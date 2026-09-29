@@ -22,7 +22,14 @@ pub struct ChatMessage {
     pub message_id: String,
     pub sender_id: String,
     pub sender_name: String,
+    /// The body as sent, with `<@user_id>` mention tokens.
     pub content: String,
+    /// The body to show: mention tokens resolved to `@name`.
+    #[serde(default)]
+    pub display_body: String,
+    /// The users mentioned in the body, in order of first appearance.
+    #[serde(default)]
+    pub mentions: Vec<crate::chat::MentionRef>,
     pub timestamp: String,
     pub create_time: String,
     pub update_time: String,
@@ -31,6 +38,13 @@ pub struct ChatMessage {
     pub is_system: bool,
     pub is_edited: bool,
     pub is_deleted: bool,
+}
+
+impl ChatMessage {
+    /// True when the message mentions `user_id`.
+    pub fn mentions_user(&self, user_id: &str) -> bool {
+        self.mentions.iter().any(|m| m.user_id == user_id)
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -239,7 +253,13 @@ pub enum Event {
     HistoryLoadFailed,
     ChatMessageEdited {
         message_id: String,
+        /// The new body as sent, with `<@user_id>` mention tokens.
         new_content: String,
+        /// The new body to show, mentions resolved. See [`ChatMessage::display_body`].
+        #[serde(default)]
+        new_display_body: String,
+        #[serde(default)]
+        mentions: Vec<crate::chat::MentionRef>,
         update_time: String,
     },
     ChatMessageDeleted {

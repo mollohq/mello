@@ -672,8 +672,12 @@ impl Client {
             Command::LeaveCrew => {
                 self.handle_leave_crew().await;
             }
-            Command::SendMessage { content, reply_to } => {
-                self.handle_send_message(&content, reply_to.as_deref())
+            Command::SendMessage {
+                content,
+                reply_to,
+                mentions,
+            } => {
+                self.handle_send_message(&content, reply_to.as_deref(), &mentions)
                     .await;
             }
             Command::SendGif { gif, body } => {
@@ -682,8 +686,10 @@ impl Client {
             Command::EditMessage {
                 message_id,
                 new_body,
+                mentions,
             } => {
-                self.handle_edit_message(&message_id, &new_body).await;
+                self.handle_edit_message(&message_id, &new_body, &mentions)
+                    .await;
             }
             Command::DeleteMessage { message_id } => {
                 self.handle_delete_message(&message_id).await;

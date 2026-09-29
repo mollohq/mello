@@ -1853,6 +1853,7 @@ impl NakamaClient {
 
         let list: ApiChannelMessageList = resp.json().await?;
         let next_cursor = list.next_cursor.clone().filter(|c| !c.is_empty());
+        self.member_names.ensure(&mentioned_user_ids(&list)).await;
         let names = self.member_names.read().await;
         let (messages, stats) = parse_channel_messages_with_stats(list, &names);
         log::info!(
@@ -1988,6 +1989,7 @@ impl NakamaClient {
 
         let list: ApiChannelMessageList = resp.json().await?;
         let next_cursor = list.next_cursor.clone().filter(|c| !c.is_empty());
+        self.member_names.ensure(&mentioned_user_ids(&list)).await;
         let names = self.member_names.read().await;
         let (messages, stats) = parse_channel_messages_with_stats(list, &names);
         Ok((messages, next_cursor, stats))
@@ -2102,6 +2104,18 @@ pub(crate) fn parse_channel_messages(
     parse_channel_messages_with_stats(list, member_names).0
 }
 
+/// The user IDs mentioned in a page of channel messages, so their names can be
+/// resolved before the page is parsed.
+pub(crate) fn mentioned_user_ids(list: &ApiChannelMessageList) -> Vec<String> {
+    list.messages
+        .iter()
+        .flatten()
+        .filter_map(|m| m.content.as_deref())
+        .filter_map(crate::chat::parse_content)
+        .flat_map(|e| crate::chat::extract_mentions(&e.body))
+        .collect()
+}
+
 pub(crate) fn parse_channel_messages_with_stats(
     list: ApiChannelMessageList,
     member_names: &HashMap<String, String>,
@@ -2151,6 +2165,7 @@ pub(crate) fn parse_channel_messages_with_stats(
                 update_time,
                 envelope,
                 content_str,
+                member_names,
             )
         })
         .collect();
@@ -2345,15 +2360,23 @@ async fn handle_ws_message(
         let create_time = msg.create_time.unwrap_or_default();
         let update_time = msg.update_time.unwrap_or_default();
 
-        let Some(chat_msg) = crate::chat::chat_message_from_envelope(
-            message_id.clone(),
-            sender_id,
-            sender_name,
-            create_time,
-            update_time,
-            envelope,
-            &content_str,
-        ) else {
+        member_names
+            .ensure(&crate::chat::extract_mentions(&envelope.body))
+            .await;
+        let chat_msg = {
+            let names = member_names.read().await;
+            crate::chat::chat_message_from_envelope(
+                message_id.clone(),
+                sender_id,
+                sender_name,
+                create_time,
+                update_time,
+                envelope,
+                &content_str,
+                &names,
+            )
+        };
+        let Some(chat_msg) = chat_msg else {
             return;
         };
 
@@ -2365,8 +2388,10 @@ async fn handle_ws_message(
         if code == 1 {
             let _ = event_tx.send(Event::ChatMessageEdited {
                 message_id,
-                new_content: chat_msg.content.clone(),
-                update_time: chat_msg.update_time.clone(),
+                new_content: chat_msg.content,
+                new_display_body: chat_msg.display_body,
+                mentions: chat_msg.mentions,
+                update_time: chat_msg.update_time,
             });
             return;
         }
@@ -2642,6 +2667,34 @@ mod tests {
         let result = parse_channel_messages(list, &names);
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].sender_name, "Bob");
+    }
+
+    #[test]
+    fn history_mentions_resolve_a_user_outside_the_crew_list() {
+        // The mentioned user is not in the cache (left the crew, or history
+        // arrived before the crew list). The page is scanned, the user is looked
+        // up, and the row shows the name, not the user id.
+        let list = ApiChannelMessageList {
+            messages: Some(vec![make_api_msg(
+                r#"{"v":1,"type":"text","body":"gg <@u-gone>","mentions":["u-gone"]}"#,
+                "u1",
+                "VObaZMuWUa",
+            )]),
+            next_cursor: None,
+            prev_cursor: None,
+        };
+        assert_eq!(mentioned_user_ids(&list), vec!["u-gone".to_string()]);
+
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let names = rt.block_on(async {
+            let cache = MemberNames::new(FakeLookup::with(&[("u-gone", "Gone Member")]));
+            cache.ensure(&mentioned_user_ids(&list)).await;
+            let names = cache.read().await.clone();
+            names
+        });
+        let result = parse_channel_messages(list, &names);
+        assert_eq!(result[0].display_body, "gg @Gone Member");
+        assert!(result[0].mentions_user("u-gone"));
     }
 
     #[test]

@@ -652,7 +652,9 @@ fn sending_a_message_carries_its_content() {
 
     let cmds = h.commands();
     let sent = cmds.iter().find_map(|c| match c {
-        Command::SendMessage { content, reply_to } => Some((content.clone(), reply_to.clone())),
+        Command::SendMessage {
+            content, reply_to, ..
+        } => Some((content.clone(), reply_to.clone())),
         _ => None,
     });
     assert_eq!(
@@ -673,7 +675,9 @@ fn replying_carries_both_body_and_parent() {
 
     let cmds = h.commands();
     let sent = cmds.iter().find_map(|c| match c {
-        Command::SendMessage { content, reply_to } => Some((content.clone(), reply_to.clone())),
+        Command::SendMessage {
+            content, reply_to, ..
+        } => Some((content.clone(), reply_to.clone())),
         _ => None,
     });
     assert_eq!(
@@ -694,7 +698,7 @@ fn editing_and_deleting_messages_target_the_right_id() {
     assert!(
         cmds.iter().any(|c| matches!(
             c,
-            Command::EditMessage { message_id, new_body }
+            Command::EditMessage { message_id, new_body, .. }
                 if message_id == "msg-1" && new_body == "fixed"
         )),
         "edit must target msg-1, got {cmds:?}"
@@ -704,6 +708,88 @@ fn editing_and_deleting_messages_target_the_right_id() {
             .any(|c| matches!(c, Command::DeleteMessage { message_id } if message_id == "msg-2")),
         "delete must target msg-2, got {cmds:?}"
     );
+}
+
+/// Picking a member shows `@name` in the composer (never the raw user id) and
+/// sends the pick, so the core can write the `<@user_id>` token.
+#[test]
+fn picking_a_mention_shows_the_name_and_sends_the_pick() {
+    let mut h = Harness::new();
+
+    h.app().set_chat_input_text("gg @Al".into());
+    h.app()
+        .invoke_mention_selected("u-alice".into(), "Alice Baker".into());
+    assert_eq!(h.app().get_chat_input_text(), "gg @Alice Baker ");
+
+    h.app().invoke_send_message("gg @Alice Baker ".into());
+    let cmds = h.commands();
+    let mentions = cmds.iter().find_map(|c| match c {
+        Command::SendMessage { mentions, .. } => Some(mentions.clone()),
+        _ => None,
+    });
+    assert_eq!(
+        mentions,
+        Some(vec![mello_core::chat::MentionRef {
+            user_id: "u-alice".into(),
+            name: "Alice Baker".into(),
+        }]),
+        "SendMessage must carry the pick, got {cmds:?}"
+    );
+
+    // The pick is used once; the next message starts with no picks.
+    h.app().invoke_send_message("plain text".into());
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::SendMessage { mentions, content, .. }
+                if content == "plain text" && mentions.is_empty()
+        )),
+        "a later message must not reuse old picks, got {cmds:?}"
+    );
+}
+
+/// A mention renders as `@name` from the core's resolved body, also before the
+/// crew member list has loaded, and flags the row when it mentions the user.
+#[test]
+fn a_mention_renders_as_a_name_before_the_member_list_loads() {
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+
+    let (display_body, mentions) = mello_core::chat::resolve_mentions(
+        "hey <@u-me>",
+        &[("u-me".to_string(), "Me".to_string())]
+            .into_iter()
+            .collect(),
+    );
+    h.emit(Event::MessagesLoaded {
+        messages: vec![mello_core::events::ChatMessage {
+            message_id: "m1".into(),
+            sender_id: "u-bob".into(),
+            sender_name: "Bob".into(),
+            content: "hey <@u-me>".into(),
+            display_body,
+            mentions,
+            timestamp: "2026-03-08T12:00:00Z".into(),
+            create_time: "2026-03-08T12:00:00Z".into(),
+            update_time: "2026-03-08T12:00:00Z".into(),
+            gif: None,
+            reply_to: None,
+            is_system: false,
+            is_edited: false,
+            is_deleted: false,
+        }],
+        has_more_history: false,
+    });
+
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "m1")
+        .expect("the message row");
+    assert_eq!(row.display_text, "hey @Me");
+    assert_eq!(row.text, "hey @Me", "copy and edit must see the name");
+    assert!(row.mentions_self);
 }
 
 // ---------------------------------------------------------------------------

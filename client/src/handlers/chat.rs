@@ -6,7 +6,7 @@ use slint::{ComponentHandle, Model};
 use crate::app_context::AppContext;
 use crate::converters::{
     apply_unread_to_crews, chat_messages_to_slint, fetch_gif_images_for_messages,
-    member_names_from_app, ChatConvertOptions,
+    ChatConvertOptions,
 };
 use crate::{image_cache, notifications, CrewData, GifItemData};
 
@@ -14,14 +14,12 @@ fn refresh_chat_ui(ctx: &AppContext) {
     let uid = ctx.app.get_user_id().to_string();
     let uav = ctx.app.get_user_avatar();
     let huav = ctx.app.get_has_user_avatar();
-    let member_names = member_names_from_app(&ctx.app);
     let first_unread = ctx.chat_scroll.first_unread_id();
     let opts = ChatConvertOptions {
         user_id: &uid,
         user_avatar: &uav,
         has_user_avatar: huav,
         avatar_cache: &ctx.avatar_cache.borrow(),
-        member_names: &member_names,
         first_unread_id: first_unread.as_deref(),
     };
     let raw = ctx.chat_messages.borrow();
@@ -80,16 +78,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::MessageReceived { message } => {
             if !ctx.app.window().is_visible() {
                 let crew_name = ctx.app.get_active_crew_id().to_string();
-                notifications::notify_message(&crew_name, &message.sender_name, &message.content);
+                notifications::notify_message(
+                    &crew_name,
+                    &message.sender_name,
+                    &message.display_body,
+                );
             }
             let sender_id = message.sender_id.clone();
             let message_id = message.message_id.clone();
             let uid = ctx.app.get_user_id().to_string();
             let is_own = sender_id == uid;
 
-            let member_names = member_names_from_app(&ctx.app);
-            let mentions_self =
-                mello_core::chat::prepare_body_for_display(&message.content, &uid, &member_names).1;
+            let mentions_self = message.mentions_user(&uid);
 
             let active_crew = ctx.app.get_active_crew_id().to_string();
             let was_at_bottom = ctx.chat_scroll.at_bottom.get();
@@ -129,6 +129,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::ChatMessageEdited {
             message_id,
             new_content,
+            new_display_body,
+            mentions,
             update_time,
         } => {
             log::info!("Message edited: {} at {}", message_id, update_time);
@@ -136,6 +138,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let mut msgs = ctx.chat_messages.borrow_mut();
                 if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
                     m.content = new_content;
+                    m.display_body = new_display_body;
+                    m.mentions = mentions;
                     m.update_time = update_time;
                     m.is_edited = true;
                     m.is_deleted = false;
@@ -149,6 +153,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let mut msgs = ctx.chat_messages.borrow_mut();
                 if let Some(m) = msgs.iter_mut().find(|m| m.message_id == message_id) {
                     m.content.clear();
+                    m.display_body.clear();
+                    m.mentions.clear();
                     m.is_deleted = true;
                     m.is_edited = false;
                 }

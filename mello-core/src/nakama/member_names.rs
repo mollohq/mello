@@ -88,6 +88,23 @@ impl MemberNames {
             }
         }
     }
+
+    /// Looks up each user ID that is not cached, so a following [`Self::read`]
+    /// can resolve it. Used for mentioned users, who can be outside the crew
+    /// list (a member who left, or history loaded before the crew list).
+    pub(crate) async fn ensure(&self, user_ids: &[String]) {
+        let missing: std::collections::BTreeSet<&str> = {
+            let names = self.names.read().await;
+            user_ids
+                .iter()
+                .map(String::as_str)
+                .filter(|id| !id.is_empty() && !names.contains_key(*id))
+                .collect()
+        };
+        for id in missing {
+            self.resolve(id, "").await;
+        }
+    }
 }
 
 /// `UserLookup` over Nakama's `GET /v2/user?ids=`.
@@ -217,6 +234,23 @@ mod tests {
         assert_eq!(names.resolve("u-bob", "UXljDftxYv").await, "UXljDftxYv");
         assert_eq!(names.resolve("u-bob", "UXljDftxYv").await, "UXljDftxYv");
         assert_eq!(lookup.calls().len(), 2);
+    }
+
+    #[tokio::test]
+    async fn ensure_looks_up_each_unknown_user_once_and_caches_it() {
+        let lookup = FakeLookup::with(&[("u-gone", "Gone Member")]);
+        let names = MemberNames::new(lookup.clone());
+        names.insert("u-alice".into(), "Alice".into()).await;
+        let ids: Vec<String> = ["u-alice", "u-gone", "u-gone", ""]
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
+        names.ensure(&ids).await;
+        assert_eq!(lookup.calls(), vec!["u-gone".to_string()]);
+        assert_eq!(
+            names.read().await.get("u-gone").map(String::as_str),
+            Some("Gone Member")
+        );
     }
 
     #[tokio::test]
