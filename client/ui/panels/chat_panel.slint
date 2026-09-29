@@ -93,6 +93,9 @@ component MessageMoreMenu inherits Rectangle {
         y: (parent.height - self.height) / 2;
     }
 
+    // A pointer click by element position misses inside a PopupWindow, so
+    // each item also takes the default accessibility action. Each request
+    // clears `active`, which closes the menu.
     menu-popup := PopupWindow {
         x: 0px;
         y: open-above ? -menu-box.height - 8px : parent.height + 4px;
@@ -128,6 +131,7 @@ component MessageMoreMenu inherits Rectangle {
                     menu-edit-touch := TouchArea {
                         accessible-role: button;
                         accessible-label: "Edit";
+                        accessible-action-default => { root.edit-requested(); }
                         clicked => { root.edit-requested(); }
                     }
                 }
@@ -150,6 +154,7 @@ component MessageMoreMenu inherits Rectangle {
                     menu-del-touch := TouchArea {
                         accessible-role: button;
                         accessible-label: "Delete";
+                        accessible-action-default => { root.delete-requested(); }
                         clicked => { root.delete-requested(); }
                     }
                 }
@@ -172,6 +177,7 @@ component MessageMoreMenu inherits Rectangle {
                     menu-copy-touch := TouchArea {
                         accessible-role: button;
                         accessible-label: "Copy text";
+                        accessible-action-default => { root.copy-requested(); }
                         clicked => { root.copy-requested(); }
                     }
                 }

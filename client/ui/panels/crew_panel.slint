@@ -664,6 +664,10 @@ component ActiveCrewCard inherits Rectangle {
             }
         }
 
+        // A pointer click by element position misses inside a PopupWindow
+        // (the position is relative to the popup), so each item also takes
+        // the default accessibility action, as a screen reader sends it. The
+        // action closes the menu, as a click on an item does.
         crew-context-popup := PopupWindow {
             x: root.width - 172px;
             y: 52px;
@@ -711,6 +715,10 @@ component ActiveCrewCard inherits Rectangle {
                             accessible-role: button;
                             accessible-label: "Crew settings";
                             mouse-cursor: pointer;
+                            accessible-action-default => {
+                                root.crew-edit-requested();
+                                crew-context-popup.close();
+                            }
                             clicked => { root.crew-edit-requested(); }
                         }
                     }
@@ -745,6 +753,10 @@ component ActiveCrewCard inherits Rectangle {
                             accessible-role: button;
                             accessible-label: "Add channel";
                             mouse-cursor: pointer;
+                            accessible-action-default => {
+                                root.crew-add-channel-requested();
+                                crew-context-popup.close();
+                            }
                             clicked => { root.crew-add-channel-requested(); }
                         }
                     }
@@ -779,6 +791,10 @@ component ActiveCrewCard inherits Rectangle {
                             accessible-role: button;
                             accessible-label: "Invite";
                             mouse-cursor: pointer;
+                            accessible-action-default => {
+                                root.invite-clicked();
+                                crew-context-popup.close();
+                            }
                             clicked => { root.invite-clicked(); }
                         }
                     }
@@ -818,6 +834,10 @@ component ActiveCrewCard inherits Rectangle {
                             accessible-role: button;
                             accessible-label: "Leave crew";
                             mouse-cursor: pointer;
+                            accessible-action-default => {
+                                root.crew-leave-requested();
+                                crew-context-popup.close();
+                            }
                             clicked => { root.crew-leave-requested(); }
                         }
                     }
