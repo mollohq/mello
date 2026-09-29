@@ -564,10 +564,7 @@ func hydrateRecentMessages(ctx context.Context, logger runtime.Logger, nk runtim
 		if !isDisplayableChatMessage(content) {
 			continue
 		}
-		preview := extractPreview(content)
-		if len(preview) > 60 {
-			preview = preview[:57] + "..."
-		}
+		preview := previewText(ctx, nk, content)
 		username := resolveUsername(ctx, nk, m.GetSenderId())
 		if username == "" {
 			username = m.GetUsername()
@@ -626,11 +623,8 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		return nil
 	}
 
-	// Extract preview text from the message envelope
-	preview := extractPreview(content)
-	if len(preview) > 60 {
-		preview = preview[:57] + "..."
-	}
+	// Preview text from the message envelope, mentions resolved to names.
+	preview := previewText(ctx, nk, content)
 
 	userID, _ := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	username := resolveUsername(ctx, nk, userID)
