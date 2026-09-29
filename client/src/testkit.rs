@@ -253,6 +253,32 @@ impl Harness {
         self.pump();
     }
 
+    /// The text of the visible text field with this accessible label.
+    ///
+    /// Panics when no field matches.
+    pub fn field_text(&self, label: &str) -> String {
+        let matches = self.controls_labelled(label);
+        assert!(
+            !matches.is_empty(),
+            "no visible control labelled {label:?} in this state"
+        );
+        matches[0]
+            .accessible_value()
+            .unwrap_or_else(|| panic!("{label:?} is not a text field"))
+            .to_string()
+    }
+
+    /// Fire an Edit menu item, as the macOS menu bar does for a menu click
+    /// or for its shortcut (Cmd+C and the others). `id` is one of the ids in
+    /// [`crate::edit_shortcuts`].
+    pub fn edit_menu(&mut self, id: &str) {
+        assert!(
+            crate::edit_shortcuts::forward(self.app().window(), id),
+            "{id:?} is not an Edit menu item"
+        );
+        self.pump();
+    }
+
     /// Assert the window is showing *something* the user can see.
     ///
     /// The onboarding outage produced a window where neither the onboarding

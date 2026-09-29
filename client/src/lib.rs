@@ -12,6 +12,7 @@ mod deep_link;
 mod diag_capture;
 #[cfg(feature = "e2e")]
 mod e2e_state;
+mod edit_shortcuts;
 mod emoji_font;
 #[cfg(test)]
 mod flow_catalogue;

@@ -182,7 +182,21 @@ Help
 
 ### 4.3 Notes on the Edit menu
 
-`muda` exposes `PredefinedMenuItem` variants for all standard Edit actions — these wire into the macOS responder chain properly, meaning Slint `TextInput` fields get undo/redo/copy/paste for free without any custom handling. **Always use `PredefinedMenuItem` for these** — custom `MenuItem` with matching accelerators will not correctly target the first responder.
+The Edit items are our own `MenuItem`s. They are not `PredefinedMenuItem`s.
+
+- A predefined item sends a Cocoa action (`copy:`, `paste:`) to the first responder.
+- The first responder is the winit `WinitView`. It implements none of these actions.
+- The menu bar receives a key equivalent (Cmd+C) before the window. The predefined item consumes it and does nothing.
+- The Slint `TextInput` then never receives the key. Copy and paste fail in every text field.
+
+Each Edit item has an id (`edit.undo`, `edit.redo`, `edit.cut`, `edit.copy`, `edit.paste`, `edit.select_all`).
+When an item fires, from the menu or from its shortcut, the poll loop forwards the key press to the Slint window.
+The focused text field then handles it as if the shortcut had reached it.
+
+- The table of items and the key mapping are in `client/src/edit_shortcuts.rs`. The module compiles on every platform.
+- Slint maps the Command key to `Key::Control`. `TextInput` checks `modifiers.control`, not `meta`.
+- Redo sends Command, Shift and `Z`.
+- Slint tracks the modifier state from key events only. The forwarded release of Command clears the flag while the user still holds Command. A Command shortcut with no menu item (for example Cmd+Left) then needs a new Command press.
 
 File and Window menus are intentionally omitted. Mello is a single-window app; Close Window (Cmd+W) is handled by the close→tray behaviour, not a menu item.
 
@@ -214,16 +228,24 @@ pub fn build_menu_bar() -> Menu {
     menu.append(&app_menu).ok();
 
     // ── Edit ───────────────────────────────────────────────────────────────
-    // All PredefinedMenuItems — these integrate with the macOS responder chain
-    // and give Slint TextInput fields correct system behaviour for free.
+    // Our own MenuItems (ids in `edit_shortcuts::EDIT_ITEMS`), not
+    // PredefinedMenuItems. The poll loop forwards each item's key press to
+    // the Slint window. See §4.3.
     let edit_menu = Submenu::with_title("Edit", true);
-    edit_menu.append(&PredefinedMenuItem::undo(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::redo(None)).ok();
+    let append_edit_item = |item: &edit_shortcuts::EditItem| {
+        edit_menu.append(&MenuItem::with_id(
+            MenuId::new(item.id),
+            item.title,
+            true,
+            Some(item.accelerator.parse().unwrap()),
+        )).ok();
+    };
+    append_edit_item(&EDIT_ITEMS[0]); // Undo
+    append_edit_item(&EDIT_ITEMS[1]); // Redo
     edit_menu.append(&PredefinedMenuItem::separator()).ok();
-    edit_menu.append(&PredefinedMenuItem::cut(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::copy(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::paste(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::select_all(None)).ok();
+    for item in &EDIT_ITEMS[2..] {    // Cut, Copy, Paste, Select All
+        append_edit_item(item);
+    }
     edit_menu.append(&PredefinedMenuItem::separator()).ok();
     edit_menu.append(&MenuItem::with_id(
         MenuId::new("find"),

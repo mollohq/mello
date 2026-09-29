@@ -2583,3 +2583,100 @@ fn quit_game_stops_the_hosted_stream() {
         "StreamTargetExited must emit Command::StopStream, got {cmds:?}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// The macOS Edit menu forwards its shortcuts to the text field
+// ---------------------------------------------------------------------------
+//
+// On macOS the menu bar consumed Cmd+C, Cmd+V and the others, and the
+// predefined menu items did nothing, so no text field received them. Our
+// menu items now forward the key press with `edit_shortcuts::forward`.
+// The testing backend has a clipboard, so Cut, Copy and Paste run for real.
+// Not covered here: the real NSMenu, and the poll-loop arm that calls
+// `forward`. Both need macOS and a human.
+
+/// Open the step-3 email form and focus its Email field.
+fn focus_step_three_email_field(h: &mut Harness) {
+    resume(h.ctx(), OnboardingState::LinkIdentity);
+    h.click_label("Email + password");
+    h.click_label("Email");
+    assert_eq!(h.field_text("Email"), "", "the field starts empty");
+}
+
+/// ★ Regression: Select All reached no text field on macOS. Typing after it
+/// replaces the whole text.
+#[test]
+fn edit_menu_select_all_selects_the_text_in_the_focused_field() {
+    let mut h = Harness::new();
+    focus_step_three_email_field(&mut h);
+    h.type_text("user@example.com");
+    assert_eq!(h.field_text("Email"), "user@example.com");
+
+    h.edit_menu(crate::edit_shortcuts::SELECT_ALL);
+    h.type_text("x");
+
+    assert_eq!(
+        h.field_text("Email"),
+        "x",
+        "Select All must select the whole text, so typing replaces it"
+    );
+}
+
+/// ★ Regression: Cut and Paste reached no text field on macOS.
+#[test]
+fn edit_menu_cut_and_paste_move_the_text_through_the_clipboard() {
+    let mut h = Harness::new();
+    focus_step_three_email_field(&mut h);
+    h.type_text("user@example.com");
+
+    h.edit_menu(crate::edit_shortcuts::SELECT_ALL);
+    h.edit_menu(crate::edit_shortcuts::CUT);
+    assert_eq!(h.field_text("Email"), "", "Cut must remove the selection");
+
+    h.edit_menu(crate::edit_shortcuts::PASTE);
+    assert_eq!(
+        h.field_text("Email"),
+        "user@example.com",
+        "Paste must insert what Cut put on the clipboard"
+    );
+    h.edit_menu(crate::edit_shortcuts::PASTE);
+    assert_eq!(h.field_text("Email"), "user@example.comuser@example.com");
+}
+
+/// ★ Regression: Copy reached no text field on macOS. Copy keeps the text.
+#[test]
+fn edit_menu_copy_puts_the_selection_on_the_clipboard() {
+    let mut h = Harness::new();
+    focus_step_three_email_field(&mut h);
+    h.type_text("abc");
+
+    h.edit_menu(crate::edit_shortcuts::SELECT_ALL);
+    h.edit_menu(crate::edit_shortcuts::COPY);
+    assert_eq!(h.field_text("Email"), "abc", "Copy must not remove text");
+
+    // Typing replaces the selection. Paste then brings back the copied text.
+    h.type_text("Z");
+    assert_eq!(h.field_text("Email"), "Z");
+    h.edit_menu(crate::edit_shortcuts::PASTE);
+    assert_eq!(h.field_text("Email"), "Zabc");
+}
+
+/// ★ Regression: Undo and Redo reached no text field on macOS.
+///
+/// Slint 1.17 enables Redo on Control+Shift+Z on every target except Windows.
+#[test]
+fn edit_menu_undo_and_redo_step_through_the_edit_history() {
+    let mut h = Harness::new();
+    focus_step_three_email_field(&mut h);
+    h.type_text("abc");
+    assert_eq!(h.field_text("Email"), "abc");
+
+    h.edit_menu(crate::edit_shortcuts::UNDO);
+    assert_eq!(h.field_text("Email"), "", "Undo must remove the typed text");
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        h.edit_menu(crate::edit_shortcuts::REDO);
+        assert_eq!(h.field_text("Email"), "abc", "Redo must restore the text");
+    }
+}

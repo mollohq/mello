@@ -236,10 +236,13 @@ impl PollState {
                         log::info!("[quit] tray quit");
                         slint::quit_event_loop().ok();
                     }
-                    _ =>
-                    {
+                    _ => {
                         #[cfg(target_os = "macos")]
                         match id {
+                            // Edit menu: send the shortcut to the focused Slint field.
+                            id if crate::edit_shortcuts::is_edit_item(id) => {
+                                crate::edit_shortcuts::forward(poll_ctx.app.window(), id);
+                            }
                             "prefs" => {
                                 let _ = poll_ctx.cmd_tx.send(Command::ListAudioDevices);
                                 let settings = poll_ctx.settings.borrow();
