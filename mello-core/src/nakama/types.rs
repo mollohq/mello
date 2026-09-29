@@ -184,6 +184,52 @@ pub struct ResolveCrewInviteResult {
     pub crew_id: String,
     #[serde(default)]
     pub highlight: String,
+    #[serde(default)]
+    pub member_count: i32,
+    #[serde(default)]
+    pub members: Vec<InviteMemberPreview>,
+    #[serde(default)]
+    pub inviter_display_name: String,
+    #[serde(default)]
+    pub inviter_avatar_seed: String,
+}
+
+#[derive(Debug, Deserialize)]
+pub struct InviteMemberPreview {
+    pub display_name: String,
+    #[serde(default)]
+    pub avatar_seed: String,
+}
+
+impl From<ResolveCrewInviteResult> for crate::crew::ResolvedInvite {
+    fn from(r: ResolveCrewInviteResult) -> Self {
+        let person = |display_name: String, avatar_seed: String| crate::crew::InvitePerson {
+            avatar_seed: if avatar_seed.is_empty() {
+                display_name.clone()
+            } else {
+                avatar_seed
+            },
+            display_name,
+        };
+        // Every code made by `create_crew` or `create_invite_code` has an
+        // inviter. An older code, or an inviter whose account is gone, has none.
+        let inviter = (!r.inviter_display_name.trim().is_empty())
+            .then(|| person(r.inviter_display_name, r.inviter_avatar_seed));
+        Self {
+            crew_name: r.crew_name,
+            avatar_seed: r.avatar_seed,
+            crew_id: r.crew_id,
+            highlight: r.highlight,
+            member_count: r.member_count,
+            members: r
+                .members
+                .into_iter()
+                .filter(|m| !m.display_name.trim().is_empty())
+                .map(|m| person(m.display_name, m.avatar_seed))
+                .collect(),
+            inviter,
+        }
+    }
 }
 
 // --- WebSocket types ---
@@ -298,6 +344,55 @@ pub struct ApiChannelMessage {
 #[derive(Debug, Deserialize)]
 pub struct ChatContent {
     pub text: Option<String>,
+}
+
+#[cfg(test)]
+mod invite_tests {
+    use super::ResolveCrewInviteResult;
+    use crate::crew::{InvitePerson, ResolvedInvite};
+
+    fn resolve(json: &str) -> ResolvedInvite {
+        serde_json::from_str::<ResolveCrewInviteResult>(json)
+            .expect("deserialize")
+            .into()
+    }
+
+    /// The welcome screen and the join modal show the inviter and the
+    /// members. The client dropped them before.
+    #[test]
+    fn a_resolved_invite_keeps_the_inviter_and_the_members() {
+        let invite = resolve(
+            r#"{"crew_name":"Night Owls","avatar_seed":"Night Owls","crew_id":"c1",
+                "highlight":"7h hangout","member_count":4,
+                "members":[{"display_name":"alice","avatar_seed":"alice"},
+                           {"display_name":"bo","avatar_seed":""}],
+                "inviter_display_name":"alice","inviter_avatar_seed":"alice",
+                "top_game":"CS2"}"#,
+        );
+        assert_eq!(invite.member_count, 4);
+        assert_eq!(
+            invite.inviter,
+            Some(InvitePerson {
+                display_name: "alice".into(),
+                avatar_seed: "alice".into()
+            })
+        );
+        assert_eq!(invite.members.len(), 2);
+        assert_eq!(
+            invite.members[1].avatar_seed, "bo",
+            "an empty seed falls back to the name"
+        );
+    }
+
+    /// A code with no inviter still resolves.
+    #[test]
+    fn a_resolved_invite_without_an_inviter_has_none() {
+        let invite =
+            resolve(r#"{"crew_name":"Night Owls","avatar_seed":"Night Owls","crew_id":"c1"}"#);
+        assert_eq!(invite.inviter, None);
+        assert_eq!(invite.member_count, 0);
+        assert!(invite.members.is_empty());
+    }
 }
 
 #[cfg(test)]

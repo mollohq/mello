@@ -22,12 +22,30 @@ pub struct Member {
     pub online: bool,
 }
 
+/// A person shown with an invite: the inviter, or a member preview.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InvitePerson {
+    pub display_name: String,
+    pub avatar_seed: String,
+}
+
+/// Public crew info for an invite code (`resolve_crew_invite`,
+/// CREW-INVITES.md §3).
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ResolvedInvite {
     pub crew_name: String,
     pub avatar_seed: String,
     pub crew_id: String,
     pub highlight: String,
+    #[serde(default)]
+    pub member_count: i32,
+    /// Up to 5 member previews, in the order the server sent them.
+    #[serde(default)]
+    pub members: Vec<InvitePerson>,
+    /// The user who made the code. `None` when the code has no inviter, or
+    /// the inviter has no name.
+    #[serde(default)]
+    pub inviter: Option<InvitePerson>,
 }
 
 /// Why an invite could not be resolved or joined.

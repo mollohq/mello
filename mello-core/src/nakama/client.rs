@@ -1046,12 +1046,7 @@ impl NakamaClient {
             }
         };
         let result: ResolveCrewInviteResult = serde_json::from_str(&resp_str)?;
-        Ok(crate::crew::ResolvedInvite {
-            crew_name: result.crew_name,
-            avatar_seed: result.avatar_seed,
-            crew_id: result.crew_id,
-            highlight: result.highlight,
-        })
+        Ok(result.into())
     }
 
     pub async fn create_invite_code(&self, crew_id: &str) -> Result<String> {
