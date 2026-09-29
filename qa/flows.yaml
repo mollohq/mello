@@ -239,8 +239,8 @@ flows:
     title: Voice channels — add, rename, delete
     priority: P2
     users: 1
-    harness: []
-    journeys: []
+    harness: [crew_menu_add_channel_answers_the_accessibility_action]
+    journeys: [qa/journeys/voice-channels.ts]
     protocol: []
     issues: []
 
@@ -286,7 +286,7 @@ flows:
     priority: P1
     users: 2
     harness: []
-    journeys: []
+    journeys: [qa/journeys/voice-channels.ts]
     protocol: []
     issues: []
 

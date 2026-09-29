@@ -488,6 +488,8 @@ Design changes from §5 and §6:
 | Journey | Flows | Result |
 |---|---|---|
 | `voice-two-users.ts` | VOICE-01, VOICE-02, VOICE-04 (setup covers INV-01, INV-03 for a public crew) | **20/20** |
+| `voice-channels.ts#createChannel` | CREW-05 | **11/11** |
+| `voice-channels.ts#rapidSwitch` | VOICE-03 | 1/20. Fails on #96 in 16: bob's crew card leaves the accessibility tree after he joins A. Fails in 3 because a crew data update closed alice's open crew menu. |
 | `session-restore.ts` | AUTH-01 | **20/20** |
 | `chat-two-users.ts` | CHAT-01 | Fails on #84 |
 | `invite-accept-deeplink-cold.ts#publicCrew` | INV-01, INV-03 | Fails on #84 |
