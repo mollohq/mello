@@ -628,6 +628,8 @@ export component Onboarding inherits Rectangle {
     in property <bool> invite-path: false;
     callback invite-accepted();
     callback invite-declined();
+    // Step 2 on the invite path: back to the welcome screen.
+    callback invite-back();
     // Why the invite link could not be used. Step 1 shows it above the crews.
     in property <string> invite-error: "";
     // The invite-code card on step 1: the typed text, why it was refused, and
@@ -1716,6 +1718,40 @@ export component Onboarding inherits Rectangle {
                     clicked => {
                         root.continue-to-step(3);
                     }
+                }
+            }
+        }
+
+        // On the invite path the step indicator has no mark for the welcome
+        // screen, so this is the way back to it. The invite is kept. It is a text
+        // link, as "Back" is in the sign-in panel.
+        if root.invite-path: Rectangle {
+            x: 140px;
+            y: 36px;
+            width: back-text.preferred-width + 16px;
+            height: 32px;
+            opacity: root.busy ? 0.55 : 1.0;
+
+            back-text := Text {
+                x: 0;
+                y: 0;
+                height: parent.height;
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
+                text: "Back";
+                font-family: Theme.font-label;
+                font-size: 13px;
+                color: back-touch.has-hover && !root.busy ? Theme.text-primary : Theme.text-secondary;
+                vertical-alignment: center;
+            }
+
+            back-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "Back";
+                enabled: !root.busy;
+                mouse-cursor: root.busy ? MouseCursor.default : MouseCursor.pointer;
+                clicked => {
+                    root.invite-back();
                 }
             }
         }

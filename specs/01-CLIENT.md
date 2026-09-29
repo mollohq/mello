@@ -170,6 +170,8 @@ The welcome screen is onboarding step 5 in `Settings` and in the Slint property.
 
 A restart on the welcome screen shows it again. The screen reads the invite from `Settings::pending_invite`, so it needs no network call. With no stored invite, startup opens step 1.
 
+**Back on step 2.** On the invite path, step 2 shows a "Back" control above the step indicator. It opens the welcome screen. The invite stays stored, so "Join {crew}" opens step 2 again. "Back" does nothing while finalize runs. Without an invite, step 2 has no "Back": the step indicator goes back.
+
 **Step numbers.** The invite path has two steps: step 2 shows "STEP 01 / 02", step 3 shows "STEP 02 / 02". `Settings::onboarding_via_invite` keeps this through a restart. It is set when the invite resolves, and cleared on step 1 and when onboarding is done. Without an invite, onboarding has three steps.
 
 | Case | Result |

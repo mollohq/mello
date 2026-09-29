@@ -66,6 +66,13 @@ export const typedLink = journey({
       await bob.checkpoint("step2-invited-crew");
     });
 
+    await step("bob: Back on step 2 opens the welcome screen again, and Join opens step 2 again", async () => {
+      await bob.click("Back");
+      await inviteWelcome(bob, crew, aliceName);
+      await joinFromWelcome(bob, crew);
+      await bob.checkpoint("step2-after-back");
+    });
+
     await step("bob: finishes onboarding (profile, then email at step 3)", async () => {
       await profileAtStep2(bob, bobName, 2);
       expect(await bob.text("STEP 02 / 02"), `step 3 shows "STEP 02 / 02"`);

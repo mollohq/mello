@@ -93,6 +93,20 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- Onboarding: back from step 2 of the invite path ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let shuffle_timer = ctx.avatar_shuffle_timer.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_back(move || {
+            if let Some(app) = app_weak.upgrade() {
+                stop_ambient_shuffle(&shuffle_timer);
+                crate::onboarding_invite::back(&app, &s, &fx);
+            }
+        });
+    }
+
     // --- Onboarding: create crew ---
     {
         let app_weak = ctx.app.as_weak();

@@ -175,6 +175,18 @@ pub fn code_edited(app: &crate::MainWindow) {
     app.set_onboarding_invite_code_error("".into());
 }
 
+/// "Back" on step 2 of the invite path: the welcome screen, with the invite
+/// kept. The welcome screen shows it again from `Settings`.
+pub fn back(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>, fx: &EffectCtx) {
+    log::info!("[invite] step 2: back — opening the welcome screen, the invite is kept");
+    crate::onboarding::advance_with(
+        app,
+        settings,
+        fx,
+        Input::GoBackTo(OnboardingState::InviteWelcome),
+    );
+}
+
 /// "Join" on the welcome screen: step 2, which keeps the invite.
 pub fn join(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>, fx: &EffectCtx) {
     log::info!("[invite] welcome screen: join — opening step 2");

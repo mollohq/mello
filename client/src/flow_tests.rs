@@ -1949,6 +1949,72 @@ fn a_resolve_the_card_did_not_send_keeps_the_device_account_path() {
     assert!(join_crew_modal_is_visible(&h));
 }
 
+/// ★ "Back" on step 2 of the invite path returns to the welcome screen.
+/// The invite is kept: "Join" opens step 2 again and finalize joins by code.
+#[test]
+fn back_on_step_two_of_the_invite_path_returns_to_the_welcome_screen() {
+    let mut h = Harness::new();
+    accept_invite_on_fresh_install(&mut h);
+    assert_eq!(step_indicator(&h).as_deref(), Some("STEP 01 / 02"));
+
+    h.click_label("Back");
+
+    assert_eq!(h.app().get_onboarding_step(), 5, "the welcome screen");
+    assert!(welcome_is_visible(&h));
+    assert_eq!(
+        text_on_screen(&h, "InviteWelcome::crew-name-text").as_deref(),
+        Some("Night Stones")
+    );
+    assert_eq!(
+        text_on_screen(&h, "InviteWelcome::inviter-text").as_deref(),
+        Some("alice invited you to join")
+    );
+    {
+        let settings = h.settings();
+        let s = settings.borrow();
+        assert_eq!(s.pending_invite_code.as_deref(), Some("NITE-0001"));
+        assert!(s.pending_invite.is_some());
+        assert!(s.onboarding_via_invite, "still the invite path");
+        assert_eq!(s.onboarding_step, 5, "persisted, so a restart shows it");
+    }
+
+    h.click_label("Join Night Stones");
+    assert_eq!(step_indicator(&h).as_deref(), Some("STEP 01 / 02"));
+    h.commands();
+    finalize(&h);
+    assert_eq!(
+        finalize_invite(&h.commands()),
+        Some((Some("NITE-0001".into()), None, None))
+    );
+}
+
+/// "Back" belongs to the invite path. Step 2 with a crew picked at step 1
+/// has the step indicator to go back, and no "Back".
+#[test]
+fn step_two_has_no_back_control_off_the_invite_path() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+    h.app().invoke_onboarding_crew_selected("crew-0".into());
+    assert_eq!(h.app().get_onboarding_step(), 2);
+
+    assert!(h.controls_labelled("Back").is_empty());
+}
+
+/// A finalize in flight cannot be left: "Back" does nothing while busy.
+#[test]
+fn back_does_nothing_while_the_account_is_being_created() {
+    let mut h = Harness::new();
+    accept_invite_on_fresh_install(&mut h);
+    h.app().set_onboarding_busy(true);
+
+    h.click_label("Back");
+
+    assert_eq!(h.app().get_onboarding_step(), 2);
+}
+
 /// ★ The Discover field takes a link, as the card does. Before, only a bare
 /// code in the exact stored form worked.
 #[test]

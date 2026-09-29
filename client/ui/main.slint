@@ -649,6 +649,8 @@ export component MainWindow inherits Window {
     // The welcome screen: "Join {crew}" and "Not now".
     callback onboarding-invite-accepted();
     callback onboarding-invite-declined();
+    // Step 2 on the invite path: back to the welcome screen.
+    callback onboarding-invite-back();
     // The invite-code card on step 1: "Open invite" with the typed text, and
     // an edit of the field.
     callback onboarding-open-invite(string);
@@ -707,6 +709,9 @@ export component MainWindow inherits Window {
         }
         invite-code-edited => {
             root.onboarding-invite-code-edited();
+        }
+        invite-back => {
+            root.onboarding-invite-back();
         }
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
