@@ -118,7 +118,7 @@ Onboarding is a 3-step full-screen flow for new users (when `onboarding_step` is
 
 | Step | Screen | What happens |
 |------|--------|-------------|
-| 1 | Discover Crews | Bento grid of public crews (fetched unauthenticated via `http_key`). "Create Your Own Crew" opens the new-crew modal in onboarding mode (invite section disabled, button says "Save & Continue"). Crew details stored locally, creation deferred. |
+| 1 | Discover Crews | Bento grid of public crews (fetched unauthenticated via `http_key`). "Create Your Own Crew" opens the new-crew modal in onboarding mode (invite section disabled, button says "Save & Continue"). Crew details stored locally, creation deferred. Row 1 also has the invite-code card (§6.4). The grid shows at most four crews. |
 | 2 | Profile Setup | User sets nickname and picks an avatar. |
 | 3 | Identity Linking | Required. The user links one identity: a provider (Steam, Twitch, Google, Apple, Discord) or email + password. There is no skip. A successful link enters the main app. |
 
@@ -164,7 +164,7 @@ A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh ins
 | Crew | The crew tile with initials, the crew name, the highlight (if present), up to 5 member octagons and "{n} members" |
 | Next steps | "Pick a name and an avatar, check your mic, and you're in. It takes about a minute." |
 | Primary button (red) | "Join {crew}". Long names elide. Opens step 2. |
-| Text link | "Not now — show me other crews". Opens step 1 and forgets the invite. Finalize then does not join the invited crew. |
+| Text link | "Not now — show me other crews". Opens step 1 and forgets the invite. It also clears the invite-code card (§6.4). Finalize then does not join the invited crew. |
 
 The welcome screen is onboarding step 5 in `Settings` and in the Slint property. Steps 0 to 4 keep their numbers from earlier builds. In the flow it comes before step 2.
 
@@ -180,7 +180,7 @@ A restart on the welcome screen shows it again. The screen reads the invite from
 | Finalize: the code is no longer valid, the crew is full, or the server refuses the user | Step 1, with the message. The invite is forgotten. |
 | The user goes back to step 1 and picks or creates a crew | The crew replaces the invite. |
 | The user goes back to step 1 and signs in to an existing account | The stored invite opens the join modal after sign-in. |
-| A device account exists, or the user is logged in | No change: the join modal opens after sign-in. |
+| A device account exists, or the user is logged in | No change for a link: the join modal opens after sign-in. An invite typed in the card (§6.4) opens the welcome screen. |
 
 ### 6.3 Lost Session
 
@@ -191,6 +191,25 @@ At startup with onboarding done (`onboarding_step` 4, or a step the build does n
 3. `DeviceAuthed { created: true }` or a failed device auth: step 1.
 
 With no device account, a failed restore goes to step 1.
+
+### 6.4 Invite-Code Card on Step 1
+
+The web lounge cannot always hand an invite to the app. A user who installed the app then has no link to follow. Step 1 has the invite-code card for this user. See [CREW-INVITES.md](features/CREW-INVITES.md) §8.5.
+
+| Item | Rule |
+|---|---|
+| Place | Row 1 of the bento grid, right of "Create your own crew". With no discoverable crews, next to "Create your own crew". |
+| Shown to | Every user on step 1, also after a logout. |
+| Content | Label "GOT AN INVITE?", the line "Paste the link or the code your friend sent you.", a field, an error line, and a white button "Open invite". |
+| Input | A web link, a `mello://join/` link, or a bare code. One parse function (`deep_link::parse_invite_input`) reads all three. |
+| Invalid input | "This invite code is not valid." in the card. The field gets a red outline. No network call. |
+| Submit | The button, or Enter in the field. The button reads "Checking…" and ignores clicks until the answer arrives. |
+| Success | The same path as a deep link: the client stores the invite and opens the welcome screen (§6.2). |
+| Failure | The message shows in the card. An invalid or expired code reads "This invite code is not valid." Other failures read "Could not load this invite. Try again." |
+| Edit | Editing the field clears the error. |
+| "Not now" | Opens step 1 with the field empty. |
+
+**After a logout.** The machine has a device account, and the user has no session. The card takes the same path: the welcome screen opens, not the join modal. Finalize authenticates the device id, which opens the existing account, and joins the crew by its invite code.
 
 ---
 

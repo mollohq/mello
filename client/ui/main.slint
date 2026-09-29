@@ -93,6 +93,11 @@ export component MainWindow inherits Window {
     in property <bool> onboarding-invite-path: false;
     // Non-empty when the invite link could not be used. Step 1 shows it.
     in property <string> onboarding-invite-error: "";
+    // The invite-code card on step 1: what the user typed, why it was
+    // refused, and a resolve in flight.
+    in-out property <string> onboarding-invite-code-text: "";
+    in property <string> onboarding-invite-code-error: "";
+    in property <bool> onboarding-invite-code-checking: false;
     in property <bool> is-returning-user: false;
     // This machine has a device account (a persisted device id). Step 1
     // offers "I already have an account" only when it has none (#67).
@@ -644,6 +649,10 @@ export component MainWindow inherits Window {
     // The welcome screen: "Join {crew}" and "Not now".
     callback onboarding-invite-accepted();
     callback onboarding-invite-declined();
+    // The invite-code card on step 1: "Open invite" with the typed text, and
+    // an edit of the field.
+    callback onboarding-open-invite(string);
+    callback onboarding-invite-code-edited();
     callback onboarding-login-requested();
     callback onboarding-link-email(string, string);
     callback onboarding-capture-device-selected(string);
@@ -690,6 +699,15 @@ export component MainWindow inherits Window {
         invite-inviter: root.onboarding-invite-inviter;
         invite-path: root.onboarding-invite-path;
         invite-error: root.onboarding-invite-error;
+        invite-code-text <=> root.onboarding-invite-code-text;
+        invite-code-error: root.onboarding-invite-code-error;
+        invite-code-checking: root.onboarding-invite-code-checking;
+        open-invite(text) => {
+            root.onboarding-open-invite(text);
+        }
+        invite-code-edited => {
+            root.onboarding-invite-code-edited();
+        }
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
         is-returning-user: root.is-returning-user;

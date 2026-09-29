@@ -1516,6 +1516,440 @@ fn mute_toggle_emits_set_mute_and_broadcast() {
 }
 
 // ---------------------------------------------------------------------------
+// The invite-code card on step 1
+// ---------------------------------------------------------------------------
+
+/// The card's field: its label is the caption the user reads.
+const CARD_FIELD: &str = "GOT AN INVITE?";
+const OPEN_INVITE: &str = "Open invite";
+const CHECKING: &str = "Checking…";
+const CODE_NOT_VALID: &str = "This invite code is not valid.";
+const COULD_NOT_LOAD: &str = "Could not load this invite. Try again.";
+
+/// Step 1 of a fresh install with a list of crews and no deep link.
+fn step_one_fresh_install(h: &mut Harness) {
+    crate::onboarding::resume(h.ctx(), crate::onboarding::OnboardingState::Loading);
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    h.commands();
+}
+
+/// Focus the card's field with a click, then type as the user does.
+fn type_in_card(h: &mut Harness, text: &str) {
+    let field = h.controls_labelled(CARD_FIELD);
+    assert_eq!(field.len(), 1, "the card has one field on step 1");
+    field[0].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.type_text(text);
+}
+
+fn resolve_commands(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::ResolveCrewInvite { code } => Some(code.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+fn card_error(h: &Harness) -> String {
+    h.app().get_onboarding_invite_code_error().to_string()
+}
+
+/// ★ A user whose link the web lounge could not hand to the app pastes it
+/// into the card on step 1. The resolve takes the path of a deep link: the
+/// welcome screen opens, and finalize joins the crew by its invite code.
+///
+/// Before the card, this user had no way to reach the invited crew.
+#[test]
+fn a_link_typed_in_the_card_opens_the_welcome_screen() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+    assert!(!h.controls_labelled(OPEN_INVITE).is_empty());
+
+    type_in_card(&mut h, "https://m3llo.app/join/nite-0001");
+    h.click_label(OPEN_INVITE);
+
+    let cmds = h.commands();
+    assert_eq!(
+        resolve_commands(&cmds),
+        vec!["NITE-0001".to_string()],
+        "the card sends the code, normalised: {cmds:?}"
+    );
+    assert!(
+        h.controls_labelled(OPEN_INVITE).is_empty() && !h.controls_labelled(CHECKING).is_empty(),
+        "the button reads \"Checking…\" while the resolve runs"
+    );
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(
+        welcome_is_visible(&h),
+        "the welcome screen opens, as for a deep link"
+    );
+    assert!(!join_crew_modal_is_visible(&h));
+    assert_eq!(
+        text_on_screen(&h, "InviteWelcome::inviter-text").as_deref(),
+        Some("alice invited you to join")
+    );
+    assert!(h.settings().borrow().onboarding_via_invite);
+    assert_eq!(
+        h.settings().borrow().pending_invite_code.as_deref(),
+        Some("NITE-0001")
+    );
+
+    h.click_label("Join Night Stones");
+    assert_eq!(step_indicator(&h).as_deref(), Some("STEP 01 / 02"));
+    h.commands();
+    finalize(&h);
+    assert_eq!(
+        finalize_invite(&h.commands()),
+        Some((Some("NITE-0001".into()), None, None)),
+        "finalize joins the invited crew by its code"
+    );
+}
+
+/// The card takes a bare code, and Enter in the field submits it.
+#[test]
+fn enter_in_the_card_field_sends_the_code() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+
+    type_in_card(&mut h, "  nite0001 \n");
+
+    assert_eq!(resolve_commands(&h.commands()), vec!["NITE-0001"]);
+    assert!(h.app().get_onboarding_invite_code_checking());
+}
+
+/// ★ While the resolve runs, the button ignores clicks and Enter: one
+/// command, not one for each press.
+#[test]
+fn the_card_sends_one_resolve_while_it_waits() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+    type_in_card(&mut h, "NITE-0001");
+    h.click_label(OPEN_INVITE);
+    assert_eq!(resolve_commands(&h.commands()).len(), 1);
+
+    h.click_label(CHECKING);
+    type_in_card(&mut h, "\n");
+    // The window also guards the callback itself.
+    h.app().invoke_onboarding_open_invite("NITE-0001".into());
+
+    assert_eq!(
+        resolve_commands(&h.commands()),
+        Vec::<String>::new(),
+        "no second resolve while the first runs"
+    );
+}
+
+/// ★ Text that is no invite gets the message in the card, and no network
+/// call.
+#[test]
+fn an_invalid_input_in_the_card_shows_the_error_and_sends_nothing() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+
+    for input in ["hello world", "ABCD", "https://example.com/join/NITE-0001"] {
+        type_in_card(&mut h, input);
+        h.click_label(OPEN_INVITE);
+        assert_eq!(card_error(&h), CODE_NOT_VALID, "{input:?}");
+        assert_eq!(
+            text_on_screen(&h, "InviteCodeCard::error-text").as_deref(),
+            Some(CODE_NOT_VALID),
+            "{input:?}: the message is under the field"
+        );
+        assert!(!h.app().get_onboarding_invite_code_checking());
+        let cmds = h.commands();
+        assert!(
+            !cmds
+                .iter()
+                .any(|c| matches!(c, Command::ResolveCrewInvite { .. })),
+            "{input:?}: no command for an input that is no invite: {cmds:?}"
+        );
+        // Clear the field for the next input.
+        h.app().set_onboarding_invite_code_text("".into());
+    }
+}
+
+/// ★ A resolve failure shows its own text in the card, not above the crews,
+/// and the button accepts a new try.
+#[test]
+fn a_resolve_failure_shows_in_the_card() {
+    for (error, text) in [
+        (mello_core::crew::InviteError::InvalidCode, CODE_NOT_VALID),
+        (mello_core::crew::InviteError::Failed, COULD_NOT_LOAD),
+    ] {
+        let mut h = Harness::new();
+        step_one_fresh_install(&mut h);
+        type_in_card(&mut h, "NITE-0001");
+        h.click_label(OPEN_INVITE);
+        h.commands();
+
+        h.emit(Event::CrewInviteResolveFailed {
+            reason: "server said no".into(),
+            error,
+        });
+
+        assert_eq!(card_error(&h), text, "{error:?}");
+        assert_eq!(
+            text_on_screen(&h, "InviteCodeCard::error-text").as_deref(),
+            Some(text)
+        );
+        assert_eq!(
+            h.app().get_onboarding_invite_error().as_str(),
+            "",
+            "the message stays in the card: nothing above the crews"
+        );
+        assert!(!join_crew_modal_is_visible(&h));
+        assert_eq!(h.app().get_onboarding_step(), 1);
+        assert!(
+            !h.controls_labelled(OPEN_INVITE).is_empty(),
+            "the button reads \"Open invite\" again"
+        );
+        h.click_label(OPEN_INVITE);
+        assert_eq!(
+            resolve_commands(&h.commands()),
+            vec!["NITE-0001"],
+            "the user can try again"
+        );
+    }
+}
+
+/// ★ Editing the field clears the error.
+#[test]
+fn editing_the_card_field_clears_the_error() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+    type_in_card(&mut h, "WXYZ-0000");
+    h.click_label(OPEN_INVITE);
+    assert_eq!(card_error(&h), "", "a well-formed code goes to the network");
+    h.emit(Event::CrewInviteResolveFailed {
+        reason: "not found".into(),
+        error: mello_core::crew::InviteError::InvalidCode,
+    });
+    assert_eq!(card_error(&h), CODE_NOT_VALID);
+
+    h.type_text("1");
+
+    assert_eq!(card_error(&h), "", "the user edited the field");
+}
+
+/// A link that opened the app still shows its message above the crews. The
+/// card does not take it.
+#[test]
+fn a_deep_link_failure_still_shows_above_the_crews() {
+    let mut h = Harness::new();
+    start_fresh_install_from_invite(&mut h);
+
+    h.emit(Event::CrewInviteResolveFailed {
+        reason: "not found".into(),
+        error: mello_core::crew::InviteError::InvalidCode,
+    });
+
+    assert_eq!(
+        h.app().get_onboarding_invite_error().as_str(),
+        "This invite link is no longer valid."
+    );
+    assert_eq!(card_error(&h), "");
+}
+
+/// ★ "Not now" returns to step 1 with the field cleared.
+#[test]
+fn not_now_after_the_card_returns_to_step_one_with_the_field_cleared() {
+    let mut h = Harness::new();
+    step_one_fresh_install(&mut h);
+    type_in_card(&mut h, "https://m3llo.app/join/NITE-0001");
+    h.click_label(OPEN_INVITE);
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(welcome_is_visible(&h));
+    assert_eq!(
+        h.app().get_onboarding_invite_code_text().as_str(),
+        "https://m3llo.app/join/NITE-0001",
+        "the text stays while the welcome screen shows"
+    );
+
+    h.click_label("Not now — show me other crews");
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(h.app().get_onboarding_invite_code_text().as_str(), "");
+    assert_eq!(card_error(&h), "");
+    assert!(!h.app().get_onboarding_invite_code_checking());
+    let fields = h.controls_labelled(CARD_FIELD);
+    assert_eq!(fields.len(), 1, "the card is on step 1");
+    assert_eq!(
+        fields[0].accessible_value().unwrap_or_default().as_str(),
+        "",
+        "the field on screen is empty"
+    );
+}
+
+/// A user with no discoverable crews still has the card, next to "Create
+/// your own crew".
+#[test]
+fn the_card_is_on_step_one_with_no_discoverable_crews() {
+    let mut h = Harness::new();
+    crate::onboarding::resume(h.ctx(), crate::onboarding::OnboardingState::Loading);
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: vec![],
+        cursor: None,
+    });
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "InviteCodeCard").count(),
+        1
+    );
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "CreateCrewCard").count(),
+        1
+    );
+    assert!(!h.controls_labelled(CARD_FIELD).is_empty());
+}
+
+/// The card is on step 1 once, whatever the number of crews.
+#[test]
+fn the_card_is_on_step_one_once_with_crews() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(8),
+        cursor: None,
+    });
+
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "InviteCodeCard").count(),
+        1
+    );
+}
+
+/// ★ The card takes the place of a crew card in row 1. No crew that step 1
+/// shows loses its card because of it: four crews, four cards, and the
+/// "Create your own crew" card.
+#[test]
+fn the_card_leaves_a_card_for_each_crew_that_step_one_shows() {
+    let mut h = Harness::new();
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(6),
+        cursor: None,
+    });
+
+    let names: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "CrewCard")
+        .filter_map(|e| e.accessible_label())
+        .collect();
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "CrewCard").count(),
+        4,
+        "four crews, one card each: {names:?}"
+    );
+    assert_eq!(
+        ElementHandle::find_by_element_type_name(h.app(), "CreateCrewCard").count(),
+        1
+    );
+    let model = h.app().get_discover_crews();
+    assert_eq!(model.row_count(), 4, "step 1 keeps four crews");
+}
+
+/// ★ After a logout the machine has a device account, and the user is on
+/// step 1 with no session. The card takes the same path: the welcome screen
+/// opens (no join modal, which needs a session), and finalize joins the crew
+/// by its code, through device auth into the existing account.
+#[test]
+fn after_a_logout_the_card_joins_the_crew_into_the_device_account() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app().invoke_logout();
+    assert!(!h.app().get_logged_in());
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert!(h.app().get_has_device_account());
+    h.commands();
+
+    type_in_card(&mut h, "nite-0001");
+    h.click_label(OPEN_INVITE);
+    assert_eq!(resolve_commands(&h.commands()), vec!["NITE-0001"]);
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+
+    assert!(welcome_is_visible(&h), "the welcome screen, not the modal");
+    assert!(!join_crew_modal_is_visible(&h));
+    h.click_label("Join Night Stones");
+    assert_eq!(h.app().get_onboarding_step(), 2);
+    h.commands();
+    finalize(&h);
+    let cmds = h.commands();
+    let finalize_cmd = cmds.iter().find_map(|c| match c {
+        Command::FinalizeOnboarding {
+            device_id,
+            invite_code,
+            crew_id,
+            crew_name,
+            ..
+        } => Some((
+            device_id.clone(),
+            invite_code.clone(),
+            crew_id.clone(),
+            crew_name.clone(),
+        )),
+        _ => None,
+    });
+    assert_eq!(
+        finalize_cmd,
+        Some(("dev-abc".into(), Some("NITE-0001".into()), None, None)),
+        "the existing device id, and the invite code: {cmds:?}"
+    );
+
+    h.emit(Event::OnboardingReady {
+        user: sample_user(),
+    });
+    assert_eq!(h.app().get_onboarding_step(), 3);
+    let after = h.commands();
+    assert!(
+        resolve_commands(&after).is_empty(),
+        "the invite is used: it does not come back as a join modal: {after:?}"
+    );
+}
+
+/// The card only changes where an invite that the user typed goes. A link
+/// that resolves for a device account with no card in use keeps the join
+/// modal path (CREW-INVITES §7).
+#[test]
+fn a_resolve_the_card_did_not_send_keeps_the_device_account_path() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app().invoke_logout();
+    h.emit(Event::DiscoverCrewsLoaded {
+        crews: sample_crews(3),
+        cursor: None,
+    });
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+
+    assert!(!welcome_is_visible(&h));
+    assert!(join_crew_modal_is_visible(&h));
+}
+
+// ---------------------------------------------------------------------------
 // Layout
 // ---------------------------------------------------------------------------
 

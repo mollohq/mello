@@ -12,31 +12,48 @@
 //!
 //! A user with a device account, or a logged-in user, keeps the join modal:
 //! the pending link is sent after sign-in (`handlers::auth`).
+//!
+//! The web lounge cannot always hand the invite to the app. Step 1 has the
+//! invite-code card for that: the user pastes the link or the code, and the
+//! resolve takes the same path as a deep link (CREW-INVITES §7.1). The card
+//! also works for a user with a device account who logged out: that user is
+//! on step 1, and finalize joins the crew into the existing account.
 
 use std::cell::RefCell;
 use std::rc::Rc;
 
 use mello_core::crew::{InviteError, ResolvedInvite};
 use mello_core::Command;
+use tokio::sync::mpsc::UnboundedSender;
 
 use crate::app_context::AppContext;
 use crate::deep_link::DeepLink;
-use crate::handlers::{invite_join_error_message, InviteSource};
+use crate::handlers::{invite_join_error_message, invite_resolve_error_message, InviteSource};
 use crate::onboarding::{EffectCtx, Input, OnboardingState};
 
-/// Does an invite link go into onboarding, instead of the join modal?
+/// Does an invite go into onboarding, instead of the join modal?
 ///
-/// Only for a fresh install that has not created its account: no session, no
+/// For a fresh install that has not created its account: no session, no
 /// device account, and a step before the account exists.
+///
+/// Also for an invite that the user typed into the card on step 1, with a
+/// device account: the user logged out, has no session, and cannot join in
+/// the modal. Finalize joins the crew into the device account instead.
 pub fn opens_onboarding(app: &crate::MainWindow, settings: &crate::Settings) -> bool {
     opens_onboarding_at(
         OnboardingState::from_step(app.get_onboarding_step()),
         app.get_logged_in(),
         settings.has_device_account(),
+        app.get_onboarding_invite_code_checking(),
     )
 }
 
-fn opens_onboarding_at(state: OnboardingState, logged_in: bool, has_device_account: bool) -> bool {
+fn opens_onboarding_at(
+    state: OnboardingState,
+    logged_in: bool,
+    has_device_account: bool,
+    typed_in_card: bool,
+) -> bool {
     let before_account = matches!(
         state,
         OnboardingState::Loading
@@ -44,7 +61,7 @@ fn opens_onboarding_at(state: OnboardingState, logged_in: bool, has_device_accou
             | OnboardingState::InviteWelcome
             | OnboardingState::PickAvatar
     );
-    !logged_in && !has_device_account && before_account
+    !logged_in && (!has_device_account || typed_in_card) && before_account
 }
 
 /// At startup, resolve an invite link now when it goes into onboarding.
@@ -55,7 +72,7 @@ fn opens_onboarding_at(state: OnboardingState, logged_in: bool, has_device_accou
 /// user signs in.
 pub fn dispatch_at_startup(ctx: &AppContext, state: OnboardingState) {
     let has_device_account = ctx.settings.borrow().has_device_account();
-    if !opens_onboarding_at(state, false, has_device_account) {
+    if !opens_onboarding_at(state, false, has_device_account, false) {
         return;
     }
     show_pending(ctx);
@@ -118,7 +135,44 @@ pub fn accept(ctx: &AppContext, code: String, invite: ResolvedInvite) {
     // the first, and the entry effect runs only on a change of state.
     show_stored(&ctx.app, &ctx.settings);
     ctx.app.set_onboarding_invite_error("".into());
+    // The card that sent this resolve is done. The typed text stays until
+    // "Not now" clears it.
+    ctx.app.set_onboarding_invite_code_checking(false);
+    ctx.app.set_onboarding_invite_code_error("".into());
     crate::onboarding::advance(ctx, Input::InviteResolved);
+}
+
+/// "Open invite" on step 1, or Enter in the field: what the user typed.
+///
+/// A text that is no invite gets the message in the card and no network
+/// call. A valid one sends `ResolveCrewInvite`, and the answer takes the
+/// path of a deep link (`accept`, `resolve_failed`). A second press while the
+/// resolve runs does nothing.
+pub fn open_typed(app: &crate::MainWindow, cmd_tx: &UnboundedSender<Command>, text: &str) {
+    if app.get_onboarding_invite_code_checking() {
+        log::debug!("[invite] card: a resolve is running — ignoring");
+        return;
+    }
+    match crate::deep_link::parse_invite_input(text) {
+        Some(code) => {
+            log::info!("[invite] card: resolving {code}");
+            app.set_onboarding_invite_code_error("".into());
+            app.set_onboarding_invite_code_checking(true);
+            let _ = cmd_tx.send(Command::ResolveCrewInvite { code });
+        }
+        None => {
+            log::info!("[invite] card: the text is not an invite — no network call");
+            app.set_onboarding_invite_code_error(
+                invite_resolve_error_message(InviteError::InvalidCode, InviteSource::TypedCode)
+                    .into(),
+            );
+        }
+    }
+}
+
+/// The user edited the field in the card: the message no longer applies.
+pub fn code_edited(app: &crate::MainWindow) {
+    app.set_onboarding_invite_code_error("".into());
 }
 
 /// "Join" on the welcome screen: step 2, which keeps the invite.
@@ -149,10 +203,22 @@ pub fn show_stored(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Setting
 
 /// The invite did not resolve: step 1 says why. Discovery moves `Loading` on
 /// to step 1, so this does not change the step.
+///
+/// An invite that the user typed shows the message in the card, with the
+/// field marked. A link that opened the app shows it above the crews.
 pub fn resolve_failed(ctx: &AppContext, error: InviteError) {
+    if ctx.app.get_onboarding_invite_code_checking() {
+        log::warn!("[invite] card: the invite did not resolve: {error:?} — message in the card");
+        ctx.app.set_onboarding_invite_code_checking(false);
+        ctx.app.set_onboarding_invite_code_error(
+            invite_resolve_error_message(error, InviteSource::TypedCode).into(),
+        );
+        return;
+    }
     log::warn!("[invite] onboarding invite did not resolve: {error:?} — step 1 with a message");
-    ctx.app
-        .set_onboarding_invite_error(crate::handlers::invite_resolve_error_message(error).into());
+    ctx.app.set_onboarding_invite_error(
+        invite_resolve_error_message(error, InviteSource::Link).into(),
+    );
 }
 
 /// Finalize could not join the invited crew. The account exists.
@@ -176,6 +242,9 @@ pub fn join_failed(ctx: &AppContext, error: InviteError) {
 
 /// Forget the invite: the user chose another crew, or onboarding finished.
 ///
+/// Clears what the user typed in the card too. It does not end a resolve in
+/// flight: only the answer does.
+///
 /// Does not save the settings. Every caller moves onboarding next, and the
 /// single writer in `onboarding` saves them.
 pub fn clear(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>) {
@@ -186,6 +255,8 @@ pub fn clear(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>) {
         s.pending_invite = None;
     }
     set_crew(app, "");
+    app.set_onboarding_invite_code_text("".into());
+    app.set_onboarding_invite_code_error("".into());
     app.set_onboarding_invite_highlight("".into());
     app.set_onboarding_invite_member_count(0);
     app.set_onboarding_invite_members(Rc::new(slint::VecModel::default()).into());

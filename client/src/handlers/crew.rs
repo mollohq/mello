@@ -11,6 +11,10 @@ use crate::{
     ChatMessageData, CrewData, DiscoverCrewData, FeedCardData, SearchUserData, VoiceChannelData,
 };
 
+/// The crews that step 1 shows: one featured crew, and three in row 2. Row 1
+/// also holds the "Create your own crew" card and the invite-code card.
+const ONBOARDING_CREW_CARDS: usize = 4;
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::DiscoverCrewsFailed { reason } => {
@@ -48,7 +52,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 crate::onboarding::OnboardingState::from_step(ctx.app.get_onboarding_step())
                     != crate::onboarding::OnboardingState::Done;
             if in_onboarding && !is_append {
-                let onboard_count = crews.len().min(5);
+                // Four crews: row 1 of the grid has the featured crew, "Create
+                // your own crew" and the invite-code card. Row 2 has three.
+                let onboard_count = crews.len().min(ONBOARDING_CREW_CARDS);
                 let model: Vec<CrewData> = crews[..onboard_count]
                     .iter()
                     .map(|c| CrewData {
@@ -62,7 +68,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ..Default::default()
                     })
                     .collect();
-                let bases = bento_bases(onboard_count, 5);
+                let bases = bento_bases(onboard_count, ONBOARDING_CREW_CARDS);
                 let rc = Rc::new(slint::VecModel::from(model));
                 ctx.app.set_discover_crews(rc.into());
                 ctx.app
@@ -437,8 +443,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 crate::onboarding_invite::resolve_failed(ctx, error);
                 return;
             }
-            ctx.app
-                .set_join_crew_error(invite_resolve_error_message(error).into());
+            ctx.app.set_join_crew_error(
+                invite_resolve_error_message(error, InviteSource::Link).into(),
+            );
             ctx.app.set_join_crew_loading(false);
             ctx.app.set_join_crew_modal_open(true);
         }
@@ -573,10 +580,15 @@ pub(crate) fn invite_join_error_message(error: InviteError, source: InviteSource
     }
 }
 
-/// The text shown when `resolve_crew_invite` fails.
-pub(crate) fn invite_resolve_error_message(error: InviteError) -> &'static str {
-    match error {
-        InviteError::InvalidCode => "This invite link is no longer valid.",
+/// The text shown when `resolve_crew_invite` fails. A user who typed the
+/// code did not follow a link, so the text names the code.
+pub(crate) fn invite_resolve_error_message(
+    error: InviteError,
+    source: InviteSource,
+) -> &'static str {
+    match (error, source) {
+        (InviteError::InvalidCode, InviteSource::Link) => "This invite link is no longer valid.",
+        (InviteError::InvalidCode, InviteSource::TypedCode) => "This invite code is not valid.",
         _ => "Could not load this invite. Try again.",
     }
 }

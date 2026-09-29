@@ -62,6 +62,10 @@ struct Snapshot {
     join_crew_inviter: String,
     /// Onboarding step 1: why the invite link could not be used.
     onboarding_invite_error: String,
+    /// The invite-code card on step 1: why the typed text was refused.
+    onboarding_invite_code_error: String,
+    /// The invite-code card on step 1: a resolve is running.
+    onboarding_invite_code_checking: bool,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -229,6 +233,8 @@ fn read(app: &MainWindow) -> Snapshot {
         onboarding_invite_path: app.get_onboarding_invite_path(),
         join_crew_inviter: app.get_join_crew_inviter().name.into(),
         onboarding_invite_error: app.get_onboarding_invite_error().into(),
+        onboarding_invite_code_error: app.get_onboarding_invite_code_error().into(),
+        onboarding_invite_code_checking: app.get_onboarding_invite_code_checking(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

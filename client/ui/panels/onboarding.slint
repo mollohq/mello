@@ -1,4 +1,4 @@
-import { Theme, MelloTextInput } from "../theme.slint";
+import { Theme, MelloTextInput, MelloInputField } from "../theme.slint";
 import { CutShape, CutButtonShape, CutCard } from "../components/cut.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
 import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
@@ -235,6 +235,135 @@ component CreateCrewCard inherits Rectangle {
             color: Theme.text-secondary;
             horizontal-alignment: center;
             letter-spacing: 1.5px;
+        }
+    }
+}
+
+/// "Got an invite?": the way to a crew that a link could not open in the
+/// app (CREW-INVITES §7.1). It shares the outline of the Create card. The
+/// button is white: it opens the invite and commits nothing. The red commit
+/// is "Join {crew}" on the welcome screen.
+component InviteCodeCard inherits Rectangle {
+    in-out property <string> text <=> field.text;
+    /// Why the input was refused. Empty when nothing is wrong.
+    in property <string> error: "";
+    /// A resolve is in flight: the button reads "Checking…" and takes no click.
+    in property <bool> checking: false;
+    callback open-invite(string);
+    /// The user edited the field.
+    callback edited();
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: Theme.graphic-light;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.bg-app;
+    }
+
+    VerticalLayout {
+        padding: 24px;
+        spacing: 0px;
+        alignment: center;
+
+        Text {
+            text: "GOT AN INVITE?";
+            font-family: Theme.font-label;
+            font-size: 14px;
+            font-weight: Theme.weight-label;
+            color: Theme.text-secondary;
+            letter-spacing: 1.5px;
+        }
+
+        Rectangle {
+            height: 8px;
+        }
+
+        Text {
+            text: "Paste the link or the code your friend sent you.";
+            font-family: Theme.font-body;
+            font-size: Theme.font-md;
+            font-weight: Theme.weight-sentence;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        Rectangle {
+            height: 18px;
+        }
+
+        field := MelloInputField {
+            label: "GOT AN INVITE?";
+            placeholder: "m3llo.app/join/…  or  ABCD-1234";
+            invalid: root.error != "";
+            accepted => {
+                if !root.checking {
+                    root.open-invite(self.text);
+                }
+            }
+            edited => {
+                root.edited();
+            }
+        }
+
+        Rectangle {
+            height: 8px;
+        }
+
+        error-text := Text {
+            text: root.error;
+            font-family: Theme.font-body;
+            font-size: 12px;
+            font-weight: Theme.weight-sentence;
+            color: Theme.live;
+            wrap: word-wrap;
+            min-height: 16px;
+        }
+
+        Rectangle {
+            height: 6px;
+        }
+
+        Rectangle {
+            height: 44px;
+            opacity: root.checking ? 0.55 : 1.0;
+
+            CutButtonShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.cut;
+                fill: open-touch.has-hover && !root.checking ? Theme.action-press : Theme.action;
+            }
+
+            Text {
+                text: root.checking ? "Checking…" : "Open invite";
+                font-family: Theme.font-label;
+                font-size: 14px;
+                font-weight: Theme.weight-label;
+                color: Theme.on-action;
+                width: parent.width;
+                height: parent.height;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+
+            open-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: root.checking ? "Checking…" : "Open invite";
+                enabled: !root.checking;
+                mouse-cursor: root.checking ? MouseCursor.default : MouseCursor.pointer;
+                clicked => {
+                    root.open-invite(field.text);
+                }
+            }
         }
     }
 }
@@ -501,6 +630,13 @@ export component Onboarding inherits Rectangle {
     callback invite-declined();
     // Why the invite link could not be used. Step 1 shows it above the crews.
     in property <string> invite-error: "";
+    // The invite-code card on step 1: the typed text, why it was refused, and
+    // a resolve in flight. "Open invite" and Enter emit `open-invite`.
+    in-out property <string> invite-code-text: "";
+    in property <string> invite-code-error: "";
+    in property <bool> invite-code-checking: false;
+    callback open-invite(string);
+    callback invite-code-edited();
     // Non-empty when crew discovery failed; step 1 surfaces it with a retry.
     in property <string> discover-error: "";
     callback retry-discover();
@@ -931,10 +1067,27 @@ export component Onboarding inherits Rectangle {
                             horizontal-stretch: 1;
                             clicked => { root.create-crew-requested("New Crew"); }
                         }
+
+                        // An invite is another way in, so the card is here
+                        // too: a user who has no crew to pick still has it.
+                        InviteCodeCard {
+                            horizontal-stretch: 1;
+                            text <=> root.invite-code-text;
+                            error: root.invite-code-error;
+                            checking: root.invite-code-checking;
+                            open-invite(text) => { root.open-invite(text); }
+                            edited => { root.invite-code-edited(); }
+                        }
                     }
 
                     for base in root.bento-set-bases: VerticalLayout {
                         spacing: 20px;
+
+                        // Where row 2 starts in the crew list. The first set
+                        // has the invite-code card in row 1, where the second
+                        // crew was. Its row 2 then starts one crew earlier,
+                        // so no crew loses its card.
+                        property <int> row2: base == 0 ? 1 : 2;
 
                         // Row 1: [featured 2x] [create CTA or 1x] [1x]
                         if discover-crews.length > base: HorizontalLayout {
@@ -974,7 +1127,18 @@ export component Onboarding inherits Rectangle {
                                 }
                             }
 
-                            CrewCard {
+                            // The first set puts the invite-code card here, in
+                            // the slot right of "Create your own crew".
+                            if base == 0: InviteCodeCard {
+                                horizontal-stretch: 1;
+                                text <=> root.invite-code-text;
+                                error: root.invite-code-error;
+                                checking: root.invite-code-checking;
+                                open-invite(text) => { root.open-invite(text); }
+                                edited => { root.invite-code-edited(); }
+                            }
+
+                            if base != 0: CrewCard {
                                 horizontal-stretch: 1;
                                 crew-name: discover-crews.length > base + 1 ? discover-crews[base + 1].name : "";
                                 crew-description: discover-crews.length > base + 1 ? discover-crews[base + 1].description : "";
@@ -983,7 +1147,7 @@ export component Onboarding inherits Rectangle {
                                 online-count: discover-crews.length > base + 1 ? discover-crews[base + 1].online-count : 0;
                                 crew-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].avatar : @image-url("");
                                 has-avatar: discover-crews.length > base + 1 ? discover-crews[base + 1].has-avatar : false;
-                                visible: base == 0 ? discover-crews.length > base + 1 : false;
+                                visible: false;
                                 clicked => {
                                     if discover-crews.length > base + 1 { root.crew-selected(discover-crews[base + 1].id); }
                                 }
@@ -991,50 +1155,50 @@ export component Onboarding inherits Rectangle {
                         }
 
                         // Row 2: [1x] [featured 2x] [1x]
-                        if discover-crews.length > base + 2: HorizontalLayout {
+                        if discover-crews.length > base + row2: HorizontalLayout {
                             height: 240px;
                             spacing: 20px;
 
                             CrewCard {
                                 horizontal-stretch: 1;
-                                crew-name: discover-crews[base + 2].name;
-                                crew-description: discover-crews[base + 2].description;
-                                member-count: discover-crews[base + 2].member-count;
-                                max-members: discover-crews[base + 2].max-members;
-                                online-count: discover-crews[base + 2].online-count;
-                                crew-avatar: discover-crews[base + 2].avatar;
-                                has-avatar: discover-crews[base + 2].has-avatar;
-                                clicked => { root.crew-selected(discover-crews[base + 2].id); }
+                                crew-name: discover-crews[base + row2].name;
+                                crew-description: discover-crews[base + row2].description;
+                                member-count: discover-crews[base + row2].member-count;
+                                max-members: discover-crews[base + row2].max-members;
+                                online-count: discover-crews[base + row2].online-count;
+                                crew-avatar: discover-crews[base + row2].avatar;
+                                has-avatar: discover-crews[base + row2].has-avatar;
+                                clicked => { root.crew-selected(discover-crews[base + row2].id); }
                             }
 
                             CrewCard {
                                 horizontal-stretch: 2;
                                 featured: true;
-                                crew-name: discover-crews.length > base + 3 ? discover-crews[base + 3].name : "";
-                                crew-description: discover-crews.length > base + 3 ? discover-crews[base + 3].description : "";
-                                member-count: discover-crews.length > base + 3 ? discover-crews[base + 3].member-count : 0;
-                                max-members: discover-crews.length > base + 3 ? discover-crews[base + 3].max-members : 0;
-                                online-count: discover-crews.length > base + 3 ? discover-crews[base + 3].online-count : 0;
-                                crew-avatar: discover-crews.length > base + 3 ? discover-crews[base + 3].avatar : @image-url("");
-                                has-avatar: discover-crews.length > base + 3 ? discover-crews[base + 3].has-avatar : false;
-                                visible: discover-crews.length > base + 3;
+                                crew-name: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].name : "";
+                                crew-description: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].description : "";
+                                member-count: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].member-count : 0;
+                                max-members: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].max-members : 0;
+                                online-count: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].online-count : 0;
+                                crew-avatar: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].avatar : @image-url("");
+                                has-avatar: discover-crews.length > base + row2 + 1 ? discover-crews[base + row2 + 1].has-avatar : false;
+                                visible: discover-crews.length > base + row2 + 1;
                                 clicked => {
-                                    if discover-crews.length > base + 3 { root.crew-selected(discover-crews[base + 3].id); }
+                                    if discover-crews.length > base + row2 + 1 { root.crew-selected(discover-crews[base + row2 + 1].id); }
                                 }
                             }
 
                             CrewCard {
                                 horizontal-stretch: 1;
-                                crew-name: discover-crews.length > base + 4 ? discover-crews[base + 4].name : "";
-                                crew-description: discover-crews.length > base + 4 ? discover-crews[base + 4].description : "";
-                                member-count: discover-crews.length > base + 4 ? discover-crews[base + 4].member-count : 0;
-                                max-members: discover-crews.length > base + 4 ? discover-crews[base + 4].max-members : 0;
-                                online-count: discover-crews.length > base + 4 ? discover-crews[base + 4].online-count : 0;
-                                crew-avatar: discover-crews.length > base + 4 ? discover-crews[base + 4].avatar : @image-url("");
-                                has-avatar: discover-crews.length > base + 4 ? discover-crews[base + 4].has-avatar : false;
-                                visible: discover-crews.length > base + 4;
+                                crew-name: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].name : "";
+                                crew-description: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].description : "";
+                                member-count: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].member-count : 0;
+                                max-members: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].max-members : 0;
+                                online-count: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].online-count : 0;
+                                crew-avatar: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].avatar : @image-url("");
+                                has-avatar: discover-crews.length > base + row2 + 2 ? discover-crews[base + row2 + 2].has-avatar : false;
+                                visible: discover-crews.length > base + row2 + 2;
                                 clicked => {
-                                    if discover-crews.length > base + 4 { root.crew-selected(discover-crews[base + 4].id); }
+                                    if discover-crews.length > base + row2 + 2 { root.crew-selected(discover-crews[base + row2 + 2].id); }
                                 }
                             }
                         }

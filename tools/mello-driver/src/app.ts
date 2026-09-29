@@ -33,6 +33,10 @@ export type AppState = {
   join_crew_inviter: string;
   /** Onboarding step 1: why the invite link could not be used. */
   onboarding_invite_error: string;
+  /** The invite-code card on step 1: why the typed text was refused. */
+  onboarding_invite_code_error: string;
+  /** The invite-code card on step 1: a resolve is running. */
+  onboarding_invite_code_checking: boolean;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];

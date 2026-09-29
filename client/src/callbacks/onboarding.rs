@@ -74,6 +74,25 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- Onboarding: the invite-code card on step 1 ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_onboarding_open_invite(move |text| {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::open_typed(&app, &cmd, text.as_str());
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_onboarding_invite_code_edited(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::code_edited(&app);
+            }
+        });
+    }
+
     // --- Onboarding: create crew ---
     {
         let app_weak = ctx.app.as_weak();
