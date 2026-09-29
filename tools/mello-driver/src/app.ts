@@ -130,6 +130,15 @@ export class App {
     return join(this.dir, "session.token");
   }
 
+  /**
+   * The single-instance name. The lock is global on the machine, so it
+   * carries the MCP port: two runs with different port bases can both have
+   * an "alice".
+   */
+  private get instance(): string {
+    return `e2e-${this.opts.mcpPort}-${this.name}`;
+  }
+
   /** Where the app writes an OAuth URL instead of opening the system browser. */
   get browserFile(): string {
     return join(this.dir, "browser-url.txt");
@@ -141,7 +150,7 @@ export class App {
    */
   async launch(deeplink?: string): Promise<void> {
     if (this.proc) throw new DriverError(`${this.name}: already running`);
-    const args = [...(deeplink ? [deeplink] : []), "--instance", `e2e-${this.name}`];
+    const args = [...(deeplink ? [deeplink] : []), "--instance", this.instance];
     const log = openSync(this.logPath, "a");
     this.proc = spawn(this.opts.binary, args, {
       cwd: this.opts.cwd,
@@ -183,7 +192,7 @@ export class App {
    * process with the same instance relays the URL over IPC and exits.
    */
   async openLink(url: string): Promise<void> {
-    const relay = spawn(this.opts.binary, [url, "--instance", `e2e-${this.name}`], {
+    const relay = spawn(this.opts.binary, [url, "--instance", this.instance], {
       cwd: this.opts.cwd,
       stdio: "ignore",
       env: { ...process.env, MELLO_CONFIG_DIR: join(this.dir, "config"), ...this.opts.env },
