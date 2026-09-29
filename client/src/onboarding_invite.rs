@@ -101,10 +101,49 @@ pub fn resume_state(settings: &crate::Settings, state: OnboardingState) -> Onboa
 }
 
 /// Show an invite that a previous run stored, for a restart on step 2.
+///
+/// The avatar is not stored: load it again.
 fn show_pending(ctx: &AppContext) {
     let name = ctx.settings.borrow().pending_invite_crew_name.clone();
     if let Some(name) = name.filter(|_| ctx.settings.borrow().pending_invite_code.is_some()) {
         set_crew(&ctx.app, &name);
+        fetch_avatar(&ctx.cmd_tx, &ctx.settings);
+    }
+}
+
+/// Ask core for the avatar of the stored invite's crew.
+///
+/// The resolve answer has no avatar. `get_crew_avatar` needs no session:
+/// core uses the `http_key`, as step 1 does for the crews it lists. The
+/// answer arrives as `CrewAvatarLoaded` (`handlers::crew`).
+fn fetch_avatar(cmd_tx: &UnboundedSender<Command>, settings: &Rc<RefCell<crate::Settings>>) {
+    let crew_id = settings
+        .borrow()
+        .pending_invite
+        .as_ref()
+        .map(|invite| invite.crew_id.clone());
+    if let Some(crew_id) = crew_id.filter(|id| !id.is_empty()) {
+        let _ = cmd_tx.send(Command::FetchCrewAvatars {
+            crew_ids: vec![crew_id],
+        });
+    }
+}
+
+/// The crew avatar arrived. Show it when it belongs to the stored invite.
+pub fn avatar_loaded(
+    app: &crate::MainWindow,
+    settings: &Rc<RefCell<crate::Settings>>,
+    crew_id: &str,
+    image: &slint::Image,
+) {
+    let is_invited_crew = settings
+        .borrow()
+        .pending_invite
+        .as_ref()
+        .is_some_and(|invite| invite.crew_id == crew_id);
+    if is_invited_crew {
+        app.set_onboarding_invite_crew_avatar(image.clone());
+        app.set_onboarding_invite_crew_has_avatar(true);
     }
 }
 
@@ -139,6 +178,11 @@ pub fn accept(ctx: &AppContext, code: String, invite: ResolvedInvite) {
     // "Not now" clears it.
     ctx.app.set_onboarding_invite_code_checking(false);
     ctx.app.set_onboarding_invite_code_error("".into());
+    // A second invite replaces the first, and the avatar with it.
+    ctx.app
+        .set_onboarding_invite_crew_avatar(Default::default());
+    ctx.app.set_onboarding_invite_crew_has_avatar(false);
+    fetch_avatar(&ctx.cmd_tx, &ctx.settings);
     crate::onboarding::advance(ctx, Input::InviteResolved);
 }
 
@@ -267,6 +311,8 @@ pub fn clear(app: &crate::MainWindow, settings: &Rc<RefCell<crate::Settings>>) {
         s.pending_invite = None;
     }
     set_crew(app, "");
+    app.set_onboarding_invite_crew_avatar(Default::default());
+    app.set_onboarding_invite_crew_has_avatar(false);
     app.set_onboarding_invite_code_text("".into());
     app.set_onboarding_invite_code_error("".into());
     app.set_onboarding_invite_highlight("".into());

@@ -166,6 +166,8 @@ A fresh install opened from `mello://join/{code}` skips step 1 (#68). "Fresh ins
 | Primary button (red) | "Join {crew}". Long names elide. Opens step 2. |
 | Text link | "Not now — show me other crews". Opens step 1 and forgets the invite. It also clears the invite-code card (§6.4). Finalize then does not join the invited crew. |
 
+The crew tile shows the crew avatar. The resolve answer has no avatar, so the client sends `FetchCrewAvatars` with the crew ID. Core calls `get_crew_avatar` with the `http_key`, so no session is needed. The tile shows the initials until `CrewAvatarLoaded` arrives, and when the crew has no avatar. Step 2 ("JOINING CREW") and the join modal show the same avatar.
+
 The welcome screen is onboarding step 5 in `Settings` and in the Slint property. Steps 0 to 4 keep their numbers from earlier builds. In the flow it comes before step 2.
 
 A restart on the welcome screen shows it again. The screen reads the invite from `Settings::pending_invite`, so it needs no network call. With no stored invite, startup opens step 1.

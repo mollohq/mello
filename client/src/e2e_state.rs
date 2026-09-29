@@ -66,6 +66,8 @@ struct Snapshot {
     onboarding_invite_code_error: String,
     /// The invite-code card on step 1: a resolve is running.
     onboarding_invite_code_checking: bool,
+    /// The welcome screen and step 2: the invited crew shows its avatar.
+    onboarding_invite_crew_has_avatar: bool,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -235,6 +237,7 @@ fn read(app: &MainWindow) -> Snapshot {
         onboarding_invite_error: app.get_onboarding_invite_error().into(),
         onboarding_invite_code_error: app.get_onboarding_invite_code_error().into(),
         onboarding_invite_code_checking: app.get_onboarding_invite_code_checking(),
+        onboarding_invite_crew_has_avatar: app.get_onboarding_invite_crew_has_avatar(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

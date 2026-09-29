@@ -1558,6 +1558,15 @@ fn card_error(h: &Harness) -> String {
     h.app().get_onboarding_invite_code_error().to_string()
 }
 
+/// A crew avatar as core delivers it: base64 of an image file.
+fn avatar_data() -> String {
+    let img = image::RgbaImage::from_pixel(8, 8, image::Rgba([200, 60, 60, 255]));
+    let mut png = std::io::Cursor::new(Vec::new());
+    img.write_to(&mut png, image::ImageFormat::Png)
+        .expect("a PNG encodes in memory");
+    base64::engine::general_purpose::STANDARD.encode(png.into_inner())
+}
+
 /// ★ A user whose link the web lounge could not hand to the app pastes it
 /// into the card on step 1. The resolve takes the path of a deep link: the
 /// welcome screen opens, and finalize joins the crew by its invite code.
@@ -2053,6 +2062,143 @@ fn the_discover_code_field_refuses_what_is_no_invite() {
             .iter()
             .any(|c| matches!(c, Command::JoinByInviteCode { .. })),
         "{cmds:?}"
+    );
+}
+
+/// ★ The crew avatar loads by crew ID, without a session, and shows on the
+/// welcome screen and on step 2. Initials show until it arrives.
+#[test]
+fn the_invited_crew_avatar_loads_and_shows_on_the_welcome_screen_and_step_two() {
+    let mut h = Harness::new();
+    start_fresh_install_from_invite(&mut h);
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::FetchCrewAvatars { crew_ids } if crew_ids == &["crew-inv".to_string()]
+        )),
+        "the avatar is fetched by crew ID: {cmds:?}"
+    );
+    assert!(
+        !h.app().get_onboarding_invite_crew_has_avatar(),
+        "initials show until the avatar arrives"
+    );
+    assert_eq!(h.app().get_onboarding_invite_crew_initials().as_str(), "NS");
+
+    // The avatar of another crew is not the invited crew's.
+    h.emit(Event::CrewAvatarLoaded {
+        crew_id: "crew-other".into(),
+        data: avatar_data(),
+    });
+    assert!(!h.app().get_onboarding_invite_crew_has_avatar());
+
+    h.emit(Event::CrewAvatarLoaded {
+        crew_id: "crew-inv".into(),
+        data: avatar_data(),
+    });
+    assert!(h.app().get_onboarding_invite_crew_has_avatar());
+    assert!(welcome_is_visible(&h));
+
+    // Step 2 shows the same avatar, and "Back" keeps it.
+    h.click_label("Join Night Stones");
+    assert!(h.app().get_onboarding_invite_crew_has_avatar());
+    h.click_label("Back");
+    assert!(h.app().get_onboarding_invite_crew_has_avatar());
+}
+
+/// "Not now" forgets the invite, and its avatar with it. A second invite
+/// starts with initials again.
+#[test]
+fn the_invited_crew_avatar_does_not_outlive_its_invite() {
+    let mut h = Harness::new();
+    welcome_on_fresh_install(&mut h, sample_invite());
+    h.emit(Event::CrewAvatarLoaded {
+        crew_id: "crew-inv".into(),
+        data: avatar_data(),
+    });
+    assert!(h.app().get_onboarding_invite_crew_has_avatar());
+
+    // A second link replaces the first.
+    h.emit(Event::CrewInviteResolved {
+        code: "OTHR-0002".into(),
+        invite: mello_core::crew::ResolvedInvite {
+            crew_id: "crew-2".into(),
+            crew_name: "Other Crew".into(),
+            ..sample_invite()
+        },
+    });
+    assert!(!h.app().get_onboarding_invite_crew_has_avatar());
+
+    h.emit(Event::CrewAvatarLoaded {
+        crew_id: "crew-2".into(),
+        data: avatar_data(),
+    });
+    assert!(h.app().get_onboarding_invite_crew_has_avatar());
+    h.click_label("Not now — show me other crews");
+    assert!(!h.app().get_onboarding_invite_crew_has_avatar());
+}
+
+/// A restart on the welcome screen loads the avatar again: only the invite
+/// is stored, not the image.
+#[test]
+fn a_restart_on_the_welcome_screen_loads_the_avatar_again() {
+    let mut h = Harness::new();
+    welcome_on_fresh_install(&mut h, sample_invite());
+
+    let mut h2 = h.restart();
+    let cmds = h2.commands();
+
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::FetchCrewAvatars { crew_ids } if crew_ids == &["crew-inv".to_string()]
+        )),
+        "{cmds:?}"
+    );
+}
+
+/// The join modal shows the crew avatar too. The modal opens for a user with
+/// an account, and the avatar loads by crew ID.
+#[test]
+fn the_join_modal_loads_and_shows_the_crew_avatar() {
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.commands();
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(join_crew_modal_is_visible(&h));
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::FetchCrewAvatars { crew_ids } if crew_ids == &["crew-inv".to_string()]
+        )),
+        "{cmds:?}"
+    );
+    assert!(
+        !h.app().get_join_crew_has_avatar(),
+        "initials show until it arrives"
+    );
+
+    h.emit(Event::CrewAvatarLoaded {
+        crew_id: "crew-inv".into(),
+        data: avatar_data(),
+    });
+
+    assert!(h.app().get_join_crew_has_avatar());
+    assert!(
+        !h.app().get_onboarding_invite_crew_has_avatar(),
+        "the onboarding invite is not the modal's crew"
     );
 }
 

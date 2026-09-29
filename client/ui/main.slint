@@ -82,6 +82,10 @@ export component MainWindow inherits Window {
     // shows it: finalize joins this crew. Empty when there is no invite.
     in property <string> onboarding-invite-crew-name: "";
     in property <string> onboarding-invite-crew-initials: "";
+    // The invited crew's avatar, loaded by crew ID. Initials show until it
+    // arrives, and for a crew with no avatar.
+    in property <image> onboarding-invite-crew-avatar;
+    in property <bool> onboarding-invite-crew-has-avatar: false;
     // The rest of the invite, for the welcome screen (step 5).
     in property <string> onboarding-invite-highlight: "";
     in property <int> onboarding-invite-member-count: 0;
@@ -370,6 +374,9 @@ export component MainWindow inherits Window {
     in property <string> join-crew-name: "";
     /// Two letters for the crew tile in the join dialog.
     in property <string> join-crew-initials: "";
+    // The crew avatar, loaded by crew ID. Initials show until it arrives.
+    in property <image> join-crew-avatar;
+    in property <bool> join-crew-has-avatar: false;
     in property <string> join-crew-id: "";
     in property <string> join-crew-invite-code: "";
     in property <string> join-crew-highlight: "";
@@ -695,6 +702,8 @@ export component MainWindow inherits Window {
         link-error: root.link-error;
         invite-crew-name: root.onboarding-invite-crew-name;
         invite-crew-initials: root.onboarding-invite-crew-initials;
+        invite-crew-avatar: root.onboarding-invite-crew-avatar;
+        invite-crew-has-avatar: root.onboarding-invite-crew-has-avatar;
         invite-highlight: root.onboarding-invite-highlight;
         invite-member-count: root.onboarding-invite-member-count;
         invite-members: root.onboarding-invite-members;
@@ -1475,6 +1484,8 @@ export component MainWindow inherits Window {
     if join-crew-modal-open: JoinCrewModal {
         crew-name: root.join-crew-name;
         crew-initials: root.join-crew-initials;
+        crew-avatar: root.join-crew-avatar;
+        crew-has-avatar: root.join-crew-has-avatar;
         crew-id: root.join-crew-id;
         highlight: root.join-crew-highlight;
         avatar-seed: root.join-crew-avatar-seed;

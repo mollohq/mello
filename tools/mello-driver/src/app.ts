@@ -37,6 +37,8 @@ export type AppState = {
   onboarding_invite_code_error: string;
   /** The invite-code card on step 1: a resolve is running. */
   onboarding_invite_code_checking: boolean;
+  /** The welcome screen and step 2: the invited crew shows its avatar. */
+  onboarding_invite_crew_has_avatar: boolean;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];

@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
-import { CutButtonShape, CutTile } from "../components/cut.slint";
+import { CutButtonShape } from "../components/cut.slint";
+import { CrewTile } from "../components/crew_tile.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { InvitePersonData } from "../types.slint";
 
@@ -13,8 +14,13 @@ import { InvitePersonData } from "../types.slint";
 
 export component InviteWelcome inherits Rectangle {
     in property <string> crew-name: "";
-    /// Two letters for the crew tile. The resolve answer has no avatar URL.
+    /// Two letters for the crew tile. Shown until the avatar loads, and for a
+    /// crew with no avatar.
     in property <string> crew-initials: "";
+    /// The crew avatar. The resolve answer has no avatar URL: the client
+    /// loads it by crew ID after the answer.
+    in property <image> crew-avatar;
+    in property <bool> crew-has-avatar: false;
     /// One line from the weekly recap. Empty when the crew has none.
     in property <string> highlight: "";
     in property <int> member-count: 0;
@@ -82,23 +88,15 @@ export component InviteWelcome inherits Rectangle {
         HorizontalLayout {
             spacing: 24px;
 
-            CutTile {
+            CrewTile {
                 width: 104px;
                 height: 104px;
                 notch: Theme.cut;
-                fill-color: Theme.raised;
-
-                Text {
-                    text: root.crew-initials != "" ? root.crew-initials : "?";
-                    font-family: Theme.font-display;
-                    font-size: 36px;
-                    font-weight: Theme.weight-display-bold;
-                    color: Theme.text-secondary;
-                    width: parent.width;
-                    height: parent.height;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
+                initials: root.crew-initials;
+                initials-size: 36px;
+                avatar: root.crew-avatar;
+                has-avatar: root.crew-has-avatar;
+                surface: Theme.bg-app;
             }
 
             VerticalLayout {

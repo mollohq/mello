@@ -1,5 +1,6 @@
 import { Theme, MelloTextInput, MelloInputField } from "../theme.slint";
 import { CutShape, CutButtonShape, CutCard } from "../components/cut.slint";
+import { CrewTile } from "../components/crew_tile.slint";
 import { CrewData, AudioDeviceData } from "../types.slint";
 import { DeviceDropdown, SettingsToggle } from "settings_modal.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
@@ -618,6 +619,9 @@ export component Onboarding inherits Rectangle {
     // shows the crew the user joins. Empty when there is no invite.
     in property <string> invite-crew-name: "";
     in property <string> invite-crew-initials: "";
+    // The invited crew's avatar. Initials show until it loads.
+    in property <image> invite-crew-avatar;
+    in property <bool> invite-crew-has-avatar: false;
     // The rest of the invite, for the welcome screen (step 5).
     in property <string> invite-highlight: "";
     in property <int> invite-member-count: 0;
@@ -765,6 +769,8 @@ export component Onboarding inherits Rectangle {
         height: parent.height;
         crew-name: root.invite-crew-name;
         crew-initials: root.invite-crew-initials;
+        crew-avatar: root.invite-crew-avatar;
+        crew-has-avatar: root.invite-crew-has-avatar;
         highlight: root.invite-highlight;
         member-count: root.invite-member-count;
         members: root.invite-members;
@@ -1262,28 +1268,15 @@ export component Onboarding inherits Rectangle {
                     alignment: start;
 
                     // A crew is a thing, so it wears the two-corner tile.
-                    Rectangle {
+                    CrewTile {
                         width: 44px;
                         height: 44px;
-
-                        CutButtonShape {
-                            width: parent.width;
-                            height: parent.height;
-                            n: Theme.cut;
-                            fill: Theme.raised;
-                        }
-
-                        Text {
-                            font-family: Theme.font-display;
-                            text: root.invite-crew-initials != "" ? root.invite-crew-initials : "?";
-                            font-size: 15px;
-                            font-weight: Theme.weight-display-bold;
-                            color: Theme.text-secondary;
-                            width: parent.width;
-                            height: parent.height;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
+                        notch: Theme.cut;
+                        initials: root.invite-crew-initials;
+                        initials-size: 15px;
+                        avatar: root.invite-crew-avatar;
+                        has-avatar: root.invite-crew-has-avatar;
+                        surface: Theme.bg-app;
                     }
 
                     VerticalLayout {

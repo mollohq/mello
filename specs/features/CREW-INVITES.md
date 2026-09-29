@@ -258,7 +258,7 @@ The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each 
 
 On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`.
 
-**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists. Onboarding skips step 1 and opens the welcome screen. It names the inviter and the crew. "Join {crew}" opens step 2, and finalize joins the crew by its invite code. "Not now" opens step 1 and forgets the invite. Step 2 has "Back", which opens the welcome screen again with the invite kept. See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
+**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists. Onboarding skips step 1 and opens the welcome screen. It names the inviter and the crew. "Join {crew}" opens step 2, and finalize joins the crew by its invite code. "Not now" opens step 1 and forgets the invite. Step 2 has "Back", which opens the welcome screen again with the invite kept. The crew tile on these screens shows the crew avatar (§8.3). See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
 
 An invite typed in the card on step 1 (§8.5) takes the same path, also for a machine with a device account.
 
@@ -302,7 +302,7 @@ An `InviteCard` component is injected client-side at a fixed position (slot 2) i
 Full-screen modal overlay shown when `DeepLink::Join` is dispatched:
 
 - Inviter line: the inviter as an octagon, and "{inviter} invited you". No line when the invite has no inviter.
-- Crew avatar (large, centered)
+- Crew avatar (large, centered). The resolve answer has no avatar. The client sends `FetchCrewAvatars` with the crew ID, and the tile shows the initials until `CrewAvatarLoaded` arrives, and when the crew has none. Core calls `get_crew_avatar`, which needs no session.
 - Crew name (large text)
 - Sub line: the member count and the highlight from the weekly recap (if available), e.g. "4 members · 7h hangout · 3 clips"
 - Primary button: **"Join crew"** — calls `join_by_invite_code` RPC, navigates to the crew on success

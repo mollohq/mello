@@ -1,5 +1,6 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { CrewTile } from "../components/crew_tile.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { InvitePersonData } from "../types.slint";
 
@@ -7,6 +8,10 @@ export component JoinCrewModal inherits Rectangle {
     in property <string> crew-name: "";
     /// Two letters for the crew tile. The full name does not fit the box.
     in property <string> crew-initials: "";
+    /// The crew avatar, loaded by crew ID after the resolve answer. The
+    /// initials show until it arrives, and for a crew with no avatar.
+    in property <image> crew-avatar;
+    in property <bool> crew-has-avatar: false;
     in property <string> crew-id: "";
     in property <string> highlight: "";
     in property <string> avatar-seed: "";
@@ -179,32 +184,18 @@ export component JoinCrewModal inherits Rectangle {
                     }
                 }
 
-                // Avatar placeholder (circle with initials from seed)
-                Rectangle {
+                // A crew is a thing, so it wears the two-corner tile. The
+                // avatar replaces the initials once it has loaded.
+                CrewTile {
                     width: 96px;
                     height: 96px;
                     x: (parent.width - self.width) / 2;
-                    background: transparent;
-
-                    // A crew is a thing, so it wears the two-corner tile.
-                    CutButtonShape {
-                        width: parent.width;
-                        height: parent.height;
-                        n: 21px;
-                        fill: Theme.raised;
-                    }
-
-                    Text {
-                        font-family: Theme.font-display;
-                        text: crew-initials != "" ? crew-initials : "?";
-                        font-size: 30px;
-                        font-weight: Theme.weight-display-bold;
-                        color: Theme.text-secondary;
-                        width: parent.width;
-                        height: parent.height;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                    notch: 21px;
+                    initials: root.crew-initials;
+                    initials-size: 30px;
+                    avatar: root.crew-avatar;
+                    has-avatar: root.crew-has-avatar;
+                    surface: Theme.surface;
                 }
 
                 // Crew name

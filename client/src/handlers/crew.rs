@@ -284,6 +284,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             let slint_img = crate::avatar::downscale_for_ui(slint::Image::from_rgba8(buf));
 
+            // The crew of an open invite: the join modal, and the welcome
+            // screen and step 2 of a fresh install.
+            if ctx.app.get_join_crew_id() == crew_id.as_str() {
+                ctx.app.set_join_crew_avatar(slint_img.clone());
+                ctx.app.set_join_crew_has_avatar(true);
+            }
+            crate::onboarding_invite::avatar_loaded(
+                &ctx.app,
+                &ctx.settings,
+                crew_id.as_str(),
+                &slint_img,
+            );
+
             let crews = ctx.app.get_crews();
             for i in 0..crews.row_count() {
                 if let Some(mut c) = crews.row_data(i) {
@@ -430,6 +443,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         .map(crate::converters::invite_person)
                         .unwrap_or_default(),
                 );
+                // The resolve answer has no avatar: load it by crew ID. The
+                // initials show until it arrives.
+                let _ = ctx.cmd_tx.send(Command::FetchCrewAvatars {
+                    crew_ids: vec![ctx.app.get_join_crew_id().to_string()],
+                });
+                ctx.app.set_join_crew_avatar(Default::default());
+                ctx.app.set_join_crew_has_avatar(false);
                 ctx.app.set_join_crew_error("".into());
                 ctx.app.set_join_crew_loading(false);
                 ctx.app.set_join_crew_joining(false);
