@@ -291,9 +291,10 @@ An `InviteCard` component is injected client-side at a fixed position (slot 2) i
 
 Full-screen modal overlay shown when `DeepLink::Join` is dispatched:
 
+- Inviter line: the inviter as an octagon, and "{inviter} invited you". No line when the invite has no inviter.
 - Crew avatar (large, centered)
 - Crew name (large text)
-- Highlight text from the weekly recap (if available), e.g. "7h hangout · 3 clips · Counter-Strike 2"
+- Sub line: the member count and the highlight from the weekly recap (if available), e.g. "4 members · 7h hangout · 3 clips"
 - Primary button: **"Join crew"** — calls `join_by_invite_code` RPC, navigates to the crew on success
 - Secondary text link: **"Not now"** — dismisses the modal
 

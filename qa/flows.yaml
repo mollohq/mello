@@ -148,7 +148,7 @@ flows:
     title: Accept an invite by deep link while the app runs
     priority: P0
     users: 2
-    harness: []
+    harness: [the_join_modal_names_the_inviter_and_counts_the_members]
     journeys: [qa/journeys/invite-accept-while-running.ts]
     protocol: []
     issues: []

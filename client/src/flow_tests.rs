@@ -804,6 +804,39 @@ fn open_join_modal_during_onboarding(h: &mut Harness) {
     assert_eq!(visible_screens(h), vec![Screen::Onboarding]);
 }
 
+/// The join modal names the inviter and counts the members.
+#[test]
+fn the_join_modal_names_the_inviter_and_counts_the_members() {
+    let mut h = Harness::new();
+    h.app().set_join_crew_highlight("stale".into());
+    open_join_modal_during_onboarding(&mut h);
+
+    assert_eq!(
+        text_on_screen(&h, "JoinCrewModal::inviter-text").as_deref(),
+        Some("alice invited you")
+    );
+    assert_eq!(
+        text_on_screen(&h, "JoinCrewModal::sub-line-text").as_deref(),
+        Some("4 members"),
+        "the member count; this invite has no highlight"
+    );
+
+    // An invite with no inviter has no inviter line.
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0002".into(),
+        invite: mello_core::crew::ResolvedInvite {
+            inviter: None,
+            highlight: "7h hangout".into(),
+            ..sample_invite()
+        },
+    });
+    assert_eq!(text_on_screen(&h, "JoinCrewModal::inviter-text"), None);
+    assert_eq!(
+        text_on_screen(&h, "JoinCrewModal::sub-line-text").as_deref(),
+        Some("4 members · 7h hangout")
+    );
+}
+
 /// ★ Regression: a failed invite join during onboarding was invisible.
 ///
 /// Clicking "Join crew" closed the modal at once, and the failure went to the

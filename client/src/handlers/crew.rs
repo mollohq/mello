@@ -416,6 +416,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_join_crew_id(invite.crew_id.into());
                 ctx.app.set_join_crew_highlight(invite.highlight.into());
                 ctx.app.set_join_crew_avatar_seed(invite.avatar_seed.into());
+                ctx.app.set_join_crew_member_count(invite.member_count);
+                ctx.app.set_join_crew_inviter(
+                    invite
+                        .inviter
+                        .as_ref()
+                        .map(crate::converters::invite_person)
+                        .unwrap_or_default(),
+                );
                 ctx.app.set_join_crew_error("".into());
                 ctx.app.set_join_crew_loading(false);
                 ctx.app.set_join_crew_joining(false);
