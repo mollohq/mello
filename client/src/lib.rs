@@ -598,17 +598,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             ctx.app.set_onboarding_step(4);
         } else {
             log::info!("[auth] startup  onboarding_step={step}");
-            let state = crate::onboarding::OnboardingState::from_step(step as i32);
-            if step > 3 {
-                log::info!("[auth] onboarding done — attempting session restore");
-                let _ = ctx.cmd_tx.send(Command::TryRestore);
-            } else {
-                log::info!("[auth] onboarding in progress — resuming {state:?}");
-            }
-            // Before resume: an invite link on a fresh install resolves ahead
-            // of crew discovery and opens step 2 (#68).
-            crate::onboarding_invite::dispatch_at_startup(&ctx, state);
-            crate::onboarding::resume(&ctx, state);
+            crate::onboarding::start(&ctx);
         }
         let _ = ctx.cmd_tx.send(Command::CheckMicPermission);
     }

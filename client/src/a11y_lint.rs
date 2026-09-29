@@ -334,6 +334,10 @@ mod runtime {
         check("onboarding step 2", &mut h, &mut failures);
         h.app().set_onboarding_step(3);
         check("onboarding step 3", &mut h, &mut failures);
+        h.app()
+            .set_onboarding_invite_crew_name("Night Stones".into());
+        h.app().set_onboarding_step(5);
+        check("invite welcome", &mut h, &mut failures);
         h.app().set_onboarding_step(1);
         h.app().set_show_sign_in(true);
         check("sign-in panel", &mut h, &mut failures);

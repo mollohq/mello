@@ -29,7 +29,7 @@ flows:
     title: Fresh install, join a public crew from step 1
     priority: P0
     users: 1
-    harness: [entering_step_2_by_choosing_a_crew_loads_its_data, onboarding_with_crews_shows_cards_and_one_create_card]
+    harness: [entering_step_2_by_choosing_a_crew_loads_its_data, onboarding_with_crews_shows_cards_and_one_create_card, the_card_leaves_a_card_for_each_crew_that_step_one_shows]
     journeys: []
     protocol: []
     issues: []
@@ -47,7 +47,7 @@ flows:
     title: No discoverable crews, the create card still shows
     priority: P1
     users: 1
-    harness: [onboarding_with_zero_crews_still_offers_a_way_forward]
+    harness: [onboarding_with_zero_crews_still_offers_a_way_forward, the_card_is_on_step_one_with_no_discoverable_crews]
     journeys: []
     protocol: []
     issues: []
@@ -148,16 +148,16 @@ flows:
     title: Accept an invite by deep link while the app runs
     priority: P0
     users: 2
-    harness: []
+    harness: [the_join_modal_names_the_inviter_and_counts_the_members]
     journeys: [qa/journeys/invite-accept-while-running.ts]
     protocol: []
     issues: []
 
   - id: INV-03
-    title: Accept an invite by deep link on a fresh install (step 1 is skipped, step 2 names the crew)
+    title: Accept an invite by deep link on a fresh install (the welcome screen names the inviter and the crew, Join opens step 2 of 2)
     priority: P0
     users: 2
-    harness: [an_invite_link_on_a_fresh_install_skips_step_one, retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code, a_crew_picked_at_step_one_replaces_the_invite, a_failed_invite_join_at_finalize_is_never_a_dead_end, a_restart_on_step_two_keeps_the_invite, an_invite_on_a_machine_with_a_device_account_waits_for_sign_in, a_resolved_invite_skips_step_one_only_before_the_account_exists]
+    harness: [an_invite_link_on_a_fresh_install_skips_step_one, a_fresh_install_from_an_invite_shows_the_welcome_screen, join_on_the_welcome_screen_opens_step_one_of_two, the_welcome_screen_without_an_inviter_says_you_are_invited, a_restart_on_the_welcome_screen_shows_it_again, a_restart_on_the_welcome_screen_without_an_invite_opens_step_one, retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code, a_crew_picked_at_step_one_replaces_the_invite, a_failed_invite_join_at_finalize_is_never_a_dead_end, a_restart_on_step_two_keeps_the_invite, an_invite_on_a_machine_with_a_device_account_waits_for_sign_in, a_resolved_invite_skips_step_one_only_before_the_account_exists, back_on_step_two_of_the_invite_path_returns_to_the_welcome_screen, step_two_has_no_back_control_off_the_invite_path, back_does_nothing_while_the_account_is_being_created, the_invited_crew_avatar_loads_and_shows_on_the_welcome_screen_and_step_two, the_invited_crew_avatar_does_not_outlive_its_invite, a_restart_on_the_welcome_screen_loads_the_avatar_again, the_join_modal_loads_and_shows_the_crew_avatar]
     journeys: [qa/journeys/invite-accept-deeplink-cold.ts, qa/journeys/chat-two-users.ts, qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
@@ -175,8 +175,8 @@ flows:
     title: An invalid or expired invite code shows a clear error
     priority: P1
     users: 1
-    harness: [an_invalid_invite_on_a_fresh_install_shows_step_one_with_a_message, a_failed_join_from_the_discover_code_field_is_shown_there]
-    journeys: [qa/journeys/invite-invalid-code-cold.ts]
+    harness: [an_invalid_invite_on_a_fresh_install_shows_step_one_with_a_message, a_failed_join_from_the_discover_code_field_is_shown_there, an_invalid_input_in_the_card_shows_the_error_and_sends_nothing, a_resolve_failure_shows_in_the_card, editing_the_card_field_clears_the_error, a_deep_link_failure_still_shows_above_the_crews]
+    journeys: [qa/journeys/invite-invalid-code-cold.ts, qa/journeys/invite-code-card.ts]
     protocol: []
     issues: []
 
@@ -193,12 +193,31 @@ flows:
     title: Join by typing an invite code in Discover
     priority: P1
     users: 2
-    harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths]
+    harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths, the_discover_code_field_accepts_a_link, the_discover_code_field_refuses_what_is_no_invite]
     journeys: []
     protocol: []
     issues: []
 
+  - id: INV-08
+    title: Decline an invite on the welcome screen (Not now), pick another crew at step 1
+    priority: P1
+    users: 2
+    harness: [not_now_on_the_welcome_screen_forgets_the_invite, the_welcome_screen_opens_step_two_or_step_one, not_now_after_the_card_returns_to_step_one_with_the_field_cleared]
+    journeys: [qa/journeys/invite-not-now-cold.ts]
+    protocol: []
+    issues: []
+
+  - id: INV-09
+    title: Open an invite from the code card on step 1 (a link or a code, the web lounge could not hand it to the app), also after a logout
+    priority: P0
+    users: 2
+    harness: [a_link_typed_in_the_card_opens_the_welcome_screen, enter_in_the_card_field_sends_the_code, the_card_sends_one_resolve_while_it_waits, an_invalid_input_in_the_card_shows_the_error_and_sends_nothing, a_resolve_failure_shows_in_the_card, editing_the_card_field_clears_the_error, a_deep_link_failure_still_shows_above_the_crews, not_now_after_the_card_returns_to_step_one_with_the_field_cleared, the_card_is_on_step_one_with_no_discoverable_crews, the_card_is_on_step_one_once_with_crews, after_a_logout_the_card_joins_the_crew_into_the_device_account, a_resolve_the_card_did_not_send_keeps_the_device_account_path]
+    journeys: [qa/journeys/invite-code-card.ts]
+    protocol: []
+    issues: []
+
   # ── Crew ──────────────────────────────────────────────────────
+
   - id: CREW-01
     title: Create a crew from the app
     priority: P1

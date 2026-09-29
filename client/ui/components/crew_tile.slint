@@ -1,0 +1,66 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape, CutMask } from "cut.slint";
+
+/// A crew: the two-corner tile (top-left and bottom-right cut).
+///
+/// Shows the crew avatar when it has loaded, and the initials until then, or
+/// when the crew has none. The invite screens use it: the welcome screen,
+/// step 2 and the join modal.
+///
+/// The avatar is a rectangle clipped to the tile. Slint cannot clip to a
+/// path, so two masks in the colour behind the tile cover the cut corners.
+export component CrewTile inherits Rectangle {
+    in property <string> initials: "";
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
+    in property <length> notch: Theme.cut;
+    in property <length> initials-size: 15px;
+    /// The colour behind the tile: what the corner masks paint.
+    in property <color> surface: Theme.bg-app;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: root.notch;
+        fill: Theme.raised;
+    }
+
+    if root.has-avatar: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Image {
+            source: root.avatar;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        CutMask {
+            width: parent.width;
+            height: parent.height;
+            n: root.notch;
+            corner: "tl";
+            fill: root.surface;
+        }
+        CutMask {
+            width: parent.width;
+            height: parent.height;
+            n: root.notch;
+            corner: "br";
+            fill: root.surface;
+        }
+    }
+
+    if !root.has-avatar: Text {
+        text: root.initials != "" ? root.initials : "?";
+        font-family: Theme.font-display;
+        font-size: root.initials-size;
+        font-weight: Theme.weight-display-bold;
+        color: Theme.text-secondary;
+        width: parent.width;
+        height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+    }
+}

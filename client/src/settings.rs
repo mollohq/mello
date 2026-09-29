@@ -24,6 +24,12 @@ pub struct Settings {
     pub pending_invite_code: Option<String>,
     /// The name of the invited crew, shown on step 2.
     pub pending_invite_crew_name: Option<String>,
+    /// The resolved invite, shown on the welcome screen. Stored so that a
+    /// restart on the welcome screen shows it again with no network call.
+    pub pending_invite: Option<mello_core::crew::ResolvedInvite>,
+    /// Onboarding started from an invite link and skipped step 1. The step
+    /// indicator then counts two steps, not three. Survives a restart.
+    pub onboarding_via_invite: bool,
     pub start_on_boot: bool,
     pub ptt_key: Option<String>,
     // General tab
@@ -77,6 +83,8 @@ impl Default for Settings {
             pending_crew_open: None,
             pending_invite_code: None,
             pending_invite_crew_name: None,
+            pending_invite: None,
+            onboarding_via_invite: false,
             start_on_boot: false,
             ptt_key: None,
             start_minimized: false,
@@ -289,6 +297,43 @@ mod tests {
         assert_eq!(decoded.capture_device_id.as_deref(), Some("mic_123"));
         assert_eq!(decoded.playback_device_id.as_deref(), Some("spk_456"));
         assert!(!decoded.dark_theme);
+    }
+
+    /// The welcome screen reads the invite from Settings after a restart. It
+    /// must survive the TOML file, members and inviter included.
+    #[test]
+    fn a_pending_invite_survives_the_settings_file() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = Settings::override_path(Some(dir.path().to_string_lossy().into_owned()))
+            .expect("override path");
+        let person = |n: &str| mello_core::crew::InvitePerson {
+            display_name: n.into(),
+            avatar_seed: n.into(),
+        };
+        let saved = Settings {
+            onboarding_step: 5,
+            onboarding_via_invite: true,
+            pending_invite_code: Some("NITE-0001".into()),
+            pending_invite: Some(mello_core::crew::ResolvedInvite {
+                crew_name: "Night Owls".into(),
+                avatar_seed: "Night Owls".into(),
+                crew_id: "c1".into(),
+                highlight: "7h hangout".into(),
+                member_count: 4,
+                members: vec![person("alice"), person("bo")],
+                inviter: Some(person("alice")),
+            }),
+            ..Default::default()
+        };
+        confy::store_path(&path, &saved).expect("store");
+        let loaded: Settings = confy::load_path(&path).expect("load");
+
+        let invite = loaded.pending_invite.expect("the invite is stored");
+        assert_eq!(invite.crew_name, "Night Owls");
+        assert_eq!(invite.member_count, 4);
+        assert_eq!(invite.members, vec![person("alice"), person("bo")]);
+        assert_eq!(invite.inviter, Some(person("alice")));
+        assert!(loaded.onboarding_via_invite);
     }
 
     #[test]

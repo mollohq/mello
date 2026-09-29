@@ -50,10 +50,24 @@ struct Snapshot {
     link_error: String,
     /// A sign-in or link is in progress (the spinner shows).
     login_loading: bool,
-    /// Onboarding step 2: the crew of the invite link that the user joins.
+    /// Onboarding step 2 and the welcome screen: the crew of the invite link.
     onboarding_invite_crew_name: String,
+    /// The welcome screen: who made the invite. Empty when there is none.
+    onboarding_invite_inviter: String,
+    /// The welcome screen (onboarding step 5) is on screen.
+    invite_welcome: bool,
+    /// Onboarding skipped step 1 for an invite: two steps, not three.
+    onboarding_invite_path: bool,
+    /// The join modal: who made the invite. Empty when there is none.
+    join_crew_inviter: String,
     /// Onboarding step 1: why the invite link could not be used.
     onboarding_invite_error: String,
+    /// The invite-code card on step 1: why the typed text was refused.
+    onboarding_invite_code_error: String,
+    /// The invite-code card on step 1: a resolve is running.
+    onboarding_invite_code_checking: bool,
+    /// The welcome screen and step 2: the invited crew shows its avatar.
+    onboarding_invite_crew_has_avatar: bool,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -189,10 +203,13 @@ fn read(app: &MainWindow) -> Snapshot {
     let step = app.get_onboarding_step();
     let logged_in = app.get_logged_in();
     let show_sign_in = app.get_show_sign_in();
+    let onboarding_state = crate::onboarding::OnboardingState::from_step(step);
+    // main.slint: steps 1..=3 and 5, the states that render without a session.
+    let onboarding_screen = onboarding_state.renders_without_session();
     // Mirrors the branch conditions in main.slint.
     let screen = if show_sign_in {
         "sign_in"
-    } else if (1..=3).contains(&step) {
+    } else if onboarding_screen {
         "onboarding"
     } else if logged_in {
         "app"
@@ -212,7 +229,15 @@ fn read(app: &MainWindow) -> Snapshot {
         link_error: app.get_link_error().into(),
         login_loading: app.get_login_loading(),
         onboarding_invite_crew_name: app.get_onboarding_invite_crew_name().into(),
+        onboarding_invite_inviter: app.get_onboarding_invite_inviter().name.into(),
+        invite_welcome: !show_sign_in
+            && onboarding_state == crate::onboarding::OnboardingState::InviteWelcome,
+        onboarding_invite_path: app.get_onboarding_invite_path(),
+        join_crew_inviter: app.get_join_crew_inviter().name.into(),
         onboarding_invite_error: app.get_onboarding_invite_error().into(),
+        onboarding_invite_code_error: app.get_onboarding_invite_code_error().into(),
+        onboarding_invite_code_checking: app.get_onboarding_invite_code_checking(),
+        onboarding_invite_crew_has_avatar: app.get_onboarding_invite_crew_has_avatar(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

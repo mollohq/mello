@@ -223,6 +223,14 @@ The `DeepLink` enum handles two URL patterns:
 - `mello://join/{code}` → `DeepLink::Join { code }`
 - `mello://crew/{id}` → `DeepLink::Crew { id }`
 
+`parse_invite_input(text)` reads what a user types or pastes into an invite field. It returns the code as `XXXX-XXXX`, or `None`. It accepts:
+
+- a web link: `https://m3llo.app/join/{code}`, with or without the scheme and `www.`, and with a trailing slash, a query or a fragment
+- a deep link: `mello://join/{code}`
+- a bare code, in any case, with or without the dash
+
+Leading and trailing spaces do not matter. The invite-code card (§8.5) and the Discover field (§8.4) both call this function.
+
 `extract_deep_link()` reads `argv[1]` at startup. The `mello://` scheme is registered in `Cargo.toml` via `osx_url_schemes = ["mello"]` for macOS app bundles.
 
 ---
@@ -250,7 +258,9 @@ The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each 
 
 On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores it in `AppContext::pending_deep_link`.
 
-**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists, and onboarding skips step 1. Finalize joins the crew by its invite code. See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
+**Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists. Onboarding skips step 1 and opens the welcome screen. It names the inviter and the crew. "Join {crew}" opens step 2, and finalize joins the crew by its invite code. "Not now" opens step 1 and forgets the invite. Step 2 has "Back", which opens the welcome screen again with the invite kept. The crew tile on these screens shows the crew avatar (§8.3). See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
+
+An invite typed in the card on step 1 (§8.5) takes the same path, also for a machine with a device account.
 
 **Any other case:** the link is dispatched after authentication completes:
 
@@ -291,9 +301,10 @@ An `InviteCard` component is injected client-side at a fixed position (slot 2) i
 
 Full-screen modal overlay shown when `DeepLink::Join` is dispatched:
 
-- Crew avatar (large, centered)
+- Inviter line: the inviter as an octagon, and "{inviter} invited you". No line when the invite has no inviter.
+- Crew avatar (large, centered). The resolve answer has no avatar. The client sends `FetchCrewAvatars` with the crew ID, and the tile shows the initials until `CrewAvatarLoaded` arrives, and when the crew has none. Core calls `get_crew_avatar`, which needs no session.
 - Crew name (large text)
-- Highlight text from the weekly recap (if available), e.g. "7h hangout · 3 clips · Counter-Strike 2"
+- Sub line: the member count and the highlight from the weekly recap (if available), e.g. "4 members · 7h hangout · 3 clips"
 - Primary button: **"Join crew"** — calls `join_by_invite_code` RPC, navigates to the crew on success
 - Secondary text link: **"Not now"** — dismisses the modal
 
@@ -318,13 +329,34 @@ open with the error above the button, and the button accepts a retry.
 
 Only `InvalidCode` blames the invite. A server or network failure is `Failed`.
 
+A user who typed the code (§8.5) did not follow a link. For this user the `InvalidCode` resolve text reads "This invite code is not valid."
+
 ### 8.4 Invite code field in Discover
 
 **File:** `client/ui/panels/discover_panel.slint`
 
-The "Join a Private Crew" field also calls `join_by_invite_code`. When the join
+The "Join a Private Crew" field also calls `join_by_invite_code`. It takes the same input as the invite-code card (§8.5): a link or a code. The client reads the input with `parse_invite_input` and sends the normalised code. An input that is no invite shows "This invite code is not valid." under the field, and no command goes to core. When the join
 modal is not open, `InviteJoinFailed` shows under the field. `InvalidCode` reads
 "This invite code is not valid." The other texts are the join texts in §8.3.
+
+### 8.5 Invite-code card on onboarding step 1
+
+**Files:** `client/ui/panels/onboarding.slint` (`InviteCodeCard`), `client/src/onboarding_invite.rs`
+
+The web lounge cannot always hand an invite to the app. A user who installs the app then has no link to follow. Step 1 has a card for this user. See [01-CLIENT.md](../01-CLIENT.md) §6.4.
+
+- The card shows for every user on step 1. It sits right of "Create your own crew".
+- The user pastes a link or a code, and presses "Open invite" or Enter.
+- The client reads the text with `parse_invite_input`. A text that is no invite shows "This invite code is not valid." in the card and marks the field. No command goes to core.
+- A valid code sends `ResolveCrewInvite`. Without a session, core uses the `http_key`, as for a deep link. The button reads "Checking…" and ignores clicks until the answer arrives.
+- `CrewInviteResolved` takes the path of a deep link: the client stores the invite and opens the welcome screen (§7).
+- `CrewInviteResolveFailed` shows the message in the card and marks the field. `InvalidCode` reads "This invite code is not valid." Any other error reads "Could not load this invite. Try again."
+- Editing the field clears the message.
+- "Not now" on the welcome screen opens step 1 with the field empty.
+
+The button is white: it opens the invite and commits nothing. The red button that commits is "Join {crew}" on the welcome screen.
+
+**After a logout.** The machine has a device account, and the user has no session. The join modal cannot join without a session. An invite typed in the card therefore opens the welcome screen. Finalize sends `device_id` and `invite_code`. Core authenticates the device, which opens the existing account, and calls `join_by_invite_code`.
 
 ---
 
@@ -375,6 +407,12 @@ When a mockup in `designs/` disagrees with `theme.slint`, `theme.slint` wins.
 
 An **invite frame** wraps the client. The frame is not from the client: it
 carries the wordmark, the inviter, the crew name and the install button.
+
+The frame also has an **"Open in m3llo"** button. It opens `mello://join/{code}`
+for a guest who has the app installed. After a download, the same button reads
+"Installed? Open m3llo". The installed app then shows the welcome screen
+([01-CLIENT.md](../01-CLIENT.md) §6.2). The download URL has no `?invite=`
+parameter.
 
 ### 9.3 Joining voice
 
@@ -557,6 +595,5 @@ Overview tab.
 - Invite link in crew discovery or public directory
 - A `guest_policy` control in crew settings
 
-**Partly addressed:** deferred deep link. The lounge appends `?invite={code}` to
-the download URL. The client does not read it yet, so a guest who installs still
-has to open the link again.
+- Deferred deep link. The installer does not carry the code. The lounge's
+  "Open in m3llo" button (§9) opens the link in the installed app instead.

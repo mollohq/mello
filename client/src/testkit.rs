@@ -141,6 +141,19 @@ impl Harness {
         }
     }
 
+    /// Quit and launch again: a new window with the settings this run
+    /// persisted, started the way `lib.rs` starts it (`onboarding::start`).
+    ///
+    /// The launch has no deep link. Read its commands with
+    /// [`Harness::commands`] on the returned harness.
+    pub fn restart(&self) -> Harness {
+        let mut next = Harness::new();
+        *next.ctx.settings.borrow_mut() = self.ctx.settings.borrow().clone();
+        crate::onboarding::start(&next.ctx);
+        next.pump();
+        next
+    }
+
     /// The live `MainWindow`, for reading properties and invoking callbacks.
     pub fn app(&self) -> &MainWindow {
         &self.ctx.app

@@ -21,10 +21,24 @@ export type AppState = {
   link_error: string;
   /** A sign-in or link is in progress (the spinner shows). */
   login_loading: boolean;
-  /** Onboarding step 2: the crew of the invite link that the user joins. */
+  /** Onboarding step 2 and the welcome screen: the crew of the invite link. */
   onboarding_invite_crew_name: string;
+  /** The welcome screen: who made the invite. Empty when there is none. */
+  onboarding_invite_inviter: string;
+  /** The invite welcome screen (onboarding step 5) is on screen. */
+  invite_welcome: boolean;
+  /** Onboarding skipped step 1 for an invite: two steps, not three. */
+  onboarding_invite_path: boolean;
+  /** The join modal: who made the invite. Empty when there is none. */
+  join_crew_inviter: string;
   /** Onboarding step 1: why the invite link could not be used. */
   onboarding_invite_error: string;
+  /** The invite-code card on step 1: why the typed text was refused. */
+  onboarding_invite_code_error: string;
+  /** The invite-code card on step 1: a resolve is running. */
+  onboarding_invite_code_checking: boolean;
+  /** The welcome screen and step 2: the invited crew shows its avatar. */
+  onboarding_invite_crew_has_avatar: boolean;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];
@@ -122,6 +136,15 @@ export class App {
     return join(this.dir, "session.token");
   }
 
+  /**
+   * The single-instance name. The lock is global on the machine, so it
+   * carries the MCP port: two runs with different port bases can both have
+   * an "alice".
+   */
+  private get instance(): string {
+    return `e2e-${this.opts.mcpPort}-${this.name}`;
+  }
+
   /** Where the app writes an OAuth URL instead of opening the system browser. */
   get browserFile(): string {
     return join(this.dir, "browser-url.txt");
@@ -133,7 +156,7 @@ export class App {
    */
   async launch(deeplink?: string): Promise<void> {
     if (this.proc) throw new DriverError(`${this.name}: already running`);
-    const args = [...(deeplink ? [deeplink] : []), "--instance", `e2e-${this.name}`];
+    const args = [...(deeplink ? [deeplink] : []), "--instance", this.instance];
     const log = openSync(this.logPath, "a");
     this.proc = spawn(this.opts.binary, args, {
       cwd: this.opts.cwd,
@@ -175,7 +198,7 @@ export class App {
    * process with the same instance relays the URL over IPC and exits.
    */
   async openLink(url: string): Promise<void> {
-    const relay = spawn(this.opts.binary, [url, "--instance", `e2e-${this.name}`], {
+    const relay = spawn(this.opts.binary, [url, "--instance", this.instance], {
       cwd: this.opts.cwd,
       stdio: "ignore",
       env: { ...process.env, MELLO_CONFIG_DIR: join(this.dir, "config"), ...this.opts.env },

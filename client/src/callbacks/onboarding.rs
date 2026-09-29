@@ -52,6 +52,61 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- Onboarding: the invite welcome screen ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_accepted(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::join(&app, &s, &fx);
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_declined(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::decline(&app, &s, &fx);
+            }
+        });
+    }
+
+    // --- Onboarding: the invite-code card on step 1 ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_onboarding_open_invite(move |text| {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::open_typed(&app, &cmd, text.as_str());
+            }
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_onboarding_invite_code_edited(move || {
+            if let Some(app) = app_weak.upgrade() {
+                crate::onboarding_invite::code_edited(&app);
+            }
+        });
+    }
+
+    // --- Onboarding: back from step 2 of the invite path ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let s = ctx.settings.clone();
+        let shuffle_timer = ctx.avatar_shuffle_timer.clone();
+        let fx = crate::onboarding::EffectCtx::from_ctx(ctx);
+        ctx.app.on_onboarding_invite_back(move || {
+            if let Some(app) = app_weak.upgrade() {
+                stop_ambient_shuffle(&shuffle_timer);
+                crate::onboarding_invite::back(&app, &s, &fx);
+            }
+        });
+    }
+
     // --- Onboarding: create crew ---
     {
         let app_weak = ctx.app.as_weak();

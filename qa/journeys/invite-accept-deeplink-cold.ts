@@ -1,11 +1,13 @@
 // INV-01 + INV-03: alice shares an invite link; bob, on a fresh install,
-// opens it as a deep link. Step 1 is skipped (#68): step 2 names alice's
-// crew, and bob is a member of it when onboarding ends. Both sides are
+// opens it as a deep link. Step 1 is skipped (#68): the welcome screen says
+// that alice invited him and names her crew. "Join" opens step 2 ("STEP 01 /
+// 02"), and bob is a member of the crew when onboarding ends. Both sides are
 // checked. Two journeys: a private crew (the app's default) and a public crew.
 
 import { journey, type Journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
 import {
-  inviteAtStep2,
+  inviteWelcome,
+  joinFromWelcome,
   linkEmailAtStep3,
   onboardWithNewCrew,
   profileAtStep2,
@@ -46,9 +48,17 @@ async function run({ runId, launch, step, expect }: JourneyContext, visibility: 
   });
 
   const bob = await launch("bob", `mello://join/${code}`);
-  await step("bob: cold start from the deep link skips step 1 and names alice's crew", async () => {
-    await inviteAtStep2(bob, crew);
+  await step("bob: cold start from the deep link shows the welcome screen: alice invited him to her crew", async () => {
+    await inviteWelcome(bob, crew, aliceName);
     const s = await bob.state();
+    expect(!s.join_crew_modal_open, "no join modal: onboarding joins the crew");
+    await bob.checkpoint("welcome");
+  });
+
+  await step("bob: Join opens step 2, step 1 of 2, which names alice's crew", async () => {
+    await joinFromWelcome(bob, crew);
+    const s = await bob.state();
+    expect(s.onboarding_invite_path, "the invite path counts two steps");
     expect(!s.join_crew_modal_open, "no join modal: onboarding joins the crew");
     await bob.checkpoint("step2-invited-crew");
   });
@@ -57,6 +67,7 @@ async function run({ runId, launch, step, expect }: JourneyContext, visibility: 
     await profileAtStep2(bob, bobName, 2);
     const s = await bob.state();
     expect(!s.join_crew_modal_open, "no join modal on step 3");
+    expect(await bob.text("STEP 02 / 02"), `step 3 shows "STEP 02 / 02"`);
     await linkEmailAtStep3(bob, bobName);
   });
 

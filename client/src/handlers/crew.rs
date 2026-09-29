@@ -11,6 +11,10 @@ use crate::{
     ChatMessageData, CrewData, DiscoverCrewData, FeedCardData, SearchUserData, VoiceChannelData,
 };
 
+/// The crews that step 1 shows: one featured crew, and three in row 2. Row 1
+/// also holds the "Create your own crew" card and the invite-code card.
+const ONBOARDING_CREW_CARDS: usize = 4;
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::DiscoverCrewsFailed { reason } => {
@@ -44,9 +48,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .map(|c| c.id.clone())
                 .collect();
 
-            let step = ctx.app.get_onboarding_step();
-            if step <= 3 && !is_append {
-                let onboard_count = crews.len().min(5);
+            let in_onboarding =
+                crate::onboarding::OnboardingState::from_step(ctx.app.get_onboarding_step())
+                    != crate::onboarding::OnboardingState::Done;
+            if in_onboarding && !is_append {
+                // Four crews: row 1 of the grid has the featured crew, "Create
+                // your own crew" and the invite-code card. Row 2 has three.
+                let onboard_count = crews.len().min(ONBOARDING_CREW_CARDS);
                 let model: Vec<CrewData> = crews[..onboard_count]
                     .iter()
                     .map(|c| CrewData {
@@ -60,7 +68,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         ..Default::default()
                     })
                     .collect();
-                let bases = bento_bases(onboard_count, 5);
+                let bases = bento_bases(onboard_count, ONBOARDING_CREW_CARDS);
                 let rc = Rc::new(slint::VecModel::from(model));
                 ctx.app.set_discover_crews(rc.into());
                 ctx.app
@@ -276,6 +284,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             let slint_img = crate::avatar::downscale_for_ui(slint::Image::from_rgba8(buf));
 
+            // The crew of an open invite: the join modal, and the welcome
+            // screen and step 2 of a fresh install.
+            if ctx.app.get_join_crew_id() == crew_id.as_str() {
+                ctx.app.set_join_crew_avatar(slint_img.clone());
+                ctx.app.set_join_crew_has_avatar(true);
+            }
+            crate::onboarding_invite::avatar_loaded(
+                &ctx.app,
+                &ctx.settings,
+                crew_id.as_str(),
+                &slint_img,
+            );
+
             let crews = ctx.app.get_crews();
             for i in 0..crews.row_count() {
                 if let Some(mut c) = crews.row_data(i) {
@@ -384,9 +405,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::CrewInviteResolved { code, invite } => {
             log::info!(
-                "[invite] resolved: crew={} id={}",
+                "[invite] resolved: crew={} id={} members={} inviter={:?}",
                 invite.crew_name,
                 invite.crew_id,
+                invite.member_count,
+                invite.inviter.as_ref().map(|p| p.display_name.as_str()),
             );
             // A fresh install joins the crew in onboarding, not in the modal.
             if crate::onboarding_invite::opens_onboarding(&ctx.app, &ctx.settings.borrow()) {
@@ -412,6 +435,21 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_join_crew_id(invite.crew_id.into());
                 ctx.app.set_join_crew_highlight(invite.highlight.into());
                 ctx.app.set_join_crew_avatar_seed(invite.avatar_seed.into());
+                ctx.app.set_join_crew_member_count(invite.member_count);
+                ctx.app.set_join_crew_inviter(
+                    invite
+                        .inviter
+                        .as_ref()
+                        .map(crate::converters::invite_person)
+                        .unwrap_or_default(),
+                );
+                // The resolve answer has no avatar: load it by crew ID. The
+                // initials show until it arrives.
+                let _ = ctx.cmd_tx.send(Command::FetchCrewAvatars {
+                    crew_ids: vec![ctx.app.get_join_crew_id().to_string()],
+                });
+                ctx.app.set_join_crew_avatar(Default::default());
+                ctx.app.set_join_crew_has_avatar(false);
                 ctx.app.set_join_crew_error("".into());
                 ctx.app.set_join_crew_loading(false);
                 ctx.app.set_join_crew_joining(false);
@@ -425,8 +463,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 crate::onboarding_invite::resolve_failed(ctx, error);
                 return;
             }
-            ctx.app
-                .set_join_crew_error(invite_resolve_error_message(error).into());
+            ctx.app.set_join_crew_error(
+                invite_resolve_error_message(error, InviteSource::Link).into(),
+            );
             ctx.app.set_join_crew_loading(false);
             ctx.app.set_join_crew_modal_open(true);
         }
@@ -561,10 +600,15 @@ pub(crate) fn invite_join_error_message(error: InviteError, source: InviteSource
     }
 }
 
-/// The text shown when `resolve_crew_invite` fails.
-pub(crate) fn invite_resolve_error_message(error: InviteError) -> &'static str {
-    match error {
-        InviteError::InvalidCode => "This invite link is no longer valid.",
+/// The text shown when `resolve_crew_invite` fails. A user who typed the
+/// code did not follow a link, so the text names the code.
+pub(crate) fn invite_resolve_error_message(
+    error: InviteError,
+    source: InviteSource,
+) -> &'static str {
+    match (error, source) {
+        (InviteError::InvalidCode, InviteSource::Link) => "This invite link is no longer valid.",
+        (InviteError::InvalidCode, InviteSource::TypedCode) => "This invite code is not valid.",
         _ => "Could not load this invite. Try again.",
     }
 }

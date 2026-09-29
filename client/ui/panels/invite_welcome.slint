@@ -1,0 +1,251 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape } from "../components/cut.slint";
+import { CrewTile } from "../components/crew_tile.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { InvitePersonData } from "../types.slint";
+
+// ============================================================
+//  The invite welcome screen (onboarding step 5, 01-CLIENT.md §6.2).
+//
+//  A fresh install opened from an invite link shows this before step 2:
+//  who invited the user, to which crew, and what comes next. It has no
+//  step indicator. "Join {crew}" opens step 2. "Not now" opens step 1.
+// ============================================================
+
+export component InviteWelcome inherits Rectangle {
+    in property <string> crew-name: "";
+    /// Two letters for the crew tile. Shown until the avatar loads, and for a
+    /// crew with no avatar.
+    in property <string> crew-initials: "";
+    /// The crew avatar. The resolve answer has no avatar URL: the client
+    /// loads it by crew ID after the answer.
+    in property <image> crew-avatar;
+    in property <bool> crew-has-avatar: false;
+    /// One line from the weekly recap. Empty when the crew has none.
+    in property <string> highlight: "";
+    in property <int> member-count: 0;
+    /// Up to 5 member previews.
+    in property <[InvitePersonData]> members: [];
+    /// Who made the invite. An empty name means no inviter.
+    in property <InvitePersonData> inviter;
+
+    callback join-requested();
+    callback not-now-requested();
+
+    property <bool> has-inviter: root.inviter.name != "";
+
+    background: Theme.bg-app;
+
+    VerticalLayout {
+        padding-top: 150px;
+        padding-left: 140px;
+        padding-right: 140px;
+        padding-bottom: 40px;
+        spacing: 0px;
+        alignment: start;
+
+        Text {
+            text: "YOU'RE INVITED";
+            font-family: Theme.font-label;
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            color: Theme.text-secondary;
+            letter-spacing: 1.4px;
+        }
+
+        Rectangle { height: 22px; }
+
+        // The inviter is a person, so an octagon. The row keeps the avatar
+        // height with no inviter, so the crew does not move up.
+        HorizontalLayout {
+            min-height: 32px;
+            spacing: 12px;
+            cross-axis-alignment: center;
+
+            if root.has-inviter: UserAvatar {
+                size: 32px;
+                initials: root.inviter.initials;
+                color-index: root.inviter.color-index;
+                bg-color: Theme.bg-app;
+            }
+
+            inviter-text := Text {
+                horizontal-stretch: 1;
+                text: root.has-inviter
+                    ? root.inviter.name + " invited you to join"
+                    : "You're invited to join";
+                font-family: Theme.font-body;
+                font-size: 16px;
+                font-weight: Theme.weight-sentence;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+        }
+
+        Rectangle { height: 28px; }
+
+        // The crew is a thing, so a two-corner tile.
+        HorizontalLayout {
+            spacing: 24px;
+
+            CrewTile {
+                width: 104px;
+                height: 104px;
+                notch: Theme.cut;
+                initials: root.crew-initials;
+                initials-size: 36px;
+                avatar: root.crew-avatar;
+                has-avatar: root.crew-has-avatar;
+                surface: Theme.bg-app;
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 10px;
+
+                crew-name-text := Text {
+                    text: root.crew-name;
+                    font-family: Theme.font-display;
+                    font-size: 48px;
+                    font-weight: Theme.weight-display;
+                    color: Theme.text-primary;
+                    letter-spacing: -1px;
+                    overflow: elide;
+                }
+
+                if root.highlight != "": Text {
+                    text: root.highlight;
+                    font-family: Theme.font-body;
+                    font-size: 14px;
+                    font-weight: Theme.weight-sentence;
+                    color: Theme.text-secondary;
+                    overflow: elide;
+                }
+
+                if root.member-count > 0: HorizontalLayout {
+                    spacing: 6px;
+                    alignment: start;
+                    cross-axis-alignment: center;
+
+                    for member in root.members: UserAvatar {
+                        size: 24px;
+                        initials: member.initials;
+                        color-index: member.color-index;
+                        bg-color: Theme.bg-app;
+                    }
+
+                    // The avatars sit 6px apart; the count stands off further.
+                    HorizontalLayout {
+                        padding-left: root.members.length > 0 ? 6px : 0px;
+
+                        member-count-text := Text {
+                            text: root.member-count == 1 ? "1 member" : root.member-count + " members";
+                            font-family: Theme.font-label;
+                            font-size: 12px;
+                            font-weight: Theme.weight-label;
+                            color: Theme.text-secondary;
+                        }
+                    }
+                }
+            }
+        }
+
+        Rectangle { height: 56px; }
+
+        Text {
+            text: "Pick a name and an avatar, check your mic, and you're in.\nIt takes about a minute.";
+            font-family: Theme.font-body;
+            font-size: 15px;
+            font-weight: Theme.weight-sentence;
+            color: Theme.text-secondary;
+        }
+
+        Rectangle { height: 28px; }
+
+        HorizontalLayout {
+            spacing: 28px;
+            alignment: start;
+            cross-axis-alignment: center;
+
+            // A button that commits is red.
+            Rectangle {
+                width: min(max(220px, join-label.preferred-width + 64px), 360px);
+                height: 52px;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: Theme.cut;
+                    fill: join-touch.has-hover ? Theme.confirm-press : Theme.confirm;
+                }
+
+                join-label := Text {
+                    x: 24px;
+                    width: parent.width - 48px;
+                    height: parent.height;
+                    text: "Join " + root.crew-name;
+                    font-family: Theme.font-label;
+                    font-size: 14px;
+                    font-weight: Theme.weight-label;
+                    color: Theme.on-confirm;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    overflow: elide;
+                }
+
+                join-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Join " + root.crew-name;
+                    mouse-cursor: pointer;
+                    clicked => { root.join-requested(); }
+                }
+            }
+
+            Rectangle {
+                width: not-now-text.preferred-width;
+                height: 32px;
+
+                not-now-text := Text {
+                    text: "Not now — show me other crews";
+                    font-family: Theme.font-label;
+                    font-size: 13px;
+                    font-weight: Theme.weight-label;
+                    color: not-now-touch.has-hover ? Theme.accent : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                not-now-touch := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Not now — show me other crews";
+                    mouse-cursor: pointer;
+                    clicked => { root.not-now-requested(); }
+                }
+            }
+        }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png client/ui/panels/invite_welcome.slint
+export component Preview inherits Window {
+    width: 1280px;
+    height: 800px;
+    background: Theme.bg-app;
+
+    InviteWelcome {
+        width: parent.width;
+        height: parent.height;
+        crew-name: "Night Owls";
+        crew-initials: "NO";
+        highlight: "7h hangout · 3 clips · Counter-Strike 2";
+        member-count: 4;
+        members: [
+            { name: "alice", initials: "AL", color-index: 1 },
+            { name: "bo", initials: "BO", color-index: 0 },
+            { name: "kit", initials: "KI", color-index: 2 },
+            { name: "mara", initials: "MA", color-index: 4 },
+        ];
+        inviter: { name: "alice", initials: "AL", color-index: 1 };
+    }
+}
