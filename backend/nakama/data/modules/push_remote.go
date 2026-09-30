@@ -30,6 +30,9 @@ import (
 
 const (
 	PushTokensCollection = "push_tokens"
+	// PushTokenOwnersCollection holds system-owned records key -> current owner,
+	// so a register can find the token's previous owner (spec §4.2).
+	PushTokenOwnersCollection = "push_token_owners"
 
 	// maxMentionPushes caps the users one message can notify (spec §5).
 	maxMentionPushes = 20
@@ -113,7 +116,7 @@ func RegisterPushTokenRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 	}
 
 	key := pushTokenKey(req.Token)
-	reassignPushToken(ctx, logger, db, nk, key, userID)
+	reassignPushToken(ctx, logger, nk, key, userID)
 
 	data, err := json.Marshal(pushTokenRecord{
 		Token:       req.Token,
@@ -135,45 +138,86 @@ func RegisterPushTokenRPC(ctx context.Context, logger runtime.Logger, db *sql.DB
 		logger.Error("push: store token for %s: %v", userID, err)
 		return "", runtime.NewError("failed to store push token", 13)
 	}
+	if err := writePushTokenOwner(ctx, nk, key, userID); err != nil {
+		// The token is stored; only a later reassign would miss this owner.
+		logger.Warn("push: write token owner for %s: %v", userID, err)
+	}
 	logger.Info("push: token registered user=%s platform=%s env=%s", userID, req.Platform, req.Environment)
 	return `{"success":true}`, nil
 }
 
-// reassignPushToken removes the token from every other user. A token belongs
+// reassignPushToken removes the token from its previous owner. A token belongs
 // to one device, and a device to its current user: without this, user A's
 // mention previews reach the device user B now uses (spec §4.2).
-func reassignPushToken(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, key, userID string) {
-	if db == nil {
+//
+// Nakama Storage is keyed per user and has no "find this key for any user"
+// call, so a system-owned owner record (push_token_owners/<key>) names the
+// current owner. Only the storage API is used: no SQL against Nakama's tables,
+// which are not a stable interface across Nakama upgrades.
+func reassignPushToken(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, key, userID string) {
+	previous := readPushTokenOwner(ctx, logger, nk, key)
+	if previous == "" || previous == userID {
 		return
 	}
-	rows, err := db.QueryContext(ctx,
-		`SELECT user_id FROM storage WHERE collection = $1 AND key = $2 AND user_id <> $3`,
-		PushTokensCollection, key, userID)
-	if err != nil {
-		logger.Warn("push: reassign lookup failed: %v", err)
-		return
-	}
-	defer rows.Close()
-
-	var deletes []*runtime.StorageDelete
-	for rows.Next() {
-		var other string
-		if err := rows.Scan(&other); err != nil {
-			logger.Warn("push: reassign scan failed: %v", err)
-			return
-		}
-		deletes = append(deletes, &runtime.StorageDelete{
-			Collection: PushTokensCollection, Key: key, UserID: other,
-		})
-	}
-	if len(deletes) == 0 {
-		return
-	}
-	if err := nk.StorageDelete(ctx, deletes); err != nil {
+	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{{
+		Collection: PushTokensCollection, Key: key, UserID: previous,
+	}}); err != nil {
 		logger.Warn("push: reassign delete failed: %v", err)
 		return
 	}
-	logger.Info("push: token moved to user=%s from %d other user(s)", userID, len(deletes))
+	logger.Info("push: token moved to user=%s from user=%s", userID, previous)
+}
+
+type pushTokenOwner struct {
+	UserID string `json:"user_id"`
+}
+
+// readPushTokenOwner returns the user that owns a token key, or "".
+func readPushTokenOwner(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, key string) string {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
+		Collection: PushTokenOwnersCollection, Key: key, UserID: "",
+	}})
+	if err != nil {
+		logger.Warn("push: read token owner: %v", err)
+		return ""
+	}
+	if len(objects) == 0 {
+		return ""
+	}
+	var owner pushTokenOwner
+	if err := json.Unmarshal([]byte(objects[0].GetValue()), &owner); err != nil {
+		return ""
+	}
+	return owner.UserID
+}
+
+func writePushTokenOwner(ctx context.Context, nk runtime.NakamaModule, key, userID string) error {
+	data, err := json.Marshal(pushTokenOwner{UserID: userID})
+	if err != nil {
+		return err
+	}
+	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+		Collection:      PushTokenOwnersCollection,
+		Key:             key,
+		UserID:          "", // system-owned
+		Value:           string(data),
+		PermissionRead:  0,
+		PermissionWrite: 0,
+	}})
+	return err
+}
+
+// dropPushTokenOwner deletes the owner record when userID still owns the key.
+// A newer owner's record is left alone.
+func dropPushTokenOwner(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, key, userID string) {
+	if readPushTokenOwner(ctx, logger, nk, key) != userID {
+		return
+	}
+	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{{
+		Collection: PushTokenOwnersCollection, Key: key, UserID: "",
+	}}); err != nil {
+		logger.Warn("push: delete token owner: %v", err)
+	}
 }
 
 // UnregisterPushTokenRPC removes the caller's token (logout).
@@ -188,12 +232,14 @@ func UnregisterPushTokenRPC(ctx context.Context, logger runtime.Logger, db *sql.
 	if err := json.Unmarshal([]byte(payload), &req); err != nil || req.Token == "" {
 		return "", runtime.NewError("invalid request", 3)
 	}
+	key := pushTokenKey(req.Token)
 	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{{
-		Collection: PushTokensCollection, Key: pushTokenKey(req.Token), UserID: userID,
+		Collection: PushTokensCollection, Key: key, UserID: userID,
 	}}); err != nil {
 		logger.Warn("push: unregister for %s: %v", userID, err)
 		return "", runtime.NewError("failed to remove push token", 13)
 	}
+	dropPushTokenOwner(ctx, logger, nk, key, userID)
 	logger.Info("push: token unregistered user=%s", userID)
 	return `{"success":true}`, nil
 }
@@ -329,6 +375,10 @@ func prunePushTokens(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 	}
 	if err := nk.StorageDelete(ctx, deletes); err != nil {
 		logger.Warn("push: prune %d token(s) for %s: %v", len(tokens), userID, err)
+		return
+	}
+	for _, t := range tokens {
+		dropPushTokenOwner(ctx, logger, nk, pushTokenKey(t), userID)
 	}
 }
 
