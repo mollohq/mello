@@ -151,6 +151,39 @@ pub fn resolve_mentions(
     (out, mentions)
 }
 
+/// Byte ranges of each mention's `@name` in a display body, in text order and
+/// without overlap. Longer names claim their text first, so `@Bob Smith` is not
+/// split by a mention of `@Bob`; a name must end at a word boundary. Clients use
+/// these ranges to style mentions.
+pub fn mention_spans(display_body: &str, mentions: &[MentionRef]) -> Vec<std::ops::Range<usize>> {
+    let mut tokens: Vec<String> = mentions
+        .iter()
+        .filter(|m| !m.name.is_empty())
+        .map(|m| format!("@{}", m.name))
+        .collect();
+    tokens.sort_by(|a, b| b.len().cmp(&a.len()).then_with(|| a.cmp(b)));
+    tokens.dedup();
+
+    let mut spans: Vec<std::ops::Range<usize>> = Vec::new();
+    for token in &tokens {
+        let mut from = 0;
+        while let Some(rel) = display_body[from..].find(token.as_str()) {
+            let start = from + rel;
+            let end = start + token.len();
+            let ends_word = !display_body[end..]
+                .chars()
+                .next()
+                .is_some_and(continues_name);
+            if ends_word && !spans.iter().any(|r| r.start < end && start < r.end) {
+                spans.push(start..end);
+            }
+            from = end;
+        }
+    }
+    spans.sort_by_key(|r| r.start);
+    spans
+}
+
 fn continues_name(c: char) -> bool {
     c.is_alphanumeric() || c == '_'
 }
@@ -875,6 +908,24 @@ mod tests {
             resolve_mentions(&body, &names(&[("u1", "Åsa"), ("u2", "Bob Smith")]));
         assert_eq!(shown, "hej @Åsa och @Bob Smith 👋");
         assert_eq!(mentions, picks.to_vec());
+    }
+
+    #[test]
+    fn mention_spans_cover_whole_names_longest_first() {
+        let text = "@Bob Smith and @Bob, not @Bobby or me@Bob";
+        let spans = mention_spans(text, &[pick("u1", "Bob"), pick("u2", "Bob Smith")]);
+        let found: Vec<&str> = spans.iter().map(|r| &text[r.clone()]).collect();
+        assert_eq!(found, vec!["@Bob Smith", "@Bob", "@Bob"]);
+        // "@Bobby" is not a mention of Bob; "me@Bob" still ends at a boundary.
+        assert_eq!(spans[1].start, text.find("@Bob,").unwrap());
+    }
+
+    #[test]
+    fn mention_spans_handle_unicode_names() {
+        let text = "hej @Åsa 👋 och @unknown";
+        let spans = mention_spans(text, &[pick("u1", "Åsa"), pick("u9", UNKNOWN_MENTION_NAME)]);
+        let found: Vec<&str> = spans.iter().map(|r| &text[r.clone()]).collect();
+        assert_eq!(found, vec!["@Åsa", "@unknown"]);
     }
 
     #[test]

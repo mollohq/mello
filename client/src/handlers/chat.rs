@@ -5,7 +5,7 @@ use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    apply_unread_to_crews, chat_messages_to_slint, fetch_gif_images_for_messages,
+    apply_unread_to_crews, chat_messages_to_slint, color_hex, fetch_gif_images_for_messages,
     ChatConvertOptions,
 };
 use crate::{image_cache, notifications, CrewData, GifItemData};
@@ -14,12 +14,14 @@ fn refresh_chat_ui(ctx: &AppContext) {
     let uid = ctx.app.get_user_id().to_string();
     let uav = ctx.app.get_user_avatar();
     let huav = ctx.app.get_has_user_avatar();
+    let mention_color = color_hex(ctx.app.global::<crate::Theme>().get_mention());
     let first_unread = ctx.chat_scroll.first_unread_id();
     let opts = ChatConvertOptions {
         user_id: &uid,
         user_avatar: &uav,
         has_user_avatar: huav,
         avatar_cache: &ctx.avatar_cache.borrow(),
+        mention_color: &mention_color,
         first_unread_id: first_unread.as_deref(),
     };
     let raw = ctx.chat_messages.borrow();
