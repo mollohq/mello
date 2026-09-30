@@ -13,7 +13,8 @@
 // capture realtime thread, the render callback on the playout thread.
 // Unit setup/teardown serializes on coreaudio_unit_mutex(); start/stop
 // refcounts serialize under an internal mutex. No locks on realtime paths.
-#ifdef __APPLE__
+#include "audio_platform.hpp"
+#ifdef MELLO_HAS_VPIO_DUPLEX
 
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
@@ -148,4 +149,4 @@ private:
 
 }  // namespace mello::audio
 
-#endif  // __APPLE__
+#endif  // MELLO_HAS_VPIO_DUPLEX

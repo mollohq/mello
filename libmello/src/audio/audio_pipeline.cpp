@@ -13,11 +13,13 @@
 #include <mach-o/dyld.h>
 #include <libgen.h>
 #include <climits>
-#include "vpio_duplex.hpp"
 #else
 #include <unistd.h>
 #include <limits.h>
 #include <libgen.h>
+#endif
+#ifdef MELLO_HAS_VPIO_DUPLEX
+#include "vpio_duplex.hpp"
 #endif
 
 namespace mello::audio {
@@ -129,7 +131,7 @@ bool AudioPipeline::initialize() {
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // Voice-session scope: the duplex unit lights the mic at the device
     // level as soon as it starts, so it must not exist before a voice
     // session. Startup is always the plain pair (clips preview mic-free);
@@ -231,7 +233,7 @@ bool AudioPipeline::start_capture() {
     // Fresh GRU states + delay search for the new speech session.
     echo_suppressor_.reset();
 
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // Activate the duplex pair for the session when desired and not live.
     // Starting it any earlier shows mic usage with no voice session.
     if (voice_processing_capture_.load(std::memory_order_relaxed) &&
@@ -262,7 +264,7 @@ void AudioPipeline::stop_capture() {
         capture_inject_mode_.store(false, std::memory_order_relaxed);
     }
 
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // Leaving voice releases the mic: drop a live duplex unit back to the
     // plain pair. Desired stays where the toggle put it (the APM flag
     // mirrors it); only the live backend drops. Skipped while dying.
@@ -333,7 +335,7 @@ void AudioPipeline::set_high_pass_filter(bool enabled) {
 
 void AudioPipeline::set_echo_cancellation(bool enabled) {
     echo_canceller_.set_aec_enabled(enabled);
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // On macOS the toggle selects the capture backend: on = combined VPIO
     // duplex (OS AEC/AGC, our APM capture pass skipped), off = plain HAL
     // pair + software AEC. Elsewhere it only flips the APM flag. The
@@ -349,7 +351,7 @@ void AudioPipeline::set_echo_cancellation(bool enabled) {
 #endif
 }
 
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
 bool AudioPipeline::activate_vpio_pair() {
     auto unit = VpioUnit::create();
     if (!unit->initialize(current_capture_device_id(), current_playback_device_id())) {
@@ -383,7 +385,7 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
     if (playback_) playback_->stop();
 
     bool live = false;
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     if (voice_processing) live = activate_vpio_pair();
     if (!live) {
         if (voice_processing) {
@@ -392,7 +394,7 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
         activate_plain_pair();
     }
 #else
-    // Only reached on Apple (call sites are guarded); plain pair it is.
+    // Only reached with the VPIO backend (call sites are guarded); plain pair it is.
     (void)voice_processing;
     (void)live;
     capture_ = create_audio_capture();
@@ -410,7 +412,7 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
         MELLO_LOG_WARN("pipeline", "backend switch failed on stored devices, retrying defaults");
         capture_device_id_.clear();
         playback_device_id_.clear();
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
         activate_plain_pair();
 #else
         capture_ = create_audio_capture();
@@ -1029,7 +1031,7 @@ int AudioPipeline::set_capture_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching capture device (was_capturing=%d)", (int)capturing_.load());
     capture_device_id_ = device_id ? device_id : "";
 
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // Duplex mode rebuilds the whole pair (the unit spans both directions),
     // but only mid-session: outside voice there is nothing to restart and
     // no unit may run.
@@ -1081,7 +1083,7 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching playback device");
     playback_device_id_ = device_id ? device_id : "";
 
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     // Duplex mode rebuilds the whole pair (the unit spans both directions),
     // but only mid-session: outside voice there is nothing to restart and
     // no unit may run.
