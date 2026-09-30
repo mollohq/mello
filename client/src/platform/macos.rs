@@ -1,5 +1,6 @@
 use muda::{Menu, MenuId, MenuItem, PredefinedMenuItem, Submenu};
 
+use crate::edit_shortcuts::{self, EDIT_ITEMS};
 use crate::APP_NAME;
 
 /// Build the macOS NSMenuBar. Must be called on the main thread before
@@ -48,16 +49,30 @@ pub fn build_menu_bar() -> Menu {
     menu.append(&app_menu).ok();
 
     // -- Edit --
-    // All PredefinedMenuItems — these integrate with the macOS responder chain
-    // and give Slint TextInput fields correct system behaviour for free.
+    // Undo, Redo, Cut, Copy, Paste and Select All are our own items, not
+    // `PredefinedMenuItem`s. A predefined item sends a Cocoa action (`copy:`)
+    // to the first responder. That is winit's `WinitView`, and it implements
+    // none of them. The menu would consume the shortcut and do nothing, and
+    // the Slint `TextInput` would never get the key. Each item here forwards
+    // its key press to the Slint window instead. See `edit_shortcuts`.
     let edit_menu = Submenu::with_id("edit", "Edit", true);
-    edit_menu.append(&PredefinedMenuItem::undo(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::redo(None)).ok();
+    let append_edit_item = |item: &edit_shortcuts::EditItem| {
+        edit_menu
+            .append(&MenuItem::with_id(
+                MenuId::new(item.id),
+                item.title,
+                true,
+                Some(item.accelerator.parse().unwrap()),
+            ))
+            .ok();
+    };
+    append_edit_item(&EDIT_ITEMS[0]); // Undo
+    append_edit_item(&EDIT_ITEMS[1]); // Redo
     edit_menu.append(&PredefinedMenuItem::separator()).ok();
-    edit_menu.append(&PredefinedMenuItem::cut(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::copy(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::paste(None)).ok();
-    edit_menu.append(&PredefinedMenuItem::select_all(None)).ok();
+    for item in &EDIT_ITEMS[2..] {
+        // Cut, Copy, Paste, Select All
+        append_edit_item(item);
+    }
     edit_menu.append(&PredefinedMenuItem::separator()).ok();
     edit_menu
         .append(&MenuItem::with_id(
