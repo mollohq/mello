@@ -142,6 +142,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .send(Command::FetchUserAvatar { user_id: member_id });
             }
             ctx.app.set_members(rc.into());
+            crate::callbacks::refresh_mention_members(ctx);
             update_active_crew_card(&ctx.app);
         }
         Event::MemberLeft { member_id, .. } => {
@@ -152,6 +153,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .collect();
             let rc = Rc::new(slint::VecModel::from(members));
             ctx.app.set_members(rc.into());
+            crate::callbacks::refresh_mention_members(ctx);
             update_active_crew_card(&ctx.app);
         }
         Event::PresenceUpdated { user_id, online } => {

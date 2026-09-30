@@ -160,9 +160,14 @@ pub enum Command {
     },
     LeaveCrew,
     SendMessage {
+        /// The composer text, with mentions written as `@name`.
         content: String,
         #[serde(default)]
         reply_to: Option<String>,
+        /// The members the user picked from mention autocomplete. The core
+        /// turns each picked `@name` in `content` into a `<@user_id>` token.
+        #[serde(default)]
+        mentions: Vec<crate::chat::MentionRef>,
     },
     SendGif {
         gif: crate::chat::GifData,
@@ -171,7 +176,11 @@ pub enum Command {
     },
     EditMessage {
         message_id: String,
+        /// The edited text, with mentions written as `@name`.
         new_body: String,
+        /// The message's existing mentions plus any new picks. See `SendMessage::mentions`.
+        #[serde(default)]
+        mentions: Vec<crate::chat::MentionRef>,
     },
     DeleteMessage {
         message_id: String,

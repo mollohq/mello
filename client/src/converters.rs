@@ -56,7 +56,6 @@ pub struct ChatConvertOptions<'a> {
     pub user_avatar: &'a slint::Image,
     pub has_user_avatar: bool,
     pub avatar_cache: &'a HashMap<String, slint::Image>,
-    pub member_names: &'a HashMap<String, String>,
     pub first_unread_id: Option<&'a str>,
 }
 
@@ -92,10 +91,11 @@ pub fn chat_messages_to_slint(
             (slint::Image::default(), false)
         };
 
-        let (display_text, mentions_self, links) = if d.is_system || d.is_deleted {
-            (d.content.clone(), false, Vec::new())
+        let mentions_self = d.mentions.iter().any(|m| m.user_id == opts.user_id);
+        let (display_text, links) = if d.is_system || d.is_deleted {
+            (d.display_body.clone(), Vec::new())
         } else {
-            mello_core::chat::prepare_body_for_markdown(&d.content, opts.user_id, opts.member_names)
+            mello_core::chat::prepare_body_for_markdown(&d.display_body)
         };
 
         // Guard: one message must never render into a giant Skia glyph buffer.
@@ -142,7 +142,8 @@ pub fn chat_messages_to_slint(
             sender_initials: d.sender_initials.into(),
             sender_avatar: sender_av,
             has_sender_avatar: has_sender_av,
-            text: d.content.into(),
+            // Copy and edit work on the shown text (`@name`, not `<@user_id>`).
+            text: d.display_body.into(),
             display_text: display_text.into(),
             display_styled,
             links: Rc::new(slint::VecModel::from(slint_links)).into(),
@@ -171,17 +172,6 @@ pub fn chat_messages_to_slint(
     }
 
     out
-}
-
-pub fn member_names_from_app(app: &MainWindow) -> HashMap<String, String> {
-    let members = app.get_members();
-    let mut names = HashMap::new();
-    for i in 0..members.row_count() {
-        if let Some(m) = members.row_data(i) {
-            names.insert(m.id.to_string(), m.name.to_string());
-        }
-    }
-    names
 }
 
 pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::UnreadTracker) {

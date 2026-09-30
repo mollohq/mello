@@ -77,23 +77,122 @@ impl MessageEnvelope {
     }
 }
 
-/// Extract user IDs from `<@user_id>` tokens in a message body.
-pub fn extract_mentions(body: &str) -> Vec<String> {
-    let mut mentions = Vec::new();
+/// A user mentioned in a message: the id from its `<@user_id>` token and the
+/// name shown for it. Composers send these for the members the user picked.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MentionRef {
+    pub user_id: String,
+    pub name: String,
+}
+
+/// Name shown for a mention whose user cannot be resolved. A raw user id is never shown.
+pub const UNKNOWN_MENTION_NAME: &str = "unknown";
+
+fn is_mention_id(id: &str) -> bool {
+    !id.is_empty() && !id.contains(|c: char| c.is_whitespace() || c == '<' || c == '@')
+}
+
+/// Byte range and user id of each `<@user_id>` token in `body`, in order.
+fn mention_tokens(body: &str) -> Vec<(std::ops::Range<usize>, &str)> {
+    let mut out = Vec::new();
     let mut start = 0;
-    while let Some(open) = body[start..].find("<@") {
-        let abs_open = start + open + 2;
-        if let Some(close) = body[abs_open..].find('>') {
-            let user_id = &body[abs_open..abs_open + close];
-            if !user_id.is_empty() {
-                mentions.push(user_id.to_string());
-            }
-            start = abs_open + close + 1;
-        } else {
+    while let Some(rel) = body[start..].find("<@") {
+        let id_start = start + rel + 2;
+        let Some(rel_close) = body[id_start..].find('>') else {
             break;
+        };
+        let id_end = id_start + rel_close;
+        let id = &body[id_start..id_end];
+        if is_mention_id(id) {
+            out.push((start + rel..id_end + 1, id));
+            start = id_end + 1;
+        } else {
+            start = id_start;
         }
     }
-    mentions
+    out
+}
+
+/// Extract user IDs from `<@user_id>` tokens in a message body.
+pub fn extract_mentions(body: &str) -> Vec<String> {
+    mention_tokens(body)
+        .into_iter()
+        .map(|(_, id)| id.to_string())
+        .collect()
+}
+
+/// Replace each `<@user_id>` token with `@name`. Returns the text to show and
+/// the mentioned users in order of first appearance. A user missing from
+/// `member_names` shows as [`UNKNOWN_MENTION_NAME`].
+pub fn resolve_mentions(
+    body: &str,
+    member_names: &std::collections::HashMap<String, String>,
+) -> (String, Vec<MentionRef>) {
+    let mut out = String::with_capacity(body.len());
+    let mut mentions: Vec<MentionRef> = Vec::new();
+    let mut cursor = 0;
+    for (range, user_id) in mention_tokens(body) {
+        let name = member_names
+            .get(user_id)
+            .filter(|n| !n.is_empty())
+            .map_or(UNKNOWN_MENTION_NAME, String::as_str);
+        out.push_str(&body[cursor..range.start]);
+        out.push('@');
+        out.push_str(name);
+        cursor = range.end;
+        if !mentions.iter().any(|m| m.user_id == user_id) {
+            mentions.push(MentionRef {
+                user_id: user_id.to_string(),
+                name: name.to_string(),
+            });
+        }
+    }
+    out.push_str(&body[cursor..]);
+    (out, mentions)
+}
+
+fn continues_name(c: char) -> bool {
+    c.is_alphanumeric() || c == '_'
+}
+
+/// Replace each picked `@name` in composer text with its `<@user_id>` token.
+/// Typed `@name` text without a pick stays plain text. A name matches only as a
+/// whole word, so a pick of `@bob` leaves `@bobby` and `me@bob` alone.
+pub fn encode_mentions(text: &str, picks: &[MentionRef]) -> String {
+    let mut picks: Vec<&MentionRef> = picks
+        .iter()
+        .filter(|p| !p.name.is_empty() && is_mention_id(&p.user_id))
+        .collect();
+    // Longest first, so a pick of "Bob Smith" wins over a pick of "Bob".
+    picks.sort_by_key(|p| std::cmp::Reverse(p.name.len()));
+
+    let mut out = String::with_capacity(text.len());
+    let mut prev: Option<char> = None;
+    let mut rest = text;
+    while let Some(c) = rest.chars().next() {
+        if c == '@' && !prev.is_some_and(continues_name) {
+            let after = &rest[1..];
+            let pick = picks.iter().find(|p| {
+                after.starts_with(p.name.as_str())
+                    && !after[p.name.len()..]
+                        .chars()
+                        .next()
+                        .is_some_and(continues_name)
+            });
+            if let Some(p) = pick {
+                out.push_str("<@");
+                out.push_str(&p.user_id);
+                out.push('>');
+                prev = p.name.chars().last();
+                rest = &after[p.name.len()..];
+                continue;
+            }
+        }
+        out.push(c);
+        prev = Some(c);
+        rest = &rest[c.len_utf8()..];
+    }
+    out
 }
 
 /// A URL extracted from message text for pill rendering in the UI.
@@ -137,16 +236,11 @@ fn truncate_chars(s: &str, max: usize) -> String {
     out
 }
 
-/// Resolve mentions and pull bare URLs out of the body for separate pill widgets.
-/// Returns markdown-safe plain text (no link syntax) plus link metadata.
-pub fn prepare_body_for_markdown(
-    body: &str,
-    current_user_id: &str,
-    member_names: &std::collections::HashMap<String, String>,
-) -> (String, bool, Vec<ChatLink>) {
-    let (resolved, mentions_self) = prepare_body_for_display(body, current_user_id, member_names);
-    let (plain, links) = extract_urls_from_text(&resolved);
-    (plain, mentions_self, links)
+/// Pull bare URLs out of a display body (mentions already resolved, see
+/// [`resolve_mentions`]) for separate pill widgets. Returns markdown-safe plain
+/// text (no link syntax) plus link metadata.
+pub fn prepare_body_for_markdown(display_body: &str) -> (String, Vec<ChatLink>) {
+    extract_urls_from_text(display_body)
 }
 
 fn extract_urls_from_text(text: &str) -> (String, Vec<ChatLink>) {
@@ -184,30 +278,6 @@ fn extract_urls_from_text(text: &str) -> (String, Vec<ChatLink>) {
     plain.push_str(tail);
     let plain = plain.trim().to_string();
     (plain, links)
-}
-
-/// Resolve `<@user_id>` tokens in a message body to `@display_name`.
-/// Returns the body with tokens replaced, plus whether the current user is mentioned.
-pub fn prepare_body_for_display(
-    body: &str,
-    current_user_id: &str,
-    member_names: &std::collections::HashMap<String, String>,
-) -> (String, bool) {
-    let mut result = body.to_string();
-    let mut mentions_self = false;
-    let mentions = extract_mentions(body);
-    for uid in &mentions {
-        if uid == current_user_id {
-            mentions_self = true;
-        }
-        let display = member_names
-            .get(uid.as_str())
-            .map(|n| format!("@{}", n))
-            .unwrap_or_else(|| format!("@{}", uid));
-        let token = format!("<@{}>", uid);
-        result = result.replace(&token, &display);
-    }
-    (result, mentions_self)
 }
 
 /// True when a Nakama channel `content` field must not appear in chat (signaling, empty JSON, etc.).
@@ -274,6 +344,9 @@ fn envelope_is_displayable(envelope: &MessageEnvelope) -> bool {
 }
 
 /// Build a [`ChatMessage`] from a parsed envelope and Nakama metadata.
+/// `member_names` resolves the `<@user_id>` tokens for `display_body`; resolve
+/// unknown mentioned users into it first (see `MemberNames::ensure`).
+#[allow(clippy::too_many_arguments)]
 pub fn chat_message_from_envelope(
     message_id: String,
     sender_id: String,
@@ -282,6 +355,7 @@ pub fn chat_message_from_envelope(
     update_time: String,
     envelope: MessageEnvelope,
     content_str: &str,
+    member_names: &std::collections::HashMap<String, String>,
 ) -> Option<ChatMessage> {
     let is_system = envelope.msg_type == MessageType::System;
     let is_deleted = !is_system
@@ -294,6 +368,8 @@ pub fn chat_message_from_envelope(
             sender_id,
             sender_name,
             content: String::new(),
+            display_body: String::new(),
+            mentions: Vec::new(),
             timestamp: create_time.clone(),
             create_time,
             update_time,
@@ -314,11 +390,14 @@ pub fn chat_message_from_envelope(
         && !create_time.is_empty()
         && update_time != create_time;
 
+    let (display_body, mentions) = resolve_mentions(&envelope.body, member_names);
     Some(ChatMessage {
         message_id,
         sender_id,
         sender_name,
         content: envelope.body,
+        display_body,
+        mentions,
         timestamp: create_time.clone(),
         create_time,
         update_time,
@@ -426,7 +505,11 @@ pub struct DisplayMessage {
     pub sender_id: String,
     pub sender_name: String,
     pub sender_initials: String,
+    /// The body as sent, with `<@user_id>` mention tokens.
     pub content: String,
+    /// The body to show, mentions resolved. See [`ChatMessage::display_body`].
+    pub display_body: String,
+    pub mentions: Vec<MentionRef>,
     pub timestamp: String,
     pub display_time: String,
     pub is_group_start: bool,
@@ -548,7 +631,7 @@ fn resolve_reply(
     } else if orig.gif.is_some() && orig.content.is_empty() {
         "GIF".to_string()
     } else {
-        truncate_preview(&orig.content, 100)
+        truncate_preview(&orig.display_body, 100)
     };
     (Some(orig.sender_name.clone()), Some(preview))
 }
@@ -565,6 +648,8 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
                 sender_name: msg.sender_name.clone(),
                 sender_initials: String::new(),
                 content: msg.content.clone(),
+                display_body: msg.display_body.clone(),
+                mentions: msg.mentions.clone(),
                 timestamp: msg.timestamp.clone(),
                 display_time: String::new(),
                 is_group_start: false,
@@ -608,6 +693,12 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
             } else {
                 msg.content.clone()
             },
+            display_body: if msg.is_deleted {
+                "[message deleted]".to_string()
+            } else {
+                msg.display_body.clone()
+            },
+            mentions: msg.mentions.clone(),
             timestamp: msg.timestamp.clone(),
             display_time: format_display_time(&msg.timestamp),
             is_group_start,
@@ -635,6 +726,8 @@ mod tests {
             sender_id: sender.to_string(),
             sender_name: name.to_string(),
             content: text.to_string(),
+            display_body: text.to_string(),
+            mentions: Vec::new(),
             timestamp: ts.to_string(),
             create_time: ts.to_string(),
             update_time: ts.to_string(),
@@ -710,21 +803,109 @@ mod tests {
         assert_eq!(make_initials(""), "?");
     }
 
-    #[test]
-    fn prepare_body_resolves_mentions() {
-        let mut names = std::collections::HashMap::new();
-        names.insert("u1".to_string(), "Alice".to_string());
-        names.insert("u2".to_string(), "Bob".to_string());
-        let (body, mentions_self) = prepare_body_for_display("hey <@u1> and <@u2>", "u1", &names);
-        assert_eq!(body, "hey @Alice and @Bob");
-        assert!(mentions_self);
+    fn names(pairs: &[(&str, &str)]) -> std::collections::HashMap<String, String> {
+        pairs
+            .iter()
+            .map(|(id, n)| (id.to_string(), n.to_string()))
+            .collect()
+    }
+
+    fn pick(user_id: &str, name: &str) -> MentionRef {
+        MentionRef {
+            user_id: user_id.into(),
+            name: name.into(),
+        }
     }
 
     #[test]
-    fn prepare_body_no_self_mention() {
-        let names = std::collections::HashMap::new();
-        let (_, mentions_self) = prepare_body_for_display("hey <@u2>", "u1", &names);
-        assert!(!mentions_self);
+    fn resolve_mentions_shows_names_and_lists_each_user_once() {
+        let (body, mentions) = resolve_mentions(
+            "hey <@u1> and <@u2>, <@u1>!",
+            &names(&[("u1", "Alice"), ("u2", "Bob Smith")]),
+        );
+        assert_eq!(body, "hey @Alice and @Bob Smith, @Alice!");
+        assert_eq!(mentions, vec![pick("u1", "Alice"), pick("u2", "Bob Smith")]);
+    }
+
+    #[test]
+    fn resolve_mentions_never_shows_a_raw_user_id() {
+        let (body, mentions) = resolve_mentions("ping <@9f3c-uuid>", &names(&[]));
+        assert_eq!(body, "ping @unknown");
+        assert_eq!(mentions, vec![pick("9f3c-uuid", UNKNOWN_MENTION_NAME)]);
+    }
+
+    #[test]
+    fn resolve_mentions_leaves_text_that_is_not_a_token() {
+        let text = "a <@ b> c <@> d <@u1";
+        let (body, mentions) = resolve_mentions(text, &names(&[("u1", "Alice")]));
+        assert_eq!(body, text);
+        assert!(mentions.is_empty());
+    }
+
+    #[test]
+    fn encode_mentions_turns_picked_names_into_tokens() {
+        let body = encode_mentions(
+            "@Bob Smith and @Alice, see this",
+            &[pick("u1", "Alice"), pick("u2", "Bob Smith")],
+        );
+        assert_eq!(body, "<@u2> and <@u1>, see this");
+    }
+
+    #[test]
+    fn encode_mentions_leaves_unpicked_and_partial_names() {
+        let picks = [pick("u1", "bob")];
+        assert_eq!(encode_mentions("@bobby hi", &picks), "@bobby hi");
+        assert_eq!(encode_mentions("me@bob hi", &picks), "me@bob hi");
+        assert_eq!(encode_mentions("@carol hi", &picks), "@carol hi");
+        assert_eq!(encode_mentions("hi @bob.", &picks), "hi <@u1>.");
+    }
+
+    #[test]
+    fn encode_mentions_prefers_the_longest_picked_name() {
+        let picks = [pick("u1", "Bob"), pick("u2", "Bob Smith")];
+        assert_eq!(encode_mentions("@Bob Smith @Bob", &picks), "<@u2> <@u1>");
+    }
+
+    #[test]
+    fn encoded_mentions_round_trip_through_display() {
+        let picks = [pick("u1", "Åsa"), pick("u2", "Bob Smith")];
+        let body = encode_mentions("hej @Åsa och @Bob Smith 👋", &picks);
+        assert_eq!(extract_mentions(&body), vec!["u1", "u2"]);
+        let (shown, mentions) =
+            resolve_mentions(&body, &names(&[("u1", "Åsa"), ("u2", "Bob Smith")]));
+        assert_eq!(shown, "hej @Åsa och @Bob Smith 👋");
+        assert_eq!(mentions, picks.to_vec());
+    }
+
+    #[test]
+    fn chat_message_carries_the_resolved_body() {
+        let env = MessageEnvelope::text("yo <@u2>", None);
+        let json = serde_json::to_string(&env).unwrap();
+        let m = chat_message_from_envelope(
+            "m1".into(),
+            "u1".into(),
+            "Alice".into(),
+            "t".into(),
+            "t".into(),
+            env,
+            &json,
+            &names(&[("u2", "Bob")]),
+        )
+        .unwrap();
+        assert_eq!(m.content, "yo <@u2>");
+        assert_eq!(m.display_body, "yo @Bob");
+        assert!(m.mentions_user("u2"));
+        assert!(!m.mentions_user("u1"));
+    }
+
+    #[test]
+    fn reply_preview_uses_the_resolved_body() {
+        let mut orig = msg("1", "u1", "alice", "2026-03-08T12:00:00Z", "hi <@u2>");
+        orig.display_body = "hi @Bob".into();
+        let mut reply = msg("2", "u2", "bob", "2026-03-08T12:01:00Z", "yes");
+        reply.reply_to = Some("1".into());
+        let display = prepare_messages_for_display(&[orig, reply]);
+        assert_eq!(display[1].reply_preview.as_deref(), Some("hi @Bob"));
     }
 
     #[test]
@@ -734,9 +915,7 @@ mod tests {
 
     #[test]
     fn prepare_body_extracts_url_pills() {
-        let names = std::collections::HashMap::new();
-        let (plain, _, links) =
-            prepare_body_for_markdown("see https://slint.dev/docs ok", "u1", &names);
+        let (plain, links) = prepare_body_for_markdown("see https://slint.dev/docs ok");
         assert_eq!(plain, "see ok");
         assert_eq!(links.len(), 1);
         assert_eq!(links[0].url, "https://slint.dev/docs");
@@ -831,6 +1010,8 @@ mod tests {
             sender_id: "u1".into(),
             sender_name: "bob".into(),
             content: "hi".into(),
+            display_body: "hi".into(),
+            mentions: Vec::new(),
             timestamp: iso.into(),
             create_time: iso.into(),
             update_time: iso.into(),

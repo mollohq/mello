@@ -1,8 +1,14 @@
 use crate::events::Event;
 
 impl super::Client {
-    pub(super) async fn handle_send_message(&self, content: &str, reply_to: Option<&str>) {
-        let envelope = crate::chat::MessageEnvelope::text(content, reply_to.map(String::from));
+    pub(super) async fn handle_send_message(
+        &self,
+        content: &str,
+        reply_to: Option<&str>,
+        mentions: &[crate::chat::MentionRef],
+    ) {
+        let body = crate::chat::encode_mentions(content, mentions);
+        let envelope = crate::chat::MessageEnvelope::text(&body, reply_to.map(String::from));
         let json = match serde_json::to_string(&envelope) {
             Ok(j) => j,
             Err(e) => {
@@ -29,8 +35,14 @@ impl super::Client {
         }
     }
 
-    pub(super) async fn handle_edit_message(&self, message_id: &str, new_body: &str) {
-        let envelope = crate::chat::MessageEnvelope::text(new_body, None);
+    pub(super) async fn handle_edit_message(
+        &self,
+        message_id: &str,
+        new_body: &str,
+        mentions: &[crate::chat::MentionRef],
+    ) {
+        let body = crate::chat::encode_mentions(new_body, mentions);
+        let envelope = crate::chat::MessageEnvelope::text(&body, None);
         let json = match serde_json::to_string(&envelope) {
             Ok(j) => j,
             Err(e) => {

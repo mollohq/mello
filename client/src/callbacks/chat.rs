@@ -1,5 +1,7 @@
+use std::cell::RefCell;
 use std::rc::Rc;
 
+use mello_core::chat::MentionRef;
 use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
@@ -41,10 +43,29 @@ pub fn refresh_mention_members(ctx: &AppContext) {
         .set_mention_members(Rc::new(slint::VecModel::from(list)).into());
 }
 
+/// The members picked from mention autocomplete since the last send.
+type MentionPicks = Rc<RefCell<Vec<MentionRef>>>;
+
+/// The picks whose `@name` is still in `text`. The picks are cleared, so the
+/// next message starts with none.
+fn take_picks(picks: &MentionPicks, text: &str) -> Vec<MentionRef> {
+    std::mem::take(&mut *picks.borrow_mut())
+        .into_iter()
+        .filter(|p| text.contains(&format!("@{}", p.name)))
+        .collect()
+}
+
+/// Composer text after a pick: the `@query` being typed becomes `@name `.
+fn text_after_pick(current: &str, name: &str) -> String {
+    let head = current.rfind('@').map_or(current, |at| &current[..at]);
+    format!("{head}@{name} ")
+}
+
 pub fn wire(ctx: &AppContext) {
     ctx.app
         .set_emoji_list(Rc::new(slint::VecModel::from(default_emoji_list())).into());
     refresh_mention_members(ctx);
+    let picks: MentionPicks = Rc::default();
 
     {
         let cmd = ctx.cmd_tx.clone();
@@ -56,8 +77,10 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_send_message({
             let cmd = cmd.clone();
             let s = scroll_ctx.clone();
+            let picks = picks.clone();
             move |text| {
                 let _ = cmd.send(Command::SendMessage {
+                    mentions: take_picks(&picks, &text),
                     content: text.to_string(),
                     reply_to: None,
                 });
@@ -72,8 +95,10 @@ pub fn wire(ctx: &AppContext) {
             unread: ctx.unread_tracker.clone(),
             app: ctx.app.as_weak(),
         });
+        let picks = picks.clone();
         ctx.app.on_send_message_with_reply(move |text, reply_to| {
             let _ = cmd.send(Command::SendMessage {
+                mentions: take_picks(&picks, &text),
                 content: text.to_string(),
                 reply_to: Some(reply_to.to_string()),
             });
@@ -97,8 +122,19 @@ pub fn wire(ctx: &AppContext) {
             unread: ctx.unread_tracker.clone(),
             app: ctx.app.as_weak(),
         });
+        let picks = picks.clone();
+        let chat_messages = ctx.chat_messages.clone();
         ctx.app.on_edit_message(move |message_id, new_body| {
+            // The edit box shows `@name`, so the message's own mentions count as picks.
+            let existing: Vec<MentionRef> = chat_messages
+                .borrow()
+                .iter()
+                .find(|m| m.message_id == message_id.as_str())
+                .map(|m| m.mentions.clone())
+                .unwrap_or_default();
+            picks.borrow_mut().extend(existing);
             let _ = cmd.send(Command::EditMessage {
+                mentions: take_picks(&picks, &new_body),
                 message_id: message_id.to_string(),
                 new_body: new_body.to_string(),
             });
@@ -210,18 +246,18 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let app_weak = ctx.app.as_weak();
-        ctx.app.on_mention_selected(move |user_id, _display_name| {
+        let picks = picks.clone();
+        ctx.app.on_mention_selected(move |user_id, display_name| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
+            // Show the name; the core writes the `<@user_id>` token at send time.
             let current = app.get_chat_input_text();
-            let token = format!("<@{}>", user_id);
-            let new_text = if let Some(at) = current.rfind('@') {
-                format!("{}{} ", &current[..at], token)
-            } else {
-                format!("{} ", token)
-            };
-            app.set_chat_input_text(new_text.into());
+            app.set_chat_input_text(text_after_pick(&current, &display_name).into());
+            picks.borrow_mut().push(MentionRef {
+                user_id: user_id.to_string(),
+                name: display_name.to_string(),
+            });
             app.set_mention_suggestions(
                 Rc::new(slint::VecModel::<MentionMemberData>::default()).into(),
             );
