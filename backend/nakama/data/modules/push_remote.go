@@ -290,6 +290,7 @@ func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 		devices = append(devices, pushDevice{Token: rec.Token, Platform: rec.Platform, Environment: rec.Environment})
 	}
 	if len(devices) == 0 {
+		logger.Debug("push: user=%s has no registered device", userID)
 		return
 	}
 
@@ -378,6 +379,7 @@ func queueMentionPushes(logger runtime.Logger, nk runtime.NakamaModule, senderID
 	if len(targets) == 0 {
 		return
 	}
+	logger.Debug("push: message=%s crew=%s mentions=%d", messageID, crewID, len(targets))
 	body := env.Body
 	go func() {
 		defer func() {
@@ -404,6 +406,7 @@ func deliverMentionPushes(ctx context.Context, logger runtime.Logger, nk runtime
 		}
 		recipients = append(recipients, uid)
 	}
+	logger.Debug("push: message=%s members=%d recipients=%d", messageID, len(members), len(recipients))
 	if len(recipients) == 0 {
 		return
 	}

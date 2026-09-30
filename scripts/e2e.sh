@@ -29,6 +29,13 @@ done
 
 COMPOSE="docker compose -f backend/docker-compose.yml"
 
+# Remote push: Nakama posts to a stub Worker that the push e2e test serves on
+# the host (spec 23). Compose recreates Nakama when these change.
+MELLO_E2E_PUSH_PORT="${MELLO_E2E_PUSH_PORT:-18787}"
+PUSH_WORKER_URL="${PUSH_WORKER_URL:-http://host.docker.internal:$MELLO_E2E_PUSH_PORT}"
+PUSH_WORKER_TOKEN="${PUSH_WORKER_TOKEN:-e2e-push-token}"
+export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
+
 if ! docker info >/dev/null 2>&1; then
     echo "✗ Docker is not running. Start Docker Desktop and retry." >&2
     exit 1

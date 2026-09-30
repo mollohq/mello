@@ -102,6 +102,14 @@ services:
       - SNAPSHOTS_S3_PUBLIC_URL=http://localhost:9000/mello-snapshots
       # Private bucket for user-driven diagnostic log captures (no public URL).
       - DIAGNOSTICS_S3_BUCKET=mello-diagnostics
+      # Remote push (spec 23). Unset = pushes are skipped. scripts/e2e.sh points
+      # these at a stub Worker that the e2e test runs on the host.
+      - PUSH_WORKER_URL=${PUSH_WORKER_URL:-}
+      - PUSH_WORKER_TOKEN=${PUSH_WORKER_TOKEN:-}
+    # Lets the container reach a stub on the host; Docker Desktop has this name
+    # already, Linux needs the mapping.
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     entrypoint:
       - /bin/sh
       - -c
