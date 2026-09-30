@@ -94,12 +94,12 @@ func TestHasActiveSessions(t *testing.T) {
 		t.Fatal("no session yet")
 	}
 	registerSessionStart("u1")
-	if !HasActiveSessions("u1") || shouldPushNow("u1") {
-		t.Fatal("a connected user must not get a push")
+	if !HasActiveSessions("u1") {
+		t.Fatal("one session registered")
 	}
 	registerSessionEnd("u1")
-	if HasActiveSessions("u1") || !shouldPushNow("u1") {
-		t.Fatal("a disconnected user must get a push")
+	if HasActiveSessions("u1") {
+		t.Fatal("the session ended")
 	}
 }
 

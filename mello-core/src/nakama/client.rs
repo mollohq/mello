@@ -53,6 +53,9 @@ pub struct NakamaClient {
     ws_tx: Option<mpsc::Sender<String>>,
     ws_shared: Arc<RwLock<WsShared>>,
     next_cid: u64,
+    /// Counts socket connections, so state tied to a socket session (the push
+    /// activity report) can be sent again after a reconnect.
+    ws_generation: u64,
     signal_rx: Option<mpsc::Receiver<InternalSignal>>,
     signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
     presence_rx: Option<mpsc::Receiver<InternalPresence>>,
@@ -90,6 +93,7 @@ impl NakamaClient {
             ws_tx: None,
             ws_shared: Arc::new(RwLock::new(WsShared::default())),
             next_cid: 1,
+            ws_generation: 0,
             signal_rx: Some(sig_rx),
             signal_tx_template: Some(sig_tx),
             member_names,
@@ -545,6 +549,7 @@ impl NakamaClient {
 
         let (ws_tx, ws_rx) = mpsc::channel::<String>(256);
         self.ws_tx = Some(ws_tx);
+        self.ws_generation += 1;
 
         let shared = self.ws_shared.clone();
         if let Some(user) = &self.current_user {
@@ -623,6 +628,27 @@ impl NakamaClient {
     /// Take the presence receiver (call once, from the client run loop)
     pub fn take_presence_rx(&mut self) -> Option<mpsc::Receiver<InternalPresence>> {
         self.presence_rx.take()
+    }
+
+    /// Increases on every successful `connect_ws`.
+    pub fn ws_generation(&self) -> u64 {
+        self.ws_generation
+    }
+
+    /// Calls an RPC over the realtime socket, fire-and-forget. Unlike `rpc`,
+    /// the server sees the calling session id. The reply is ignored.
+    pub async fn socket_rpc(&self, id: &str, payload: &serde_json::Value) -> Result<()> {
+        let msg = serde_json::json!({
+            "rpc": { "id": id, "payload": payload.to_string() }
+        })
+        .to_string();
+        self.ws_send(msg).await
+    }
+
+    /// Reports whether the user is active on this session (spec 23 §6.2).
+    pub async fn set_session_activity(&self, active: bool, platform: &str) -> Result<()> {
+        let payload = serde_json::json!({ "active": active, "platform": platform });
+        self.socket_rpc("set_session_activity", &payload).await
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
@@ -3211,6 +3237,42 @@ mod push_tests {
             payload,
             serde_json::json!({"token": "ab12", "platform": "ios", "environment": "sandbox"})
         );
+    }
+
+    /// The activity report goes over the socket as a Nakama realtime RPC
+    /// envelope, so the server sees the calling session (spec 23 §6.2).
+    #[tokio::test]
+    async fn set_session_activity_sends_a_socket_rpc_envelope() {
+        let mut client = NakamaClient::new(Config::development());
+        let (tx, mut rx) = mpsc::channel(4);
+        client.ws_tx = Some(tx);
+
+        client
+            .set_session_activity(false, "desktop")
+            .await
+            .expect("queued on the socket");
+        let sent: serde_json::Value =
+            serde_json::from_str(&rx.recv().await.expect("one message")).expect("json");
+        assert_eq!(sent["rpc"]["id"], "set_session_activity");
+        let payload: serde_json::Value = serde_json::from_str(
+            sent["rpc"]["payload"]
+                .as_str()
+                .expect("payload is a string"),
+        )
+        .expect("payload json");
+        assert_eq!(
+            payload,
+            serde_json::json!({"active": false, "platform": "desktop"})
+        );
+    }
+
+    #[tokio::test]
+    async fn set_session_activity_without_a_socket_is_not_connected() {
+        let client = NakamaClient::new(Config::development());
+        assert!(matches!(
+            client.set_session_activity(true, "desktop").await,
+            Err(Error::NotConnected)
+        ));
     }
 
     #[tokio::test]

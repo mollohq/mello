@@ -520,124 +520,155 @@ fn push_token_register_and_unregister_round_trip() {
 struct CapturedSend {
     head: String,
     body: serde_json::Value,
+    at: std::time::Instant,
 }
 
-/// Serves one `POST /send` on the host port that `scripts/e2e.sh` gave Nakama
-/// as `PUSH_WORKER_URL`, answers like the real Worker, and returns what it got.
+/// Serves `POST /send` on the host port that `scripts/e2e.sh` gave Nakama as
+/// `PUSH_WORKER_URL`, answers like the real Worker, and reports each request.
 fn stub_push_worker(port: u16) -> std::sync::mpsc::Receiver<CapturedSend> {
     use std::io::{BufRead, BufReader, Read, Write};
     let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("bind stub push worker");
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let Ok((mut stream, _)) = listener.accept() else {
-            return;
-        };
-        let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-        let mut head = String::new();
-        let mut len = 0usize;
-        loop {
-            let mut line = String::new();
-            if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                break;
+        for stream in listener.incoming() {
+            let Ok(mut stream) = stream else { continue };
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut head = String::new();
+            let mut len = 0usize;
+            loop {
+                let mut line = String::new();
+                if reader.read_line(&mut line).unwrap_or(0) == 0 {
+                    break;
+                }
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    len = v.trim().parse().unwrap_or(0);
+                }
+                if line == "\r\n" {
+                    break;
+                }
+                head.push_str(&line);
             }
-            if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                len = v.trim().parse().unwrap_or(0);
-            }
-            if line == "\r\n" {
-                break;
-            }
-            head.push_str(&line);
-        }
-        let mut raw = vec![0u8; len];
-        let _ = reader.read_exact(&mut raw);
-        let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
-        let token = body["tokens"][0]["token"]
-            .as_str()
-            .unwrap_or_default()
+            let mut raw = vec![0u8; len];
+            let _ = reader.read_exact(&mut raw);
+            let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
+            let token = body["tokens"][0]["token"]
+                .as_str()
+                .unwrap_or_default()
+                .to_string();
+            let reply = serde_json::json!({
+                "results": [{"token": token, "status": "sent", "apns_id": "e2e"}],
+                "prune": [],
+            })
             .to_string();
-        let reply = serde_json::json!({
-            "results": [{"token": token, "status": "sent", "apns_id": "e2e"}],
-            "prune": [],
-        })
-        .to_string();
-        let _ = write!(
-            stream,
-            "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-            reply.len()
-        );
-        let _ = tx.send(CapturedSend { head, body });
+            let _ = write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            );
+            if tx
+                .send(CapturedSend {
+                    head,
+                    body,
+                    at: std::time::Instant::now(),
+                })
+                .is_err()
+            {
+                return;
+            }
+        }
     });
     rx
 }
 
-/// Spec 23 M4: a chat message that mentions an offline crew member makes
-/// Nakama post that member's token to the push Worker, with the tap route and
-/// the mention shown as a name. Needs the stub Worker URL from `scripts/e2e.sh`.
+/// Waits for the next `/send` without blocking the single-threaded runtime:
+/// the socket writer task must run to deliver messages at all.
+async fn next_send(rx: &std::sync::mpsc::Receiver<CapturedSend>, what: &str) -> CapturedSend {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
+    loop {
+        if let Ok(got) = rx.try_recv() {
+            return got;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no /send within 15 s: {what}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+}
+
+/// Sends a chat message, retrying while the channel join is still in flight
+/// (the send reports NotConnected until Nakama's join reply arrives).
+async fn send_when_joined(client: &NakamaClient, text: &str) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        match client.send_chat_message(text).await {
+            Ok(()) => return,
+            Err(e) if std::time::Instant::now() < deadline => {
+                let _ = e;
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            }
+            Err(e) => panic!("send {text:?}: {e}"),
+        }
+    }
+}
+
+async fn joined_member(code: &str, token: &str) -> (NakamaClient, String) {
+    let mut member = NakamaClient::new(e2e_config());
+    member
+        .authenticate_device(&random_device_id())
+        .await
+        .expect("device auth for the member");
+    member
+        .join_by_invite_code(code)
+        .await
+        .expect("join by invite");
+    let id = member.current_user_id().expect("member id").to_string();
+    member
+        .register_push_token(token, "ios", "sandbox")
+        .await
+        .expect("register");
+    (member, id)
+}
+
+/// Spec 23 M4 + M5, against a live Nakama and a stub Worker:
+/// 1. A mention of an offline member is posted to the Worker at once, with the
+///    tap route and the mention shown as a name.
+/// 2. A mention of a member whose desktop is open but inactive is held for the
+///    grace period (`PUSH_DESKTOP_GRACE_SECS`, 2 s under `scripts/e2e.sh`).
+///
+/// One test, because both scenarios share the stub's fixed port.
 #[test]
-fn a_mention_of_an_offline_member_reaches_the_push_worker() {
-    if !e2e_enabled("a_mention_of_an_offline_member_reaches_the_push_worker") {
+fn mention_pushes_follow_the_delivery_rules() {
+    if !e2e_enabled("mention_pushes_follow_the_delivery_rules") {
         return;
     }
-    let Some(port) = std::env::var("MELLO_E2E_PUSH_PORT")
-        .ok()
-        .and_then(|p| p.parse().ok())
-    else {
-        println!("SKIP a_mention_of_an_offline_member_reaches_the_push_worker: MELLO_E2E_PUSH_PORT unset (run ./scripts/e2e.sh)");
+    let (Some(port), Some(grace)) = (
+        std::env::var("MELLO_E2E_PUSH_PORT")
+            .ok()
+            .and_then(|p| p.parse::<u16>().ok()),
+        std::env::var("PUSH_DESKTOP_GRACE_SECS")
+            .ok()
+            .and_then(|g| g.parse::<u64>().ok()),
+    ) else {
+        println!("SKIP mention_pushes_follow_the_delivery_rules: run ./scripts/e2e.sh (push stub env unset)");
         return;
     };
+    let grace = std::time::Duration::from_secs(grace);
     let captured = stub_push_worker(port);
 
     rt().block_on(async {
         let (mut owner, crew_id, code) = crew_with_invite(true).await;
-
-        // The member joins and registers a token, then stays offline (no socket).
-        let mut member = NakamaClient::new(e2e_config());
-        member
-            .authenticate_device(&random_device_id())
-            .await
-            .expect("device auth for the member");
-        member.join_by_invite_code(&code).await.expect("join by invite");
-        let member_id = member.current_user_id().expect("member id").to_string();
-        member
-            .register_push_token("feedface01", "ios", "sandbox")
-            .await
-            .expect("register");
-
         let (event_tx, _events) = std::sync::mpsc::channel();
         owner.connect_ws(event_tx).await.expect("owner socket");
         owner.join_crew_channel(&crew_id).await.expect("join crew channel");
-        // The join completes when Nakama's reply arrives on the socket; until
-        // then the send reports NotConnected.
-        let text = format!("gg <@{member_id}> ping");
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
-        loop {
-            match owner.send_chat_message(&text).await {
-                Ok(()) => break,
-                Err(e) if std::time::Instant::now() < deadline => {
-                    let _ = e;
-                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-                }
-                Err(e) => panic!("send mention: {e}"),
-            }
-        }
 
-        // Poll without blocking: this runtime has one thread, and the socket
-        // writer task must run to deliver the message at all.
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-        let got = loop {
-            if let Ok(got) = captured.try_recv() {
-                break got;
-            }
-            assert!(
-                std::time::Instant::now() < deadline,
-                "Nakama must post the mention to the push Worker within 15 s"
-            );
-            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
-        };
+        // 1. Offline member: pushed at once.
+        let (offline, offline_id) = joined_member(&code, "feedface01").await;
+        send_when_joined(&owner, &format!("gg <@{offline_id}> ping")).await;
+        let got = next_send(&captured, "mention of an offline member").await;
         let head = got.head.to_ascii_lowercase();
         assert!(head.starts_with("post /send "), "{}", got.head);
         assert!(head.contains("authorization: bearer e2e-push-token"), "{}", got.head);
-
         let n = &got.body["notification"];
         assert_eq!(n["type"], "mention");
         assert_eq!(n["crew_id"], crew_id.as_str());
@@ -650,7 +681,31 @@ fn a_mention_of_an_offline_member_reaches_the_push_worker() {
             serde_json::json!([{"token": "feedface01", "platform": "ios", "environment": "sandbox"}])
         );
 
-        let _ = member.delete_account().await;
-        let _ = owner.delete_account().await;
+        // 2. Desktop open but inactive: held for the grace period.
+        let (mut away, away_id) = joined_member(&code, "feedface02").await;
+        let (away_tx, _away_events) = std::sync::mpsc::channel();
+        away.connect_ws(away_tx).await.expect("member socket");
+        away.set_session_activity(false, "desktop").await.expect("report inactive");
+        // Nakama handles one session's messages in order, so once this send
+        // succeeds the activity report above has been processed.
+        away.join_crew_channel(&crew_id).await.expect("member joins channel");
+        send_when_joined(&away, "brb").await;
+
+        let sent_at = std::time::Instant::now();
+        owner
+            .send_chat_message(&format!("<@{away_id}> you there?"))
+            .await
+            .expect("mention the away member");
+        let got = next_send(&captured, "held mention of an inactive desktop user").await;
+        assert_eq!(got.body["tokens"][0]["token"], "feedface02");
+        let waited = got.at.duration_since(sent_at);
+        assert!(
+            waited >= grace.saturating_sub(std::time::Duration::from_millis(300)),
+            "the push must wait for the grace period ({grace:?}), came after {waited:?}"
+        );
+
+        for c in [offline, away, owner] {
+            let _ = c.delete_account().await;
+        }
     });
 }

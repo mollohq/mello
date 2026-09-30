@@ -106,6 +106,7 @@ services:
       # these at a stub Worker that the e2e test runs on the host.
       - PUSH_WORKER_URL=${PUSH_WORKER_URL:-}
       - PUSH_WORKER_TOKEN=${PUSH_WORKER_TOKEN:-}
+      - PUSH_DESKTOP_GRACE_SECS=${PUSH_DESKTOP_GRACE_SECS:-}
     # Lets the container reach a stub on the host; Docker Desktop has this name
     # already, Linux needs the mapping.
     extra_hosts:

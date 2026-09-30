@@ -362,12 +362,6 @@ func pushBody(senderName, text string) string {
 	return truncateRunes(senderName+": "+text, pushBodyMaxRunes)
 }
 
-// shouldPushNow is the delivery rule (spec §6.1): push only to a user with no
-// connected session.
-func shouldPushNow(userID string) bool {
-	return !HasActiveSessions(userID)
-}
-
 // queueMentionPushes starts the push fan-out for a chat message. It returns at
 // once: the chat hook must not wait on storage or the Worker.
 func queueMentionPushes(logger runtime.Logger, nk runtime.NakamaModule, senderID, senderName, crewID, messageID, content string) {
@@ -395,19 +389,22 @@ func queueMentionPushes(logger runtime.Logger, nk runtime.NakamaModule, senderID
 
 func deliverMentionPushes(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, senderName, crewID, messageID, body string, targets []string) {
 	members := crewMemberSet(ctx, nk, crewID)
-	var recipients []string
+	var now, later []string
 	for _, uid := range targets {
 		if !members[uid] {
 			continue // the client's mention list is not trusted
 		}
-		if !shouldPushNow(uid) {
-			logger.Debug("push: skip user=%s (connected)", uid)
-			continue
+		switch action := pushDecisionFor(uid); action {
+		case pushNow:
+			now = append(now, uid)
+		case pushAfterGrace:
+			later = append(later, uid)
+		default:
+			logger.Debug("push: skip user=%s (%s)", uid, action)
 		}
-		recipients = append(recipients, uid)
 	}
-	logger.Debug("push: message=%s members=%d recipients=%d", messageID, len(members), len(recipients))
-	if len(recipients) == 0 {
+	logger.Debug("push: message=%s members=%d now=%d later=%d", messageID, len(members), len(now), len(later))
+	if len(now) == 0 && len(later) == 0 {
 		return
 	}
 
@@ -428,10 +425,38 @@ func deliverMentionPushes(ctx context.Context, logger runtime.Logger, nk runtime
 		Title:     truncateRunes(title, pushTitleMaxRunes),
 		Body:      pushBody(senderName, resolveMentionTokens(ctx, nk, body)),
 	}
-	for _, uid := range recipients {
+	for _, uid := range now {
 		sendPushToUser(ctx, logger, nk, uid, n)
 	}
+	for _, uid := range later {
+		schedulePushAfterGrace(logger, nk, uid, n)
+	}
 }
+
+// schedulePushAfterGrace holds a push back while the user's desktop is open
+// but inactive, then sends it unless the user became active (spec 23 §6.2).
+// The timer lives in memory: a Nakama restart drops it (best-effort, §6.4).
+func schedulePushAfterGrace(logger runtime.Logger, nk runtime.NakamaModule, userID string, n pushAlert) {
+	grace := desktopGrace()
+	logger.Debug("push: user=%s message=%s held for %s (desktop inactive)", userID, n.MessageID, grace)
+	afterFunc(grace, func() {
+		defer func() {
+			if r := recover(); r != nil {
+				logger.Error("push: delayed send panic for message %s: %v", n.MessageID, r)
+			}
+		}()
+		if action := pushDecisionFor(userID); action == pushSkip {
+			logger.Debug("push: drop held push user=%s message=%s (active again)", userID, n.MessageID)
+			return
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), pushFanoutTimeout)
+		defer cancel()
+		heldPushSend(ctx, logger, nk, userID, n)
+	})
+}
+
+// heldPushSend is sendPushToUser; tests replace it to observe the recheck.
+var heldPushSend = sendPushToUser
 
 // crewMemberSet returns the crew's members (not pending join requests).
 func crewMemberSet(ctx context.Context, nk runtime.NakamaModule, crewID string) map[string]bool {

@@ -179,6 +179,16 @@ pub enum Command {
         #[serde(default)]
         environment: Option<String>,
     },
+    /// The app window's state, sent periodically by the UI (spec 23 §6.2). The
+    /// core combines it with voice, stream and game state into one "active"
+    /// flag and reports changes to the server.
+    SetWindowActivity {
+        /// Desktop: the window is visible and focused. iOS: the app is in the foreground.
+        foreground: bool,
+        /// Seconds since the last system-wide keyboard or mouse input (0 if unknown).
+        #[serde(default)]
+        input_idle_secs: u64,
+    },
     SendGif {
         gif: crate::chat::GifData,
         #[serde(default)]

@@ -34,7 +34,9 @@ COMPOSE="docker compose -f backend/docker-compose.yml"
 MELLO_E2E_PUSH_PORT="${MELLO_E2E_PUSH_PORT:-18787}"
 PUSH_WORKER_URL="${PUSH_WORKER_URL:-http://host.docker.internal:$MELLO_E2E_PUSH_PORT}"
 PUSH_WORKER_TOKEN="${PUSH_WORKER_TOKEN:-e2e-push-token}"
-export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
+# A short grace period so the held-push test runs in seconds, not minutes.
+PUSH_DESKTOP_GRACE_SECS="${PUSH_DESKTOP_GRACE_SECS:-2}"
+export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN PUSH_DESKTOP_GRACE_SECS
 
 if ! docker info >/dev/null 2>&1; then
     echo "✗ Docker is not running. Start Docker Desktop and retry." >&2
