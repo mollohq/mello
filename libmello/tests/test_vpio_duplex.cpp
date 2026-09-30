@@ -2,7 +2,8 @@
 // CoreAudio devices, so the hardware cases SKIP (never fail) when no
 // usable route exists — headless CI stays green, dev machines exercise
 // the real path.
-#ifdef __APPLE__
+#include "audio/audio_platform.hpp"
+#ifdef MELLO_HAS_VPIO_DUPLEX
 
 #include <gtest/gtest.h>
 #include <atomic>
@@ -68,4 +69,4 @@ TEST(VpioDuplex, InvalidDeviceIdFailsCleanly) {
     EXPECT_FALSE(unit->initialized());
 }
 
-#endif  // __APPLE__
+#endif  // MELLO_HAS_VPIO_DUPLEX

@@ -1,4 +1,5 @@
-#ifdef __APPLE__
+#include "audio_platform.hpp"
+#ifdef MELLO_HAS_VPIO_DUPLEX
 #include "vpio_duplex.hpp"
 #include "coreaudio_unit_lock.hpp"
 #include "../util/log.hpp"

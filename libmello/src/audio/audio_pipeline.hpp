@@ -1,4 +1,5 @@
 #pragma once
+#include "audio_platform.hpp"
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
 #include "opus_codec.hpp"
@@ -147,7 +148,7 @@ private:
     const char* current_playback_device_id() const {
         return playback_device_id_.empty() ? nullptr : playback_device_id_.c_str();
     }
-#ifdef __APPLE__
+#ifdef MELLO_HAS_VPIO_DUPLEX
     /// Install a live VPIO duplex pair for the stored device ids. Returns
     /// false when the unit fails (caller falls back to the plain pair).
     bool activate_vpio_pair();
