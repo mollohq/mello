@@ -8,6 +8,7 @@ mod diagnostics;
 mod game_services;
 pub mod loop_watchdog;
 mod presence;
+mod push;
 mod reconnect;
 mod stats_emit;
 mod stream_ffi;
@@ -98,6 +99,8 @@ pub const FRAME_STATE_PRESENTED: u8 = 3;
 
 pub struct Client {
     nakama: NakamaClient,
+    /// The last push token this device registered; `Logout` unregisters it.
+    push_token: Option<String>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -268,6 +271,7 @@ impl Client {
             cached_windows: Vec::new(),
             history_cursor: None,
             giphy: GiphyClient::new(),
+            push_token: None,
             sfu_voice_reconnect: None,
             last_voice_channel: None,
             game_state: GameStateManager::new(),
@@ -678,6 +682,14 @@ impl Client {
                 mentions,
             } => {
                 self.handle_send_message(&content, reply_to.as_deref(), &mentions)
+                    .await;
+            }
+            Command::RegisterPushToken {
+                token,
+                platform,
+                environment,
+            } => {
+                self.handle_register_push_token(token, &platform, environment)
                     .await;
             }
             Command::SendGif { gif, body } => {

@@ -473,3 +473,45 @@ fn an_invite_code_completes_a_pending_join_request() {
         let _ = owner.delete_account().await;
     });
 }
+
+/// Push tokens (spec 23): the core's register and unregister calls reach the
+/// real handlers, a repeat register is an upsert, and invalid input is refused
+/// rather than stored. The rows are server-only, so storage and the reassign
+/// rule are checked by the Go tests and a manual SQL check, not here.
+#[test]
+fn push_token_register_and_unregister_round_trip() {
+    if !e2e_enabled("push_token_register_and_unregister_round_trip") {
+        return;
+    }
+
+    rt().block_on(async {
+        let mut client = NakamaClient::new(e2e_config());
+        client
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth");
+
+        client
+            .register_push_token("ab12cd34", "ios", "sandbox")
+            .await
+            .expect("register");
+        client
+            .register_push_token("ab12cd34", "ios", "sandbox")
+            .await
+            .expect("a repeat register is an upsert");
+        client
+            .register_push_token("not-hex", "ios", "production")
+            .await
+            .expect_err("a non-hex iOS token must be refused");
+        client
+            .register_push_token("ab12cd34", "ios", "staging")
+            .await
+            .expect_err("an unknown APNs environment must be refused");
+        client
+            .unregister_push_token("ab12cd34")
+            .await
+            .expect("unregister");
+
+        let _ = client.delete_account().await;
+    });
+}

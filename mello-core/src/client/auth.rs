@@ -130,6 +130,10 @@ impl super::Client {
         // A browser flow that ends after logout must not sign in or link.
         self.browser_flows.cancel();
 
+        // Needs the session, so it runs before anything clears it. Otherwise the
+        // next user on this device receives this user's mention pushes.
+        self.unregister_push_token_on_logout().await;
+
         // Notify server we're going offline
         if let Err(e) = self
             .nakama

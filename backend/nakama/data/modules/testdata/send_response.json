@@ -1,0 +1,8 @@
+{
+  "results": [
+    { "token": "a1b2", "status": "sent", "apns_id": "apns-1" },
+    { "token": "c3d4", "status": "pruned", "reason": "Unregistered" },
+    { "token": "e5f6", "status": "failed", "reason": "TooManyRequests" }
+  ],
+  "prune": ["c3d4"]
+}
