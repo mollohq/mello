@@ -752,6 +752,65 @@ fn picking_a_mention_shows_the_name_and_sends_the_pick() {
     );
 }
 
+/// The mention picker lists crew members whether or not they are online.
+/// `MemberLeft` / `MemberJoined` are chat-channel presence (app closed or
+/// backgrounded), not crew membership, so they must not drop anyone from the
+/// picker. Bug: after mentioning a user who then backgrounded the app, a
+/// second mention could not find them.
+#[test]
+fn the_mention_picker_keeps_members_who_went_offline() {
+    let mut h = Harness::new();
+    h.app().set_mention_members(
+        std::rc::Rc::new(slint::VecModel::from(vec![
+            crate::MentionMemberData {
+                user_id: "u-alice".into(),
+                display_name: "Alice Baker".into(),
+                initials: "AB".into(),
+            },
+            crate::MentionMemberData {
+                user_id: "u-kim".into(),
+                display_name: "kim".into(),
+                initials: "KI".into(),
+            },
+        ]))
+        .into(),
+    );
+    let suggested = |h: &Harness| -> Vec<String> {
+        h.app().set_chat_input_text("@".into());
+        h.app().invoke_chat_input_changed("@".into());
+        let m = h.app().get_mention_suggestions();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i))
+            .map(|r| r.display_name.to_string())
+            .collect()
+    };
+
+    h.emit(Event::MemberLeft {
+        crew_id: "crew-1".into(),
+        member_id: "u-alice".into(),
+    });
+    assert_eq!(
+        suggested(&h),
+        ["Alice Baker", "kim"],
+        "Alice only went offline"
+    );
+
+    h.emit(Event::MemberJoined {
+        crew_id: "crew-1".into(),
+        member: mello_core::crew::Member {
+            id: "u-new".into(),
+            username: "xYzRandom".into(),
+            display_name: "Newcomer".into(),
+            online: true,
+        },
+    });
+    assert_eq!(
+        suggested(&h),
+        ["Alice Baker", "kim", "Newcomer"],
+        "a join adds the newcomer and keeps the offline members"
+    );
+}
+
 /// A mention renders as `@name` from the core's resolved body, also before the
 /// crew member list has loaded, and flags the row when it mentions the user.
 #[test]

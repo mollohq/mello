@@ -61,6 +61,29 @@ fn text_after_pick(current: &str, name: &str) -> String {
     format!("{head}@{name} ")
 }
 
+/// Adds one member to the mention picker if missing. Channel presence (a member
+/// opening the app) only ever adds: the picker lists the whole crew, online or
+/// not, and is rebuilt from the crew roster when crew state loads.
+pub fn add_mention_member(ctx: &AppContext, user_id: &str, display_name: &str, initials: &str) {
+    let current = ctx.app.get_mention_members();
+    if (0..current.row_count())
+        .filter_map(|i| current.row_data(i))
+        .any(|m| m.user_id == user_id)
+    {
+        return;
+    }
+    let mut list: Vec<MentionMemberData> = (0..current.row_count())
+        .filter_map(|i| current.row_data(i))
+        .collect();
+    list.push(MentionMemberData {
+        user_id: user_id.into(),
+        display_name: display_name.into(),
+        initials: initials.into(),
+    });
+    ctx.app
+        .set_mention_members(Rc::new(slint::VecModel::from(list)).into());
+}
+
 pub fn wire(ctx: &AppContext) {
     ctx.app
         .set_emoji_list(Rc::new(slint::VecModel::from(default_emoji_list())).into());
