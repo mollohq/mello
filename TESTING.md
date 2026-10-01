@@ -151,6 +151,10 @@ cargo test --workspace
 
 Notes:
 
+- **A PR that changes only `specs/` or `plans/` skips the build.** The `changes`
+  job decides this. The three test jobs show as skipped, and a skipped required
+  check passes. Do not use `paths-ignore` for this: the checks never start, and
+  the PR cannot merge.
 - **`CI=true` is set automatically by GitHub Actions.** That's what makes
   `cargo test --workspace` skip the device-dependent audio/video tests. Locally
   those tests block waiting on real capture/playback devices, so run local tests

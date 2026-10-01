@@ -19,8 +19,44 @@ env:
   CI: "true"
 
 jobs:
+  # A PR that only touches specs/ or plans/ skips the build. This is a job, not
+  # `paths-ignore`: the three test jobs are required checks in the main ruleset,
+  # and a workflow that never starts leaves them "Expected" forever. A job
+  # skipped by its `if:` reports success, so the PR stays mergeable.
+  changes:
+    name: Detect changes
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      pull-requests: read
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+
+    steps:
+      - name: Check for files outside specs/ and plans/
+        id: filter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        # previous_filename catches a rename out of specs/ or plans/.
+        run: |
+          set -euo pipefail
+          files=$(gh api --paginate \
+            "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
+            --jq '.[] | .filename, (.previous_filename // empty)')
+          echo "$files"
+          if [ -z "$files" ] || grep -qvE '^(specs|plans)/' <<<"$files"; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Only specs/ and plans/ changed. The build is skipped."
+            echo "code=false" >> "$GITHUB_OUTPUT"
+          fi
+
   test-windows:
     name: Test (Windows)
+    needs: changes
+    # If detection fails, build anyway. A failed `needs` skips the job by
+    # default, and a skipped required check passes.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: [self-hosted, Windows]
     # The full run is ~19 min. This bound exists for a wedged runner, not a slow
     # one: a self-hosted machine that sleeps mid-job otherwise blocks the check
@@ -86,6 +122,9 @@ jobs:
 
   test-macos:
     name: Test (macOS)
+    needs: changes
+    # See test-windows for this condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: [self-hosted, macOS]
     # ~6 min in practice; see the Windows job for why the bound is generous.
     timeout-minutes: 45
@@ -157,6 +196,9 @@ jobs:
   # than competing for the single self-hosted Windows/macOS runners.
   test-backend:
     name: Test (Backend / Go)
+    needs: changes
+    # See test-windows for this condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:
@@ -168,7 +210,7 @@ jobs:
         uses: actions/checkout@v7
 
       - name: Set up Go
-        uses: actions/setup-go@v5
+        uses: actions/setup-go@v7
         with:
           go-version-file: backend/nakama/data/modules/go.mod
           cache-dependency-path: backend/nakama/data/modules/go.sum
