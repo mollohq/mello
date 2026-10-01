@@ -115,6 +115,27 @@ fn main() {
 }
 ```
 
+### 3.1 Renderer
+
+Mello ships one Slint renderer: Skia. The `slint` dependency turns off the default features, because they add FemtoVG and the Slint software renderer.
+
+```toml
+# client/Cargo.toml, hud/Cargo.toml
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "accessibility"] }
+
+[build-dependencies]
+slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
+```
+
+- Skia renders on the GPU through wgpu: D3D12 on Windows, Metal on macOS. Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.
+- When the GPU surface fails, Skia falls back to its own CPU rasterizer.
+- `--software-rendering` forces that CPU rasterizer (renderer name `skia-software`). It is a debug switch.
+- Do not add `renderer-software` or `renderer-femtovg`. They add binary size and never run.
+
+### 3.2 Opaque windows on macOS
+
+A window with a frame must have an opaque `background`. Slint 1.18 makes an `NSWindow` transparent only when the background is translucent or the window has no frame. On macOS 27, a transparent window has no title bar background.
+
 ---
 
 ## 4. Native Menus (`muda`)

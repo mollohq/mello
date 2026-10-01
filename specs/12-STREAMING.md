@@ -420,7 +420,7 @@ The Rust `stream_tick` drives `mello_stream_present_frame`, which emits `on_view
 
 ### 7.6 DirectComposition Rendering (Windows)
 
-Video frames bypass Slint's renderer entirely. A separate D3D11 device, composition swap chain, and DComp visual tree are created when the viewer starts watching. Slint continues to run with its default software renderer for the UI, keeping idle RAM low (~80 MB target). The GPU context exists only while a stream is active.
+Video frames bypass Slint's renderer entirely. A separate D3D11 device, composition swap chain, and DComp visual tree are created when the viewer starts watching. Slint renders the UI with Skia on wgpu (D3D12), on its own swap chain (see [12-NATIVE-PLATFORM.md §3.1](./12-NATIVE-PLATFORM.md)). The video D3D11 device and composition swap chain exist only while a stream is active.
 
 **DComp visual tree:**
 
@@ -821,4 +821,4 @@ Optional local loopback smoke:
 - Scrolling the card fully out of view: DComp visual is hidden (no overlap with surrounding content).
 - DPI change (drag between monitors): video repositions correctly, no crash.
 - watch-stream init failures surface as explicit UI/log errors and stop watching cleanly.
-- Idle RAM stays below ~80 MB (Slint software renderer, no GPU context when not streaming).
+- No video D3D11 device exists when not streaming.
