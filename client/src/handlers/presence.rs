@@ -117,6 +117,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 (slint::Image::default(), false)
             };
             let member_id = member.id.clone();
+            crate::callbacks::add_mention_member(ctx, &member.id, &member.display_name, &initials);
             drop(cache);
             let new_member = MemberData {
                 id: member.id.into(),
@@ -142,7 +143,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .send(Command::FetchUserAvatar { user_id: member_id });
             }
             ctx.app.set_members(rc.into());
-            crate::callbacks::refresh_mention_members(ctx);
             update_active_crew_card(&ctx.app);
         }
         Event::MemberLeft { member_id, .. } => {
@@ -153,7 +153,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .collect();
             let rc = Rc::new(slint::VecModel::from(members));
             ctx.app.set_members(rc.into());
-            crate::callbacks::refresh_mention_members(ctx);
+            // Not the mention picker: leaving the chat channel is going
+            // offline, not leaving the crew.
             update_active_crew_card(&ctx.app);
         }
         Event::PresenceUpdated { user_id, online } => {

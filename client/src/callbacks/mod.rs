@@ -12,7 +12,7 @@ mod voice;
 
 use crate::app_context::AppContext;
 
-pub use chat::refresh_mention_members;
+pub use chat::{add_mention_member, refresh_mention_members};
 
 pub fn wire_all(ctx: &AppContext) {
     auth::wire(ctx);
