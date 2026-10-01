@@ -362,8 +362,8 @@ export component DebugPanel inherits Rectangle {
         // on screen; the Flickable guarantees reachability if all are expanded.
         Flickable {
             vertical-stretch: 1;
-            viewport-width: self.width;
-            viewport-height: body.preferred-height;
+            content-width: self.width;
+            content-height: body.preferred-height;
 
             body := VerticalLayout {
                 spacing: 8px;
