@@ -56,6 +56,11 @@ services:
         sync: false
       - key: S3_PUBLIC_URL
         sync: false
+      # Remote push (spec 23): the mello-push Worker URL and its bearer token.
+      - key: PUSH_WORKER_URL
+        sync: false
+      - key: PUSH_WORKER_TOKEN
+        sync: false
       - key: SNAPSHOTS_S3_BUCKET
         value: mello-snapshots
       - key: SNAPSHOTS_S3_PUBLIC_URL

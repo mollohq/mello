@@ -1,0 +1,15 @@
+{
+  "notification": {
+    "type": "mention",
+    "crew_id": "c-uuid",
+    "channel_id": "ch-id",
+    "message_id": "m-uuid",
+    "title": "Retro",
+    "body": "bob: @alice are you on tonight?"
+  },
+  "tokens": [
+    { "token": "a1b2", "platform": "ios", "environment": "sandbox" },
+    { "token": "c3d4", "platform": "ios", "environment": "production" },
+    { "token": "e5f6", "platform": "ios", "environment": "production" }
+  ]
+}

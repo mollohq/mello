@@ -53,6 +53,9 @@ pub struct NakamaClient {
     ws_tx: Option<mpsc::Sender<String>>,
     ws_shared: Arc<RwLock<WsShared>>,
     next_cid: u64,
+    /// Counts socket connections, so state tied to a socket session (the push
+    /// activity report) can be sent again after a reconnect.
+    ws_generation: u64,
     signal_rx: Option<mpsc::Receiver<InternalSignal>>,
     signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
     presence_rx: Option<mpsc::Receiver<InternalPresence>>,
@@ -90,6 +93,7 @@ impl NakamaClient {
             ws_tx: None,
             ws_shared: Arc::new(RwLock::new(WsShared::default())),
             next_cid: 1,
+            ws_generation: 0,
             signal_rx: Some(sig_rx),
             signal_tx_template: Some(sig_tx),
             member_names,
@@ -545,6 +549,7 @@ impl NakamaClient {
 
         let (ws_tx, ws_rx) = mpsc::channel::<String>(256);
         self.ws_tx = Some(ws_tx);
+        self.ws_generation += 1;
 
         let shared = self.ws_shared.clone();
         if let Some(user) = &self.current_user {
@@ -623,6 +628,27 @@ impl NakamaClient {
     /// Take the presence receiver (call once, from the client run loop)
     pub fn take_presence_rx(&mut self) -> Option<mpsc::Receiver<InternalPresence>> {
         self.presence_rx.take()
+    }
+
+    /// Increases on every successful `connect_ws`.
+    pub fn ws_generation(&self) -> u64 {
+        self.ws_generation
+    }
+
+    /// Calls an RPC over the realtime socket, fire-and-forget. Unlike `rpc`,
+    /// the server sees the calling session id. The reply is ignored.
+    pub async fn socket_rpc(&self, id: &str, payload: &serde_json::Value) -> Result<()> {
+        let msg = serde_json::json!({
+            "rpc": { "id": id, "payload": payload.to_string() }
+        })
+        .to_string();
+        self.ws_send(msg).await
+    }
+
+    /// Reports whether the user is active on this session (spec 23 §6.2).
+    pub async fn set_session_activity(&self, active: bool, platform: &str) -> Result<()> {
+        let payload = serde_json::json!({ "active": active, "platform": platform });
+        self.socket_rpc("set_session_activity", &payload).await
     }
 
     async fn ws_send(&self, msg: String) -> Result<()> {
@@ -1271,6 +1297,29 @@ impl NakamaClient {
             "clear_activity": activity.is_none(),
         });
         self.rpc("presence_update", &payload).await?;
+        Ok(())
+    }
+
+    /// Stores this device's push token for the current user (spec 23 §4).
+    pub async fn register_push_token(
+        &self,
+        token: &str,
+        platform: &str,
+        environment: &str,
+    ) -> Result<()> {
+        let payload = serde_json::json!({
+            "token": token,
+            "platform": platform,
+            "environment": environment,
+        });
+        self.rpc("register_push_token", &payload).await?;
+        Ok(())
+    }
+
+    /// Removes this device's push token from the current user (logout).
+    pub async fn unregister_push_token(&self, token: &str) -> Result<()> {
+        let payload = serde_json::json!({ "token": token });
+        self.rpc("unregister_push_token", &payload).await?;
         Ok(())
     }
 
@@ -3106,5 +3155,133 @@ mod invite_tests {
             crate::crew::InviteError::InvalidCode
         );
         server.join().expect("server thread");
+    }
+}
+
+#[cfg(test)]
+mod push_tests {
+    use super::*;
+    use std::io::{BufRead, BufReader, Read, Write};
+
+    /// Serve one RPC on a local port. The join handle returns the request head
+    /// and the RPC payload (Nakama wraps it as a JSON string).
+    fn serve_rpc_once() -> (u16, std::thread::JoinHandle<(String, serde_json::Value)>) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let port = listener.local_addr().expect("addr").port();
+        let handle = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().expect("accept");
+            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
+            let mut head = String::new();
+            let mut content_length = 0usize;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).expect("read");
+                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                    content_length = v.trim().parse().unwrap_or(0);
+                }
+                if line == "\r\n" || line.is_empty() {
+                    break;
+                }
+                head.push_str(&line);
+            }
+            let mut raw = vec![0u8; content_length];
+            reader.read_exact(&mut raw).expect("body");
+            let wrapped: String = serde_json::from_slice(&raw).expect("rpc body is a JSON string");
+            let payload: serde_json::Value = serde_json::from_str(&wrapped).expect("payload json");
+
+            let reply = r#"{"payload":"{\"success\":true}"}"#;
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                reply.len()
+            )
+            .expect("write");
+            (head, payload)
+        });
+        (port, handle)
+    }
+
+    fn signed_in_client(port: u16) -> NakamaClient {
+        let mut config = Config::development();
+        config.nakama_host = "127.0.0.1".into();
+        config.nakama_port = port;
+        config.nakama_ssl = false;
+        let client = NakamaClient::new(config);
+        client.set_token(Some("session-token".into()));
+        client
+    }
+
+    #[tokio::test]
+    async fn register_push_token_sends_token_platform_and_environment() {
+        let (port, server) = serve_rpc_once();
+        signed_in_client(port)
+            .register_push_token("ab12", "ios", "sandbox")
+            .await
+            .expect("register");
+        let (head, payload) = server.join().expect("server thread");
+        assert!(
+            head.starts_with("POST /v2/rpc/register_push_token "),
+            "{head}"
+        );
+        assert!(
+            head.to_ascii_lowercase()
+                .contains("authorization: bearer session-token"),
+            "{head}"
+        );
+        assert_eq!(
+            payload,
+            serde_json::json!({"token": "ab12", "platform": "ios", "environment": "sandbox"})
+        );
+    }
+
+    /// The activity report goes over the socket as a Nakama realtime RPC
+    /// envelope, so the server sees the calling session (spec 23 §6.2).
+    #[tokio::test]
+    async fn set_session_activity_sends_a_socket_rpc_envelope() {
+        let mut client = NakamaClient::new(Config::development());
+        let (tx, mut rx) = mpsc::channel(4);
+        client.ws_tx = Some(tx);
+
+        client
+            .set_session_activity(false, "desktop")
+            .await
+            .expect("queued on the socket");
+        let sent: serde_json::Value =
+            serde_json::from_str(&rx.recv().await.expect("one message")).expect("json");
+        assert_eq!(sent["rpc"]["id"], "set_session_activity");
+        let payload: serde_json::Value = serde_json::from_str(
+            sent["rpc"]["payload"]
+                .as_str()
+                .expect("payload is a string"),
+        )
+        .expect("payload json");
+        assert_eq!(
+            payload,
+            serde_json::json!({"active": false, "platform": "desktop"})
+        );
+    }
+
+    #[tokio::test]
+    async fn set_session_activity_without_a_socket_is_not_connected() {
+        let client = NakamaClient::new(Config::development());
+        assert!(matches!(
+            client.set_session_activity(true, "desktop").await,
+            Err(Error::NotConnected)
+        ));
+    }
+
+    #[tokio::test]
+    async fn unregister_push_token_sends_the_token() {
+        let (port, server) = serve_rpc_once();
+        signed_in_client(port)
+            .unregister_push_token("ab12")
+            .await
+            .expect("unregister");
+        let (head, payload) = server.join().expect("server thread");
+        assert!(
+            head.starts_with("POST /v2/rpc/unregister_push_token "),
+            "{head}"
+        );
+        assert_eq!(payload, serde_json::json!({"token": "ab12"}));
     }
 }

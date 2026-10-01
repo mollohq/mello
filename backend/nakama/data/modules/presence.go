@@ -282,6 +282,14 @@ func registerSessionStart(userID string) int {
 	return sessionCounts[userID]
 }
 
+// HasActiveSessions reports whether the user has at least one connected
+// WebSocket session on this node. Remote push uses it (spec 23 §6.1).
+func HasActiveSessions(userID string) bool {
+	sessionCountsMu.Lock()
+	defer sessionCountsMu.Unlock()
+	return sessionCounts[userID] > 0
+}
+
 func registerSessionEnd(userID string) int {
 	sessionCountsMu.Lock()
 	defer sessionCountsMu.Unlock()
@@ -337,6 +345,11 @@ func OnSessionEnd(ctx context.Context, logger runtime.Logger, evt *api.Event) {
 	if userID == "" {
 		logger.Warn("OnSessionEnd: could not resolve user_id from context or event properties")
 		return
+	}
+
+	// The session's push activity report dies with it (spec 23 §6.2).
+	if sessionID, _ := ctx.Value(runtime.RUNTIME_CTX_SESSION_ID).(string); sessionID != "" {
+		clearSessionActivity(userID, sessionID)
 	}
 
 	remaining := registerSessionEnd(userID)

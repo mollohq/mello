@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod a11y_lint;
+mod activity_report;
 mod app_context;
 mod autolaunch;
 mod avatar;
@@ -651,6 +652,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     // --- Start poll loop ---
     let _poll_timer = poll_loop::start(&ctx, event_rx, update_event_rx);
+    let _activity_timer = activity_report::start(&ctx);
     log::info!("[startup] poll loop started");
 
     let _stream_frame_timer = stream_frame_timer;

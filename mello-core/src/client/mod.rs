@@ -8,6 +8,7 @@ mod diagnostics;
 mod game_services;
 pub mod loop_watchdog;
 mod presence;
+mod push;
 mod reconnect;
 mod stats_emit;
 mod stream_ffi;
@@ -98,6 +99,14 @@ pub const FRAME_STATE_PRESENTED: u8 = 3;
 
 pub struct Client {
     nakama: NakamaClient,
+    /// The last push token this device registered; `Logout` unregisters it.
+    push_token: Option<String>,
+    /// Latest window state from the UI (`SetWindowActivity`).
+    window_foreground: bool,
+    input_idle_secs: u64,
+    /// The activity last sent to the server and the socket generation it was
+    /// sent on. A new socket session starts unreported, so a reconnect resends.
+    reported_activity: Option<(bool, u64)>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -268,6 +277,10 @@ impl Client {
             cached_windows: Vec::new(),
             history_cursor: None,
             giphy: GiphyClient::new(),
+            push_token: None,
+            window_foreground: true,
+            input_idle_secs: 0,
+            reported_activity: None,
             sfu_voice_reconnect: None,
             last_voice_channel: None,
             game_state: GameStateManager::new(),
@@ -439,6 +452,9 @@ impl Client {
                 _ = connection_tick.tick() => {
                     let _step = watchdog.step("connection_tick");
                     self.connection_tick().await;
+                    // Also catches voice, stream and game changes, and resends
+                    // after a reconnect.
+                    self.report_activity_if_changed().await;
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
@@ -679,6 +695,22 @@ impl Client {
             } => {
                 self.handle_send_message(&content, reply_to.as_deref(), &mentions)
                     .await;
+            }
+            Command::RegisterPushToken {
+                token,
+                platform,
+                environment,
+            } => {
+                self.handle_register_push_token(token, &platform, environment)
+                    .await;
+            }
+            Command::SetWindowActivity {
+                foreground,
+                input_idle_secs,
+            } => {
+                self.window_foreground = foreground;
+                self.input_idle_secs = input_idle_secs;
+                self.report_activity_if_changed().await;
             }
             Command::SendGif { gif, body } => {
                 self.handle_send_gif(gif, &body).await;

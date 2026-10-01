@@ -658,5 +658,9 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	// Update last-seen (user is actively chatting in this crew)
 	updateLastSeen(ctx, nk, userID, crewID)
 
+	// Remote push to mentioned users who cannot see the message (spec 23).
+	// Runs in its own goroutine; never delays the hook.
+	queueMentionPushes(logger, nk, userID, username, crewID, ack.GetMessageId(), content)
+
 	return nil
 }

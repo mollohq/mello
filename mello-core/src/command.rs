@@ -169,6 +169,26 @@ pub enum Command {
         #[serde(default)]
         mentions: Vec<crate::chat::MentionRef>,
     },
+    /// Register this device for remote push (spec 23 §3). Best-effort: a
+    /// failed RPC is logged. The core keeps the token so `Logout` can remove it.
+    RegisterPushToken {
+        token: String,
+        /// `"ios"` or `"android"`.
+        platform: String,
+        /// `"production"` or `"sandbox"` (APNs). Defaults to production.
+        #[serde(default)]
+        environment: Option<String>,
+    },
+    /// The app window's state, sent periodically by the UI (spec 23 §6.2). The
+    /// core combines it with voice, stream and game state into one "active"
+    /// flag and reports changes to the server.
+    SetWindowActivity {
+        /// Desktop: the window is visible and focused. iOS: the app is in the foreground.
+        foreground: bool,
+        /// Seconds since the last system-wide keyboard or mouse input (0 if unknown).
+        #[serde(default)]
+        input_idle_secs: u64,
+    },
     SendGif {
         gif: crate::chat::GifData,
         #[serde(default)]
@@ -508,6 +528,30 @@ mod tests {
         .unwrap();
         assert_eq!(json["type"], "DeviceAuth");
         assert_eq!(json["data"]["device_id"], "dev_123");
+    }
+
+    /// The exact JSON `Command.swift` sends today (no `environment`) must
+    /// still decode, so an older iOS build keeps registering.
+    #[test]
+    fn register_push_token_decodes_the_swift_shape() {
+        let cmd: Command = serde_json::from_str(
+            r#"{"type":"RegisterPushToken","data":{"token":"ab12","platform":"ios"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            Command::RegisterPushToken { ref token, ref platform, environment: None }
+                if token == "ab12" && platform == "ios"
+        ));
+
+        let cmd: Command = serde_json::from_str(
+            r#"{"type":"RegisterPushToken","data":{"token":"ab12","platform":"ios","environment":"sandbox"}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            cmd,
+            Command::RegisterPushToken { environment: Some(ref e), .. } if e == "sandbox"
+        ));
     }
 
     #[test]

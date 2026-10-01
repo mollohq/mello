@@ -86,6 +86,19 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — remote push (spec 23)
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("register_push_token", RegisterPushTokenRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("unregister_push_token", UnregisterPushTokenRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("set_session_activity", SetSessionActivityRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — auth
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("auth/providers", AuthProvidersRPC); err != nil {
