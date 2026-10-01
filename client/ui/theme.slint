@@ -118,6 +118,9 @@ export global Theme {
     //  resolves to ACTION, which is the more common of the two readings.
     //  See designs/design-system.html for what each colour means.
     out property <color> accent:       action;
+    // A mention in a chat message (`@name`). Matches the iOS accent
+    // (Palette.accent) so a mention reads the same on both clients.
+    out property <color> mention:      #EB4D5F;
     out property <color> accent-bg:    action-dim;
     out property <color> accent-red:   live;
     out property <color> accent-green: id-teal;      // presence, muted

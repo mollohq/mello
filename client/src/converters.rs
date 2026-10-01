@@ -56,7 +56,58 @@ pub struct ChatConvertOptions<'a> {
     pub user_avatar: &'a slint::Image,
     pub has_user_avatar: bool,
     pub avatar_cache: &'a HashMap<String, slint::Image>,
+    /// `Theme.mention` as `#rrggbb`, for the mention spans in the markdown.
+    pub mention_color: &'a str,
     pub first_unread_id: Option<&'a str>,
+}
+
+/// `color` as `#rrggbb` for a `<font color>` tag in styled text.
+pub fn color_hex(color: slint::Color) -> String {
+    format!(
+        "#{:02x}{:02x}{:02x}",
+        color.red(),
+        color.green(),
+        color.blue()
+    )
+}
+
+/// Backslash-escapes ASCII punctuation, so a `*`, `_` or `<` in a name stays
+/// literal text inside the markdown instead of changing the markup.
+fn escape_markdown(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if c.is_ascii_punctuation() {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The message markdown with each mention (`@name`) in the mention colour
+/// (TEXT-CHAT §7). The rest of the text is passed through unchanged, so a
+/// user's own markdown still applies.
+pub fn markdown_with_mentions(
+    text: &str,
+    mentions: &[mello_core::chat::MentionRef],
+    color: &str,
+) -> String {
+    let spans = mello_core::chat::mention_spans(text, mentions);
+    if spans.is_empty() {
+        return text.to_string();
+    }
+    let mut out = String::with_capacity(text.len() + spans.len() * 32);
+    let mut cursor = 0;
+    for span in spans {
+        out.push_str(&text[cursor..span.start]);
+        out.push_str(&format!(
+            "<font color=\"{color}\">{}</font>",
+            escape_markdown(&text[span.clone()])
+        ));
+        cursor = span.end;
+    }
+    out.push_str(&text[cursor..]);
+    out
 }
 
 pub fn chat_messages_to_slint(
@@ -123,8 +174,12 @@ pub fn chat_messages_to_slint(
         let display_styled: StyledText = if d.is_system || d.is_deleted {
             StyledText::from_plain_text(&display_text)
         } else {
-            StyledText::from_markdown(&display_text)
-                .unwrap_or_else(|_| StyledText::from_plain_text(&display_text))
+            StyledText::from_markdown(&markdown_with_mentions(
+                &display_text,
+                &d.mentions,
+                opts.mention_color,
+            ))
+            .unwrap_or_else(|_| StyledText::from_plain_text(&display_text))
         };
 
         let slint_links: Vec<ChatLinkData> = links
@@ -570,5 +625,55 @@ mod tests {
     #[test]
     fn format_elapsed_minutes_sub_hour() {
         assert_eq!(format_elapsed_minutes(47 * 60_000), "47m");
+    }
+}
+
+#[cfg(test)]
+mod mention_markdown_tests {
+    use super::*;
+    use mello_core::chat::MentionRef;
+
+    fn m(user_id: &str, name: &str) -> MentionRef {
+        MentionRef {
+            user_id: user_id.into(),
+            name: name.into(),
+        }
+    }
+
+    #[test]
+    fn mentions_get_the_mention_colour_and_the_rest_is_unchanged() {
+        let md = markdown_with_mentions(
+            "yo @Alice Baker, **bring** snacks",
+            &[m("u1", "Alice Baker")],
+            "#ffffff",
+        );
+        assert_eq!(
+            md,
+            r##"yo <font color="#ffffff">\@Alice Baker</font>, **bring** snacks"##
+        );
+        assert!(StyledText::from_markdown(&md).is_ok(), "{md}");
+    }
+
+    #[test]
+    fn markup_in_a_name_stays_literal() {
+        let md = markdown_with_mentions("hi @x*<u>y", &[m("u1", "x*<u>y")], "#eb4d5f");
+        assert_eq!(md, r##"hi <font color="#eb4d5f">\@x\*\<u\>y</font>"##);
+        assert!(StyledText::from_markdown(&md).is_ok(), "{md}");
+    }
+
+    #[test]
+    fn text_without_mentions_is_untouched() {
+        assert_eq!(
+            markdown_with_mentions("@nobody here", &[], "#ffffff"),
+            "@nobody here"
+        );
+    }
+
+    #[test]
+    fn color_hex_is_rrggbb() {
+        assert_eq!(
+            color_hex(slint::Color::from_rgb_u8(0xEB, 0x4D, 0x5F)),
+            "#eb4d5f"
+        );
     }
 }
