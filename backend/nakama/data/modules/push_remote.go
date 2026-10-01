@@ -476,7 +476,7 @@ func deliverMentionPushes(ctx context.Context, logger runtime.Logger, nk runtime
 		Body:      pushBody(senderName, resolveMentionTokens(ctx, nk, body)),
 	}
 	for _, uid := range now {
-		sendPushToUser(ctx, logger, nk, uid, n)
+		mentionPushes.submit(uid, n) // rate limit + coalescing (spec §6.3)
 	}
 	for _, uid := range later {
 		schedulePushAfterGrace(logger, nk, uid, n)
@@ -505,8 +505,11 @@ func schedulePushAfterGrace(logger runtime.Logger, nk runtime.NakamaModule, user
 	})
 }
 
-// heldPushSend is sendPushToUser; tests replace it to observe the recheck.
-var heldPushSend = sendPushToUser
+// heldPushSend passes a released push to the limiter; tests replace it to
+// observe the recheck.
+var heldPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, userID string, n pushAlert) {
+	mentionPushes.submit(userID, n)
+}
 
 // crewMemberSet returns the crew's members (not pending join requests).
 func crewMemberSet(ctx context.Context, nk runtime.NakamaModule, crewID string) map[string]bool {
