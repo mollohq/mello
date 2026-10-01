@@ -469,8 +469,12 @@ Mentions are stored in the message body as `<@user_id>` tokens. Example:
 "body": "hey <@user_abc> check this out"
 ```
 
-The client resolves `user_id` to display name at render time using the crew
-member list from crew state.
+mello-core resolves each token to a display name before it emits a message
+(`ChatMessage.display_body`, plus `mentions: [{user_id, name}]`). Names come
+from the `MemberNames` cache; a mentioned user who is not cached (left the
+crew, or history loaded before the crew list) is looked up first. Clients
+render `display_body` and never resolve tokens themselves. Message previews from
+Nakama (sidebar, code 115) resolve tokens on the server.
 
 ### 7.2 Autocomplete
 
@@ -489,15 +493,23 @@ above the input showing crew members. Filter as the user continues typing.
 - Trigger: `@` character at start of input or after a space.
 - Source: crew member list (already available in client state).
 - Arrow keys to navigate, Enter or Tab to select.
-- On select: replace `@partial` with `<@user_id>` in the raw body, display as
-  `@display_name` with accent color highlight in the input.
+- On select: replace `@partial` with `@display_name` in the input and record the
+  pick `{user_id, name}`. The input never shows a raw `<@user_id>` token.
+- `SendMessage` / `EditMessage` carry the picks (`mentions`). mello-core turns
+  each picked `@name` into `<@user_id>` (whole word, longest name first). Typed
+  `@name` text without a pick stays plain text. An edit starts with the
+  message's existing mentions as picks.
 - The `mentions` array in the envelope is populated at send time by scanning
-  the body for `<@...>` tokens.
+  the body for `<@...>` tokens. It is the rule of record for push (spec 23).
 
 ### 7.3 Render
 
-Mentions render as `@display_name` with accent color text. If the mentioned user
-is no longer in the crew (left/kicked), render as `@unknown` in muted text.
+Mentions render as `@display_name` in the mention colour: `Theme.mention`
+(`#EB4D5F`) on desktop, `Palette.accent` (same value) on iOS. mello-core reports
+the spans (`chat::mention_spans`); desktop wraps them in `<font color>` in the
+message markdown with the name escaped. A user who left the crew still shows by
+name (looked up); `@unknown` appears only when the lookup fails. A raw user id
+is never shown.
 
 If the mention is for the current user, apply a subtle background highlight to
 the entire message to draw attention.
