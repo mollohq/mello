@@ -672,6 +672,27 @@ Upload a stream thumbnail (called by streamer every 30s).
 }
 ```
 
+### 4.6 Push Activity RPC
+
+#### `set_session_activity`
+
+Whether the user is active on this session, for remote push (spec 23 §6.2,
+mello-backlog). **Socket RPC**: sent over the realtime WebSocket, not HTTP, so
+the server knows which session reports. An HTTP call is rejected.
+
+**Request:**
+```json
+{ "active": false, "platform": "desktop" }
+```
+
+`platform` is `"desktop"` or `"ios"`. mello-core computes `active`
+(`activity::is_active`: window focused and input < 10 min idle, or in voice,
+hosting a stream, or a game running) and sends it on change and after every
+reconnect. Nakama keeps the report per session in memory and drops it in
+`OnSessionEnd`. A session that never reports counts as active.
+
+**Response:** `{"success": true}` (ignored by the client).
+
 ---
 
 ## 5. Client ↔ Server Communication
@@ -679,7 +700,8 @@ Upload a stream thumbnail (called by streamer every 30s).
 ### 5.1 Client → Server (HTTP RPCs)
 
 All client-to-server actions use Nakama HTTP RPCs (`POST /v2/rpc/{id}`), not raw
-WebSocket messages. The mello-core `NakamaClient` has a generic `rpc()` helper
+WebSocket messages. The one exception is `set_session_activity` (§4.6): it must
+identify the session, so it goes over the socket (`NakamaClient::socket_rpc`). The mello-core `NakamaClient` has a generic `rpc()` helper
 and thin typed wrappers for each call. See Section 4 for payloads.
 
 | Action | RPC ID | Called when |
@@ -695,6 +717,9 @@ and thin typed wrappers for each call. See Section 4 for payloads.
 | Rename channel | `channel_rename` | Admin renames voice channel |
 | Delete channel | `channel_delete` | Admin deletes voice channel |
 | Reorder channels | `channel_reorder` | Admin reorders voice channels |
+| Push activity (socket) | `set_session_activity` | Activity changes; after reconnect |
+| Register push token | `register_push_token` | APNs/FCM token received (spec 23) |
+| Unregister push token | `unregister_push_token` | Logout (spec 23) |
 
 ### 5.2 Server → Client (Nakama Notifications)
 
