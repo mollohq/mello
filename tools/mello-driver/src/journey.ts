@@ -6,7 +6,9 @@
 import { mkdirSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { App, DriverError, type AppOptions } from "./app.ts";
+import { App, DriverError, onShutdown, type AppOptions } from "./app.ts";
+import type { EventWriter } from "./events.ts";
+import { startLiveShots } from "./live.ts";
 
 export type JourneyContext = {
   /** Unique per run; put it in names so repeated runs never collide. */
@@ -41,7 +43,13 @@ export type RunOptions = {
   artifactsRoot: string;
   mcpPortBase: number;
   env?: Record<string, string>;
+  /** Write progress events here (`run --events`). */
+  events?: EventWriter;
+  /** Live screenshot interval in ms with `events`; 0 turns them off. Default 2000. */
+  liveScreenshotMs?: number;
 };
+
+export const DEFAULT_LIVE_SCREENSHOT_MS = 2000;
 
 type StepRecord = { title: string; ms: number; ok: boolean; error?: string };
 
@@ -63,6 +71,9 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
   const steps: StepRecord[] = [];
   const started = Date.now();
   const log = (line: string) => process.stdout.write(`${line}\n`);
+  const events = opts.events;
+  events?.beginJourney();
+  events?.emit("journey_start", { id: j.id, dir });
 
   const appOpts = (port: number): AppOptions => ({
     binary: opts.binary,
@@ -70,6 +81,7 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
     runDir: dir,
     mcpPort: port,
     env: opts.env,
+    onAction: events ? (user, text) => events.emit("action", { user, text }) : undefined,
   });
 
   const ctx: JourneyContext = {
@@ -79,6 +91,7 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
       const app = new App(name, appOpts(opts.mcpPortBase + users.size));
       users.set(name, app);
       await app.launch(deeplink);
+      events?.emit("user_launch", { user: name, mcpPort: opts.mcpPortBase + users.size - 1, statePort: app.statePort });
       return app;
     },
     user(name) {
@@ -88,12 +101,16 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
     },
     async step(title, fn) {
       const t0 = Date.now();
+      const index = steps.length;
       log(`  ▸ ${title}`);
+      events?.emit("step_start", { index, title });
       try {
         await fn();
         steps.push({ title, ms: Date.now() - t0, ok: true });
+        events?.emit("step_end", { index, title, ok: true, ms: Date.now() - t0 });
       } catch (e) {
         steps.push({ title, ms: Date.now() - t0, ok: false, error: String(e) });
+        events?.emit("step_end", { index, title, ok: false, ms: Date.now() - t0, error: e instanceof Error ? e.message : String(e) });
         throw e;
       }
     },
@@ -103,6 +120,32 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
   };
 
   log(`● ${j.id}  (${dir})`);
+
+  // Live screenshots, only with --events. On SIGINT or SIGTERM the timer
+  // stops and journey_end is written before the driver kills the apps.
+  const interval = opts.liveScreenshotMs ?? DEFAULT_LIVE_SCREENSHOT_MS;
+  const shots =
+    events && interval > 0
+      ? startLiveShots({
+          targets: () => users.values(),
+          dir,
+          intervalMs: interval,
+          onShot: (user, path) => events.emit("screenshot", { user, path }),
+          onError: (user, e) => console.error(`live screenshot of ${user} failed: ${e instanceof Error ? e.message : e}`),
+        })
+      : null;
+  let ended = false;
+  const endEvent = (error?: string, ms = Date.now() - started) => {
+    if (ended) return;
+    ended = true;
+    events?.emit("journey_end", { id: j.id, ok: !error, ms, ...(error ? { error } : {}) });
+  };
+  const unhook = onShutdown((signal) => {
+    void shots?.stop();
+    endEvent(`interrupted by ${signal}`);
+    events?.close();
+  });
+
   let error: string | undefined;
   try {
     await j.run(ctx);
@@ -112,6 +155,7 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
       if (u.running) await u.checkpoint("failure").catch(() => undefined);
     }
   } finally {
+    await shots?.stop();
     for (const u of users.values()) await u.kill();
   }
 
@@ -119,6 +163,8 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
   writeFileSync(join(dir, "result.json"), JSON.stringify(result, null, 2));
   writeFileSync(join(dir, "report.md"), report(j, result, users));
   log(error ? `✗ ${j.id} failed after ${result.ms} ms\n${indent(error)}` : `✓ ${j.id} passed in ${result.ms} ms`);
+  endEvent(error, result.ms);
+  unhook();
   return result;
 }
 

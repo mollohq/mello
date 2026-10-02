@@ -37,13 +37,55 @@ export const CONTROL_ROLES = ["Button", "Switch", "Tab", "Slider", "Combobox", "
 export class SlintMcp {
   readonly url: string;
   private id = 0;
+  /** Journey requests and actions that are running now. */
+  private holds = 0;
+  /** The live screenshot that is running now, if any. */
+  private exclusive: Promise<unknown> | null = null;
 
   constructor(port: number) {
     this.url = `http://127.0.0.1:${port}/mcp`;
   }
 
+  /**
+   * Run `fn` as part of the journey. Journey work shares the connection with
+   * other journey work, but never runs at the same time as an exclusive job
+   * (a live screenshot): it waits for that job first. Nesting is safe, because
+   * an exclusive job cannot start while a hold is open.
+   */
+  async hold<T>(fn: () => Promise<T>): Promise<T> {
+    while (this.exclusive) await this.exclusive.catch(() => undefined);
+    this.holds++;
+    try {
+      return await fn();
+    } finally {
+      this.holds--;
+    }
+  }
+
+  /**
+   * Run `fn` alone on this connection, or not at all: it is skipped (and this
+   * returns false) when a journey request or action is in flight, or another
+   * exclusive job runs. `fn` must call `rawCall`, not `call`.
+   */
+  async tryExclusive(fn: () => Promise<void>): Promise<boolean> {
+    if (this.holds > 0 || this.exclusive) return false;
+    const job = fn();
+    this.exclusive = job;
+    try {
+      await job;
+    } finally {
+      this.exclusive = null;
+    }
+    return true;
+  }
+
   /** Call one MCP tool. Throws with the tool name when the call fails. */
-  async call<T = any>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
+  call<T = any>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
+    return this.hold(() => this.rawCall<T>(tool, args));
+  }
+
+  /** `call` without the journey hold. Only an exclusive job uses it. */
+  async rawCall<T = any>(tool: string, args: Record<string, unknown> = {}): Promise<T> {
     const res = await fetch(this.url, {
       method: "POST",
       headers: { "Content-Type": "application/json", Accept: "application/json, text/event-stream" },
@@ -120,7 +162,11 @@ export class SlintMcp {
   }
 
   /** Every labelled control on screen, in tree order within each role. */
-  async controls(): Promise<Control[]> {
+  controls(): Promise<Control[]> {
+    return this.hold(() => this.controlsNow());
+  }
+
+  private async controlsNow(): Promise<Control[]> {
     const root = await this.root();
     const perRole = await Promise.all(
       CONTROL_ROLES.map((role) => this.query(root, { matchElementAccessibleRole: role })),
@@ -147,7 +193,11 @@ export class SlintMcp {
   }
 
   /** Visible text: Text labels and text-input values. */
-  async texts(): Promise<string[]> {
+  texts(): Promise<string[]> {
+    return this.hold(() => this.textsNow());
+  }
+
+  private async textsNow(): Promise<string[]> {
     const root = await this.root();
     const [texts, inputs] = await Promise.all([
       this.query(root, { matchElementTypeName: "Text" }),
@@ -173,11 +223,22 @@ export class SlintMcp {
   }
 
   async key(text: string): Promise<void> {
-    await this.call("dispatch_key_event", { windowHandle: await this.window(), text });
+    await this.hold(async () => {
+      await this.call("dispatch_key_event", { windowHandle: await this.window(), text });
+    });
   }
 
-  async screenshot(): Promise<Buffer> {
-    const r = await this.call<{ png: Buffer }>("take_screenshot", { windowHandle: await this.window() });
-    return r.png;
+  screenshot(): Promise<Buffer> {
+    return this.hold(async () => {
+      const r = await this.call<{ png: Buffer }>("take_screenshot", { windowHandle: await this.window() });
+      return r.png;
+    });
+  }
+
+  /** The same screenshot, for an exclusive job. */
+  async rawScreenshot(): Promise<Buffer> {
+    const w = (await this.rawCall<{ windowHandles: Handle[] }>("list_windows")).windowHandles?.[0];
+    if (!w) throw new Error("slint mcp: no window");
+    return (await this.rawCall<{ png: Buffer }>("take_screenshot", { windowHandle: w })).png;
   }
 }

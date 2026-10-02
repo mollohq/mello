@@ -48,3 +48,26 @@ panic = "unwind"
 # libs, so impact should be UI/cold paths only. Validate with perf-harness.
 opt-level = "z"
 
+
+# Live screenshots in the e2e driver (Slint MCP take_screenshot) encode a PNG on
+# the UI thread. At opt-level 0 that blocks the app for about 0.9 s, which also
+# delays the state port and slows a journey. These crates are small; optimize
+# them in dev builds. See plans/E2E-QA.md section 16.
+[profile.dev.package.image]
+opt-level = 3
+[profile.dev.package."png@0.18.1"]
+opt-level = 3
+[profile.dev.package.fdeflate]
+opt-level = 3
+[profile.dev.package.miniz_oxide]
+opt-level = 3
+[profile.dev.package.crc32fast]
+opt-level = 3
+[profile.dev.package.adler2]
+opt-level = 3
+[profile.dev.package.i-slint-renderer-skia]
+opt-level = 3
+[profile.dev.package.i-slint-backend-testing]
+opt-level = 3
+[profile.dev.package.base64]
+opt-level = 3

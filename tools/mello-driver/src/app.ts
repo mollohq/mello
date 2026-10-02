@@ -2,8 +2,8 @@
 // from the developer's own client (plans/E2E-QA.md §5.2).
 
 import { spawn, type ChildProcess } from "node:child_process";
-import { appendFileSync, mkdirSync, openSync, writeFileSync, readFileSync, existsSync } from "node:fs";
-import { join } from "node:path";
+import { appendFileSync, mkdirSync, openSync, renameSync, writeFileSync, readFileSync, existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { SlintMcp, type Control } from "./slint.ts";
@@ -79,6 +79,8 @@ export type AppOptions = {
   mcpPort: number;
   /** Extra environment, for example NAKAMA_HOST. */
   env?: Record<string, string>;
+  /** Called with the text of each action, the same text as in actions.log. */
+  onAction?: (user: string, text: string) => void;
 };
 
 export class DriverError extends Error {}
@@ -97,8 +99,27 @@ export function killAllApps(): void {
   for (const p of live) p.kill("SIGKILL");
   live.clear();
 }
+
+const shutdownHooks = new Set<(signal: string) => void>();
+
+/**
+ * Run `fn` when the driver gets SIGINT or SIGTERM, before the apps are
+ * killed. It must be synchronous. Returns a function that removes the hook.
+ */
+export function onShutdown(fn: (signal: string) => void): () => void {
+  shutdownHooks.add(fn);
+  return () => void shutdownHooks.delete(fn);
+}
+
 for (const sig of ["SIGINT", "SIGTERM"] as const) {
   process.once(sig, () => {
+    for (const fn of shutdownHooks) {
+      try {
+        fn(sig);
+      } catch {
+        // A failing hook must not keep the apps alive.
+      }
+    }
     killAllApps();
     process.exit(130);
   });
@@ -111,6 +132,7 @@ export class App {
   private readonly opts: AppOptions;
   private proc: ChildProcess | null = null;
   private shots = 0;
+  private ready = false;
 
   constructor(name: string, opts: AppOptions) {
     this.name = name;
@@ -182,12 +204,18 @@ export class App {
     live.add(child);
     child.on("exit", () => {
       live.delete(child);
-      if (this.proc === child) this.proc = null;
+      if (this.proc === child) {
+        this.proc = null;
+        this.ready = false;
+      }
     });
     const deadline = Date.now() + 30_000;
     while (Date.now() < deadline) {
       if (!this.proc) throw new DriverError(`${this.name}: exited during start; see ${this.logPath}`);
-      if ((await this.ui.ready()) && (await this.stateOrNull())) return;
+      if ((await this.ui.ready()) && (await this.stateOrNull())) {
+        this.ready = true;
+        return;
+      }
       await sleep(200);
     }
     throw new DriverError(`${this.name}: no MCP or state port after 30 s; see ${this.logPath}`);
@@ -223,6 +251,29 @@ export class App {
 
   get running(): boolean {
     return this.proc !== null;
+  }
+
+  /** The app is started and answers on both ports. */
+  get live(): boolean {
+    return this.proc !== null && this.ready;
+  }
+
+  /**
+   * Screenshot for the live view (`run --events`). Written to `file` through
+   * a temp file and a rename, so a reader never sees half a file. It skips
+   * (returns false) while any journey action is in flight, and it holds the
+   * MCP connection alone while it runs: a journey action that starts then
+   * waits for it. See SlintMcp.tryExclusive.
+   */
+  async liveShot(file: string): Promise<boolean> {
+    if (!this.live) return false;
+    return this.ui.tryExclusive(async () => {
+      const png = await this.ui.rawScreenshot();
+      mkdirSync(dirname(file), { recursive: true });
+      const tmp = `${file}.tmp`;
+      writeFileSync(tmp, png);
+      renameSync(tmp, file);
+    });
   }
 
   // ── State port ────────────────────────────────────────────────
@@ -298,7 +349,11 @@ export class App {
    * settles. A control appears when the UI thread has rendered it, which can
    * trail the state port by a frame.
    */
-  async find(label: string, n = 0, timeoutMs = 5_000): Promise<Control> {
+  find(label: string, n = 0, timeoutMs = 5_000): Promise<Control> {
+    return this.ui.hold(() => this.findNow(label, n, timeoutMs));
+  }
+
+  private async findNow(label: string, n: number, timeoutMs: number): Promise<Control> {
     const deadline = Date.now() + timeoutMs;
     let seen: Control[] = [];
     while (Date.now() < deadline) {
@@ -319,7 +374,11 @@ export class App {
    * resolves the label again and acts on the current element. This is not a
    * test retry. The action still fails when the control is not there.
    */
-  private async onControl(label: string, n: number, act: (c: Control) => Promise<void>, timeoutMs = 5_000): Promise<void> {
+  private onControl(label: string, n: number, act: (c: Control) => Promise<void>, timeoutMs = 5_000): Promise<void> {
+    return this.ui.hold(() => this.onControlNow(label, n, act, timeoutMs));
+  }
+
+  private async onControlNow(label: string, n: number, act: (c: Control) => Promise<void>, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
       const c = await this.find(label, n, Math.max(500, deadline - Date.now()));
@@ -340,6 +399,7 @@ export class App {
   private trace(action: string, label: string, c?: Control): void {
     const where = c ? ` ${c.role} at (${c.x.toFixed(0)},${c.y.toFixed(0)}) ${c.width.toFixed(0)}x${c.height.toFixed(0)}` : "";
     appendFileSync(join(this.dir, "actions.log"), `${new Date().toISOString()} ${action} "${label}"${where}\n`);
+    this.opts.onAction?.(this.name, `${action} "${label}"`);
   }
 
   /** A real pointer click at the control's center. */
@@ -368,13 +428,15 @@ export class App {
 
   /** Focus a text field by label, clear it, and type with real key events. */
   async type(label: string, text: string): Promise<void> {
-    await this.onControl(label, 0, async (c) => {
-      if (c.role !== "TextInput") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a text field`);
-      this.trace("type", label, c);
-      await this.ui.click(c.handle);
-      if (c.value !== "") await this.ui.setValue(c.handle, "");
+    await this.ui.hold(async () => {
+      await this.onControl(label, 0, async (c) => {
+        if (c.role !== "TextInput") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a text field`);
+        this.trace("type", label, c);
+        await this.ui.click(c.handle);
+        if (c.value !== "") await this.ui.setValue(c.handle, "");
+      });
+      await this.ui.key(text);
     });
-    await this.ui.key(text);
   }
 
   /**
