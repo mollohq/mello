@@ -151,6 +151,21 @@ impl VoiceManager {
             log::info!("Loopback mode enabled -- captured audio will play back locally");
         }
 
+        Self::with_context(ctx, event_tx, loopback)
+    }
+
+    /// A manager with no libmello context. Every voice call is a no-op, so a
+    /// test can run the command loop without audio devices.
+    #[cfg(test)]
+    pub(crate) fn without_audio(event_tx: std_mpsc::Sender<Event>) -> Self {
+        Self::with_context(std::ptr::null_mut(), event_tx, false)
+    }
+
+    fn with_context(
+        ctx: *mut mello_sys::MelloContext,
+        event_tx: std_mpsc::Sender<Event>,
+        loopback: bool,
+    ) -> Self {
         Self {
             ctx,
             event_tx,

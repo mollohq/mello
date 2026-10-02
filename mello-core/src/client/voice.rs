@@ -1,13 +1,21 @@
+use crate::crew_state::VoiceJoinResponse;
 use crate::events::Event;
 use crate::voice::{SignalEnvelope, SignalPurpose};
+
+use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 
 impl super::Client {
     pub(super) async fn voice_tick(&mut self) {
         self.voice.tick();
 
+        // An SFU voice join that runs decides the voice mode when it ends.
+        // Until then, Disconnected is not a drop, and no reconnect may start.
+        let join_pending = self.sfu_voice_joins.is_pending();
+
         // SFU voice reconnect: if voice mode went Disconnected but we still have a
         // last_voice_channel, schedule a reconnect with exponential backoff.
-        if self.last_voice_channel.is_some()
+        if !join_pending
+            && self.last_voice_channel.is_some()
             && self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected
             && self.sfu_voice_reconnect.is_none()
         {
@@ -18,7 +26,7 @@ impl super::Client {
         }
 
         if let Some((at, ref channel, attempt)) = self.sfu_voice_reconnect.clone() {
-            if tokio::time::Instant::now() >= at {
+            if !join_pending && tokio::time::Instant::now() >= at {
                 const MAX_RECONNECT_ATTEMPTS: u32 = 5;
                 if attempt >= MAX_RECONNECT_ATTEMPTS {
                     log::warn!("SFU voice reconnect: giving up after {} attempts", attempt);
@@ -35,7 +43,9 @@ impl super::Client {
                     );
                     let ch = channel.clone();
                     self.handle_join_voice(&ch).await;
-                    // If still disconnected after rejoin, bump the attempt with backoff
+                    // If still disconnected after rejoin, bump the attempt with backoff.
+                    // An SFU join that still runs is disconnected too. Its outcome
+                    // clears the next attempt if voice starts.
                     if self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected {
                         let backoff = tokio::time::Duration::from_secs(2u64.pow(attempt + 1));
                         self.sfu_voice_reconnect =
@@ -94,8 +104,6 @@ impl super::Client {
             }
         };
 
-        let mode = resp.mode.as_deref().unwrap_or("p2p");
-
         self.last_voice_channel = Some(resp.channel_id.clone());
         self.sfu_voice_reconnect = None;
 
@@ -108,96 +116,106 @@ impl super::Client {
             members: resp.voice_state.members.clone(),
         });
 
-        self.sfu_leave_if_connected().await;
-        self.voice.leave_voice();
-        if let Some(local_id) = self.nakama.current_user_id().map(String::from) {
-            match mode {
-                "sfu" => {
-                    let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
-                    let token = resp.sfu_token.as_deref().unwrap_or_default();
-
-                    let fallback_to_p2p =
-                        |voice: &mut crate::voice::VoiceManager,
-                         local_id: &str,
-                         resp: &crate::crew_state::VoiceJoinResponse| {
-                            let peer_ids: Vec<String> = resp
-                                .voice_state
-                                .members
-                                .iter()
-                                .filter(|m| m.user_id != local_id)
-                                .map(|m| m.user_id.clone())
-                                .collect();
-                            voice.join_voice(local_id, &peer_ids);
-                        };
-
-                    match crate::transport::SfuConnection::connect(endpoint, token).await {
-                        Ok(mut conn) => {
-                            let peer_handle = {
-                                let ctx = self.voice.mello_ctx();
-                                unsafe { crate::transport::SfuConnection::create_peer(ctx) }
-                            };
-                            match peer_handle {
-                                Ok(ph) => match conn.join_voice(ph, &crew_id, channel_id).await {
-                                    Ok(_session) => {
-                                        if let Err(e) = conn.wait_for_datachannel_open().await {
-                                            log::error!(
-                                                "SFU DataChannel failed to open: {}, falling back to P2P",
-                                                e
-                                            );
-                                            fallback_to_p2p(&mut self.voice, &local_id, &resp);
-                                        } else {
-                                            let conn = std::sync::Arc::new(conn);
-                                            self.voice.join_voice_sfu(&local_id, &crew_id, conn);
-                                        }
-                                    }
-                                    Err(e) => {
-                                        log::error!(
-                                            "SFU voice join failed: {}, falling back to P2P",
-                                            e
-                                        );
-                                        fallback_to_p2p(&mut self.voice, &local_id, &resp);
-                                    }
-                                },
-                                Err(e) => {
-                                    log::error!(
-                                        "SFU peer creation failed: {}, falling back to P2P",
-                                        e
-                                    );
-                                    fallback_to_p2p(&mut self.voice, &local_id, &resp);
-                                }
-                            }
-                        }
-                        Err(e) => {
-                            log::error!("SFU connect failed: {}, falling back to P2P", e);
-                            fallback_to_p2p(&mut self.voice, &local_id, &resp);
-                        }
-                    }
-                }
-                _ => {
-                    let peer_ids: Vec<String> = resp
-                        .voice_state
-                        .members
-                        .iter()
-                        .filter(|m| m.user_id != local_id)
-                        .map(|m| m.user_id.clone())
-                        .collect();
-                    self.voice.join_voice(&local_id, &peer_ids);
-                }
-            }
-
-            let _ = self
-                .event_tx
-                .send(Event::VoiceStateChanged { in_call: true });
-
-            // Auto-start clip buffer for voice clip capture
-            self.handle_start_clip_buffer();
-        }
-
-        // Note: VoiceJoined was already emitted above (before SFU/P2P connection)
-        // to prevent race conditions with VoiceChannelsUpdated notifications.
+        let local_id = self.nakama.current_user_id().map(String::from);
+        self.start_voice_media(&crew_id, local_id.as_deref(), &resp)
+            .await;
     }
 
-    pub(super) async fn sfu_leave_if_connected(&self) {
+    /// Stop the current voice media and start it for the joined channel.
+    ///
+    /// P2P starts here. An SFU join only starts here: its network steps run
+    /// off the command loop, and `on_sfu_voice_join_step` finishes it. Voice
+    /// ticks and other commands keep running while the SFU answers or fails.
+    pub(super) async fn start_voice_media(
+        &mut self,
+        crew_id: &str,
+        local_id: Option<&str>,
+        resp: &VoiceJoinResponse,
+    ) {
+        self.sfu_leave_if_connected().await;
+        self.voice.leave_voice();
+        let Some(local_id) = local_id else {
+            return;
+        };
+
+        let p2p_peer_ids: Vec<String> = resp
+            .voice_state
+            .members
+            .iter()
+            .filter(|m| m.user_id != local_id)
+            .map(|m| m.user_id.clone())
+            .collect();
+
+        if resp.mode.as_deref().unwrap_or("p2p") == "sfu" {
+            let join = SfuVoiceJoin {
+                crew_id: crew_id.to_string(),
+                channel_id: resp.channel_id.clone(),
+                local_id: local_id.to_string(),
+                p2p_peer_ids,
+            };
+            let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
+            let token = resp.sfu_token.as_deref().unwrap_or_default();
+            self.sfu_voice_joins.connect(join, endpoint, token);
+            return;
+        }
+
+        self.voice.join_voice(local_id, &p2p_peer_ids);
+        self.on_voice_media_started();
+    }
+
+    /// Continue the SFU voice join with the outcome of its last network step.
+    /// Runs on the loop. A failed step falls back to P2P.
+    pub(super) fn on_sfu_voice_join_step(&mut self, outcome: JoinOutcome) {
+        let JoinOutcome { join, step, result } = outcome;
+        match result {
+            Ok(JoinStep::Connected(conn)) => {
+                let peer_handle = {
+                    let ctx = self.voice.mello_ctx();
+                    unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+                };
+                match peer_handle {
+                    Ok(ph) => {
+                        self.sfu_voice_joins.join_session(join, conn, ph);
+                        return;
+                    }
+                    Err(e) => {
+                        log::error!("SFU peer creation failed: {}, falling back to P2P", e);
+                        self.voice.join_voice(&join.local_id, &join.p2p_peer_ids);
+                    }
+                }
+            }
+            Ok(JoinStep::Ready(conn)) => {
+                let conn = std::sync::Arc::new(conn);
+                self.voice
+                    .join_voice_sfu(&join.local_id, &join.crew_id, conn);
+            }
+            Err(e) => {
+                log::error!("SFU {} failed: {}, falling back to P2P", step, e);
+                self.voice.join_voice(&join.local_id, &join.p2p_peer_ids);
+            }
+        }
+        self.on_voice_media_started();
+    }
+
+    /// The voice media for the joined channel started, or tried to start.
+    fn on_voice_media_started(&mut self) {
+        // A reconnect attempt keeps its next attempt only when voice did not start.
+        if self.voice.voice_mode() != crate::voice::VoiceMode::Disconnected {
+            self.sfu_voice_reconnect = None;
+        }
+
+        let _ = self
+            .event_tx
+            .send(Event::VoiceStateChanged { in_call: true });
+
+        // Auto-start clip buffer for voice clip capture
+        self.handle_start_clip_buffer();
+    }
+
+    /// Leave the SFU voice session, if any, and cancel an SFU voice join that
+    /// runs. Every voice teardown calls this before `VoiceManager::leave_voice`.
+    pub(super) async fn sfu_leave_if_connected(&mut self) {
+        self.sfu_voice_joins.cancel();
         if let Some(conn) = self.voice.sfu_connection() {
             conn.leave().await;
         }
@@ -277,5 +295,173 @@ impl super::Client {
                 });
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::sfu_voice_join::tests::{join_for, silent_sfu};
+    use super::super::Client;
+    use crate::command::Command;
+    use crate::config::Config;
+    use crate::crew_state::VoiceJoinResponse;
+    use crate::events::Event;
+    use crate::voice::VoiceManager;
+    use std::sync::mpsc;
+    use std::sync::Arc;
+    use std::time::Duration;
+
+    const LIMIT: Duration = Duration::from_secs(10);
+
+    /// A client whose voice manager has no libmello context, so the loop runs
+    /// without audio devices. It has no session, so no tick calls Nakama.
+    fn client_without_audio() -> (Client, mpsc::Receiver<Event>) {
+        let (event_tx, events) = mpsc::channel();
+        let voice = VoiceManager::without_audio(event_tx.clone());
+        let client = Client::with_voice(
+            Config::default(),
+            event_tx,
+            voice,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            false,
+            false,
+        );
+        (client, events)
+    }
+
+    fn sfu_join_response(channel_id: &str, endpoint: &str) -> VoiceJoinResponse {
+        serde_json::from_value(serde_json::json!({
+            "channel_id": channel_id,
+            "voice_state": {
+                "channel_id": channel_id,
+                "members": [{ "user_id": "me" }, { "user_id": "peer-1" }],
+            },
+            "mode": "sfu",
+            "sfu_endpoint": endpoint,
+            "sfu_token": "token",
+        }))
+        .expect("valid voice_join response")
+    }
+
+    /// Wait for the first event that `pick` accepts. Returns the events
+    /// before it. Polls, because the loop runs on this test's thread.
+    async fn wait_for_event(
+        events: &mpsc::Receiver<Event>,
+        what: &str,
+        pick: impl Fn(&Event) -> bool,
+    ) -> Vec<Event> {
+        let deadline = tokio::time::Instant::now() + LIMIT;
+        let mut before = Vec::new();
+        loop {
+            while let Ok(ev) = events.try_recv() {
+                if pick(&ev) {
+                    return before;
+                }
+                before.push(ev);
+            }
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no {what} event; saw {before:?}"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+
+    fn is_in_call(ev: &Event) -> bool {
+        matches!(ev, Event::VoiceStateChanged { in_call: true })
+    }
+
+    #[tokio::test]
+    async fn the_loop_handles_commands_while_the_sfu_connect_waits_then_falls_back() {
+        // The SFU takes the connection and does not answer: the connect waits.
+        let sfu = silent_sfu().await;
+        let (mut client, events) = client_without_audio();
+        let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
+
+        // The JoinVoice handler must return while the SFU connect waits.
+        let resp = sfu_join_response("ch-1", &sfu.endpoint);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.start_voice_media("crew-1", Some("me"), &resp),
+        )
+        .await
+        .expect("the join handler waited for the SFU connect");
+        assert!(client.sfu_voice_joins.is_pending());
+
+        let driver = async {
+            tokio::time::timeout(LIMIT, sfu.accepted)
+                .await
+                .expect("the connect reaches the SFU")
+                .expect("accept task runs");
+
+            // The connect still waits. The loop must handle another command.
+            cmd_tx
+                .send(Command::ListAudioDevices)
+                .expect("the loop listens");
+            let before = wait_for_event(&events, "AudioDevicesListed", |ev| {
+                matches!(ev, Event::AudioDevicesListed { .. })
+            })
+            .await;
+            assert!(
+                !before.iter().any(is_in_call),
+                "voice started before the SFU connect ended: {before:?}"
+            );
+
+            // The connect fails. The loop falls back to P2P and reports the call.
+            drop(sfu.release);
+            wait_for_event(&events, "VoiceStateChanged { in_call: true }", is_in_call).await;
+
+            drop(cmd_tx);
+        };
+        tokio::time::timeout(LIMIT, async { tokio::join!(client.run(cmd_rx), driver) })
+            .await
+            .expect("the loop ends when the command channel closes");
+
+        assert!(!client.sfu_voice_joins.is_pending());
+    }
+
+    #[tokio::test]
+    async fn the_voice_tick_does_not_reconnect_while_an_sfu_join_runs() {
+        // Voice is Disconnected while the join runs. That is not a drop.
+        let sfu = silent_sfu().await;
+        let (mut client, _events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+        client
+            .sfu_voice_joins
+            .connect(join_for("ch-1"), &sfu.endpoint, "token");
+
+        client.voice_tick().await;
+        assert!(
+            client.sfu_voice_reconnect.is_none(),
+            "a reconnect was scheduled while the SFU join runs"
+        );
+
+        // A scheduled attempt that is due must also wait for the join.
+        client.sfu_voice_reconnect = Some((tokio::time::Instant::now(), "ch-1".into(), 0));
+        client.voice_tick().await;
+        assert!(
+            client.sfu_voice_joins.is_pending(),
+            "the reconnect replaced the running join"
+        );
+    }
+
+    #[tokio::test]
+    async fn leaving_voice_cancels_the_sfu_join() {
+        let sfu = silent_sfu().await;
+        let (mut client, _events) = client_without_audio();
+        let resp = sfu_join_response("ch-1", &sfu.endpoint);
+        tokio::time::timeout(
+            Duration::from_secs(2),
+            client.start_voice_media("crew-1", Some("me"), &resp),
+        )
+        .await
+        .expect("the join handler waited for the SFU connect");
+        assert!(client.sfu_voice_joins.is_pending());
+
+        client.sfu_leave_if_connected().await;
+        assert!(!client.sfu_voice_joins.is_pending());
     }
 }

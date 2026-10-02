@@ -31,6 +31,7 @@ mello-core/src/
 │   ├── crew.rs             # Crew CRUD, discovery, avatars, user search
 │   ├── chat.rs             # Send/edit/delete messages, GIF search, history
 │   ├── voice.rs            # Voice join/leave, channel CRUD, reconnection
+│   ├── sfu_voice_join.rs   # SFU voice join steps, run off the command loop
 │   ├── streaming.rs        # Stream host/viewer orchestration, thumbnails
 │   ├── stream_ffi.rs       # FFI structs & unsafe C callbacks for streaming
 │   ├── presence.rs         # Profile updates, catchup, moments, game sessions
@@ -183,6 +184,14 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 - **Audio pipeline:** Mic → CoreAudio/WASAPI capture → WebRTC APM → adaptive RMS/noise-floor gate → Silero VAD on candidate speech → RNNoise/Opus only during speech/pre-roll/hangover → send via RTP audio track (SFU) or unreliable DataChannel (P2P mesh). Receive path (SFU): `onTrack` → RTP parse → `feed_packet` → per-peer jitter buffer → Opus decode → per-peer ring buffer → `mix_output` render callback → speaker.
 - **Mute/Deafen:** `SetMute` stops sending audio (capture continues for local VAD). `SetDeafen` stops playback.
 - **VAD callbacks:** libmello fires speaking state changes via C callback; mello-core forwards these as `VoiceActivity` events to the UI.
+- **SFU voice join off the command loop (`client/sfu_voice_join.rs`):** The SFU connect and the session join run on Tokio tasks. The loop takes each step's outcome in its `select!`. Voice ticks and other commands continue while the SFU answers or fails.
+  - Step 1 (task): WebSocket connect and welcome.
+  - Step 2 (loop): create the native peer. Only the loop owns the libmello context.
+  - Step 3 (task): join the voice session and wait for the DataChannels.
+  - A failed step falls back to P2P on the loop. `VoiceStateChanged { in_call: true }` follows the SFU start or the fallback.
+  - A new join, a leave, a crew change or a logout cancels the running join.
+  - While a join runs, the loop holds Nakama signals and presence in their channels. The P2P fallback then gets them in order.
+  - While a join runs, the voice tick schedules no reconnect.
 - **SFU reconnect + unified teardown:** SFU disconnects (signaling disconnect, liveness timeout, sleep/wake fault) go through `mark_disconnected_with_reason(...)`: stop capture first, best-effort `leave` handshake, clear SFU state, emit `VoiceSfuDisconnected { reason }`. The client's `voice_tick` then auto-reconnects with exponential backoff (2s base, max 5 attempts). On terminal failure, it emits `VoiceStateChanged { in_call: false }`.
 
 ---
