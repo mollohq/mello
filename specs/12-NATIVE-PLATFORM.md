@@ -127,9 +127,17 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
 ```
 
-- Skia renders on the GPU through wgpu: D3D12 on Windows, Metal on macOS. Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.
-- When the GPU surface fails, Skia falls back to its own CPU rasterizer.
-- `--software-rendering` forces that CPU rasterizer (renderer name `skia-software`). It is a debug switch.
+- On Windows, Skia renders on the CPU (renderer name `skia-software`). `configure_slint_platform` selects it always.
+- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game.
+
+  | Windows, idle | Working set | Private | GPU memory |
+  |---|---|---|---|
+  | Skia CPU rasterizer | 134 MB | 95 MB | 12 MB |
+  | Skia on wgpu (D3D12) | 387 MB | 414 MB | 189 MB |
+
+- On macOS, Skia renders on the GPU through wgpu (Metal). When the GPU surface fails, Skia falls back to its CPU rasterizer.
+- On macOS, `--software-rendering` forces the CPU rasterizer. It is a debug switch.
+- Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.
 - Do not add `renderer-software` or `renderer-femtovg`. They add binary size and never run.
 
 ### 3.2 Opaque windows on macOS
