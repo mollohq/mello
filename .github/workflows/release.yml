@@ -44,6 +44,12 @@ jobs:
           }
           echo "RELEASE_VERSION=$version" >> $env:GITHUB_ENV
 
+      # The offline lockfile refresh below needs every locked crate in the
+      # local registry cache. A new dependency version is not there yet.
+      - name: Fetch locked crates
+        shell: pwsh
+        run: cargo fetch --locked
+
       - name: Stamp version in Cargo.toml
         shell: pwsh
         run: |
@@ -175,6 +181,11 @@ jobs:
           fi
           version="${version#v}"
           echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
+
+      # The offline lockfile refresh below needs every locked crate in the
+      # local registry cache. A new dependency version is not there yet.
+      - name: Fetch locked crates
+        run: cargo fetch --locked
 
       - name: Stamp version in Cargo.toml
         run: sed -i'' -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml

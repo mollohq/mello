@@ -371,7 +371,7 @@ export component DiscoverPanel inherits Rectangle {
     Flickable {
         vertical-stretch: 1;
         flicked => {
-            if (-self.viewport-y + self.height) > (self.viewport-height - 400px) {
+            if (-self.content-y + self.height) > (self.content-height - 400px) {
                 root.load-more();
             }
         }

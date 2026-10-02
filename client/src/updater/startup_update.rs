@@ -11,20 +11,31 @@ use crate::ForceUpdateWindow;
 const FORCE_UPDATE_WIDTH: f32 = 360.0;
 const FORCE_UPDATE_HEIGHT: f32 = 188.0;
 
-pub(crate) fn apply_renderer_override() {
-    if std::env::args().any(|a| a == "--software-rendering") {
-        log::info!("[startup] forcing software rendering backend");
-        std::env::set_var("SLINT_BACKEND", "winit-software");
-    }
-}
+/// Skia's CPU rasterizer. Slint's own software renderer is not compiled in
+/// (spec 12-NATIVE-PLATFORM §3.1).
+#[cfg(any(target_os = "windows", target_os = "macos"))]
+const SKIA_CPU_RENDERER: &str = "skia-software";
 
+/// Installs the winit backend. The builder does not read `SLINT_BACKEND`, so
+/// the renderer choice is made here. Other platforms keep Slint's default.
 pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
     {
-        let backend = i_slint_backend_winit::Backend::builder()
-            .with_default_menu_bar(false)
-            .build()?;
-        slint::platform::set_platform(Box::new(backend))?;
+        let mut builder = i_slint_backend_winit::Backend::builder();
+
+        // Default: Skia on wgpu (D3D12 on Windows, Metal on macOS). The debug
+        // switch forces Skia's CPU rasterizer.
+        if std::env::args().any(|a| a == "--software-rendering") {
+            log::info!("[startup] Slint renderer: {SKIA_CPU_RENDERER}");
+            builder = builder.with_renderer_name(SKIA_CPU_RENDERER);
+        }
+
+        #[cfg(target_os = "macos")]
+        {
+            builder = builder.with_default_menu_bar(false);
+        }
+
+        slint::platform::set_platform(Box::new(builder.build()?))?;
     }
 
     Ok(())
