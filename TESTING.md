@@ -201,6 +201,28 @@ Highlights of what's covered:
 - **`events.rs` / `command.rs`** — lock the FFI JSON shape (adjacently-tagged
   `{"type","data"}`) used across the core↔client boundary.
 
+### Which build is this? `mello --build-info`
+
+A harness that runs journeys must know which commit a binary came from.
+`mello --build-info` prints one line of JSON and exits with code 0. It starts no UI, no logging, no updater and no
+single-instance lock. The flag works anywhere in the arguments.
+
+```bash
+SLINT_EMIT_DEBUG_INFO=1 cargo build -p mello-client --no-default-features --features development,e2e
+target/debug/mello --build-info
+# {"commit":"<40 hex>","dirty":false,"built_at":"2026-10-02T09:12:00Z","version":"0.0.0-DEV","features":["development","e2e"]}
+```
+
+- `dirty` is `true` when the worktree had uncommitted changes at build time.
+- The stamp is made by the small `build-stamp` crate. It has its own build script, so the Slint UI does not
+  compile again after a Rust edit.
+- Cargo runs the stamp again when HEAD, the index or a client or `mello-core` source file changes.
+  An edit in another crate does not run it. Rebuild after a commit if you need an exact stamp.
+- Without git (a source tarball), `commit` is `"unknown"` and the build still works.
+- In GitHub Actions, the version edits in `Cargo.toml`, `Cargo.lock` and `Info.plist` do not set `dirty`.
+- The client also logs the same line at startup (`Build: {...}`).
+- A Windows release build uses the GUI subsystem. Read the line from a pipe or a file, not from an interactive console.
+
 ---
 
 ## libmello — C++ audio/video DSP

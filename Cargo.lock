@@ -741,6 +741,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-stamp"
+version = "0.0.0-DEV"
+
+[[package]]
 name = "bumpalo"
 version = "3.20.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3856,6 +3860,7 @@ dependencies = [
  "arboard",
  "auto-launch",
  "base64 0.22.1",
+ "build-stamp",
  "confy",
  "directories",
  "i-slint-backend-testing",
