@@ -8,7 +8,9 @@
   },
   "scripts": {
     "journey": "node src/cli.ts run",
-    "mcp": "node src/cli.ts mcp"
+    "list": "node src/cli.ts list",
+    "mcp": "node src/cli.ts mcp",
+    "test": "node --test \"test/*.test.ts\""
   },
   "dependencies": {
     "playwright": "1.63.0"

@@ -93,9 +93,10 @@ else
     printf '  ! go not installed, skipping fake-oauth\n'
 fi
 if command -v node >/dev/null 2>&1 && [ "$(node -p 'process.versions.node.split(".")[0]')" -ge 24 ]; then
-    for f in tools/mello-driver/src/*.ts qa/journeys/*.ts qa/journeys/lib/*.ts; do
+    for f in tools/mello-driver/src/*.ts tools/mello-driver/test/*.ts qa/journeys/*.ts qa/journeys/lib/*.ts; do
         run node --check "$f"
     done
+    run node --test "tools/mello-driver/test/*.test.ts"
 else
     printf '  ! node >= 24 not installed, skipping the driver syntax check\n'
 fi

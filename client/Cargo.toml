@@ -23,7 +23,7 @@ path = "src/main.rs"
 build-stamp = { path = "../build-stamp" }
 mello-core = { path = "../mello-core" }
 perf-scenarios = { path = "../tools/perf-scenarios" }
-slint = { version = "1.17", features = ["renderer-winit-skia", "renderer-winit-software"] }
+slint = { version = "1.18", default-features = false, features = ["std", "compat-1-2", "backend-winit", "renderer-skia", "accessibility"] }
 tokio = { workspace = true }
 log = { workspace = true }
 tracing = "0.1"
@@ -38,7 +38,7 @@ paste = "1"
 
 # Dev-only: embedded MCP server for AI-driven UI inspection (gated by the `mcp` feature).
 # Runtime is a no-op unless SLINT_MCP_PORT is set; never enabled in production builds.
-i-slint-backend-testing = { version = "1.17", optional = true, features = ["mcp"] }
+i-slint-backend-testing = { version = "=1.18.1", optional = true, features = ["mcp"] }
 
 # Only pulled in by the `testkit` feature (integration tests); also a
 # dev-dependency below so in-crate `cfg(test)` builds get it without the feature.
@@ -93,12 +93,12 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
 ] }
 windows-numerics = "0.3"
-i-slint-backend-winit = { version = "=1.17.0" }
+i-slint-backend-winit = { version = "=1.18.1" }
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 muda = "0.17"
-i-slint-backend-winit = { version = "=1.17.0", features = ["renderer-skia"] }
+i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
 
 [features]
 default = ["development"]
@@ -120,8 +120,8 @@ toml = "0.8"
 tempfile = "3"
 # Exact pin is mandatory: this crate explicitly does not follow semver and must
 # match the `slint` version. A patch bump can break compilation outright.
-i-slint-backend-testing = "=1.17.0"
+i-slint-backend-testing = "=1.18.1"
 
 [build-dependencies]
-slint-build = "1.17"
+slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
 winresource = "0.1"

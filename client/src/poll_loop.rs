@@ -221,113 +221,7 @@ impl PollState {
 
             // --- Tray context-menu + menu bar events ---
             while let Ok(event) = tray_icon::menu::MenuEvent::receiver().try_recv() {
-                let id = event.id().as_ref();
-                match id {
-                    "tray_open" => {
-                        poll_ctx.app.show().ok();
-                    }
-                    "tray_mute" => {
-                        crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
-                    }
-                    "tray_leave" => {
-                        let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
-                    }
-                    "tray_quit" => {
-                        log::info!("[quit] tray quit");
-                        slint::quit_event_loop().ok();
-                    }
-                    _ => {
-                        #[cfg(target_os = "macos")]
-                        match id {
-                            // Edit menu: send the shortcut to the focused Slint field.
-                            id if crate::edit_shortcuts::is_edit_item(id) => {
-                                crate::edit_shortcuts::forward(poll_ctx.app.window(), id);
-                            }
-                            "prefs" => {
-                                let _ = poll_ctx.cmd_tx.send(Command::ListAudioDevices);
-                                let settings = poll_ctx.settings.borrow();
-                                poll_ctx
-                                    .app
-                                    .set_settings_start_on_boot(settings.start_on_boot);
-                                poll_ctx
-                                    .app
-                                    .set_settings_start_minimized(settings.start_minimized);
-                                poll_ctx
-                                    .app
-                                    .set_settings_close_to_tray(settings.close_to_tray);
-                                poll_ctx
-                                    .app
-                                    .set_settings_auto_connect(settings.auto_connect);
-                                poll_ctx
-                                    .app
-                                    .set_settings_minimize_on_join(settings.minimize_on_join);
-                                poll_ctx
-                                    .app
-                                    .set_settings_hw_acceleration(settings.hardware_acceleration);
-                                poll_ctx
-                                    .app
-                                    .set_settings_input_volume(settings.input_volume);
-                                poll_ctx
-                                    .app
-                                    .set_settings_output_volume(settings.output_volume);
-                                poll_ctx
-                                    .app
-                                    .set_settings_noise_suppression(settings.noise_suppression);
-                                poll_ctx
-                                    .app
-                                    .set_settings_echo_cancellation(settings.echo_cancellation);
-                                poll_ctx
-                                    .app
-                                    .set_settings_echo_suppression(settings.echo_suppression);
-                                poll_ctx.app.set_settings_agc(settings.agc);
-                                poll_ctx
-                                    .app
-                                    .set_settings_ptt_mode(settings.input_mode == "push_to_talk");
-                                let ptt_enabled = settings.input_mode == "push_to_talk";
-                                let _ = poll_ctx.cmd_tx.send(Command::SetPushToTalk {
-                                    enabled: ptt_enabled,
-                                });
-                                poll_ctx
-                                    .app
-                                    .set_settings_vad_threshold(settings.vad_threshold);
-                                let ptt_label: slint::SharedString =
-                                    if let Some(ref key_str) = settings.ptt_key {
-                                        platform::hotkeys::parse_ptt_string(key_str)
-                                            .map(|(_, label)| label)
-                                            .unwrap_or_else(|| "Unassigned".into())
-                                    } else {
-                                        "Unassigned".into()
-                                    }
-                                    .into();
-                                poll_ctx.app.set_settings_ptt_key_label(ptt_label);
-                                poll_ctx.app.set_settings_open(true);
-                            }
-                            "mute" => {
-                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
-                            }
-                            "deafen" => {
-                                crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
-                            }
-                            "github" => {
-                                if let Err(e) = open::that("https://github.com/mollohq/mello") {
-                                    log::warn!("Failed to open GitHub URL: {}", e);
-                                }
-                            }
-                            "check_updates" => {
-                                if let Some(ref mut u) = *poll_ctx.updater.borrow_mut() {
-                                    u.check_for_updates();
-                                } else if let Err(e) =
-                                    open::that("https://github.com/mollohq/mello/releases")
-                                {
-                                    log::warn!("Failed to open releases URL: {}", e);
-                                }
-                            }
-                            _ => {
-                                log::debug!("Unhandled menu event: {}", id);
-                            }
-                        }
-                    }
-                }
+                handle_menu_item(poll_ctx, event.id().as_ref());
             }
 
             // --- PTT hotkey events ---
@@ -431,6 +325,58 @@ impl PollState {
                         }
                     },
                 );
+            }
+        }
+    }
+}
+
+/// Run the action of a tray menu or macOS menu bar item.
+pub(crate) fn handle_menu_item(poll_ctx: &AppContext, id: &str) {
+    match id {
+        "tray_open" => {
+            poll_ctx.app.show().ok();
+        }
+        "tray_mute" => {
+            crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
+        }
+        "tray_leave" => {
+            let _ = poll_ctx.cmd_tx.send(Command::LeaveVoice);
+        }
+        "tray_quit" => {
+            log::info!("[quit] tray quit");
+            slint::quit_event_loop().ok();
+        }
+        _ => {
+            #[cfg(target_os = "macos")]
+            match id {
+                // Edit menu: send the shortcut to the focused Slint field.
+                id if crate::edit_shortcuts::is_edit_item(id) => {
+                    crate::edit_shortcuts::forward(poll_ctx.app.window(), id);
+                }
+                // Same path as the settings button, so both fill the modal
+                // the same way (the display name was missing here).
+                "prefs" => poll_ctx.app.invoke_settings_requested(),
+                "mute" => {
+                    crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleMute);
+                }
+                "deafen" => {
+                    crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
+                }
+                "github" => {
+                    if let Err(e) = open::that("https://github.com/mollohq/mello") {
+                        log::warn!("Failed to open GitHub URL: {}", e);
+                    }
+                }
+                "check_updates" => {
+                    if let Some(ref mut u) = *poll_ctx.updater.borrow_mut() {
+                        u.check_for_updates();
+                    } else if let Err(e) = open::that("https://github.com/mollohq/mello/releases") {
+                        log::warn!("Failed to open releases URL: {}", e);
+                    }
+                }
+                _ => {
+                    log::debug!("Unhandled menu event: {}", id);
+                }
             }
         }
     }

@@ -266,8 +266,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         Settings::default().save();
     }
 
-    updater::startup_update::apply_renderer_override();
-
     // Must run before ANY Slint window (including the force-update dialog):
     // Slint reads SLINT_FONT_PATH once when the font collection is first used.
     emoji_font::setup();
@@ -380,7 +378,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
     // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the
-    // window forces platform creation) because we set the platform directly on macOS,
+    // window forces platform creation) because we set the platform directly on Windows and macOS,
     // bypassing the backend selector's auto-init.
     #[cfg(feature = "mcp")]
     {

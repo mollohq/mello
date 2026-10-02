@@ -1,7 +1,16 @@
 // mello-driver command line.
 //
 //   node tools/mello-driver/src/cli.ts run qa/journeys/<file>.ts[#export|#*] [...] [--repeat N]
+//   node tools/mello-driver/src/cli.ts list [--json] [qa/journeys/<file>.ts ...]
 //   node tools/mello-driver/src/cli.ts mcp
+//
+// `list` imports the journey modules and does not run them. With no files it
+// reads every qa/journeys/*.ts. `--json` prints one JSON array on stdout and
+// nothing else (warnings go to stderr). Each entry has id, file, export,
+// selector, flows and knownIssues. `selector` is the argument for `run`, from
+// the repo root. A default export that is also a named export is listed once,
+// under the named export. Exit code 2, with a message on stderr, when a module
+// does not import.
 //
 // Environment:
 //   MELLO_BIN         app binary (default target/debug/mello). Build it with
@@ -14,8 +23,9 @@ import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 
 import { closeBrowser } from "./browser.ts";
-import { defaultOptions, preflight } from "./config.ts";
+import { defaultOptions, preflight, repoRoot } from "./config.ts";
 import { runJourney, type Journey } from "./journey.ts";
+import { defaultJourneyFiles, formatTable, listJourneys } from "./list.ts";
 import { serveMcp } from "./mcp.ts";
 
 async function run(args: string[]): Promise<number> {
@@ -67,6 +77,19 @@ async function run(args: string[]): Promise<number> {
   return failed === 0 ? 0 : 1;
 }
 
+async function list(args: string[]): Promise<number> {
+  const bad = args.find((a) => a.startsWith("--") && a !== "--json");
+  if (bad) {
+    console.error(`unknown option ${bad}\nusage: cli.ts list [--json] [qa/journeys/<file>.ts ...]`);
+    return 2;
+  }
+  const json = args.includes("--json");
+  const given = args.filter((a) => !a.startsWith("--"));
+  const entries = await listJourneys(given.length ? given : defaultJourneyFiles(repoRoot), repoRoot);
+  console.log(json ? JSON.stringify(entries, null, 2) : formatTable(entries));
+  return 0;
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "run") {
   run(rest).then(
@@ -76,9 +99,17 @@ if (cmd === "run") {
       process.exit(2);
     },
   );
+} else if (cmd === "list") {
+  list(rest).then(
+    (code) => process.exit(code),
+    (e) => {
+      console.error(`✗ ${e instanceof Error ? e.message : e}`);
+      process.exit(2);
+    },
+  );
 } else if (cmd === "mcp") {
   serveMcp(defaultOptions());
 } else {
-  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] | cli.ts mcp");
+  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp");
   process.exit(2);
 }

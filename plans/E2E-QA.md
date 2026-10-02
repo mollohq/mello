@@ -469,6 +469,7 @@ Harness tests use synthetic core events. No P0 flow except onboarding and invite
 |---|---|---|
 | Driver | `tools/mello-driver/src/` | Node 24 TypeScript, no build step. Finds controls by label through Slint MCP and waits on the state port. Parallel reads: a click by label takes milliseconds. |
 | Journey runner | `node tools/mello-driver/src/cli.ts run <file>[#export] [--repeat N]` | Writes screenshots, state, log tails and `report.md` for each failure. |
+| Journey list | `node tools/mello-driver/src/cli.ts list [--json] [file ...]` | Lists the journeys without running them. `--json` prints one array of `{id, file, export, selector, flows, knownIssues}`; `selector` is the argument for `run`. |
 | MCP server for agents | `node tools/mello-driver/src/cli.ts mcp` | 14 tools: launch, restart, kill, open_link, controls, click, type, key, screenshot, state, events, wait_for, read_text, log_tail. No MCP SDK. |
 | State port additions | `client/src/e2e_state.rs` | Chat messages, voice channels and members, mic and deafen, open modals, link error, sign-in spinner. |
 | Fake OAuth provider | `tools/fake-oauth/`, `backend/docker-compose.e2e.yml` | Go, standard library only. Discord, Twitch, Steam, Google on their real paths. Scripted outcomes. 11 unit tests. |
