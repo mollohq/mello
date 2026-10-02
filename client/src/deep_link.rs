@@ -106,15 +106,43 @@ fn normalize_invite_code(raw: &str) -> Option<String> {
     Some(format!("{}-{}", &upper[..4], &upper[4..]))
 }
 
+/// The deep link in the command line of this process, if any.
 pub fn extract_deep_link() -> Option<String> {
-    std::env::args()
-        .nth(1)
+    deep_link_in(std::env::args().skip(1))
+}
+
+/// The deep link in `args` (argv without the program name).
+///
+/// The OS passes a `mello://` URL as the first argument. A flag such as
+/// `--build-info` or `--reset` in that place is not a deep link.
+pub fn deep_link_in<I, S>(args: I) -> Option<String>
+where
+    I: IntoIterator<Item = S>,
+    S: AsRef<str>,
+{
+    args.into_iter()
+        .next()
+        .map(|a| a.as_ref().to_string())
         .filter(|arg| arg.to_ascii_lowercase().starts_with("mello://"))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_link_in_takes_only_a_mello_url_as_first_argument() {
+        assert_eq!(
+            deep_link_in(["mello://join/ABCD-1234"]).as_deref(),
+            Some("mello://join/ABCD-1234")
+        );
+        assert_eq!(
+            deep_link_in(["MELLO://crew/x", "--reset"]).as_deref(),
+            Some("MELLO://crew/x")
+        );
+        assert_eq!(deep_link_in(["--reset", "mello://join/ABCD-1234"]), None);
+        assert_eq!(deep_link_in(Vec::<&str>::new()), None);
+    }
 
     #[test]
     fn parse_join_link() {

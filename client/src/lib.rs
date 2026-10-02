@@ -4,6 +4,7 @@ mod activity_report;
 mod app_context;
 mod autolaunch;
 mod avatar;
+mod build_info;
 pub(crate) mod callbacks;
 mod chat_ui;
 mod converters;
@@ -162,6 +163,15 @@ fn init_logging() -> Option<std::path::PathBuf> {
 /// headless UI harness (`testkit`) can link against the same wiring the real
 /// app uses, instead of re-implementing it.
 pub fn run() {
+    // `--build-info` comes first: before the Velopack hooks, logging and the
+    // single-instance lock. It must have no side effect. A QA harness runs it
+    // while another instance can be open, and a Velopack hook can change the
+    // install.
+    if build_info::requested(std::env::args().skip(1)) {
+        build_info::print_current();
+        return;
+    }
+
     Updater::run_lifecycle_hooks();
 
     let log_dir = init_logging();
@@ -189,6 +199,7 @@ pub fn run() {
 
 fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     log::info!("Starting Mello...");
+    log::info!("Build: {}", build_info::current_json());
 
     // --- Single instance enforcement ---
     // single-instance on macOS uses the name as a file path (cwd-relative),

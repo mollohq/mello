@@ -1,0 +1,9 @@
+[package]
+name = "build-stamp"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+description = "Records the git commit, the dirty flag and the build time of the workspace."
+
+# No dependencies, on purpose: this crate must build in a second.
+[dependencies]

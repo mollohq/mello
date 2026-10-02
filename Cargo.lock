@@ -818,6 +818,10 @@ dependencies = [
 ]
 
 [[package]]
+name = "build-stamp"
+version = "0.0.0-DEV"
+
+[[package]]
 name = "built"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4083,6 +4087,7 @@ dependencies = [
  "arboard",
  "auto-launch",
  "base64",
+ "build-stamp",
  "confy",
  "directories",
  "i-slint-backend-testing",
