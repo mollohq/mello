@@ -3858,3 +3858,17 @@ fn edit_menu_undo_and_redo_step_through_the_edit_history() {
         assert_eq!(h.field_text("Email"), "abc", "Redo must restore the text");
     }
 }
+
+/// The macOS menu bar's Preferences item (Cmd+,) opens settings with the
+/// user's name in the display-name field, as the settings button does. It had
+/// its own copy of the open path, and that copy left the field empty.
+#[cfg(target_os = "macos")]
+#[test]
+fn preferences_menu_item_shows_the_display_name_like_the_settings_button() {
+    let mut h = Harness::new();
+    h.app().set_user_name("b0bben".into());
+    crate::poll_loop::handle_menu_item(h.ctx(), "prefs");
+    h.pump();
+    assert!(h.app().get_settings_open(), "Preferences opens settings");
+    assert_eq!(h.field_text("DISPLAY NAME"), "b0bben");
+}
