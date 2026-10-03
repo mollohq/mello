@@ -6,6 +6,8 @@ pub mod hang_dump;
 pub mod hotkeys;
 #[cfg(target_os = "macos")]
 pub mod macos;
+#[cfg(target_os = "macos")]
+pub mod macos_url_events;
 #[cfg(target_os = "windows")]
 pub mod taskbar_toolbar;
 

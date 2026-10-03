@@ -250,6 +250,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // macOS sends a mello:// link as an Apple Event, not in argv. Before any
+    // Slint code: the event of a cold start arrives while the app finishes
+    // launching.
+    #[cfg(target_os = "macos")]
+    platform::macos_url_events::install();
+
     // --- Deep link from argv ---
     let pending_deep_link = deep_link::extract_deep_link().and_then(|url| {
         let link = deep_link::parse(&url);
