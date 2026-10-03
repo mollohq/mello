@@ -80,7 +80,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::OnboardingInviteFailed { error } => {
             crate::onboarding_invite::join_failed(ctx, error);
         }
-        Event::OnboardingFailed { reason } => {
+        Event::OnboardingFailed { reason, .. } => {
             // Release the guard: the user is still on the same step and must be
             // able to retry.
             ctx.app.set_onboarding_busy(false);

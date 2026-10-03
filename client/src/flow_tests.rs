@@ -365,6 +365,7 @@ fn retrying_finalize_reuses_the_same_device_id() {
 
     h.emit(Event::OnboardingFailed {
         reason: "Connection failed: timed out".into(),
+        join_error: None,
     });
 
     finalize(&h);
@@ -407,6 +408,7 @@ fn the_finalize_guard_releases_after_a_failure() {
 
     h.emit(Event::OnboardingFailed {
         reason: "Failed to create crew".into(),
+        join_error: None,
     });
 
     finalize(&h);
@@ -447,6 +449,7 @@ fn retrying_finalize_after_failure_preserves_the_crew_avatar() {
     // Any of the seven steps failing lands here.
     h.emit(Event::OnboardingFailed {
         reason: "Connection failed: timed out".into(),
+        join_error: None,
     });
 
     finalize(&h);
@@ -1462,6 +1465,7 @@ fn retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code() {
     let first = h.commands();
     h.emit(Event::OnboardingFailed {
         reason: "Connection failed: timed out".into(),
+        join_error: None,
     });
     finalize(&h);
     let second = h.commands();
