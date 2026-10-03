@@ -755,3 +755,42 @@ func TestGuestVoiceRoster_RejectsAnExpiredGuest(t *testing.T) {
 	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
 	assertRuntimeErrorCode(t, err, 9)
 }
+
+// ---------------------------------------------------------------------------
+// Mute and speaking from a browser guest
+// ---------------------------------------------------------------------------
+
+func voiceMember(channelID, userID string) VoiceMemberState {
+	voiceRoomsMu.RLock()
+	defer voiceRoomsMu.RUnlock()
+	return *voiceRooms[channelID].Members[userID]
+}
+
+// The lounge sends voice_mute_state and voice_speaking for the guest. Neither
+// RPC may require crew membership, or members never see the guest speak.
+func TestSeatedGuestCanSetMuteAndSpeaking(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+	ctx := ctxWithUser(testGuestID)
+
+	if _, err := VoiceMuteStateRPC(ctx, testLogger(), nil, nil, `{"muted":true,"deafened":true}`); err != nil {
+		t.Fatalf("voice_mute_state failed for a seated guest: %v", err)
+	}
+	if _, err := VoiceSpeakingRPC(ctx, testLogger(), nil, nil, `{"speaking":true}`); err != nil {
+		t.Fatalf("voice_speaking failed for a seated guest: %v", err)
+	}
+
+	m := voiceMember(testChGeneral, testGuestID)
+	if !m.Muted || !m.Deafened || !m.Speaking {
+		t.Errorf("guest state not stored: muted=%v deafened=%v speaking=%v", m.Muted, m.Deafened, m.Speaking)
+	}
+
+	voiceDirtyMu.Lock()
+	dirty := voiceDirty[testGuestCrew]
+	delete(voiceDirty, testGuestCrew)
+	voiceDirtyMu.Unlock()
+	if !dirty {
+		t.Error("expected a voice_update push to be queued for the guest's crew")
+	}
+}
