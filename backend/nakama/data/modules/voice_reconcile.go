@@ -62,27 +62,42 @@ type sfuSessionDetail struct {
 	} `json:"peers"`
 }
 
-// querySFUSession asks one SFU for the live member set of a session. Returns
-// (members, true) only on a 200; any other status (notably 404 = session
-// unknown to this SFU) or transport error returns (nil, false).
-func querySFUSession(base, password, sessionID string) (map[string]bool, bool) {
+// sfuLookup is the outcome of asking the SFUs about one session.
+type sfuLookup int
+
+const (
+	// sfuLookupFailed: a transport error or an unexpected status. Nothing is known.
+	sfuLookupFailed sfuLookup = iota
+	// sfuSessionAbsent: every SFU answered, and none has the session. An SFU
+	// drops a session when its last peer leaves, so for an SFU-only participant
+	// this is proof they are gone.
+	sfuSessionAbsent
+	// sfuSessionFound: one SFU has the session; the member set is valid.
+	sfuSessionFound
+)
+
+// querySFUSession asks one SFU for the live member set of a session.
+func querySFUSession(base, password, sessionID string) (map[string]bool, sfuLookup) {
 	url := fmt.Sprintf("%s/admin/api/session/%s", base, sessionID)
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, false
+		return nil, sfuLookupFailed
 	}
 	req.SetBasicAuth("nakama", password)
 	resp, err := sfuAdminHTTP.Do(req)
 	if err != nil {
-		return nil, false
+		return nil, sfuLookupFailed
 	}
 	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, sfuSessionAbsent
+	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, false
+		return nil, sfuLookupFailed
 	}
 	var detail sfuSessionDetail
 	if err := json.NewDecoder(resp.Body).Decode(&detail); err != nil {
-		return nil, false
+		return nil, sfuLookupFailed
 	}
 	members := make(map[string]bool, len(detail.Peers))
 	for _, p := range detail.Peers {
@@ -90,20 +105,48 @@ func querySFUSession(base, password, sessionID string) (map[string]bool, bool) {
 			members[p.UserID] = true
 		}
 	}
-	return members, true
+	return members, sfuSessionFound
 }
 
 // fetchSFUSessionMembers finds the SFU that owns sessionID and returns its live
-// member set. ok is false when no configured SFU recognizes the session (so the
-// caller must NOT prune -- the room may be P2P or the lookup transiently failed).
-func fetchSFUSessionMembers(sessionID string) (members map[string]bool, ok bool) {
-	password := os.Getenv("SFU_ADMIN_PASSWORD")
-	for _, base := range sfuAdminBases {
-		if m, found := querySFUSession(base, password, sessionID); found {
-			return m, true
+// member set. The result is sfuSessionAbsent only when every configured SFU
+// answered 404; one failed lookup makes it sfuLookupFailed.
+func fetchSFUSessionMembers(sessionID string) (map[string]bool, sfuLookup) {
+	return lookupSFUSession(sfuAdminBases, os.Getenv("SFU_ADMIN_PASSWORD"), sessionID)
+}
+
+func lookupSFUSession(bases map[string]string, password, sessionID string) (map[string]bool, sfuLookup) {
+	result := sfuSessionAbsent
+	for _, base := range bases {
+		m, state := querySFUSession(base, password, sessionID)
+		switch state {
+		case sfuSessionFound:
+			return m, sfuSessionFound
+		case sfuLookupFailed:
+			result = sfuLookupFailed
 		}
 	}
-	return nil, false
+	if len(bases) == 0 {
+		return nil, sfuLookupFailed
+	}
+	return nil, result
+}
+
+// absentFromSFU reports whether a seated user is missing from the SFU session.
+// A session no SFU has is proof only for a guest: guests can only use the SFU,
+// while a member's room may be P2P, which no SFU ever knows about.
+func absentFromSFU(state sfuLookup, sfuMembers map[string]bool, uid string, isGuest bool) (absent, known bool) {
+	switch state {
+	case sfuSessionFound:
+		return !sfuMembers[uid], true
+	case sfuSessionAbsent:
+		if isGuest {
+			return true, true
+		}
+		return false, false
+	default:
+		return false, false
+	}
 }
 
 // StartVoiceReconcile runs the reconciliation loop until ctx is cancelled.
@@ -151,21 +194,25 @@ func reconcileVoiceRooms(ctx context.Context, logger runtime.Logger, nk runtime.
 
 	for _, r := range rooms {
 		sessionID := fmt.Sprintf("voice:%s:%s", r.crewID, r.channelID)
-		sfuMembers, ok := fetchSFUSessionMembers(sessionID)
-		if !ok {
-			// Unknown session (P2P or transient lookup failure): don't carry
-			// stale miss counts into later successful polls.
+		sfuMembers, state := fetchSFUSessionMembers(sessionID)
+		if state == sfuLookupFailed {
+			// Transient lookup failure: don't carry stale miss counts into
+			// later successful polls.
 			voiceReconcileMissesMu.Lock()
 			for uid := range r.members {
 				delete(voiceReconcileMisses, r.channelID+"|"+uid)
 			}
 			voiceReconcileMissesMu.Unlock()
-			continue // session unknown to any SFU (P2P or transient) -> don't prune
+			continue
 		}
 		for uid, joinedAt := range r.members {
 			key := r.channelID + "|" + uid
 			activeKeys[key] = struct{}{}
-			if sfuMembers[uid] {
+			// The last guest in a channel whose leave was lost (a closed tab)
+			// leaves an SFU session that no longer exists. Counting that as a
+			// miss is what lets the seat go.
+			absent, known := absentFromSFU(state, sfuMembers, uid, IsGuestUser(uid))
+			if !known || !absent {
 				voiceReconcileMissesMu.Lock()
 				delete(voiceReconcileMisses, key)
 				voiceReconcileMissesMu.Unlock()
