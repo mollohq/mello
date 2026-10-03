@@ -68,9 +68,17 @@ export async function inviteAtStep2(app: App, crewName: string): Promise<void> {
   check(await app.text(crewName), `step 2 shows the invited crew "${crewName}"`);
 }
 
-/** Step 2: pick an avatar and a nickname, which creates the account and moves to step 3. */
+/**
+ * Step 2: pick an avatar and a nickname, which creates the account and moves to step 3.
+ *
+ * A user picks an avatar that they can see, so the click waits for the card's
+ * image. The selection is then checked at once: a lost click fails here, and
+ * not 30 s later on the step 3 wait.
+ */
 export async function profileAtStep2(app: App, nickname: string, avatar = 0): Promise<void> {
+  await app.waitFor(`avatar ${avatar} shows its image`, (s) => s.onboarding_step === 2 && s.avatar_loaded[avatar]);
   await app.click("Choose avatar", avatar);
+  await app.waitFor(`avatar ${avatar} selected after the click`, (s) => s.selected_avatar === avatar, 1_000);
   await app.type("CREW NICKNAME", nickname);
   await app.click("Continue");
   await app.waitFor("account created, step 3", (s) => s.onboarding_step === 3 && s.logged_in, 30_000);

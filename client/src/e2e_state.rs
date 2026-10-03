@@ -68,6 +68,11 @@ struct Snapshot {
     onboarding_invite_code_checking: bool,
     /// The welcome screen and step 2: the invited crew shows its avatar.
     onboarding_invite_crew_has_avatar: bool,
+    /// Onboarding step 2: the avatar cards that show their image, in grid order.
+    avatar_loaded: [bool; 7],
+    /// Onboarding step 2: the chosen avatar. 0 to 6 is a card in the grid,
+    /// 7 is an upload, -1 is none.
+    selected_avatar: i32,
     active_crew_id: String,
     active_crew_name: String,
     crews: Vec<String>,
@@ -238,6 +243,16 @@ fn read(app: &MainWindow) -> Snapshot {
         onboarding_invite_code_error: app.get_onboarding_invite_code_error().into(),
         onboarding_invite_code_checking: app.get_onboarding_invite_code_checking(),
         onboarding_invite_crew_has_avatar: app.get_onboarding_invite_crew_has_avatar(),
+        avatar_loaded: [
+            app.get_avatar_loaded_0(),
+            app.get_avatar_loaded_1(),
+            app.get_avatar_loaded_2(),
+            app.get_avatar_loaded_3(),
+            app.get_avatar_loaded_4(),
+            app.get_avatar_loaded_5(),
+            app.get_avatar_loaded_6(),
+        ],
+        selected_avatar: app.get_selected_avatar(),
         active_crew_id: app.get_active_crew_id().into(),
         active_crew_name: app.get_active_crew_name().into(),
         crews: crews.iter().map(|c| c.name.to_string()).collect(),

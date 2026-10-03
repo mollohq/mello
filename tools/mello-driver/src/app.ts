@@ -39,6 +39,10 @@ export type AppState = {
   onboarding_invite_code_checking: boolean;
   /** The welcome screen and step 2: the invited crew shows its avatar. */
   onboarding_invite_crew_has_avatar: boolean;
+  /** Onboarding step 2: the avatar cards that show their image, in grid order. */
+  avatar_loaded: boolean[];
+  /** Onboarding step 2: the chosen avatar. 0 to 6 is a card in the grid, 7 is an upload, -1 is none. */
+  selected_avatar: number;
   active_crew_id: string;
   active_crew_name: string;
   crews: string[];
