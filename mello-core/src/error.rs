@@ -45,4 +45,16 @@ impl Error {
             .get("code")?
             .as_i64()
     }
+
+    /// The `message` of a Nakama error response, when this error carries one.
+    pub fn server_message(&self) -> Option<String> {
+        let Error::Server(body) = self else {
+            return None;
+        };
+        serde_json::from_str::<serde_json::Value>(body)
+            .ok()?
+            .get("message")?
+            .as_str()
+            .map(str::to_string)
+    }
 }

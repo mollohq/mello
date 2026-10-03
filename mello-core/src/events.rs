@@ -120,8 +120,13 @@ pub enum Event {
     OnboardingReady {
         user: User,
     },
+    /// Finalize failed. `reason` is plain text for the user; the cause is in
+    /// the log. `join_error` is set when joining the chosen crew failed, so
+    /// the client can send the user back to pick another crew.
     OnboardingFailed {
         reason: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        join_error: Option<crate::crew::InviteError>,
     },
     /// Finalize could not join the crew of the invite link. The account
     /// exists. The client picks the text from `error`.

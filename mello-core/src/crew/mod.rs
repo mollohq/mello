@@ -75,6 +75,29 @@ impl InviteError {
             _ => Self::Failed,
         }
     }
+
+    /// Classify an error from Nakama's group join (`/v2/group/{id}/join`).
+    ///
+    /// Nakama reports a full group as INVALID_ARGUMENT with the message
+    /// "Group is full.", so code 3 alone cannot tell full from a bad id.
+    /// `InvalidCode` here means the crew does not exist.
+    pub fn from_join_error(err: &crate::error::Error) -> Self {
+        match err.server_code() {
+            Some(3) => {
+                let full = err
+                    .server_message()
+                    .is_some_and(|m| m.to_ascii_lowercase().contains("full"));
+                if full {
+                    Self::CrewFull
+                } else {
+                    Self::InvalidCode
+                }
+            }
+            Some(5) => Self::InvalidCode,
+            Some(7) | Some(9) => Self::NotAllowed,
+            _ => Self::Failed,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -116,6 +139,45 @@ mod tests {
     fn an_internal_server_error_is_not_an_invalid_code() {
         let body = r#"{"code":13,"error":{"Message":"failed to join crew","Code":13},"message":"failed to join crew"}"#;
         assert_eq!(InviteError::from_error(&server(body)), InviteError::Failed);
+    }
+
+    /// The exact body the local server answered when onboarding joined a full
+    /// crew (2026-10-03).
+    #[test]
+    fn a_full_group_join_is_crew_full_not_invalid() {
+        let body = r#"{"code":3,"message":"Group is full."}"#;
+        assert_eq!(
+            InviteError::from_join_error(&server(body)),
+            InviteError::CrewFull
+        );
+        // The invite classifier reads code 3 as a bad code; the join one must not.
+        assert_eq!(
+            InviteError::from_error(&server(body)),
+            InviteError::InvalidCode
+        );
+    }
+
+    #[test]
+    fn group_join_errors_follow_the_grpc_code() {
+        let cases = [
+            (
+                r#"{"code":5,"message":"Group not found."}"#,
+                InviteError::InvalidCode,
+            ),
+            (
+                r#"{"code":3,"message":"Invalid group ID."}"#,
+                InviteError::InvalidCode,
+            ),
+            (r#"{"code":7,"message":"banned"}"#, InviteError::NotAllowed),
+            (r#"{"code":13,"message":"internal"}"#, InviteError::Failed),
+        ];
+        for (body, want) in cases {
+            assert_eq!(InviteError::from_join_error(&server(body)), want, "{body}");
+        }
+        assert_eq!(
+            InviteError::from_join_error(&Error::NotConnected),
+            InviteError::Failed
+        );
     }
 
     #[test]

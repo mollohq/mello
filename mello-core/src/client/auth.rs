@@ -607,20 +607,24 @@ impl super::Client {
             Err(e) => {
                 log::error!("[onboarding] device auth failed: {}", e);
                 let _ = self.event_tx.send(Event::OnboardingFailed {
-                    reason: format!("Account creation failed: {}", e),
+                    reason: "Couldn't create your account. Check your connection and try again."
+                        .into(),
+                    join_error: None,
                 });
                 return;
             }
         };
 
-        if let Some(rt) = self.nakama.refresh_token() {
-            let _ = session::save(rt);
-        }
+        // The session is saved only when finalize succeeds (below). Saved
+        // here, a failed join left a session that the next launch restored
+        // into the app with no crew and no identity step. Unsaved, a retry
+        // device-auths into the same account.
 
         if let Err(e) = self.nakama.connect_ws(self.event_tx.clone()).await {
             log::error!("[onboarding] WebSocket connect failed: {}", e);
             let _ = self.event_tx.send(Event::OnboardingFailed {
-                reason: format!("Connection failed: {}", e),
+                reason: "Couldn't connect. Check your connection and try again.".into(),
+                join_error: None,
             });
             return;
         }
@@ -702,9 +706,16 @@ impl super::Client {
             }
         } else if let Some(id) = crew_id {
             if let Err(e) = self.nakama.join_group(&id).await {
-                log::error!("[onboarding] failed to join crew {}: {}", id, e);
+                let error = crate::crew::InviteError::from_join_error(&e);
+                log::error!(
+                    "[onboarding] failed to join crew {}: {:?}: {}",
+                    id,
+                    error,
+                    e
+                );
                 let _ = self.event_tx.send(Event::OnboardingFailed {
-                    reason: format!("Failed to join crew: {}", e),
+                    reason: join_failure_reason(error).into(),
+                    join_error: Some(error),
                 });
                 return;
             }
@@ -732,7 +743,8 @@ impl super::Client {
                 Err(e) => {
                     log::error!("[onboarding] failed to create crew: {}", e);
                     let _ = self.event_tx.send(Event::OnboardingFailed {
-                        reason: format!("Failed to create crew: {}", e),
+                        reason: "Couldn't create the crew. Try again.".into(),
+                        join_error: None,
                     });
                     return;
                 }
@@ -745,6 +757,10 @@ impl super::Client {
             self.handle_select_crew(cid).await;
         }
 
+        if let Some(rt) = self.nakama.refresh_token() {
+            let _ = session::save(rt);
+        }
+
         let mut updated_user = user;
         updated_user.display_name = display_name.to_string();
         let _ = self
@@ -753,9 +769,41 @@ impl super::Client {
     }
 }
 
+/// Plain text for a failed crew join during onboarding. Never the server text.
+fn join_failure_reason(error: crate::crew::InviteError) -> &'static str {
+    use crate::crew::InviteError;
+    match error {
+        InviteError::CrewFull => "That crew is full. Pick another one.",
+        InviteError::InvalidCode => "That crew no longer exists. Pick another one.",
+        InviteError::NotAllowed => "You can't join that crew. Pick another one.",
+        InviteError::Failed => "Couldn't join the crew. Check your connection and try again.",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_failed_onboarding_join_never_shows_server_text() {
+        use crate::crew::InviteError;
+        for error in [
+            InviteError::CrewFull,
+            InviteError::InvalidCode,
+            InviteError::NotAllowed,
+            InviteError::Failed,
+        ] {
+            let reason = join_failure_reason(error);
+            assert!(
+                !reason.contains('{') && !reason.contains("code"),
+                "{reason}"
+            );
+        }
+        assert_eq!(
+            join_failure_reason(InviteError::CrewFull),
+            "That crew is full. Pick another one."
+        );
+    }
 
     #[test]
     fn a_refusal_at_the_provider_reads_as_a_cancel() {
