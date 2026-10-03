@@ -2,8 +2,8 @@
 # CLAUDE.md — Mello / Mollo Tech AB
 
 ## What This Is
-Mello: Discord-meets-Parsec. Rust client (Slint UI + mello-core), C++ low-level lib (libmello),
-Go/Nakama backend. Open Core. Windows-first beta. See `specs/` for every design decision.
+Mello: A gamers best friend, a companion app. Discord-like quality in voice chat and stream with crew feed that remembers.  Rust client (Slint UI + mello-core), C++ low-level lib (libmello),
+Go/Nakama backend. Open Core. See `specs/` for every design decision.
 
 ## The Golden Rule: Read the Specs First
 Before implementing anything non-trivial, locate and read the relevant spec in `specs/XX-NAME.md`.
@@ -232,7 +232,7 @@ Enabling the feature rebuilds the `slint` crate. Run one cargo process at a
 time, or the second blocks on the artifact lock.
 
 ## Running the Client
-- Always use `.\client-prod.ps1` to start the client — there is no local backend.
+- Use `.\client-prod.sh` to start the client against production backend when applicable, otherwise `.\client-dev.sh` against local Docker-backed backend.
 
 ## Troubleshooting
 - Be systematic. Never throw changes at the wall to see what sticks.
