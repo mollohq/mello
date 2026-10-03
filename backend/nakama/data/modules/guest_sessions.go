@@ -338,6 +338,13 @@ type guestVoiceChannel struct {
 	Members   []guestVoiceMember `json:"members"`
 }
 
+// guestLiveStream says that a crew member streams now, and what game. The
+// lounge shows the card but cannot play the stream: watching needs the app.
+type guestLiveStream struct {
+	StreamerName string `json:"streamer_name"`
+	Game         string `json:"game,omitempty"`
+}
+
 type guestCrewFeedResponse struct {
 	CrewName      string                `json:"crew_name"`
 	MemberCount   int                   `json:"member_count"`
@@ -349,6 +356,7 @@ type guestCrewFeedResponse struct {
 	Sessions      []guestSessionCard    `json:"sessions,omitempty"`
 	ClipCount     int                   `json:"clip_count"`
 	VoiceChannels []guestVoiceChannel   `json:"voice_channels"`
+	LiveStreams   []guestLiveStream     `json:"live_streams"`
 }
 
 // GuestCrewFeedRPC returns the read-only crew feed behind an invite code.
@@ -381,6 +389,7 @@ func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		MemberCount:   int(group.GetEdgeCount()),
 		GuestPolicy:   guestPolicyFor(ctx, nk, crewID),
 		VoiceChannels: []guestVoiceChannel{},
+		LiveStreams:   []guestLiveStream{},
 	}
 
 	if members, _, mErr := nk.GroupUsersList(ctx, crewID, 100, nil, ""); mErr == nil {
@@ -415,6 +424,17 @@ func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 
 	if channels, chErr := GetVoiceChannels(ctx, nk, crewID); chErr == nil && channels != nil {
 		resp.VoiceChannels = projectGuestVoiceChannels(channels.Channels)
+	}
+
+	// stream_meta/{crew_id} is the live stream record that crew_state reads.
+	// The record has no game field, so the game comes from the streamer's
+	// presence, the same source as the crew's active games.
+	if stream := getActiveStreamForCrew(ctx, nk, crewID); stream.Active {
+		var game *GamePresence
+		if p, pErr := ReadPresence(ctx, nk, stream.StreamerID); pErr == nil {
+			game = p.Game
+		}
+		resp.LiveStreams = projectGuestLiveStreams(stream, game)
 	}
 
 	out, _ := json.Marshal(resp)
@@ -568,4 +588,20 @@ func projectGuestVoiceChannels(defs []*VoiceChannelDef) []guestVoiceChannel {
 		out = append(out, ch)
 	}
 	return out
+}
+
+// projectGuestLiveStreams reduces the crew's live stream to a name and a game.
+// The stream ID, streamer ID, thumbnail and viewer list stay on the server. A
+// crew has at most one live stream today (stream_meta is keyed by crew), but
+// the field is a list so that the lounge does not change if that limit goes.
+func projectGuestLiveStreams(stream *CrewStreamState, game *GamePresence) []guestLiveStream {
+	out := []guestLiveStream{}
+	if stream == nil || !stream.Active {
+		return out
+	}
+	ls := guestLiveStream{StreamerName: stream.StreamerUsername}
+	if game != nil {
+		ls.Game = game.GameName
+	}
+	return append(out, ls)
 }

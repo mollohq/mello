@@ -543,7 +543,9 @@ func TestGuestCrewFeed_PayloadHasNoUserIDs(t *testing.T) {
 	resetVoiceState()
 	seatGuestCrewVoice()
 
-	out := callGuestCrewFeed(t, seedGuestCrew())
+	nk := seedGuestCrew()
+	seedLiveStream(nk)
+	out := callGuestCrewFeed(t, nk)
 
 	var generic interface{}
 	if err := json.Unmarshal([]byte(out), &generic); err != nil {
@@ -554,9 +556,68 @@ func TestGuestCrewFeed_PayloadHasNoUserIDs(t *testing.T) {
 			t.Errorf("guest_crew_feed has a %q key at %s: %s", key, path, out)
 		}
 	}
-	for _, id := range []string{testAliceID, testBobID, testGuestID, testInviterID, testGuestCrew} {
+	for _, id := range []string{testAliceID, testBobID, testGuestID, testInviterID, testGuestCrew, testStreamID, "thumb.jpg", "viewer-uuid"} {
 		if strings.Contains(out, id) {
 			t.Errorf("guest_crew_feed leaked the ID %q: %s", id, out)
 		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_crew_feed live streams
+// ---------------------------------------------------------------------------
+
+const testStreamID = "stream_member-u_1700000000000"
+
+// seedLiveStream makes alice stream Counter-Strike 2 in the test crew.
+func seedLiveStream(nk *fakeGuestNk) {
+	nk.put(StreamMetaCollection, testGuestCrew, SystemUserID, StreamMeta{
+		StreamID:         testStreamID,
+		CrewID:           testGuestCrew,
+		StreamerID:       testAliceID,
+		StreamerUsername: "alice",
+		Title:            "ranked grind",
+		StartedAt:        "2026-10-03T18:00:00Z",
+		ThumbnailURL:     "https://cdn.example/thumb.jpg",
+		ViewerIDs:        []string{"viewer-uuid-1"},
+	})
+	nk.put(PresenceCollection, testAliceID, testAliceID, UserPresence{
+		UserID: testAliceID,
+		Status: StatusOnline,
+		Game:   &GamePresence{GameName: "Counter-Strike 2", GameID: "counter-strike-2"},
+	})
+}
+
+func TestGuestCrewFeed_LiveStreamNameAndGame(t *testing.T) {
+	resetVoiceState()
+	nk := seedGuestCrew()
+	seedLiveStream(nk)
+
+	var resp guestCrewFeedResponse
+	if err := json.Unmarshal([]byte(callGuestCrewFeed(t, nk)), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := guestLiveStream{StreamerName: "alice", Game: "Counter-Strike 2"}
+	if len(resp.LiveStreams) != 1 || resp.LiveStreams[0] != want {
+		t.Errorf("live_streams = %+v, want [%+v]", resp.LiveStreams, want)
+	}
+}
+
+func TestGuestCrewFeed_NoLiveStreamIsAnEmptyArray(t *testing.T) {
+	resetVoiceState()
+
+	out := callGuestCrewFeed(t, seedGuestCrew())
+	if !strings.Contains(out, `"live_streams":[]`) {
+		t.Errorf("expected an empty live_streams array: %s", out)
+	}
+}
+
+func TestProjectGuestLiveStreams(t *testing.T) {
+	if got := projectGuestLiveStreams(&CrewStreamState{Active: false, StreamerUsername: "ghost"}, nil); len(got) != 0 {
+		t.Errorf("an inactive stream must not be listed, got %+v", got)
+	}
+	got := projectGuestLiveStreams(&CrewStreamState{Active: true, StreamerUsername: "bob"}, nil)
+	if len(got) != 1 || got[0] != (guestLiveStream{StreamerName: "bob"}) {
+		t.Errorf("a streamer with no game presence keeps an empty game, got %+v", got)
 	}
 }
