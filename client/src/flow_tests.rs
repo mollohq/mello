@@ -11,7 +11,7 @@ use base64::Engine as _;
 use i_slint_backend_testing::ElementHandle;
 use mello_core::crew_events::{FeedEntry, FeedResponse, FeedSection};
 use mello_core::{decode_clip_waveform, Command, Event};
-use slint::Model;
+use slint::{ComponentHandle as _, Model};
 
 use crate::testkit::{Harness, MainWindow};
 use crate::FeedCardData;
@@ -3178,6 +3178,65 @@ fn entering_step_2_by_choosing_a_crew_loads_its_data() {
         listed_audio_devices(&h.commands()),
         "the happy path must load step 2's audio devices"
     );
+}
+
+/// The avatar cards that the user can click on step 2, in grid order.
+fn avatar_cards(h: &Harness) -> Vec<ElementHandle> {
+    let cards = h.controls_labelled("Choose avatar");
+    assert_eq!(cards.len(), 7, "step 2 shows seven avatar cards");
+    cards
+}
+
+/// The deal-in does not swallow a click. Step 2 deals the cards in with an
+/// opacity and scale animation. A click on a card that has not dealt in yet,
+/// or that is in the middle of the deal, selects it.
+#[test]
+fn a_click_during_the_avatar_deal_in_selects_the_avatar() {
+    let h = Harness::new();
+    resume(h.ctx(), OnboardingState::PickAvatar);
+
+    // No time has passed: no card has started its deal-in.
+    assert!(!h.app().get_avatar_deal_0());
+    avatar_cards(&h)[0].mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(
+        h.app().get_selected_avatar(),
+        0,
+        "a card before its deal-in"
+    );
+
+    // Slot 1 deals in at 60 ms and animates for 350 ms.
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(100));
+    assert!(h.app().get_avatar_deal_1());
+    avatar_cards(&h)[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    assert_eq!(h.app().get_selected_avatar(), 1, "a card in its deal-in");
+}
+
+/// An image that arrives between pointer down and pointer up replaces the
+/// card's placeholder. The click still selects the card.
+#[test]
+fn an_avatar_image_that_arrives_during_the_click_does_not_drop_it() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+
+    let h = Harness::new();
+    resume(h.ctx(), OnboardingState::PickAvatar);
+    assert!(!h.app().get_avatar_loaded_0());
+
+    let card = &avatar_cards(&h)[0];
+    let (pos, size) = (card.absolute_position(), card.size());
+    let center = slint::LogicalPosition::new(pos.x + size.width / 2.0, pos.y + size.height / 2.0);
+    let window = h.app().window();
+    window.dispatch_event(WindowEvent::PointerMoved { position: center });
+    window.dispatch_event(WindowEvent::PointerPressed {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+    h.app().set_avatar_loaded_0(true);
+    window.dispatch_event(WindowEvent::PointerReleased {
+        position: center,
+        button: PointerEventButton::Left,
+    });
+
+    assert_eq!(h.app().get_selected_avatar(), 0);
 }
 
 /// ★ Regression: a restart mid-onboarding used to resume into an empty step 2.
