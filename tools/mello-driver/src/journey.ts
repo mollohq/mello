@@ -3,10 +3,10 @@
 // `journey({...})`. The runner owns process lifetimes and artifacts; the
 // journey only describes what a user does and what must be true.
 
-import { mkdirSync, writeFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { App, DriverError, onShutdown, type AppOptions } from "./app.ts";
+import { App, clipboardFile, DriverError, onShutdown, type AppOptions } from "./app.ts";
 import type { EventWriter } from "./events.ts";
 import { startLiveShots } from "./live.ts";
 
@@ -21,6 +21,11 @@ export type JourneyContext = {
   step(title: string, fn: () => Promise<void>): Promise<void>;
   /** Fail the journey with a message unless `cond` holds. */
   expect(cond: unknown, message: string): void;
+  /**
+   * The clipboard of the machine the users run on. Every app of the run reads
+   * it, and a journey writes what the user copied (for example in the lounge).
+   */
+  clipboard: { write(text: string): void; read(): string };
 };
 
 export type Journey = {
@@ -116,6 +121,15 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
     },
     expect(cond, message) {
       if (!cond) throw new DriverError(`expectation failed: ${message}`);
+    },
+    clipboard: {
+      write(text) {
+        writeFileSync(clipboardFile(dir), text);
+      },
+      read() {
+        const file = clipboardFile(dir);
+        return existsSync(file) ? readFileSync(file, "utf8") : "";
+      },
     },
   };
 

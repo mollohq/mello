@@ -198,7 +198,7 @@ With no device account, a failed restore goes to step 1.
 
 ### 6.4 Invite-Code Card on Step 1
 
-The web lounge cannot always hand an invite to the app. A user who installed the app then has no link to follow. Step 1 has the invite-code card for this user. See [CREW-INVITES.md](features/CREW-INVITES.md) §8.5.
+The web lounge copies the invite link to the clipboard on a download, and the first launch reads it ([CREW-INVITES.md](features/CREW-INVITES.md) §7.1). The clipboard can hold something else by then. A user who installed the app then has no link to follow. Step 1 has the invite-code card for this user. See [CREW-INVITES.md](features/CREW-INVITES.md) §8.5.
 
 | Item | Rule |
 |---|---|

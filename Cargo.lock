@@ -3870,6 +3870,7 @@ dependencies = [
  "mello-core",
  "muda 0.17.1",
  "notify-rust",
+ "objc2 0.6.4",
  "open",
  "paste",
  "perf-scenarios",

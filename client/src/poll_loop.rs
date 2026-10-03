@@ -107,23 +107,9 @@ impl PollState {
                 }
             }
 
-            // --- IPC deep links from second instances ---
-            if let Some(ref listener) = *poll_ctx.ipc_listener.borrow() {
-                for msg in listener.try_recv() {
-                    if let Some(link) = crate::deep_link::parse(&msg) {
-                        log::info!("[ipc] dispatching deep link: {:?}", link);
-                        match link {
-                            crate::deep_link::DeepLink::Join { code } => {
-                                let _ = poll_ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
-                            }
-                            crate::deep_link::DeepLink::Crew { id } => {
-                                let _ = poll_ctx.cmd_tx.send(Command::SelectCrew { crew_id: id });
-                            }
-                        }
-                    } else {
-                        log::warn!("[ipc] ignoring unrecognised message: {}", msg);
-                    }
-                }
+            // --- Deep links that reach the running app (CREW-INVITES §6) ---
+            for url in received_links(poll_ctx) {
+                dispatch_running_link(poll_ctx, &url);
             }
 
             // --- Core events ---
@@ -378,6 +364,43 @@ pub(crate) fn handle_menu_item(poll_ctx: &AppContext, id: &str) {
                     log::debug!("Unhandled menu event: {}", id);
                 }
             }
+        }
+    }
+}
+
+/// `mello://` links that reached the app since the last tick: relayed by a
+/// second instance, or sent by macOS as an Apple Event.
+fn received_links(ctx: &AppContext) -> Vec<String> {
+    #[allow(unused_mut)]
+    let mut links = ctx
+        .ipc_listener
+        .borrow()
+        .as_ref()
+        .map(|listener| listener.try_recv())
+        .unwrap_or_default();
+    #[cfg(target_os = "macos")]
+    links.extend(crate::platform::macos_url_events::take());
+    links
+}
+
+/// Dispatch a link that reached the running app.
+///
+/// The app is past startup, so the link does not wait in
+/// `pending_deep_link`. A join link resolves now. The answer opens the
+/// welcome screen for a fresh install, and the join modal for anyone else
+/// (`handlers::crew`).
+fn dispatch_running_link(ctx: &AppContext, url: &str) {
+    let Some(link) = crate::deep_link::parse(url) else {
+        log::warn!("[deep-link] ignoring unrecognised message: {url}");
+        return;
+    };
+    log::info!("[deep-link] dispatching {link:?}");
+    match link {
+        crate::deep_link::DeepLink::Join { code } => {
+            let _ = ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
+        }
+        crate::deep_link::DeepLink::Crew { id } => {
+            let _ = ctx.cmd_tx.send(Command::SelectCrew { crew_id: id });
         }
     }
 }

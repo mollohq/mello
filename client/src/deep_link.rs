@@ -106,6 +106,41 @@ fn normalize_invite_code(raw: &str) -> Option<String> {
     Some(format!("{}-{}", &upper[..4], &upper[4..]))
 }
 
+/// The longest text that [`lounge_link_code`] reads. A join link is about 35
+/// bytes. A longer text on the clipboard is something else.
+const MAX_LOUNGE_LINK_LEN: usize = 256;
+
+/// The invite code in a lounge join link on the clipboard (CREW-INVITES §7).
+///
+/// Stricter than [`parse_invite_input`]: the user did not type this text.
+/// Only `https://{lounge_host}/join/{code}` counts. `http`, `www.`, a
+/// trailing slash, a query and a fragment are allowed. A bare code, a deep
+/// link and any other text return `None`. An empty `lounge_host` accepts
+/// any host.
+pub fn lounge_link_code(text: &str, lounge_host: &str) -> Option<String> {
+    if text.len() > MAX_LOUNGE_LINK_LEN {
+        return None;
+    }
+    let lower = text.trim().to_ascii_lowercase();
+    let rest = ["https://", "http://"]
+        .iter()
+        .find_map(|scheme| lower.strip_prefix(scheme))?;
+    let (host, path) = rest.split_once('/')?;
+    if !lounge_host.is_empty() {
+        let want = lounge_host.to_ascii_lowercase();
+        if host != want && host.strip_prefix("www.") != Some(want.as_str()) {
+            return None;
+        }
+    }
+    if !path.starts_with("join/") {
+        return None;
+    }
+    match parse(&format!("mello://{path}"))? {
+        DeepLink::Join { code } => normalize_invite_code(&code),
+        DeepLink::Crew { .. } => None,
+    }
+}
+
 /// The deep link in the command line of this process, if any.
 pub fn extract_deep_link() -> Option<String> {
     deep_link_in(std::env::args().skip(1))
@@ -294,6 +329,65 @@ mod tests {
         ] {
             assert_eq!(invite(input), None, "{input:?}");
         }
+    }
+
+    #[test]
+    fn lounge_link_code_takes_a_join_link_on_the_lounge_host() {
+        for text in [
+            "https://m3llo.app/join/ABCD-1234",
+            "http://m3llo.app/join/ABCD-1234",
+            "https://www.m3llo.app/join/ABCD-1234",
+            "HTTPS://M3LLO.APP/JOIN/abcd-1234",
+            "https://m3llo.app/join/ABCD-1234/",
+            "https://m3llo.app/join/ABCD-1234?ref=lounge#top",
+            "  https://m3llo.app/join/abcd1234\n",
+        ] {
+            assert_eq!(
+                lounge_link_code(text, "m3llo.app").as_deref(),
+                Some("ABCD-1234"),
+                "{text:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn lounge_link_code_ignores_everything_else() {
+        let long = format!("https://m3llo.app/join/ABCD-1234?{}", "x".repeat(300));
+        for text in [
+            "",
+            "ABCD-1234",
+            "mello://join/ABCD-1234",
+            "m3llo.app/join/ABCD-1234",
+            "https://example.com/join/ABCD-1234",
+            "https://notm3llo.app/join/ABCD-1234",
+            "https://m3llo.app.example.com/join/ABCD-1234",
+            "https://user@m3llo.app/join/ABCD-1234",
+            "https://m3llo.app:8443/join/ABCD-1234",
+            "https://m3llo.app/crew/ABCD-1234",
+            "https://m3llo.app/join/",
+            "https://m3llo.app/join/ABCD-1234/extra",
+            "https://m3llo.app/join/ABCD-1234 and some text",
+            "look at https://m3llo.app/join/ABCD-1234",
+            "hunter2",
+            long.as_str(),
+        ] {
+            assert_eq!(lounge_link_code(text, "m3llo.app"), None, "{text:?}");
+        }
+    }
+
+    #[test]
+    fn lounge_link_code_with_no_host_accepts_any_host() {
+        assert_eq!(
+            lounge_link_code("http://localhost:8788/join/DEVS-0001", "").as_deref(),
+            Some("DEVS-0001")
+        );
+        assert_eq!(
+            lounge_link_code("https://m3llo.app/join/ABCD-1234", "").as_deref(),
+            Some("ABCD-1234")
+        );
+        // Still a join link and nothing else.
+        assert_eq!(lounge_link_code("ABCD-1234", ""), None);
+        assert_eq!(lounge_link_code("mello://join/ABCD-1234", ""), None);
     }
 
     #[test]

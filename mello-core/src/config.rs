@@ -20,6 +20,11 @@ pub struct Config {
     pub google_client_secret: Option<String>,
     pub discord_client_id: Option<String>,
     pub twitch_client_id: Option<String>,
+    /// Host of the web lounge, for example `m3llo.app`. A fresh install takes
+    /// an invite from the clipboard only when the link is on this host. Empty
+    /// means any host. Baked in at compile time from `LOUNGE_HOST`.
+    #[serde(default)]
+    pub lounge_host: String,
 }
 
 impl Config {
@@ -38,6 +43,7 @@ impl Config {
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),
             discord_client_id: option_env!("DISCORD_CLIENT_ID").map(Into::into),
             twitch_client_id: option_env!("TWITCH_CLIENT_ID").map(Into::into),
+            lounge_host: option_env!("LOUNGE_HOST").unwrap_or_default().into(),
         }
     }
 
@@ -113,6 +119,7 @@ impl Default for Config {
             google_client_secret: option_env!("GOOGLE_CLIENT_SECRET").map(Into::into),
             discord_client_id: option_env!("DISCORD_CLIENT_ID").map(Into::into),
             twitch_client_id: option_env!("TWITCH_CLIENT_ID").map(Into::into),
+            lounge_host: option_env!("LOUNGE_HOST").unwrap_or_default().into(),
         }
     }
 }

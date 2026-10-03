@@ -13,9 +13,15 @@
 //! A user with a device account, or a logged-in user, keeps the join modal:
 //! the pending link is sent after sign-in (`handlers::auth`).
 //!
-//! The web lounge cannot always hand the invite to the app. Step 1 has the
+//! The web lounge copies the invite link to the clipboard when the user
+//! downloads the app. On the first launch of a fresh install with no deep
+//! link, startup reads the clipboard once. A join link on the lounge host
+//! takes the path of a deep link. Any other text is ignored: it is not
+//! logged, stored or sent, and the clipboard is not changed.
+//!
+//! The clipboard can also hold something else. Step 1 has the
 //! invite-code card for that: the user pastes the link or the code, and the
-//! resolve takes the same path as a deep link (CREW-INVITES §7.1). The card
+//! resolve takes the same path as a deep link (CREW-INVITES §8.5). The card
 //! also works for a user with a device account who logged out: that user is
 //! on step 1, and finalize joins the crew into the existing account.
 
@@ -71,11 +77,22 @@ fn opens_onboarding_at(
 /// and step 1 does not show first. Any other link stays pending until the
 /// user signs in.
 pub fn dispatch_at_startup(ctx: &AppContext, state: OnboardingState) {
+    // Taken on every start, so the clipboard is read once at most.
+    let clipboard = ctx.startup_clipboard.borrow_mut().take();
     let has_device_account = ctx.settings.borrow().has_device_account();
     if !opens_onboarding_at(state, false, has_device_account, false) {
         return;
     }
     show_pending(ctx);
+
+    // Only on `Loading`, the first launch. A later launch is on step 1 or
+    // further, and a link the user declined there must not open again.
+    if state == OnboardingState::Loading && ctx.pending_deep_link.borrow().is_none() {
+        if let Some(code) = clipboard.and_then(StartupClipboard::invite_code) {
+            log::info!("[invite] fresh install: the clipboard holds a lounge invite");
+            *ctx.pending_deep_link.borrow_mut() = Some(DeepLink::Join { code });
+        }
+    }
 
     let is_join = matches!(*ctx.pending_deep_link.borrow(), Some(DeepLink::Join { .. }));
     if !is_join {
@@ -84,6 +101,51 @@ pub fn dispatch_at_startup(ctx: &AppContext, state: OnboardingState) {
     if let Some(DeepLink::Join { code }) = ctx.pending_deep_link.borrow_mut().take() {
         log::info!("[invite] fresh install opened from an invite — resolving {code} before step 2");
         let _ = ctx.cmd_tx.send(Command::ResolveCrewInvite { code });
+    }
+}
+
+/// A file that replaces the system clipboard in an `e2e` build.
+#[cfg(feature = "e2e")]
+pub const E2E_CLIPBOARD_ENV: &str = "MELLO_E2E_CLIPBOARD_FILE";
+
+/// The clipboard, read at most once by [`dispatch_at_startup`].
+///
+/// A reader instead of the text: startup reads the clipboard only for a
+/// fresh install with no deep link. Tests give a reader that does not touch
+/// the system clipboard.
+pub struct StartupClipboard {
+    /// The lounge host from the build config. Empty: any host.
+    pub lounge_host: String,
+    pub read: Box<dyn FnOnce() -> Option<String>>,
+}
+
+impl StartupClipboard {
+    /// The system clipboard, through `arboard`.
+    ///
+    /// An `e2e` build reads the file in `MELLO_E2E_CLIPBOARD_FILE` instead,
+    /// when it is set. The driver gives each journey one file: the clipboard
+    /// of its machine. No journey reads the clipboard of the developer.
+    pub fn system(lounge_host: String) -> Self {
+        #[cfg(feature = "e2e")]
+        if let Some(path) = std::env::var_os(E2E_CLIPBOARD_ENV) {
+            log::info!("[e2e] the clipboard is the file {}", path.to_string_lossy());
+            return Self {
+                lounge_host,
+                read: Box::new(move || std::fs::read_to_string(path).ok()),
+            };
+        }
+        Self {
+            lounge_host,
+            read: Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok()),
+        }
+    }
+
+    /// The invite code, when the clipboard holds a lounge join link.
+    ///
+    /// The text is dropped here. Text that is not a join link is not logged.
+    fn invite_code(self) -> Option<String> {
+        let text = (self.read)()?;
+        crate::deep_link::lounge_link_code(&text, &self.lounge_host)
     }
 }
 

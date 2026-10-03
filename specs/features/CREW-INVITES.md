@@ -19,7 +19,9 @@ without an account. Streams, replays, clips and chat need the app.
 
 **Deep link format:** `mello://join/{code}`
 
-The deep link is still used by the client. The lounge does not fire it.
+The lounge does not fire the deep link on its own. Its "Open in m3llo"
+button opens it (§9.2). On a download, the lounge copies the web link to the
+clipboard, and a fresh install reads it on its first launch (§7.1).
 
 ---
 
@@ -231,13 +233,19 @@ The `DeepLink` enum handles two URL patterns:
 
 Leading and trailing spaces do not matter. The invite-code card (§8.5) and the Discover field (§8.4) both call this function.
 
+`lounge_link_code(text, lounge_host)` reads the clipboard at startup (§7.1). It is stricter than `parse_invite_input`, because the user did not type the text. It accepts only `https://{lounge_host}/join/{code}`, with `http`, `www.`, a trailing slash, a query or a fragment. A bare code, a deep link, a text longer than 256 bytes and any other text return `None`. An empty `lounge_host` accepts any host.
+
 `extract_deep_link()` reads `argv[1]` at startup. The `mello://` scheme is registered in `Cargo.toml` via `osx_url_schemes = ["mello"]` for macOS app bundles.
 
 ---
 
-## 6. Client: IPC Relay for Deep Links
+## 6. Client: Deep Links to a Running App
 
-**File:** `client/src/ipc.rs`
+**Files:** `client/src/ipc.rs`, `client/src/platform/macos_url_events.rs`, `client/src/poll_loop.rs`
+
+A deep link can reach an app that already runs. Windows and Linux start a second instance with the URL in argv. macOS does not.
+
+### 6.1 Windows and Linux: IPC relay
 
 When m3llo is already running and the OS launches a second instance (via `mello://join/...`), the second instance must relay the URL to the running instance instead of silently dropping it.
 
@@ -246,9 +254,27 @@ When m3llo is already running and the OS launches a second instance (via `mello:
 - **macOS/Linux:** Unix domain socket at `/tmp/app.mello.desktop.sock`. The first instance binds a non-blocking `UnixListener`. The second instance connects, writes the URL as a newline-terminated string, and exits.
 - **Windows:** Named pipe at `\\.\pipe\app.mello.desktop`. The first instance runs a background thread that blocks on `ConnectNamedPipe` in a loop, reading one line per connection and forwarding it via `mpsc` channel. The second instance opens the pipe as a regular file and writes the URL.
 
-The poll loop (`poll_loop.rs`, 50ms timer) calls `ipc_listener.try_recv()` each tick. Received URLs are parsed with `deep_link::parse()` and dispatched immediately as `Command::ResolveCrewInvite` or `Command::SelectCrew` — no `pending_deep_link` needed since the app is already authenticated and running.
-
 **Cleanup:** The `IpcListener` removes the socket file on drop (Unix). The socket is also cleaned up before bind to handle stale files from crashes.
+
+### 6.2 macOS: Apple Event
+
+macOS never puts the URL in argv, and it does not start a second instance. LaunchServices sends a `kAEGetURL` Apple Event to the app: at a cold start, and while the app runs.
+
+`macos_url_events::install()` registers a handler with `NSAppleEventManager`. `lib.rs` calls it before any Slint code. AppKit can install its own `kAEGetURL` handler while the app finishes launching. The module therefore also registers again on `NSApplicationWillFinishLaunchingNotification`. The handler queues the URL.
+
+At a cold start the event arrives after startup. The URL takes the path of §6.3, not `pending_deep_link`.
+
+### 6.3 Dispatch
+
+The poll loop (`poll_loop.rs`, 100 ms timer) takes the relayed URLs and the macOS queue on each tick. `dispatch_running_link` parses each URL with `deep_link::parse()` and sends `Command::ResolveCrewInvite` or `Command::SelectCrew` at once. It does not use `pending_deep_link`.
+
+The resolve answer decides the screen (`handlers::crew`). For a fresh install, `opens_onboarding` is true on step 1, and the answer opens the welcome screen (§7). For anyone else it opens the join modal (§8.3).
+
+> **The relay on step 1 is the lounge's second way in.** The installer can
+> start the app before the user presses "Open in m3llo". The link then
+> reaches an app that shows step 1. It must open the welcome screen, not the
+> join modal. `flow_tests::a_relayed_join_link_on_step_one_opens_the_welcome_screen`
+> sends the link over a real IPC endpoint and checks this.
 
 ---
 
@@ -261,6 +287,28 @@ On startup, `extract_deep_link()` parses `argv[1]` into a `DeepLink` and stores 
 **Fresh install** (no session, no device account, onboarding before the account exists): a join link is resolved at once, before an account exists. Onboarding skips step 1 and opens the welcome screen. It names the inviter and the crew. "Join {crew}" opens step 2, and finalize joins the crew by its invite code. "Not now" opens step 1 and forgets the invite. Step 2 has "Back", which opens the welcome screen again with the invite kept. The crew tile on these screens shows the crew avatar (§8.3). See [01-CLIENT.md](../01-CLIENT.md) §6.2. File: `client/src/onboarding_invite.rs`.
 
 An invite typed in the card on step 1 (§8.5) takes the same path, also for a machine with a device account.
+
+### 7.1 The invite on the clipboard
+
+The installer cannot carry the invite. On a download the lounge copies `https://m3llo.app/join/{code}` to the clipboard (§9.2). The app reads it once, in `onboarding_invite::dispatch_at_startup`.
+
+The client reads the clipboard only when all of these are true:
+
+- The machine is a fresh install: `opens_onboarding` is true.
+- Startup resumes `Loading`. This is the first launch. A later launch is on step 1 or further. An invite that the user declined with "Not now" must not open again.
+- No deep link arrived in argv.
+
+The client reads the text with `lounge_link_code` (§5) and the lounge host. A valid code becomes `pending_deep_link`, and takes the path of a deep link.
+
+Any other text is ignored. The client does not log, store or send it. The client does not change the clipboard.
+
+**e2e.** An `e2e` build reads the file in `MELLO_E2E_CLIPBOARD_FILE` instead of the system clipboard. The driver gives each journey run one file, the clipboard of its machine. `qa/journeys/invite-lounge-download.ts` (flow INV-10) drives the local lounge and both ways into the app. It needs the lounge on `localhost:8788` (`npm run dev` in mello-site).
+
+**Lounge host.** `Config::lounge_host` in mello-core, next to `nakama_host`. It is set at compile time from `LOUNGE_HOST`. `release.yml` sets `m3llo.app`. A build without it has an empty host, and accepts a join link on any host. Use this for a local lounge.
+
+**macOS.** A deep link at a cold start arrives after startup (§6.2). Startup can then read the clipboard first. When both hold an invite, the deep link resolves last and replaces the clipboard invite.
+
+**A second way in.** The user can copy something else before the first launch. The lounge's "Open in m3llo" button then carries the invite (§6.3).
 
 **Any other case:** the link is dispatched after authentication completes:
 
@@ -409,10 +457,24 @@ An **invite frame** wraps the client. The frame is not from the client: it
 carries the wordmark, the inviter, the crew name and the install button.
 
 The frame also has an **"Open in m3llo"** button. It opens `mello://join/{code}`
-for a guest who has the app installed. After a download, the same button reads
-"Installed? Open m3llo". The installed app then shows the welcome screen
-([01-CLIENT.md](../01-CLIENT.md) §6.2). The download URL has no `?invite=`
-parameter.
+for a guest who has the app installed. After a download, the frame shows
+"Installed?" and an "Open m3llo" button. The installed app then shows the welcome
+screen ([01-CLIENT.md](../01-CLIENT.md) §6.2). The download URL has no `?invite=`
+parameter: an installer cannot read it.
+
+**On a download** (`main.js`, `onDownload`), from the frame, the rail or a gate:
+
+1. The lounge writes `https://m3llo.app/join/{code}` to the clipboard with
+   `navigator.clipboard.writeText`. The write happens first, inside the click:
+   a browser allows it only during a user gesture.
+2. The browser downloads the installer. The page stays, and voice keeps running.
+3. The gate opens in the **installed state**: "Install, then open m3llo", an
+   **"Open in m3llo"** button and "Keep listening in the browser".
+4. When the write succeeds, the gate shows "Your invite is copied. m3llo picks
+   it up when it opens." When it fails, the gate shows no line. The button
+   stays.
+
+The app reads the clipboard on its first launch (§7.1).
 
 ### 9.3 Joining voice
 
@@ -595,5 +657,7 @@ Overview tab.
 - Invite link in crew discovery or public directory
 - A `guest_policy` control in crew settings
 
-- Deferred deep link. The installer does not carry the code. The lounge's
-  "Open in m3llo" button (§9) opens the link in the installed app instead.
+- Deferred deep link through the installer or a server. The installer does
+  not carry the code. The server keeps no state for an install: no machine ID
+  and no IP address. The invite goes through the clipboard (§7.1), and the
+  lounge's "Open in m3llo" button (§9.2) is the second way in.

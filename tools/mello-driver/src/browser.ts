@@ -1,5 +1,5 @@
 // The headless browser for the parts of a journey that happen outside the
-// app: a provider's consent page (plans/E2E-QA.md §8) and, later, the web
+// app: a provider's consent page (plans/E2E-QA.md §8) and the web
 // lounge. Playwright loads on first use, so journeys without a browser step
 // do not need it installed.
 
@@ -90,4 +90,77 @@ async function waitForBrowserUrl(app: App, timeoutMs: number): Promise<string> {
     await sleep(100);
   }
   throw new DriverError(`${app.name}: the app did not start a browser sign-in within ${timeoutMs} ms`);
+}
+
+// ── The web lounge (mello-site/lounge) ─────────────────────────────
+
+/** The lounge of the local stack: `npm run dev` in mello-site. */
+export const LOUNGE = process.env.MELLO_E2E_LOUNGE_URL ?? "http://localhost:8788";
+
+/** True when the local lounge answers. */
+export async function loungeUp(): Promise<boolean> {
+  try {
+    return (await fetch(`${LOUNGE}/join/NONE-0000`)).status < 500;
+  } catch {
+    return false;
+  }
+}
+
+/** What the lounge did when the guest pressed its install button. */
+export type LoungeDownload = {
+  /** The installer URL the browser asked for. It gets an empty file. */
+  installer: string;
+  /** The text the lounge put on the clipboard, or "" when it put none. */
+  copied: string;
+  /** The gate shows "Your invite is copied. …". */
+  copiedLineShown: boolean;
+  /** The href of the gate's "Open in m3llo" button. */
+  openLink: string;
+};
+
+/**
+ * A guest opens the invite in the lounge and presses "Install m3llo now".
+ *
+ * The browser grants the clipboard, as Chrome does for a click. The installer
+ * is an empty file: a journey runs the app it already has. The browser's
+ * clipboard is its own, so the journey hands `copied` to the machine's
+ * clipboard (`ctx.clipboard`) itself.
+ */
+export async function downloadFromLounge(code: string): Promise<LoungeDownload> {
+  const context = await (await browser()).newContext();
+  await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: LOUNGE });
+  const page = await context.newPage();
+  let installer = "";
+  // Answer with an empty attachment, as the real installer is one: the
+  // browser starts a download and the lounge page stays. An aborted request
+  // would replace the page with an error page.
+  await page.route("https://github.com/**", (route: any) => {
+    installer = route.request().url();
+    return route.fulfill({
+      status: 200,
+      headers: { "Content-Type": "application/octet-stream", "Content-Disposition": 'attachment; filename="m3llo-Setup"' },
+      body: "",
+    });
+  });
+  try {
+    await page.goto(`${LOUNGE}/join/${encodeURIComponent(code)}`);
+    // The join panel dims the page until the guest answers it.
+    const notNow = page.getByRole("button", { name: "Not now" });
+    if (await notNow.isVisible().catch(() => false)) await notNow.click();
+    await page.getByRole("button", { name: "Install m3llo now" }).click();
+
+    const gate = page.locator(".gate[open]");
+    const open = gate.getByRole("link", { name: "Open in m3llo" });
+    await open.waitFor({ state: "visible", timeout: 10_000 });
+    const copiedLine = gate.getByText("Your invite is copied. m3llo picks it up when it opens.");
+    // The line shows once the clipboard write answers.
+    const copiedLineShown = await copiedLine
+      .waitFor({ state: "visible", timeout: 5_000 })
+      .then(() => true, () => false);
+    const copied = await page.evaluate(() => navigator.clipboard.readText()).catch(() => "");
+    if (!installer) throw new DriverError("the lounge did not ask for an installer");
+    return { installer, copied, copiedLineShown, openLink: (await open.getAttribute("href")) ?? "" };
+  } finally {
+    await context.close();
+  }
 }

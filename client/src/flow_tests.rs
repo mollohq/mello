@@ -1477,6 +1477,180 @@ fn retrying_finalize_with_an_invite_keeps_the_device_id_and_the_code() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// The lounge invite on the clipboard, and the lounge's "Open in m3llo" button
+// ---------------------------------------------------------------------------
+
+/// A clipboard for startup that holds `text` and records whether startup read
+/// it. The lounge host is the release one.
+fn clipboard_with(h: &Harness, text: &'static str) -> std::rc::Rc<std::cell::Cell<bool>> {
+    let read = std::rc::Rc::new(std::cell::Cell::new(false));
+    let flag = read.clone();
+    *h.ctx().startup_clipboard.borrow_mut() = Some(crate::onboarding_invite::StartupClipboard {
+        lounge_host: "m3llo.app".into(),
+        read: Box::new(move || {
+            flag.set(true);
+            Some(text.to_string())
+        }),
+    });
+    read
+}
+
+fn resolved_codes(cmds: &[Command]) -> Vec<String> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::ResolveCrewInvite { code } => Some(code.clone()),
+            _ => None,
+        })
+        .collect()
+}
+
+/// ★ The lounge copies the invite link when the user downloads the app. The
+/// first launch of the fresh install finds it on the clipboard and opens the
+/// welcome screen for that crew, with no deep link.
+#[test]
+fn a_lounge_link_on_the_clipboard_opens_the_welcome_screen_on_first_launch() {
+    let mut h = Harness::new();
+    let read = clipboard_with(&h, "https://m3llo.app/join/NITE-0001");
+
+    crate::onboarding::start(h.ctx());
+    let cmds = h.commands();
+    assert!(read.get(), "a fresh install reads the clipboard");
+    let resolve = cmds
+        .iter()
+        .position(|c| matches!(c, Command::ResolveCrewInvite { code } if code == "NITE-0001"));
+    let discover = cmds
+        .iter()
+        .position(|c| matches!(c, Command::DiscoverCrews { .. }));
+    assert!(
+        resolve.is_some() && resolve < discover,
+        "the invite resolves before crew discovery, as a deep link does: {cmds:?}"
+    );
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(welcome_is_visible(&h), "the welcome screen for the crew");
+    assert_eq!(h.app().get_onboarding_step(), 5);
+}
+
+/// Anything on the clipboard that is not a join link on the lounge host is
+/// ignored. Startup opens step 1 as usual.
+#[test]
+fn other_clipboard_text_is_ignored() {
+    for text in [
+        "hunter2",
+        "NITE-0001",
+        "mello://join/NITE-0001",
+        "https://example.com/join/NITE-0001",
+    ] {
+        let mut h = Harness::new();
+        let read = clipboard_with(&h, text);
+        crate::onboarding::start(h.ctx());
+        assert!(read.get());
+        let cmds = h.commands();
+        assert!(resolved_codes(&cmds).is_empty(), "{text:?}: {cmds:?}");
+
+        h.emit(Event::DiscoverCrewsLoaded {
+            crews: sample_crews(3),
+            cursor: None,
+        });
+        assert_eq!(h.app().get_onboarding_step(), 1, "{text:?}");
+    }
+}
+
+/// Startup reads the clipboard only on the first launch of a fresh install,
+/// and only with no deep link.
+#[test]
+fn startup_reads_the_clipboard_only_on_a_first_launch_with_no_deep_link() {
+    // A deep link arrived: it wins, and the clipboard is not read.
+    let mut h = Harness::new();
+    let read = clipboard_with(&h, "https://m3llo.app/join/CLIP-0001");
+    *h.ctx().pending_deep_link.borrow_mut() = Some(crate::deep_link::DeepLink::Join {
+        code: "NITE-0001".into(),
+    });
+    crate::onboarding::start(h.ctx());
+    assert!(!read.get(), "a deep link arrived: no clipboard read");
+    assert_eq!(resolved_codes(&h.commands()), vec!["NITE-0001".to_string()]);
+
+    // A device account: not a fresh install.
+    let mut h = Harness::new();
+    h.settings().borrow_mut().device_id = Some("dev-abc".into());
+    h.settings().borrow_mut().onboarding_step = 2;
+    let read = clipboard_with(&h, "https://m3llo.app/join/CLIP-0001");
+    crate::onboarding::start(h.ctx());
+    assert!(!read.get(), "a device account: no clipboard read");
+    assert!(resolved_codes(&h.commands()).is_empty());
+
+    // A later launch on step 1, for example after "Not now": the declined
+    // invite must not open again.
+    let mut h = Harness::new();
+    h.settings().borrow_mut().onboarding_step = 1;
+    let read = clipboard_with(&h, "https://m3llo.app/join/CLIP-0001");
+    crate::onboarding::start(h.ctx());
+    assert!(!read.get(), "not the first launch: no clipboard read");
+    assert!(resolved_codes(&h.commands()).is_empty());
+
+    // A returning user.
+    let h = Harness::new();
+    h.settings().borrow_mut().onboarding_step = 4;
+    let read = clipboard_with(&h, "https://m3llo.app/join/CLIP-0001");
+    crate::onboarding::start(h.ctx());
+    assert!(!read.get(), "a returning user: no clipboard read");
+}
+
+/// ★ CREW-INVITES §7: the installer starts the app, which opens step 1 with no
+/// invite (the user copied something else). The user then presses "Open in
+/// m3llo" in the lounge. The OS starts a second instance, which relays the
+/// link to the running app over the real IPC endpoint. The running app must
+/// open the welcome screen, not the join modal.
+#[test]
+fn a_relayed_join_link_on_step_one_opens_the_welcome_screen() {
+    let mut h = Harness::new();
+    let endpoint =
+        crate::ipc::endpoint_name(&format!("mello-relay-step-one.{}", std::process::id()));
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind the IPC endpoint");
+    *h.ctx().ipc_listener.borrow_mut() = Some(listener);
+    step_one_fresh_install(&mut h);
+
+    // What the second instance does in `lib.rs`.
+    assert!(crate::ipc::send_to_running(
+        &endpoint,
+        "mello://join/NITE-0001"
+    ));
+
+    // The listener hands the line over on its own thread (Windows). Wait for
+    // the command that the test asserts on, with a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let mut codes = Vec::new();
+    while codes.is_empty() && std::time::Instant::now() < deadline {
+        h.pump();
+        codes = resolved_codes(&h.commands());
+        if codes.is_empty() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    assert_eq!(
+        codes,
+        vec!["NITE-0001".to_string()],
+        "the running app resolves the link"
+    );
+
+    h.emit(Event::CrewInviteResolved {
+        code: "NITE-0001".into(),
+        invite: sample_invite(),
+    });
+    assert!(welcome_is_visible(&h), "the welcome screen for the crew");
+    assert_eq!(h.app().get_onboarding_step(), 5);
+    assert!(!join_crew_modal_is_visible(&h), "no join modal on step 1");
+    assert_eq!(
+        h.settings().borrow().pending_invite_code.as_deref(),
+        Some("NITE-0001"),
+        "finalize joins this crew"
+    );
+}
+
 /// INV-05: an invalid invite code on a fresh install shows step 1 with a
 /// message. Step 1 offers a way forward. No join modal opens.
 #[test]

@@ -216,6 +216,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: INV-10
+    title: Install from the web lounge and keep the invite (the lounge copies the link; the first launch reads the clipboard, or "Open in m3llo" reaches the app on step 1)
+    priority: P0
+    users: 2
+    harness: [a_lounge_link_on_the_clipboard_opens_the_welcome_screen_on_first_launch, other_clipboard_text_is_ignored, startup_reads_the_clipboard_only_on_a_first_launch_with_no_deep_link, a_relayed_join_link_on_step_one_opens_the_welcome_screen]
+    journeys: [qa/journeys/invite-lounge-download.ts]
+    protocol: []
+    issues: []
+
   # ── Crew ──────────────────────────────────────────────────────
 
   - id: CREW-01

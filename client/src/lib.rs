@@ -250,6 +250,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }
     };
 
+    // macOS sends a mello:// link as an Apple Event, not in argv. Before any
+    // Slint code: the event of a cold start arrives while the app finishes
+    // launching.
+    #[cfg(target_os = "macos")]
+    platform::macos_url_events::install();
+
     // --- Deep link from argv ---
     let pending_deep_link = deep_link::extract_deep_link().and_then(|url| {
         let link = deep_link::parse(&url);
@@ -354,9 +360,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
     let share_game_activity = settings.borrow().share_game_activity;
 
+    let config = nakama_config();
+    let lounge_host = config.lounge_host.clone();
     rt.spawn(async move {
         let mut client = Client::new(
-            nakama_config(),
+            config,
             event_tx,
             loopback,
             frame_slot_for_client,
@@ -580,6 +588,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),
         ipc_listener: Rc::new(RefCell::new(ipc_listener)),
+        startup_clipboard: Rc::new(RefCell::new(Some(
+            onboarding_invite::StartupClipboard::system(lounge_host),
+        ))),
         stream_frame_timer: stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: native_frame_slot.clone(),
