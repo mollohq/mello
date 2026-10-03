@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/heroiclabs/nakama-common/api"
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 func resetGuestState() {
@@ -620,4 +621,137 @@ func TestProjectGuestLiveStreams(t *testing.T) {
 	if len(got) != 1 || got[0] != (guestLiveStream{StreamerName: "bob"}) {
 		t.Errorf("a streamer with no game presence keeps an empty game, got %+v", got)
 	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_voice_roster
+// ---------------------------------------------------------------------------
+
+func callGuestVoiceRoster(ctx context.Context, nk *fakeGuestNk) (string, error) {
+	return GuestVoiceRosterRPC(ctx, testLogger(), nil, nk, "{}")
+}
+
+func assertRuntimeErrorCode(t *testing.T, err error, want int) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected an error with code %d, got success", want)
+	}
+	rerr, ok := err.(*runtime.Error)
+	if !ok {
+		t.Fatalf("expected a *runtime.Error, got %T: %v", err, err)
+	}
+	if rerr.Code != want {
+		t.Errorf("error code = %d (%q), want %d", rerr.Code, rerr.Message, want)
+	}
+}
+
+// seatGuestInGeneral seats the test guest in General next to alice and bob,
+// and records the guest session as guest_voice_join does.
+func seatGuestInGeneral() {
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testBobID, Username: "bob", JoinedAt: 200, Deafened: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testAliceID, Username: "alice", JoinedAt: 100, Muted: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testGuestID, Username: "visitor", JoinedAt: 300, IsGuest: true})
+	rememberGuestSession(testGuestID, testGuestCrew, testChGeneral)
+}
+
+func TestGuestVoiceRoster_ReturnsTheGuestsChannel(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+	// Someone in another channel must not appear in the guest's roster.
+	seatInVoice(testChLounge, testGuestCrew, VoiceMemberState{UserID: "member-uuid-carol", Username: "carol", JoinedAt: 50})
+
+	out, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	if err != nil {
+		t.Fatalf("roster failed: %v", err)
+	}
+	var resp guestVoiceRosterResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ChannelID != testChGeneral || resp.ChannelName != "General" {
+		t.Errorf("expected General, got id=%q name=%q", resp.ChannelID, resp.ChannelName)
+	}
+	want := []guestRosterMember{
+		{UserID: testAliceID, DisplayName: "alice", Muted: true},
+		{UserID: testBobID, DisplayName: "bob", Deafened: true},
+		{UserID: testGuestID, DisplayName: "visitor", IsGuest: true},
+	}
+	if len(resp.Members) != len(want) {
+		t.Fatalf("expected %d members, got %+v", len(want), resp.Members)
+	}
+	for i := range want {
+		if resp.Members[i] != want[i] {
+			t.Errorf("member %d = %+v, want %+v", i, resp.Members[i], want[i])
+		}
+	}
+	if strings.Contains(out, "speaking") {
+		t.Errorf("roster must not carry speaking: %s", out)
+	}
+}
+
+func TestGuestVoiceRoster_RequiresASession(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The HTTP key path has no user in the context.
+	_, err := callGuestVoiceRoster(context.Background(), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 16)
+}
+
+func TestGuestVoiceRoster_RejectsCrewMembers(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// alice sits in the same channel through voice_join, with no guest session.
+	_, err := callGuestVoiceRoster(ctxWithUser(testAliceID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 7)
+}
+
+func TestGuestVoiceRoster_RejectsAGuestWithNoSeat(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The voice GC removed the seat, but the guest session is still there.
+	voiceUserChannelMu.Lock()
+	delete(voiceUserChannel, testGuestID)
+	voiceUserChannelMu.Unlock()
+	voiceRoomsMu.Lock()
+	delete(voiceRooms[testChGeneral].Members, testGuestID)
+	voiceRoomsMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
+}
+
+func TestGuestVoiceRoster_RejectsAGuestInAnotherChannel(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The seat moved away from the channel the guest session records.
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[testGuestID] = testChLounge
+	voiceUserChannelMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
+}
+
+func TestGuestVoiceRoster_RejectsAnExpiredGuest(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// ExpireGuestSessions runs on the reconciler tick, so a session can outlive
+	// the TTL for a short time. The roster must not serve it.
+	guestSessionsMu.Lock()
+	guestSessions[testGuestID].JoinedAt = time.Now().Add(-GuestSessionTTL - time.Minute)
+	guestSessionsMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
 }

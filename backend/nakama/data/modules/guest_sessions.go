@@ -294,6 +294,114 @@ func GuestVoiceLeaveRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, 
 }
 
 // ---------------------------------------------------------------------------
+// RPC: guest_voice_roster
+// ---------------------------------------------------------------------------
+
+// guestRosterMember is one person in the guest's own voice channel.
+//
+// Unlike guest_crew_feed, this struct carries the user ID. The SFU labels each
+// audio track with the sender's user ID, and the lounge needs this map to show
+// a name on a track. Only a seated guest can read it. That guest already gets
+// the same IDs in the voice_state of the guest_voice_join response.
+type guestRosterMember struct {
+	UserID      string `json:"user_id"`
+	DisplayName string `json:"display_name"`
+	Muted       bool   `json:"muted"`
+	Deafened    bool   `json:"deafened"`
+	IsGuest     bool   `json:"is_guest"`
+}
+
+type guestVoiceRosterResponse struct {
+	ChannelID   string              `json:"channel_id"`
+	ChannelName string              `json:"channel_name"`
+	Members     []guestRosterMember `json:"members"`
+}
+
+var (
+	errGuestRosterNotGuest  = runtime.NewError("caller is not a web guest", 7)
+	errGuestRosterNotSeated = runtime.NewError("guest is not seated in voice", 9)
+)
+
+// seatedGuestChannel returns the crew and the channel of a guest who sits in
+// voice now. A caller with no guest session is not a guest. A guest whose
+// session is past the TTL, or whose seat the voice GC or the reconciler
+// removed, is not seated. The voice room is the source of truth for the seat.
+func seatedGuestChannel(userID string, now time.Time) (crewID, channelID string, err error) {
+	guestSessionsMu.RLock()
+	s, ok := guestSessions[userID]
+	var sess guestSession
+	if ok {
+		sess = *s
+	}
+	guestSessionsMu.RUnlock()
+	if !ok {
+		return "", "", errGuestRosterNotGuest
+	}
+	if now.Sub(sess.JoinedAt) > GuestSessionTTL {
+		return "", "", errGuestRosterNotSeated
+	}
+
+	voiceUserChannelMu.RLock()
+	current := voiceUserChannel[userID]
+	voiceUserChannelMu.RUnlock()
+	if current == "" || current != sess.ChannelID {
+		return "", "", errGuestRosterNotSeated
+	}
+
+	voiceRoomsMu.RLock()
+	seatedAsGuest := false
+	if room, roomOK := voiceRooms[current]; roomOK {
+		if m, memberOK := room.Members[userID]; memberOK {
+			seatedAsGuest = m.IsGuest
+		}
+	}
+	voiceRoomsMu.RUnlock()
+	if !seatedAsGuest {
+		return "", "", errGuestRosterNotSeated
+	}
+	return sess.CrewID, current, nil
+}
+
+// buildGuestVoiceRoster lists the people in one voice channel in join order.
+func buildGuestVoiceRoster(channelID, channelName string) guestVoiceRosterResponse {
+	resp := guestVoiceRosterResponse{
+		ChannelID:   channelID,
+		ChannelName: channelName,
+		Members:     []guestRosterMember{},
+	}
+	for _, m := range sortedVoiceMembers(channelID) {
+		resp.Members = append(resp.Members, guestRosterMember{
+			UserID:      m.UserID,
+			DisplayName: m.Username,
+			Muted:       m.Muted,
+			Deafened:    m.Deafened,
+			IsGuest:     m.IsGuest,
+		})
+	}
+	return resp
+}
+
+// GuestVoiceRosterRPC returns the roster of the caller's own voice channel.
+//
+// Auth: a device session of a guest who sits in voice. The request has no
+// fields. The guest cannot subscribe to crew pushes, so the lounge polls this.
+func GuestVoiceRosterRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok || userID == "" {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	crewID, channelID, err := seatedGuestChannel(userID, time.Now())
+	if err != nil {
+		return "", err
+	}
+
+	resp := buildGuestVoiceRoster(channelID, resolveChannelName(ctx, nk, crewID, channelID))
+	out, _ := json.Marshal(resp)
+	return string(out), nil
+}
+
+// ---------------------------------------------------------------------------
 // RPC: guest_crew_feed
 // ---------------------------------------------------------------------------
 
