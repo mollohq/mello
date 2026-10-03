@@ -1,6 +1,7 @@
 // mello-driver command line.
 //
 //   node tools/mello-driver/src/cli.ts run qa/journeys/<file>.ts[#export|#*] [...] [--repeat N]
+//                                        [--events <file>] [--live-screenshot-ms N]
 //   node tools/mello-driver/src/cli.ts list [--json] [qa/journeys/<file>.ts ...]
 //   node tools/mello-driver/src/cli.ts mcp
 //
@@ -11,6 +12,19 @@
 // the repo root. A default export that is also a named export is listed once,
 // under the named export. Exit code 2, with a message on stderr, when a module
 // does not import.
+//
+// `--events <file>` appends one JSON object per line to the file, for a live
+// view of the run. Every object has `type`, `ts` (ISO 8601 UTC) and `t` (ms
+// since the journey started). The types are journey_start {id, dir},
+// user_launch {user, mcpPort, statePort}, step_start {index, title},
+// step_end {index, title, ok, ms, error?}, action {user, text},
+// screenshot {user, path} and journey_end {id, ok, ms, error?}. The events of
+// each journey run follow each other in the file. Every N ms (default 2000;
+// `--live-screenshot-ms 0` turns it off) the driver writes a screenshot of each
+// running app to <artifacts dir>/live/<user>.png and emits `screenshot`. It
+// skips a screenshot while a journey action is in flight. A failed screenshot
+// goes to stderr and does not fail the journey. Without `--events` the driver
+// writes no file and takes no live screenshot.
 //
 // Environment:
 //   MELLO_BIN         app binary (default target/debug/mello). Build it with
@@ -24,20 +38,27 @@ import { pathToFileURL } from "node:url";
 
 import { closeBrowser } from "./browser.ts";
 import { defaultOptions, preflight, repoRoot } from "./config.ts";
+import { parseRunArgs } from "./args.ts";
+import { EventWriter } from "./events.ts";
 import { runJourney, type Journey } from "./journey.ts";
 import { defaultJourneyFiles, formatTable, listJourneys } from "./list.ts";
 import { serveMcp } from "./mcp.ts";
 
+const RUN_USAGE = "usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N]";
+
 async function run(args: string[]): Promise<number> {
-  const repeatAt = args.indexOf("--repeat");
-  const repeat = repeatAt >= 0 ? Number(args[repeatAt + 1]) : 1;
-  const files = args.filter((a, i) => !a.startsWith("--") && args[i - 1] !== "--repeat");
-  if (files.length === 0) {
-    console.error("usage: cli.ts run <journey.ts> [...] [--repeat N]");
+  const parsed = parseRunArgs(args);
+  if (typeof parsed === "string") {
+    console.error(`${parsed}\n${RUN_USAGE}`);
     return 2;
   }
+  const { files, repeat } = parsed;
   const opts = defaultOptions();
   await preflight(opts);
+  if (parsed.events) {
+    opts.events = new EventWriter(resolve(parsed.events));
+    opts.liveScreenshotMs = parsed.liveScreenshotMs;
+  }
 
   // `file.ts` runs the default export, `file.ts#name` one named export, and
   // `file.ts#*` every exported journey in the file.
@@ -72,6 +93,7 @@ async function run(args: string[]): Promise<number> {
     }
   }
   await closeBrowser();
+  opts.events?.close();
   console.log("\nSummary");
   for (const [id, t] of tally) console.log(`  ${t.fail === 0 ? "✓" : "✗"} ${id}: ${t.pass}/${t.pass + t.fail} passed`);
   return failed === 0 ? 0 : 1;
@@ -110,6 +132,6 @@ if (cmd === "run") {
 } else if (cmd === "mcp") {
   serveMcp(defaultOptions());
 } else {
-  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp");
+  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp");
   process.exit(2);
 }
