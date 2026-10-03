@@ -69,6 +69,8 @@ jobs:
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          # A fresh install takes an invite from the clipboard only on this host.
+          LOUNGE_HOST: m3llo.app
 
       - name: Run tests
         run: cargo test --workspace --locked
@@ -236,6 +238,8 @@ jobs:
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          # A fresh install takes an invite from the clipboard only on this host.
+          LOUNGE_HOST: m3llo.app
 
       - name: Run tests
         run: cargo test --workspace --locked
