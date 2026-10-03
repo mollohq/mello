@@ -302,6 +302,8 @@ The client reads the text with `lounge_link_code` (§5) and the lounge host. A v
 
 Any other text is ignored. The client does not log, store or send it. The client does not change the clipboard.
 
+**e2e.** An `e2e` build reads the file in `MELLO_E2E_CLIPBOARD_FILE` instead of the system clipboard. The driver gives each journey run one file, the clipboard of its machine. `qa/journeys/invite-lounge-download.ts` (flow INV-10) drives the local lounge and both ways into the app. It needs the lounge on `localhost:8788` (`npm run dev` in mello-site).
+
 **Lounge host.** `Config::lounge_host` in mello-core, next to `nakama_host`. It is set at compile time from `LOUNGE_HOST`. `release.yml` sets `m3llo.app`. A build without it has an empty host, and accepts a join link on any host. Use this for a local lounge.
 
 **macOS.** A deep link at a cold start arrives after startup (§6.2). Startup can then read the clipboard first. When both hold an invite, the deep link resolves last and replaces the clipboard invite.

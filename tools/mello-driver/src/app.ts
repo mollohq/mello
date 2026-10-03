@@ -68,6 +68,15 @@ export function voiceMembers(s: AppState, channel: string): string[] {
 
 export type AppEvent = { seq: number; ts_ms: number; type: string; message?: string };
 
+/**
+ * The file that stands in for the system clipboard in a run. A fresh install
+ * reads it once at startup. Empty until a journey writes it, so no journey
+ * reads the developer's clipboard.
+ */
+export function clipboardFile(runDir: string): string {
+  return join(runDir, "clipboard.txt");
+}
+
 export type AppOptions = {
   /** Path to a build with `--features development,e2e` and SLINT_EMIT_DEBUG_INFO=1. */
   binary: string;
@@ -196,6 +205,9 @@ export class App {
         MELLO_E2E_OAUTH_BASE: FAKE_OAUTH,
         MELLO_E2E_BROWSER_FILE: this.browserFile,
         MELLO_E2E_OAUTH_TIMEOUT_MS: "8000",
+        // The machine's clipboard: one file per run, shared by every user and
+        // the browser (client/src/onboarding_invite.rs).
+        MELLO_E2E_CLIPBOARD_FILE: clipboardFile(this.opts.runDir),
         RUST_LOG: "info,mello=debug,mello_core=debug",
         ...this.opts.env,
       },

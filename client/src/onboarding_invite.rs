@@ -104,6 +104,10 @@ pub fn dispatch_at_startup(ctx: &AppContext, state: OnboardingState) {
     }
 }
 
+/// A file that replaces the system clipboard in an `e2e` build.
+#[cfg(feature = "e2e")]
+pub const E2E_CLIPBOARD_ENV: &str = "MELLO_E2E_CLIPBOARD_FILE";
+
 /// The clipboard, read at most once by [`dispatch_at_startup`].
 ///
 /// A reader instead of the text: startup reads the clipboard only for a
@@ -117,7 +121,19 @@ pub struct StartupClipboard {
 
 impl StartupClipboard {
     /// The system clipboard, through `arboard`.
+    ///
+    /// An `e2e` build reads the file in `MELLO_E2E_CLIPBOARD_FILE` instead,
+    /// when it is set. The driver gives each journey one file: the clipboard
+    /// of its machine. No journey reads the clipboard of the developer.
     pub fn system(lounge_host: String) -> Self {
+        #[cfg(feature = "e2e")]
+        if let Some(path) = std::env::var_os(E2E_CLIPBOARD_ENV) {
+            log::info!("[e2e] the clipboard is the file {}", path.to_string_lossy());
+            return Self {
+                lounge_host,
+                read: Box::new(move || std::fs::read_to_string(path).ok()),
+            };
+        }
         Self {
             lounge_host,
             read: Box::new(|| arboard::Clipboard::new().ok()?.get_text().ok()),
