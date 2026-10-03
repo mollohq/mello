@@ -23,9 +23,11 @@ pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error
     {
         let mut builder = i_slint_backend_winit::Backend::builder();
 
-        // Default: Skia on wgpu (D3D12 on Windows, Metal on macOS). The debug
-        // switch forces Skia's CPU rasterizer.
-        if std::env::args().any(|a| a == "--software-rendering") {
+        // Windows: always Skia's CPU rasterizer. Skia on wgpu (D3D12) adds
+        // ~250 MB of RAM and ~190 MB of GPU memory at idle, and a gaming
+        // companion must not take GPU time from the game.
+        // macOS: Skia on wgpu (Metal); the debug switch forces the CPU rasterizer.
+        if cfg!(target_os = "windows") || std::env::args().any(|a| a == "--software-rendering") {
             log::info!("[startup] Slint renderer: {SKIA_CPU_RENDERER}");
             builder = builder.with_renderer_name(SKIA_CPU_RENDERER);
         }
