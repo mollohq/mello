@@ -10,6 +10,7 @@ pub mod loop_watchdog;
 mod presence;
 mod push;
 mod reconnect;
+mod sfu_voice_join;
 mod stats_emit;
 mod stream_ffi;
 mod streaming;
@@ -143,6 +144,9 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
+    /// The SFU voice join that runs off the loop; the loop takes each step's
+    /// outcome in `select!`. See `sfu_voice_join.rs`.
+    sfu_voice_joins: sfu_voice_join::SfuVoiceJoins,
     game_state: GameStateManager,
     /// Last game published to presence, so a 15s scan tick that changes
     /// nothing does not re-broadcast to every crew member.
@@ -248,11 +252,38 @@ impl Client {
         enable_game_sensor: bool,
         emit_process_stats: bool,
     ) -> Self {
+        let voice = VoiceManager::new(event_tx.clone(), loopback);
+        Self::with_voice(
+            config,
+            event_tx,
+            voice,
+            frame_slot,
+            native_frame_slot,
+            frame_consumed,
+            frame_lifecycle,
+            enable_game_sensor,
+            emit_process_stats,
+        )
+    }
+
+    /// Construct a client around `voice`. Tests pass a manager without audio.
+    #[allow(clippy::too_many_arguments)]
+    fn with_voice(
+        config: Config,
+        event_tx: std::sync::mpsc::Sender<Event>,
+        voice: VoiceManager,
+        frame_slot: FrameSlot,
+        native_frame_slot: NativeFrameSlot,
+        frame_consumed: Arc<std::sync::atomic::AtomicBool>,
+        frame_lifecycle: FrameLifecycleSlot,
+        enable_game_sensor: bool,
+        emit_process_stats: bool,
+    ) -> Self {
         let (telemetry_event_tx, telemetry_event_rx) =
             std::sync::mpsc::channel::<crate::telemetry::TelemetryEvent>();
         Self {
             nakama: NakamaClient::new(config),
-            voice: VoiceManager::new(event_tx.clone(), loopback),
+            voice,
             event_tx,
             frame_slot,
             native_frame_slot,
@@ -283,6 +314,7 @@ impl Client {
             reported_activity: None,
             sfu_voice_reconnect: None,
             last_voice_channel: None,
+            sfu_voice_joins: sfu_voice_join::SfuVoiceJoins::default(),
             game_state: GameStateManager::new(),
             published_game: None,
             game_sensor: None,
@@ -418,15 +450,24 @@ impl Client {
                         None => break,
                     }
                 }
-                signal = signal_rx.recv() => {
+                // Voice signals and roster changes wait in their channels while
+                // an SFU voice join runs. A P2P fallback must see them after its
+                // mesh starts, in the order they arrived.
+                signal = signal_rx.recv(), if !self.sfu_voice_joins.is_pending() => {
                     if let Some(sig) = signal {
                         self.handle_signal(sig);
                     }
                 }
-                presence = presence_rx.recv() => {
+                presence = presence_rx.recv(), if !self.sfu_voice_joins.is_pending() => {
                     if let Some(p) = presence {
                         self.handle_presence(p);
                     }
+                }
+                // Never completes while no join runs. Borrows only
+                // `self.sfu_voice_joins`.
+                outcome = self.sfu_voice_joins.finished() => {
+                    let _step = watchdog.step("sfu_voice_join_step");
+                    self.on_sfu_voice_join_step(outcome);
                 }
                 // Never completes while no flow waits. Borrows only
                 // `self.browser_flows`; the other branch futures are locals.
@@ -464,6 +505,7 @@ impl Client {
         // A waiting browser flow would hold its thread (and the runtime's
         // shutdown) until the callback timeout.
         self.browser_flows.cancel();
+        self.sfu_voice_joins.cancel();
         log::info!("Mello client shutting down");
     }
 
