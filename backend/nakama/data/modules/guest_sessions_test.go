@@ -1,10 +1,14 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heroiclabs/nakama-common/api"
 )
 
 func resetGuestState() {
@@ -387,5 +391,172 @@ func TestRecordLedgerSession_GuestDoesNotJoinAMembersSession(t *testing.T) {
 
 	if got := ledgerParticipantCount("ch_1"); got != 1 {
 		t.Errorf("expected only the member in the ledger session, got %d participants", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_crew_feed voice channels
+// ---------------------------------------------------------------------------
+
+const (
+	testGuestCode = "ABCD-EFGH"
+	testGuestCrew = "crew-uuid-1"
+	testInviterID = "inviter-uuid-1"
+	testAliceID   = "member-uuid-alice"
+	testBobID     = "member-uuid-bob"
+	testGuestID   = "guest-uuid-visitor"
+	testChLounge  = "ch_lounge"
+	testChGeneral = "ch_general"
+)
+
+// seedGuestCrew builds a crew with an invite code, two members and two voice
+// channels. The channels are stored out of sort order on purpose.
+func seedGuestCrew() *fakeGuestNk {
+	nk := newFakeGuestNk()
+	nk.put(InviteCodeCollection, testGuestCode, SystemUserID, map[string]string{
+		"crew_id": testGuestCrew, "inviter_user_id": testInviterID,
+	})
+	nk.groups[testGuestCrew] = &api.Group{Id: testGuestCrew, Name: "Night Owls", EdgeCount: 2}
+	nk.addMember(testGuestCrew, testAliceID, "alice")
+	nk.addMember(testGuestCrew, testBobID, "bob")
+	nk.users[testInviterID] = &api.User{Id: testInviterID, DisplayName: "inviter"}
+	nk.put(VoiceChannelCollection, testGuestCrew, SystemUserID, VoiceChannelList{Channels: []*VoiceChannelDef{
+		{ID: testChLounge, Name: "Lounge", SortOrder: 1},
+		{ID: testChGeneral, Name: "General", IsDefault: true, SortOrder: 0},
+	}})
+	return nk
+}
+
+// seatInVoice puts a participant in a voice room the way joinVoiceRoom does,
+// without the presence writes and pushes.
+func seatInVoice(channelID, crewID string, m VoiceMemberState) {
+	voiceRoomsMu.Lock()
+	room, ok := voiceRooms[channelID]
+	if !ok {
+		room = &VoiceRoom{ChannelID: channelID, CrewID: crewID, Members: map[string]*VoiceMemberState{}}
+		voiceRooms[channelID] = room
+	}
+	member := m
+	room.Members[m.UserID] = &member
+	voiceRoomsMu.Unlock()
+
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[m.UserID] = channelID
+	voiceUserChannelMu.Unlock()
+
+	voiceChannelCrewMu.Lock()
+	voiceChannelCrew[channelID] = crewID
+	voiceChannelCrewMu.Unlock()
+}
+
+// seatGuestCrewVoice seats alice and bob in General and a guest in Lounge.
+func seatGuestCrewVoice() {
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testBobID, Username: "bob", JoinedAt: 200, Speaking: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testAliceID, Username: "alice", JoinedAt: 100, Muted: true})
+	seatInVoice(testChLounge, testGuestCrew, VoiceMemberState{UserID: testGuestID, Username: "visitor", JoinedAt: 300, Deafened: true, IsGuest: true})
+}
+
+func callGuestCrewFeed(t *testing.T, nk *fakeGuestNk) string {
+	t.Helper()
+	out, err := GuestCrewFeedRPC(context.Background(), testLogger(), nil, nk, `{"code":"abcd-efgh"}`)
+	if err != nil {
+		t.Fatalf("guest_crew_feed failed: %v", err)
+	}
+	return out
+}
+
+// findJSONKey reports the path of the first object key named key, at any depth.
+func findJSONKey(v interface{}, key, path string) (string, bool) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		for k, child := range x {
+			if k == key {
+				return path + "." + k, true
+			}
+			if p, ok := findJSONKey(child, key, path+"."+k); ok {
+				return p, true
+			}
+		}
+	case []interface{}:
+		for i, child := range x {
+			if p, ok := findJSONKey(child, key, fmt.Sprintf("%s[%d]", path, i)); ok {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+func TestGuestCrewFeed_VoiceChannelsInSortOrderWithOccupants(t *testing.T) {
+	resetVoiceState()
+	seatGuestCrewVoice()
+
+	var resp guestCrewFeedResponse
+	if err := json.Unmarshal([]byte(callGuestCrewFeed(t, seedGuestCrew())), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.VoiceChannels) != 2 {
+		t.Fatalf("expected 2 voice channels, got %d", len(resp.VoiceChannels))
+	}
+	general, lounge := resp.VoiceChannels[0], resp.VoiceChannels[1]
+	if general.ID != testChGeneral || general.Name != "General" || !general.IsDefault {
+		t.Errorf("expected General first and default, got %+v", general)
+	}
+	if lounge.ID != testChLounge || lounge.IsDefault {
+		t.Errorf("expected Lounge second and not default, got %+v", lounge)
+	}
+
+	want := []guestVoiceMember{
+		{DisplayName: "alice", Muted: true},
+		{DisplayName: "bob"},
+	}
+	if len(general.Members) != len(want) {
+		t.Fatalf("expected %d members in General, got %+v", len(want), general.Members)
+	}
+	for i := range want {
+		if general.Members[i] != want[i] {
+			t.Errorf("General member %d = %+v, want %+v (join order)", i, general.Members[i], want[i])
+		}
+	}
+	if len(lounge.Members) != 1 || lounge.Members[0] != (guestVoiceMember{DisplayName: "visitor", Deafened: true, IsGuest: true}) {
+		t.Errorf("expected the guest in Lounge, got %+v", lounge.Members)
+	}
+}
+
+func TestGuestCrewFeed_EmptyChannelHasEmptyMemberArray(t *testing.T) {
+	resetVoiceState()
+
+	out := callGuestCrewFeed(t, seedGuestCrew())
+	// The lounge iterates members directly, so an empty room must be [] not null.
+	if !strings.Contains(out, `"members":[]`) {
+		t.Errorf("expected an empty members array for an empty channel: %s", out)
+	}
+	if strings.Contains(out, `"voice_channels":null`) {
+		t.Errorf("voice_channels must be an array: %s", out)
+	}
+}
+
+// guest_crew_feed is readable by anyone with an invite code. No user ID may
+// reach it, from the voice rooms or from any other part of the payload.
+func TestGuestCrewFeed_PayloadHasNoUserIDs(t *testing.T) {
+	resetVoiceState()
+	seatGuestCrewVoice()
+
+	out := callGuestCrewFeed(t, seedGuestCrew())
+
+	var generic interface{}
+	if err := json.Unmarshal([]byte(out), &generic); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, key := range []string{"user_id", "member_ids", "speaking"} {
+		if path, found := findJSONKey(generic, key, "$"); found {
+			t.Errorf("guest_crew_feed has a %q key at %s: %s", key, path, out)
+		}
+	}
+	for _, id := range []string{testAliceID, testBobID, testGuestID, testInviterID, testGuestCrew} {
+		if strings.Contains(out, id) {
+			t.Errorf("guest_crew_feed leaked the ID %q: %s", id, out)
+		}
 	}
 }

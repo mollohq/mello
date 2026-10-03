@@ -318,23 +318,45 @@ type guestSessionCard struct {
 	Ts           int64  `json:"ts"`
 }
 
+// guestVoiceMember is one person in a voice channel, as the public lounge
+// shows them. The struct has no user ID field on purpose: guest_crew_feed is
+// callable with the HTTP key, so anyone with an invite code can read it.
+// Speaking is also absent, because the browser detects speech from the audio.
+type guestVoiceMember struct {
+	DisplayName string `json:"display_name"`
+	Muted       bool   `json:"muted"`
+	Deafened    bool   `json:"deafened"`
+	IsGuest     bool   `json:"is_guest"`
+}
+
+// guestVoiceChannel is a crew voice channel and the people in it. The lounge
+// sends ID back as channel_id in guest_voice_join to join this channel.
+type guestVoiceChannel struct {
+	ID        string             `json:"id"`
+	Name      string             `json:"name"`
+	IsDefault bool               `json:"is_default"`
+	Members   []guestVoiceMember `json:"members"`
+}
+
 type guestCrewFeedResponse struct {
-	CrewName    string                `json:"crew_name"`
-	MemberCount int                   `json:"member_count"`
-	Members     []InviteMemberPreview `json:"members,omitempty"`
-	InviterName string                `json:"inviter_display_name,omitempty"`
-	GuestPolicy string                `json:"guest_policy"`
-	Recap       *WeeklyRecapData      `json:"recap,omitempty"`
-	Clips       []guestClip           `json:"clips,omitempty"`
-	Sessions    []guestSessionCard    `json:"sessions,omitempty"`
-	ClipCount   int                   `json:"clip_count"`
+	CrewName      string                `json:"crew_name"`
+	MemberCount   int                   `json:"member_count"`
+	Members       []InviteMemberPreview `json:"members,omitempty"`
+	InviterName   string                `json:"inviter_display_name,omitempty"`
+	GuestPolicy   string                `json:"guest_policy"`
+	Recap         *WeeklyRecapData      `json:"recap,omitempty"`
+	Clips         []guestClip           `json:"clips,omitempty"`
+	Sessions      []guestSessionCard    `json:"sessions,omitempty"`
+	ClipCount     int                   `json:"clip_count"`
+	VoiceChannels []guestVoiceChannel   `json:"voice_channels"`
 }
 
 // GuestCrewFeedRPC returns the read-only crew feed behind an invite code.
 //
 // Callable with the Nakama HTTP key so the Cloudflare Pages function can render
 // the lounge server-side. It returns a public-safe projection only: no media
-// URLs, no local paths, no user IDs.
+// URLs, no local paths, no user IDs. Keep this rule when you add a field. The
+// guest structs carry no field for these values, so a leak needs a new field.
 func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	var req struct {
 		Code string `json:"code"`
@@ -355,9 +377,10 @@ func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	group := groups[0]
 
 	resp := guestCrewFeedResponse{
-		CrewName:    group.GetName(),
-		MemberCount: int(group.GetEdgeCount()),
-		GuestPolicy: guestPolicyFor(ctx, nk, crewID),
+		CrewName:      group.GetName(),
+		MemberCount:   int(group.GetEdgeCount()),
+		GuestPolicy:   guestPolicyFor(ctx, nk, crewID),
+		VoiceChannels: []guestVoiceChannel{},
 	}
 
 	if members, _, mErr := nk.GroupUsersList(ctx, crewID, 100, nil, ""); mErr == nil {
@@ -389,6 +412,10 @@ func GuestCrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
 	resp.Clips, resp.ClipCount = collectGuestClips(clipsDoc, ledger, guestFeedClipLimit)
 	resp.Sessions = projectGuestSessions(ledger, guestFeedSessionCap)
+
+	if channels, chErr := GetVoiceChannels(ctx, nk, crewID); chErr == nil && channels != nil {
+		resp.VoiceChannels = projectGuestVoiceChannels(channels.Channels)
+	}
 
 	out, _ := json.Marshal(resp)
 	return string(out), nil
@@ -493,6 +520,52 @@ func projectGuestSessions(ledger *CrewEventLedger, limit int) []guestSessionCard
 			HasSnapshots: len(d.SnapshotURLs) > 0,
 			Ts:           ev.Timestamp,
 		})
+	}
+	return out
+}
+
+// sortedVoiceMembers returns the members of a voice channel in join order. The
+// room is a map, so without a sort the lounge rows change order on each read.
+func sortedVoiceMembers(channelID string) []*VoiceMemberState {
+	members := GetVoiceChannelSnapshot(channelID).Members
+	sort.SliceStable(members, func(i, j int) bool {
+		if members[i].JoinedAt != members[j].JoinedAt {
+			return members[i].JoinedAt < members[j].JoinedAt
+		}
+		return members[i].UserID < members[j].UserID
+	})
+	return members
+}
+
+// projectGuestVoiceChannels lists the crew's voice channels in sort order with
+// the people in each one. It reads the in-memory voice rooms only. The result
+// has no user IDs (see guestVoiceMember).
+func projectGuestVoiceChannels(defs []*VoiceChannelDef) []guestVoiceChannel {
+	ordered := make([]*VoiceChannelDef, 0, len(defs))
+	for _, d := range defs {
+		if d != nil {
+			ordered = append(ordered, d)
+		}
+	}
+	sort.SliceStable(ordered, func(i, j int) bool { return ordered[i].SortOrder < ordered[j].SortOrder })
+
+	out := make([]guestVoiceChannel, 0, len(ordered))
+	for _, d := range ordered {
+		ch := guestVoiceChannel{
+			ID:        d.ID,
+			Name:      d.Name,
+			IsDefault: d.IsDefault,
+			Members:   []guestVoiceMember{},
+		}
+		for _, m := range sortedVoiceMembers(d.ID) {
+			ch.Members = append(ch.Members, guestVoiceMember{
+				DisplayName: m.Username,
+				Muted:       m.Muted,
+				Deafened:    m.Deafened,
+				IsGuest:     m.IsGuest,
+			})
+		}
+		out = append(out, ch)
 	}
 	return out
 }
