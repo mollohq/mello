@@ -341,7 +341,18 @@ flows:
     priority: P1
     users: 1
     harness: []
-    journeys: []
+    journeys: [qa/journeys/mic-permission.ts]
+    protocol: []
+    issues: []
+
+  # P0: every new macOS user passes this prompt before the first voice call.
+  # Without Allow there is no Mute and no join button, so no voice.
+  - id: VOICE-07
+    title: Microphone permission not asked yet, the user allows it and the voice controls show
+    priority: P0
+    users: 1
+    harness: []
+    journeys: [qa/journeys/mic-permission.ts]
     protocol: []
     issues: []
 

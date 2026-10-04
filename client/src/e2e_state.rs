@@ -88,6 +88,9 @@ struct Snapshot {
     join_crew_error: String,
     mic_muted: bool,
     deafened: bool,
+    /// The microphone permission that the control bar shows: `"granted"`,
+    /// `"denied"` or `"undetermined"`. See [`mic_permission_name`].
+    mic_permission: &'static str,
     /// Modals that are open, by name. The driver waits on these to close.
     open_modals: Vec<&'static str>,
     /// The last 20 chat messages in the active crew, oldest first.
@@ -118,6 +121,18 @@ struct VoiceMemberSnap {
     speaking: bool,
     muted: bool,
     deafened: bool,
+}
+
+/// The microphone permission, as the state port reports it, from the two UI
+/// properties that `MicPermissionChanged` sets.
+fn mic_permission_name(granted: bool, denied: bool) -> &'static str {
+    if granted {
+        "granted"
+    } else if denied {
+        "denied"
+    } else {
+        "undetermined"
+    }
 }
 
 /// The name of a transport, as the state port reports it.
@@ -308,6 +323,10 @@ fn read(app: &MainWindow) -> Snapshot {
         join_crew_name: app.get_join_crew_name().into(),
         join_crew_error: app.get_join_crew_error().into(),
         mic_muted: app.get_mic_muted(),
+        mic_permission: mic_permission_name(
+            app.get_mic_permission_granted(),
+            app.get_mic_permission_denied(),
+        ),
         open_modals: [
             ("settings", app.get_settings_open()),
             ("crew_settings", app.get_crew_settings_open()),
@@ -366,6 +385,13 @@ mod tests {
 
     fn state_changed(in_call: bool, transport: VoiceMode) -> Event {
         Event::VoiceStateChanged { in_call, transport }
+    }
+
+    #[test]
+    fn the_mic_permission_has_one_name_for_each_state() {
+        assert_eq!(mic_permission_name(true, false), "granted");
+        assert_eq!(mic_permission_name(false, true), "denied");
+        assert_eq!(mic_permission_name(false, false), "undetermined");
     }
 
     #[test]

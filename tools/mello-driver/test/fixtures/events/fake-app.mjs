@@ -7,6 +7,9 @@
 // With FAKE_APP_VOICE_TRANSPORT ("sfu", "p2p" or "disconnected") the app is in
 // a voice call that started on that transport: the state port reports it, and
 // the event tail has the VoiceJoined and VoiceStateChanged of the join.
+//
+// The state port reports MELLO_E2E_MIC_PERMISSION as `mic_permission`, as the
+// real app does with the e2e-mic feature.
 
 import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
@@ -60,7 +63,15 @@ createServer((req, res) => {
 }).listen(Number(process.env.SLINT_MCP_PORT), "127.0.0.1");
 
 const transport = process.env.FAKE_APP_VOICE_TRANSPORT;
-const state = { screen: "app", crews: [], members: [], open_modals: [], in_voice: false, voice_transport: null };
+const state = {
+  screen: "app",
+  crews: [],
+  members: [],
+  open_modals: [],
+  in_voice: false,
+  voice_transport: null,
+  mic_permission: process.env.MELLO_E2E_MIC_PERMISSION ?? null,
+};
 const events = [];
 if (transport) {
   state.in_voice = transport !== "disconnected";
