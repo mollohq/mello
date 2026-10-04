@@ -62,6 +62,12 @@ export type AppState = {
     active: boolean;
     members: { name: string; speaking: boolean; muted: boolean; deafened: boolean }[];
   }[];
+  /**
+   * The transport of the current voice call: "sfu", or "p2p" after an SFU
+   * join fell back. null when not in a call. A channel switch keeps the old
+   * value until the new call starts: see voice.ts, expectSfuVoice.
+   */
+  voice_transport: "sfu" | "p2p" | null;
   last_event_seq: number;
 };
 
@@ -70,7 +76,15 @@ export function voiceMembers(s: AppState, channel: string): string[] {
   return s.voice_channels.find((c) => c.name === channel)?.members.map((m) => m.name) ?? [];
 }
 
-export type AppEvent = { seq: number; ts_ms: number; type: string; message?: string };
+export type AppEvent = {
+  seq: number;
+  ts_ms: number;
+  type: string;
+  /** Only on Error events. */
+  message?: string;
+  /** Only on VoiceStateChanged: the transport the call started on, or "disconnected". */
+  transport?: "sfu" | "p2p" | "disconnected";
+};
 
 /**
  * The file that stands in for the system clipboard in a run. A fresh install
