@@ -502,6 +502,9 @@ Design changes from §5 and §6:
 | `session-lost.ts` | AUTH-02 | New with #71 |
 | `social-signin.ts` (9 journeys) | ONB-03, AUTH-04, ONB-08 | 9/9 on the e2e Docker profile. Discord, Twitch, Steam and Google sign up and sign in end to end. `discordDeny` requires a refusal to end within 5 s (#87, fixed). |
 
+The voice rows above did not check the transport. A join that fell back to P2P passed.
+§16.6 has the voice results through the SFU only.
+
 The first 20-run check found a driver race in 4 of 12 runs. The cause was an app bug (#85). The fix in the driver waits on the real state, and the next 20-run check passed 40 of 40.
 
 ### 16.3 Bugs found in Phase 2
@@ -529,3 +532,64 @@ The 10-run check passed 89 of 90. One Twitch run lost the click on the sign-in p
 
 - Journeys for INV-04 (web lounge guest), VOICE-05 (reconnect after a network drop, needs a fault port) and STREAM-01.
 - The agent runner (Phase 3).
+- `voice-channels.ts#createChannel` fails through the SFU: the joined channel loses its active flag (§16.6). No issue yet.
+
+## 16.6 Voice Through the SFU Only (2026-10-04)
+
+P2P will be removed as a feature. A voice journey that passes over P2P tests a path that is going away.
+Voice journeys therefore run only through the local SFU. A P2P call fails the journey.
+
+Before this change, a join that could not reach the SFU fell back to P2P without a message, and the voice journeys passed.
+
+### 16.6.1 How it works
+
+| Part | Where | What it does |
+|---|---|---|
+| Transport in the core | `mello-core/src/events.rs`, `client/voice.rs` | `VoiceStateChanged` carries `transport`: `sfu`, `p2p` or `disconnected`. The core sets it where the call starts, from `VoiceManager::voice_mode()`. An SFU join that failed and fell back reports `p2p`. |
+| State port | `client/src/e2e_state.rs` | `/state` has `voice_transport`: `"sfu"`, `"p2p"` or `null` when not in a call. `/events` has `transport` on each `VoiceStateChanged`. |
+| SFU check | `tools/mello-driver/src/config.ts` | `run` checks the local SFU before a journey with `voice: true`. It stops when the health address does not answer or its `status` is not `ok`. |
+| Transport check | `tools/mello-driver/src/voice.ts` | `expectSfuVoice(app)` waits for the transport of the last join. It fails the journey on `p2p` or `disconnected`. |
+| Join step | `qa/journeys/lib/voice.ts` | `joinVoice(app, channel)` clicks the channel, waits for the call and calls `expectSfuVoice`. |
+
+The SFU health address is `http://127.0.0.1:8080/health`. Set `MELLO_E2E_SFU_HEALTH` to change it.
+
+A new voice journey must:
+
+- Set `voice: true`.
+- Join with `joinVoice`, or call `expectSfuVoice` after each join.
+
+The transport of a join is the first `VoiceStateChanged` after the last `VoiceJoined`.
+`voice_transport` alone is not enough: a channel switch keeps the old value until the new call starts.
+After a Nakama reconnect, the core sends `VoiceJoined` again and no `VoiceStateChanged`.
+`expectSfuVoice` then times out. The VOICE-05 journey must allow for this.
+
+### 16.6.2 Results
+
+macOS, local stack and local SFU, `MELLO_E2E_PORT_BASE=47000`. Every pass reported `sfu`. No run reported `p2p`.
+
+| Journey | Runs | Passed | Failures |
+|---|---|---|---|
+| `voice-two-users.ts` | 20 | 19 | 1 in setup, before voice: the click on "Share invite link" landed 26 ms after a sidebar update (the #105 family). |
+| `voice-channels.ts#rapidSwitch` | 20 | 19 | 1 on #96: bob's "Bravo" was not in the accessibility tree. The first 10 runs used the old limit, the last 10 the new limit (§16.6.3). Before, it passed 1 of 20. |
+| `voice-channels.ts#createChannel` | 20 | 0 | 18 on a new bug, below. 2 before the join: a data update closed the crew menu (#105), and an avatar image did not load. |
+
+The new bug: the joined channel loses its active flag.
+
+1. `VoiceJoined` marks the channel active.
+2. About 100 ms later, the crew event `voice_joined` reloads the crew state.
+3. `CrewStateLoaded` rebuilds the channels. It keeps the active channel only when `in_voice` is true.
+4. `in_voice` becomes true at `VoiceStateChanged`, about 0.8 s after `VoiceJoined`, when the SFU call starts.
+5. Nothing marks the channel active again.
+
+Over P2P the call started before the reload, so the journey passed. The journey from `main` fails 3 of 3 through the SFU.
+
+### 16.6.3 Timings
+
+| Measure | Before (the old comment in `voice-channels.ts`) | Through the SFU, measured |
+|---|---|---|
+| Command loop hold for one join | 0.6 to 1.6 s: an SFU attempt, then the P2P fallback (#104) | The `voice_join` RPC only. The SFU join runs off the loop. |
+| Command loop hold when an SFU call starts (`sfu_voice_join_step`) | Not measured | 597 to 777 ms, median 663 ms (40 joins) |
+| Click to an SFU call, first user in the channel | Not measured | 1.43 to 1.60 s (20 runs) |
+| Rapid switch, last click to settled | Not measured | 54 to 161 ms (19 runs) |
+| Rapid switch, first click to settled | At most about 5 s | 4.7 to 9.7 s. The clicks wait for bob's channel list (#96). |
+| Rapid switch limit | 10 s from the first click | 2 s from the last click |

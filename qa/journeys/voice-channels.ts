@@ -7,15 +7,20 @@
 //   join shows again after the last one (a late replay). A tester saw quick
 //   clicks join one after another, seconds later; the cause was a social
 //   sign-in wait that blocked the core command loop (#88, fixed in 0.5.8).
+//
+// Every join runs through the local SFU. A P2P call fails the journey.
 
 import { voiceMembers, type App, type AppState } from "../../tools/mello-driver/src/app.ts";
 import { journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
+import { expectSfuVoice } from "../../tools/mello-driver/src/voice.ts";
 import { addVoiceChannel, waitForChannels } from "./lib/channels.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
+import { joinVoice } from "./lib/voice.ts";
 
 export const createChannel = journey({
   id: "voice.create-channel",
   flows: ["CREW-05"],
+  voice: true,
   async run(ctx) {
     const { step, expect } = ctx;
     const { alice, bob, bobName } = await twoUsersInOneCrew(ctx);
@@ -29,9 +34,8 @@ export const createChannel = journey({
       await waitForChannels(bob, ["General", CH]);
     });
 
-    await step(`bob joins ${CH}, both see him there`, async () => {
-      await bob.click(CH);
-      await bob.waitFor("bob is in voice", (s) => s.in_voice, 20_000);
+    await step(`bob joins ${CH} through the SFU, both see him there`, async () => {
+      await joinVoice(bob, CH);
       for (const u of [bob, alice]) {
         await u.waitFor(`${u.name} sees bob in ${CH}`, (s) => voiceMembers(s, CH).includes(bobName));
       }
@@ -48,13 +52,18 @@ const B = "Bravo";
 const C = "Charlie";
 
 /**
- * From the first click to both users showing bob in C only. The core runs
- * the three joins one after another, and each JoinVoice holds the command
- * loop for 0.6 to 1.6 s (an SFU attempt, then the P2P fallback: #104; 38
- * joins measured on macOS against the local stack). Three joins take at most
- * about 5 s; the limit is twice that. See plans/E2E-QA.md §16.2.
+ * From the last click to both users showing bob in C only. The core runs the
+ * joins in click order. JoinVoice holds the command loop only for the
+ * voice_join RPC: the SFU join runs off the loop, and the next join cancels
+ * it. An SFU join that ends holds the loop for 0.6 to 0.8 s to start the
+ * call (`sfu_voice_join_step` in the loop watchdog), so a click can wait
+ * that long. The switch settles in at most about 1 s; the limit is twice
+ * that. See plans/E2E-QA.md §16.6 for the measured numbers.
+ *
+ * The time from the first click is not limited: the driver waits for bob's
+ * channel list between the clicks (#96).
  */
-const SETTLE_LIMIT_MS = 10_000;
+const SETTLE_LIMIT_MS = 2_000;
 /** After both users show bob in C only, the state must hold this long. */
 const WATCH_MS = 3_000;
 const SAMPLE_MS = 50;
@@ -74,10 +83,17 @@ function notSettled(s: AppState, side: Side, bobName: string): string {
 /**
  * Sample both users until each shows bob in C only, then for WATCH_MS more.
  * Returns the settle time from `t0`. Fails when the switch does not settle
- * within SETTLE_LIMIT_MS, when bob shows in A or B after he first showed in C,
- * or when the final state does not hold for the watch window.
+ * within SETTLE_LIMIT_MS of the last click (`lastClick` ms after `t0`), when
+ * bob shows in A or B after he first showed in C, or when the final state
+ * does not hold for the watch window.
  */
-async function watchSwitch(ctx: JourneyContext, sides: Side[], bobName: string, t0: number): Promise<number> {
+async function watchSwitch(
+  ctx: JourneyContext,
+  sides: Side[],
+  bobName: string,
+  t0: number,
+  lastClick: number,
+): Promise<number> {
   let settledAt: number | null = null;
   for (;;) {
     const states = await Promise.all(sides.map((sd) => sd.app.state()));
@@ -95,9 +111,9 @@ async function watchSwitch(ctx: JourneyContext, sides: Side[], bobName: string, 
     });
     if (settledAt === null) {
       if (why.every((w) => w === "")) settledAt = at;
-      else if (at > SETTLE_LIMIT_MS) {
+      else if (at - lastClick > SETTLE_LIMIT_MS) {
         const detail = sides.map((sd, i) => `${sd.app.name}: ${why[i] || "ok"}`).join("; ");
-        throw new Error(`the switch did not settle within ${SETTLE_LIMIT_MS} ms (${detail})`);
+        throw new Error(`the switch did not settle within ${SETTLE_LIMIT_MS} ms of the last click (${detail})`);
       }
     } else {
       const broken = sides.map((sd, i) => (why[i] ? `${sd.app.name}: ${why[i]}` : "")).filter(Boolean);
@@ -114,6 +130,7 @@ export const rapidSwitch = journey({
   // After bob joins A, his crew card leaves the accessibility tree for
   // seconds, so the clicks on B and C wait or fail.
   knownIssues: [96],
+  voice: true,
   async run(ctx) {
     const { step, expect } = ctx;
     const { alice, bob, bobName } = await twoUsersInOneCrew(ctx);
@@ -138,12 +155,15 @@ export const rapidSwitch = journey({
         { app: bob, own: true, firstInC: null },
         { app: alice, own: false, firstInC: null },
       ];
-      const settleMs = await watchSwitch(ctx, sides, bobName, t0);
+      const settleMs = await watchSwitch(ctx, sides, bobName, t0, clicksMs);
       // One line for each run, to measure the switch over many runs.
       process.stdout.write(
-        `    switch: clicks ${clicksMs} ms, settled ${settleMs} ms after the first click` +
+        `    switch: clicks ${clicksMs} ms, settled ${settleMs - clicksMs} ms after the last click` +
+          ` and ${settleMs} ms after the first click` +
           ` (bob first in ${C} at ${sides[0].firstInC} ms, on alice at ${sides[1].firstInC} ms)\n`,
       );
+      // The call that ends the switch runs through the SFU.
+      await expectSfuVoice(bob);
       await bob.checkpoint("bob-in-charlie");
       await alice.checkpoint("alice-sees-bob-in-charlie");
     });
