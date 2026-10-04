@@ -6,15 +6,19 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
-import { App, clipboardFile, DriverError, onShutdown, type AppOptions } from "./app.ts";
+import { App, clipboardFile, DriverError, onShutdown, type AppOptions, type UserOptions } from "./app.ts";
 import type { EventWriter } from "./events.ts";
 import { startLiveShots } from "./live.ts";
 
 export type JourneyContext = {
   /** Unique per run; put it in names so repeated runs never collide. */
   runId: string;
-  /** Start a user. The first user gets MCP port base, the next base + 1, … */
-  launch(name: string, deeplink?: string): Promise<App>;
+  /**
+   * Start a user. The first user gets MCP port base, the next base + 1, …
+   * The second argument is a deep link, or the user's options. Each user
+   * gets the microphone permission "granted" unless the options say otherwise.
+   */
+  launch(name: string, options?: string | UserOptions): Promise<App>;
   /** A user that `launch` started. */
   user(name: string): App;
   /** A named step: timed, logged, and reported. */
@@ -86,22 +90,24 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
   events?.beginJourney();
   events?.emit("journey_start", { id: j.id, dir });
 
-  const appOpts = (port: number): AppOptions => ({
+  const appOpts = (port: number, user: UserOptions): AppOptions => ({
     binary: opts.binary,
     cwd: opts.repoRoot,
     runDir: dir,
     mcpPort: port,
     env: opts.env,
+    micPermission: user.micPermission,
     onAction: events ? (user, text) => events.emit("action", { user, text }) : undefined,
   });
 
   const ctx: JourneyContext = {
     runId,
-    async launch(name, deeplink) {
+    async launch(name, options) {
       if (users.has(name)) throw new DriverError(`user ${name} already launched`);
-      const app = new App(name, appOpts(opts.mcpPortBase + users.size));
+      const user: UserOptions = typeof options === "string" ? { deeplink: options } : (options ?? {});
+      const app = new App(name, appOpts(opts.mcpPortBase + users.size, user));
       users.set(name, app);
-      await app.launch(deeplink);
+      await app.launch(user.deeplink);
       events?.emit("user_launch", { user: name, mcpPort: opts.mcpPortBase + users.size - 1, statePort: app.statePort });
       return app;
     },

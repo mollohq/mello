@@ -31,6 +31,7 @@ mello-core/src/
 │   ├── crew.rs             # Crew CRUD, discovery, avatars, user search
 │   ├── chat.rs             # Send/edit/delete messages, GIF search, history
 │   ├── voice.rs            # Voice join/leave, channel CRUD, reconnection
+│   ├── mic_permission.rs   # CheckMicPermission / RequestMicPermission: the OS, or a fixed e2e value
 │   ├── sfu_voice_join.rs   # SFU voice join steps, run off the command loop
 │   ├── streaming.rs        # Stream host/viewer orchestration, thumbnails
 │   ├── stream_ffi.rs       # FFI structs & unsafe C callbacks for streaming
@@ -102,6 +103,7 @@ app.set_crews(...)
 | Voice channels | `CreateVoiceChannel`, `RenameVoiceChannel`, `DeleteVoiceChannel` |
 | Presence | `UpdatePresence`, `SetActiveCrew`, `SubscribeSidebar` |
 | Devices | `ListAudioDevices`, `SetCaptureDevice`, `SetPlaybackDevice` |
+| Mic permission | `CheckMicPermission`, `RequestMicPermission` |
 
 ### Event categories
 
@@ -111,7 +113,7 @@ app.set_crews(...)
 | Crews | `CrewsLoaded`, `CrewCreated`, `CrewJoined`, `DiscoverCrewsLoaded` |
 | Social | `UserSearchResults`, `CrewAvatarLoaded` |
 | Chat | `ChatHistory`, `ChatMessage` |
-| Voice | `VoiceConnected`, `VoiceMemberJoined`, `VoiceActivity`, `VoiceSfuDisconnected` |
+| Voice | `VoiceConnected`, `VoiceMemberJoined`, `VoiceActivity`, `VoiceSfuDisconnected`, `MicPermissionChanged` |
 | Streaming | `StreamStarted`, `StreamFrame`, `StreamEnded` |
 | State | `CrewStateUpdate`, `SidebarUpdate`, `VoiceChannelsUpdated` |
 | Errors | `Error { message }`, `CrewCreateFailed` |
@@ -183,6 +185,11 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 - **SFU topology:** For crews with SFU enabled, voice goes through the SFU server via **RTP audio tracks** (Opus, PT 111). The SFU creates per-sender `sendonly` tracks with `msid` = sender user_id, and renegotiates SDP when members join/leave. The client's `onTrack` callback (`setup_incoming_track`) receives each incoming track, extracts the sender_id from the `msid`, filters RTCP (PT != 111), parses the RTP header, strips it, and calls `feed_packet(sender_id, opus_payload)`. This routes audio to per-sender jitter buffers, Opus decoders, and per-peer ring buffers. A `mix_output` callback sums all peer buffers for playback. Phantom transceivers (from Pion's undeclared-SSRC handler) are filtered client-side: voice tracks must use UUID msids (contain `-`); stream viewer tracks use session-scoped msids (`stream_…`).
 - **Audio pipeline:** Mic → CoreAudio/WASAPI capture → WebRTC APM → adaptive RMS/noise-floor gate → Silero VAD on candidate speech → RNNoise/Opus only during speech/pre-roll/hangover → send via RTP audio track (SFU) or unreliable DataChannel (P2P mesh). Receive path (SFU): `onTrack` → RTP parse → `feed_packet` → per-peer jitter buffer → Opus decode → per-peer ring buffer → `mix_output` render callback → speaker.
 - **Mute/Deafen:** `SetMute` stops sending audio (capture continues for local VAD). `SetDeafen` stops playback.
+- **Microphone permission (`client/mic_permission.rs`):** The UI shows Mute, Deafen and the join buttons only when the permission is granted. Otherwise the control bar asks for it.
+  - The client sends `CheckMicPermission` at startup. The core reads the OS state through libmello (`mello_mic_permission_status`) and sends `MicPermissionChanged { granted, denied }`. Both are false when the user was not asked yet.
+  - `RequestMicPermission` opens the OS dialog (`mello_mic_request_permission`). The answer comes later, from another thread, as `MicPermissionChanged`.
+  - macOS keeps the decision for the app that is responsible for the process. A binary that a terminal or a tool starts gets the decision of that tool.
+  - Test builds only (feature `e2e-mic`, which the client's `e2e` feature turns on): `MELLO_E2E_MIC_PERMISSION=granted|denied|undetermined` fixes the answer. The core does not ask the OS. A request answers at once: `undetermined` becomes granted, as a user who presses Allow. `denied` stays denied. The core keeps the answer, so a later check agrees. Without the variable, a test build asks the OS. Voice capture does not change. See plans/E2E-QA.md §16.7.
 - **VAD callbacks:** libmello fires speaking state changes via C callback; mello-core forwards these as `VoiceActivity` events to the UI.
 - **SFU voice join off the command loop (`client/sfu_voice_join.rs`):** The SFU connect and the session join run on Tokio tasks. The loop takes each step's outcome in its `select!`. Voice ticks and other commands continue while the SFU answers or fails.
   - Step 1 (task): WebSocket connect and welcome.

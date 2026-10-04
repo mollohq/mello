@@ -53,6 +53,8 @@ export type AppState = {
   join_crew_error: string;
   mic_muted: boolean;
   deafened: boolean;
+  /** The microphone permission that the control bar shows. */
+  mic_permission: MicPermission;
   /** Open modals by name: settings, crew_settings, new_crew, join_crew, invite_share, … */
   open_modals: string[];
   /** The last 20 chat messages in the active crew, oldest first. */
@@ -95,6 +97,29 @@ export function clipboardFile(runDir: string): string {
   return join(runDir, "clipboard.txt");
 }
 
+/**
+ * The microphone permission of a test app (MELLO_E2E_MIC_PERMISSION, the
+ * `e2e-mic` feature in mello-core). The app reports it instead of the
+ * decision that macOS keeps for the app that started the driver, and a
+ * request answers at once without the OS dialog: "undetermined" becomes
+ * "granted", as a user who presses Allow.
+ */
+export type MicPermission = "granted" | "denied" | "undetermined";
+
+/**
+ * Every app gets this unless its journey asks for another value. Voice
+ * journeys then find Mute and the voice controls on every machine.
+ */
+export const DEFAULT_MIC_PERMISSION: MicPermission = "granted";
+
+/** What a journey can set for one user when it starts the app. */
+export type UserOptions = {
+  /** A deep link for argv[1], as the OS passes it. */
+  deeplink?: string;
+  /** Default: DEFAULT_MIC_PERMISSION. */
+  micPermission?: MicPermission;
+};
+
 export type AppOptions = {
   /** Path to a build with `--features development,e2e` and SLINT_EMIT_DEBUG_INFO=1. */
   binary: string;
@@ -106,6 +131,8 @@ export type AppOptions = {
   mcpPort: number;
   /** Extra environment, for example NAKAMA_HOST. */
   env?: Record<string, string>;
+  /** The microphone permission of this user. Default: DEFAULT_MIC_PERMISSION. */
+  micPermission?: MicPermission;
   /** Called with the text of each action, the same text as in actions.log. */
   onAction?: (user: string, text: string) => void;
 };
@@ -210,25 +237,7 @@ export class App {
     this.proc = spawn(this.opts.binary, args, {
       cwd: this.opts.cwd,
       stdio: ["ignore", log, log],
-      env: {
-        ...process.env,
-        MELLO_CONFIG_DIR: join(this.dir, "config"),
-        MELLO_SESSION_KEY: `e2e-${this.name}`,
-        MELLO_E2E_SESSION_FILE: this.sessionFile,
-        SLINT_MCP_PORT: String(this.opts.mcpPort),
-        MELLO_E2E_STATE_PORT: String(this.statePort),
-        NAKAMA_SERVER_KEY: "mello_dev_key",
-        // e2e-oauth seams (mello-core/src/oauth.rs): the fake provider, the
-        // browser handoff, and a short wait for a callback that never comes.
-        MELLO_E2E_OAUTH_BASE: FAKE_OAUTH,
-        MELLO_E2E_BROWSER_FILE: this.browserFile,
-        MELLO_E2E_OAUTH_TIMEOUT_MS: "8000",
-        // The machine's clipboard: one file per run, shared by every user and
-        // the browser (client/src/onboarding_invite.rs).
-        MELLO_E2E_CLIPBOARD_FILE: clipboardFile(this.opts.runDir),
-        RUST_LOG: "info,mello=debug,mello_core=debug",
-        ...this.opts.env,
-      },
+      env: this.launchEnv(),
     });
     const child = this.proc;
     live.add(child);
@@ -249,6 +258,32 @@ export class App {
       await sleep(200);
     }
     throw new DriverError(`${this.name}: no MCP or state port after 30 s; see ${this.logPath}`);
+  }
+
+  /** The environment of the app process. */
+  launchEnv(): Record<string, string | undefined> {
+    return {
+      ...process.env,
+      MELLO_CONFIG_DIR: join(this.dir, "config"),
+      MELLO_SESSION_KEY: `e2e-${this.name}`,
+      MELLO_E2E_SESSION_FILE: this.sessionFile,
+      SLINT_MCP_PORT: String(this.opts.mcpPort),
+      MELLO_E2E_STATE_PORT: String(this.statePort),
+      NAKAMA_SERVER_KEY: "mello_dev_key",
+      // e2e-oauth seams (mello-core/src/oauth.rs): the fake provider, the
+      // browser handoff, and a short wait for a callback that never comes.
+      MELLO_E2E_OAUTH_BASE: FAKE_OAUTH,
+      MELLO_E2E_BROWSER_FILE: this.browserFile,
+      MELLO_E2E_OAUTH_TIMEOUT_MS: "8000",
+      // The machine's clipboard: one file per run, shared by every user and
+      // the browser (client/src/onboarding_invite.rs).
+      MELLO_E2E_CLIPBOARD_FILE: clipboardFile(this.opts.runDir),
+      RUST_LOG: "info,mello=debug,mello_core=debug",
+      ...this.opts.env,
+      // The e2e-mic seam (mello-core/src/client/mic_permission.rs). Last, so
+      // the user's option decides, not the developer's shell or the run.
+      MELLO_E2E_MIC_PERMISSION: this.opts.micPermission ?? DEFAULT_MIC_PERMISSION,
+    };
   }
 
   /**

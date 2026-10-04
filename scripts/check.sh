@@ -78,7 +78,7 @@ step "e2e tooling (e2e feature, fake-oauth, driver)"
 # The e2e feature is off in default builds, so the steps above never compile
 # the state port, the OAuth seams or the session file. Lint and test them here.
 run cargo clippy -p mello-client --no-default-features --features development,e2e --all-targets -- -D warnings
-run cargo test -p mello-core --lib --features e2e-oauth,e2e-session
+run cargo test -p mello-core --lib --features e2e-oauth,e2e-session,e2e-mic
 if command -v go >/dev/null 2>&1; then
     (
         cd tools/fake-oauth

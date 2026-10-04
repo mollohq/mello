@@ -25,8 +25,16 @@ const TOOLS: { name: string; description: string; inputSchema: object }[] = [
   {
     name: "launch",
     description:
-      "Start a fresh, isolated mello app for a user (own config, session and ports). Optional deeplink, for example mello://join/ABCD-1234, opens as on a cold start.",
-    inputSchema: { type: "object", properties: { ...USER, deeplink: { type: "string" } }, required: ["user"] },
+      "Start a fresh, isolated mello app for a user (own config, session and ports). Optional deeplink, for example mello://join/ABCD-1234, opens as on a cold start. Optional mic_permission (default granted) is the microphone permission the app reports; on the first launch of the user only.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        ...USER,
+        deeplink: { type: "string" },
+        mic_permission: { type: "string", enum: ["granted", "denied", "undetermined"] },
+      },
+      required: ["user"],
+    },
   },
   {
     name: "restart",
@@ -148,6 +156,7 @@ export function serveMcp(opts: RunOptions): void {
             runDir,
             mcpPort: opts.mcpPortBase + users.size,
             env: opts.env,
+            micPermission: a.mic_permission,
           });
         users.set(a.user, app);
         await app.launch(a.deeplink);

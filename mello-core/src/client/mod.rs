@@ -7,6 +7,7 @@ mod crew;
 mod diagnostics;
 mod game_services;
 pub mod loop_watchdog;
+mod mic_permission;
 mod presence;
 mod push;
 mod reconnect;
@@ -189,6 +190,9 @@ pub struct Client {
     /// The social sign-in or link that waits for the browser. It runs on its
     /// own thread; the loop takes its outcome in `select!` (#88).
     browser_flows: browser_flow::BrowserFlows,
+    /// Where `CheckMicPermission` and `RequestMicPermission` get the answer:
+    /// the OS, or a fixed value in an e2e build.
+    mic_permission: mic_permission::MicPermissionSource,
 }
 
 impl Client {
@@ -335,6 +339,7 @@ impl Client {
             host_sfu_ping_ticks: 0,
             reconnect: reconnect::ReconnectSupervisor::new(),
             browser_flows: browser_flow::BrowserFlows::default(),
+            mic_permission: mic_permission::MicPermissionSource::from_env(),
         }
     }
 
@@ -814,28 +819,18 @@ impl Client {
                 }
             }
             Command::CheckMicPermission => {
-                let status = unsafe { mello_sys::mello_mic_permission_status() };
-                let granted = status == mello_sys::MelloMicPermission_MELLO_MIC_GRANTED;
-                let denied = status == mello_sys::MelloMicPermission_MELLO_MIC_DENIED;
-                let _ = self
-                    .event_tx
-                    .send(Event::MicPermissionChanged { granted, denied });
+                let p = self
+                    .mic_permission
+                    .check(mic_permission::MicPermission::from_os);
+                let _ = self.event_tx.send(p.event());
             }
             Command::RequestMicPermission => {
                 let tx = self.event_tx.clone();
-                unsafe extern "C" fn on_result(user_data: *mut std::ffi::c_void, granted: bool) {
-                    let tx = Box::from_raw(user_data as *mut std::sync::mpsc::Sender<Event>);
-                    let _ = tx.send(Event::MicPermissionChanged {
-                        granted,
-                        denied: !granted,
-                    });
-                }
-                let tx_box = Box::new(tx);
-                unsafe {
-                    mello_sys::mello_mic_request_permission(
-                        Some(on_result),
-                        Box::into_raw(tx_box) as *mut std::ffi::c_void,
-                    );
+                if let Some(p) = self
+                    .mic_permission
+                    .request(|| request_os_mic_permission(tx))
+                {
+                    let _ = self.event_tx.send(p.event());
                 }
             }
             Command::ListAudioDevices => {
@@ -1271,5 +1266,24 @@ impl Client {
                 self.reconnect.backdate_liveness();
             }
         }
+    }
+}
+
+/// Ask the OS for the microphone. macOS shows its dialog once and calls back
+/// on another thread with the answer, which goes to the UI as an event.
+fn request_os_mic_permission(tx: std::sync::mpsc::Sender<Event>) {
+    unsafe extern "C" fn on_result(user_data: *mut std::ffi::c_void, granted: bool) {
+        let tx = Box::from_raw(user_data as *mut std::sync::mpsc::Sender<Event>);
+        let _ = tx.send(Event::MicPermissionChanged {
+            granted,
+            denied: !granted,
+        });
+    }
+    let tx_box = Box::new(tx);
+    unsafe {
+        mello_sys::mello_mic_request_permission(
+            Some(on_result),
+            Box::into_raw(tx_box) as *mut std::ffi::c_void,
+        );
     }
 }
