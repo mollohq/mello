@@ -1,10 +1,15 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heroiclabs/nakama-common/api"
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 func resetGuestState() {
@@ -387,5 +392,405 @@ func TestRecordLedgerSession_GuestDoesNotJoinAMembersSession(t *testing.T) {
 
 	if got := ledgerParticipantCount("ch_1"); got != 1 {
 		t.Errorf("expected only the member in the ledger session, got %d participants", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_crew_feed voice channels
+// ---------------------------------------------------------------------------
+
+const (
+	testGuestCode = "ABCD-EFGH"
+	testGuestCrew = "crew-uuid-1"
+	testInviterID = "inviter-uuid-1"
+	testAliceID   = "member-uuid-alice"
+	testBobID     = "member-uuid-bob"
+	testGuestID   = "guest-uuid-visitor"
+	testChLounge  = "ch_lounge"
+	testChGeneral = "ch_general"
+)
+
+// seedGuestCrew builds a crew with an invite code, two members and two voice
+// channels. The channels are stored out of sort order on purpose.
+func seedGuestCrew() *fakeGuestNk {
+	nk := newFakeGuestNk()
+	nk.put(InviteCodeCollection, testGuestCode, SystemUserID, map[string]string{
+		"crew_id": testGuestCrew, "inviter_user_id": testInviterID,
+	})
+	nk.groups[testGuestCrew] = &api.Group{Id: testGuestCrew, Name: "Night Owls", EdgeCount: 2}
+	nk.addMember(testGuestCrew, testAliceID, "alice")
+	nk.addMember(testGuestCrew, testBobID, "bob")
+	nk.users[testInviterID] = &api.User{Id: testInviterID, DisplayName: "inviter"}
+	nk.put(VoiceChannelCollection, testGuestCrew, SystemUserID, VoiceChannelList{Channels: []*VoiceChannelDef{
+		{ID: testChLounge, Name: "Lounge", SortOrder: 1},
+		{ID: testChGeneral, Name: "General", IsDefault: true, SortOrder: 0},
+	}})
+	return nk
+}
+
+// seatInVoice puts a participant in a voice room the way joinVoiceRoom does,
+// without the presence writes and pushes.
+func seatInVoice(channelID, crewID string, m VoiceMemberState) {
+	voiceRoomsMu.Lock()
+	room, ok := voiceRooms[channelID]
+	if !ok {
+		room = &VoiceRoom{ChannelID: channelID, CrewID: crewID, Members: map[string]*VoiceMemberState{}}
+		voiceRooms[channelID] = room
+	}
+	member := m
+	room.Members[m.UserID] = &member
+	voiceRoomsMu.Unlock()
+
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[m.UserID] = channelID
+	voiceUserChannelMu.Unlock()
+
+	voiceChannelCrewMu.Lock()
+	voiceChannelCrew[channelID] = crewID
+	voiceChannelCrewMu.Unlock()
+}
+
+// seatGuestCrewVoice seats alice and bob in General and a guest in Lounge.
+func seatGuestCrewVoice() {
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testBobID, Username: "bob", JoinedAt: 200, Speaking: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testAliceID, Username: "alice", JoinedAt: 100, Muted: true})
+	seatInVoice(testChLounge, testGuestCrew, VoiceMemberState{UserID: testGuestID, Username: "visitor", JoinedAt: 300, Deafened: true, IsGuest: true})
+}
+
+func callGuestCrewFeed(t *testing.T, nk *fakeGuestNk) string {
+	t.Helper()
+	out, err := GuestCrewFeedRPC(context.Background(), testLogger(), nil, nk, `{"code":"abcd-efgh"}`)
+	if err != nil {
+		t.Fatalf("guest_crew_feed failed: %v", err)
+	}
+	return out
+}
+
+// findJSONKey reports the path of the first object key named key, at any depth.
+func findJSONKey(v interface{}, key, path string) (string, bool) {
+	switch x := v.(type) {
+	case map[string]interface{}:
+		for k, child := range x {
+			if k == key {
+				return path + "." + k, true
+			}
+			if p, ok := findJSONKey(child, key, path+"."+k); ok {
+				return p, true
+			}
+		}
+	case []interface{}:
+		for i, child := range x {
+			if p, ok := findJSONKey(child, key, fmt.Sprintf("%s[%d]", path, i)); ok {
+				return p, true
+			}
+		}
+	}
+	return "", false
+}
+
+func TestGuestCrewFeed_VoiceChannelsInSortOrderWithOccupants(t *testing.T) {
+	resetVoiceState()
+	seatGuestCrewVoice()
+
+	var resp guestCrewFeedResponse
+	if err := json.Unmarshal([]byte(callGuestCrewFeed(t, seedGuestCrew())), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+
+	if len(resp.VoiceChannels) != 2 {
+		t.Fatalf("expected 2 voice channels, got %d", len(resp.VoiceChannels))
+	}
+	general, lounge := resp.VoiceChannels[0], resp.VoiceChannels[1]
+	if general.ID != testChGeneral || general.Name != "General" || !general.IsDefault {
+		t.Errorf("expected General first and default, got %+v", general)
+	}
+	if lounge.ID != testChLounge || lounge.IsDefault {
+		t.Errorf("expected Lounge second and not default, got %+v", lounge)
+	}
+
+	want := []guestVoiceMember{
+		{DisplayName: "alice", Muted: true},
+		{DisplayName: "bob"},
+	}
+	if len(general.Members) != len(want) {
+		t.Fatalf("expected %d members in General, got %+v", len(want), general.Members)
+	}
+	for i := range want {
+		if general.Members[i] != want[i] {
+			t.Errorf("General member %d = %+v, want %+v (join order)", i, general.Members[i], want[i])
+		}
+	}
+	if len(lounge.Members) != 1 || lounge.Members[0] != (guestVoiceMember{DisplayName: "visitor", Deafened: true, IsGuest: true}) {
+		t.Errorf("expected the guest in Lounge, got %+v", lounge.Members)
+	}
+}
+
+func TestGuestCrewFeed_EmptyChannelHasEmptyMemberArray(t *testing.T) {
+	resetVoiceState()
+
+	out := callGuestCrewFeed(t, seedGuestCrew())
+	// The lounge iterates members directly, so an empty room must be [] not null.
+	if !strings.Contains(out, `"members":[]`) {
+		t.Errorf("expected an empty members array for an empty channel: %s", out)
+	}
+	if strings.Contains(out, `"voice_channels":null`) {
+		t.Errorf("voice_channels must be an array: %s", out)
+	}
+}
+
+// guest_crew_feed is readable by anyone with an invite code. No user ID may
+// reach it, from the voice rooms or from any other part of the payload.
+func TestGuestCrewFeed_PayloadHasNoUserIDs(t *testing.T) {
+	resetVoiceState()
+	seatGuestCrewVoice()
+
+	nk := seedGuestCrew()
+	seedLiveStream(nk)
+	out := callGuestCrewFeed(t, nk)
+
+	var generic interface{}
+	if err := json.Unmarshal([]byte(out), &generic); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	for _, key := range []string{"user_id", "member_ids", "speaking"} {
+		if path, found := findJSONKey(generic, key, "$"); found {
+			t.Errorf("guest_crew_feed has a %q key at %s: %s", key, path, out)
+		}
+	}
+	for _, id := range []string{testAliceID, testBobID, testGuestID, testInviterID, testGuestCrew, testStreamID, "thumb.jpg", "viewer-uuid"} {
+		if strings.Contains(out, id) {
+			t.Errorf("guest_crew_feed leaked the ID %q: %s", id, out)
+		}
+	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_crew_feed live streams
+// ---------------------------------------------------------------------------
+
+const testStreamID = "stream_member-u_1700000000000"
+
+// seedLiveStream makes alice stream Counter-Strike 2 in the test crew.
+func seedLiveStream(nk *fakeGuestNk) {
+	nk.put(StreamMetaCollection, testGuestCrew, SystemUserID, StreamMeta{
+		StreamID:         testStreamID,
+		CrewID:           testGuestCrew,
+		StreamerID:       testAliceID,
+		StreamerUsername: "alice",
+		Title:            "ranked grind",
+		StartedAt:        "2026-10-03T18:00:00Z",
+		ThumbnailURL:     "https://cdn.example/thumb.jpg",
+		ViewerIDs:        []string{"viewer-uuid-1"},
+	})
+	nk.put(PresenceCollection, testAliceID, testAliceID, UserPresence{
+		UserID: testAliceID,
+		Status: StatusOnline,
+		Game:   &GamePresence{GameName: "Counter-Strike 2", GameID: "counter-strike-2"},
+	})
+}
+
+func TestGuestCrewFeed_LiveStreamNameAndGame(t *testing.T) {
+	resetVoiceState()
+	nk := seedGuestCrew()
+	seedLiveStream(nk)
+
+	var resp guestCrewFeedResponse
+	if err := json.Unmarshal([]byte(callGuestCrewFeed(t, nk)), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	want := guestLiveStream{StreamerName: "alice", Game: "Counter-Strike 2"}
+	if len(resp.LiveStreams) != 1 || resp.LiveStreams[0] != want {
+		t.Errorf("live_streams = %+v, want [%+v]", resp.LiveStreams, want)
+	}
+}
+
+func TestGuestCrewFeed_NoLiveStreamIsAnEmptyArray(t *testing.T) {
+	resetVoiceState()
+
+	out := callGuestCrewFeed(t, seedGuestCrew())
+	if !strings.Contains(out, `"live_streams":[]`) {
+		t.Errorf("expected an empty live_streams array: %s", out)
+	}
+}
+
+func TestProjectGuestLiveStreams(t *testing.T) {
+	if got := projectGuestLiveStreams(&CrewStreamState{Active: false, StreamerUsername: "ghost"}, nil); len(got) != 0 {
+		t.Errorf("an inactive stream must not be listed, got %+v", got)
+	}
+	got := projectGuestLiveStreams(&CrewStreamState{Active: true, StreamerUsername: "bob"}, nil)
+	if len(got) != 1 || got[0] != (guestLiveStream{StreamerName: "bob"}) {
+		t.Errorf("a streamer with no game presence keeps an empty game, got %+v", got)
+	}
+}
+
+// ---------------------------------------------------------------------------
+// guest_voice_roster
+// ---------------------------------------------------------------------------
+
+func callGuestVoiceRoster(ctx context.Context, nk *fakeGuestNk) (string, error) {
+	return GuestVoiceRosterRPC(ctx, testLogger(), nil, nk, "{}")
+}
+
+func assertRuntimeErrorCode(t *testing.T, err error, want int) {
+	t.Helper()
+	if err == nil {
+		t.Fatalf("expected an error with code %d, got success", want)
+	}
+	rerr, ok := err.(*runtime.Error)
+	if !ok {
+		t.Fatalf("expected a *runtime.Error, got %T: %v", err, err)
+	}
+	if rerr.Code != want {
+		t.Errorf("error code = %d (%q), want %d", rerr.Code, rerr.Message, want)
+	}
+}
+
+// seatGuestInGeneral seats the test guest in General next to alice and bob,
+// and records the guest session as guest_voice_join does.
+func seatGuestInGeneral() {
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testBobID, Username: "bob", JoinedAt: 200, Deafened: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testAliceID, Username: "alice", JoinedAt: 100, Muted: true})
+	seatInVoice(testChGeneral, testGuestCrew, VoiceMemberState{UserID: testGuestID, Username: "visitor", JoinedAt: 300, IsGuest: true})
+	rememberGuestSession(testGuestID, testGuestCrew, testChGeneral)
+}
+
+func TestGuestVoiceRoster_ReturnsTheGuestsChannel(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+	// Someone in another channel must not appear in the guest's roster.
+	seatInVoice(testChLounge, testGuestCrew, VoiceMemberState{UserID: "member-uuid-carol", Username: "carol", JoinedAt: 50})
+
+	out, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	if err != nil {
+		t.Fatalf("roster failed: %v", err)
+	}
+	var resp guestVoiceRosterResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("decode: %v", err)
+	}
+	if resp.ChannelID != testChGeneral || resp.ChannelName != "General" {
+		t.Errorf("expected General, got id=%q name=%q", resp.ChannelID, resp.ChannelName)
+	}
+	want := []guestRosterMember{
+		{UserID: testAliceID, DisplayName: "alice", Muted: true},
+		{UserID: testBobID, DisplayName: "bob", Deafened: true},
+		{UserID: testGuestID, DisplayName: "visitor", IsGuest: true},
+	}
+	if len(resp.Members) != len(want) {
+		t.Fatalf("expected %d members, got %+v", len(want), resp.Members)
+	}
+	for i := range want {
+		if resp.Members[i] != want[i] {
+			t.Errorf("member %d = %+v, want %+v", i, resp.Members[i], want[i])
+		}
+	}
+	if strings.Contains(out, "speaking") {
+		t.Errorf("roster must not carry speaking: %s", out)
+	}
+}
+
+func TestGuestVoiceRoster_RequiresASession(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The HTTP key path has no user in the context.
+	_, err := callGuestVoiceRoster(context.Background(), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 16)
+}
+
+func TestGuestVoiceRoster_RejectsCrewMembers(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// alice sits in the same channel through voice_join, with no guest session.
+	_, err := callGuestVoiceRoster(ctxWithUser(testAliceID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 7)
+}
+
+func TestGuestVoiceRoster_RejectsAGuestWithNoSeat(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The voice GC removed the seat, but the guest session is still there.
+	voiceUserChannelMu.Lock()
+	delete(voiceUserChannel, testGuestID)
+	voiceUserChannelMu.Unlock()
+	voiceRoomsMu.Lock()
+	delete(voiceRooms[testChGeneral].Members, testGuestID)
+	voiceRoomsMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
+}
+
+func TestGuestVoiceRoster_RejectsAGuestInAnotherChannel(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// The seat moved away from the channel the guest session records.
+	voiceUserChannelMu.Lock()
+	voiceUserChannel[testGuestID] = testChLounge
+	voiceUserChannelMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
+}
+
+func TestGuestVoiceRoster_RejectsAnExpiredGuest(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+
+	// ExpireGuestSessions runs on the reconciler tick, so a session can outlive
+	// the TTL for a short time. The roster must not serve it.
+	guestSessionsMu.Lock()
+	guestSessions[testGuestID].JoinedAt = time.Now().Add(-GuestSessionTTL - time.Minute)
+	guestSessionsMu.Unlock()
+
+	_, err := callGuestVoiceRoster(ctxWithUser(testGuestID), seedGuestCrew())
+	assertRuntimeErrorCode(t, err, 9)
+}
+
+// ---------------------------------------------------------------------------
+// Mute and speaking from a browser guest
+// ---------------------------------------------------------------------------
+
+func voiceMember(channelID, userID string) VoiceMemberState {
+	voiceRoomsMu.RLock()
+	defer voiceRoomsMu.RUnlock()
+	return *voiceRooms[channelID].Members[userID]
+}
+
+// The lounge sends voice_mute_state and voice_speaking for the guest. Neither
+// RPC may require crew membership, or members never see the guest speak.
+func TestSeatedGuestCanSetMuteAndSpeaking(t *testing.T) {
+	resetVoiceState()
+	resetGuestState()
+	seatGuestInGeneral()
+	ctx := ctxWithUser(testGuestID)
+
+	if _, err := VoiceMuteStateRPC(ctx, testLogger(), nil, nil, `{"muted":true,"deafened":true}`); err != nil {
+		t.Fatalf("voice_mute_state failed for a seated guest: %v", err)
+	}
+	if _, err := VoiceSpeakingRPC(ctx, testLogger(), nil, nil, `{"speaking":true}`); err != nil {
+		t.Fatalf("voice_speaking failed for a seated guest: %v", err)
+	}
+
+	m := voiceMember(testChGeneral, testGuestID)
+	if !m.Muted || !m.Deafened || !m.Speaking {
+		t.Errorf("guest state not stored: muted=%v deafened=%v speaking=%v", m.Muted, m.Deafened, m.Speaking)
+	}
+
+	voiceDirtyMu.Lock()
+	dirty := voiceDirty[testGuestCrew]
+	delete(voiceDirty, testGuestCrew)
+	voiceDirtyMu.Unlock()
+	if !dirty {
+		t.Error("expected a voice_update push to be queued for the guest's crew")
 	}
 }
