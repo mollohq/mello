@@ -35,6 +35,12 @@ export type Journey = {
   flows: string[];
   /** Known issues that make this journey fail today, for the report. */
   knownIssues?: number[];
+  /**
+   * The journey joins voice. Voice runs only through the local SFU: `run`
+   * stops before it starts when the SFU does not answer (config.ts,
+   * checkSfu), and each join fails on a P2P call (voice.ts, expectSfuVoice).
+   */
+  voice?: boolean;
   run(ctx: JourneyContext): Promise<void>;
 };
 

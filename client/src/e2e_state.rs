@@ -14,7 +14,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use mello_core::Event;
+use mello_core::{Event, VoiceMode};
 use serde::Serialize;
 use slint::{ComponentHandle, Model};
 
@@ -25,6 +25,8 @@ const EVENT_TAIL: usize = 200;
 
 static EVENTS: Mutex<VecDeque<EventRecord>> = Mutex::new(VecDeque::new());
 static EVENT_SEQ: Mutex<u64> = Mutex::new(0);
+/// The transport of the current voice call, from the core's events.
+static VOICE_TRANSPORT: Mutex<Option<&'static str>> = Mutex::new(None);
 
 #[derive(Serialize, Clone)]
 struct EventRecord {
@@ -35,6 +37,9 @@ struct EventRecord {
     /// Only for `Error`: the UI never shows these, so the driver must see them.
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// Only for `VoiceStateChanged`: `"sfu"`, `"p2p"` or `"disconnected"`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    transport: Option<&'static str>,
 }
 
 #[derive(Serialize)]
@@ -88,6 +93,9 @@ struct Snapshot {
     /// The last 20 chat messages in the active crew, oldest first.
     messages: Vec<MessageSnap>,
     voice_channels: Vec<VoiceChannelSnap>,
+    /// The transport of the current voice call: `"sfu"` or `"p2p"`. `None`
+    /// (JSON `null`) when not in a call. See [`transport_after`].
+    voice_transport: Option<&'static str>,
     last_event_seq: u64,
 }
 
@@ -112,12 +120,49 @@ struct VoiceMemberSnap {
     deafened: bool,
 }
 
+/// The name of a transport, as the state port reports it.
+fn transport_name(mode: VoiceMode) -> &'static str {
+    match mode {
+        VoiceMode::SFU => "sfu",
+        VoiceMode::P2P => "p2p",
+        VoiceMode::Disconnected => "disconnected",
+    }
+}
+
+/// The transport of the current voice call after `ev`, from `prev`.
+///
+/// The core reports the transport in `VoiceStateChanged` when a call starts
+/// on the SFU or on P2P (an SFU join that failed and fell back), and when the
+/// call ends. `VoiceSfuDisconnected` means the SFU call dropped: there is no
+/// transport until the core joins again. A channel switch keeps the old value
+/// until the new call starts: the core reports no event when it stops the old
+/// media. The driver therefore waits on the first `VoiceStateChanged` after
+/// the `VoiceJoined` of the channel (tools/mello-driver/src/voice.ts).
+fn transport_after(prev: Option<&'static str>, ev: &Event) -> Option<&'static str> {
+    match ev {
+        Event::VoiceStateChanged { transport, .. } => match transport {
+            VoiceMode::Disconnected => None,
+            mode => Some(transport_name(*mode)),
+        },
+        Event::VoiceSfuDisconnected { .. } => None,
+        _ => prev,
+    }
+}
+
 /// Record a core event before the UI handles it. Called from the poll loop.
 pub fn record_event(ev: &Event) {
     let message = match ev {
         Event::Error { message } => Some(message.clone()),
         _ => None,
     };
+    let transport = match ev {
+        Event::VoiceStateChanged { transport, .. } => Some(transport_name(*transport)),
+        _ => None,
+    };
+    {
+        let mut t = VOICE_TRANSPORT.lock().expect("voice transport lock");
+        *t = transport_after(*t, ev);
+    }
     let seq = {
         let mut s = EVENT_SEQ.lock().expect("event seq lock");
         *s += 1;
@@ -131,6 +176,7 @@ pub fn record_event(ev: &Event) {
             .unwrap_or_default(),
         kind: perf_scenarios::event_type(ev).to_string(),
         message,
+        transport,
     };
     let mut q = EVENTS.lock().expect("event tail lock");
     if q.len() == EVENT_TAIL {
@@ -309,6 +355,53 @@ fn read(app: &MainWindow) -> Snapshot {
                     .collect(),
             })
             .collect(),
+        voice_transport: *VOICE_TRANSPORT.lock().expect("voice transport lock"),
         last_event_seq: *EVENT_SEQ.lock().expect("event seq lock"),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn state_changed(in_call: bool, transport: VoiceMode) -> Event {
+        Event::VoiceStateChanged { in_call, transport }
+    }
+
+    #[test]
+    fn the_transport_follows_the_core_voice_events() {
+        let sfu = transport_after(None, &state_changed(true, VoiceMode::SFU));
+        assert_eq!(sfu, Some("sfu"));
+        assert_eq!(
+            transport_after(None, &state_changed(true, VoiceMode::P2P)),
+            Some("p2p"),
+            "an SFU join that fell back to P2P must show as p2p"
+        );
+        assert_eq!(
+            transport_after(sfu, &state_changed(true, VoiceMode::Disconnected)),
+            None,
+            "voice capture did not start: no transport"
+        );
+        assert_eq!(
+            transport_after(sfu, &state_changed(false, VoiceMode::Disconnected)),
+            None,
+            "the call ended"
+        );
+        assert_eq!(
+            transport_after(
+                sfu,
+                &Event::VoiceSfuDisconnected {
+                    crew_id: "c".into(),
+                    reason: "liveness_timeout".into()
+                }
+            ),
+            None,
+            "the SFU call dropped"
+        );
+        assert_eq!(
+            transport_after(sfu, &Event::MicLevel { level: 0.5 }),
+            sfu,
+            "other events keep the transport"
+        );
     }
 }

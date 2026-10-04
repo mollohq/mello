@@ -31,6 +31,9 @@
 //                     SLINT_EMIT_DEBUG_INFO=1 cargo build -p mello-client
 //                       --no-default-features --features development,e2e
 //   NAKAMA_HOST/PORT  local stack (default 127.0.0.1:7350)
+//   MELLO_E2E_SFU_HEALTH  health address of the local SFU (default
+//                     http://127.0.0.1:8080/health). `run` checks it before a
+//                     journey that uses voice, and stops when it does not answer.
 //   MELLO_E2E_ARTIFACTS  artifact root (default target/e2e)
 
 import { resolve } from "node:path";
@@ -54,11 +57,6 @@ async function run(args: string[]): Promise<number> {
   }
   const { files, repeat } = parsed;
   const opts = defaultOptions();
-  await preflight(opts);
-  if (parsed.events) {
-    opts.events = new EventWriter(resolve(parsed.events));
-    opts.liveScreenshotMs = parsed.liveScreenshotMs;
-  }
 
   // `file.ts` runs the default export, `file.ts#name` one named export, and
   // `file.ts#*` every exported journey in the file.
@@ -75,6 +73,11 @@ async function run(args: string[]): Promise<number> {
       if (!isJourney(j)) throw new Error(`${spec}: no journey export "${name ?? "default"}"`);
       journeys.push(j as Journey);
     }
+  }
+  await preflight(opts, journeys);
+  if (parsed.events) {
+    opts.events = new EventWriter(resolve(parsed.events));
+    opts.liveScreenshotMs = parsed.liveScreenshotMs;
   }
 
   let failed = 0;

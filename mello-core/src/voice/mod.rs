@@ -23,8 +23,13 @@ const SFU_SIGNALING_GRACE_MS: u64 = 5_000;
 /// of pongs means the control round-trip is dead and the session is unhealthy.
 const SFU_PONG_GRACE_MS: i64 = 15_000;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+/// How voice is carried: through the SFU, over P2P, or not at all.
+/// `VoiceStateChanged` reports it. Serialized as `"sfu"`, `"p2p"` or
+/// `"disconnected"`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum VoiceMode {
+    #[default]
     Disconnected,
     P2P,
     SFU,

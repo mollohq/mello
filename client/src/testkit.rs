@@ -326,6 +326,7 @@ impl Harness {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use mello_core::VoiceMode;
 
     /// UI → core, through the real `callbacks::wire_all`.
     #[test]
@@ -350,7 +351,10 @@ mod tests {
         let mut h = Harness::new();
         assert!(!h.app().get_in_voice());
 
-        h.emit(Event::VoiceStateChanged { in_call: true });
+        h.emit(Event::VoiceStateChanged {
+            in_call: true,
+            transport: VoiceMode::SFU,
+        });
 
         assert!(
             h.app().get_in_voice(),
@@ -365,10 +369,16 @@ mod tests {
         let mut h = Harness::new();
 
         h.event_tx
-            .send(Event::VoiceStateChanged { in_call: true })
+            .send(Event::VoiceStateChanged {
+                in_call: true,
+                transport: VoiceMode::SFU,
+            })
             .unwrap();
         h.event_tx
-            .send(Event::VoiceStateChanged { in_call: false })
+            .send(Event::VoiceStateChanged {
+                in_call: false,
+                transport: VoiceMode::Disconnected,
+            })
             .unwrap();
         h.pump();
 

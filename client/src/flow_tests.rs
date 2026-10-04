@@ -10,7 +10,7 @@ use std::ops::ControlFlow;
 use base64::Engine as _;
 use i_slint_backend_testing::ElementHandle;
 use mello_core::crew_events::{FeedEntry, FeedResponse, FeedSection};
-use mello_core::{decode_clip_waveform, Command, Event};
+use mello_core::{decode_clip_waveform, Command, Event, VoiceMode};
 use slint::{ComponentHandle as _, Model};
 
 use crate::testkit::{Harness, MainWindow};
@@ -638,10 +638,16 @@ fn undeafen_keeps_mic_muted_when_it_was_muted_before() {
 fn voice_state_change_updates_the_ui() {
     let mut h = Harness::new();
 
-    h.emit(Event::VoiceStateChanged { in_call: true });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
     assert!(h.app().get_in_voice());
 
-    h.emit(Event::VoiceStateChanged { in_call: false });
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
     assert!(!h.app().get_in_voice());
 }
 
@@ -725,7 +731,10 @@ fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
         "the crew update came before the call started"
     );
 
-    h.emit(Event::VoiceStateChanged { in_call: true });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
     assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
 
     h.emit(Event::CrewStateLoaded {
@@ -745,7 +754,10 @@ fn a_failed_join_clears_the_active_channel() {
     h.emit(Event::CrewStateLoaded {
         state: crew_state_with_channels(&["u-me"]),
     });
-    h.emit(Event::VoiceStateChanged { in_call: false });
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
     assert!(
         active_voice_channels(&h).is_empty(),
         "the join failed, so no channel is active"
