@@ -475,6 +475,7 @@ Harness tests use synthetic core events. No P0 flow except onboarding and invite
 | State port additions | `client/src/e2e_state.rs` | Chat messages, voice channels and members, mic and deafen, open modals, link error, sign-in spinner. |
 | Fake OAuth provider | `tools/fake-oauth/`, `backend/docker-compose.e2e.yml` | Go, standard library only. Discord, Twitch, Steam, Google on their real paths. Scripted outcomes. 11 unit tests. |
 | Client OAuth seams | `mello-core/src/oauth.rs`, feature `e2e-oauth` | Provider base URL, browser handoff file, short callback wait. |
+| Client mic permission seam | `mello-core/src/client/mic_permission.rs`, feature `e2e-mic` | A fixed microphone permission from `MELLO_E2E_MIC_PERMISSION`. See §16.7. |
 | Browser step | `tools/mello-driver/src/browser.ts` | Playwright 1.63.0, the one npm dependency. |
 | `check.sh` e2e lane | `scripts/check.sh` | Lints and tests the e2e feature, fake-oauth and the driver. |
 
@@ -593,3 +594,78 @@ Over P2P the call started before the reload, so the journey passed. The journey 
 | Rapid switch, last click to settled | Not measured | 54 to 161 ms (19 runs) |
 | Rapid switch, first click to settled | At most about 5 s | 4.7 to 9.7 s. The clicks wait for bob's channel list (#96). |
 | Rapid switch limit | 10 s from the first click | 2 s from the last click |
+
+## 16.7 Microphone Permission (2026-10-04)
+
+### 16.7.1 The problem
+
+The control bar shows Mute and Deafen only when the microphone permission is granted.
+Otherwise it shows "Microphone access is needed for voice chat" and "ALLOW MICROPHONE".
+A voice journey then fails at its first click on "Mute".
+
+macOS keeps the permission for the app that is responsible for the process, not for the test binary.
+The driver starts the binary, so the responsible app is the app that started the driver.
+
+| Started from | Responsible app (tccd log) | Permission | Result |
+|---|---|---|---|
+| A Claude Code session | `com.anthropic.claude-code` | Granted earlier by the user | Mute shows. Voice journeys pass. |
+| The QA harness app | The harness app bundle | Not determined. The bundle has no `NSMicrophoneUsageDescription`. | No Mute. `voice-two-users.ts` fails at "alice mutes". |
+
+"ALLOW MICROPHONE" opens an OS dialog. The driver cannot click it.
+macOS has no command that grants the permission. `tccutil` only resets it.
+
+### 16.7.2 How it works
+
+| Part | Where | What it does |
+|---|---|---|
+| Switch in the core | `mello-core/src/client/mic_permission.rs`, feature `e2e-mic` | `MELLO_E2E_MIC_PERMISSION=granted\|denied\|undetermined`. `CheckMicPermission` reports the value and does not ask the OS. `RequestMicPermission` answers at once with no OS dialog: `undetermined` becomes granted, as a user who presses Allow. `denied` stays denied. A later check agrees. No variable: the OS is asked, as in a release build. |
+| Feature | `client/Cargo.toml` | The client's `e2e` feature turns on `mello-core/e2e-mic`. Shipped builds do not contain the switch. |
+| Driver default | `tools/mello-driver/src/app.ts` | Each app gets `granted`. The run environment and the developer's shell do not change it. |
+| Per-user option | `ctx.launch(name, { micPermission, deeplink })` | A journey sets another value for one user. `launch(name, deeplink)` still works. The MCP `launch` tool takes `mic_permission`. |
+| State port | `client/src/e2e_state.rs` | `/state` has `mic_permission`: `"granted"`, `"denied"` or `"undetermined"`, from the UI properties. |
+
+The default is `granted` because a voice journey tests voice, not the permission.
+The permission screens have their own journeys:
+
+| Journey | Flow | Checks |
+|---|---|---|
+| `mic-permission.ts#undetermined` | VOICE-07 | The bar asks for the microphone, with "ALLOW MICROPHONE" and no Mute. A click on "ALLOW MICROPHONE" makes Mute show and the prompt go. |
+| `mic-permission.ts#denied` | VOICE-06 | The bar says access is denied, with "OPEN SETTINGS" and no Mute. The journey does not click "OPEN SETTINGS": it opens System Settings. |
+
+A journey that tests the permission screens must:
+
+- Set `micPermission` for the user in `launch`.
+- Wait for `mic_permission` on the state port before it checks the screen.
+
+### 16.7.3 Voice capture still opens the real microphone
+
+The switch changes only the two commands. Voice capture does not change.
+libmello opens the input through CoreAudio (`kAudioUnitSubType_HALOutput` in `capture_coreaudio.cpp`, `VoiceProcessingIO` in `vpio_duplex.cpp`).
+The tccd log shows a microphone access check (`preflight=no`) when the app initializes the capture unit at startup, before any voice join.
+
+| Responsible app | What tccd does at that check | Dialog |
+|---|---|---|
+| Granted | Allows (`authValue=2`). Capture gets the real microphone. | No |
+| Not determined, no `NSMicrophoneUsageDescription` (the QA harness app) | "Refusing authorization request … without NSMicrophoneUsageDescription key". Capture gets silence. | No |
+| Not determined, with `NSMicrophoneUsageDescription` (for example a terminal app) | Prompts (`AUTHREQ_PROMPTING`) | Yes, from macOS, at app startup. Not observed in these runs. |
+
+A dialog can therefore appear when the driver runs from a new terminal app that has a usage description.
+The fix is a silent test input (§5.1, "Media injection"): in an `e2e` build, a capture backend that reads a WAV file or silence and opens no CoreAudio input.
+This change does not build it.
+
+### 16.7.4 Results
+
+macOS, local stack and local SFU, `MELLO_E2E_PORT_BASE=49000`, run from a Claude Code session.
+
+| Journey | Runs | Passed | Failures |
+|---|---|---|---|
+| `voice-two-users.ts` | 5 | 5 | None. Every call reported `sfu`. |
+| `mic-permission.ts#undetermined` | 5 (one invocation) | 5 | None |
+| `mic-permission.ts#denied` | 10 (one invocation) | 10 | None |
+| `voice-channels.ts#*` | 3 | createChannel 2, rapidSwitch 2 | 1 each: "Add channel" was not on screen. A data update closed alice's crew menu (#105). |
+
+The driver process crashed 3 times in 3 invocations that ran both mic journeys 5 times.
+Each crash was `Error: setTypeOfService EINVAL` from the `fetch` in Node 24.15.0 (undici `writeH1`).
+It is a Node bug: undici 7 calls `setTypeOfService` with no `try` when the peer resets the connection (nodejs/undici#5544, fixed in undici 8.8.0, Node 26.5.1).
+The crash ends the driver, not a journey step, and it leaves the app of the running journey alive.
+No fix in this change.
