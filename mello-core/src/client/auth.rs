@@ -155,9 +155,10 @@ impl super::Client {
         // scheduler can't try to rejoin the old channel after logout.
         self.last_voice_channel = None;
         self.sfu_voice_reconnect = None;
-        let _ = self
-            .event_tx
-            .send(Event::VoiceStateChanged { in_call: false });
+        let _ = self.event_tx.send(Event::VoiceStateChanged {
+            in_call: false,
+            transport: crate::voice::VoiceMode::Disconnected,
+        });
 
         session::clear();
         if let Err(e) = self.nakama.leave_crew_channel().await {

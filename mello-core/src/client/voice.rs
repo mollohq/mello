@@ -32,9 +32,10 @@ impl super::Client {
                     log::warn!("SFU voice reconnect: giving up after {} attempts", attempt);
                     self.sfu_voice_reconnect = None;
                     self.last_voice_channel = None;
-                    let _ = self
-                        .event_tx
-                        .send(Event::VoiceStateChanged { in_call: false });
+                    let _ = self.event_tx.send(Event::VoiceStateChanged {
+                        in_call: false,
+                        transport: crate::voice::VoiceMode::Disconnected,
+                    });
                 } else {
                     log::info!(
                         "SFU voice reconnect attempt {} for channel {}",
@@ -204,9 +205,12 @@ impl super::Client {
             self.sfu_voice_reconnect = None;
         }
 
-        let _ = self
-            .event_tx
-            .send(Event::VoiceStateChanged { in_call: true });
+        // The transport is the one that started: the SFU, or P2P after an
+        // SFU join failed.
+        let _ = self.event_tx.send(Event::VoiceStateChanged {
+            in_call: true,
+            transport: self.voice.voice_mode(),
+        });
 
         // Auto-start clip buffer for voice clip capture
         self.handle_start_clip_buffer();
@@ -235,9 +239,10 @@ impl super::Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self
-            .event_tx
-            .send(Event::VoiceStateChanged { in_call: false });
+        let _ = self.event_tx.send(Event::VoiceStateChanged {
+            in_call: false,
+            transport: crate::voice::VoiceMode::Disconnected,
+        });
     }
 
     pub(super) async fn handle_create_voice_channel(&self, crew_id: &str, name: &str) {
@@ -371,7 +376,7 @@ mod tests {
     }
 
     fn is_in_call(ev: &Event) -> bool {
-        matches!(ev, Event::VoiceStateChanged { in_call: true })
+        matches!(ev, Event::VoiceStateChanged { in_call: true, .. })
     }
 
     #[tokio::test]

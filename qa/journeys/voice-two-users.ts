@@ -1,22 +1,24 @@
 // VOICE-01, VOICE-02, VOICE-04: two members join the same voice channel, see
 // each other, one mutes, then leaves. Each side checks what the other sees.
+// Both calls run through the local SFU. A P2P call fails the journey.
 
 import { voiceMembers } from "../../tools/mello-driver/src/app.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
+import { joinVoice } from "./lib/voice.ts";
 
 const CHANNEL = "General";
 
 export default journey({
   id: "voice.two-users",
   flows: ["VOICE-01", "VOICE-02", "VOICE-04"],
+  voice: true,
   async run(ctx) {
     const { step, expect } = ctx;
     const { alice, bob, aliceName, bobName } = await twoUsersInOneCrew(ctx);
 
-    await step(`alice joins ${CHANNEL}`, async () => {
-      await alice.click(CHANNEL);
-      await alice.waitFor("alice is in voice", (s) => s.in_voice, 20_000);
+    await step(`alice joins ${CHANNEL} through the SFU`, async () => {
+      await joinVoice(alice, CHANNEL);
       await alice.waitFor(`alice listed in ${CHANNEL}`, (s) => voiceMembers(s, CHANNEL).includes(aliceName));
     });
 
@@ -24,9 +26,8 @@ export default journey({
       await bob.waitFor(`alice listed in ${CHANNEL} on bob`, (s) => voiceMembers(s, CHANNEL).includes(aliceName));
     });
 
-    await step(`bob joins ${CHANNEL}, both see both`, async () => {
-      await bob.click(CHANNEL);
-      await bob.waitFor("bob is in voice", (s) => s.in_voice, 20_000);
+    await step(`bob joins ${CHANNEL} through the SFU, both see both`, async () => {
+      await joinVoice(bob, CHANNEL);
       for (const u of [alice, bob]) {
         await u.waitFor(`${u.name} sees both in ${CHANNEL}`, (s) => {
           const m = voiceMembers(s, CHANNEL);

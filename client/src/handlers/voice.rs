@@ -12,7 +12,7 @@ use crate::{AudioDeviceData, MemberData, VoiceChannelData, VoiceChannelMember};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
-        Event::VoiceStateChanged { in_call } => {
+        Event::VoiceStateChanged { in_call, .. } => {
             ctx.app.set_in_voice(in_call);
             log::info!("UI: voice state changed, in_call={}", in_call);
 

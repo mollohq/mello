@@ -119,7 +119,7 @@ impl PollState {
                 };
                 // Update tray icon based on voice state changes
                 match &event {
-                    Event::VoiceStateChanged { in_call } => {
+                    Event::VoiceStateChanged { in_call, .. } => {
                         let state = if *in_call {
                             VoiceState::Connected
                         } else {

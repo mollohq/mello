@@ -416,21 +416,24 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             .collect()
                     })
                     .unwrap_or_default();
-                let avc_id = if ctx.app.get_in_voice() {
-                    let current_avc = ctx.active_voice_channel.borrow().clone();
-                    if current_avc.is_empty() {
-                        let default_id = state
-                            .voice_channels
-                            .iter()
-                            .find(|ch| ch.is_default)
-                            .or_else(|| state.voice_channels.first())
-                            .map(|ch| ch.id.clone())
-                            .unwrap_or_default();
-                        *ctx.active_voice_channel.borrow_mut() = default_id.clone();
-                        default_id
-                    } else {
-                        current_avc
-                    }
+                // The joined channel stays active from VoiceJoined until
+                // VoiceStateChanged { in_call: false } clears it (leave or
+                // failed join). An SFU call starts after this update can
+                // come, so do not wait for in_voice (#129). The default
+                // channel is a fallback only while in a call.
+                let current_avc = ctx.active_voice_channel.borrow().clone();
+                let avc_id = if !current_avc.is_empty() {
+                    current_avc
+                } else if ctx.app.get_in_voice() {
+                    let default_id = state
+                        .voice_channels
+                        .iter()
+                        .find(|ch| ch.is_default)
+                        .or_else(|| state.voice_channels.first())
+                        .map(|ch| ch.id.clone())
+                        .unwrap_or_default();
+                    *ctx.active_voice_channel.borrow_mut() = default_id.clone();
+                    default_id
                 } else {
                     String::new()
                 };

@@ -306,9 +306,10 @@ impl super::Client {
     pub(super) async fn handle_select_crew(&mut self, crew_id: &str) {
         self.sfu_leave_if_connected().await;
         self.voice.leave_voice();
-        let _ = self
-            .event_tx
-            .send(Event::VoiceStateChanged { in_call: false });
+        let _ = self.event_tx.send(Event::VoiceStateChanged {
+            in_call: false,
+            transport: crate::voice::VoiceMode::Disconnected,
+        });
 
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::warn!("Failed to leave previous channel: {}", e);
@@ -444,9 +445,10 @@ impl super::Client {
             }
         }
         self.voice.leave_voice();
-        let _ = self
-            .event_tx
-            .send(Event::VoiceStateChanged { in_call: false });
+        let _ = self.event_tx.send(Event::VoiceStateChanged {
+            in_call: false,
+            transport: crate::voice::VoiceMode::Disconnected,
+        });
         let crew_id = self.nakama.active_crew_id().map(String::from);
         if let Err(e) = self.nakama.leave_crew_channel().await {
             log::error!("Failed to leave crew: {}", e);
