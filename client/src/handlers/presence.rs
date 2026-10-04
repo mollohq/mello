@@ -345,8 +345,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     c
                 })
                 .collect();
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
                 if let Some(ref stream) = state.stream {
@@ -803,8 +802,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     catchup_requests.push(sc.crew_id.clone());
                 }
             }
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
 
             for crew_id in catchup_requests {
                 let _ = ctx.cmd_tx.send(Command::CrewCatchup {
@@ -840,8 +838,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     c
                 })
                 .collect();
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
         }
         Event::MomentPosted { event_id } => {
             log::info!("UI: moment posted, event_id={}", event_id);

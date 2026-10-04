@@ -354,8 +354,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         c
                     })
                     .collect();
-                ctx.app
-                    .set_crews(Rc::new(slint::VecModel::from(cleared)).into());
+                crate::converters::sync_crews(&ctx.app, cleared);
                 ctx.chat_messages.borrow_mut().clear();
                 ctx.chat_scroll.reset_on_messages_loaded();
                 let empty: Vec<ChatMessageData> = vec![];
@@ -399,8 +398,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     c
                 })
                 .collect();
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
             crate::converters::set_active_crew(&ctx.app, "");
         }
         Event::CrewInviteResolved { code, invite } => {
@@ -526,8 +524,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .filter_map(|i| crews.row_data(i))
                 .filter(|c| c.id != crew_id.as_str())
                 .collect();
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
             if ctx.app.get_active_crew_id() == crew_id.as_str() {
                 crate::converters::set_active_crew(&ctx.app, "");
             }

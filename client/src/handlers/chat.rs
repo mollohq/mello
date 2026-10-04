@@ -227,8 +227,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     c.m1_text = m.preview.clone().into();
                 }
             }
-            ctx.app
-                .set_crews(Rc::new(slint::VecModel::from(updated)).into());
+            crate::converters::sync_crews(&ctx.app, updated);
         }
         _ => {}
     }
