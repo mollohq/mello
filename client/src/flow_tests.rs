@@ -651,6 +651,121 @@ fn voice_state_change_updates_the_ui() {
     assert!(!h.app().get_in_voice());
 }
 
+/// A crew state with a default channel `General` and a channel `Squad`.
+/// `in_squad` lists the user ids in `Squad`.
+fn crew_state_with_channels(in_squad: &[&str]) -> mello_core::crew_state::CrewState {
+    use mello_core::crew_state::{CrewState, VoiceChannelState, VoiceMember};
+    CrewState {
+        crew_id: "crew-1".into(),
+        name: "Crew".into(),
+        voice_channels: vec![
+            VoiceChannelState {
+                id: "ch-general".into(),
+                name: "General".into(),
+                is_default: true,
+                members: vec![],
+            },
+            VoiceChannelState {
+                id: "ch-squad".into(),
+                name: "Squad".into(),
+                is_default: false,
+                members: in_squad
+                    .iter()
+                    .map(|id| VoiceMember {
+                        user_id: (*id).into(),
+                        username: (*id).into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+            },
+        ],
+        ..Default::default()
+    }
+}
+
+/// The ids of the voice channels the UI marks active.
+fn active_voice_channels(h: &Harness) -> Vec<String> {
+    let channels = h.app().get_voice_channels();
+    (0..channels.row_count())
+        .filter_map(|i| channels.row_data(i))
+        .filter(|ch| ch.active)
+        .map(|ch| ch.id.to_string())
+        .collect()
+}
+
+/// Join `Squad` in a crew with two channels. The call has not started yet.
+fn join_squad_before_the_call_starts(h: &mut Harness) {
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&[]),
+    });
+    assert!(active_voice_channels(h).is_empty(), "no channel is active");
+
+    h.emit(Event::VoiceJoined {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        members: vec![mello_core::crew_state::VoiceMember {
+            user_id: "u-me".into(),
+            username: "me".into(),
+            ..Default::default()
+        }],
+    });
+    assert_eq!(active_voice_channels(h), vec!["ch-squad"]);
+}
+
+/// ★ Regression (#129): an SFU call starts about 0.8 s after `VoiceJoined`.
+/// A crew update before that rebuilt the channels and dropped the active
+/// mark, because the rebuild kept it only when `in_voice` was true.
+#[test]
+fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
+    let mut h = Harness::new();
+    join_squad_before_the_call_starts(&mut h);
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me"]),
+    });
+    assert_eq!(
+        active_voice_channels(&h),
+        vec!["ch-squad"],
+        "the crew update came before the call started"
+    );
+
+    h.emit(Event::VoiceStateChanged { in_call: true });
+    assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me"]),
+    });
+    assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
+}
+
+/// ★ A join that fails after `VoiceJoined` ends with
+/// `VoiceStateChanged { in_call: false }`. The active mark goes, and a later
+/// crew update does not put it back on a channel the user is not in.
+#[test]
+fn a_failed_join_clears_the_active_channel() {
+    let mut h = Harness::new();
+    join_squad_before_the_call_starts(&mut h);
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me"]),
+    });
+    h.emit(Event::VoiceStateChanged { in_call: false });
+    assert!(
+        active_voice_channels(&h).is_empty(),
+        "the join failed, so no channel is active"
+    );
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&[]),
+    });
+    assert!(
+        active_voice_channels(&h).is_empty(),
+        "a crew update after the failed join marks no channel"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Chat
 // ---------------------------------------------------------------------------

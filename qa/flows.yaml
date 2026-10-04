@@ -295,7 +295,7 @@ flows:
     title: Join a voice channel, both users see each other and hear each other
     priority: P0
     users: 2
-    harness: [voice_state_change_updates_the_ui]
+    harness: [voice_state_change_updates_the_ui, a_crew_update_before_the_call_starts_keeps_the_joined_channel_active, a_failed_join_clears_the_active_channel]
     journeys: [qa/journeys/voice-two-users.ts]
     protocol: []
     issues: []
