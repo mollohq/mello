@@ -10,9 +10,8 @@ import type { App } from "../../../tools/mello-driver/src/app.ts";
  */
 export async function addVoiceChannel(app: App, name: string): Promise<void> {
   await app.click("Crew menu");
-  // A crew menu item is in a PopupWindow: see App.activate. Any crew data
-  // update (SidebarUpdated, for example the server's 30 s batch) rebuilds
-  // the crew card and closes an open menu. The action then finds no item.
+  // A crew menu item is in a PopupWindow: see App.activate. A crew data
+  // update changes the crew list in place, so the menu stays open (#105).
   await app.activate("Add channel");
   await app.waitFor("crew settings open", (s) => s.open_modals.includes("crew_settings"), 5_000);
   await app.type("New channel", name);
