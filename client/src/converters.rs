@@ -229,6 +229,49 @@ pub fn chat_messages_to_slint(
     out
 }
 
+/// Make the crew list equal to `crews`, in place.
+///
+/// A new model makes Slint rebuild every crew card, and a popup open on the
+/// active card closes (#105). So keep the current `VecModel`: change only the
+/// rows that differ, insert new crews and remove gone ones. Only a model of
+/// another type, or a new order, replaces the rows.
+pub fn sync_crews(app: &MainWindow, crews: Vec<CrewData>) {
+    let model = app.get_crews();
+    let Some(rows) = model.as_any().downcast_ref::<slint::VecModel<CrewData>>() else {
+        app.set_crews(Rc::new(slint::VecModel::from(crews)).into());
+        return;
+    };
+
+    // From the end, so the indices of the rows still to check hold.
+    for i in (0..rows.row_count()).rev() {
+        let gone = rows
+            .row_data(i)
+            .is_none_or(|row| !crews.iter().any(|c| c.id == row.id));
+        if gone {
+            rows.remove(i);
+        }
+    }
+
+    for (i, crew) in crews.iter().enumerate() {
+        match rows.row_data(i) {
+            Some(row) if row.id == crew.id => {
+                if row != *crew {
+                    rows.set_row_data(i, crew.clone());
+                }
+            }
+            Some(_)
+                if (i + 1..rows.row_count())
+                    .any(|j| rows.row_data(j).is_some_and(|row| row.id == crew.id)) =>
+            {
+                log::debug!("[crews] crew order changed, replacing the rows");
+                rows.set_vec(crews.clone());
+                return;
+            }
+            _ => rows.insert(i, crew.clone()),
+        }
+    }
+}
+
 pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::UnreadTracker) {
     let crews = app.get_crews();
     let updated: Vec<CrewData> = (0..crews.row_count())
@@ -243,7 +286,7 @@ pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::Unrea
             c
         })
         .collect();
-    app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+    sync_crews(app, updated);
 }
 
 /// Scan recent messages for GIFs and kick off animated frame fetches.
@@ -512,7 +555,7 @@ pub fn update_active_crew_card(app: &MainWindow) {
             c
         })
         .collect();
-    app.set_crews(Rc::new(slint::VecModel::from(updated)).into());
+    sync_crews(app, updated);
 }
 
 /// Update one member's speaking flag in the crew member list without rebuilding models.

@@ -3952,6 +3952,238 @@ fn crew_menu_add_channel_answers_the_accessibility_action() {
     );
 }
 
+/// Two crews, "crew-1" active with the online member "u2", and the crew menu
+/// open on the active crew card.
+fn crew_menu_open() -> Harness {
+    use crate::{CrewData, MemberData};
+
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app()
+        .set_crews(slint::ModelRc::new(slint::VecModel::from(vec![
+            CrewData {
+                id: "crew-1".into(),
+                name: "M3LLO CREW".into(),
+                ..Default::default()
+            },
+            CrewData {
+                id: "crew-2".into(),
+                name: "Night Stones".into(),
+                ..Default::default()
+            },
+        ])));
+    h.app()
+        .set_members(slint::ModelRc::new(slint::VecModel::from(vec![
+            MemberData {
+                id: "u2".into(),
+                name: "kim".into(),
+                initials: "KI".into(),
+                online: true,
+                ..Default::default()
+            },
+        ])));
+    crate::converters::set_active_crew(h.app(), "crew-1");
+    h.app().set_can_manage_channels(true);
+    h.pump();
+
+    h.click_label("Crew menu");
+    assert_eq!(
+        h.controls_labelled("Add channel").len(),
+        1,
+        "the crew menu is open"
+    );
+    h
+}
+
+fn crew_row(h: &Harness, id: &str) -> crate::CrewData {
+    let crews = h.app().get_crews();
+    (0..crews.row_count())
+        .filter_map(|i| crews.row_data(i))
+        .find(|c| c.id == id)
+        .unwrap_or_else(|| panic!("no crew {id:?} in the crew list"))
+}
+
+fn assert_crew_menu_open(h: &Harness, after: &str) {
+    assert_eq!(
+        h.controls_labelled("Add channel").len(),
+        1,
+        "the crew menu is still open after {after}"
+    );
+}
+
+/// ★ Regression (#105): the server sends a sidebar batch every 30 s. The
+/// handler replaced the crews model, Slint rebuilt the active crew card, and
+/// the crew menu on it closed under the mouse.
+#[test]
+fn crew_menu_survives_a_sidebar_update() {
+    let mut h = crew_menu_open();
+
+    h.emit(Event::SidebarUpdated {
+        crews: vec![mello_core::crew_state::CrewSidebarState {
+            crew_id: "crew-1".into(),
+            name: "M3LLO CREW".into(),
+            counts: mello_core::crew_state::CrewCounts {
+                online: 3,
+                total: 5,
+            },
+            ..Default::default()
+        }],
+    });
+
+    assert_eq!(crew_row(&h, "crew-1").online_count, 3, "the update applies");
+    assert_crew_menu_open(&h, "a sidebar update");
+}
+
+/// ★ Regression (#105): every change in who speaks updates the active crew
+/// card. It replaced the crews model too, so in voice the menu closed at once.
+#[test]
+fn crew_menu_survives_a_speaking_change() {
+    let mut h = crew_menu_open();
+
+    h.emit(Event::VoiceActivity {
+        member_id: "u2".into(),
+        speaking: true,
+    });
+
+    assert!(crew_row(&h, "crew-1").v0_speaking, "the update applies");
+    assert_crew_menu_open(&h, "a speaking change");
+}
+
+/// ★ Regression (#105): message previews and catch-up text update the crew
+/// list as well.
+#[test]
+fn crew_menu_survives_preview_and_catchup_updates() {
+    let mut h = crew_menu_open();
+
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-1".into(),
+        messages: vec![mello_core::crew_state::MessagePreview {
+            username: "kim".into(),
+            preview: "gg".into(),
+            ..Default::default()
+        }],
+    });
+    assert_eq!(crew_row(&h, "crew-1").m0_text, "gg", "the preview applies");
+    assert_crew_menu_open(&h, "a message preview");
+
+    h.emit(Event::CatchupLoaded {
+        response: mello_core::crew_events::CatchupResponse {
+            crew_id: "crew-2".into(),
+            catchup_text: "2 clips".into(),
+            event_count: 2,
+            top_events: vec![],
+            has_events: true,
+        },
+    });
+    assert_eq!(
+        crew_row(&h, "crew-2").catchup_text,
+        "2 clips",
+        "the catch-up applies"
+    );
+    assert_crew_menu_open(&h, "a catch-up");
+}
+
+/// ★ Regression (#105): another crew leaves the list. The rows change, and
+/// the active crew card and its menu stay.
+#[test]
+fn crew_menu_survives_another_crew_removed() {
+    let mut h = crew_menu_open();
+
+    h.emit(Event::CrewDeleted {
+        crew_id: "crew-2".into(),
+    });
+
+    assert_eq!(h.app().get_crews().row_count(), 1, "crew-2 is gone");
+    assert_crew_menu_open(&h, "another crew was removed");
+}
+
+/// `sync_crews` keeps the one crews model and the order it is given: it
+/// changes, inserts and removes rows, and a new order replaces the rows.
+#[test]
+fn sync_crews_updates_the_crew_list_in_place() {
+    use crate::converters::sync_crews;
+    use crate::CrewData;
+
+    let crew = |id: &str, online: i32| CrewData {
+        id: id.into(),
+        online_count: online,
+        ..Default::default()
+    };
+    let ids = |h: &Harness| -> Vec<(String, i32)> {
+        let crews = h.app().get_crews();
+        (0..crews.row_count())
+            .filter_map(|i| crews.row_data(i))
+            .map(|c| (c.id.to_string(), c.online_count))
+            .collect()
+    };
+    let row = |id: &str, online: i32| (id.to_string(), online);
+
+    let h = Harness::new();
+    // The default model is not a VecModel: the first sync replaces it.
+    sync_crews(h.app(), vec![crew("a", 0), crew("b", 0)]);
+    let model = h.app().get_crews();
+    assert_eq!(ids(&h), vec![row("a", 0), row("b", 0)]);
+
+    sync_crews(h.app(), vec![crew("a", 2), crew("b", 0)]);
+    assert_eq!(ids(&h), vec![row("a", 2), row("b", 0)], "a row changes");
+
+    sync_crews(h.app(), vec![crew("a", 2), crew("c", 1), crew("b", 0)]);
+    assert_eq!(
+        ids(&h),
+        vec![row("a", 2), row("c", 1), row("b", 0)],
+        "a new crew goes in at its place"
+    );
+
+    sync_crews(h.app(), vec![crew("c", 1), crew("b", 0)]);
+    assert_eq!(
+        ids(&h),
+        vec![row("c", 1), row("b", 0)],
+        "a gone crew leaves"
+    );
+    assert!(
+        h.app().get_crews() == model,
+        "changes, inserts and removals keep the same model"
+    );
+
+    sync_crews(h.app(), vec![crew("b", 0), crew("c", 1)]);
+    assert_eq!(
+        ids(&h),
+        vec![row("b", 0), row("c", 1)],
+        "a new order applies"
+    );
+}
+
+/// The active crew card follows the active crew id after in-place updates.
+#[test]
+fn active_crew_card_follows_the_active_crew_after_an_update() {
+    let mut h = crew_menu_open();
+    h.emit(Event::SidebarUpdated {
+        crews: vec![mello_core::crew_state::CrewSidebarState {
+            crew_id: "crew-2".into(),
+            name: "Night Stones".into(),
+            ..Default::default()
+        }],
+    });
+
+    crate::converters::set_active_crew(h.app(), "crew-2");
+    h.pump();
+
+    assert!(
+        h.controls_labelled("Add channel").is_empty(),
+        "the old card closes with its menu"
+    );
+    let active: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "ActiveCrewCard").collect();
+    let compact: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "CompactCrewCard").collect();
+    assert_eq!(active.len(), 1, "one active crew card");
+    assert_eq!(compact.len(), 1, "one compact crew card");
+    h.click_label("Crew menu");
+    assert_crew_menu_open(&h, "the switch to crew-2");
+}
+
 /// The quality pills in the STREAM menu and the window picker write one
 /// property. The quick path — STREAM with a game detected — used to send a
 /// hardcoded Medium, so the pills were a lie on the path most people take.
