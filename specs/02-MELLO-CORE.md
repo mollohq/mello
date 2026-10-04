@@ -189,6 +189,7 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
   - Step 2 (loop): create the native peer. Only the loop owns the libmello context.
   - Step 3 (task): join the voice session and wait for the DataChannels.
   - A failed step falls back to P2P on the loop. `VoiceStateChanged { in_call: true }` follows the SFU start or the fallback.
+  - `VoiceStateChanged.transport` is the `VoiceMode` that started: `SFU`, or `P2P` after the fallback. It is `Disconnected` when the call ends or voice capture did not start. The e2e state port reports it (plans/E2E-QA.md §16.6).
   - A new join, a leave, a crew change or a logout cancels the running join.
   - While a join runs, the loop holds Nakama signals and presence in their channels. The P2P fallback then gets them in order.
   - While a join runs, the voice tick schedules no reconnect.

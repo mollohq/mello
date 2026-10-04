@@ -41,7 +41,7 @@ pub use error::{Error, Result};
 pub use events::Event;
 pub use stats::MelloStats;
 pub use stream::{Codec, QualityPreset, StreamConfig, StreamError};
-pub use voice::{AudioDevice, NsMode};
+pub use voice::{AudioDevice, NsMode, VoiceMode};
 
 /// Protocol version this build speaks. Bump on breaking client↔server changes.
 pub const PROTOCOL_VERSION: u32 = 1;

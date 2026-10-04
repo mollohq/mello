@@ -21,7 +21,7 @@ let mut h = Harness::new();
 h.app().invoke_mic_toggle();                        // UI -> core
 assert!(h.commands().iter().any(|c| matches!(c, Command::SetMute { muted: true })));
 
-h.emit(Event::VoiceStateChanged { in_call: true }); // core -> UI
+h.emit(Event::VoiceStateChanged { in_call: true, transport: VoiceMode::SFU }); // core -> UI
 assert!(h.app().get_in_voice());
 ```
 

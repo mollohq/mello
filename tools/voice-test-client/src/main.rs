@@ -620,7 +620,7 @@ fn main() -> Result<(), Box<dyn Error>> {
                             window.set_status_text(msg.clone().into());
                             push_log(&window, &logs, msg);
                         }
-                        Event::VoiceStateChanged { in_call } => {
+                        Event::VoiceStateChanged { in_call, .. } => {
                             let msg = if in_call {
                                 "Voice connected"
                             } else {

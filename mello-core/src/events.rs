@@ -5,7 +5,7 @@ use crate::crew_state::{
     CrewEvent, CrewSidebarState, CrewState, MessagePreview, PresenceChange, VoiceChannelState,
     VoiceMember,
 };
-use crate::voice::AudioDevice;
+use crate::voice::{AudioDevice, VoiceMode};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct User {
@@ -276,6 +276,11 @@ pub enum Event {
 
     VoiceStateChanged {
         in_call: bool,
+        /// The voice transport after this change: `SFU` or `P2P` when the
+        /// call started on it, `Disconnected` when the call ended or voice
+        /// capture did not start. An SFU join that fails reports `P2P` here.
+        #[serde(default)]
+        transport: VoiceMode,
     },
     VoiceConnected {
         peer_id: String,
