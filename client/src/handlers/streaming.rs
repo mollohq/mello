@@ -28,6 +28,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     mode: s.mode.into(),
                     pid: s.pid.unwrap_or(0) as i32,
                     exe: s.exe.into(),
+                    igdb_id: s.igdb_id as i32,
                     is_fullscreen: s.is_fullscreen,
                     resolution: s.resolution.into(),
                     ..Default::default()
@@ -41,6 +42,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     mode: s.mode.into(),
                     pid: s.pid.unwrap_or(0) as i32,
                     exe: s.exe.into(),
+                    igdb_id: s.igdb_id as i32,
                     is_fullscreen: s.is_fullscreen,
                     resolution: s.resolution.into(),
                     ..Default::default()
@@ -54,6 +56,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     mode: s.mode.into(),
                     pid: s.pid.unwrap_or(0) as i32,
                     exe: s.exe.into(),
+                    igdb_id: s.igdb_id as i32,
                     is_fullscreen: s.is_fullscreen,
                     resolution: s.resolution.into(),
                     ..Default::default()

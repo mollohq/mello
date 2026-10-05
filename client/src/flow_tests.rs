@@ -4343,6 +4343,107 @@ fn the_quick_stream_path_uses_the_chosen_quality() {
     );
 }
 
+/// One capture source for the hook identity tests.
+fn game_source(pid: u32, exe: &str, igdb_id: u32) -> mello_core::events::CaptureSource {
+    mello_core::events::CaptureSource {
+        id: format!("game-{pid}"),
+        name: exe.into(),
+        mode: "process".into(),
+        monitor_index: None,
+        hwnd: None,
+        pid: Some(pid),
+        exe: exe.into(),
+        igdb_id,
+        is_fullscreen: true,
+        resolution: String::new(),
+    }
+}
+
+/// Two running games: Counter-Strike 2 (pid 5151) is listed first, The
+/// Witcher 3 (pid 4242) second. A lookup that takes the first row, or any
+/// row but the pid's own, sends the wrong identity.
+fn two_games_listed(h: &mut Harness) {
+    h.emit(Event::CaptureSourcesListed {
+        monitors: vec![],
+        games: vec![
+            game_source(5151, "cs2.exe", 242408),
+            game_source(4242, "witcher3.exe", 1942),
+        ],
+        windows: vec![],
+    });
+}
+
+/// The hook policy invariant (game-identity plan §3): the identity sent with
+/// a stream start belongs to the process that is captured. The quick path
+/// starts pid 4242, so it must send 4242's id, not the id of another row.
+#[test]
+fn the_quick_stream_path_sends_the_identity_of_the_captured_pid() {
+    let mut h = Harness::new();
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app().set_game_name("The Witcher 3".into());
+    two_games_listed(&mut h);
+    h.ctx()
+        .fg_monitor
+        .borrow_mut()
+        .set_game_active(true, Some(4242));
+    h.pump();
+    h.app().invoke_stream_requested();
+    h.pump();
+
+    let cmds = h.commands();
+    let sent = cmds.iter().find_map(|c| match c {
+        Command::StartStream {
+            pid, exe, igdb_id, ..
+        } => Some((*pid, exe.clone(), *igdb_id)),
+        _ => None,
+    });
+    assert_eq!(
+        sent,
+        Some((Some(4242), "witcher3.exe".to_string(), 1942)),
+        "the start must carry the identity of pid 4242, got {cmds:?}"
+    );
+}
+
+/// The picker path carries the identity of the picked row from the UI
+/// callback to the emitted command, and an unknown process sends 0.
+#[test]
+fn the_picker_sends_the_identity_of_the_picked_source() {
+    let mut h = Harness::new();
+    h.app().set_logged_in(true);
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::CaptureSourcesListed {
+        monitors: vec![],
+        games: vec![
+            game_source(5151, "cs2.exe", 242408),
+            game_source(4242, "witcher3.exe", 1942),
+            game_source(7777, "indie.exe", 0),
+        ],
+        windows: vec![],
+    });
+
+    let identity_of = |h: &mut Harness, pid: u32| {
+        h.app()
+            .invoke_start_stream(format!("game-{pid}").into(), "process".into(), 2);
+        h.pump();
+        h.commands().iter().rev().find_map(|c| match c {
+            Command::StartStream {
+                pid: Some(p),
+                igdb_id,
+                ..
+            } if *p == pid => Some(*igdb_id),
+            _ => None,
+        })
+    };
+    assert_eq!(identity_of(&mut h, 4242), Some(1942), "The Witcher 3");
+    assert_eq!(identity_of(&mut h, 5151), Some(242408), "Counter-Strike 2");
+    assert_eq!(
+        identity_of(&mut h, 7777),
+        Some(0),
+        "a process the catalogue does not know sends 0"
+    );
+}
+
 /// A quit game ends the hosted stream: the core reports the exited target
 /// and the UI must route it to the normal stop path, not leave the session
 /// streaming a dead process.

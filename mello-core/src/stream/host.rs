@@ -25,10 +25,13 @@ pub struct StartStreamRequest {
     pub width: u32,
     pub height: u32,
     pub bitrate_kbps: u32,
-    /// Game executable name for logging only. The server never trusts it to
-    /// allow a hook; the client matches exe against the capture block lists.
+    /// Game executable name for logging only.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub exe: String,
+    /// Catalogue identity of the captured process, for logging. The server
+    /// cannot verify it. The client matches it against the capture block.
+    #[serde(default)]
+    pub igdb_id: u32,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -50,9 +53,9 @@ pub struct StartStreamResponse {
     pub capture: Option<CapturePolicy>,
 }
 
-/// Backend hook policy for one stream start. Lists carry executable names
-/// (e.g. "heaven.exe") and are matched case-insensitively. Deny wins over
-/// allow; unknown executables are never hooked.
+/// Backend hook policy for one stream start. Lists carry catalogue
+/// identities (IGDB ids). Deny wins over allow; an id on neither list is
+/// never hooked.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct CapturePolicy {
     #[serde(default)]
@@ -60,22 +63,21 @@ pub struct CapturePolicy {
     #[serde(default)]
     pub policy_version: String,
     #[serde(default)]
-    pub hook_allow: Vec<String>,
+    pub hook_allow_ids: Vec<u32>,
     #[serde(default)]
-    pub hook_deny: Vec<String>,
+    pub hook_deny_ids: Vec<u32>,
 }
 
 fn default_mode() -> String {
     "p2p".to_string()
 }
 
-/// Decide whether the game capture hook may run for `exe` under `policy`.
+/// Gate 1 of the hook policy, keyed by catalogue identity.
 ///
-/// All three must hold: the backend kill switch is on, the exe is on the
-/// allow list, and it is not on the deny list. Matching is ASCII
-/// case-insensitive because Windows executable names vary in case. `None`
-/// (no `capture` block) or an empty exe never allows the hook.
-pub fn hook_allowed_for_exe(exe: &str, policy: Option<&CapturePolicy>) -> bool {
+/// `igdb_id` must have been resolved from the process that will be
+/// captured (see the plan's invariant). Zero means the catalogue does not
+/// know this process, which is never hooked.
+pub fn hook_allowed_for_game(igdb_id: u32, policy: Option<&CapturePolicy>) -> bool {
     let policy = match policy {
         Some(p) => p,
         None => return false,
@@ -83,17 +85,13 @@ pub fn hook_allowed_for_exe(exe: &str, policy: Option<&CapturePolicy>) -> bool {
     if !policy.hook_enabled {
         return false;
     }
-    if exe.is_empty() {
+    if igdb_id == 0 {
         return false;
     }
-    let denied = policy.hook_deny.iter().any(|d| d.eq_ignore_ascii_case(exe));
-    if denied {
+    if policy.hook_deny_ids.contains(&igdb_id) {
         return false;
     }
-    policy
-        .hook_allow
-        .iter()
-        .any(|a| a.eq_ignore_ascii_case(exe))
+    policy.hook_allow_ids.contains(&igdb_id)
 }
 
 impl StartStreamResponse {
@@ -117,6 +115,7 @@ pub async fn request_start_stream(
     height: u32,
     bitrate_kbps: u32,
     exe: &str,
+    igdb_id: u32,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
@@ -126,6 +125,7 @@ pub async fn request_start_stream(
         height,
         bitrate_kbps,
         exe: exe.to_string(),
+        igdb_id,
     };
     let payload = serde_json::to_value(&req).map_err(|e| StreamError::Backend(e.to_string()))?;
 
@@ -378,49 +378,55 @@ pub fn create_stream_session(
 
 #[cfg(test)]
 mod tests {
-    use super::{hook_allowed_for_exe, CapturePolicy, StartStreamRequest, StartStreamResponse};
+    use super::{hook_allowed_for_game, CapturePolicy, StartStreamRequest, StartStreamResponse};
+
+    /// The Witcher 3 (allowed) and Counter-Strike 2 (denied), by IGDB id.
+    const WITCHER3: u32 = 1942;
+    const CS2: u32 = 242408;
 
     fn policy() -> CapturePolicy {
         CapturePolicy {
             hook_enabled: true,
-            policy_version: "2026-09-19:2001".to_string(),
-            hook_allow: vec!["heaven.exe".to_string()],
-            hook_deny: vec!["cs2.exe".to_string()],
+            policy_version: "2026-10-06:test".to_string(),
+            hook_allow_ids: vec![WITCHER3],
+            hook_deny_ids: vec![CS2],
         }
     }
 
     #[test]
-    fn hook_allowed_for_listed_exe_case_insensitive() {
-        assert!(hook_allowed_for_exe("Heaven.exe", Some(&policy())));
+    fn hook_allowed_for_listed_id() {
+        assert!(hook_allowed_for_game(WITCHER3, Some(&policy())));
     }
 
     #[test]
     fn hook_denied_wins_over_allow() {
         let mut p = policy();
-        p.hook_allow.push("cs2.exe".to_string());
-        assert!(!hook_allowed_for_exe("cs2.exe", Some(&p)));
+        p.hook_allow_ids.push(CS2);
+        assert!(!hook_allowed_for_game(CS2, Some(&p)));
     }
 
     #[test]
-    fn hook_denied_for_unknown_exe() {
-        assert!(!hook_allowed_for_exe("unknown-game.exe", Some(&policy())));
+    fn hook_denied_for_id_on_neither_list() {
+        assert!(!hook_allowed_for_game(7346, Some(&policy())));
+    }
+
+    #[test]
+    fn hook_denied_for_zero_id_even_with_switch_on() {
+        let mut p = policy();
+        p.hook_allow_ids.push(0);
+        assert!(!hook_allowed_for_game(0, Some(&p)));
     }
 
     #[test]
     fn hook_denied_when_kill_switch_off() {
         let mut p = policy();
         p.hook_enabled = false;
-        assert!(!hook_allowed_for_exe("heaven.exe", Some(&p)));
+        assert!(!hook_allowed_for_game(WITCHER3, Some(&p)));
     }
 
     #[test]
     fn hook_denied_without_capture_block() {
-        assert!(!hook_allowed_for_exe("heaven.exe", None));
-    }
-
-    #[test]
-    fn hook_denied_for_empty_exe() {
-        assert!(!hook_allowed_for_exe("", Some(&policy())));
+        assert!(!hook_allowed_for_game(WITCHER3, None));
     }
 
     #[test]
@@ -428,19 +434,48 @@ mod tests {
         let resp: StartStreamResponse = serde_json::from_str(r#"{"session_id":"s1","mode":"p2p"}"#)
             .expect("old response parses");
         assert!(resp.capture.is_none());
-        assert!(!hook_allowed_for_exe("heaven.exe", resp.capture.as_ref()));
+        assert!(!hook_allowed_for_game(WITCHER3, resp.capture.as_ref()));
     }
 
     #[test]
-    fn new_backend_response_with_capture_parses() {
+    fn backend_response_with_id_lists_parses() {
         let resp: StartStreamResponse = serde_json::from_str(
-            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v1","hook_allow":["heaven.exe"],"hook_deny":["cs2.exe"]}}"#,
+            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v1","hook_allow_ids":[1942],"hook_deny_ids":[242408]}}"#,
         )
-        .expect("new response parses");
+        .expect("response parses");
         let capture = resp.capture.as_ref().expect("capture block present");
         assert_eq!(capture.policy_version, "v1");
-        assert!(hook_allowed_for_exe("heaven.exe", Some(capture)));
-        assert!(!hook_allowed_for_exe("cs2.exe", Some(capture)));
+        assert!(hook_allowed_for_game(WITCHER3, Some(capture)));
+        assert!(!hook_allowed_for_game(CS2, Some(capture)));
+    }
+
+    #[test]
+    fn backend_response_with_only_exe_lists_never_hooks() {
+        // A backend that still sends the old string lists: the id lists
+        // default to empty, so nothing is hooked.
+        let resp: StartStreamResponse = serde_json::from_str(
+            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v0","hook_allow":["witcher3.exe"],"hook_deny":[]}}"#,
+        )
+        .expect("old capture block parses");
+        let capture = resp.capture.as_ref().expect("capture block present");
+        assert!(capture.hook_allow_ids.is_empty());
+        assert!(!hook_allowed_for_game(WITCHER3, Some(capture)));
+    }
+
+    #[test]
+    fn start_stream_request_carries_igdb_id() {
+        let request = StartStreamRequest {
+            crew_id: "crew".to_string(),
+            title: String::new(),
+            supports_av1: false,
+            width: 1280,
+            height: 720,
+            bitrate_kbps: 2_500,
+            exe: "witcher3.exe".to_string(),
+            igdb_id: WITCHER3,
+        };
+        let json = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(json["igdb_id"], WITCHER3);
     }
 
     #[test]
@@ -453,6 +488,7 @@ mod tests {
             height: 1080,
             bitrate_kbps: 4_500,
             exe: String::new(),
+            igdb_id: 0,
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert_eq!(json["bitrate_kbps"], 4_500);
@@ -468,6 +504,7 @@ mod tests {
             height: 720,
             bitrate_kbps: 2_500,
             exe: String::new(),
+            igdb_id: 0,
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert!(json.get("exe").is_none(), "empty exe stays off the wire");

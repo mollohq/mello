@@ -324,6 +324,8 @@ export struct CaptureSourceData {
     mode: string,
     pid: int,
     exe: string,
+    // Catalogue identity of this pid, 0 when unknown. The hook policy key.
+    igdb-id: int,
     is-fullscreen: bool,
     resolution: string,
     thumbnail: image,

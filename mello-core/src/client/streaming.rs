@@ -22,6 +22,47 @@ fn catalogue() -> Option<&'static crate::catalogue::Head> {
     static HEAD: std::sync::OnceLock<Option<crate::catalogue::Head>> = std::sync::OnceLock::new();
     HEAD.get_or_init(crate::catalogue::Head::bundled).as_ref()
 }
+
+/// One running process as a capture source, or `None` when it cannot be
+/// captured. The bool is true when the catalogue knows the process.
+///
+/// The catalogue lookup runs once, and the name, the tier and `igdb_id` all
+/// come from it. The identity and the pid therefore describe one process,
+/// which the hook policy needs (game-identity plan §3).
+fn game_capture_source(
+    head: Option<&crate::catalogue::Head>,
+    pid: u32,
+    exe: String,
+    path: &str,
+    title: String,
+    process_name: String,
+    is_fullscreen: bool,
+) -> Option<(bool, crate::events::CaptureSource)> {
+    let entry = head.and_then(|h| h.lookup_exe(&exe, path));
+    // A process with no window cannot be captured, so it has no business
+    // in a capture picker regardless of which tier it would land in.
+    if entry.is_none() && title.is_empty() {
+        return None;
+    }
+    let name = match &entry {
+        Some(e) => e.name.to_string(),
+        None if !title.is_empty() => title,
+        None => process_name,
+    };
+    let source = crate::events::CaptureSource {
+        id: format!("game-{pid}"),
+        name,
+        mode: "process".to_string(),
+        monitor_index: None,
+        hwnd: None,
+        pid: Some(pid),
+        exe,
+        igdb_id: entry.as_ref().map(|e| e.igdb_id).unwrap_or(0),
+        is_fullscreen,
+        resolution: String::new(),
+    };
+    Some((entry.is_some(), source))
+}
 use super::stream_ffi::{
     feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
     poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, register_pause_callback,
@@ -960,6 +1001,7 @@ impl super::Client {
                 hwnd: None,
                 pid: None,
                 exe: String::new(),
+                igdb_id: 0,
                 is_fullscreen: false,
                 resolution: format!("{}x{}", mon.width, mon.height),
             });
@@ -1011,31 +1053,21 @@ impl super::Client {
             let path = unsafe { std::ffi::CStr::from_ptr(game.path.as_ptr()) }
                 .to_string_lossy()
                 .to_string();
-            let entry = head.and_then(|h| h.lookup_exe(&exe, &path));
-            // A process with no window cannot be captured, so it has no business
-            // in a capture picker regardless of which tier it would land in.
-            if entry.is_none() && title.is_empty() {
-                continue;
-            }
-            let name = match &entry {
-                Some(e) => e.name.to_string(),
-                None if !title.is_empty() => title,
-                None => unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
-                    .to_string_lossy()
-                    .to_string(),
-            };
-            let source = crate::events::CaptureSource {
-                id: format!("game-{}", game.pid),
-                name,
-                mode: "process".to_string(),
-                monitor_index: None,
-                hwnd: None,
-                pid: Some(game.pid),
+            let process_name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
+                .to_string_lossy()
+                .to_string();
+            let Some((is_known, source)) = game_capture_source(
+                head,
+                game.pid,
                 exe,
-                is_fullscreen: game.is_fullscreen,
-                resolution: String::new(),
+                &path,
+                title,
+                process_name,
+                game.is_fullscreen,
+            ) else {
+                continue;
             };
-            if entry.is_some() {
+            if is_known {
                 known.push((game.is_foreground, source));
             } else {
                 other.push((game.is_foreground, source));
@@ -1082,6 +1114,7 @@ impl super::Client {
                 hwnd: Some(hwnd),
                 pid: Some(win.pid),
                 exe,
+                igdb_id: 0,
                 is_fullscreen: false,
                 resolution: String::new(),
             });
@@ -1180,6 +1213,7 @@ impl super::Client {
         pid: Option<u32>,
         preset_idx: u32,
         exe: &str,
+        igdb_id: u32,
     ) {
         if self.stream_session.is_some() || self.pending_stream_start.is_some() {
             let _ = self.event_tx.send(Event::StreamError {
@@ -1239,6 +1273,7 @@ impl super::Client {
             config.height,
             config.bitrate_kbps,
             exe,
+            igdb_id,
         )
         .await
         {
@@ -1288,19 +1323,20 @@ impl super::Client {
             ),
             crate::stream::config::CaptureTarget::Process { pid } => {
                 // Gate 1 of the hook policy (plan §8): the backend
-                // `capture` block carries the kill switch and the safe
+                // `capture` block carries the kill switch and the id
                 // lists. No block, or no match, means no hook. Gates 2
                 // (catalogue) and 3 (runtime checks) run in libmello.
                 let allow_hook =
-                    crate::stream::host::hook_allowed_for_exe(exe, resp.capture.as_ref());
+                    crate::stream::host::hook_allowed_for_game(igdb_id, resp.capture.as_ref());
                 let version = resp
                     .capture
                     .as_ref()
                     .map(|c| c.policy_version.as_str())
                     .unwrap_or("none");
                 log::info!(
-                    "Hook policy: exe={:?} allow_hook={} policy_version={}",
+                    "Hook policy: exe={:?} igdb_id={} allow_hook={} policy_version={}",
                     exe,
+                    igdb_id,
                     allow_hook,
                     version
                 );
@@ -2165,6 +2201,63 @@ mod async_start_tests {
     fn start_thread_types_are_send() {
         assert_send::<NativeStartParams>();
         assert_send::<NativeStartOutcome>();
+    }
+}
+
+#[cfg(test)]
+mod capture_source_tests {
+    use super::game_capture_source;
+    use crate::catalogue::Head;
+
+    #[test]
+    fn a_known_game_carries_its_igdb_id() {
+        let head = Head::bundled().expect("bundled head.bin must parse");
+        let (known, source) = game_capture_source(
+            Some(&head),
+            4242,
+            "witcher3.exe".into(),
+            r"C:\Games\The Witcher 3\bin\x64\witcher3.exe",
+            "The Witcher 3".into(),
+            "witcher3.exe".into(),
+            true,
+        )
+        .expect("a catalogue game is a source");
+        assert!(known);
+        assert_eq!(source.pid, Some(4242));
+        assert_eq!(source.igdb_id, 1942, "The Witcher 3: Wild Hunt");
+    }
+
+    #[test]
+    fn an_unknown_process_with_a_window_carries_zero() {
+        let head = Head::bundled().expect("bundled head.bin must parse");
+        let (known, source) = game_capture_source(
+            Some(&head),
+            7777,
+            "my-indie-build.exe".into(),
+            r"C:\dev\my-indie-build.exe",
+            "My Indie Build".into(),
+            "my-indie-build.exe".into(),
+            false,
+        )
+        .expect("a process with a window is a source");
+        assert!(!known);
+        assert_eq!(source.igdb_id, 0);
+        assert_eq!(source.name, "My Indie Build");
+    }
+
+    #[test]
+    fn an_unknown_process_without_a_window_is_not_a_source() {
+        let head = Head::bundled().expect("bundled head.bin must parse");
+        assert!(game_capture_source(
+            Some(&head),
+            7778,
+            "svchost.exe".into(),
+            r"C:\Windows\System32\svchost.exe",
+            String::new(),
+            "svchost.exe".into(),
+            false,
+        )
+        .is_none());
     }
 }
 

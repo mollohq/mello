@@ -23,9 +23,12 @@ type StartStreamRequest struct {
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
 	// Exe is the game executable name (e.g. "Heaven.exe"), for logging and
-	// policy-mismatch diagnostics only. The server never trusts it to allow
-	// a hook; the client still matches exe against the capture block lists.
+	// policy-mismatch diagnostics only.
 	Exe string `json:"exe,omitempty"`
+	// IgdbID is the catalogue identity of the captured process, for logging
+	// only. The client supplies it and the server cannot verify it. The
+	// client matches it against the capture block lists.
+	IgdbID uint32 `json:"igdb_id,omitempty"`
 }
 
 // CapturePolicy is the backend `capture` block in the start_stream response
@@ -34,24 +37,29 @@ type StartStreamRequest struct {
 // runtime checks pass. With no block, or with hook_enabled=false, the client
 // never hooks.
 //
-// The lists are matched case-insensitively by executable name. Deny wins over
-// allow; unknown executables are never hooked. hook_review games appear in
-// neither list. Counter-Strike 2 is in hook_deny permanently.
+// The lists carry catalogue identities (IGDB ids), which the client resolves
+// from the process it captures. Deny wins over allow; an id on neither list is
+// never hooked. hook_review games appear in neither list. Counter-Strike 2
+// (242408) is in hook_deny_ids permanently.
 //
 // Source data: mello-backlog/plans/game-capture-hook-games/games.csv
-// (policy==hook -> hook_allow, policy==no_hook -> hook_deny). Stored as a
-// versioned blob in Nakama storage so exposure is controlled from the backend,
-// not by who installed what. See loadCapturePolicy.
+// (policy==hook -> hook_allow_ids, policy==no_hook -> hook_deny_ids). Stored
+// as a versioned blob in Nakama storage so exposure is controlled from the
+// backend, not by who installed what. See loadCapturePolicy. The admin tool
+// edits it through admin_capture_policy_set.
 type CapturePolicy struct {
 	HookEnabled   bool     `json:"hook_enabled"`
 	PolicyVersion string   `json:"policy_version"`
-	HookAllow     []string `json:"hook_allow"`
-	HookDeny      []string `json:"hook_deny"`
+	HookAllowIDs  []uint32 `json:"hook_allow_ids"`
+	HookDenyIDs   []uint32 `json:"hook_deny_ids"`
 }
 
 const (
 	CapturePolicyCollection = "capture_config"
 	CapturePolicyKey        = "hook_policy"
+	// CS2IgdbID is Counter-Strike 2. It is denied permanently: Trusted Mode
+	// blocks third-party DLLs and Valve keeps no allowlist.
+	CS2IgdbID uint32 = 242408
 )
 
 // defaultCapturePolicy is the safe default: no hook until a policy is stored.
@@ -59,8 +67,8 @@ func defaultCapturePolicy() CapturePolicy {
 	return CapturePolicy{
 		HookEnabled:   false,
 		PolicyVersion: "none",
-		HookAllow:     []string{},
-		HookDeny:      []string{},
+		HookAllowIDs:  []uint32{},
+		HookDenyIDs:   []uint32{},
 	}
 }
 
@@ -78,11 +86,11 @@ func parseCapturePolicy(raw string) CapturePolicy {
 	}
 	policy.HookEnabled = stored.HookEnabled
 	policy.PolicyVersion = stored.PolicyVersion
-	if stored.HookAllow != nil {
-		policy.HookAllow = stored.HookAllow
+	if stored.HookAllowIDs != nil {
+		policy.HookAllowIDs = stored.HookAllowIDs
 	}
-	if stored.HookDeny != nil {
-		policy.HookDeny = stored.HookDeny
+	if stored.HookDenyIDs != nil {
+		policy.HookDenyIDs = stored.HookDenyIDs
 	}
 	return policy
 }

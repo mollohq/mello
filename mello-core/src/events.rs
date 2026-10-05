@@ -56,6 +56,11 @@ pub struct CaptureSource {
     pub hwnd: Option<u64>,
     pub pid: Option<u32>,
     pub exe: String,
+    /// Catalogue identity of the process, from the same `lookup_exe` call
+    /// that produced this source. 0 when the catalogue does not know the
+    /// process, and for monitors and windows.
+    #[serde(default)]
+    pub igdb_id: u32,
     pub is_fullscreen: bool,
     pub resolution: String,
 }
