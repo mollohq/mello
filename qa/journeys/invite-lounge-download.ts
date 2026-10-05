@@ -1,6 +1,6 @@
 // INV-10: a friend installs from the web lounge, and the invite survives the
 // install (CREW-INVITES §7.1, §9.2). alice shares her link. bob opens it in
-// the lounge and presses "Install m3llo now". The lounge copies the link and
+// the lounge and presses "Install m3llo". The lounge copies the link and
 // shows "Open in m3llo". bob's fresh install then gets the invite one of two
 // ways, and both end with bob in alice's crew:
 //
