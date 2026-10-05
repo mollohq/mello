@@ -57,7 +57,7 @@ echo ""
 
 echo "screen state:"
 mut "app screen gate off by one" \
-    client/ui/main.slint "onboarding-step > 3): Rectangle" "onboarding-step > 4): Rectangle"
+    client/ui/main.slint "(onboarding-step > 3 && onboarding-step != 5)): Rectangle" "(onboarding-step > 4 && onboarding-step != 5)): Rectangle"
 
 echo "auth:"
 mut "OnboardingReady stops logging the user in" \
