@@ -19,7 +19,9 @@ env:
   CI: "true"
 
 jobs:
-  # A PR that only touches specs/ or plans/ skips the build. This is a job, not
+  # A PR that only touches specs/, plans/, the journeys or the driver skips the
+  # build: the Windows build alone takes about 20 min. The journeys and the
+  # driver get the `journeys` job instead. This is a job, not
   # `paths-ignore`: the three test jobs are required checks in the main ruleset,
   # and a workflow that never starts leaves them "Expected" forever. A job
   # skipped by its `if:` reports success, so the PR stays mergeable.
@@ -31,9 +33,10 @@ jobs:
       pull-requests: read
     outputs:
       code: ${{ steps.filter.outputs.code }}
+      journeys: ${{ steps.filter.outputs.journeys }}
 
     steps:
-      - name: Check for files outside specs/ and plans/
+      - name: Check which parts changed
         id: filter
         env:
           GH_TOKEN: ${{ github.token }}
@@ -44,12 +47,65 @@ jobs:
             "repos/${{ github.repository }}/pulls/${{ github.event.pull_request.number }}/files" \
             --jq '.[] | .filename, (.previous_filename // empty)')
           echo "$files"
-          if [ -z "$files" ] || grep -qvE '^(specs|plans)/' <<<"$files"; then
+          # code: a file that the build or the Rust tests read. qa/flows.yaml stays
+          # code: a Rust test checks the harness tests that it names.
+          if [ -z "$files" ] || grep -qvE '^(specs/|plans/|qa/journeys/|tools/mello-driver/)' <<<"$files"; then
             echo "code=true" >> "$GITHUB_OUTPUT"
           else
-            echo "::notice::Only specs/ and plans/ changed. The build is skipped."
+            echo "::notice::Only specs/, plans/, journeys or the driver changed. The build is skipped."
             echo "code=false" >> "$GITHUB_OUTPUT"
           fi
+          if [ -z "$files" ] || grep -qE '^(qa/journeys/|qa/flows\.yaml|tools/mello-driver/|\.github/workflows/pr-checks\.yml)' <<<"$files"; then
+            echo "journeys=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "journeys=false" >> "$GITHUB_OUTPUT"
+          fi
+
+  # What check.sh does for the journeys and the driver, in about a minute: the
+  # syntax of every journey and driver file, the driver tests, and the journeys
+  # that qa/flows.yaml names must exist (the part of the Rust flow catalogue test
+  # that a PR without the build could break).
+  journeys:
+    name: Journeys and driver
+    needs: changes
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.journeys == 'true') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Install the driver's packages
+        working-directory: tools/mello-driver
+        run: npm ci
+
+      - name: Check the syntax of every journey and driver file
+        run: |
+          set -euo pipefail
+          for f in tools/mello-driver/src/*.ts tools/mello-driver/test/*.ts qa/journeys/*.ts qa/journeys/lib/*.ts; do
+            node --check "$f"
+          done
+
+      - name: Run the driver tests
+        run: node --test "tools/mello-driver/test/*.test.ts"
+
+      - name: The journeys that qa/flows.yaml names exist
+        run: |
+          set -euo pipefail
+          missing=0
+          for j in $(sed -nE 's/^ *journeys: \[(.*)\]$/\1/p' qa/flows.yaml | tr ',' '\n' | sed -E 's/^ +| +$//g' | grep -v '^$'); do
+            if [ ! -f "$j" ]; then
+              echo "::error file=qa/flows.yaml::journey $j does not exist"
+              missing=1
+            fi
+          done
+          exit $missing
 
   test-windows:
     name: Test (Windows)
