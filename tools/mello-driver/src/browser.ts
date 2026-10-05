@@ -119,7 +119,7 @@ export type LoungeDownload = {
 };
 
 /**
- * A guest opens the invite in the lounge and presses "Install m3llo now".
+ * A guest opens the invite in the lounge and presses "Install m3llo".
  *
  * The browser grants the clipboard, as Chrome does for a click. The installer
  * is an empty file: a journey runs the app it already has. The browser's
@@ -147,7 +147,7 @@ export async function downloadFromLounge(code: string): Promise<LoungeDownload> 
     // The join panel dims the page until the guest answers it.
     const notNow = page.getByRole("button", { name: "Not now" });
     if (await notNow.isVisible().catch(() => false)) await notNow.click();
-    await page.getByRole("button", { name: "Install m3llo now" }).click();
+    await page.getByRole("button", { name: "Install m3llo" }).click();
 
     const gate = page.locator(".gate[open]");
     const open = gate.getByRole("link", { name: "Open in m3llo" });
