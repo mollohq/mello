@@ -492,7 +492,11 @@ test("cli: --events with --repeat writes the events of each run to the file", as
   }
 });
 
-test("cli: SIGTERM stops the timer, writes journey_end and kills the app", async () => {
+// Windows has no POSIX signals: kill("SIGTERM") ends the process at once, so
+// no handler runs and no journey_end is written. The behaviour is POSIX only.
+const sigtermSkip = process.platform === "win32" ? "Windows has no SIGTERM handler" : false;
+
+test("cli: SIGTERM stops the timer, writes journey_end and kills the app", { skip: sigtermSkip }, async () => {
   const { server, port } = await healthServer();
   try {
     const dir = tmp();
