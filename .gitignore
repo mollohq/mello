@@ -83,3 +83,7 @@ scripts/.catalogue_work/
 
 # Local benchmark output (streaming reliability plan 2.6)
 *.csv
+
+# Claude Code: local settings and the worktrees of agent sessions. A file here
+# would mark every build and every QA result as dirty.
+.claude/
