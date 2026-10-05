@@ -1,7 +1,7 @@
 // One test user = one real mello process, isolated from every other user and
 // from the developer's own client (plans/E2E-QA.md §5.2).
 
-import { spawn, type ChildProcess } from "node:child_process";
+import { spawn, type ChildProcess, type SpawnOptions } from "node:child_process";
 import { appendFileSync, mkdirSync, openSync, renameSync, writeFileSync, readFileSync, existsSync } from "node:fs";
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
@@ -179,6 +179,18 @@ for (const sig of ["SIGINT", "SIGTERM"] as const) {
   });
 }
 
+/**
+ * Start the app binary. A script binary (the test stand-in `fake-app.mjs`)
+ * runs under this Node: Windows has no shebang support and refuses to start
+ * a script file with EFTYPE. macOS and Linux would start it directly.
+ */
+export function spawnBinary(binary: string, args: string[], options: SpawnOptions): ChildProcess {
+  if (/\.(mjs|cjs|js|ts)$/i.test(binary)) {
+    return spawn(process.execPath, [binary, ...args], options);
+  }
+  return spawn(binary, args, options);
+}
+
 export class App {
   readonly name: string;
   readonly dir: string;
@@ -234,7 +246,7 @@ export class App {
     if (this.proc) throw new DriverError(`${this.name}: already running`);
     const args = [...(deeplink ? [deeplink] : []), "--instance", this.instance];
     const log = openSync(this.logPath, "a");
-    this.proc = spawn(this.opts.binary, args, {
+    this.proc = spawnBinary(this.opts.binary, args, {
       cwd: this.opts.cwd,
       stdio: ["ignore", log, log],
       env: this.launchEnv(),
@@ -291,7 +303,7 @@ export class App {
    * process with the same instance relays the URL over IPC and exits.
    */
   async openLink(url: string): Promise<void> {
-    const relay = spawn(this.opts.binary, [url, "--instance", this.instance], {
+    const relay = spawnBinary(this.opts.binary, [url, "--instance", this.instance], {
       cwd: this.opts.cwd,
       stdio: "ignore",
       env: { ...process.env, MELLO_CONFIG_DIR: join(this.dir, "config"), ...this.opts.env },
