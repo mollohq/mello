@@ -699,21 +699,24 @@ var sfuEndpoints = map[string]string{
     "us-east": "wss://sfu-us.m3llo.app/ws",  // GCP us-east4 (Virginia)
 }
 
-func selectSFURegion(userRegion string) string {
-    // Simple geo-mapping for beta
-    // userRegion is derived from the client's IP geolocation (MaxMind GeoLite2)
-    switch {
-    case isEuropean(userRegion):
-        return "eu-west"
-    default:
-        return "us-east"
-    }
-}
+// The client's choice when it names a configured endpoint, else
+// SFU_DEFAULT_REGION when that names one, else eu-west.
+func selectSFURegion(preferred string) string
 ```
 
-For stream sessions, the **host's region** determines the SFU. Viewers connect to the same SFU as the host — cross-region relay between SFU instances is a post-v1 feature.
+Current behaviour (interim, plans/voice-quality.md stage 1.6):
 
-For voice sessions, the **crew creator's region** determines the SFU. This is a simplification for beta; optimal would be selecting the region that minimises aggregate latency across all members.
+| Input | Rule |
+|---|---|
+| `preferred_region` in `voice_join` and `start_stream` | Optional. Used when it names a key of `sfuEndpoints`. An empty or unknown value falls back; it never fails the RPC. |
+| `SFU_DEFAULT_REGION` (env) | The fallback when it names a key of `sfuEndpoints`. |
+| `eu-west` | The last fallback. |
+
+The client sends no `preferred_region` yet. Stage 6 adds the client ping that chooses it, and the IP geolocation fallback.
+
+For stream sessions, the **host's region** determines the SFU. Viewers connect to the same SFU as the host (`watch_stream` reads the stored session region) — cross-region relay between SFU instances is a post-v1 feature.
+
+For voice sessions, the **first member who gets an SFU token** picks the region for the room (`VoiceRoom.SFURegion`). Every later member gets the room's region, whatever it prefers, because all members of a voice session must reach the same SFU instance. The region goes away with the room when the last member leaves.
 
 ---
 

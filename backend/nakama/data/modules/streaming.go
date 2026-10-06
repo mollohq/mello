@@ -29,6 +29,10 @@ type StartStreamRequest struct {
 	// only. The client supplies it and the server cannot verify it. The
 	// client matches it against the capture block lists.
 	IgdbID uint32 `json:"igdb_id,omitempty"`
+	// PreferredRegion is optional: an SFU region from sfu_routing.go for the
+	// host's session. Viewers join the host's region (watch_stream). An empty
+	// or unknown value falls back (selectSFURegion).
+	PreferredRegion string `json:"preferred_region,omitempty"`
 }
 
 // CapturePolicy is the backend `capture` block in the start_stream response
@@ -269,7 +273,7 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 
 	// SFU path: premium crews get server-relayed streaming
 	if sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID) {
-		region := selectSFURegion("")
+		region := selectSFURegion(req.PreferredRegion)
 		endpoint := sfuEndpointForRegion(region)
 
 		token, err := signSFUToken(SFUTokenClaims{
