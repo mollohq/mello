@@ -211,6 +211,7 @@ void AudioPipeline::shutdown() {
     MELLO_LOG_INFO("pipeline", "shutting down");
     initialized_ = false;  // first: no backend switching while dying
     stop_capture();
+    set_packet_sink(nullptr);
     if (playback_) playback_->stop();
     echo_canceller_.shutdown();
     echo_suppressor_.shutdown();
@@ -498,16 +499,28 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp)
     int encoded = encoder_.encode(frame, FRAME_SIZE, raw_pkt, MAX_PACKET_SIZE);
 
     if (encoded > 0) {
+        const uint32_t seq = sequence_++;
+        std::lock_guard<std::mutex> slock(packet_sink_mutex_);
+        if (packet_sink_) {
+            // Direct send: the frame leaves on this thread, with no wait
+            // for a consumer of the queue (spec 10 section 4.5).
+            packet_sink_(raw_pkt, encoded, timestamp, seq);
+            if ((seq % 250) == 0 || seq < 5) {
+                MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, to sink",
+                                seq, encoded, vad_.probability());
+            }
+            return;
+        }
         std::lock_guard<std::mutex> olock(outgoing_mutex_);
         EncodedPacket pkt;
         pkt.data.assign(raw_pkt, raw_pkt + encoded);
-        pkt.sequence = sequence_++;
+        pkt.sequence = seq;
         pkt.timestamp = timestamp;
         outgoing_.push(std::move(pkt));
 
-        if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
+        if ((seq % 250) == 0 || seq < 5) {
             MELLO_LOG_DEBUG("pipeline", "encode: seq=%u size=%d bytes, vad=%.2f, queue=%zu",
-                            pkt.sequence, encoded, vad_.probability(), outgoing_.size());
+                            seq, encoded, vad_.probability(), outgoing_.size());
         }
     } else if (encoded < 0) {
         MELLO_LOG_WARN("pipeline", "opus encode error: %d", encoded);
@@ -674,6 +687,26 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
         }
         capture_accum_.erase(capture_accum_.begin(),
                              capture_accum_.begin() + FRAME_SIZE);
+    }
+}
+
+void AudioPipeline::set_packet_sink(PacketSink sink) {
+    const bool set = static_cast<bool>(sink);
+    // Waits for a sink call that runs now on the capture thread.
+    std::lock_guard<std::mutex> slock(packet_sink_mutex_);
+    const bool was_set = static_cast<bool>(packet_sink_);
+    packet_sink_ = std::move(sink);
+    size_t dropped = 0;
+    if (set) {
+        // Frames queued before the sink would leave late, or reach the
+        // next get_packet caller as stale audio.
+        std::lock_guard<std::mutex> olock(outgoing_mutex_);
+        dropped = outgoing_.size();
+        std::queue<EncodedPacket>().swap(outgoing_);
+    }
+    if (set || was_set) {
+        MELLO_LOG_INFO("pipeline", "packet sink %s (queued frames dropped=%zu)",
+                       set ? (was_set ? "replaced" : "set") : "cleared", dropped);
     }
 }
 
