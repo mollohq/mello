@@ -66,8 +66,9 @@ pub trait PacketSink: Send + Sync {
         is_keyframe: bool,
     ) -> Result<(), StreamError>;
 
-    /// Send one Opus-encoded game-audio packet.
-    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError>;
+    /// Send one Opus-encoded game-audio packet. `timestamp` is its media
+    /// time in 48 kHz samples; it becomes the RTP timestamp offset.
+    async fn send_audio(&self, opus: &[u8], timestamp: u32) -> Result<(), StreamError>;
 
     /// Send a small reliable control message to every viewer (pause state,
     /// rung changes, ...). Best-effort: a failed control send must never

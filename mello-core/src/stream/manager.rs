@@ -176,7 +176,16 @@ pub struct VideoPacket {
 
 pub struct AudioPacket {
     pub data: Vec<u8>,
+    /// Media time of the frame in microseconds (libmello game-audio capture
+    /// clock: 20 000 per 20 ms frame, every frame counted).
     pub timestamp: u64,
+}
+
+/// Game-audio media time in 48 kHz RTP samples, modulo 2^32, from the
+/// capture timestamp in microseconds.
+fn media_time_48k(timestamp_us: u64) -> u32 {
+    // Truncation to 32 bits is the RTP timestamp wrap.
+    (timestamp_us.wrapping_mul(48) / 1000) as u32
 }
 
 /// Longest time `StreamSession::stop_and_wait` waits for the manager run loop.
@@ -1332,7 +1341,11 @@ impl StreamManager {
             return;
         }
         let _ = self.audio_seq.fetch_add(1, Ordering::Relaxed);
-        match self.sink.send_audio(&pkt.data).await {
+        match self
+            .sink
+            .send_audio(&pkt.data, media_time_48k(pkt.timestamp))
+            .await
+        {
             Ok(()) => {
                 self.manager_audio_sent_total = self.manager_audio_sent_total.saturating_add(1);
             }
@@ -1483,6 +1496,7 @@ mod tests {
         feedback: Mutex<Vec<SinkVideoFeedback>>,
         joins: Mutex<Vec<String>>,
         audio_packets: Mutex<Vec<Vec<u8>>>,
+        audio_timestamps: Mutex<Vec<u32>>,
         control: Mutex<Vec<Vec<u8>>>,
     }
 
@@ -1494,6 +1508,7 @@ mod tests {
                 feedback: Mutex::new(Vec::new()),
                 joins: Mutex::new(Vec::new()),
                 audio_packets: Mutex::new(Vec::new()),
+                audio_timestamps: Mutex::new(Vec::new()),
                 control: Mutex::new(Vec::new()),
             }
         }
@@ -1519,8 +1534,9 @@ mod tests {
             Ok(())
         }
 
-        async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+        async fn send_audio(&self, opus: &[u8], timestamp: u32) -> Result<(), StreamError> {
             self.audio_packets.lock().expect("lock").push(opus.to_vec());
+            self.audio_timestamps.lock().expect("lock").push(timestamp);
             Ok(())
         }
 
@@ -1957,6 +1973,42 @@ mod tests {
             sink.audio_packets.lock().expect("lock").is_empty(),
             "paused game audio must not reach viewers"
         );
+        std::mem::forget(mgr);
+    }
+
+    /// Game audio reaches the sink with its media time on the 48 kHz RTP
+    /// clock: frames 20 ms apart differ by 960, a 1 s gap by 48 000 more.
+    #[test]
+    fn game_audio_carries_its_48k_media_time_to_the_sink() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        for timestamp in [0u64, 20_000, 1_040_000] {
+            rt.block_on(mgr.handle_audio(super::AudioPacket {
+                data: vec![1, 2, 3],
+                timestamp,
+            }));
+        }
+        assert_eq!(
+            *sink.audio_timestamps.lock().expect("lock"),
+            vec![0, 960, 960 + 960 + 48_000]
+        );
+        // The u32 RTP clock wraps after 2^32 samples (about 24.9 hours):
+        // frame 4 473 925 is at 960 * 4 473 925 = 2^32 + 704 samples.
+        assert_eq!(super::media_time_48k(4_473_925 * 20_000), 704);
         std::mem::forget(mgr);
     }
 
@@ -2400,7 +2452,7 @@ mod tests {
             .build()
             .expect("runtime");
         rt.block_on(async {
-            sink.send_audio(&[1, 2, 3, 4]).await.expect("send");
+            sink.send_audio(&[1, 2, 3, 4], 0).await.expect("send");
         });
         let packets = sink.audio_packets.lock().expect("lock");
         assert_eq!(packets.len(), 1);

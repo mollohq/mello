@@ -473,7 +473,7 @@ void AudioPipeline::set_push_to_talk(bool enabled) {
     MELLO_LOG_INFO("pipeline", "push_to_talk mode %s", enabled ? "enabled" : "disabled");
 }
 
-void AudioPipeline::process_and_encode_frame(int16_t* frame) {
+void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp) {
     if (ns_mode() == NsMode::Rnnoise) {
         noise_suppressor_.process(frame, FRAME_SIZE);
     }
@@ -486,6 +486,7 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame) {
         EncodedPacket pkt;
         pkt.data.assign(raw_pkt, raw_pkt + encoded);
         pkt.sequence = sequence_++;
+        pkt.timestamp = timestamp;
         outgoing_.push(std::move(pkt));
 
         if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
@@ -509,6 +510,10 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
+        // Media time of this frame, counted whether it is encoded or not.
+        const uint32_t frame_ts = capture_timestamp_;
+        capture_timestamp_ += FRAME_SIZE;
+
         float rms = 0.0f;
         {
             double sum = 0.0;
@@ -569,7 +574,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
-                process_and_encode_frame(capture_accum_.data());
+                process_and_encode_frame(capture_accum_.data(), frame_ts);
             } else {
                 const float speech_threshold =
                     (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
@@ -617,11 +622,11 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 if (should_encode) {
                     if (!speech_gate_active_) {
                         for (auto& frame : speech_pre_roll_) {
-                            process_and_encode_frame(frame.data());
+                            process_and_encode_frame(frame.pcm.data(), frame.timestamp);
                         }
                         speech_pre_roll_.clear();
                     }
-                    process_and_encode_frame(capture_accum_.data());
+                    process_and_encode_frame(capture_accum_.data(), frame_ts);
                     speech_gate_active_ = true;
                 } else {
                     if (speech_gate_active_) {
@@ -629,8 +634,9 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                     }
                     speech_gate_active_ = false;
 
-                    std::array<int16_t, FRAME_SIZE> frame{};
-                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.data());
+                    PreRollFrame frame{};
+                    frame.timestamp = frame_ts;
+                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
                     speech_pre_roll_.push_back(frame);
                     while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
                         speech_pre_roll_.pop_front();
@@ -647,7 +653,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     }
 }
 
-int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
+int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp) {
     std::lock_guard<std::mutex> lock(outgoing_mutex_);
     if (outgoing_.empty()) return 0;
 
@@ -666,6 +672,9 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
     buffer[2] = static_cast<uint8_t>(seq >> 16);
     buffer[3] = static_cast<uint8_t>(seq >> 24);
     std::memcpy(buffer + 4, pkt.data.data(), payload_size);
+    if (out_timestamp) {
+        *out_timestamp = pkt.timestamp;
+    }
     outgoing_.pop();
 
     get_pkt_ctr_++;

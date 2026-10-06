@@ -379,10 +379,17 @@ impl SfuConnection {
         self.join_and_negotiate(msg, peer_handle).await
     }
 
-    /// Send raw Opus frame via the RTP audio track (for voice over SFU).
-    pub fn send_audio(&self, data: &[u8]) -> Result<(), StreamError> {
+    /// Send one Opus frame via the RTP audio track (voice and stream game
+    /// audio over SFU). `timestamp` is the frame's media time in 48 kHz
+    /// samples; libmello adds the track's RTP start timestamp.
+    pub fn send_audio(&self, data: &[u8], timestamp: u32) -> Result<(), StreamError> {
         let result = unsafe {
-            mello_sys::mello_peer_send_audio(self.peer, data.as_ptr(), data.len() as i32)
+            mello_sys::mello_peer_send_audio_frame(
+                self.peer,
+                data.as_ptr(),
+                data.len() as i32,
+                timestamp,
+            )
         };
         if result != mello_sys::MelloResult_MELLO_OK {
             return Err(StreamError::SfuSendFailed("audio track send failed".into()));
