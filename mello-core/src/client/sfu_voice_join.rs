@@ -285,4 +285,151 @@ pub(super) mod tests {
         let polled = tokio::time::timeout(Duration::from_millis(50), joins.finished()).await;
         assert!(polled.is_err(), "a cancelled join must not report");
     }
+
+    use crate::transport::SfuEvent;
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    /// A real SDP answer for `offer`, from a native peer that lives only
+    /// inside this call.
+    fn native_answer(offer: &str) -> String {
+        let id = std::ffi::CString::new("fake-sfu").expect("static id");
+        let offer = std::ffi::CString::new(offer).expect("offer has no NUL");
+        // SAFETY: the context argument is unused by libmello; the peer is
+        // destroyed before return and the answer is copied first.
+        unsafe {
+            let peer = mello_sys::mello_peer_create(std::ptr::null_mut(), id.as_ptr());
+            assert!(!peer.is_null(), "native answerer");
+            let answer = mello_sys::mello_peer_create_answer(peer, offer.as_ptr());
+            assert!(!answer.is_null(), "native answer");
+            let text = std::ffi::CStr::from_ptr(answer)
+                .to_string_lossy()
+                .into_owned();
+            mello_sys::mello_peer_destroy(peer);
+            text
+        }
+    }
+
+    fn text(value: serde_json::Value) -> Message {
+        Message::Text(value.to_string())
+    }
+
+    /// An SFU that sends other signaling between the client's join and the
+    /// `joined` reply, and between the offer and the `answer`, as a busy
+    /// session does when members come and go during a join.
+    async fn interleaving_sfu() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+
+            let join = loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(t))) => break t,
+                    Some(Ok(_)) => continue,
+                    _ => panic!("no join message"),
+                }
+            };
+            assert!(join.contains("join_voice"), "{join}");
+            ws.send(text(serde_json::json!({
+                "type": "member_joined",
+                "data": { "user_id": "early-1", "role": "member" }
+            })))
+            .await
+            .expect("send member_joined");
+            ws.send(text(serde_json::json!({
+                "type": "joined",
+                "data": { "session_type": "voice", "session_id": "voice:crew-1:ch-1", "members": [] }
+            })))
+            .await
+            .expect("send joined");
+
+            let offer = loop {
+                match ws.next().await {
+                    Some(Ok(Message::Text(t))) => {
+                        let v: serde_json::Value =
+                            serde_json::from_str(&t).expect("client sends JSON");
+                        if v["type"] == "offer" {
+                            break v["data"]["sdp"].as_str().expect("offer sdp").to_string();
+                        }
+                    }
+                    Some(Ok(_)) => continue,
+                    _ => panic!("no offer"),
+                }
+            };
+            let answer = native_answer(&offer);
+            for msg in [
+                serde_json::json!({
+                    "type": "member_joined",
+                    "data": { "user_id": "early-2", "role": "member" }
+                }),
+                serde_json::json!({
+                    "type": "ice_candidate",
+                    "data": {
+                        "candidate": "candidate:1 1 UDP 2130706431 127.0.0.1 9 typ host",
+                        "sdp_mid": "0",
+                        "sdp_mline_index": 0
+                    }
+                }),
+                serde_json::json!({
+                    "type": "member_left",
+                    "data": { "user_id": "early-2", "reason": "left" }
+                }),
+                serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+            ] {
+                ws.send(text(msg)).await.expect("send");
+            }
+            // Keep the socket open; the client's ICE candidates arrive here.
+            while ws.next().await.is_some() {}
+        });
+        endpoint
+    }
+
+    /// Signaling that arrives before `joined` or before `answer` must not
+    /// fail the join, and must reach the event queue in order once the join
+    /// completes.
+    #[tokio::test]
+    async fn signaling_before_joined_and_answer_is_kept_for_the_listener() {
+        let endpoint = interleaving_sfu().await;
+        let mut conn = tokio::time::timeout(LIMIT, SfuConnection::connect(&endpoint, "token"))
+            .await
+            .expect("connect in time")
+            .expect("connect");
+        // SAFETY: libmello ignores the context argument of mello_peer_create.
+        let peer = unsafe { SfuConnection::create_peer(std::ptr::null_mut()) }.expect("peer");
+
+        let session = tokio::time::timeout(LIMIT, conn.join_voice(peer, "crew-1", "ch-1"))
+            .await
+            .expect("join in time")
+            .expect("the join succeeds");
+        assert_eq!(session.session_id, "voice:crew-1:ch-1");
+
+        let mut seen = Vec::new();
+        while seen.len() < 3 {
+            let ev = tokio::time::timeout(LIMIT, conn.recv_event())
+                .await
+                .expect("queued signaling arrives")
+                .expect("event channel open");
+            match ev {
+                SfuEvent::MemberJoined { user_id, .. } => seen.push(format!("joined:{user_id}")),
+                SfuEvent::MemberLeft { user_id, .. } => seen.push(format!("left:{user_id}")),
+                other => panic!("unexpected event {other:?}"),
+            }
+        }
+        assert_eq!(seen, ["joined:early-1", "joined:early-2", "left:early-2"]);
+    }
 }

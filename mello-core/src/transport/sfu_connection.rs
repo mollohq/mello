@@ -840,16 +840,10 @@ impl SfuConnection {
         // Step 1: Send join message
         self.send_signaling(&join_msg).await?;
 
-        // Step 2: Receive "joined" response
-        let joined_msg = ws_rx
-            .next()
-            .await
-            .ok_or_else(|| {
-                StreamError::SfuProtocolError("connection closed before joined response".into())
-            })?
-            .map_err(|e| StreamError::SfuConnectFailed(e.to_string()))?;
-
-        let joined: SignalingMessage = parse_ws_message(&joined_msg)?;
+        // Step 2: Receive "joined" response. Signaling that arrives before
+        // it is kept for the listener (read_signal_until).
+        let mut deferred: Vec<SignalingMessage> = Vec::new();
+        let joined = read_signal_until(&mut ws_rx, "joined", &mut deferred).await?;
         if joined.msg_type == "error" {
             let err_msg = joined
                 .data
@@ -857,12 +851,6 @@ impl SfuConnection {
                 .and_then(|v| v.as_str())
                 .unwrap_or("unknown error");
             return Err(StreamError::SfuJoinFailed(err_msg.to_string()));
-        }
-        if joined.msg_type != "joined" {
-            return Err(StreamError::SfuProtocolError(format!(
-                "expected joined, got {}",
-                joined.msg_type
-            )));
         }
 
         let session_info = SessionInfo {
@@ -1075,14 +1063,9 @@ impl SfuConnection {
             }
         }
 
-        // Steps 8-9: Receive SDP answer
-        let answer_msg = ws_rx
-            .next()
-            .await
-            .ok_or_else(|| StreamError::SfuProtocolError("connection closed before answer".into()))?
-            .map_err(|e| StreamError::SfuConnectFailed(e.to_string()))?;
-
-        let answer: SignalingMessage = parse_ws_message(&answer_msg)?;
+        // Steps 8-9: Receive SDP answer. Signaling that arrives before it
+        // (member changes, server ICE candidates) is kept for the listener.
+        let answer = read_signal_until(&mut ws_rx, "answer", &mut deferred).await?;
         if answer.msg_type != "answer" {
             // Surface the relay's code/message: without them a failed setup
             // logs only "got error" and the cause is undebuggable in the field.
@@ -1141,166 +1124,37 @@ impl SfuConnection {
         self.ice_cb_data = cb_data_wrapped.0;
         self.audio_cb_data = audio_cb_wrapped.0;
 
-        // Step 12: Spawn background signaling listener
-        let event_tx_clone = self.event_tx.clone();
-        let peer_for_task = SendPtr(self.peer);
-        let ws_tx_for_task = Arc::clone(&self.ws_tx);
-        let signaling_activity_for_task = Arc::clone(&self.last_signaling_activity_ms);
+        // Step 12: Spawn background signaling listener. It first handles the
+        // signaling that arrived while the join waited for `joined` and
+        // `answer`, in arrival order, then reads the socket.
+        let mut listener = SignalListener {
+            event_tx: self.event_tx.clone(),
+            peer: SendPtr(self.peer),
+            ws_tx: Arc::clone(&self.ws_tx),
+            activity: Arc::clone(&self.last_signaling_activity_ms),
+        };
         let listener_task = tokio::spawn(async move {
-            while let Some(msg_result) = ws_rx.next().await {
+            let mut open = true;
+            for sig in deferred {
+                if !listener.handle(sig).await {
+                    open = false;
+                    break;
+                }
+            }
+            while open {
+                let Some(msg_result) = ws_rx.next().await else {
+                    break;
+                };
                 match msg_result {
                     Ok(msg) => {
                         if let Ok(sig) = parse_ws_message(&msg) {
-                            signaling_activity_for_task.store(now_millis(), Ordering::Relaxed);
-                            log::info!("SFU <- signaling: type={} data={}", sig.msg_type, sig.data);
-                            match sig.msg_type.as_str() {
-                                "member_joined" => {
-                                    let user_id = sig
-                                        .data
-                                        .get("user_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let role = sig
-                                        .data
-                                        .get("role")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let _ = event_tx_clone
-                                        .send(SfuEvent::MemberJoined { user_id, role })
-                                        .await;
-                                }
-                                "member_left" => {
-                                    let user_id = sig
-                                        .data
-                                        .get("user_id")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("")
-                                        .to_string();
-                                    let reason = sig
-                                        .data
-                                        .get("reason")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown")
-                                        .to_string();
-                                    let _ = event_tx_clone
-                                        .send(SfuEvent::MemberLeft { user_id, reason })
-                                        .await;
-                                }
-                                "ice_candidate" => {
-                                    if let Some(data) = sig.data.as_object() {
-                                        let raw = data
-                                            .get("candidate")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("");
-                                        let candidate = if raw.starts_with("a=") {
-                                            raw.to_string()
-                                        } else {
-                                            format!("a={}", raw)
-                                        };
-                                        let sdp_mid = data
-                                            .get("sdp_mid")
-                                            .and_then(|v| v.as_str())
-                                            .unwrap_or("0");
-                                        let sdp_mline_index = data
-                                            .get("sdp_mline_index")
-                                            .and_then(|v| v.as_i64())
-                                            .unwrap_or(0)
-                                            as i32;
-                                        apply_remote_ice_candidate(
-                                            &peer_for_task,
-                                            &candidate,
-                                            sdp_mid,
-                                            sdp_mline_index,
-                                        );
-                                        log::debug!("SFU: applied server ICE candidate");
-                                    }
-                                }
-                                "offer" => {
-                                    // Server-initiated renegotiation (new tracks added)
-                                    if let Some(sdp) = sig.data.get("sdp").and_then(|v| v.as_str())
-                                    {
-                                        if let Ok(sdp_c) = CString::new(sdp) {
-                                            let answer_ptr = unsafe {
-                                                mello_sys::mello_peer_handle_remote_offer(
-                                                    peer_for_task.0,
-                                                    sdp_c.as_ptr(),
-                                                )
-                                            };
-                                            if !answer_ptr.is_null() {
-                                                let answer_sdp = unsafe {
-                                                    CStr::from_ptr(answer_ptr)
-                                                        .to_string_lossy()
-                                                        .into_owned()
-                                                };
-                                                let answer_msg = serde_json::json!({
-                                                    "type": "answer",
-                                                    "seq": 0,
-                                                    "data": { "sdp": answer_sdp }
-                                                });
-                                                let mut ws = ws_tx_for_task.lock().await;
-                                                let _ = ws
-                                                    .send(Message::Text(answer_msg.to_string()))
-                                                    .await;
-                                                log::info!("SFU: renegotiation answer sent");
-                                            } else {
-                                                log::error!(
-                                                    "SFU: failed to handle renegotiation offer"
-                                                );
-                                            }
-                                        }
-                                    }
-                                }
-                                "error" => {
-                                    let code =
-                                        sig.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
-                                    let error_msg = sig
-                                        .data
-                                        .get("message")
-                                        .and_then(|v| v.as_str())
-                                        .unwrap_or("unknown error")
-                                        .to_string();
-                                    log::error!("SFU signaling error [{}]: {}", code, error_msg);
-                                    // Fatal errors leave the session unusable, so
-                                    // surface them as a disconnect to drive a full
-                                    // reconnect. Transient validation errors (e.g. a
-                                    // stray ICE candidate) are logged only.
-                                    const FATAL: &[&str] = &[
-                                        "INVALID_TOKEN",
-                                        "INVALID_ROLE",
-                                        "SESSION_FULL",
-                                        "WEBRTC_ERROR",
-                                    ];
-                                    if FATAL.contains(&code) {
-                                        let _ = event_tx_clone
-                                            .send(SfuEvent::Disconnected {
-                                                reason: format!("error:{}", code),
-                                            })
-                                            .await;
-                                        break;
-                                    }
-                                }
-                                "session_ended" => {
-                                    let _ = event_tx_clone
-                                        .send(SfuEvent::Disconnected {
-                                            reason: "session_ended".into(),
-                                        })
-                                        .await;
-                                    break;
-                                }
-                                _ => {
-                                    log::debug!(
-                                        "SFU: unhandled signaling message: {}",
-                                        sig.msg_type
-                                    );
-                                }
-                            }
+                            open = listener.handle(sig).await;
                         }
                     }
                     Err(e) => {
                         log::warn!("SFU WebSocket error: {}", e);
-                        let _ = event_tx_clone
+                        let _ = listener
+                            .event_tx
                             .send(SfuEvent::Disconnected {
                                 reason: e.to_string(),
                             })
@@ -1446,6 +1300,202 @@ impl Drop for SfuConnection {
             });
         }
         log::info!("SFU: connection dropped (server_id={})", self.server_id);
+    }
+}
+
+/// Handles signaling after a join: membership events, server ICE candidates,
+/// server-initiated renegotiation, errors. Owned by the listener task.
+struct SignalListener {
+    event_tx: mpsc::Sender<SfuEvent>,
+    peer: SendPtr<mello_sys::MelloPeerConnection>,
+    ws_tx: Arc<tokio::sync::Mutex<futures::stream::SplitSink<WsStream, Message>>>,
+    activity: Arc<AtomicU64>,
+}
+
+impl SignalListener {
+    /// Handle one signaling message. Returns false when the session is over
+    /// (a fatal error or `session_ended`) and the listener must stop.
+    async fn handle(&mut self, sig: SignalingMessage) -> bool {
+        self.activity.store(now_millis(), Ordering::Relaxed);
+        log::info!("SFU <- signaling: type={} data={}", sig.msg_type, sig.data);
+        match sig.msg_type.as_str() {
+            "member_joined" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let role = sig
+                    .data
+                    .get("role")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::MemberJoined { user_id, role })
+                    .await;
+            }
+            "member_left" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let reason = sig
+                    .data
+                    .get("reason")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown")
+                    .to_string();
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::MemberLeft { user_id, reason })
+                    .await;
+            }
+            "ice_candidate" => {
+                if let Some(data) = sig.data.as_object() {
+                    let raw = data.get("candidate").and_then(|v| v.as_str()).unwrap_or("");
+                    let candidate = if raw.starts_with("a=") {
+                        raw.to_string()
+                    } else {
+                        format!("a={}", raw)
+                    };
+                    let sdp_mid = data.get("sdp_mid").and_then(|v| v.as_str()).unwrap_or("0");
+                    let sdp_mline_index = data
+                        .get("sdp_mline_index")
+                        .and_then(|v| v.as_i64())
+                        .unwrap_or(0) as i32;
+                    apply_remote_ice_candidate(&self.peer, &candidate, sdp_mid, sdp_mline_index);
+                    log::debug!("SFU: applied server ICE candidate");
+                }
+            }
+            "offer" => {
+                // Server-initiated renegotiation (new tracks added)
+                if let Some(sdp) = sig.data.get("sdp").and_then(|v| v.as_str()) {
+                    if let Ok(sdp_c) = CString::new(sdp) {
+                        let answer_ptr = unsafe {
+                            mello_sys::mello_peer_handle_remote_offer(self.peer.0, sdp_c.as_ptr())
+                        };
+                        if !answer_ptr.is_null() {
+                            let answer_sdp = unsafe {
+                                CStr::from_ptr(answer_ptr).to_string_lossy().into_owned()
+                            };
+                            let answer_msg = serde_json::json!({
+                                "type": "answer",
+                                "seq": 0,
+                                "data": { "sdp": answer_sdp }
+                            });
+                            let mut ws = self.ws_tx.lock().await;
+                            let _ = ws.send(Message::Text(answer_msg.to_string())).await;
+                            log::info!("SFU: renegotiation answer sent");
+                        } else {
+                            log::error!("SFU: failed to handle renegotiation offer");
+                        }
+                    }
+                }
+            }
+            "error" => {
+                let code = sig.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
+                let error_msg = sig
+                    .data
+                    .get("message")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("unknown error")
+                    .to_string();
+                log::error!("SFU signaling error [{}]: {}", code, error_msg);
+                // Fatal errors leave the session unusable, so
+                // surface them as a disconnect to drive a full
+                // reconnect. Transient validation errors (e.g. a
+                // stray ICE candidate) are logged only.
+                const FATAL: &[&str] = &[
+                    "INVALID_TOKEN",
+                    "INVALID_ROLE",
+                    "SESSION_FULL",
+                    "WEBRTC_ERROR",
+                ];
+                if FATAL.contains(&code) {
+                    let _ = self
+                        .event_tx
+                        .send(SfuEvent::Disconnected {
+                            reason: format!("error:{}", code),
+                        })
+                        .await;
+                    return false;
+                }
+            }
+            "session_ended" => {
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::Disconnected {
+                        reason: "session_ended".into(),
+                    })
+                    .await;
+                return false;
+            }
+            _ => {
+                log::debug!("SFU: unhandled signaling message: {}", sig.msg_type);
+            }
+        }
+        true
+    }
+}
+
+/// Most signaling messages kept while a join waits for one reply. A server
+/// that sends more is broken; the join fails instead of buffering forever.
+const MAX_DEFERRED_SIGNALS: usize = 256;
+
+/// Read signaling until a message of type `wanted` or `error`, and return it.
+///
+/// A busy session sends other messages while a join waits for `joined` or
+/// `answer`: `member_joined`, `member_left`, `ice_candidate`, a server
+/// offer. They go to `deferred` in arrival order, for the signaling listener,
+/// so the join neither fails on them nor loses them. Control frames (ping,
+/// pong) are skipped.
+async fn read_signal_until<S>(
+    ws_rx: &mut S,
+    wanted: &str,
+    deferred: &mut Vec<SignalingMessage>,
+) -> Result<SignalingMessage, StreamError>
+where
+    S: futures::Stream<Item = Result<Message, tokio_tungstenite::tungstenite::Error>> + Unpin,
+{
+    loop {
+        let msg = ws_rx
+            .next()
+            .await
+            .ok_or_else(|| {
+                StreamError::SfuProtocolError(format!("connection closed before {}", wanted))
+            })?
+            .map_err(|e| StreamError::SfuConnectFailed(e.to_string()))?;
+        match msg {
+            Message::Text(_) => {}
+            Message::Close(_) => {
+                return Err(StreamError::SfuProtocolError(format!(
+                    "connection closed before {}",
+                    wanted
+                )));
+            }
+            _ => continue,
+        }
+        let sig = parse_ws_message(&msg)?;
+        if sig.msg_type == wanted || sig.msg_type == "error" {
+            return Ok(sig);
+        }
+        if deferred.len() >= MAX_DEFERRED_SIGNALS {
+            return Err(StreamError::SfuProtocolError(format!(
+                "more than {} signaling messages before {}",
+                MAX_DEFERRED_SIGNALS, wanted
+            )));
+        }
+        log::info!(
+            "SFU: {} arrived before {}; kept for the signaling listener",
+            sig.msg_type,
+            wanted
+        );
+        deferred.push(sig);
     }
 }
 
