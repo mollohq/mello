@@ -742,7 +742,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     int decoded_ok = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         std::vector<uint8_t> pkt_data;
-        uint32_t pkt_seq = 0;
+        int64_t pkt_seq = 0;
         int drained = 0;
         while (drained < kMaxDrainPacketsPerPeer) {
             auto pop_result = jb.pop(pkt_data, &pkt_seq);
@@ -774,7 +774,8 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             auto last_it = last_decoded_seq_.find(pid);
             uint32_t missing_frames = 0;
             if (last_it != last_decoded_seq_.end() && pkt_seq > last_it->second + 1) {
-                missing_frames = pkt_seq - last_it->second - 1;
+                missing_frames = static_cast<uint32_t>(
+                    (std::min<int64_t>)(pkt_seq - last_it->second - 1, kMaxConcealFramesPerPacket));
             }
 
             if (primed && missing_frames > 0) {

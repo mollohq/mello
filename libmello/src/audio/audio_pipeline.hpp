@@ -209,7 +209,7 @@ private:
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, bool> decoder_primed_;
-    std::unordered_map<std::string, uint32_t> last_decoded_seq_;
+    std::unordered_map<std::string, int64_t> last_decoded_seq_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
 

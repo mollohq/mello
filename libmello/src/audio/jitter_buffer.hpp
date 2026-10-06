@@ -10,11 +10,29 @@ static constexpr int JITTER_MAX_PACKETS = 50;
 static constexpr int JITTER_TARGET_MS = 60;
 static constexpr int JITTER_MIN_MS = 20;
 static constexpr int JITTER_MAX_MS = 200;
-static constexpr uint32_t SEQ_DISCONTINUITY_THRESHOLD = 1000;
+static constexpr int64_t SEQ_DISCONTINUITY_THRESHOLD = 1000;
+
+/// Extends a 16-bit RTP sequence number to a running 64-bit counter.
+///
+/// The SFU path carries the 16-bit RTP sequence in the packet header
+/// (peer_connection.cpp); it wraps from 65535 to 0 every 22 minutes of
+/// speech. The P2P path carries a 32-bit counter (AudioPipeline::get_packet).
+/// Both use only the low 16 bits here: each value is placed at the extended
+/// position nearest to the previous one, so a step of up to 32767 packets
+/// either way keeps its order. Not thread safe; the owner locks.
+class SequenceUnwrapper {
+public:
+    int64_t unwrap(uint32_t sequence);
+    void reset() { has_last_ = false; }
+
+private:
+    bool has_last_ = false;
+    int64_t last_ = 0;
+};
 
 struct JitterPacket {
     std::vector<uint8_t> data;
-    uint32_t sequence;
+    int64_t sequence;
     int64_t arrival_time_ms;
 };
 
@@ -31,13 +49,18 @@ public:
 
     void reset();
 
+    // `sequence` is the packet header value: a 16-bit RTP sequence (SFU) or
+    // a 32-bit counter (P2P). The buffer unwraps it (SequenceUnwrapper), so
+    // the timeline below sees one monotonic extended sequence.
     void push(uint32_t sequence, const uint8_t* data, int size);
 
     // Pops from playout timeline:
     // - Packet when data is ready
     // - Missing when a packet is considered lost and concealment should run
     // - None when still prebuffering / waiting for delay
-    JitterPopResult pop(std::vector<uint8_t>& out_data, uint32_t* out_sequence = nullptr);
+    // out_sequence receives the extended sequence of the packet, or of the
+    // lost packet for Missing.
+    JitterPopResult pop(std::vector<uint8_t>& out_data, int64_t* out_sequence = nullptr);
 
     int buffered_count() const;
     int target_delay_ms() const { return target_delay_ms_; }
@@ -54,10 +77,11 @@ private:
     void adapt_target();
     void reset_locked();
 
-    std::map<uint32_t, JitterPacket> packets_;
+    std::map<int64_t, JitterPacket> packets_;
     mutable std::mutex mutex_;
 
-    uint32_t next_seq_ = 0;
+    SequenceUnwrapper unwrapper_;
+    int64_t next_seq_ = 0;
     bool first_packet_ = true;
     bool prebuffering_ = true;
     int target_delay_ms_ = JITTER_TARGET_MS;

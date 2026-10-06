@@ -159,6 +159,13 @@ For endpoint packet API (`mello_voice_get_packet` / `mello_voice_feed_packet`), 
 
 In SFU RTP mode, `mello-core` strips this 4-byte sequence before `mello_peer_send_audio()` because RTP sequence/timestamp are handled by transport.
 
+Receive side:
+
+- The SFU path writes the 16-bit RTP sequence into the 4-byte header, with the high bytes zero (`peer_connection.cpp`).
+- The P2P path carries the 32-bit sender counter.
+- The jitter buffer reads only the low 16 bits and extends them to a running 64-bit sequence (`SequenceUnwrapper`). Each value goes to the extended position nearest to the previous value.
+- All timeline comparisons use the extended sequence. The RTP wrap from 65535 to 0 is one ordinary step: no late drop, no reset.
+
 ### 4.3 Push-to-Talk Mode
 
 When the client enables push-to-talk (`mello_voice_set_push_to_talk(true)`), Silero VAD and the adaptive RMS/pre-roll speech gate are bypassed while the mic is unmuted. The client hotkey and mute state control when packets are sent; AEC3, AGC2, RNNoise, and Opus run on every captured frame during an unmuted PTT hold. Speaking indicators and `voice_speaking` presence remain hotkey-driven in the client, not Silero-driven.

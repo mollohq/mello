@@ -5,11 +5,26 @@
 
 namespace mello::audio {
 
+int64_t SequenceUnwrapper::unwrap(uint32_t sequence) {
+    const uint16_t low = static_cast<uint16_t>(sequence & 0xFFFFu);
+    if (!has_last_) {
+        has_last_ = true;
+        last_ = low;
+        return last_;
+    }
+    // Signed 16-bit distance from the previous value: wrap-safe.
+    const auto step = static_cast<int16_t>(
+        static_cast<uint16_t>(low - static_cast<uint16_t>(last_ & 0xFFFF)));
+    last_ += step;
+    return last_;
+}
+
 JitterBuffer::JitterBuffer() = default;
 
 void JitterBuffer::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
     reset_locked();
+    unwrapper_.reset();
 }
 
 void JitterBuffer::reset_locked() {
@@ -29,9 +44,12 @@ int64_t JitterBuffer::now_ms() const {
     return util::steady_now_ms();
 }
 
-void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
+void JitterBuffer::push(uint32_t raw_sequence, const uint8_t* data, int size) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Every comparison below is on the extended sequence, so the 16-bit RTP
+    // wrap is an ordinary step of one.
+    const int64_t sequence = unwrapper_.unwrap(raw_sequence);
     int64_t arrival = now_ms();
 
     if (first_packet_) {
@@ -42,9 +60,10 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
         last_arrival_ = arrival;
     }
 
-    // Detect sequence discontinuity (track re-wire) and reset
+    // Detect sequence discontinuity (track re-wire) and reset. The
+    // unwrapper keeps its state: the new stream continues from here.
     if (!first_packet_ && packets_.empty()) {
-        uint32_t gap = (sequence > next_seq_)
+        const int64_t gap = (sequence > next_seq_)
             ? sequence - next_seq_
             : next_seq_ - sequence;
         if (gap > SEQ_DISCONTINUITY_THRESHOLD) {
@@ -84,7 +103,7 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
     adapt_target();
 }
 
-JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, uint32_t* out_sequence) {
+JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, int64_t* out_sequence) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (packets_.empty()) {
