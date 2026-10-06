@@ -268,6 +268,13 @@ pub enum Command {
     SetOutputVolume {
         volume: f32,
     },
+    /// Playback volume of one remote member (spec 10 section 8). `peer_id` is
+    /// the member's user id (the SFU names voice tracks after it). `volume`:
+    /// 0.0 silent, 1.0 unity, up to 2.0.
+    SetPeerVolume {
+        peer_id: String,
+        volume: f32,
+    },
     /// Input sensitivity of the speech gate (spec 10 section 8). `auto`: the
     /// gate tracks the ambient noise floor. Otherwise it opens when the raw
     /// microphone level reaches `db` dBFS (-100..0).

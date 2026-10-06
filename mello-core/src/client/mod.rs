@@ -892,6 +892,9 @@ impl Client {
             Command::SetOutputVolume { volume } => {
                 self.voice.set_output_volume(volume);
             }
+            Command::SetPeerVolume { peer_id, volume } => {
+                self.voice.set_peer_volume(&peer_id, volume);
+            }
             Command::SetInputSensitivity { auto, db } => {
                 self.voice.set_input_sensitivity(auto, db);
             }
