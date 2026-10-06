@@ -43,6 +43,11 @@ public:
     int target_delay_ms() const { return target_delay_ms_; }
     float avg_hold_ms() const { return avg_hold_ms_; }
     uint32_t underruns() const { return underruns_; }
+    // Diagnostic counters for the voice quality gate. Lifetime of this
+    // buffer; reset() does not clear them.
+    uint32_t dropped_late() const { return dropped_late_; }
+    uint32_t dropped_overflow() const { return dropped_overflow_; }
+    uint32_t discontinuity_resets() const { return discontinuity_resets_; }
 
 private:
     int64_t now_ms() const;
@@ -63,6 +68,9 @@ private:
     float jitter_estimate_ = 0.0f;
     float avg_hold_ms_ = 0.0f;
     uint32_t underruns_ = 0;
+    uint32_t dropped_late_ = 0;
+    uint32_t dropped_overflow_ = 0;
+    uint32_t discontinuity_resets_ = 0;
 };
 
 } // namespace mello::audio

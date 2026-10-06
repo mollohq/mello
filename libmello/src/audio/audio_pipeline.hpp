@@ -35,6 +35,26 @@ struct EncodedPacket {
     uint32_t sequence;
 };
 
+/// Receive-path counters for mello_get_debug_stats (voice quality gate).
+/// Counter fields are lifetime totals for the pipeline. Jitter fields are
+/// summed over the current remote peers; target delay and playout buffer are
+/// averages over them.
+struct ReceiveStats {
+    uint32_t frames_decoded = 0;
+    uint32_t decode_errors = 0;
+    uint32_t conceal_missing_plc = 0;
+    uint32_t conceal_gap_fec = 0;
+    uint32_t conceal_gap_plc = 0;
+    uint32_t conceal_fill_plc = 0;
+    uint32_t jitter_missing = 0;
+    uint32_t jitter_dropped_late = 0;
+    uint32_t jitter_dropped_overflow = 0;
+    uint32_t jitter_resets = 0;
+    int32_t jitter_buffered_packets = 0;
+    float jitter_target_delay_ms = 0.0f;
+    float playout_buffer_ms = 0.0f;
+};
+
 enum class NsMode {
     Off = 0,
     Rnnoise = 1,
@@ -110,6 +130,13 @@ public:
     int underrun_count() const { return underrun_count_.load(std::memory_order_relaxed); }
     int rtp_recv_total() const { return rtp_recv_total_.load(std::memory_order_relaxed); }
     float pipeline_delay_ms() const;
+    ReceiveStats receive_stats() const;
+
+    /// Test backend only (MELLO_AUDIO_BACKEND=test): pull `count` samples of
+    /// mixed output through the playback render source, as the device thread
+    /// does. Returns the samples the mixer produced, or -1 when the active
+    /// playback backend is not the test backend. Caller thread only.
+    int render_test_output(int16_t* out, size_t count);
 
     using VadCallback = std::function<void(bool speaking)>;
     void set_vad_callback(VadCallback cb) { vad_.set_callback(std::move(cb)); }
@@ -192,6 +219,13 @@ private:
     std::atomic<int> active_streams_{0};
     std::atomic<int> underrun_count_{0};
     std::atomic<int> rtp_recv_total_{0};
+    // Receive counters (ReceiveStats). Written by mix_output, read by stats.
+    std::atomic<uint32_t> rx_frames_decoded_{0};
+    std::atomic<uint32_t> rx_decode_errors_{0};
+    std::atomic<uint32_t> rx_conceal_missing_plc_{0};
+    std::atomic<uint32_t> rx_conceal_gap_fec_{0};
+    std::atomic<uint32_t> rx_conceal_gap_plc_{0};
+    std::atomic<uint32_t> rx_conceal_fill_plc_{0};
 
     // Windowed underrun health (audio-thread only; no atomics needed).
     int underrun_window_count_ = 0;

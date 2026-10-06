@@ -155,6 +155,28 @@ MELLO_API void mello_voice_inject_capture(MelloContext* ctx, const int16_t* samp
 MELLO_API void mello_voice_stop_capture_inject(MelloContext* ctx);
 
 /* ============================================================================
+ * Voice test hooks (voice quality gate, mello-sys/tests/voice_gate.rs)
+ *
+ * Not for production use. Set the environment variable
+ * MELLO_AUDIO_BACKEND=test before mello_init() to select a device-free audio
+ * backend: no capture or playback device opens and no device thread starts.
+ * Feed capture audio with mello_voice_start_capture_inject() and
+ * mello_voice_inject_capture(), and pull mixed output with
+ * mello_voice_test_pull_output(). Without the variable, nothing changes.
+ * ============================================================================ */
+
+/** Pull `count` samples (48 kHz mono int16) of mixed voice output through the
+ *  playback render path, as the playback device thread does. Samples the mixer
+ *  did not produce are zero. Returns the number of samples the mixer produced
+ *  (0 = silence), or -1 when the context does not use the test backend. */
+MELLO_API int mello_voice_test_pull_output(MelloContext* ctx, int16_t* out, int count);
+
+/** Drive the playout clock (jitter buffer hold timing) from the caller.
+ *  now_ms >= 0 sets the clock to that value in milliseconds. now_ms < 0
+ *  restores the steady clock. Process-wide: it affects every context. */
+MELLO_API void mello_test_set_clock_ms(int64_t now_ms);
+
+/* ============================================================================
  * Clip Buffer
  * ============================================================================ */
 
@@ -834,6 +856,22 @@ typedef struct MelloDebugStats {
     int32_t  underrun_count;
     int32_t  rtp_recv_total;
     float    pipeline_delay_ms;
+    /* Receive-path counters, appended for the voice quality gate. Append new
+     * fields after these; never reorder. Counters are totals since the
+     * context started. Jitter fields cover the current remote peers. */
+    uint32_t rx_frames_decoded;          /* packets decoded normally */
+    uint32_t rx_decode_errors;           /* Opus decode failures */
+    uint32_t rx_conceal_missing_plc;     /* PLC frames for a jitter "Missing" event */
+    uint32_t rx_conceal_gap_fec;         /* FEC frames for a sequence gap at decode */
+    uint32_t rx_conceal_gap_plc;         /* PLC frames for a sequence gap at decode */
+    uint32_t rx_conceal_fill_plc;        /* PLC frames that fill a short playout buffer */
+    uint32_t rx_jitter_missing;          /* packets the jitter buffer declared lost */
+    uint32_t rx_jitter_dropped_late;     /* packets dropped: older than the playout point */
+    uint32_t rx_jitter_dropped_overflow; /* packets dropped: jitter buffer full */
+    uint32_t rx_jitter_resets;           /* jitter buffer resets on a sequence jump */
+    int32_t  rx_jitter_buffered_packets; /* packets in the jitter buffers now */
+    float    rx_jitter_target_delay_ms;  /* mean jitter target delay now */
+    float    rx_playout_buffer_ms;       /* mean decoded audio queued for playout now */
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);

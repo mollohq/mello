@@ -13,6 +13,7 @@
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
 #include "util/log.hpp"
+#include "util/test_clock.hpp"
 #include <climits>
 #include <cstring>
 #include <cstdlib>
@@ -393,6 +394,19 @@ void mello_voice_stop_capture_inject(MelloContext* ctx) {
     try {
         if (ctx) ctx_cast(ctx)->audio().stop_capture_inject();
     } catch (...) {}
+}
+
+int mello_voice_test_pull_output(MelloContext* ctx, int16_t* out, int count) {
+    if (!ctx || !out || count <= 0) return -1;
+    try {
+        return ctx_cast(ctx)->audio().render_test_output(out, static_cast<size_t>(count));
+    } catch (...) {
+        return -1;
+    }
+}
+
+void mello_test_set_clock_ms(int64_t now_ms) {
+    mello::util::set_test_clock_ms(now_ms);
 }
 
 /* ============================================================================
@@ -929,6 +943,20 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->underrun_count  = audio.underrun_count();
         out->rtp_recv_total  = audio.rtp_recv_total();
         out->pipeline_delay_ms = audio.pipeline_delay_ms();
+        const auto rx = audio.receive_stats();
+        out->rx_frames_decoded          = rx.frames_decoded;
+        out->rx_decode_errors           = rx.decode_errors;
+        out->rx_conceal_missing_plc     = rx.conceal_missing_plc;
+        out->rx_conceal_gap_fec         = rx.conceal_gap_fec;
+        out->rx_conceal_gap_plc         = rx.conceal_gap_plc;
+        out->rx_conceal_fill_plc        = rx.conceal_fill_plc;
+        out->rx_jitter_missing          = rx.jitter_missing;
+        out->rx_jitter_dropped_late     = rx.jitter_dropped_late;
+        out->rx_jitter_dropped_overflow = rx.jitter_dropped_overflow;
+        out->rx_jitter_resets           = rx.jitter_resets;
+        out->rx_jitter_buffered_packets = rx.jitter_buffered_packets;
+        out->rx_jitter_target_delay_ms  = rx.jitter_target_delay_ms;
+        out->rx_playout_buffer_ms       = rx.playout_buffer_ms;
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

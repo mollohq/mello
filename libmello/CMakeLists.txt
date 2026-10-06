@@ -176,6 +176,7 @@ set(MELLO_SOURCES
     src/mello.cpp
     src/context.cpp
     src/audio/audio_pipeline.cpp
+    src/audio/audio_backend_test.cpp
     src/audio/clip_buffer.cpp
     src/audio/clip_encoder.cpp
     src/audio/opus_codec.cpp

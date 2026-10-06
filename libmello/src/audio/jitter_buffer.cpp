@@ -1,5 +1,5 @@
 #include "jitter_buffer.hpp"
-#include <chrono>
+#include "../util/test_clock.hpp"
 #include <algorithm>
 #include <cmath>
 
@@ -25,9 +25,8 @@ void JitterBuffer::reset_locked() {
 }
 
 int64_t JitterBuffer::now_ms() const {
-    auto now = std::chrono::steady_clock::now();
-    return std::chrono::duration_cast<std::chrono::milliseconds>(
-        now.time_since_epoch()).count();
+    // steady_clock in production; the voice quality gate can drive it.
+    return util::steady_now_ms();
 }
 
 void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
@@ -49,6 +48,7 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
             ? sequence - next_seq_
             : next_seq_ - sequence;
         if (gap > SEQ_DISCONTINUITY_THRESHOLD) {
+            discontinuity_resets_++;
             reset_locked();
             next_seq_ = sequence;
             first_packet_ = false;
@@ -67,9 +67,11 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
 
     if (packets_.size() >= JITTER_MAX_PACKETS) {
         packets_.erase(packets_.begin());
+        dropped_overflow_++;
     }
 
     if (!packets_.empty() && sequence < next_seq_) {
+        dropped_late_++;
         return;
     }
 
