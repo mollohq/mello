@@ -5,8 +5,7 @@
     "cyberpunk2077.exe",
     "javaw.exe",
     "ts4_x64.exe",
-    "witcher3.exe",
-    "zenlesszonezero.exe"
+    "witcher3.exe"
   ],
   "hook_deny": [
     "aces.exe",
@@ -50,6 +49,7 @@
     "warframe.x64.exe",
     "wow.exe",
     "wowclassic.exe",
-    "yuanshen.exe"
+    "yuanshen.exe",
+    "zenlesszonezero.exe"
   ]
 }

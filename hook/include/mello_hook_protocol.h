@@ -36,7 +36,11 @@
 //
 // Version 2: presents_seen, cpu_frame_bytes, cpu_pitch, the D3D9 offsets and
 // MELLO_HOOK_ERR_DEVICE_LOST.
-#define MELLO_HOOK_PROTOCOL_VERSION 2u
+// Version 3: client_adapter_luid, so a Direct3D 9 game on a D3D9Ex device can
+// share textures with the client's adapter instead of reading them back.
+// A hook and a client on different versions refuse each other outright,
+// which is what must happen after a half-applied update.
+#define MELLO_HOOK_PROTOCOL_VERSION 3u
 
 // Two textures, used one after the other. The hook writes the one the client is
 // not reading, so a slow client cannot see a half-written frame.
@@ -116,6 +120,11 @@ typedef struct MelloHookInfo {
     // --- Control. Written by the client, read by the hook. ---
     uint32_t capture_enabled;    // 1 asks the hook to capture, 0 to stop
     uint32_t client_pid;
+    // LUID of the adapter the client opens shared textures on. A Direct3D 9
+    // game shares its back buffer only when its own device sits on this same
+    // adapter; a shared handle is valid nowhere else. Zero means an older
+    // client that never wrote it, and the hook takes the memory path.
+    uint64_t client_adapter_luid;
 
     // --- Frame publication. Written by the hook, last and with a release. ---
     uint64_t frame_index;        // count of captured frames; 0 means none yet
@@ -165,7 +174,7 @@ typedef struct MelloHookInfo {
 #pragma pack(pop)
 
 #if defined(__cplusplus) && __cplusplus >= 201103L
-static_assert(sizeof(MelloHookInfo) == 248, "MelloHookInfo layout changed: bump the protocol version");
+static_assert(sizeof(MelloHookInfo) == 256, "MelloHookInfo layout changed: bump the protocol version");
 static_assert(sizeof(MelloHookInfo) % 8 == 0, "MelloHookInfo must stay 8-byte aligned");
 #endif
 

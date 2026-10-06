@@ -62,6 +62,24 @@ struct Resources {
     IDirect3DSurface9* resolve     = nullptr;   // default pool, single sample
     IDirect3DSurface9* readback    = nullptr;   // system memory, one per slot
     IDirect3DSurface9* readback2   = nullptr;
+    // The GPU path: two shared textures on the game's own D3D9Ex device,
+    // opened by the client on its D3D11 device. No read-back, no CPU copy.
+    // Only when the game device is D3D9Ex and sits on the client's adapter;
+    // a plain D3D9 device cannot share at all, and a shared handle is valid
+    // on no other adapter.
+    IDirect3DTexture9* shared_tex[MELLO_HOOK_TEXTURE_COUNT] = {};
+    IDirect3DSurface9* shared_surf[MELLO_HOOK_TEXTURE_COUNT] = {};
+    // One event query per slot. Direct3D 9 queues the StretchRect and the
+    // client's device has no lock to wait on, so a slot is only safe to hand
+    // over once its copy has retired on the GPU. `test_d3d9ex_share.cpp`
+    // proves the need: without the wait the texture opens and reads zeros.
+    IDirect3DQuery9*   fence[MELLO_HOOK_TEXTURE_COUNT] = {};
+    bool               gpu_path    = false;
+    // The slot written but not yet handed over, and when it was written.
+    // Checked at the next present, so the game's thread never waits.
+    uint32_t           pending      = 0;
+    uint64_t           pending_qpc  = 0;
+    bool               has_pending  = false;
     HANDLE             mapping     = nullptr;   // the frame block
     uint8_t*           frames      = nullptr;   // MELLO_HOOK_TEXTURE_COUNT slots
     uint32_t           frame_bytes = 0;
@@ -75,11 +93,33 @@ struct Resources {
 
 Resources g_res;
 
+void release_shared_pair() {
+    for (uint32_t i = 0; i < MELLO_HOOK_TEXTURE_COUNT; ++i) {
+        if (g_res.shared_surf[i]) {
+            g_res.shared_surf[i]->Release();
+            g_res.shared_surf[i] = nullptr;
+        }
+        if (g_res.shared_tex[i]) {
+            g_res.shared_tex[i]->Release();
+            g_res.shared_tex[i] = nullptr;
+        }
+        // A query is a device resource like any other: Direct3D 9 refuses a
+        // Reset while one is alive, so these go with the textures.
+        if (g_res.fence[i]) {
+            g_res.fence[i]->Release();
+            g_res.fence[i] = nullptr;
+        }
+    }
+    g_res.has_pending = false;
+}
+
 void release_resources() {
     if (g_res.resolve) {
         g_res.resolve->Release();
         g_res.resolve = nullptr;
     }
+    release_shared_pair();
+    g_res.gpu_path = false;
     if (g_res.readback) {
         g_res.readback->Release();
         g_res.readback = nullptr;
@@ -106,10 +146,11 @@ void release_resources() {
     g_res.ready = false;
 }
 
-// Forward declarations: capture_present (below) uses the resolve-only
-// rebuild, which is defined alongside the reset hooks further down.
-void release_resolve_only();
+// Forward declarations: capture_present (below) uses the transient rebuilds,
+// which are defined alongside the reset hooks further down.
+void release_transient_resources();
 bool build_resolve_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc);
+bool build_shared_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc);
 
 // The client works in DXGI formats. These two are what a game's back buffer
 // carries; anything else the hook refuses rather than sending wrong colours.
@@ -122,6 +163,128 @@ uint32_t dxgi_format_of(D3DFORMAT format) {    switch (format) {
     }
 }
 
+// LUID of the adapter behind a game device, for the sharing check. Zero on
+// any failure, which always means the memory path.
+uint64_t game_adapter_luid(IDirect3DDevice9* device) {
+    D3DDEVICE_CREATION_PARAMETERS params{};
+    if (FAILED(device->GetCreationParameters(&params))) return 0;
+    IDirect3D9* d3d = nullptr;
+    if (FAILED(device->GetDirect3D(&d3d)) || !d3d) return 0;
+    IDirect3D9Ex* d3d_ex = nullptr;
+    const HRESULT hr =
+        d3d->QueryInterface(__uuidof(IDirect3D9Ex), reinterpret_cast<void**>(&d3d_ex));
+    d3d->Release();
+    // A plain D3D9 object answers no Ex interface, and only Ex honours the
+    // shared-handle parameter at all.
+    if (FAILED(hr) || !d3d_ex) return 0;
+    LUID luid{};
+    const HRESULT lr = d3d_ex->GetAdapterLUID(params.AdapterOrdinal, &luid);
+    d3d_ex->Release();
+    if (FAILED(lr)) return 0;
+    return (static_cast<uint64_t>(static_cast<uint32_t>(luid.HighPart)) << 32) |
+           static_cast<uint64_t>(static_cast<uint32_t>(luid.LowPart));
+}
+
+// Builds the shared texture pair for an Ex game on the client's adapter.
+// False for everything else; the caller then takes the memory path it has
+// always taken. Multisample still resolves on the way: StretchRect copies
+// the back buffer into these single-sample surfaces each present.
+bool build_shared_textures(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc,
+                           uint32_t dxgi_format, uint64_t game_luid) {
+    // Capability probe: only a D3D9Ex device honours pSharedHandle. The
+    // pointer is released at once; creation goes through the base interface
+    // below, which is the same object.
+    IDirect3DDevice9Ex* device_ex = nullptr;
+    if (FAILED(device->QueryInterface(__uuidof(IDirect3DDevice9Ex),
+                                      reinterpret_cast<void**>(&device_ex))) ||
+        !device_ex) {
+        return false;
+    }
+    device_ex->Release();
+
+    // A reset drops these without clearing the rest of the resources, so a
+    // rebuild starts empty-handed here too.
+    release_shared_pair();
+    uint32_t handles[MELLO_HOOK_TEXTURE_COUNT] = {};
+    for (uint32_t i = 0; i < MELLO_HOOK_TEXTURE_COUNT; ++i) {
+        HANDLE shared = nullptr;
+        IDirect3DTexture9* tex = nullptr;
+        IDirect3DSurface9* surf = nullptr;
+        IDirect3DQuery9* fence = nullptr;
+        bool ok = SUCCEEDED(device->CreateTexture(
+                      desc.Width, desc.Height, 1, D3DUSAGE_RENDERTARGET, desc.Format,
+                      D3DPOOL_DEFAULT, &tex, &shared)) &&
+                  tex && shared && SUCCEEDED(tex->GetSurfaceLevel(0, &surf)) && surf &&
+                  // No query, no GPU path. Handing over a slot whose copy may
+                  // not have retired sends the client zeros or a torn frame,
+                  // and the memory path below is correct on every device.
+                  SUCCEEDED(device->CreateQuery(D3DQUERYTYPE_EVENT, &fence)) && fence;
+        if (!ok) {
+            if (fence) fence->Release();
+            if (surf) surf->Release();
+            if (tex) tex->Release();
+            HookState::instance().set_error(MELLO_HOOK_ERR_SHARED_TEXTURE);
+            release_shared_pair();
+            return false;
+        }
+        g_res.shared_tex[i] = tex;
+        g_res.shared_surf[i] = surf;
+        g_res.fence[i] = fence;
+        handles[i] = static_cast<uint32_t>(reinterpret_cast<uintptr_t>(shared));
+    }
+
+    g_res.device = identity_of(device);
+    g_res.width = desc.Width;
+    g_res.height = desc.Height;
+    g_res.format = desc.Format;
+    g_res.next = 0;
+    g_res.ready = true;
+    g_res.gpu_path = true;
+    g_res.has_pending = false;
+
+    HookState::instance().publish_description(MELLO_HOOK_API_D3D9, desc.Width, desc.Height,
+                                              dxgi_format, game_luid, handles, 0);
+    HookState::instance().set_error(MELLO_HOOK_OK);
+    log_line("capturing D3D9 %ux%u fmt=%u through shared textures, no read-back", desc.Width,
+             desc.Height, desc.Format);
+    return true;
+}
+
+// Hands the pending slot to the client once its copy has retired on the GPU.
+//
+// Direct3D 9 queues StretchRect, and the client reads the shared texture from
+// a different device with no lock between them. Publishing the slot straight
+// after issuing the copy is a race the client loses silently: it reads the
+// previous contents, or a torn frame. `test_d3d9ex_share.cpp` measured that
+// as zeros. The DXGI hook has the same rule and solves it with Flush.
+//
+// The check is non-blocking and runs one present later, so the game's thread
+// never waits on its own GPU. The cost is one frame of delivery latency; a
+// stall here would cost frame rate in the game itself, which is worse. The
+// pair is double-buffered, so the slot being written is never the slot the
+// client was handed.
+void publish_retired_slot(HookState& state) {
+    if (!g_res.has_pending) return;
+    IDirect3DQuery9* fence = g_res.fence[g_res.pending];
+    if (!fence) {
+        g_res.has_pending = false;
+        return;
+    }
+    BOOL done = FALSE;
+    // D3DGETDATA_FLUSH is required, not an optimisation: without it Direct3D 9
+    // never has to push the batch holding this query, and GetData can answer
+    // S_FALSE for ever. Measured on 2026-09-21: polling without the flag
+    // delivered one frame instead of sixty. The flag asks the driver to flush
+    // and returns S_FALSE if the copy has not retired; it never waits, so the
+    // game's thread still does not block. The DXGI hook flushes every present
+    // for the same reason.
+    if (fence->GetData(&done, sizeof(done), D3DGETDATA_FLUSH) != S_OK) return;
+
+    state.publish_frame(g_res.pending, g_res.pending_qpc);
+    state.signal_frame();
+    g_res.has_pending = false;
+}
+
 // Builds the read-back surfaces and the shared frame block for this device.
 bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
     release_resources();
@@ -131,6 +294,20 @@ bool build_resources(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
         log_line("back buffer format %u is not one the client can show", desc.Format);
         HookState::instance().set_error(MELLO_HOOK_ERR_FORMAT);
         return false;
+    }
+
+    // Prefer the GPU path: no read-back stall on the game's render thread and
+    // no CPU copy. A plain D3D9 device, a game on another adapter than the
+    // client, or an older client that never wrote its LUID all fall through
+    // to the memory path below, which works on every D3D9 device.
+    {
+        MelloHookInfo* info = HookState::instance().info();
+        const uint64_t client_luid = info ? info->client_adapter_luid : 0;
+        const uint64_t game_luid = game_adapter_luid(device);
+        if (client_luid != 0 && game_luid != 0 && client_luid == game_luid &&
+            build_shared_textures(device, desc, dxgi_format, game_luid)) {
+            return true;
+        }
     }
 
     // A single-sample render target to copy the back buffer into. It also
@@ -276,9 +453,57 @@ void capture_present(IDirect3DDevice9* device) {
         return;
     }
 
-    // A reset dropped the resolve target while the read-back surfaces and the
-    // frame block survived. Recreate that one surface; anything else missing
-    // means the full rebuild above already ran.
+    // The GPU path: one StretchRect into the shared surface, then publish.
+    // No flush, no read-back, no CPU copy on the game's thread. The pair is
+    // double-buffered and the client copies the newest slot on the frame
+    // event, so the worst a cross-API race costs is a repeated frame, which
+    // the frame index makes visible rather than silent.
+    if (g_res.gpu_path) {
+        // A reset dropped the pair while the rest survived. Recreate it; a
+        // size or format move goes through the full rebuild above instead.
+        if (!g_res.shared_surf[0] && !build_shared_only(device, desc)) {
+            back->Release();
+            return;
+        }
+        const uint32_t slot = g_res.next;
+        const HRESULT hr =
+            device->StretchRect(back, nullptr, g_res.shared_surf[slot], nullptr, D3DTEXF_NONE);
+        back->Release();
+        if (FAILED(hr)) {
+            state.count_drop();
+            log_throttled(&g_last_readback_log, "D3D9 shared copy failed: hr=0x%08lx (%ux%u)",
+                          static_cast<unsigned long>(hr), g_res.width, g_res.height);
+            if (hr == D3DERR_DEVICELOST || hr == D3DERR_DEVICENOTRESET) {
+                release_resources();
+                state.set_error(MELLO_HOOK_ERR_DEVICE_LOST);
+                return;
+            }
+            state.set_error(MELLO_HOOK_ERR_COPY);
+            return;
+        }
+        state.set_error(MELLO_HOOK_OK);
+
+        // Mark this slot as the one waiting to be handed over, and hand over
+        // the one from last present if its copy has retired. A slot that never
+        // retired before the next present is dropped rather than sent half
+        // written; on a healthy GPU that does not happen, and the count makes
+        // it visible if it does.
+        if (FAILED(g_res.fence[slot]->Issue(D3DISSUE_END))) {
+            state.count_drop();
+            return;
+        }
+        publish_retired_slot(state);
+        if (g_res.has_pending) state.count_drop();
+        g_res.pending = slot;
+        g_res.pending_qpc = static_cast<uint64_t>(qpc_now());
+        g_res.has_pending = true;
+        g_res.next = (slot + 1) % MELLO_HOOK_TEXTURE_COUNT;
+        return;
+    }
+
+    // Memory path below. A reset dropped the resolve target while the
+    // read-back surfaces and the frame block survived. Recreate that one
+    // surface; anything else missing means the full rebuild above already ran.
     if (!g_res.resolve && !build_resolve_only(device, desc)) {
         back->Release();
         return;
@@ -357,17 +582,18 @@ void guarded_capture(IDirect3DDevice9* device, const char* where) {
 }
 
 // A reset destroys every default-pool resource and can change the back
-// buffer size. Only the resolve target lives in the default pool; the
-// read-back surfaces are system memory and the frame block is shared memory,
-// so both survive a reset unchanged. Drop the resolve target here and let the
-// next present rebuild that one surface, unless the size or format moved, in
-// which case the full rebuild path runs. Rebuilding everything on each of the
-// ~57 resets of a fullscreen switch is pure churn.
-void release_resolve_only() {
+// buffer size. The resolve target and the shared pair live in the default
+// pool; the read-back surfaces are system memory and the frame block is
+// shared memory, so both survive a reset unchanged. Drop the transient ones
+// here and let the next present rebuild them, unless the size or format
+// moved, in which case the full rebuild path runs. Rebuilding everything on
+// each of the ~57 resets of a fullscreen switch is pure churn.
+void release_transient_resources() {
     if (g_res.resolve) {
         g_res.resolve->Release();
         g_res.resolve = nullptr;
     }
+    release_shared_pair();
 }
 
 // Recreate just the resolve target for the current back buffer description.
@@ -387,11 +613,28 @@ bool build_resolve_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
     return true;
 }
 
-void guarded_release_resolve(const char* where) {
+// Recreate just the shared pair for the current back buffer description,
+// after a reset dropped it. The size and format must still match: anything
+// else goes through the full rebuild, which re-probes the GPU path.
+bool build_shared_only(IDirect3DDevice9* device, const D3DSURFACE_DESC& desc) {
+    if (!g_res.ready || !g_res.gpu_path || g_res.width != desc.Width ||
+        g_res.height != desc.Height || g_res.format != desc.Format) {
+        return false;
+    }
+    const uint32_t dxgi_format = dxgi_format_of(desc.Format);
+    if (dxgi_format == 0) return false;
+    MelloHookInfo* info = HookState::instance().info();
+    const uint64_t client_luid = info ? info->client_adapter_luid : 0;
+    const uint64_t game_luid = game_adapter_luid(device);
+    if (client_luid == 0 || game_luid == 0 || client_luid != game_luid) return false;
+    return build_shared_textures(device, desc, dxgi_format, game_luid);
+}
+
+void guarded_release_transient(const char* where) {
     if (g_disabled.load(std::memory_order_relaxed)) return;
     if (g_in_capture.exchange(true, std::memory_order_acquire)) return;
     __try {
-        release_resolve_only();
+        release_transient_resources();
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         note_fault(where);
     }
@@ -425,13 +668,13 @@ HRESULT STDMETHODCALLTYPE hooked_swap_present(IDirect3DSwapChain9* swap, const R
 }
 
 HRESULT STDMETHODCALLTYPE hooked_reset(IDirect3DDevice9* device, D3DPRESENT_PARAMETERS* params) {
-    guarded_release_resolve("D3D9 Reset");
+    guarded_release_transient("D3D9 Reset");
     return g_real_reset(device, params);
 }
 
 HRESULT STDMETHODCALLTYPE hooked_reset_ex(IDirect3DDevice9Ex* device,
                                           D3DPRESENT_PARAMETERS* params, D3DDISPLAYMODEEX* mode) {
-    guarded_release_resolve("D3D9 ResetEx");
+    guarded_release_transient("D3D9 ResetEx");
     return g_real_reset_ex(device, params, mode);
 }
 
