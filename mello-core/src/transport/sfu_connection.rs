@@ -145,6 +145,9 @@ pub struct SfuConnection {
     tasks: Mutex<Vec<tokio::task::JoinHandle<()>>>,
     /// Set after a successful join; drives readiness and RTP guardrails.
     media_role: Option<PeerMediaRole>,
+    /// The peer as a send target for the voice packet sink on the capture
+    /// thread. Holds the peer from the join until drop.
+    audio_send: Arc<AudioSendTarget>,
 }
 
 unsafe impl Send for SfuConnection {}
@@ -206,6 +209,94 @@ struct VoiceSinkCtx(*mut mello_sys::MelloContext);
 // manager clears the sink, under the write lock, before the context goes away.
 unsafe impl Send for VoiceSinkCtx {}
 unsafe impl Sync for VoiceSinkCtx {}
+
+/// The SFU peer as a send target for a thread other than the command loop.
+///
+/// The voice packet sink calls [`AudioSendTarget::send`] on the audio capture
+/// thread right after Opus encode (spec 10 section 4.5). The read lock guards
+/// the peer pointer for the length of one send, as the `voice_sink` lock
+/// guards the context on the receive path. `SfuConnection` removes the peer
+/// under the write lock before it destroys the peer, so that removal waits
+/// for a send that runs now.
+pub struct AudioSendTarget {
+    peer: std::sync::RwLock<Option<SendPeer>>,
+}
+
+/// SFU peer pointer used from the audio capture thread.
+#[derive(Clone, Copy)]
+struct SendPeer(*mut mello_sys::MelloPeerConnection);
+// SAFETY: `mello_peer_send_audio_frame` is safe to call from any thread (it
+// copies the track pointer under the peer mutex, and libdatachannel's
+// `Track::send` is thread safe). The pointer is valid while it is set; the
+// connection removes it, under the write lock, before the peer goes away.
+unsafe impl Send for SendPeer {}
+unsafe impl Sync for SendPeer {}
+
+/// Why [`AudioSendTarget::send`] did not send a frame.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AudioSendSkip {
+    /// The connection has no peer: before the join or after drop.
+    NoPeer,
+    /// libmello did not send: the audio track is not open yet, or closed.
+    TrackNotOpen,
+}
+
+impl std::fmt::Display for AudioSendSkip {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AudioSendSkip::NoPeer => f.write_str("no SFU peer"),
+            AudioSendSkip::TrackNotOpen => f.write_str("audio track not open"),
+        }
+    }
+}
+
+impl AudioSendTarget {
+    fn new() -> Self {
+        Self {
+            peer: std::sync::RwLock::new(None),
+        }
+    }
+
+    fn attach(&self, peer: *mut mello_sys::MelloPeerConnection) {
+        if let Ok(mut p) = self.peer.write() {
+            *p = (!peer.is_null()).then_some(SendPeer(peer));
+        }
+    }
+
+    /// Remove the peer. Waits for a send that runs now.
+    fn detach(&self) {
+        if let Ok(mut p) = self.peer.write() {
+            *p = None;
+        }
+    }
+
+    /// Send one Opus frame on the RTP audio track. `timestamp` is the
+    /// frame's media time in 48 kHz samples. Any thread. Does not block on
+    /// the network; a frame that cannot go out now is skipped.
+    pub fn send(&self, data: &[u8], timestamp: u32) -> Result<(), AudioSendSkip> {
+        let Ok(peer) = self.peer.read() else {
+            return Err(AudioSendSkip::NoPeer);
+        };
+        let Some(SendPeer(peer)) = *peer else {
+            return Err(AudioSendSkip::NoPeer);
+        };
+        // SAFETY: the read guard keeps the peer alive for this call (see
+        // `SendPeer`); data outlives the call and libmello copies it.
+        let result = unsafe {
+            mello_sys::mello_peer_send_audio_frame(
+                peer,
+                data.as_ptr(),
+                data.len() as i32,
+                timestamp,
+            )
+        };
+        if result == mello_sys::MelloResult_MELLO_OK {
+            Ok(())
+        } else {
+            Err(AudioSendSkip::TrackNotOpen)
+        }
+    }
+}
 
 // ---------------------------------------------------------------------------
 // Implementation
@@ -340,6 +431,7 @@ impl SfuConnection {
             last_signaling_activity_ms,
             tasks: Mutex::new(Vec::new()),
             media_role: None,
+            audio_send: Arc::new(AudioSendTarget::new()),
         })
     }
 
@@ -1120,6 +1212,7 @@ impl SfuConnection {
 
         // Store the peer state now that negotiation is complete
         self.peer = peer_handle.peer;
+        self.audio_send.attach(self.peer);
         self._peer_id_c = Some(peer_handle.peer_id_c);
         self.ice_cb_data = cb_data_wrapped.0;
         self.audio_cb_data = audio_cb_wrapped.0;
@@ -1205,6 +1298,12 @@ impl SfuConnection {
         }
     }
 
+    /// The peer as a send target for the voice packet sink. Sends go to this
+    /// connection's peer until the connection is dropped, then skip.
+    pub fn audio_send_target(&self) -> Arc<AudioSendTarget> {
+        Arc::clone(&self.audio_send)
+    }
+
     /// Spawn a background task that sends `client_stats` to the SFU every 10s.
     /// Requires a valid MelloContext pointer (used for `mello_get_debug_stats`).
     ///
@@ -1262,6 +1361,10 @@ impl Drop for SfuConnection {
         // the core command loop). Callback contexts are freed there, after the
         // peer that calls into them is destroyed.
         self.clear_direct_voice_sink();
+        // A voice packet sink can hold the send target past this drop. It
+        // must not reach the peer that the teardown below destroys. This
+        // waits for a send that runs now on the capture thread.
+        self.audio_send.detach();
         use crate::stream::teardown::TeardownPtr;
         let peer = TeardownPtr(std::mem::replace(&mut self.peer, std::ptr::null_mut()));
         let ice_cb = TeardownPtr(std::mem::replace(
@@ -1593,6 +1696,29 @@ mod tests {
             peer_id_c: CString::new("sfu").expect("CString::new failed"),
             media_role: role,
         }
+    }
+
+    /// The voice packet sink sends through the target from the capture
+    /// thread. Before the join and after the connection drops the peer, a
+    /// send skips and never touches a peer pointer.
+    #[test]
+    fn audio_send_target_skips_without_a_peer() {
+        let target = AudioSendTarget::new();
+        assert_eq!(target.send(&[1, 2, 3], 0), Err(AudioSendSkip::NoPeer));
+
+        // A native peer that never connected has no open audio track.
+        let id = CString::new("send-target").expect("static id");
+        // SAFETY: libmello ignores the context argument; the peer is
+        // destroyed below, after the target let go of it.
+        let peer = unsafe { mello_sys::mello_peer_create(std::ptr::null_mut(), id.as_ptr()) };
+        assert!(!peer.is_null());
+        target.attach(peer);
+        assert_eq!(target.send(&[1, 2, 3], 0), Err(AudioSendSkip::TrackNotOpen));
+
+        target.detach();
+        assert_eq!(target.send(&[1, 2, 3], 0), Err(AudioSendSkip::NoPeer));
+        // SAFETY: created above, destroyed once.
+        unsafe { mello_sys::mello_peer_destroy(peer) };
     }
 
     #[test]

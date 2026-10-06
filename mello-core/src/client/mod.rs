@@ -6,6 +6,8 @@ mod connection;
 mod crew;
 mod diagnostics;
 mod game_services;
+#[cfg(test)]
+pub(crate) mod loop_hold;
 pub mod loop_watchdog;
 mod mic_permission;
 mod presence;
@@ -17,6 +19,8 @@ mod stream_ffi;
 mod streaming;
 mod tick_gating;
 mod voice;
+#[cfg(test)]
+mod voice_send_path_tests;
 pub mod waveform;
 
 use tokio::sync::mpsc;
@@ -193,6 +197,8 @@ pub struct Client {
     /// Where `CheckMicPermission` and `RequestMicPermission` get the answer:
     /// the OS, or a fixed value in an e2e build.
     mic_permission: mic_permission::MicPermissionSource,
+    /// Reports a voice tick over its budget in SFU mode.
+    voice_tick_budget: loop_watchdog::VoiceTickBudget,
 }
 
 impl Client {
@@ -340,6 +346,7 @@ impl Client {
             reconnect: reconnect::ReconnectSupervisor::new(),
             browser_flows: browser_flow::BrowserFlows::default(),
             mic_permission: mic_permission::MicPermissionSource::from_env(),
+            voice_tick_budget: loop_watchdog::VoiceTickBudget::default(),
         }
     }
 
@@ -1267,6 +1274,10 @@ impl Client {
             Command::FaultSimulateSuspend => {
                 log::warn!("test-fault: simulating suspend (backdating liveness clock)");
                 self.reconnect.backdate_liveness();
+            }
+            #[cfg(test)]
+            Command::TestHoldLoop { token, ms } => {
+                loop_hold::hold(token, std::time::Duration::from_millis(ms));
             }
         }
     }

@@ -18,6 +18,13 @@ pub const BLOCKED_COMMAND: Duration = Duration::from_secs(2);
 
 const POLL: Duration = Duration::from_millis(250);
 
+/// A voice tick in SFU mode longer than this is logged. In SFU mode no audio
+/// waits for the tick (plans/voice-quality.md stage 2), so a long tick means
+/// a step that does not belong on it.
+pub const VOICE_TICK_BUDGET: Duration = Duration::from_millis(5);
+/// At most one over-budget line per this interval; the rest are counted.
+const VOICE_TICK_REPORT_INTERVAL: Duration = Duration::from_secs(10);
+
 #[derive(Default)]
 struct Current {
     name: Option<&'static str>,
@@ -116,6 +123,93 @@ fn check(current: &Mutex<Current>, blocked_after: Duration) -> Option<&'static s
     Some(name)
 }
 
+/// Times the steps of one voice tick. Each [`TickSteps::mark`] ends the step
+/// that started at the previous mark.
+pub struct TickSteps {
+    started: Instant,
+    last: Instant,
+    slowest: Option<(&'static str, Duration)>,
+}
+
+impl TickSteps {
+    pub fn start() -> Self {
+        let now = Instant::now();
+        Self {
+            started: now,
+            last: now,
+            slowest: None,
+        }
+    }
+
+    /// End the step `name`: the time since the previous mark.
+    pub fn mark(&mut self, name: &'static str) {
+        let now = Instant::now();
+        self.record(name, now - self.last);
+        self.last = now;
+    }
+
+    fn record(&mut self, name: &'static str, elapsed: Duration) {
+        if self.slowest.is_none_or(|(_, d)| elapsed > d) {
+            self.slowest = Some((name, elapsed));
+        }
+    }
+
+    /// Time from the start to the last mark.
+    pub fn total(&self) -> Duration {
+        self.last - self.started
+    }
+
+    /// The step that took the longest, if any step was marked.
+    pub fn slowest(&self) -> Option<(&'static str, Duration)> {
+        self.slowest
+    }
+}
+
+/// Reports a voice tick over [`VOICE_TICK_BUDGET`] in SFU mode, at warn
+/// level, with its slowest step. Rate-limited: one line per 10 s, with the
+/// count of the long ticks in between.
+#[derive(Default)]
+pub struct VoiceTickBudget {
+    last_report: Option<Instant>,
+    suppressed: u32,
+}
+
+impl VoiceTickBudget {
+    /// Check one finished tick. Returns the line it logged, if any.
+    pub fn check(&mut self, sfu_mode: bool, steps: &TickSteps, now: Instant) -> Option<String> {
+        let total = steps.total();
+        if !over_voice_tick_budget(sfu_mode, total) {
+            return None;
+        }
+        if self
+            .last_report
+            .is_some_and(|at| now.duration_since(at) < VOICE_TICK_REPORT_INTERVAL)
+        {
+            self.suppressed += 1;
+            return None;
+        }
+        let (step, step_time) = steps.slowest().unwrap_or(("unknown", total));
+        let line = format!(
+            "voice tick took {:.1} ms in SFU mode (budget {} ms); slowest step '{}' {:.1} ms; {} more long ticks since the last report",
+            total.as_secs_f64() * 1000.0,
+            VOICE_TICK_BUDGET.as_millis(),
+            step,
+            step_time.as_secs_f64() * 1000.0,
+            self.suppressed
+        );
+        log::warn!("loop watchdog: {}", line);
+        self.last_report = Some(now);
+        self.suppressed = 0;
+        Some(line)
+    }
+}
+
+/// True when a voice tick of `elapsed` breaks the budget. Only SFU mode has
+/// the budget: P2P and the mic test still send audio on the tick.
+fn over_voice_tick_budget(sfu_mode: bool, elapsed: Duration) -> bool {
+    sfu_mode && elapsed > VOICE_TICK_BUDGET
+}
+
 /// Stable name of a command for logs. Uses the serde tag, so it carries no
 /// command payload (payloads can hold tokens).
 pub fn command_name(cmd: &crate::command::Command) -> &'static str {
@@ -181,6 +275,82 @@ mod tests {
             assert_eq!(wd.current.lock().expect("lock").name, Some("JoinVoice"));
         }
         assert_eq!(wd.current.lock().expect("lock").name, None);
+    }
+
+    fn steps_with(name: &'static str, elapsed: Duration) -> TickSteps {
+        let started = Instant::now();
+        let mut steps = TickSteps {
+            started,
+            last: started,
+            slowest: None,
+        };
+        steps.record("mic_level", Duration::from_micros(10));
+        steps.record(name, elapsed);
+        steps.last = started + elapsed + Duration::from_micros(10);
+        steps
+    }
+
+    #[test]
+    fn voice_tick_budget_is_5_ms_in_sfu_mode_only() {
+        assert!(!over_voice_tick_budget(true, Duration::from_micros(4_900)));
+        assert!(!over_voice_tick_budget(true, VOICE_TICK_BUDGET));
+        assert!(over_voice_tick_budget(true, Duration::from_micros(5_100)));
+        // P2P and the mic test send audio on the tick: no budget.
+        assert!(!over_voice_tick_budget(false, Duration::from_millis(50)));
+    }
+
+    #[test]
+    fn a_long_sfu_tick_is_reported_with_its_slowest_step() {
+        let mut budget = VoiceTickBudget::default();
+        let now = Instant::now();
+        let steps = steps_with("sfu_events", Duration::from_millis(12));
+        let line = budget.check(true, &steps, now).expect("reported");
+        assert!(line.contains("'sfu_events'"), "{line}");
+        assert!(line.contains("12.0 ms"), "{line}");
+
+        // A short tick and a long P2P tick are not reported.
+        let mut quiet = VoiceTickBudget::default();
+        assert_eq!(
+            quiet.check(
+                true,
+                &steps_with("sfu_events", Duration::from_millis(1)),
+                now
+            ),
+            None
+        );
+        assert_eq!(quiet.check(false, &steps, now), None);
+    }
+
+    #[test]
+    fn long_ticks_are_rate_limited_and_counted() {
+        let mut budget = VoiceTickBudget::default();
+        let t0 = Instant::now();
+        let steps = steps_with("sfu_liveness", Duration::from_millis(8));
+        assert!(budget.check(true, &steps, t0).is_some());
+        assert_eq!(
+            budget.check(true, &steps, t0 + Duration::from_secs(1)),
+            None
+        );
+        assert_eq!(
+            budget.check(true, &steps, t0 + Duration::from_secs(2)),
+            None
+        );
+        let line = budget
+            .check(true, &steps, t0 + VOICE_TICK_REPORT_INTERVAL)
+            .expect("reported after the interval");
+        assert!(line.contains("2 more long ticks"), "{line}");
+    }
+
+    #[test]
+    fn tick_steps_name_the_slowest_step() {
+        let mut steps = TickSteps::start();
+        steps.record("mic_level", Duration::from_micros(20));
+        steps.record("sfu_liveness", Duration::from_millis(3));
+        steps.record("sfu_events", Duration::from_micros(40));
+        assert_eq!(
+            steps.slowest(),
+            Some(("sfu_liveness", Duration::from_millis(3)))
+        );
     }
 
     #[test]

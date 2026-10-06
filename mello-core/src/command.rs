@@ -518,6 +518,14 @@ pub enum Command {
     /// sleep/wake gap and triggers a full reconnect + resync.
     #[cfg(feature = "test-faults")]
     FaultSimulateSuspend,
+    /// Test only: hold the command loop for `ms` milliseconds with a blocking
+    /// sleep, as a hung native call or a slow RPC holds it. `token` names the
+    /// hold for `client::loop_hold`.
+    #[cfg(test)]
+    TestHoldLoop {
+        token: u64,
+        ms: u64,
+    },
 }
 
 #[cfg(test)]

@@ -6,7 +6,9 @@ use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 
 impl super::Client {
     pub(super) async fn voice_tick(&mut self) {
-        self.voice.tick();
+        let sfu_mode = self.voice.voice_mode() == crate::voice::VoiceMode::SFU;
+        let mut steps = super::loop_watchdog::TickSteps::start();
+        self.voice.tick(&mut steps);
 
         // An SFU voice join that runs decides the voice mode when it ends.
         // Until then, Disconnected is not a drop, and no reconnect may start.
@@ -56,6 +58,8 @@ impl super::Client {
             }
         }
 
+        steps.mark("sfu_reconnect");
+
         // Send any pending signaling messages through Nakama
         let signals = self.voice.drain_signals();
         for (to, signal) in signals {
@@ -77,6 +81,9 @@ impl super::Client {
                 log::error!("Failed to send signal to {}: {}", to, e);
             }
         }
+        steps.mark("signal_send");
+        self.voice_tick_budget
+            .check(sfu_mode, &steps, std::time::Instant::now());
     }
 
     pub(super) async fn wait_for_channel_id(&self) -> Option<String> {
