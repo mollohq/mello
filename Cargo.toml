@@ -16,6 +16,7 @@ members = [
     "tools/perf-scenarios",
     "tools/canary",
     "tools/e2e",
+    "tools/voice-gate",
 ]
 default-members = [
     "build-stamp",
@@ -70,4 +71,9 @@ opt-level = 3
 [profile.dev.package.i-slint-backend-testing]
 opt-level = 3
 [profile.dev.package.base64]
+opt-level = 3
+# The voice quality gate (tools/voice-gate) resamples and cross-correlates
+# minutes of 48 kHz audio. At opt-level 0 the analysis alone exceeds the
+# gate's 5 minute budget. Tool crate only; no production code changes.
+[profile.dev.package.voice-gate]
 opt-level = 3
