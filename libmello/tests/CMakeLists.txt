@@ -113,3 +113,35 @@ if(WIN32 AND NOT IOS)
             COMMENT "Copying ${_ort_dll} next to mello_tests")
     endforeach()
 endif()
+
+# Stage 3 spike: vendored NetEQ + AudioMixerImpl (option MELLO_WEBRTC_NETEQ,
+# cmake/webrtc-audio-processing). Own executable: it replaces the global
+# operator new to count heap per NetEQ instance, and it does not link the
+# mello library. It compiles opus_codec.cpp for the project's OpusEnc.
+if(MELLO_WEBRTC_NETEQ)
+    add_executable(mello_neteq_spike_tests
+        test_neteq_spike.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/audio/opus_codec.cpp
+    )
+    set_target_properties(mello_neteq_spike_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(mello_neteq_spike_tests PRIVATE
+        webrtc_neteq
+        GTest::gtest
+        GTest::gtest_main
+    )
+    if(WIN32)
+        target_link_libraries(mello_neteq_spike_tests PRIVATE psapi)
+    endif()
+    target_include_directories(mello_neteq_spike_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
+    )
+    target_compile_definitions(mello_neteq_spike_tests PRIVATE
+        MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
+    )
+    if(WIN32)
+        # rtc_base headers include winsock2.h; windows.h must not pull winsock.h.
+        target_compile_definitions(mello_neteq_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    gtest_discover_tests(mello_neteq_spike_tests)
+endif()
