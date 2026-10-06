@@ -1,0 +1,189 @@
+{
+  "schema": 1,
+  "_comment": [
+    "Voice quality gate definition (plans/voice-quality.md stage 7). Read by tools/voice-gate.",
+    "Frozen inputs: corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
+    "A change to a frozen input changes inputs_fingerprint; the harness then refuses to compare with the baseline.",
+    "Gates may change. 'enforced': false prints a failing gate but does not fail the run.",
+    "Times are seconds of sender audio from the run start. Delays and stalls are ms."
+  ],
+  "corpus": {
+    "dir": "libmello/tests/fixtures/voice",
+    "clips": ["m1_davison.wav", "f1_farris.wav", "m2_grothmann.wav", "f2_patterson.wav"],
+    "gap_ms": 1000,
+    "noise_dbfs": -70,
+    "noise_seed": 20261006
+  },
+  "receiver": {
+    "tail_ms": 3000
+  },
+  "analysis": {
+    "window_ms": 1000,
+    "hop_ms": 250,
+    "max_lag_ms": 3000,
+    "min_ncc": 0.5,
+    "active_dbfs": -45,
+    "recovery_tolerance_ms": 20,
+    "recovery_hold_ms": 2000,
+    "dropout_db": -20,
+    "dropout_ncc": 0.2
+  },
+  "gates": {
+    "mos_max_drop": 0.1
+  },
+  "profiles": [
+    {
+      "name": "clean",
+      "description": "LAN-like: 20 ms one way, 1 ms jitter, no loss.",
+      "duration_s": 93,
+      "seed": 101,
+      "rtp_seq_start": 1000,
+      "network": {
+        "base_delay_ms": 20,
+        "jitter_sigma_ms": 1
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "rx_dropped_late", "max": 0, "enforced": true },
+        { "metric": "rx_jitter_resets", "max": 0, "enforced": true },
+        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
+        { "metric": "latency_clip_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
+        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "stages 2 and 3: mouth-to-ear delay on a 20 ms link" }
+      ]
+    },
+    {
+      "name": "home-wifi",
+      "description": "Home Wi-Fi: 15 ms, 6 ms jitter, 2 % random loss, short bursts, 2 stalls of 120 ms per minute, rare reorder.",
+      "duration_s": 93,
+      "seed": 202,
+      "rtp_seq_start": 20000,
+      "network": {
+        "base_delay_ms": 15,
+        "jitter_sigma_ms": 6,
+        "loss_random": 0.02,
+        "burst": { "p_enter": 0.002, "p_exit": 0.5, "loss_in_bad": 1.0 },
+        "spikes_per_min": 2,
+        "spike_ms": 120,
+        "reorder_prob": 0.002,
+        "reorder_extra_ms": 25
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1: one concealment per lost frame" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 1 gate: flat delay at 2 % loss" }
+      ]
+    },
+    {
+      "name": "mobile",
+      "description": "Mobile hotspot: 50 ms, 15 ms jitter, 3 % random loss, bursts, 4 stalls of 250 ms per minute, reorder.",
+      "duration_s": 93,
+      "seed": 303,
+      "rtp_seq_start": 40000,
+      "network": {
+        "base_delay_ms": 50,
+        "jitter_sigma_ms": 15,
+        "loss_random": 0.03,
+        "burst": { "p_enter": 0.008, "p_exit": 0.35, "loss_in_bad": 1.0 },
+        "spikes_per_min": 4,
+        "spike_ms": 250,
+        "reorder_prob": 0.005,
+        "reorder_extra_ms": 40
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 3: delay goes down as well as up" }
+      ]
+    },
+    {
+      "name": "bad",
+      "description": "Bad link: 80 ms, 35 ms jitter, 7 % random loss, long bursts, 6 stalls of 400 ms per minute, reorder.",
+      "duration_s": 93,
+      "seed": 404,
+      "rtp_seq_start": 50000,
+      "network": {
+        "base_delay_ms": 80,
+        "jitter_sigma_ms": 35,
+        "loss_random": 0.07,
+        "burst": { "p_enter": 0.02, "p_exit": 0.25, "loss_in_bad": 1.0 },
+        "spikes_per_min": 6,
+        "spike_ms": 400,
+        "reorder_prob": 0.01,
+        "reorder_extra_ms": 60
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 3: delay goes down as well as up" }
+      ]
+    },
+    {
+      "name": "burst",
+      "description": "Clean link (20 ms, 2 ms jitter) with one 5 s burst at 20 s: 60 ms jitter, 10 % loss, a 300 ms stall at its start.",
+      "duration_s": 60,
+      "seed": 505,
+      "rtp_seq_start": 3000,
+      "network": {
+        "base_delay_ms": 20,
+        "jitter_sigma_ms": 2,
+        "episodes": [
+          { "start_s": 20, "dur_s": 5, "jitter_sigma_ms": 60, "loss_random": 0.1, "stall_ms": 300 }
+        ]
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "recovery_s", "max": 5, "enforced": false, "note": "stage 3 gate: back to the pre-burst delay within 5 s" }
+      ]
+    },
+    {
+      "name": "drift",
+      "description": "Clean link (20 ms, 2 ms jitter), sender clock +100 ppm fast, 10 minutes. Push-to-talk sender, so the stream has no pauses that reset the playout buffer. RNNoise off on the sender: it costs 5 ms per frame in this build and would make this profile alone take 3 minutes; the profile measures the receive clock path.",
+      "duration_s": 600,
+      "seed": 606,
+      "rtp_seq_start": 7000,
+      "drift_ppm": 100,
+      "sender": { "push_to_talk": true, "noise_suppression": false },
+      "network": {
+        "base_delay_ms": 20,
+        "jitter_sigma_ms": 2
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": false, "note": "stage 3 gate: zero drift over 10 minutes" }
+      ]
+    },
+    {
+      "name": "outage",
+      "description": "Clean link (20 ms, 2 ms jitter) with a 5 s outage at 15 s: every packet in it is lost.",
+      "duration_s": 60,
+      "seed": 707,
+      "rtp_seq_start": 9000,
+      "network": {
+        "base_delay_ms": 20,
+        "jitter_sigma_ms": 2,
+        "outage": { "start_s": 15, "dur_s": 5 }
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "recovery_s", "max": 5, "enforced": false, "note": "stage 3: back to the pre-outage delay within 5 s" }
+      ]
+    },
+    {
+      "name": "wrap",
+      "description": "Home Wi-Fi jitter (15 ms, 6 ms), no loss. The RTP sequence starts at 65280, so it wraps after 256 packets, at 6.2 s, inside a word.",
+      "duration_s": 30,
+      "seed": 808,
+      "rtp_seq_start": 65280,
+      "network": {
+        "base_delay_ms": 15,
+        "jitter_sigma_ms": 6
+      },
+      "gates": [
+        { "metric": "decode_errors", "max": 0, "enforced": true },
+        { "metric": "rx_jitter_resets", "max": 0, "enforced": false, "note": "stage 1.2: the wrap must not reset the jitter buffer" },
+        { "metric": "rx_dropped_late", "max": 0, "enforced": false, "note": "stage 1.2: no packet dropped at the wrap" },
+        { "metric": "wrap_dropout_ms", "max": 0, "enforced": false, "note": "stage 1.2: no dropout at the wrap" }
+      ]
+    }
+  ]
+}

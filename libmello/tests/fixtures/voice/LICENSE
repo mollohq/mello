@@ -1,0 +1,33 @@
+Voice quality gate speech corpus
+================================
+
+Licence: public domain.
+
+The four clips in this directory are cut from LibriVox recordings. LibriVox
+releases its recordings into the public domain. The Internet Archive items
+carry the Creative Commons Public Domain Mark 1.0:
+https://creativecommons.org/publicdomain/mark/1.0/
+
+| File              | Reader            | Voice  | Source item (Internet Archive)                     | Source file                    | Start (s) | Length (s) |
+|-------------------|-------------------|--------|----------------------------------------------------|--------------------------------|-----------|------------|
+| m1_davison.wav    | Daniel Davison    | male   | https://archive.org/details/ss091_2007_librivox    | ss091_05_various_128kb.mp3     | 53.12     | 11.46      |
+| f1_farris.wav     | Laurell Farris    | female | https://archive.org/details/ss091_2007_librivox    | ss091_14_various_128kb.mp3     | 64.74     | 10.00      |
+| m2_grothmann.wav  | Dale Grothmann    | male   | https://archive.org/details/ss091_2007_librivox    | ss091_07_various_128kb.mp3     | 40.64     | 10.06      |
+| f2_patterson.wav  | Mari Patterson    | female | https://archive.org/details/ss074_1810_librivox    | SS074_19_various_128kb.mp3     | 70.44     | 10.98      |
+
+Catalog pages with the reader of each section:
+- https://librivox.org/short-story-collection-91-by-various/
+- https://librivox.org/short-story-collection-vol-074-by-various/
+
+Processing (one time, 2026-10-06):
+1. Decode the 128 kbps MP3 with ffmpeg, downmix to mono, resample to 48 kHz.
+2. Cut at the start and length above. Each cut point is inside a pause.
+3. Scale each clip to an active speech level of -26 dBFS (mean power of the
+   20 ms frames within 30 dB of the loudest frame).
+4. Apply a 10 ms linear fade in and fade out.
+5. Write 48 kHz mono 16-bit PCM WAV.
+
+The corpus is frozen. The voice quality baseline
+(benchmarks/baselines/voice/baseline-2.9.json) was taken with these exact
+files. A change to any file makes old and new scores incomparable: take the
+baseline again on the commit the old baseline came from.
