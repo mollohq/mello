@@ -386,6 +386,28 @@ int mello_voice_get_packet_with_timestamp(
     }
 }
 
+MelloResult mello_voice_set_packet_sink(
+    MelloContext* ctx,
+    MelloPacketSinkCallback callback,
+    void* user_data)
+{
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        if (!callback) {
+            ctx_cast(ctx)->audio().set_packet_sink(nullptr);
+        } else {
+            ctx_cast(ctx)->audio().set_packet_sink(
+                [callback, user_data](const uint8_t* data, int size, uint32_t timestamp,
+                                      uint32_t sequence) {
+                    callback(user_data, data, size, timestamp, sequence);
+                });
+        }
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
 MelloResult mello_voice_feed_packet(
     MelloContext* ctx,
     const char* peer_id,

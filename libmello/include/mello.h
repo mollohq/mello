@@ -167,6 +167,43 @@ MELLO_API int mello_voice_get_packet_with_timestamp(
     uint32_t* timestamp
 );
 
+/** Receives one encoded voice frame (spec 10 section 4.5).
+ *  `data`: the Opus payload, without the 4-byte sequence header of
+ *  mello_voice_get_packet. Valid only during the call.
+ *  `timestamp`: the media time in 48 kHz samples, as
+ *  mello_voice_get_packet_with_timestamp reports it.
+ *  `sequence`: the 32-bit packet counter (the 4-byte header value). */
+typedef void (*MelloPacketSinkCallback)(
+    void* user_data,
+    const uint8_t* data,
+    int size,
+    uint32_t timestamp,
+    uint32_t sequence
+);
+
+/** Set the voice packet sink, or clear it with callback = NULL.
+ *
+ *  While a sink is set, libmello calls it for each encoded frame right after
+ *  Opus encode, and the frame does not go to the mello_voice_get_packet
+ *  queue. Setting a sink drops the frames in that queue. Mute and
+ *  push-to-talk gate frames before encode, as for the queue.
+ *
+ *  Thread: the sink runs on the audio capture thread (or on the thread that
+ *  calls mello_voice_inject_capture), with the capture lock held. It must
+ *  return fast and must not block. It may call mello_peer_send_audio_frame
+ *  and mello_voice_feed_packet. It must not call this function or any
+ *  capture control of the same context (start, stop, inject, push-to-talk).
+ *
+ *  Lifetime: set and clear wait for a sink call that runs now. After a clear
+ *  returns, no call uses `user_data`, so the caller may free it. The context
+ *  clears the sink in mello_destroy. Any thread, never from inside the sink.
+ *  Returns MELLO_ERROR_INVALID_PARAM for a NULL context. */
+MELLO_API MelloResult mello_voice_set_packet_sink(
+    MelloContext* ctx,
+    MelloPacketSinkCallback callback,
+    void* user_data
+);
+
 /** Feed an encoded audio packet received from a peer. */
 MELLO_API MelloResult mello_voice_feed_packet(
     MelloContext* ctx,

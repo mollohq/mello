@@ -10,6 +10,7 @@ add_executable(mello_tests
     test_jitter_buffer.cpp
     test_voice_receive.cpp
     test_voice_capture.cpp
+    test_voice_packet_sink.cpp
     test_vad.cpp
     test_video_pipeline.cpp
     test_stream_audio_pipeline.cpp

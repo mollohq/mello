@@ -133,6 +133,19 @@ public:
     bool is_deafened() const { return deafened_; }
 
     int get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp = nullptr);
+
+    /// Receives each encoded voice frame on the capture thread, right after
+    /// Opus encode: the Opus payload (no sequence header) and its size, the
+    /// media time (48 kHz, as get_packet reports it) and the sequence.
+    using PacketSink = std::function<void(const uint8_t* data, int size,
+                                          uint32_t timestamp, uint32_t sequence)>;
+    /// Set the packet sink (spec 10 section 4.5). While a sink is set, an
+    /// encoded frame goes to the sink and not to the get_packet queue. An
+    /// empty function clears the sink. Set and clear wait for a sink call
+    /// that runs now, so the caller may release the sink's state after a
+    /// clear returns. Setting a sink drops the frames in the queue. Any
+    /// thread, but never from inside the sink (it would wait for itself).
+    void set_packet_sink(PacketSink sink);
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
     bool is_capturing() const { return capturing_; }
@@ -270,6 +283,12 @@ private:
 
     std::queue<EncodedPacket> outgoing_;
     std::mutex outgoing_mutex_;
+    // The capture thread holds packet_sink_mutex_ for the whole sink call
+    // and for the queue push, so a set or clear waits for a running call
+    // and a frame never goes to both. Lock order: accum_mutex_, then
+    // packet_sink_mutex_, then outgoing_mutex_.
+    PacketSink packet_sink_;
+    std::mutex packet_sink_mutex_;
     uint32_t sequence_ = 0;
 
     std::atomic<bool> muted_{false};
