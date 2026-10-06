@@ -1,0 +1,25 @@
+[package]
+name = "voice-gate"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Voice quality gate: speech corpus through the libmello voice path and an impairment shim, scored against a frozen baseline."
+
+# A tool crate, not a mello-sys integration test, for one reason: the
+# analysis (resampling and FFT cross-correlation over minutes of 48 kHz audio)
+# needs opt-level 3 in dev builds to fit the 5 minute budget. A profile
+# override on this crate does that without changing the build profile of
+# mello-sys, which would rebuild libmello in every checkout.
+# See plans/voice-quality.md stage 7 and the "Voice quality gate" section of TESTING.md.
+
+[[bin]]
+name = "voice-gate"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mello-sys = { path = "../../mello-sys" }
+serde_json = { workspace = true }

@@ -1,0 +1,5 @@
+# Scorer for the voice quality gate (scripts/voice-gate.sh). Pinned: MOS
+# numbers from a different scorer version are never compared with the
+# baseline. pesq builds from source and needs a C compiler.
+pesq==0.0.4
+numpy
