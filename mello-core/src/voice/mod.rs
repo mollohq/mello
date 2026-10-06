@@ -1,4 +1,5 @@
 mod mesh;
+pub(crate) mod send_sink;
 
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -6,8 +7,10 @@ use std::sync::mpsc as std_mpsc;
 use std::sync::Arc;
 use std::time::Instant;
 
+use crate::client::loop_watchdog::TickSteps;
 use crate::events::Event;
 use crate::transport::{SfuConnection, SfuEvent};
+use send_sink::SfuPacketSink;
 use serde::{Deserialize, Serialize};
 
 pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
@@ -93,6 +96,10 @@ pub struct VoiceManager {
     tick_counter: u32,
     mode: VoiceMode,
     sfu_connection: Option<Arc<SfuConnection>>,
+    /// The libmello packet sink that sends SFU voice frames from the capture
+    /// thread. Set while in SFU mode. libmello holds a pointer to it until
+    /// `detach_sfu_send_sink` clears the sink.
+    sfu_send_sink: Option<Arc<SfuPacketSink>>,
     sfu_crew_id: String,
     /// Consecutive SFU health checks (every ~2s) that found the peer connection
     /// down. Used to detect half-open SFU sessions (e.g. after sleep/wake) that
@@ -199,6 +206,7 @@ impl VoiceManager {
             tick_counter: 0,
             mode: VoiceMode::Disconnected,
             sfu_connection: None,
+            sfu_send_sink: None,
             sfu_crew_id: String::new(),
             sfu_unhealthy_checks: 0,
             sfu_connected_at: None,
@@ -262,6 +270,9 @@ impl VoiceManager {
         // Received voice goes straight to the decoder from the native track
         // callback, so a busy command loop cannot mute other speakers.
         unsafe { connection.set_direct_voice_sink(self.ctx) };
+        // Encoded voice goes to the SFU peer from the capture thread, so a
+        // busy command loop cannot delay or stop the microphone.
+        self.attach_sfu_send_sink(&connection);
         self.sfu_connection = Some(connection);
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;
@@ -285,6 +296,7 @@ impl VoiceManager {
                 self.mesh.destroy_all_peers();
             }
             VoiceMode::SFU => {
+                self.detach_sfu_send_sink();
                 if let Some(conn) = self.sfu_connection.take() {
                     conn.clear_direct_voice_sink();
                 }
@@ -329,6 +341,9 @@ impl VoiceManager {
         if self.active {
             self.stop_capture();
         }
+        // The leave task below keeps the connection alive for a while. No
+        // frame may reach its peer after this point.
+        self.detach_sfu_send_sink();
         if let Some(conn) = self.sfu_connection.take() {
             conn.clear_direct_voice_sink();
             Self::spawn_best_effort_sfu_leave(conn);
@@ -343,6 +358,55 @@ impl VoiceManager {
         let _ = self
             .event_tx
             .send(Event::VoiceSfuDisconnected { crew_id, reason });
+    }
+
+    /// Send SFU voice frames from the capture thread (spec 10 section 4.5).
+    /// Replaces a sink that is set.
+    fn attach_sfu_send_sink(&mut self, connection: &SfuConnection) {
+        self.detach_sfu_send_sink();
+        let sink = Arc::new(SfuPacketSink::new(connection.audio_send_target()));
+        #[cfg(test)]
+        sink.trace_into(send_sink::trace::for_context(self.ctx as usize));
+        if self.loopback {
+            sink.set_loopback(self.ctx);
+        }
+        // SAFETY: the context is live. libmello keeps the pointer until
+        // `detach_sfu_send_sink` clears the sink; `self.sfu_send_sink`
+        // keeps the sink alive until then.
+        let result = unsafe {
+            mello_sys::mello_voice_set_packet_sink(
+                self.ctx,
+                Some(send_sink::sfu_packet_sink),
+                Arc::as_ptr(&sink) as *mut std::ffi::c_void,
+            )
+        };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::error!(
+                "SFU voice: packet sink not set ({}); the voice tick sends instead",
+                result
+            );
+            return;
+        }
+        self.sfu_send_sink = Some(sink);
+        log::info!("SFU voice: frames leave on the capture thread (packet sink set)");
+    }
+
+    /// Stop sending from the capture thread. Waits for a sink call that runs
+    /// now, so no frame reaches the SFU peer after this returns.
+    fn detach_sfu_send_sink(&mut self) {
+        let Some(sink) = self.sfu_send_sink.take() else {
+            return;
+        };
+        // SAFETY: the context is live. The clear waits for a running sink
+        // call; after it no call uses the pointer to `sink`.
+        unsafe {
+            mello_sys::mello_voice_set_packet_sink(self.ctx, None, std::ptr::null_mut());
+        }
+        log::info!(
+            "SFU voice: packet sink cleared (sent={} skipped={})",
+            sink.sent(),
+            sink.skipped()
+        );
     }
 
     fn stop_capture(&self) {
@@ -549,6 +613,15 @@ impl VoiceManager {
             return;
         }
         self.loopback = enabled;
+        // In an SFU call the frames leave on the capture thread, and the
+        // mic test copy goes with them.
+        if let Some(sink) = &self.sfu_send_sink {
+            sink.set_loopback(if enabled {
+                self.ctx
+            } else {
+                std::ptr::null_mut()
+            });
+        }
 
         if enabled && !self.active {
             let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
@@ -818,9 +891,12 @@ impl VoiceManager {
         });
     }
 
-    /// Poll audio: read encoded packets from capture and send to all peers,
-    /// and feed received packets from peers to the playback pipeline.
-    pub fn tick(&mut self) {
+    /// The 20 ms voice tick: liveness, stats and events. In P2P mode and for
+    /// the mic test it also sends the encoded packets from capture. In SFU
+    /// mode the packet sink sends them from the capture thread, and received
+    /// SFU voice goes to the decoder from the track callback, so no audio
+    /// waits for this tick. `steps` times each step for the loop watchdog.
+    pub fn tick(&mut self, steps: &mut TickSteps) {
         if self.ctx.is_null() {
             return;
         }
@@ -834,6 +910,7 @@ impl VoiceManager {
             let level = self.get_input_level();
             let _ = self.event_tx.send(Event::MicLevel { level });
         }
+        steps.mark("mic_level");
 
         // Send a DC ping every ~2 seconds (200 ticks at 100Hz) and run an SFU
         // liveness check. Health is multi-signal (PC connected, control channel
@@ -909,6 +986,7 @@ impl VoiceManager {
                 self.detect_rtp_stall();
             }
         }
+        steps.mark("sfu_liveness");
 
         if (self.debug_mode || self.capture_mode)
             && self.tick_counter.is_multiple_of(DEBUG_STATS_TICK_DIVISOR)
@@ -970,9 +1048,27 @@ impl VoiceManager {
                 });
             }
         }
+        steps.mark("debug_stats");
 
+        // With the SFU packet sink set, libmello queues nothing.
+        if self.sfu_send_sink.is_none() {
+            self.send_queued_packets();
+        }
+        steps.mark("packet_send");
+
+        self.receive_and_poll_events();
+        steps.mark(if self.mode == VoiceMode::P2P {
+            "p2p_receive"
+        } else {
+            "sfu_events"
+        });
+    }
+
+    /// Send the packets libmello queued since the last tick: P2P, the mic
+    /// test, and SFU only when the packet sink could not be set.
+    fn send_queued_packets(&mut self) {
         let mut buf = [0u8; PACKET_BUF_SIZE];
-        let loopback_id = std::ffi::CString::new("loopback").unwrap();
+        let loopback_id = c"loopback";
 
         // Read outgoing audio packets from capture, each with its media time
         // (48 kHz capture clock) for the RTP timestamp.
@@ -998,6 +1094,7 @@ impl VoiceManager {
                         self.mesh.broadcast_audio(pkt);
                     }
                     VoiceMode::SFU => {
+                        // Only when the packet sink could not be set.
                         if let Some(ref conn) = self.sfu_connection {
                             // Strip the 4-byte LE sequence header; RTP handles sequencing
                             let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
@@ -1024,7 +1121,11 @@ impl VoiceManager {
                 }
             }
         }
+    }
 
+    /// Feed P2P audio to the decoder and handle SFU events (membership,
+    /// disconnect, and SFU audio when the direct voice sink is not set).
+    fn receive_and_poll_events(&mut self) {
         // Read incoming audio from peers / SFU
         if self.active {
             match self.mode {
@@ -1081,6 +1182,8 @@ impl Drop for VoiceManager {
     fn drop(&mut self) {
         if !self.ctx.is_null() {
             self.leave_voice();
+            // The packet sink must not run after the context is destroyed.
+            self.detach_sfu_send_sink();
             // A connection Arc held elsewhere may outlive this manager. Its
             // direct voice sink must not reference the context destroyed below.
             if let Some(conn) = self.sfu_connection.take() {
