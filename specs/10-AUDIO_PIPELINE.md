@@ -80,6 +80,7 @@ public:
     void set_high_pass_filter(bool enabled);
 
     int  get_packet(uint8_t* buffer, int buffer_size);
+    void set_packet_sink(PacketSink sink);  // §4.5
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
 private:
@@ -107,7 +108,7 @@ Per 20ms frame, endpoint processing order is adaptive:
 7. downward expander attenuates the frame toward a floor gain when the VAD is below threshold (see §4.4)
 8. when speech opens, flush pre-roll frames so starts are not clipped
 9. while speech or hangover is active, apply the selected enhancement mode and Opus encode
-10. enqueue encoded packet with monotonically increasing sequence
+10. give the encoded packet, with a monotonically increasing sequence, to the packet sink (§4.5), or put it in the `get_packet` queue when no sink is set
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
 silence or non-speech background. This preserves Discord-like voice quality during speech
@@ -175,7 +176,7 @@ RTP timestamp (media time):
 - The capture thread keeps a 48 kHz sample counter. It counts every captured 20 ms frame, encoded or not. A frame that the speech gate or mute holds back still advances it, so a gap looks like DTX and not like a stall.
 - Each encoded packet carries the counter value of its first sample. Pre-roll frames keep the value of the time they were captured.
 - `mello_voice_get_packet_with_timestamp()` returns the packet and this value. Consecutive frames differ by 960. A 1 s gate gap adds 48000.
-- In SFU RTP mode, `mello-core` strips the 4-byte sequence and calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)`. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
+- In SFU RTP mode, the packet sink (§4.5) calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)` with the Opus payload, without the 4-byte sequence. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
 - `mello_peer_send_audio()` does not advance the RTP timestamp (libdatachannel takes it only from a `FrameInfo`). No caller in the repo uses it.
 - Stream game audio uses the same packetizer. Its capture clock counts every 20 ms frame (`ts_us`); mello-core converts it to 48 kHz samples for `mello_peer_send_audio_frame`.
 - The P2P data-channel path keeps the 4-byte header only. The receiver does not use the RTP timestamp yet.
@@ -202,6 +203,31 @@ Fix: the expander passes speech at unity gain and attenuates the frame toward a 
 Key detail: the expander is keyed off the **raw** `vad_.probability() >= VAD_THRESHOLD`, not `is_speaking()`. `is_speaking()` latches through an 8-frame holdover and stays true through the gaps that pump. The raw probability drops in those gaps and closes the expander there.
 
 The gate decision above is unchanged: it reads the frame before the expander runs. The expander state resets with the gate state on session boundaries. AGC2 also starts at `initial_gain_db = 0` (not the M131 default +15) to remove a separate start-gain pump on the listener path (`echo_canceller.cpp`).
+
+### 4.5 Send Path: Packet Sink
+
+Rule: an encoded frame never waits for the core command loop (plans/voice-quality.md section 3).
+
+`mello_voice_set_packet_sink(ctx, cb, user_data)` sets a sink. While a sink is set:
+
+- The capture thread calls the sink right after Opus encode. Arguments: the Opus payload and its size, the media time (§4.2), the 32-bit sequence.
+- The frame does not go to the `get_packet` queue. A frame goes to one of the two, never to both.
+- Setting a sink drops the frames in the queue. They would leave late, or reach a later `get_packet` caller as stale audio.
+- Mute and push-to-talk gate frames before encode, as for the queue. A frame that is not encoded does not reach the sink.
+
+Lifetime: set and clear (`cb = NULL`) wait for a sink call that runs now. After a clear returns, no call uses `user_data`. `mello_destroy` clears the sink.
+
+Who uses which path:
+
+| Mode | Send path | Thread |
+|---|---|---|
+| SFU voice | Packet sink -> `mello_peer_send_audio_frame` | Audio capture thread |
+| P2P mesh | `get_packet` on the 20 ms voice tick -> data channel | Command loop |
+| Mic test (loopback), no call | `get_packet` on the voice tick -> `mello_voice_feed_packet` | Command loop |
+| Mic test in an SFU call | The packet sink also feeds the frame as the `loopback` peer | Audio capture thread |
+| Voice quality gate | Packet sink collects the trace (§9) | Caller thread |
+
+mello-core details are in §7.3. The thread rules for the sink are in spec 03 §7.
 
 ---
 
@@ -320,6 +346,29 @@ Leave must use a proper websocket close handshake:
 
 This prevents stale legs and lingering half-closed sockets under repeated join/leave churn.
 
+### 7.3 Voice Send and Receive off the Command Loop
+
+The command loop runs every command and the 20 ms voice tick on one task. A command that waits (a Nakama RPC, a hung native call) stops the loop. No voice audio passes through the loop in SFU mode:
+
+| Direction | Path | Thread |
+|---|---|---|
+| Send | libmello packet sink -> `SfuPacketSink` -> `AudioSendTarget::send` -> `mello_peer_send_audio_frame` | Audio capture thread |
+| Receive | Native track callback -> `mello_voice_feed_packet` (`set_direct_voice_sink`) | libdatachannel thread |
+
+Send path objects (`mello-core/src/voice/send_sink.rs`, `transport/sfu_connection.rs`):
+
+- `SfuConnection` owns an `Arc<AudioSendTarget>`. It holds the peer pointer under an `RwLock`, set after the join. A send takes the read lock for one call.
+- `VoiceManager::join_voice_sfu` creates an `SfuPacketSink` on that target and sets it as the libmello sink. `VoiceManager` keeps the `Arc` while libmello holds the pointer.
+- `leave_voice`, `mark_disconnected_with_reason` and `Drop` clear the libmello sink before the connection goes. The clear waits for a running sink call.
+- `SfuConnection::drop` removes the peer from the target under the write lock, before the teardown thread destroys the peer. A sink that still holds the target then skips; it never reaches a destroyed peer.
+- The sink logs the first sent frame and the first skipped frame at info level, then every 500th skip. A skip is a frame the peer did not take (track not open yet, or no peer).
+
+Lock order on the capture thread: libmello capture lock, libmello sink lock, the target's read lock, the peer `mutex_`. The command loop takes the sink lock (clear) and the target's write lock (drop) one at a time, never one inside the other. `send_audio_frame` holds the peer `mutex_` only to copy the track pointer. It never takes `negotiation_mutex_`. A renegotiation (`handle_remote_offer` on the signaling task) holds `negotiation_mutex_` and takes `mutex_` only for short copies, so it cannot wait on the capture thread, and the capture thread cannot wait on it.
+
+What stays on the voice tick in SFU mode: the liveness ping and check (every 2 s), debug and capture stats, and the SFU event poll (membership, disconnect, and received audio only when the direct voice sink is not set). When the packet sink cannot be set, the tick sends the queued frames as before and logs an error.
+
+Watchdog: a voice tick in SFU mode longer than 5 ms (`VOICE_TICK_BUDGET`) is logged at warn level with its slowest step (`mic_level`, `sfu_liveness`, `debug_stats`, `packet_send`, `sfu_events`, `sfu_reconnect`, `signal_send`). At most one line per 10 s, with the count of long ticks in between.
+
 ---
 
 ## 8. Public C API (Voice Surface)
@@ -342,6 +391,7 @@ void mello_voice_set_input_sensitivity(MelloContext* ctx, float db);
 void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled);
 int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 int  mello_voice_get_packet_with_timestamp(MelloContext* ctx, uint8_t* buffer, int buffer_size, uint32_t* timestamp);
+MelloResult mello_voice_set_packet_sink(MelloContext* ctx, MelloPacketSinkCallback callback, void* user_data);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);
 ```
 
@@ -371,6 +421,9 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
 - drives the real libmello voice path device-free through the test hooks in
   `mello.h` (`MELLO_AUDIO_BACKEND=test`, `mello_voice_test_pull_output`,
   `mello_test_set_clock_ms`, the `rx_*` fields of `MelloDebugStats`)
+- the sender collects its packets with a packet sink (§4.5) and sends each
+  one at its encode time, as the SFU path does. `--send-tick` replays the
+  20 ms voice tick of the command loop instead, for comparison
 - an impairment shim between sender and receiver rewrites the packet header
   as the SFU path does and applies loss, jitter, stalls, reorder, outage,
   clock drift and the RTP sequence wrap
@@ -399,6 +452,7 @@ libmello/src/audio/
 
 mello-core/src/
 ├── voice/mod.rs
+├── voice/send_sink.rs          # SFU packet sink on the capture thread (§7.3)
 └── transport/sfu_connection.rs
 
 mello-sfu/internal/server/

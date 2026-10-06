@@ -297,6 +297,7 @@ device and no backend. Every change to the audio path runs it
 ./scripts/voice-gate.sh                    # all profiles, about 2 minutes
 ./scripts/voice-gate.sh --only clean,wrap  # some profiles
 ./scripts/voice-gate.sh --no-score         # structural metrics only
+./scripts/voice-gate.sh --send-tick        # old sender timing, for comparison
 ```
 
 The table shows each metric with its delta against
@@ -307,7 +308,7 @@ drops by more than 0.1 on any profile or an enforced gate fails.
 |---|---|---|
 | Corpus | `libmello/tests/fixtures/voice/` | Four public-domain LibriVox clips, 48 kHz mono. Frozen. |
 | Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
-| Sender | `mello_voice_inject_capture`, `mello_voice_get_packet` | Real capture DSP and Opus encode on a context with the test backend. |
+| Sender | `mello_voice_inject_capture`, `mello_voice_set_packet_sink` | Real capture DSP and Opus encode on a context with the test backend. Each packet leaves at its encode time, as on the SFU path. `--send-tick` replays the 20 ms voice tick of the command loop instead (the send timing before stage 2). |
 | Shim | `tools/voice-gate/src/shim.rs` | Rewrites the 4-byte header to the 16-bit RTP sequence exactly as the SFU path does, then applies the profile. Seeded. |
 | Receiver | `mello_voice_feed_packet`, `mello_voice_test_pull_output` | Real jitter buffer, decode, concealment and mix, pulled 10 ms at a time like the device thread. |
 | Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
@@ -339,6 +340,22 @@ Rules:
 
 Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
 `results.json`) lands in `target/voice-gate/`.
+
+### Voice send path off the command loop
+
+`mello-core/src/client/voice_send_path_tests.rs` runs the real command loop
+against a fake SFU. The fake SFU answers the offer with a native libmello peer
+and records each voice RTP packet with its arrival time.
+`Command::TestHoldLoop` (test builds only) blocks the loop thread with a sleep.
+
+- `sfu_voice_frames_reach_the_peer_while_the_loop_is_held`: the regression
+  test. It runs in `cargo test --workspace`.
+- `send_path_latency_with_the_loop_idle_and_held`: the stage 2 gate
+  measurement, 1000 frames idle and 1000 frames held. Ignored by default:
+
+```bash
+cargo test -p mello-core --lib send_path_latency -- --ignored --nocapture
+```
 
 ---
 

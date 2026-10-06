@@ -98,7 +98,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | Group | Key functions | Notes |
 |-------|---------------|-------|
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
-| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `feed_packet` | Mute stops sending but capture continues for VAD |
+| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet` |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
 | **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
@@ -107,6 +107,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 ### Callbacks
 
 - `MelloVoiceActivityCallback` — fires on speaking state change (used for UI VAD indicators)
+- `MelloPacketSinkCallback` — one encoded voice frame, on the capture thread (§7, spec 10 §4.5)
 - `MelloAudioFrameCallback` / `MelloVideoFrameCallback` — raw frame delivery
 - `MelloIceCandidateCallback` — ICE trickle candidate generated
 - `MelloPeerStateCallback` — peer connection state change
@@ -357,6 +358,19 @@ Each P2P connection uses libdatachannel and creates two data channels:
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+### Voice packet sink (`mello_voice_set_packet_sink`)
+
+| Question | Answer |
+|---|---|
+| Which thread calls the sink | The audio capture thread, right after Opus encode. In inject mode: the thread that calls `mello_voice_inject_capture`. |
+| Locks held during the call | The capture lock (`accum_mutex_`) and the sink lock (`packet_sink_mutex_`). |
+| What the sink may do | Return fast. Call `mello_peer_send_audio_frame` and `mello_voice_feed_packet`. Read atomics, take short leaf locks, log rarely. |
+| What the sink must not do | Block or wait on the network. Call `mello_voice_set_packet_sink`, or a capture control of the same context (start, stop, inject, push-to-talk, device switch): they take the capture or sink lock and wait for themselves. |
+| Set and clear | Any thread, never from inside the sink. Both wait for a sink call that runs now. After a clear returns, the caller may free `user_data`. |
+| Lock order | `accum_mutex_`, then `packet_sink_mutex_`, then `outgoing_mutex_`. `feed_packet` takes `peer_buffers_mutex_`, which is after `accum_mutex_` also in `stop_capture`. |
+
+`mello_peer_send_audio_frame` is safe on the capture thread while another thread renegotiates the same peer. It holds the peer `mutex_` only to copy the track pointer and never takes `negotiation_mutex_`. Renegotiation holds `negotiation_mutex_` and takes `mutex_` only for short copies. libdatachannel `Track::send` is thread safe and does not block on the network.
 
 libmello is **synchronous C++ by design** — no async runtimes. Threads are created internally and communicate via lock-free ring buffers and thread-safe queues. The C API is callable from any thread but `MelloContext` operations are not thread-safe (caller must serialize).
 
