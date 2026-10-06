@@ -62,13 +62,14 @@ void JitterBuffer::push(uint32_t raw_sequence, const uint8_t* data, int size) {
         last_arrival_ = arrival;
     }
 
-    // Detect sequence discontinuity (track re-wire) and reset. The
-    // unwrapper keeps its state: the new stream continues from here.
+    // Detect sequence discontinuity (track re-wire, sender restart) and
+    // reset. Ahead: a jump past SEQ_DISCONTINUITY_THRESHOLD. Behind: more
+    // than the buffer holds (JITTER_MAX_PACKETS, 1 s); a late packet of this
+    // stream is never that late, so it is a new stream, not a late drop.
+    // The unwrapper keeps its state: the new stream continues from here.
     if (!first_packet_ && packets_.empty()) {
-        const int64_t gap = (sequence > next_seq_)
-            ? sequence - next_seq_
-            : next_seq_ - sequence;
-        if (gap > SEQ_DISCONTINUITY_THRESHOLD) {
+        const int64_t ahead = sequence - next_seq_;
+        if (ahead > SEQ_DISCONTINUITY_THRESHOLD || ahead < -JITTER_MAX_PACKETS) {
             discontinuity_resets_++;
             reset_locked();
             next_seq_ = sequence;

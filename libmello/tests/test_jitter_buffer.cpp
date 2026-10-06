@@ -400,3 +400,31 @@ TEST_F(JitterTimelineTest, GapAtTheBoundIsConcealedInFull) {
     EXPECT_EQ(drain(), expected);
     EXPECT_EQ(jb.resyncs(), 0u);
 }
+
+// A remote that restarts its app restarts its P2P sequence at 0; a re-wired
+// SFU track starts at a random sequence. A packet more than the buffer
+// capacity behind the playout point cannot be a late packet of this stream
+// (that would be over 1 s late). On an empty buffer it starts a new stream,
+// or the restarted remote stays silent until its sequence passes the old
+// playout point.
+TEST_F(JitterTimelineTest, FarBehindOnAnEmptyBufferIsANewStream) {
+    for (uint32_t s = 0; s < 300; ++s) {
+        push(s, 0);
+        advance(20);
+        if (s % 10 == 9) {
+            advance(1000);
+            drain();
+        }
+    }
+    advance(1000);
+    drain();
+    ASSERT_EQ(jb.buffered_count(), 0);
+
+    push(0, 1);  // the restarted sender
+    advance(20);
+    push(1, 2);
+    advance(1000);
+    EXPECT_EQ(drain(), (std::vector<int>{1, 2}));
+    EXPECT_EQ(jb.dropped_late(), 0u);
+    EXPECT_EQ(jb.discontinuity_resets(), 1u);
+}

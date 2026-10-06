@@ -232,7 +232,7 @@ Current adaptive bounds:
 
 The target delay follows the interarrival jitter on the media clock (RFC 3550 §6.4.1): arrival spacing against 20 ms per sequence step. Lost packets and an outage add no jitter.
 
-A packet older than the playout point is a late drop, also when the buffer is empty.
+A packet older than the playout point is a late drop, also when the buffer is empty. On an empty buffer, a packet more than `JITTER_MAX_PACKETS` (1 s) behind the playout point, or more than 1000 ahead, starts a new stream (reset): a sender restart or a track re-wire.
 
 Long gap (outage): a gap of more lost packets than the jitter buffer holds (`JITTER_RESYNC_GAP_PACKETS` = `JITTER_MAX_PACKETS`, 1 s) is not concealed frame by frame.
 
