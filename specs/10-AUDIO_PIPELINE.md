@@ -142,6 +142,19 @@ The capture path keeps a short pre-roll buffer (currently about `100ms`) and two
 The gate closes on sustained non-speech. Closing the gate forces the VAD callback to emit `speaking=false`
 and prevents stale speaking indicators when Silero is no longer being fed.
 
+Input sensitivity sets the RMS gate threshold (the "Activation Sensitivity" control in Settings):
+
+| Mode | Gate threshold | Set by |
+|---|---|---|
+| Auto (default) | `max(MIN_SPEECH_RMS, 2.5 x noise floor)`: at least -54 dBFS, tracks the ambient floor | `mello_voice_set_input_sensitivity_auto(ctx, true)` |
+| Manual | The slider level in dBFS (-100..0) of raw frame RMS, the scale of the input level meter | `mello_voice_set_input_sensitivity(ctx, db)` and auto off |
+
+- Silero VAD confirms speech at `VAD_THRESHOLD` (0.35) in both modes.
+- The noise floor is tracked in both modes, so a change back to auto applies at once.
+- Push-to-talk bypasses the gate, so the setting has no effect there.
+- `MelloDebugStats` reports `input_sensitivity_auto`, `input_sensitivity_db` and `input_gate_dbfs` (the threshold of the last frame).
+- The client sends `Command::SetInputSensitivity { auto, db }` at startup, on each change of the slider or the toggle, and on reset. A settings file without `vad_auto` loads with auto on.
+
 This design was validated with:
 
 - continuous speech: RNNoise runs and quality is preserved
@@ -325,6 +338,8 @@ void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
 void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled);
+void mello_voice_set_input_sensitivity(MelloContext* ctx, float db);
+void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled);
 int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 int  mello_voice_get_packet_with_timestamp(MelloContext* ctx, uint8_t* buffer, int buffer_size, uint32_t* timestamp);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);

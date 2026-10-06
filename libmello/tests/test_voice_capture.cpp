@@ -109,3 +109,63 @@ TEST_F(VoiceCaptureTest, OneSecondGateGapAdvancesBy48000) {
 }
 
 }  // namespace
+
+namespace {
+
+// Input sensitivity (spec 10 section 8: every control reaches libmello).
+// The RMS gate decides which frames are speech candidates for Silero.
+class InputSensitivityTest : public VoiceCaptureTest {
+protected:
+    void SetUp() override {
+        VoiceCaptureTest::SetUp();
+        pipeline.set_push_to_talk(false);  // the gate only runs in VAD mode
+    }
+
+    // Inject `frames` 20 ms frames of a tone at `dbfs` RMS.
+    void inject_level(int frames, float dbfs) {
+        const double amplitude = 32768.0 * std::pow(10.0, dbfs / 20.0) * std::sqrt(2.0);
+        std::vector<int16_t> chunk(FRAME_SIZE / 2);
+        for (int f = 0; f < frames * 2; ++f) {
+            for (size_t i = 0; i < chunk.size(); ++i) {
+                const double t = static_cast<double>(f * chunk.size() + i) / SAMPLE_RATE;
+                chunk[i] = static_cast<int16_t>(amplitude * std::sin(2.0 * 3.14159265358979 * 400.0 * t));
+            }
+            pipeline.inject_capture(chunk.data(), static_cast<int>(chunk.size()));
+        }
+    }
+};
+
+// Manual: the dB value is the gate threshold. A -40 dBFS voice stays below a
+// -30 dBFS gate and passes a -50 dBFS gate.
+TEST_F(InputSensitivityTest, ManualLevelIsTheGateThreshold) {
+    pipeline.set_input_sensitivity_auto(false);
+    pipeline.set_input_sensitivity(-30.0f);
+    inject_level(5, -40.0f);
+    EXPECT_NEAR(pipeline.input_gate_dbfs(), -30.0f, 0.01f);
+    EXPECT_EQ(pipeline.gate_candidate_frames(), 0u);
+
+    pipeline.set_input_sensitivity(-50.0f);
+    inject_level(5, -40.0f);
+    EXPECT_NEAR(pipeline.input_gate_dbfs(), -50.0f, 0.01f);
+    EXPECT_EQ(pipeline.gate_candidate_frames(), 5u);
+}
+
+// Auto (the default) keeps the floor-tracking gate: at least -54 dBFS, here
+// 2.5 x the initial -60 dBFS floor. Switching back from manual restores it.
+TEST_F(InputSensitivityTest, AutoTracksTheNoiseFloor) {
+    EXPECT_TRUE(pipeline.input_sensitivity_auto());
+    inject_level(1, -40.0f);
+    EXPECT_NEAR(pipeline.input_gate_dbfs(), 20.0f * std::log10(0.0025f), 0.1f);
+    EXPECT_EQ(pipeline.gate_candidate_frames(), 1u);
+
+    pipeline.set_input_sensitivity_auto(false);
+    pipeline.set_input_sensitivity(0.0f);
+    inject_level(1, -40.0f);
+    EXPECT_EQ(pipeline.gate_candidate_frames(), 1u) << "a 0 dBFS gate admits nothing";
+
+    pipeline.set_input_sensitivity_auto(true);
+    inject_level(1, -40.0f);
+    EXPECT_EQ(pipeline.gate_candidate_frames(), 2u);
+}
+
+}  // namespace

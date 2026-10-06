@@ -90,6 +90,19 @@ public:
     void set_mute(bool muted);
     void set_deafen(bool deafened);
     void set_push_to_talk(bool enabled);
+    /// Input sensitivity (spec 10 section 4.1). Auto (the default): the RMS
+    /// speech gate tracks the ambient noise floor. Manual: the gate opens
+    /// when the raw microphone frame RMS reaches `db` dBFS (clamped to
+    /// -100..0). Silero VAD confirms speech at VAD_THRESHOLD in both modes.
+    /// Any thread.
+    void set_input_sensitivity(float db);
+    void set_input_sensitivity_auto(bool enabled);
+    bool input_sensitivity_auto() const { return sensitivity_auto_.load(std::memory_order_relaxed); }
+    float input_sensitivity_db() const { return sensitivity_db_.load(std::memory_order_relaxed); }
+    /// Gate threshold (dBFS) that the last captured frame was compared with.
+    float input_gate_dbfs() const;
+    /// Frames that passed the RMS gate (candidate speech), lifetime.
+    uint32_t gate_candidate_frames() const { return gate_candidate_frames_.load(std::memory_order_relaxed); }
     void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
     void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
@@ -282,6 +295,10 @@ private:
     std::string capture_device_id_;
     std::string playback_device_id_;
     float noise_floor_rms_ = 0.001f;
+    std::atomic<bool> sensitivity_auto_{true};
+    std::atomic<float> sensitivity_db_{-40.0f};
+    std::atomic<float> gate_threshold_rms_{0.002f};
+    std::atomic<uint32_t> gate_candidate_frames_{0};
     int candidate_hangover_frames_ = 0;
     int speech_hangover_frames_ = 0;
     bool speech_gate_active_ = false;

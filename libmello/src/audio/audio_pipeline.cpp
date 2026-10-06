@@ -464,6 +464,22 @@ void AudioPipeline::reset_speech_gate_state() {
     vad_.force_silence();
 }
 
+void AudioPipeline::set_input_sensitivity(float db) {
+    if (!std::isfinite(db)) return;
+    db = (std::min)(0.0f, (std::max)(-100.0f, db));
+    sensitivity_db_.store(db, std::memory_order_relaxed);
+    MELLO_LOG_INFO("pipeline", "input sensitivity set to %.1f dBFS", db);
+}
+
+void AudioPipeline::set_input_sensitivity_auto(bool enabled) {
+    sensitivity_auto_.store(enabled, std::memory_order_relaxed);
+    MELLO_LOG_INFO("pipeline", "input sensitivity %s", enabled ? "auto" : "manual");
+}
+
+float AudioPipeline::input_gate_dbfs() const {
+    return 20.0f * std::log10((std::max)(gate_threshold_rms_.load(std::memory_order_relaxed), 1e-10f));
+}
+
 void AudioPipeline::set_push_to_talk(bool enabled) {
     push_to_talk_mode_.store(enabled, std::memory_order_relaxed);
     if (enabled) {
@@ -576,9 +592,17 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
                 process_and_encode_frame(capture_accum_.data(), frame_ts);
             } else {
+                // Auto: track the ambient floor. Manual: the user's level,
+                // in dBFS of the raw frame RMS (the input meter's scale).
                 const float speech_threshold =
-                    (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
+                    sensitivity_auto_.load(std::memory_order_relaxed)
+                        ? (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT)
+                        : std::pow(10.0f, sensitivity_db_.load(std::memory_order_relaxed) / 20.0f);
+                gate_threshold_rms_.store(speech_threshold, std::memory_order_relaxed);
                 bool candidate_speech = gate_rms >= speech_threshold;
+                if (candidate_speech) {
+                    gate_candidate_frames_.fetch_add(1, std::memory_order_relaxed);
+                }
 
                 if (candidate_speech) {
                     candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;

@@ -139,6 +139,18 @@ MELLO_API void mello_voice_set_output_volume(MelloContext* ctx, float volume);
 /** Get current input audio level (0.0 = silence, 1.0 = peak). Updated per frame. */
 MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
 
+/** Manual input sensitivity in dBFS (-100..0, clamped). With auto off, the
+ *  speech gate opens when the raw microphone frame RMS reaches `db` dBFS
+ *  (the scale of the input level meter). Silero VAD then confirms speech at
+ *  its fixed threshold. Stored also while auto is on. Default -40.
+ *  No effect in push-to-talk mode, which bypasses the gate. */
+MELLO_API void mello_voice_set_input_sensitivity(MelloContext* ctx, float db);
+
+/** Auto input sensitivity (default on): the speech gate tracks the ambient
+ *  noise floor (2.5 x the floor, at least -54 dBFS). Off: the gate uses the
+ *  level from mello_voice_set_input_sensitivity. */
+MELLO_API void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled);
+
 /** Get next encoded audio packet to send to peers. Returns packet size, or 0 if none. */
 MELLO_API int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 
@@ -904,6 +916,11 @@ typedef struct MelloDebugStats {
      * only callbacks with no remote audio at all, so it stops once a stream
      * conceals with PLC. The windowed voice health reads this counter. */
     uint32_t rx_late_underruns;
+    /* Input sensitivity (mello_voice_set_input_sensitivity*): the mode, the
+     * manual level, and the gate threshold the last frame was compared with. */
+    bool     input_sensitivity_auto;
+    float    input_sensitivity_db;
+    float    input_gate_dbfs;
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);
