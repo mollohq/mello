@@ -84,14 +84,18 @@ void JitterBuffer::push(uint32_t raw_sequence, const uint8_t* data, int size) {
     }
     last_arrival_ = arrival;
 
+    // Older than the playout point: its slot was already played or
+    // concealed. Reject it also when the buffer is empty, or it sits at the
+    // front and hides the next loss from Missing detection. Checked before
+    // the overflow eviction, so a late packet never evicts a live one.
+    if (sequence < next_seq_) {
+        dropped_late_++;
+        return;
+    }
+
     if (packets_.size() >= JITTER_MAX_PACKETS) {
         packets_.erase(packets_.begin());
         dropped_overflow_++;
-    }
-
-    if (!packets_.empty() && sequence < next_seq_) {
-        dropped_late_++;
-        return;
     }
 
     JitterPacket pkt;

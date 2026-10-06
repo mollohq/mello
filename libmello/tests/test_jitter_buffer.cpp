@@ -308,3 +308,35 @@ TEST(SequenceUnwrapperTest, ExtendsAcrossTheWrapBothWays) {
     EXPECT_EQ(p2p.unwrap(70000), 70000 - 65536);
     EXPECT_EQ(p2p.unwrap(70001), 70001 - 65536);
 }
+
+// A packet older than the playout point is late even when the buffer is
+// empty. Stored, it would sit at the front of the buffer and hide the next
+// loss from Missing detection until overflow.
+TEST_F(JitterTimelineTest, StalePacketIntoAnEmptyBufferIsDroppedLate) {
+    push(100, 1);
+    advance(1000);
+    EXPECT_EQ(drain(), (std::vector<int>{1}));
+    EXPECT_EQ(jb.buffered_count(), 0);
+
+    push(99, 9);  // older than the next expected sequence (101)
+    EXPECT_EQ(jb.dropped_late(), 1u);
+    EXPECT_EQ(jb.buffered_count(), 0);
+
+    push(101, 2);
+    advance(20);
+    // 102 is lost.
+    push(103, 4);
+    advance(1000);
+    EXPECT_EQ(drain(), (std::vector<int>{2, -1, 4}));
+}
+
+// The same across the 16-bit wrap: 65535 after 0 was played is late.
+TEST_F(JitterTimelineTest, StalePacketAcrossTheWrapIsDroppedLate) {
+    push(0, 1);
+    advance(1000);
+    EXPECT_EQ(drain(), (std::vector<int>{1}));
+
+    push(65535, 9);
+    EXPECT_EQ(jb.dropped_late(), 1u);
+    EXPECT_EQ(jb.buffered_count(), 0);
+}
