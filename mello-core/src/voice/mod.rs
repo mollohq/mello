@@ -166,6 +166,18 @@ impl VoiceManager {
         Self::with_context(std::ptr::null_mut(), event_tx, false)
     }
 
+    /// A manager with a real libmello context on the device-free audio
+    /// backend (`MELLO_AUDIO_BACKEND=test`): no device opens and no device
+    /// thread starts, but every voice call reaches libmello.
+    #[cfg(test)]
+    pub(crate) fn with_test_audio_backend(event_tx: std_mpsc::Sender<Event>) -> Self {
+        static SELECT: std::sync::Once = std::sync::Once::new();
+        SELECT.call_once(|| std::env::set_var("MELLO_AUDIO_BACKEND", "test"));
+        let ctx = unsafe { mello_sys::mello_init() };
+        assert!(!ctx.is_null(), "mello_init on the test backend");
+        Self::with_context(ctx, event_tx, false)
+    }
+
     fn with_context(
         ctx: *mut mello_sys::MelloContext,
         event_tx: std_mpsc::Sender<Event>,
@@ -517,6 +529,19 @@ impl VoiceManager {
                 mello_sys::mello_voice_set_output_volume(self.ctx, volume);
             }
         }
+    }
+
+    /// Input sensitivity of the speech gate. `auto`: track the noise floor.
+    /// Otherwise the gate opens at `db` dBFS of raw microphone level. The
+    /// level is stored in both modes, so turning auto off applies it at once.
+    pub fn set_input_sensitivity(&mut self, auto: bool, db: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_input_sensitivity(self.ctx, db);
+                mello_sys::mello_voice_set_input_sensitivity_auto(self.ctx, auto);
+            }
+        }
+        log::info!("Input sensitivity: auto={} db={:.1}", auto, db);
     }
 
     pub fn set_loopback(&mut self, enabled: bool) {

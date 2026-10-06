@@ -268,6 +268,13 @@ pub enum Command {
     SetOutputVolume {
         volume: f32,
     },
+    /// Input sensitivity of the speech gate (spec 10 section 8). `auto`: the
+    /// gate tracks the ambient noise floor. Otherwise it opens when the raw
+    /// microphone level reaches `db` dBFS (-100..0).
+    SetInputSensitivity {
+        auto: bool,
+        db: f32,
+    },
     SetLoopback {
         enabled: bool,
     },

@@ -46,7 +46,12 @@ pub struct Settings {
     pub echo_suppression: bool,
     pub agc: bool,
     pub input_mode: String, // "voice_activity" or "push_to_talk"
+    /// Manual input sensitivity in dBFS (the slider). Applies when
+    /// `vad_auto` is off.
     pub vad_threshold: f32,
+    /// Automatic input sensitivity: the speech gate tracks the noise floor.
+    /// On by default; the slider applies only when it is off.
+    pub vad_auto: bool,
     // HUD tab
     pub hud_enabled: bool,
     pub hud_show_overlay_in_game: bool,
@@ -100,6 +105,7 @@ impl Default for Settings {
             agc: true,
             input_mode: "voice_activity".into(),
             vad_threshold: -40.0,
+            vad_auto: true,
             hud_enabled: true,
             hud_show_overlay_in_game: true,
             hud_overlay_opacity: 0.8,
@@ -157,6 +163,15 @@ impl Settings {
         }
     }
 
+    /// The command that applies the saved input sensitivity to libmello.
+    /// Sent at startup, on every change and on reset (spec 10 section 8).
+    pub fn input_sensitivity_command(&self) -> mello_core::Command {
+        mello_core::Command::SetInputSensitivity {
+            auto: self.vad_auto,
+            db: self.vad_threshold,
+        }
+    }
+
     pub fn save(&self) {
         let stored = match Self::configured_path() {
             Some(path) => confy::store_path(&path, self),
@@ -210,6 +225,27 @@ impl Settings {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Input sensitivity starts automatic, as libmello does. A settings file
+    /// saved before the auto toggle existed loads with auto on, so an
+    /// upgrade keeps today's floor-tracking gate and not a -40 dBFS gate.
+    #[test]
+    fn input_sensitivity_defaults_to_auto_also_for_old_settings_files() {
+        let s = Settings::default();
+        assert!(s.vad_auto);
+        assert!(matches!(
+            s.input_sensitivity_command(),
+            mello_core::Command::SetInputSensitivity { auto: true, db } if db == -40.0
+        ));
+
+        let old: Settings = toml::from_str(
+            "vad_threshold = -25.0
+",
+        )
+        .expect("old file parses");
+        assert!(old.vad_auto);
+        assert_eq!(old.vad_threshold, -25.0);
+    }
 
     #[test]
     fn settings_default_values() {

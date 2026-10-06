@@ -480,6 +480,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         let _ = cmd_tx.send(Command::SetOutputVolume {
             volume: s.output_volume,
         });
+        let _ = cmd_tx.send(s.input_sensitivity_command());
     }
 
     // Restore saved PTT binding and activate listener if PTT mode is on

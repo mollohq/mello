@@ -885,6 +885,9 @@ impl Client {
             Command::SetOutputVolume { volume } => {
                 self.voice.set_output_volume(volume);
             }
+            Command::SetInputSensitivity { auto, db } => {
+                self.voice.set_input_sensitivity(auto, db);
+            }
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
             }

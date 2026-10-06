@@ -337,6 +337,18 @@ void mello_voice_set_output_volume(MelloContext* ctx, float volume) {
     } catch (...) {}
 }
 
+void mello_voice_set_input_sensitivity(MelloContext* ctx, float db) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_input_sensitivity(db);
+    } catch (...) {}
+}
+
+void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_input_sensitivity_auto(enabled);
+    } catch (...) {}
+}
+
 float mello_voice_get_input_level(MelloContext* ctx) {
     if (!ctx) return 0.0f;
     try {
@@ -988,6 +1000,9 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->rx_jitter_target_delay_ms  = rx.jitter_target_delay_ms;
         out->rx_playout_buffer_ms       = rx.playout_buffer_ms;
         out->rx_late_underruns          = rx.late_underruns;
+        out->input_sensitivity_auto     = audio.input_sensitivity_auto();
+        out->input_sensitivity_db       = audio.input_sensitivity_db();
+        out->input_gate_dbfs            = audio.input_gate_dbfs();
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

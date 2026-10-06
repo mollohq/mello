@@ -520,7 +520,11 @@ component ProcessingCard inherits Rectangle {
 // ─── Sensitivity Slider ────────────────────────────────────────────────────
 component SensitivitySlider inherits Rectangle {
     in-out property <float> value: -40.0;  // -100 to 0
+    // Automatic sensitivity: the gate tracks the noise floor and the slider
+    // does not apply, so it is dimmed and does not take input.
+    in-out property <bool> auto: true;
     callback changed(float);
+    callback auto-changed(bool);
 
     property <float> norm: (value + 100.0) / 100.0;  // 0.0 to 1.0
 
@@ -540,19 +544,31 @@ component SensitivitySlider inherits Rectangle {
                 vertical-alignment: center;
             }
 
-            Text {
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: "Automatically determine input sensitivity";
-                font-size: 11px;
-                color: Theme.text-secondary;
-                vertical-alignment: center;
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+
+                Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: "Automatically determine input sensitivity";
+                    font-size: 11px;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                SmallToggle {
+                    label: "Automatically determine input sensitivity";
+                    checked <=> root.auto;
+                    toggled(v) => { root.auto-changed(v); }
+                }
             }
         }
 
         // Slider area
         Rectangle {
             height: 48px;
+            opacity: root.auto ? 0.4 : 1.0;
 
             // Color gradient background (green -> yellow -> red)
             HorizontalLayout {
@@ -625,6 +641,7 @@ component SensitivitySlider inherits Rectangle {
             sens-ta := TouchArea {
                 accessible-role: slider;
                 accessible-label: "Sensitivity";
+                enabled: !root.auto;
                 moved => {
                     if self.pressed {
                         root.value = clamp(self.mouse-x / parent.width * 100.0 - 100.0, -100.0, 0.0);
@@ -848,6 +865,7 @@ component AudioTab inherits VerticalLayout {
     in-out property <bool> ptt-mode: false;  // false = voice activity, true = push to talk
     in property <string> ptt-key-label: "Unassigned";
     in-out property <float> vad-threshold: -40.0;
+    in-out property <bool> vad-auto: true;
     in-out property <bool> ptt-binding: false;  // true = listening for next keypress
 
     // Mic test
@@ -865,6 +883,7 @@ component AudioTab inherits VerticalLayout {
     callback input-mode-changed(bool);  // true = ptt
     callback ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback vad-threshold-changed(float);
+    callback vad-auto-changed(bool);
     callback mic-test-toggled();
 
     // HARDWARE INTERFACES
@@ -1252,7 +1271,9 @@ component AudioTab inherits VerticalLayout {
                 // Sensitivity slider
                 SensitivitySlider {
                     value <=> root.vad-threshold;
+                    auto <=> root.vad-auto;
                     changed(v) => { vad-threshold-changed(v); }
+                    auto-changed(v) => { vad-auto-changed(v); }
                 }
             }
         }
@@ -2043,6 +2064,7 @@ export component SettingsModal inherits Rectangle {
     in property <string> ptt-key-label: "Unassigned";
     in-out property <bool> ptt-binding: false;
     in-out property <float> vad-threshold: -40.0;
+    in-out property <bool> vad-auto: true;
 
     // Version
     in property <string> build-version: "v0.1.0";
@@ -2149,6 +2171,7 @@ export component SettingsModal inherits Rectangle {
     callback setting-changed-agc(bool);
     callback setting-changed-input-mode(bool);
     callback setting-changed-vad-threshold(float);
+    callback setting-changed-vad-auto(bool);
     callback ptt-key-captured(string, bool, bool, bool, bool);
 
     // Backdrop
@@ -2663,6 +2686,7 @@ export component SettingsModal inherits Rectangle {
                             ptt-key-label: root.ptt-key-label;
                             ptt-binding <=> root.ptt-binding;
                             vad-threshold <=> root.vad-threshold;
+                            vad-auto <=> root.vad-auto;
                             mic-testing <=> root.mic-testing;
                             mic-level: root.mic-level;
                             capture-device-selected(id) => { root.capture-device-selected(id); }
@@ -2676,6 +2700,7 @@ export component SettingsModal inherits Rectangle {
                             input-mode-changed(v) => { root.setting-changed-input-mode(v); }
                             ptt-key-captured(key, ctrl, alt, shift, meta) => { root.ptt-key-captured(key, ctrl, alt, shift, meta); }
                             vad-threshold-changed(v) => { root.setting-changed-vad-threshold(v); }
+                            vad-auto-changed(v) => { root.setting-changed-vad-auto(v); }
                             mic-test-toggled => { root.mic-test-toggled(); }
                         }
 

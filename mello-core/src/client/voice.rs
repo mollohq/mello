@@ -453,6 +453,56 @@ mod tests {
         );
     }
 
+    /// Spec 10 section 8: every voice control reaches libmello. The command
+    /// runs through the real handler into a libmello context on the
+    /// device-free backend, and libmello reports the new setting.
+    #[tokio::test]
+    async fn input_sensitivity_command_reaches_libmello() {
+        let (event_tx, _events) = mpsc::channel();
+        let voice = VoiceManager::with_test_audio_backend(event_tx.clone());
+        let mut client = Client::with_voice(
+            Config::default(),
+            event_tx,
+            voice,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            false,
+            false,
+        );
+        let stats = |client: &Client| {
+            // SAFETY: zeroed is a valid MelloDebugStats; the context is live
+            // while the client holds its voice manager.
+            unsafe {
+                let mut s: mello_sys::MelloDebugStats = std::mem::zeroed();
+                mello_sys::mello_get_debug_stats(client.voice.mello_ctx(), &mut s);
+                s
+            }
+        };
+        assert!(stats(&client).input_sensitivity_auto, "auto is the default");
+
+        client
+            .handle_command(Command::SetInputSensitivity {
+                auto: false,
+                db: -33.0,
+            })
+            .await;
+        let s = stats(&client);
+        assert!(!s.input_sensitivity_auto);
+        assert_eq!(s.input_sensitivity_db, -33.0);
+
+        client
+            .handle_command(Command::SetInputSensitivity {
+                auto: true,
+                db: -12.0,
+            })
+            .await;
+        let s = stats(&client);
+        assert!(s.input_sensitivity_auto);
+        assert_eq!(s.input_sensitivity_db, -12.0);
+    }
+
     #[tokio::test]
     async fn leaving_voice_cancels_the_sfu_join() {
         let sfu = silent_sfu().await;

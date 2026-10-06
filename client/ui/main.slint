@@ -263,6 +263,7 @@ export component MainWindow inherits Window {
     in property <string> settings-ptt-key-label: "Unassigned";
     in-out property <bool> settings-ptt-binding: false;
     in-out property <float> settings-vad-threshold: -40.0;
+    in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
     in-out property <bool> settings-show-saved: false;
     // HUD settings
@@ -626,6 +627,7 @@ export component MainWindow inherits Window {
     callback setting-changed-agc(bool);
     callback setting-changed-input-mode(bool);
     callback setting-changed-vad-threshold(float);
+    callback setting-changed-vad-auto(bool);
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-reset-defaults();
     // HUD settings callbacks
@@ -1603,6 +1605,7 @@ export component MainWindow inherits Window {
         ptt-key-label: root.settings-ptt-key-label;
         ptt-binding <=> root.settings-ptt-binding;
         vad-threshold <=> root.settings-vad-threshold;
+        vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
         show-saved <=> root.settings-show-saved;
         // HUD
@@ -1708,6 +1711,10 @@ export component MainWindow inherits Window {
         setting-changed-vad-threshold(v) => {
             root.settings-show-saved = true;
             root.setting-changed-vad-threshold(v);
+        }
+        setting-changed-vad-auto(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-vad-auto(v);
         }
         ptt-key-captured(key, ctrl, alt, shift, meta) => {
             root.settings-show-saved = true;

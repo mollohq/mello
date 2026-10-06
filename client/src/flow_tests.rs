@@ -4468,3 +4468,34 @@ fn preferences_menu_item_shows_the_display_name_like_the_settings_button() {
     assert!(h.app().get_settings_open(), "Preferences opens settings");
     assert_eq!(h.field_text("DISPLAY NAME"), "b0bben");
 }
+
+/// Spec 10 section 8: every voice control reaches libmello. The
+/// input-sensitivity slider and its auto toggle used to save only.
+#[test]
+fn input_sensitivity_controls_send_the_setting_to_core() {
+    let mut h = Harness::new();
+    let _ = h.commands();
+
+    h.app().invoke_setting_changed_vad_threshold(-30.0);
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::SetInputSensitivity { auto: true, db } if *db == -30.0
+        )),
+        "the slider must send its level, got {cmds:?}"
+    );
+
+    h.app().invoke_setting_changed_vad_auto(false);
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(
+            c,
+            Command::SetInputSensitivity { auto: false, db } if *db == -30.0
+        )),
+        "the auto toggle must send the mode with the saved level, got {cmds:?}"
+    );
+    let saved = h.settings();
+    assert!(!saved.borrow().vad_auto);
+    assert_eq!(saved.borrow().vad_threshold, -30.0);
+}
