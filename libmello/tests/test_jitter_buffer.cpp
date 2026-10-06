@@ -340,3 +340,63 @@ TEST_F(JitterTimelineTest, StalePacketAcrossTheWrapIsDroppedLate) {
     EXPECT_EQ(jb.dropped_late(), 1u);
     EXPECT_EQ(jb.buffered_count(), 0);
 }
+
+// After an outage the first packet is far ahead of the playout point. The
+// buffer conceals at most JITTER_RESYNC_CONCEAL_FRAMES of the gap, then
+// jumps to the first buffered packet. One Missing per lost packet would
+// queue seconds of PLC in front of fresh audio.
+TEST_F(JitterTimelineTest, LongGapConcealsABoundedRunThenResyncs) {
+    for (uint32_t s = 0; s < 10; ++s) {
+        push(s, static_cast<uint8_t>(s));
+        advance(20);
+    }
+    advance(1000);
+    drain();
+
+    // 200 packets (4 s) are lost. Playout resumes at 210.
+    for (uint32_t s = 210; s < 215; ++s) {
+        push(s, static_cast<uint8_t>(s));
+        advance(20);
+    }
+    advance(1000);
+
+    std::vector<int> expected(JITTER_RESYNC_CONCEAL_FRAMES, -1);
+    for (int s = 210; s < 215; ++s) expected.push_back(s);
+    EXPECT_EQ(drain(), expected);
+    EXPECT_EQ(jb.underruns(), static_cast<uint32_t>(JITTER_RESYNC_CONCEAL_FRAMES));
+    EXPECT_EQ(jb.resyncs(), 1u);
+    EXPECT_EQ(jb.discontinuity_resets(), 0u);
+}
+
+// The same gap when the caller's playout is starved: its PLC fill already
+// covered the gap, so the jump is immediate.
+TEST_F(JitterTimelineTest, LongGapWithStarvedPlayoutResyncsAtOnce) {
+    push(0, 0);
+    advance(1000);
+    drain();
+    push(200, 1);
+    advance(1000);
+
+    std::vector<uint8_t> out;
+    int64_t seq = 0;
+    ASSERT_EQ(jb.pop(out, &seq, /*playout_starved=*/true), JitterPopResult::Packet);
+    EXPECT_EQ(seq, 200);
+    EXPECT_EQ(jb.underruns(), 0u);
+    EXPECT_EQ(jb.resyncs(), 1u);
+}
+
+// A gap at the bound is still concealed frame by frame: the timeline does
+// not jump for a short burst.
+TEST_F(JitterTimelineTest, GapAtTheBoundIsConcealedInFull) {
+    push(0, 0);
+    advance(20);
+    const int gap = JITTER_RESYNC_GAP_PACKETS;
+    push(static_cast<uint32_t>(gap + 1), 1);
+    advance(1000);
+
+    std::vector<int> expected{0};
+    for (int i = 0; i < gap; ++i) expected.push_back(-1);
+    expected.push_back(1);
+    EXPECT_EQ(drain(), expected);
+    EXPECT_EQ(jb.resyncs(), 0u);
+}

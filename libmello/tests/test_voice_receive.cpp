@@ -152,3 +152,44 @@ TEST_F(VoiceReceiveTest, SingleLossUsesFecFromTheNextPacket) {
 }
 
 }  // namespace
+
+namespace {
+
+// A 5 s outage: every packet in it is lost. When packets return, playout
+// must continue from fresh audio with a bounded concealment run. Before the
+// fix, one PLC frame per lost packet queued up to 1 s of PLC in front of the
+// fresh audio, and the delay took 12 s to recover (voice gate, outage).
+TEST_F(VoiceReceiveTest, OutageRecoversToThePreOutagePlayoutBuffer) {
+    std::set<uint32_t> lost;
+    for (uint32_t seq = 100; seq < 350; ++seq) lost.insert(seq);
+    auto arrivals = steady_stream(500, lost);
+
+    // Sample the decoded playout buffer before the outage and 2 s after it.
+    float before_ms = -1.0f;
+    float after_ms = -1.0f;
+    std::sort(arrivals.begin(), arrivals.end(),
+              [](const Arrival& a, const Arrival& b) { return a.arrival_ms < b.arrival_ms; });
+    size_t next = 0;
+    std::vector<int16_t> pull(480);
+    const int64_t outage_end_ms = 350 * 20 + 20;
+    for (int64_t now = 0; now <= 500 * 20 + 500; ++now) {
+        mello::util::set_test_clock_ms(kClockOrigin + now);
+        while (next < arrivals.size() && arrivals[next].arrival_ms <= now) {
+            const auto& a = arrivals[next++];
+            pipeline.feed_packet(kPeer, a.bytes.data(), static_cast<int>(a.bytes.size()));
+        }
+        if (now % 10 == 0) {
+            ASSERT_GE(pipeline.render_test_output(pull.data(), pull.size()), 0);
+        }
+        if (now == 100 * 20) before_ms = pipeline.receive_stats().playout_buffer_ms;
+        if (now == outage_end_ms + 2000) after_ms = pipeline.receive_stats().playout_buffer_ms;
+    }
+
+    EXPECT_LE(after_ms, before_ms + 20.0f) << "before=" << before_ms << " after=" << after_ms;
+    // The playout ran empty during the outage, so the fill already covered
+    // the gap: no concealment run, at most the bound.
+    const auto s = pipeline.receive_stats();
+    EXPECT_LE(s.jitter_missing, static_cast<uint32_t>(JITTER_RESYNC_CONCEAL_FRAMES));
+}
+
+}  // namespace

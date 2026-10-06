@@ -744,7 +744,12 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         int64_t pkt_seq = 0;
         int drained = 0;
         while (drained < kMaxDrainPacketsPerPeer) {
-            auto pop_result = jb.pop(pkt_data, &pkt_seq);
+            // Starved: the decoder is primed and its playout ring is empty,
+            // so the fill below has been covering the time with PLC.
+            auto ring_it = peer_buffers_.find(pid);
+            const bool starved = decoder_primed_[pid] && ring_it != peer_buffers_.end() &&
+                                 ring_it->second->available() == 0;
+            auto pop_result = jb.pop(pkt_data, &pkt_seq, starved);
             if (pop_result == JitterPopResult::None) {
                 break;
             }

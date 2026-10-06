@@ -209,6 +209,16 @@ Current adaptive bounds:
 - min/max delay guardrails `20ms..200ms`
 - bounded per-callback drain to avoid lock monopolization
 
+The target delay follows the interarrival jitter on the media clock (RFC 3550 §6.4.1): arrival spacing against 20 ms per sequence step. Lost packets and an outage add no jitter.
+
+A packet older than the playout point is a late drop, also when the buffer is empty.
+
+Long gap (outage): a gap of more lost packets than the jitter buffer holds (`JITTER_RESYNC_GAP_PACKETS` = `JITTER_MAX_PACKETS`, 1 s) is not concealed frame by frame.
+
+- When the caller's playout is starved (decoded buffer empty, PLC fill running), the fill already covered the gap. The buffer jumps to the first buffered packet at once.
+- Otherwise the buffer reports at most `JITTER_RESYNC_CONCEAL_FRAMES` (3) `Missing` events, then jumps.
+- `resyncs()` counts the jumps. Playout continues from fresh audio, so the delay returns to its value before the outage.
+
 ### 5.1 Concealment Policy
 
 Rule: one concealment frame per lost frame. A lost 20 ms frame produces 20 ms of concealed audio, never 40.

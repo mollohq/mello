@@ -11,6 +11,17 @@ static constexpr int JITTER_TARGET_MS = 60;
 static constexpr int JITTER_MIN_MS = 20;
 static constexpr int JITTER_MAX_MS = 200;
 static constexpr int64_t SEQ_DISCONTINUITY_THRESHOLD = 1000;
+// Resync after a long gap (an outage). A gap of more lost packets than the
+// jitter buffer holds (JITTER_MAX_PACKETS, 1 s of audio, also the capacity
+// of the decoded playout buffer) cannot be jitter. It is concealed for at
+// most JITTER_RESYNC_CONCEAL_FRAMES; then the timeline jumps to the first
+// buffered packet. The playout clock already ran through the gap, so
+// concealing all of it would only queue stale PLC in front of fresh audio.
+// When the caller's playout is starved (its decoded buffer ran empty and it
+// fills with PLC), that fill already covered the gap: the jump is immediate.
+// Shorter gaps are concealed frame by frame.
+static constexpr int JITTER_RESYNC_GAP_PACKETS = JITTER_MAX_PACKETS;
+static constexpr int JITTER_RESYNC_CONCEAL_FRAMES = 3;
 
 /// Extends a 16-bit RTP sequence number to a running 64-bit counter.
 ///
@@ -59,8 +70,10 @@ public:
     // - Missing when a packet is considered lost and concealment should run
     // - None when still prebuffering / waiting for delay
     // out_sequence receives the extended sequence of the packet, or of the
-    // lost packet for Missing.
-    JitterPopResult pop(std::vector<uint8_t>& out_data, int64_t* out_sequence = nullptr);
+    // lost packet for Missing. playout_starved: the caller's decoded playout
+    // buffer is empty (see JITTER_RESYNC_GAP_PACKETS).
+    JitterPopResult pop(std::vector<uint8_t>& out_data, int64_t* out_sequence = nullptr,
+                        bool playout_starved = false);
 
     // Copies the payload of the buffered packet with extended sequence
     // `sequence` into out_data, and leaves it in the buffer. False when the
@@ -77,6 +90,8 @@ public:
     uint32_t dropped_late() const { return dropped_late_; }
     uint32_t dropped_overflow() const { return dropped_overflow_; }
     uint32_t discontinuity_resets() const { return discontinuity_resets_; }
+    // Timeline jumps after a long gap (JITTER_RESYNC_GAP_PACKETS).
+    uint32_t resyncs() const { return resyncs_; }
 
 private:
     int64_t now_ms() const;
@@ -92,15 +107,21 @@ private:
     bool prebuffering_ = true;
     int target_delay_ms_ = JITTER_TARGET_MS;
     int64_t last_pop_time_ = 0;
+    // Missing results in a row since the last released packet.
+    int missing_run_ = 0;
     int64_t stream_start_ms_ = 0;
 
     int64_t last_arrival_ = 0;
+    // Extended sequence of the last pushed packet (interarrival jitter).
+    int64_t last_push_seq_ = 0;
+    bool has_last_push_seq_ = false;
     float jitter_estimate_ = 0.0f;
     float avg_hold_ms_ = 0.0f;
     uint32_t underruns_ = 0;
     uint32_t dropped_late_ = 0;
     uint32_t dropped_overflow_ = 0;
     uint32_t discontinuity_resets_ = 0;
+    uint32_t resyncs_ = 0;
 };
 
 } // namespace mello::audio
