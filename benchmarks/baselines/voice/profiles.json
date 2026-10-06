@@ -48,7 +48,7 @@
         { "metric": "rx_jitter_resets", "max": 0, "enforced": true },
         { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
         { "metric": "latency_clip_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
-        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "stages 2 and 3: mouth-to-ear delay on a 20 ms link" }
+        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "not met: the sender pre-roll (100 ms) plays at its natural delay (spec 10 section 5.2); 91 ms without pre-roll" }
       ]
     },
     {
@@ -132,7 +132,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "recovery_s", "max": 5, "enforced": false, "note": "stage 3 gate: back to the pre-burst delay within 5 s" }
+        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 3 gate: back to the pre-burst delay within 5 s" }
       ]
     },
     {
@@ -149,7 +149,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": false, "note": "stage 3 gate: zero drift over 10 minutes" }
+        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "stage 3 gate: zero drift over 10 minutes" }
       ]
     },
     {
