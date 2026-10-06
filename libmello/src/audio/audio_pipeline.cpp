@@ -1,6 +1,7 @@
 #include "audio_pipeline.hpp"
 #include "audio_backend_test.hpp"
 #include "../util/log.hpp"
+#include "../util/test_clock.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -842,11 +843,20 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     rx_conceal_gap_fec_.fetch_add(static_cast<uint32_t>(concealment_fec), std::memory_order_relaxed);
     rx_conceal_gap_plc_.fetch_add(static_cast<uint32_t>(gap_plc), std::memory_order_relaxed);
 
+    // Late playout: a primed stream ran short while its jitter buffer held
+    // packets for it. The fill below conceals it, so the mixer still returns
+    // audio and the no-audio underrun count above never sees it. A talk
+    // pause leaves the jitter buffer empty and does not count.
+    bool late_playout = false;
     if (!peer_buffers_.empty()) {
         std::vector<int16_t> temp(count);
         for (auto& [pid, buf] : peer_buffers_) {
             size_t got = buf->read(temp.data(), count);
             if (got < count && decoder_primed_[pid]) {
+                auto jit = jitter_buffers_.find(pid);
+                if (jit != jitter_buffers_.end() && jit->second.buffered_count() > 0) {
+                    late_playout = true;
+                }
                 auto dit = decoders_.find(pid);
                 if (dit != decoders_.end()) {
                     size_t write_pos = got;
@@ -876,6 +886,29 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         }
     }
     rx_conceal_fill_plc_.fetch_add(static_cast<uint32_t>(fill_plc), std::memory_order_relaxed);
+    if (late_playout) {
+        rx_late_underruns_.fetch_add(1, std::memory_order_relaxed);
+        // Windowed late-playout rate: warn when late audio is *currently*
+        // sustained, not from the ever-growing lifetime counter.
+        const int64_t now_ms = util::steady_now_ms();
+        constexpr int64_t kUnderrunWindowMs = 5000;
+        if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
+        ++underrun_window_count_;
+        const int64_t elapsed = now_ms - underrun_window_start_ms_;
+        if (elapsed >= kUnderrunWindowMs) {
+            // ~5 late callbacks/sec sustained over the window => audibly degraded.
+            if (underrun_window_count_ >= 25 &&
+                now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
+                MELLO_LOG_WARN("pipeline",
+                               "sustained late playout: %d underruns in last %lldms (%.1f/s) -- output likely degraded",
+                               underrun_window_count_, (long long)elapsed,
+                               underrun_window_count_ * 1000.0 / elapsed);
+                last_underrun_warn_ms_ = now_ms;
+            }
+            underrun_window_start_ms_ = now_ms;
+            underrun_window_count_ = 0;
+        }
+    }
 
     if (any_remote) {
         static uint32_t mix_log_ctr = 0;
@@ -908,31 +941,6 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
             MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d fec=%d plc=%d errs=%d",
                            ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
-        }
-        // Windowed underrun rate: warn when underruns are *currently* sustained
-        // rather than relying on the ever-growing lifetime counter, which looks
-        // alarming on long sessions even when audio is presently fine.
-        if (!peer_buffers_.empty()) {
-            int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now().time_since_epoch())
-                                 .count();
-            constexpr int64_t kUnderrunWindowMs = 5000;
-            if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
-            ++underrun_window_count_;
-            int64_t elapsed = now_ms - underrun_window_start_ms_;
-            if (elapsed >= kUnderrunWindowMs) {
-                // ~5 underruns/sec sustained over the window => audibly degraded.
-                if (underrun_window_count_ >= 25 &&
-                    now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
-                    MELLO_LOG_WARN("pipeline",
-                                   "sustained audio underruns: %d in last %lldms (%.1f/s) -- output likely degraded",
-                                   underrun_window_count_, (long long)elapsed,
-                                   underrun_window_count_ * 1000.0 / elapsed);
-                    last_underrun_warn_ms_ = now_ms;
-                }
-                underrun_window_start_ms_ = now_ms;
-                underrun_window_count_ = 0;
-            }
         }
     }
 
@@ -1006,6 +1014,7 @@ ReceiveStats AudioPipeline::receive_stats() const {
     s.conceal_gap_fec = rx_conceal_gap_fec_.load(std::memory_order_relaxed);
     s.conceal_gap_plc = rx_conceal_gap_plc_.load(std::memory_order_relaxed);
     s.conceal_fill_plc = rx_conceal_fill_plc_.load(std::memory_order_relaxed);
+    s.late_underruns = rx_late_underruns_.load(std::memory_order_relaxed);
 
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
     float target_sum = 0.0f;

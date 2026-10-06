@@ -872,6 +872,12 @@ typedef struct MelloDebugStats {
     int32_t  rx_jitter_buffered_packets; /* packets in the jitter buffers now */
     float    rx_jitter_target_delay_ms;  /* mean jitter target delay now */
     float    rx_playout_buffer_ms;       /* mean decoded audio queued for playout now */
+    /* Late playout: playback callbacks in which a remote stream's decoded
+     * audio ran short while its jitter buffer held packets for it. A talk
+     * pause (nothing received) does not count. underrun_count above counts
+     * only callbacks with no remote audio at all, so it stops once a stream
+     * conceals with PLC. The windowed voice health reads this counter. */
+    uint32_t rx_late_underruns;
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);

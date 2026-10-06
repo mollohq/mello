@@ -712,6 +712,16 @@ impl VoiceManager {
         );
     }
 
+    /// Late-playout underruns in the last [`UNDERRUN_WINDOW`], the voice health
+    /// signal. Reads `rx_late_underruns`: playback callbacks in which a remote
+    /// stream ran short while packets for it waited in the jitter buffer.
+    /// `underrun_count` is not used: it counts only callbacks with no remote
+    /// audio at all, and stops once a stream conceals with PLC.
+    fn windowed_late_underruns(&mut self, stats: &mello_sys::MelloDebugStats) -> i32 {
+        let total = i32::try_from(stats.rx_late_underruns).unwrap_or(i32::MAX);
+        self.windowed_underrun(total, stats.incoming_streams)
+    }
+
     /// Underruns observed in the last [`UNDERRUN_WINDOW`], counting only ticks
     /// where audio was incoming (`streams > 0`). Mirrors libmello's peer-gated
     /// warning logic so a quiet/solo session reads ~0 instead of the lifetime
@@ -883,7 +893,7 @@ impl VoiceManager {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
             }
             let rtt = self.sfu_connection.as_ref().map_or(0.0, |c| c.rtt_ms());
-            let underrun_5s = self.windowed_underrun(stats.underrun_count, stats.incoming_streams);
+            let underrun_5s = self.windowed_late_underruns(&stats);
 
             // Diagnostic capture: persist the same stats to the log so a
             // user-uploaded repro shows the sender/receiver-side timeline.
@@ -1053,5 +1063,35 @@ impl Drop for VoiceManager {
                 mello_sys::mello_set_log_callback(None, std::ptr::null_mut());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats() -> mello_sys::MelloDebugStats {
+        // SAFETY: MelloDebugStats is a plain C struct; all-zero is valid.
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// Late audio must reach the windowed health. Once a stream conceals with
+    /// PLC, `underrun_count` stops moving; `rx_late_underruns` keeps counting.
+    #[test]
+    fn windowed_health_reads_late_playout_underruns() {
+        let (event_tx, _events) = std_mpsc::channel();
+        let mut voice = VoiceManager::without_audio(event_tx);
+
+        let mut s = stats();
+        s.incoming_streams = 1;
+        s.underrun_count = 125; // callbacks before the stream primed
+        assert_eq!(
+            voice.windowed_late_underruns(&s),
+            0,
+            "the first sample seeds the baseline"
+        );
+
+        s.rx_late_underruns = 7;
+        assert_eq!(voice.windowed_late_underruns(&s), 7);
     }
 }

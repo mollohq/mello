@@ -125,6 +125,7 @@ pub fn measure(
         n(u64::from(rx.rx_conceal_fill_plc)),
     );
     m.insert("underruns".into(), Some(f64::from(rx.underrun_count)));
+    m.insert("late_underruns".into(), n(u64::from(rx.rx_late_underruns)));
     m.insert("decode_errors".into(), n(u64::from(rx.rx_decode_errors)));
     m.insert("packets_sent".into(), n(run.shim.sent));
     m.insert("packets_fed".into(), n(run.packets_fed));
