@@ -28,8 +28,10 @@ The target is Discord-grade continuity and intelligibility under realistic jitte
 **Receive and playout path:**
 ```
 ┌──────────────┐    ┌──────────────────────────┐    ┌──────────────┐
-│ Transport    │───▶│ Jitter + Decode + PLC/FEC│───▶│ Audio Output │
-│ P2P or SFU   │    │ per-peer mix + AEC render│    │ WASAPI/CA    │
+│ Transport    │───▶│ NetEQ per peer: decode,  │───▶│ Audio Output │
+│ RTP or P2P   │    │ FEC, PLC, time stretch;  │    │ WASAPI/CA    │
+│ frames       │    │ stereo mixer + limiter;  │    │ (stereo)     │
+│              │    │ AEC render reference     │    │              │
 └──────────────┘    └──────────────────────────┘    └──────────────┘
 ```
 
@@ -58,7 +60,7 @@ static constexpr int CHANNELS = 1;
 
 ## 3. AudioPipeline (libmello)
 
-`AudioPipeline` is the voice orchestrator. It owns capture/playback devices, DSP chain, per-peer decode state, jitter buffers, and clip buffering.
+`AudioPipeline` is the voice orchestrator. It owns capture/playback devices, the DSP chain, the receive and playout engine (`VoicePlayout`: one NetEQ per peer and the mixer, section 5), and clip buffering.
 
 ```cpp
 // libmello/src/audio/audio_pipeline.hpp
@@ -81,13 +83,20 @@ public:
 
     int  get_packet(uint8_t* buffer, int buffer_size);
     void set_packet_sink(PacketSink sink);  // §4.5
-    void feed_packet(const char* peer_id, const uint8_t* data, int size);
+    void feed_packet(const char* peer_id, const uint8_t* data, int size);  // voice frame, §4.2
+    void feed_rtp(const char* peer_id, const uint8_t* packet, int size, int64_t receive_time_ms);
+    void remove_peer(const char* peer_id);
+    void set_peer_volume(const char* peer_id, float gain);  // §5.3
+    void set_peer_pan(const char* peer_id, float pan);
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
-    void process_and_encode_frame(int16_t* frame);
-    size_t mix_output(int16_t* out, size_t count);
+    void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
+    size_t mix_output(int16_t* out, size_t count, uint32_t channels);  // device thread
+    void render_frame();                                               // one 10 ms mix
     void clear_remote_streams();
+
+    std::unique_ptr<VoicePlayout> playout_;  // NetEQ per peer + AudioMixerImpl
 };
 ```
 
@@ -165,11 +174,19 @@ This design was validated with:
 
 ### 4.2 Packet Format
 
-For endpoint packet API (`mello_voice_get_packet` / `mello_voice_feed_packet`), payload is prefixed by a 4-byte little-endian sequence number:
+`mello_voice_get_packet` prefixes the Opus payload with a 4-byte little-endian sequence number:
 
 ```
 [seq0 seq1 seq2 seq3][opus_payload...]
 ```
+
+The voice frame of the P2P data channel and of the mic test (`mello_voice_feed_packet`) adds the RTP timestamp, so NetEQ gets real media time on every path:
+
+```
+[seq0 seq1 seq2 seq3][ts0 ts1 ts2 ts3][opus_payload...]     (both little-endian)
+```
+
+mello-core builds it from `mello_voice_get_packet_with_timestamp` (`voice/frame.rs`). A peer that runs a build before stage 3 sends the 4-byte form, which this receiver reads as a wrong timestamp; P2P is the backup path and both ends update together.
 
 RTP timestamp (media time):
 
@@ -179,14 +196,13 @@ RTP timestamp (media time):
 - In SFU RTP mode, the packet sink (§4.5) calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)` with the Opus payload, without the 4-byte sequence. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
 - `mello_peer_send_audio()` does not advance the RTP timestamp (libdatachannel takes it only from a `FrameInfo`). No caller in the repo uses it.
 - Stream game audio uses the same packetizer. Its capture clock counts every 20 ms frame (`ts_us`); mello-core converts it to 48 kHz samples for `mello_peer_send_audio_frame`.
-- The P2P data-channel path keeps the 4-byte header only. The receiver does not use the RTP timestamp yet.
+- The P2P data-channel path carries the voice frame above: sequence and media time.
 
-Receive side:
+Receive side (section 5.1):
 
-- The SFU path writes the 16-bit RTP sequence into the 4-byte header, with the high bytes zero (`peer_connection.cpp`).
-- The P2P path carries the 32-bit sender counter.
-- The jitter buffer reads only the low 16 bits and extends them to a running 64-bit sequence (`SequenceUnwrapper`). Each value goes to the extended position nearest to the previous value.
-- All timeline comparisons use the extended sequence. The RTP wrap from 65535 to 0 is one ordinary step: no late drop, no reset.
+- The SFU path gives the whole RTP packet to `mello_voice_feed_rtp`: NetEQ sees the real 16-bit sequence, the timestamp, the payload type and the SSRC.
+- The P2P and mic test paths give the voice frame to `mello_voice_feed_packet`. libmello takes the low 16 bits of the sequence and the timestamp as the RTP fields.
+- NetEQ handles the 16-bit sequence wrap and the 32-bit timestamp wrap. The wrap is one ordinary step: no discard, no reset (voice gate `wrap`).
 
 ### 4.3 Push-to-Talk Mode
 
@@ -223,75 +239,108 @@ Who uses which path:
 |---|---|---|
 | SFU voice | Packet sink -> `mello_peer_send_audio_frame` | Audio capture thread |
 | P2P mesh | `get_packet` on the 20 ms voice tick -> data channel | Command loop |
-| Mic test (loopback), no call | `get_packet` on the voice tick -> `mello_voice_feed_packet` | Command loop |
-| Mic test in an SFU call | The packet sink also feeds the frame as the `loopback` peer | Audio capture thread |
+| Mic test (loopback), no call | `get_packet` on the voice tick -> voice frame -> `mello_voice_feed_packet` | Command loop |
+| Mic test in an SFU call | The packet sink also feeds the voice frame as the `loopback` peer | Audio capture thread |
 | Voice quality gate | Packet sink collects the trace (§9) | Caller thread |
 
 mello-core details are in §7.3. The thread rules for the sink are in spec 03 §7.
 
 ---
 
-## 5. Receive, Jitter, and Playout
+## 5. Receive, NetEQ, and Playout
 
-Each remote sender gets isolated decode state:
+Received voice plays through WebRTC NetEQ (M131), one instance per remote peer, and the WebRTC `AudioMixerImpl` over them (plans/voice-quality.md stage 3). NetEQ owns decode, in-band FEC, concealment (expand), comfort noise, and time stretching (accelerate, preemptive expand). The custom jitter buffer, the per-peer Opus decoders and the fill PLC are gone.
 
-- `JitterBuffer`
-- `OpusDec`
-- decode priming + last sequence tracking
-- per-peer PCM ring buffer
-
-`JitterBuffer::pop()` returns timeline state, not only payload:
-
-```cpp
-enum class JitterPopResult {
-    None,    // not ready yet
-    Packet,  // packet available
-    Missing, // packet considered lost; conceal
-};
+```
+SFU RTP packet ──▶ mello_voice_feed_rtp ──┐
+P2P / mic test frame ──▶ mello_voice_feed_packet ──┤  (network, command loop, capture threads)
+                                          ▼
+                    VoicePlayout: peer map ──▶ NetEq per peer (InsertPacket)
+                                                   │
+device thread: mix_output ──▶ render_frame ──▶ AudioMixerImpl::Mix (GetAudio per peer, 10 ms)
+                                   │              volume, pan, output gain, limiter (stereo)
+                                   ├──▶ deafen, clip tap, clip playback, AEC render reference
+                                   ▼
+                              output ring (10 ms) ──▶ device callback (any size, 1 or 2 channels)
 ```
 
-Current adaptive bounds:
+Code: `libmello/src/audio/voice_playout.{hpp,cpp}` (NetEQ, controller, mixer), `audio_pipeline.cpp` (`feed_packet`, `feed_rtp`, `render_frame`, `mix_output`).
 
-- target delay defaults around `60ms`
-- min/max delay guardrails `20ms..200ms`
-- bounded per-callback drain to avoid lock monopolization
+### 5.1 Receive Edges
 
-The target delay follows the interarrival jitter on the media clock (RFC 3550 §6.4.1): arrival spacing against 20 ms per sequence step. Lost packets and an outage add no jitter.
+| Path | Input | Call | Thread |
+|---|---|---|---|
+| SFU voice | The whole RTP packet from the track (`mello_peer_set_audio_rtp_callback`) | `mello_voice_feed_rtp(ctx, sender, rtp, size, -1)` | libdatachannel track thread |
+| SFU voice, fallback | `SfuEvent::AudioRtp` from the event queue, only while the direct sink is not set | `mello_voice_feed_rtp` | Command loop |
+| P2P mesh | The voice frame from the data channel (section 4.2) | `mello_voice_feed_packet` | Command loop |
+| Mic test | The voice frame of the local encoder | `mello_voice_feed_packet` as peer `loopback` | Command loop, or the capture thread in an SFU call |
 
-A packet older than the playout point is a late drop, also when the buffer is empty. On an empty buffer, a packet more than `JITTER_MAX_PACKETS` (1 s) behind the playout point, or more than 1000 ahead, starts a new stream (reset): a sender restart or a track re-wire.
+- `feed_rtp` parses the RTP header (RFC 3550: CSRC list, header extension, padding). Payload types other than 111 (Opus) and 13 (CN) count as rejected and do not reach NetEQ.
+- `feed_packet` builds the RTP fields from the 8-byte voice frame header: payload type 111, the low 16 bits of the sequence, the timestamp, SSRC 0. Both paths enter the same NetEQ code.
+- Receive time: `receive_time_ms < 0` stamps the packet with `util::steady_now_ms()`: the steady clock in production, the test clock under the voice gate. NetEQ times arrivals with its own tick (one per `GetAudio`) and uses the receive time only for its statistics.
+- NetEQ's clock is a `webrtc::Clock` subclass on `util::steady_now_ms()`, never `Clock::GetRealTimeClock()`, so the test clock drives it.
+- The legacy audio track callback (`mello_peer_set_audio_track_callback`) still delivers the Opus payload behind a 4-byte sequence header. Stream audio (P2P) and tools use it. An SFU stream viewer strips the RTP header in mello-core (`feed_viewer_audio_rtp`).
 
-Long gap (outage): a gap of more lost packets than the jitter buffer holds (`JITTER_RESYNC_GAP_PACKETS` = `JITTER_MAX_PACKETS`, 1 s) is not concealed frame by frame.
+### 5.2 NetEQ per Peer
 
-- When the caller's playout is starved (decoded buffer empty, PLC fill running), the fill already covered the gap. The buffer jumps to the first buffered packet at once.
-- Otherwise the buffer reports at most `JITTER_RESYNC_CONCEAL_FRAMES` (3) `Missing` events, then jumps.
-- `resyncs()` counts the jumps. Playout continues from fresh audio, so the delay returns to its value before the outage.
+- A peer's NetEQ is created on its first packet: 48 kHz, `enable_muted_state` on, payload 111 = `opus/48000/2` with `stereo=0` (mono decode), payload 13 = `CN/48000`. The decoder factory has Opus only.
+- One `webrtc::Environment` per pipeline carries the clock and a mello `FieldTrialsView`. It answers one key, `WebRTC-Audio-NetEqDelayManagerConfig`, with `VoicePlayout::default_delay_manager_config()` (the tuning in section 5.5).
+- A new SSRC for the same peer rebuilds its NetEQ (the SFU reassigns SSRCs per receiver slot). A timestamp more than 2 s behind the newest one also rebuilds it (a sender restart; P2P keeps SSRC 0). `rx_stream_resets` counts both.
+- Insert runs on the inserting thread. `NetEqImpl` locks itself, so an insert and the device thread's `GetAudio` may overlap. The peer map has its own mutex, which the device thread never takes. Thread and lock rules: spec 03 section 7.
+- Lifetime: `clear_remote_streams` (voice leave, `mello_voice_stop_capture`) destroys every NetEQ. `mello_voice_remove_peer` destroys one (mello-core calls it when a member leaves). Removal takes the source out of the mixer first and waits for a running mix. Lifetime counters of destroyed instances stay in the totals.
 
-### 5.1 Concealment Policy
+**Talk-spurt controller.** NetEQ runs its own `DecisionLogic` inside a mello `NetEqController` (`TalkSpurtController`, through NetEQ's public controller factory API, no upstream edit). It changes two decisions. Both come from voice gate measurements: there, NetEQ's time stretching of speech cost more PESQ MOS than the latency it saved. With time stretching off, NetEQ matched the stage 2 MOS on every profile; with upstream decisions it lost 0.15 to 0.3.
 
-Rule: one concealment frame per lost frame. A lost 20 ms frame produces 20 ms of concealed audio, never 40.
+The first change handles one property of the mello sender: the speech gate sends nothing while it is closed, and when it opens it sends the pre-roll (section 4.1, up to 100 ms) and the current frame at once. So the first packets of a talk spurt arrive up to about 100 ms late against their media time, by design.
 
-Every loss reaches the playout loop as one `Missing` event from the jitter buffer. `pop()` reports the extended sequence of the lost packet. On `Missing`, when the decoder is primed:
+| Without the controller (measured, voice gate) | With it |
+|---|---|
+| NetEQ learns the pre-roll lateness as network jitter: target delay 100 to 180 ms on every profile with a speech gate, for seconds after each spurt start. | The packets that arrive in the same 10 ms tick as a spurt start stay out of NetEQ's arrival statistics. |
+| NetEQ time-compresses the extra 100 ms during the following speech (accelerate). PESQ: about -0.3 MOS on `clean`. | The controller holds a minimum delay equal to the spurt's pre-roll lateness, so the spurt plays at its natural delay. The next gate gap removes it at no cost: the next spurt measures its own lateness. |
 
-1. If the jitter buffer holds the next packet (`peek(seq + 1)`), conceal the frame with Opus in-band `decode_fec` from that packet.
-2. Else conceal it with `decode_plc`.
-3. Record the lost sequence as played (`last_decoded_seq_`).
+- Spurt start: the first packet, or a packet whose RTP timestamp moved more than 2 frames further than its sequence number (the sender skipped frames).
+- Lateness: how late the spurt's first packet arrived against the schedule of the earliest-scheduled packet in the first 200 ms of the spurt. The hold follows it from 0 as the pre-roll arrives; a spurt never inherits the previous spurt's hold. Below 40 ms it is network jitter, and no delay is held. At most 300 ms.
+- A stream with no gate gap (push-to-talk) is one spurt.
 
-The next packet then decodes with no gap and conceals nothing. A gap at decode means the jitter buffer moved its timeline (a reset on a sequence jump). The playout loop conceals nothing for it. A packet that fails to decode gets one PLC frame.
+The second change: no preemptive expand for 5 s after a target jump. A stall, a jitter spike or reordered packets make the delay manager raise its target in one step (20 ms or more). Upstream NetEQ then stretches the speech to fill the buffer up to the new target, and soon after compresses it again when the target decays. The controller does not stretch the speech in those 5 s; real lateness still fills the buffer, through expand. The fill at stream start and slow target changes are NetEQ's own.
 
-Counters (`MelloDebugStats`): `rx_conceal_gap_fec` (FEC for a lost packet), `rx_conceal_missing_plc` (PLC for a lost packet), `rx_conceal_gap_plc` (PLC for an undecodable packet).
+Network jitter, loss, outages and clock drift are otherwise NetEQ's own decisions.
 
-### 5.2 Mix and Render
+### 5.3 Mixer and Output
 
-Mixed output applies:
+- One `AudioMixer::Source` per peer. `GetAudioFrameWithInfo` calls `NetEq::GetAudio` for 10 ms and writes a stereo frame. It returns muted when NetEQ is in muted state.
+- Per-peer volume (`mello_voice_set_peer_volume`, 0..2, default 1) times the output volume (`mello_voice_set_output_volume`) applies in the source, before the mixer's limiter. Above 1.0 a loud peer can clip; the limiter acts only on a sum of two or more peers.
+- Pan (`mello_voice_set_peer_pan`, -1..+1, default 0) is a balance law: the far channel fades, the near channel stays at unity. Centre is unity on both channels, so a mono downmix is the decoded signal.
+- `AudioMixerImpl::Mix(2, ...)` sums the peers with the AGC2 limiter of its `FrameCombiner` (one peer: no limiter). The mix is 10 ms stereo at 48 kHz.
+- `render_frame` (device thread) then: deafen zeroes the mix (NetEQ keeps running, so the voice is back at once); the clip buffer records the mono downmix plus the local mic; clip playback adds to both channels; the AEC render reference and the echo suppressor's far end get the mono downmix of what plays. A mix with no peer audio and no clip feeds nothing to the AEC.
+- The output ring holds less than one 10 ms frame. `mix_output` fills the device callback from it, with the backend's channel count: 2 on WASAPI and plain CoreAudio, 1 on VPIO, RemoteIO and the test backend (the downmix).
+- Stream-delay hint (spec 03 section 4): device output latency + device input latency + the output ring. NetEQ's buffer is before the render reference, so it is not in the echo path.
 
-- per-peer summing with saturation
-- output gain
-- optional clip playback overlay
-- AEC render reference feed (`process_render`) when far-end audio exists
+### 5.4 Telemetry
 
-The render feed accumulates variable-size playback callbacks into 10 ms APM chunks; tails are carried, not dropped. The stream-delay hint refreshes from device latencies plus jitter depth on init and every device or backend switch.
+`MelloDebugStats` (append-only). Delay fields are means over the current peers; counters are totals since the context started, over every peer.
 
-On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state immediately to avoid stale PLC artifacts.
+| Field | Source |
+|---|---|
+| `pipeline_delay_ms` | NetEQ `FilteredCurrentDelayMs` + the output ring. 0 with no peer. Not `GetPlayoutTimestamp`: NetEQ reports none during comfort noise. |
+| `rx_target_delay_ms`, `rx_filtered_delay_ms`, `rx_buffer_ms`, `rx_output_ring_ms` | NetEQ `TargetDelayMs` (includes the spurt hold), `FilteredCurrentDelayMs`, packet + sync buffer, the output ring |
+| `rx_total_samples_received` .. `rx_interruption_duration_ms` | `NetEqLifetimeStatistics` |
+| `rx_buffer_flushes` | NetEQ packet buffer flushes |
+| `rx_packets_inserted`, `rx_insert_errors`, `rx_packets_rejected`, `rx_stream_resets` | Engine counters |
+| `rx_talk_spurts`, `rx_spurt_hold_ms` | Talk-spurt controller |
+| `rx_late_underruns` | 10 ms frames in which a peer played voice expand while at least one 20 ms packet waited in its buffer (late audio). A talk pause leaves the buffer empty and does not count. |
+| `underrun_count` | 10 ms mixes in which no peer produced audio (also the muted state of a silent peer) |
+| `rx_decode_errors` | NetEQ `GetAudio` failures |
+| `rx_jitter_dropped_late`, `rx_jitter_resets`, `rx_jitter_target_delay_ms`, `rx_playout_buffer_ms` | Kept for the ABI: `rx_packets_discarded`, `rx_stream_resets + rx_buffer_flushes`, `rx_target_delay_ms`, `rx_buffer_ms` |
+| `rx_frames_decoded`, `rx_conceal_*`, `rx_jitter_missing`, `rx_jitter_dropped_overflow`, `rx_jitter_buffered_packets` | 0: no NetEQ equivalent |
+
+### 5.5 Concealment and Delay Policy
+
+- One timeline: NetEQ produces exactly 10 ms per `GetAudio`. A lost frame is concealed (expand) or repaired from the next packet's in-band FEC once, on the timeline. A loss cannot add delay.
+- Delay follows the network both ways: the delay manager's target rises under jitter, and accelerate brings the buffer back down when the target falls. Preemptive expand fills a buffer that runs low.
+- Delay manager tuning (`WebRTC-Audio-NetEqDelayManagerConfig`): `forget_factor:0.6,reorder_forget_factor:0.98` (`VoicePlayout::default_delay_manager_config()`). Upstream defaults take about 26 s to forget a 3 s jitter burst; the gate requires 5 s. The measured sweep is in `TESTING.md`.
+- Clock drift: NetEQ times playout by the device's `GetAudio` calls and removes the sender's excess with accelerate (voice gate `drift`: growth within ±20 ms over 10 minutes).
+- Long outage: NetEQ expands, mutes, and restarts from the first new packet. No backlog plays.
 
 ---
 
@@ -301,8 +350,8 @@ On voice leave, `stop_capture()` must clear all remote decode/jitter/ring state 
 
 - capture/playback initialize from device mix format
 - supports float/int16 device formats
-- performs explicit downmix/resample to internal 48k mono int16 contract
-- performs reverse conversion for playout to device-native format/channels
+- capture: downmix to mono, then `StreamResampler` (WebRTC `PushSincResampler`, 10 ms blocks) to the internal 48 kHz mono int16 contract
+- playback: the voice mix is stereo; `StreamResampler` converts 48 kHz to the device rate per channel. Mono goes to every device channel, stereo to the first two (a surround device gets silence on the rest), and a mono device gets the downmix
 - reports `GetStreamLatency` plus device period as the APM delay-hint source, cached at init; query failure degrades to 0 and never fails init
 
 ### 6.2 macOS (CoreAudio)
@@ -353,7 +402,7 @@ The command loop runs every command and the 20 ms voice tick on one task. A comm
 | Direction | Path | Thread |
 |---|---|---|
 | Send | libmello packet sink -> `SfuPacketSink` -> `AudioSendTarget::send` -> `mello_peer_send_audio_frame` | Audio capture thread |
-| Receive | Native track callback -> `mello_voice_feed_packet` (`set_direct_voice_sink`) | libdatachannel thread |
+| Receive | Native RTP callback (`mello_peer_set_audio_rtp_callback`) -> `mello_voice_feed_rtp` (`set_direct_voice_sink`) | libdatachannel thread |
 
 Send path objects (`mello-core/src/voice/send_sink.rs`, `transport/sfu_connection.rs`):
 
@@ -393,7 +442,22 @@ int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size)
 int  mello_voice_get_packet_with_timestamp(MelloContext* ctx, uint8_t* buffer, int buffer_size, uint32_t* timestamp);
 MelloResult mello_voice_set_packet_sink(MelloContext* ctx, MelloPacketSinkCallback callback, void* user_data);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);
+MelloResult mello_voice_feed_rtp(MelloContext* ctx, const char* peer_id, const uint8_t* rtp_packet, int size, int64_t receive_time_ms);
+void  mello_voice_remove_peer(MelloContext* ctx, const char* peer_id);
+void  mello_voice_set_peer_volume(MelloContext* ctx, const char* peer_id, float gain);
+void  mello_voice_set_peer_pan(MelloContext* ctx, const char* peer_id, float pan);
+float mello_voice_get_peer_volume(MelloContext* ctx, const char* peer_id);
+float mello_voice_get_peer_pan(MelloContext* ctx, const char* peer_id);
+void  mello_peer_set_audio_rtp_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data);
 ```
+
+Controls added with the NetEQ playout (section 5.3):
+
+| Control | C API | mello-core | Client |
+|---|---|---|---|
+| Per-member volume | `mello_voice_set_peer_volume` | `Command::SetPeerVolume { peer_id, volume }` -> `VoiceManager::set_peer_volume` | Not exposed yet (member context menu, follow-up) |
+| Per-member pan | `mello_voice_set_peer_pan` | none (centre) | none |
+| Peer left | `mello_voice_remove_peer` | `VoiceManager::on_member_left`, SFU `MemberLeft` | - |
 
 All user-facing voice toggles in `client` and `mello-core` must map to these runtime controls (no dead settings).
 
@@ -420,13 +484,14 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
 
 - drives the real libmello voice path device-free through the test hooks in
   `mello.h` (`MELLO_AUDIO_BACKEND=test`, `mello_voice_test_pull_output`,
-  `mello_test_set_clock_ms`, the `rx_*` fields of `MelloDebugStats`)
+  `mello_test_set_clock_ms`, the NetEQ `rx_*` fields of `MelloDebugStats`)
 - the sender collects its packets with a packet sink (§4.5) and sends each
   one at its encode time, as the SFU path does. `--send-tick` replays the
   20 ms voice tick of the command loop instead, for comparison
-- an impairment shim between sender and receiver rewrites the packet header
-  as the SFU path does and applies loss, jitter, stalls, reorder, outage,
-  clock drift and the RTP sequence wrap
+- an impairment shim between sender and receiver builds the RTP packet as
+  the SFU path forwards it (16-bit sequence, timestamp, SSRC) and applies
+  loss, jitter, stalls, reorder, outage, clock drift and the RTP sequence
+  wrap. The receiver takes it with `mello_voice_feed_rtp`
 - reports MOS-LQO (PESQ wideband), playout delay over time, concealment
   frames per lost frame, receiver drops and dropouts, with the delta against
   `benchmarks/baselines/voice/baseline-2.9.json`. See `TESTING.md`.
@@ -438,20 +503,24 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
 ```
 libmello/src/audio/
 ├── audio_pipeline.hpp / .cpp
+├── voice_playout.hpp / .cpp    # NetEQ per peer, talk-spurt controller, mixer (§5), C++20
+├── stream_resampler.hpp / .cpp # PushSincResampler for the WASAPI edges (§6.1), C++20
 ├── audio_capture.hpp / playback.hpp
 ├── capture_wasapi.hpp / .cpp
 ├── playback_wasapi.hpp / .cpp
 ├── capture_coreaudio.cpp
 ├── playback_coreaudio.cpp
-├── jitter_buffer.hpp / .cpp
-├── opus_codec.hpp / .cpp
+├── opus_codec.hpp / .cpp        # Opus encoder (voice), decoder (stream audio)
 ├── noise_suppressor.hpp / .cpp
 ├── echo_canceller.hpp / .cpp
 ├── speech_expander.hpp        # post-AGC downward expander (§4.4)
 └── vad.hpp / .cpp
 
+libmello/third_party/webrtc-neteq/  # vendored NetEQ, Opus decoder, CNG, mixer (M131)
+
 mello-core/src/
 ├── voice/mod.rs
+├── voice/frame.rs              # P2P and mic test voice frame (§4.2)
 ├── voice/send_sink.rs          # SFU packet sink on the capture thread (§7.3)
 └── transport/sfu_connection.rs
 
@@ -481,6 +550,6 @@ Audio pipeline work for this milestone is complete when:
 Two changes keep audio health decisions accurate over long-running sessions:
 
 - **Windowed underrun rate.** The pipeline keeps the raw lifetime `underrun_count` (monotonic, shown in the debug panel for reference) **and** a rolling ~5s windowed underrun count used for health decisions and the `audio_stats` log line. The lifetime counter climbs forever and is useless for "is audio bad *right now*"; the windowed value reflects current playback health.
-- **Late playout is the health signal.** `underrun_count` counts only playback callbacks with no remote audio at all. Once a stream is primed, the mixer fills a short buffer with PLC and always returns audio, so that counter stops. `rx_late_underruns` counts callbacks in which a primed stream ran short while its jitter buffer held packets for it (a stall burst, a loss waiting for `Missing`, a talk-start hold). A talk pause with an empty jitter buffer does not count. The mello-core windowed health and the libmello sustained-underrun warning read `rx_late_underruns`. Limit: without receive timestamps the hold at a talk start also counts (about 130 callbacks in the 93 s clean gate profile).
+- **Late playout is the health signal.** `underrun_count` counts 10 ms mixes in which no peer produced audio (before the first packet, and while a silent peer's NetEQ is in muted state). `rx_late_underruns` counts 10 ms frames in which a peer played voice concealment (NetEQ expand) while at least one packet waited in its NetEQ buffer: a stall, or a loss with later packets present. A talk pause leaves the buffer empty and does not count. The mello-core windowed health and the libmello sustained-late-playout warning read `rx_late_underruns`. With receive timestamps in NetEQ, the talk-start hold no longer counts (0 in the clean gate profile).
 - **Renegotiation-tolerant track reads (SFU side).** The SFU's consecutive-EOF track cutoff is raised/paused during active renegotiation so transient read errors don't tear down a healthy inbound audio track. See [SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md).
 

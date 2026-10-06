@@ -38,9 +38,9 @@ libmello/
 │   │   ├── echo_canceller.hpp/cpp  # WebRTC AEC3 + AGC2 (APM)
 │   │   ├── playback_wasapi.hpp/cpp # Windows audio playback
 │   │   ├── processing.hpp/cpp      # RNNoise + Silero VAD wrapper
-│   │   ├── opus_encoder.hpp/cpp
-│   │   ├── opus_decoder.hpp/cpp
-│   │   └── jitter_buffer.hpp       # Audio jitter buffer
+│   │   ├── opus_codec.hpp/cpp     # Opus encoder (voice), decoder (stream audio)
+│   │   ├── voice_playout.hpp/cpp   # NetEQ per peer + AudioMixerImpl (C++20 island)
+│   │   └── stream_resampler.hpp/cpp # PushSincResampler for the WASAPI edges
 │   │
 │   ├── video/
 │   │   ├── video_pipeline.hpp/cpp
@@ -105,7 +105,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | Group | Key functions | Notes |
 |-------|---------------|-------|
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
-| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet` |
+| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet`, `feed_rtp`, `remove_peer`, `set_peer_volume`, `set_peer_pan` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet`. Received audio plays through one NetEQ per peer (spec 10 section 5) |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
 | **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
@@ -174,10 +174,15 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 │                                          VAD Callback    Packets Out   │
 │                                                                         │
 │  PLAYBACK PATH:                                                         │
-│  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐                 │
-│  │ Packets │──▶│  Opus   │──▶│ Jitter  │──▶│ WASAPI  │                 │
-│  │   In    │   │ Decode  │   │ Buffer  │   │ Playback│                 │
-│  └─────────┘   └─────────┘   └─────────┘   └─────────┘                 │
+│  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   │
+│  │RTP / P2P│──▶│ NetEQ   │──▶│  Mixer  │──▶│ Output  │──▶│ WASAPI  │   │
+│  │ frames  │   │per peer │   │(stereo, │   │  ring   │   │ Playback│   │
+│  │   In    │   │decode,  │   │ limiter)│   │ 10 ms → │   │ (sinc   │   │
+│  │         │   │FEC, PLC │   │         │   │ device  │   │resample)│   │
+│  └─────────┘   └─────────┘   └─────────┘   └─────────┘   └─────────┘   │
+│                                  │                                      │
+│                                  ▼                                      │
+│                          AEC render reference                           │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
@@ -186,15 +191,19 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 
 - **WebRTC APM v2.1 / M131 (AEC3 + AGC2):** Runs first on the raw mic after capture (AEC needs the speaker reference from mixed playback). The vendored tree was upgraded from v1.3/M88; `residual_echo_detector` and `voice_detection` knobs are gone, the APM handle is ref-counted, and transient suppression is inert (backend removed upstream). Optional WebRTC NS and HPF remain runtime-testable.
 - **macOS VPIO duplex alternative:** When the echo toggle is on, capture and playback share one VoiceProcessingIO unit whose output bus carries our mix as Apple's AEC reference. Our APM capture pass is skipped on this path to avoid double processing; RNNoise and VAD run unchanged. Toggle off selects the plain HAL pair plus software AEC. Input-only VPIO never initializes; only the combined unit works.
-- **Stream-delay hints:** `AudioPipeline` feeds measured device latency plus jitter depth into APM (`set_stream_delay_ms`) on init and every device switch, so the delay estimator starts converged. CoreAudio sums unit latency, safety offset, and buffer size. WASAPI sums `GetStreamLatency` and the device period. Both legs sum because the hint is render-to-capture delay. The hint clamps to 0..500 ms. A failed query degrades to 0 and never fails init. A Windows ERLE-harness run confirmed the sum against 0 and +100 ms controls.
+- **Stream-delay hints:** `AudioPipeline` feeds measured device latency plus the output ring depth into APM (`set_stream_delay_ms`) on init and every device switch, so the delay estimator starts converged. NetEQ's buffer is not in the sum: the render reference is the mixer output, after NetEQ. CoreAudio sums unit latency, safety offset, and buffer size. WASAPI sums `GetStreamLatency` and the device period. Both legs sum because the hint is render-to-capture delay. The hint clamps to 0..500 ms. A failed query degrades to 0 and never fails init. A Windows ERLE-harness run confirmed the sum against 0 and +100 ms controls.
 - **Neural residual-echo suppressor (flag-off):** A 1.3 M-parameter GRU mask model (MS AEC-Challenge 2022 baseline, ONNX) runs post-AEC on the software path: 48↔16 kHz FIR resampling, 320-point DFT front-end matching training, far-end reference ring, silence bypass. Settings flag `echo_suppression`, default off; missing model degrades to passthrough. Budgets: ≤10 ms inference, ≤20 MB RAM, ≤6 MB model file (ships 5.0 MB fp32).
 - **Render reference accumulator:** Playback callbacks arrive in device-sized chunks (~512 frames), not APM 10 ms chunks. The render feed accumulates to 480-sample units instead of dropping tails, which kept AEC misaligned. Capture buffers are sized defensively (8192 frames) with a drop-and-log guard: VPIO has delivered 960-frame slices against a reported max of 512.
 - **Adaptive speech gate:** A cheap RMS/noise-floor gate runs before neural work. It keeps a short pre-roll and hangover windows so speech starts/ends are not clipped.
 - **Downward expander (AGC pump control):** `SpeechExpander` runs after AGC2, before encode. A quiet mic forces AGC2 to a large gain (field: ~+23 dB), which then blasts the noise floor in speech gaps and transmits crackle. AGC config cannot separate the speech gain from the floor gain. The expander attenuates the frame toward a floor gain when the raw Silero probability is below threshold (not `is_speaking()`, which latches through the gaps), with fast attack and smoothed release. AGC2 also starts at `initial_gain_db = 0` (not the M131 default +15). See spec 10 §4.4.
 - **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. It remains the default quality path, but now only runs during active speech/pre-roll/hangover windows.
 - **Silero VAD:** ONNX-based neural VAD with hysteresis. It confirms candidate speech windows instead of running as the only gate for every frame forever.
-- **Opus at 64kbps stereo:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz).
-- **Jitter buffer:** Adaptive, compensates for P2P network jitter. Uses PLC (packet loss concealment) via Opus decoder when packets are late.
+- **Opus at 64kbps mono:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz). In-band FEC and DTX on.
+- **NetEQ playout (WebRTC M131):** One `NetEq` per remote peer decodes, conceals (expand, in-band FEC), plays comfort noise, and time-stretches (accelerate, preemptive expand) to follow network jitter and clock drift. It replaces the custom jitter buffer, the per-peer Opus decoders and the fill PLC. The vendored code lives in the overlay `third_party/webrtc-neteq/` and builds as `webrtc_neteq` (option `MELLO_WEBRTC_NETEQ`, ON on every platform). Spec 10 section 5.
+- **Delay manager tuning:** NetEQ reads the field trial `WebRTC-Audio-NetEqDelayManagerConfig` from a mello `FieldTrialsView`. The shipped value shortens the memory of a jitter burst so the delay returns within 5 s (upstream: 26 s). `VoicePlayout::default_delay_manager_config()`.
+- **AudioMixerImpl with limiter:** One mixer `Source` per peer. Volume, pan and output gain apply in the source, before the AGC2 limiter of the mixer. The mix is stereo, 10 ms frames; a small output ring adapts them to the device callback size.
+- **C++20 island:** The NetEQ headers need C++20 and `WIN32_LEAN_AND_MEAN`. Only `voice_playout.cpp` and `stream_resampler.cpp` include them; they build in the object library `mello_playout`, whose objects go into libmello. Their headers have no WebRTC include, so the rest of libmello stays C++17.
+- **Sinc resampling at the WASAPI edges:** `StreamResampler` wraps WebRTC `PushSincResampler` (10 ms blocks, one per channel). It replaces linear interpolation on capture (device rate to 48 kHz mono) and playback (48 kHz to the device rate). CoreAudio and VPIO run at 48 kHz natively.
 
 
 ### 4.1 Ducking Prevention (Windows)
@@ -240,7 +249,7 @@ When `set_playback_device()` or `set_capture_device()` replaces the `AudioPlayba
 
 | Function | Must re-wire | Same wiring as |
 |----------|-------------|----------------|
-| `set_playback_device()` | `playback_->set_render_source(...)` with the `mix_output` lambda | `initialize()` step 9/9 |
+| `set_playback_device()` | `request_stereo_output()` before `initialize()`, then `wire_render_source()` (the `mix_output` lambda with the backend's `render_channels()`) | `initialize()` step 9/9 |
 | `set_capture_device()` | `capture_->start(...)` with the `on_captured_audio` lambda | `start_capture()` |
 | `switch_audio_backend()` (macOS) | **Both** of the above: the duplex unit spans both directions, so capture and playback instances are replaced together | `initialize()` pair setup |
 
@@ -377,7 +386,18 @@ Each P2P connection uses libdatachannel and creates two data channels:
 | What the sink may do | Return fast. Call `mello_peer_send_audio_frame` and `mello_voice_feed_packet`. Read atomics, take short leaf locks, log rarely. |
 | What the sink must not do | Block or wait on the network. Call `mello_voice_set_packet_sink`, or a capture control of the same context (start, stop, inject, push-to-talk, device switch): they take the capture or sink lock and wait for themselves. |
 | Set and clear | Any thread, never from inside the sink. Both wait for a sink call that runs now. After a clear returns, the caller may free `user_data`. |
-| Lock order | `accum_mutex_`, then `packet_sink_mutex_`, then `outgoing_mutex_`. `feed_packet` takes `peer_buffers_mutex_`, which is after `accum_mutex_` also in `stop_capture`. |
+| Lock order | `accum_mutex_`, then `packet_sink_mutex_`, then `outgoing_mutex_`. `feed_packet` takes the `VoicePlayout` peer map mutex, which is after `accum_mutex_` also in `stop_capture`. |
+
+### Voice receive and playout (NetEQ)
+
+| Question | Answer |
+|---|---|
+| Who inserts | The network thread: the libdatachannel track thread calls `mello_voice_feed_rtp` (SFU). The command loop calls `mello_voice_feed_packet` (P2P, mic test). The capture thread calls it for the mic test in an SFU call (inside the packet sink). |
+| Who mixes | The audio device thread, in the render source (`mix_output`). It calls `AudioMixerImpl::Mix`, which calls `NetEq::GetAudio` once per peer every 10 ms. On the test backend: the thread that calls `mello_voice_test_pull_output`. |
+| Locks | `VoicePlayout` guards its peer map with one mutex. The device thread never takes it. `NetEqImpl` locks itself, so an insert and a `GetAudio` on the same peer may overlap. The mixer locks its source list in `Mix`, `AddSource` and `RemoveSource`. |
+| Lock order | The capture lock (`accum_mutex_`), then the peer map mutex, then the mixer lock, then a NetEQ lock. The device thread takes only the mixer lock, then NetEQ locks. Nothing takes them in another order. |
+| Lifetime | A peer's NetEQ is created on its first packet (on the inserting thread) and added to the mixer. Peer removal, a new SSRC, a sender restart and `clear_remote_streams` take it out of the mixer first; `RemoveSource` waits for a `Mix` that runs now. An insert that holds a reference finishes on the old instance, and the last reference frees it. `VoicePlayout` lives as long as `AudioPipeline` and is never replaced. |
+| Output ring | The device thread owns it. It holds less than one 10 ms stereo frame between callbacks. |
 
 `mello_peer_send_audio_frame` is safe on the capture thread while another thread renegotiates the same peer. It holds the peer `mutex_` only to copy the track pointer and never takes `negotiation_mutex_`. Renegotiation holds `negotiation_mutex_` and takes `mutex_` only for short copies. libdatachannel `Track::send` is thread safe and does not block on the network.
 
