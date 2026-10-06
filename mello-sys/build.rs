@@ -65,11 +65,14 @@ fn main() {
 
     let dst = cmake_cfg.build();
 
-    // Link libmello + rnnoise + webrtc_audio_processing (built by cmake)
+    // Link libmello + rnnoise + webrtc_neteq + webrtc_audio_processing (built
+    // by cmake). webrtc_neteq (the voice playout, spec 10 section 5) uses
+    // webrtc_audio_processing, so it comes first for single-pass linkers.
     let lib_dir = dst.join("lib");
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
+    println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
     // In manifest mode, vcpkg installs into the cmake build dir
@@ -360,6 +363,7 @@ fn build_ios(manifest_dir: &str) {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
+    println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
     // Prebuilt static ONNX Runtime xcframework (downloaded + SHA256-verified by the

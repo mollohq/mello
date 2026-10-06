@@ -160,7 +160,14 @@ bool WasapiCapture::start(Callback callback) {
         running_ = false;
         return false;
     }
-    resample_src_pos_ = 0.0;
+    resampler_.reset();
+    if (device_sample_rate_ != sample_rate_) {
+        resampler_ = std::make_unique<StreamResampler>(
+            static_cast<int>(device_sample_rate_), static_cast<int>(sample_rate_), 1);
+        MELLO_LOG_INFO("capture", "sinc resampler %u -> %u Hz, blocks %zu -> %zu frames",
+                       device_sample_rate_, sample_rate_, resampler_->in_block_frames(),
+                       resampler_->out_block_frames());
+    }
     src_mono_f32_.clear();
     resampled_i16_.clear();
 
@@ -225,19 +232,18 @@ void WasapiCapture::capture_thread() {
                         float s = std::clamp(src_mono_f32_[i], -1.0f, 1.0f);
                         resampled_i16_[i] = static_cast<int16_t>(s * 32767.0f);
                     }
-                } else {
-                    const double step =
-                        static_cast<double>(device_sample_rate_) / static_cast<double>(sample_rate_);
-                    while (resample_src_pos_ < static_cast<double>(src_mono_f32_.size())) {
-                        size_t idx = static_cast<size_t>(resample_src_pos_);
-                        double frac = resample_src_pos_ - static_cast<double>(idx);
-                        float s0 = src_mono_f32_[idx];
-                        float s1 = (idx + 1 < src_mono_f32_.size()) ? src_mono_f32_[idx + 1] : s0;
-                        float sample = std::clamp(s0 + static_cast<float>((s1 - s0) * frac), -1.0f, 1.0f);
-                        resampled_i16_.push_back(static_cast<int16_t>(sample * 32767.0f));
-                        resample_src_pos_ += step;
+                } else if (resampler_) {
+                    // Device rate to 48 kHz in whole blocks; a partial block
+                    // waits in the resampler for the next packet.
+                    resampler_->push(src_mono_f32_.data(), frames);
+                    const size_t n = resampler_->available();
+                    resampled_f32_.resize(n);
+                    resampler_->pull(resampled_f32_.data(), n);
+                    resampled_i16_.resize(n);
+                    for (size_t i = 0; i < n; ++i) {
+                        const float v = std::clamp(resampled_f32_[i], -1.0f, 1.0f);
+                        resampled_i16_[i] = static_cast<int16_t>(v * 32767.0f);
                     }
-                    resample_src_pos_ -= static_cast<double>(src_mono_f32_.size());
                 }
 
                 if (!resampled_i16_.empty()) {

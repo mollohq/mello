@@ -475,8 +475,11 @@ void VpioPlaybackAdapter::set_render_source(RenderSourceFn fn) {
 }
 
 void VpioPlaybackAdapter::set_input_channels(uint32_t channels) {
+    // The voice pipeline asks every backend for stereo. The duplex unit stays
+    // mono (render_channels() = 1), and the pipeline mixes down to it.
     if (channels != 1) {
-        MELLO_LOG_WARN("vpio", "voice duplex is mono-only, ignoring channels=%u", channels);
+        MELLO_LOG_INFO("vpio", "voice duplex renders mono (asked for %u channels); the mix is downmixed",
+                       channels);
     }
 }
 

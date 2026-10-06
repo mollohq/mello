@@ -2,10 +2,12 @@
 
 #ifdef _WIN32
 #include "audio_capture.hpp"
+#include "stream_resampler.hpp"
 #include <mmdeviceapi.h>
 #include <audioclient.h>
 #include <thread>
 #include <atomic>
+#include <memory>
 #include <vector>
 
 namespace mello::audio {
@@ -46,9 +48,11 @@ private:
     uint16_t device_bits_per_sample_ = 32;
     int cached_input_latency_ms_ = 0;
 
-    // Source-rate -> 48k stream resampler state
-    double resample_src_pos_ = 0.0;
+    // Device-rate mono -> 48 kHz (sinc), created at start() when the rates
+    // differ. Capture thread only.
+    std::unique_ptr<StreamResampler> resampler_;
     std::vector<float> src_mono_f32_;
+    std::vector<float> resampled_f32_;
     std::vector<int16_t> resampled_i16_;
 
     std::thread thread_;

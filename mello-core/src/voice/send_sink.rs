@@ -20,6 +20,7 @@
 use std::sync::atomic::{AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 
+use super::frame;
 use crate::transport::AudioSendTarget;
 
 /// Opus frame bound for the mic test copy (libmello `MAX_PACKET_SIZE`).
@@ -119,22 +120,22 @@ impl SfuPacketSink {
         }
 
         let loopback = self.loopback_ctx.load(Ordering::Acquire);
-        if !loopback.is_null() && payload.len() <= MAX_OPUS_FRAME {
-            // The receive path takes the 4-byte sequence header of
-            // mello_voice_get_packet.
-            let mut pkt = [0u8; 4 + MAX_OPUS_FRAME];
-            pkt[..4].copy_from_slice(&sequence.to_le_bytes());
-            pkt[4..4 + payload.len()].copy_from_slice(payload);
-            // SAFETY: the context outlives the libmello sink (see
-            // `set_loopback`); feed_packet copies the bytes and does not take
-            // the capture lock that this thread holds.
-            unsafe {
-                mello_sys::mello_voice_feed_packet(
-                    loopback,
-                    c"loopback".as_ptr(),
-                    pkt.as_ptr(),
-                    (4 + payload.len()) as i32,
-                );
+        if !loopback.is_null() {
+            // The receive path takes the voice frame: sequence, RTP
+            // timestamp, Opus (spec 10 section 4.2).
+            let mut pkt = [0u8; frame::HEADER_LEN + MAX_OPUS_FRAME];
+            if let Some(len) = frame::write(sequence, timestamp, payload, &mut pkt) {
+                // SAFETY: the context outlives the libmello sink (see
+                // `set_loopback`); feed_packet copies the bytes and does not
+                // take the capture lock that this thread holds.
+                unsafe {
+                    mello_sys::mello_voice_feed_packet(
+                        loopback,
+                        c"loopback".as_ptr(),
+                        pkt.as_ptr(),
+                        len as i32,
+                    );
+                }
             }
         }
     }

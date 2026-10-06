@@ -351,7 +351,8 @@ impl VoiceMesh {
         signals
     }
 
-    /// Send audio data to all connected peers via unreliable channel
+    /// Send one voice frame (`super::frame`: sequence, RTP timestamp, Opus)
+    /// to all connected peers on the unreliable channel.
     pub fn broadcast_audio(&self, data: &[u8]) {
         for state in self.peers.values() {
             let connected = unsafe { mello_sys::mello_peer_is_connected(state.peer) };
@@ -367,7 +368,8 @@ impl VoiceMesh {
         }
     }
 
-    /// Poll received audio from all peers and feed to the audio pipeline
+    /// Poll received voice frames from all peers and feed them to the
+    /// libmello playout (`mello_voice_feed_packet` takes the frame as sent).
     #[allow(clippy::not_unsafe_ptr_arg_deref)]
     pub fn poll_incoming(&self, ctx: *mut mello_sys::MelloContext) {
         let mut buf = [0u8; 4000];

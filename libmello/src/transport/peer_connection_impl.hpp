@@ -36,6 +36,7 @@ public:
     void set_state_callback(MelloPeerStateCallback cb, void* user_data);
     void set_data_callback(MelloPeerDataCallback cb, void* user_data);
     void set_audio_track_callback(MelloAudioTrackCallback cb, void* user_data);
+    void set_audio_rtp_callback(MelloAudioTrackCallback cb, void* user_data);
 
     bool send_unreliable(const uint8_t* data, int size);
     bool send_reliable(const uint8_t* data, int size);
@@ -196,6 +197,9 @@ private:
     void* data_ud_ = nullptr;
     MelloAudioTrackCallback audio_track_cb_ = nullptr;
     void* audio_track_ud_ = nullptr;
+    // Whole RTP packets for the voice receive path (mello_voice_feed_rtp).
+    MelloAudioTrackCallback audio_rtp_cb_ = nullptr;
+    void* audio_rtp_ud_ = nullptr;
 
     std::atomic<bool> connected_{false};
     std::atomic<bool> unreliable_open_{false};

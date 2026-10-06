@@ -114,12 +114,30 @@ pub enum VideoFeedbackKind {
 
 #[derive(Debug)]
 pub enum SfuEvent {
-    MemberJoined { user_id: String, role: String },
-    MemberLeft { user_id: String, reason: String },
-    MediaPacket { data: Vec<u8> },
-    ControlPacket { data: Vec<u8> },
-    AudioTrackData { sender_id: String, data: Vec<u8> },
-    Disconnected { reason: String },
+    MemberJoined {
+        user_id: String,
+        role: String,
+    },
+    MemberLeft {
+        user_id: String,
+        reason: String,
+    },
+    MediaPacket {
+        data: Vec<u8>,
+    },
+    ControlPacket {
+        data: Vec<u8>,
+    },
+    /// One complete RTP packet (header and Opus payload) of a sender's audio
+    /// track. Voice gives it to `mello_voice_feed_rtp`; a stream viewer takes
+    /// the Opus payload.
+    AudioRtp {
+        sender_id: String,
+        rtp: Vec<u8>,
+    },
+    Disconnected {
+        reason: String,
+    },
 }
 
 type WsStream =
@@ -204,8 +222,8 @@ struct AudioTrackCallbackData {
 /// libmello context pointer used from the native audio track callback thread.
 #[derive(Clone, Copy)]
 struct VoiceSinkCtx(*mut mello_sys::MelloContext);
-// SAFETY: `mello_voice_feed_packet` is safe to call from any thread (it locks
-// the per-peer maps). The pointer is valid while the sink is set; the voice
+// SAFETY: `mello_voice_feed_rtp` is safe to call from any thread (the NetEQ
+// playout locks its peer map, and each NetEQ locks itself). The pointer is valid while the sink is set; the voice
 // manager clears the sink, under the write lock, before the context goes away.
 unsafe impl Send for VoiceSinkCtx {}
 unsafe impl Sync for VoiceSinkCtx {}
@@ -1050,7 +1068,8 @@ impl SfuConnection {
                 );
             }
 
-            // Audio track callback: fires from C++ when incoming RTP audio is received
+            // Audio RTP callback: fires from C++ with each incoming RTP audio
+            // packet, header included (mello_peer_set_audio_rtp_callback).
             unsafe extern "C" fn audio_track_callback(
                 user_data: *mut std::ffi::c_void,
                 sender_id: *const std::ffi::c_char,
@@ -1075,7 +1094,9 @@ impl SfuConnection {
                         if n <= 5 {
                             log::info!("SFU audio_track_cb #{} (direct voice): size={}", n, size);
                         }
-                        mello_sys::mello_voice_feed_packet(ctx, sender_id, data, size);
+                        // The whole RTP packet: NetEQ takes the real
+                        // sequence, timestamp and SSRC. Receive time: now.
+                        mello_sys::mello_voice_feed_rtp(ctx, sender_id, data, size, -1);
                         return;
                     }
                 }
@@ -1089,9 +1110,9 @@ impl SfuConnection {
                 let pkt = std::slice::from_raw_parts(data, size as usize).to_vec();
                 if cb_data
                     .event_tx
-                    .try_send(SfuEvent::AudioTrackData {
+                    .try_send(SfuEvent::AudioRtp {
                         sender_id: sid.clone(),
-                        data: pkt,
+                        rtp: pkt,
                     })
                     .is_err()
                 {
@@ -1114,7 +1135,7 @@ impl SfuConnection {
                 voice_sink: std::sync::RwLock::new(None),
             }));
             unsafe {
-                mello_sys::mello_peer_set_audio_track_callback(
+                mello_sys::mello_peer_set_audio_rtp_callback(
                     peer,
                     Some(audio_track_callback),
                     audio_cb as *mut std::ffi::c_void,
@@ -1385,7 +1406,7 @@ impl Drop for SfuConnection {
                         None,
                         std::ptr::null_mut(),
                     );
-                    mello_sys::mello_peer_set_audio_track_callback(
+                    mello_sys::mello_peer_set_audio_rtp_callback(
                         peer.get(),
                         None,
                         std::ptr::null_mut(),
@@ -1669,6 +1690,10 @@ unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json:
         "is_capturing": debug.is_capturing,
         "is_muted": debug.is_muted,
         "pipeline_delay_ms": debug.pipeline_delay_ms as u32,
+        // NetEQ's target delay (includes the talk-spurt hold) and the late
+        // playout count (spec 10 section 5.4).
+        "target_delay_ms": debug.rx_target_delay_ms as u32,
+        "late_underruns": debug.rx_late_underruns,
         "rtt_ms": rtt as u32,
         "send_audio_skips": send_skips,
         "recv_tracks": recv_tracks,

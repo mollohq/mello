@@ -483,7 +483,7 @@ else()
 endif()
 
 # ============================================================================
-# NetEQ + audio mixer (stage 3 spike, option MELLO_WEBRTC_NETEQ)
+# NetEQ + audio mixer (voice playout, option MELLO_WEBRTC_NETEQ)
 # ============================================================================
 # Source: https://webrtc.googlesource.com/src refs/branch-heads/6778 (M131),
 # commit 79aff54b0fa9238ce3518dd9eaf9610cd6f22e82, the same milestone as the
@@ -492,7 +492,8 @@ endif()
 # repository that mello cannot push to. The overlay holds only files the
 # submodule does not have; both trees share the same include root layout.
 # The decoder side has Opus and CNG only (no builtin decoder factory).
-# Nothing in libmello links this target yet: only the spike test uses it.
+# libmello links this target: the voice playout (src/audio/voice_playout.cpp)
+# runs on it, so the option must stay ON on every platform.
 option(MELLO_WEBRTC_NETEQ "Build the vendored WebRTC NetEQ and audio mixer" ON)
 
 if(MELLO_WEBRTC_NETEQ)

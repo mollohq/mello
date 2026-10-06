@@ -3,7 +3,7 @@ use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use mello_core::client::feed_viewer_audio_packet;
+use mello_core::client::feed_viewer_audio_rtp;
 use mello_core::nakama::WatchStreamResponse;
 use mello_core::transport::{SfuConnection, SfuEvent, StreamPeerRole};
 use minifb::{Key, Window, WindowOptions};
@@ -517,11 +517,11 @@ fn main() {
                     transport_lost = true;
                 }
                 SfuEvent::MediaPacket { .. } => {}
-                SfuEvent::AudioTrackData { data, .. } => {
+                SfuEvent::AudioRtp { rtp: data, .. } => {
                     audio_received = audio_received.saturating_add(1);
                     // SAFETY: `viewer` is the handle returned by the viewer
                     // start call above and stays valid for this loop.
-                    if unsafe { feed_viewer_audio_packet(viewer, &data) } {
+                    if unsafe { feed_viewer_audio_rtp(viewer, &data) } {
                         audio_fed = audio_fed.saturating_add(1);
                         if !logged_first_audio {
                             logged_first_audio = true;

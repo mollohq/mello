@@ -423,6 +423,61 @@ MelloResult mello_voice_feed_packet(
     }
 }
 
+MelloResult mello_voice_feed_rtp(
+    MelloContext* ctx,
+    const char* peer_id,
+    const uint8_t* rtp_packet,
+    int size,
+    int64_t receive_time_ms)
+{
+    if (!ctx || !peer_id || !rtp_packet || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        ctx_cast(ctx)->audio().feed_rtp(peer_id, rtp_packet, size, receive_time_ms);
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+void mello_voice_remove_peer(MelloContext* ctx, const char* peer_id) {
+    if (!ctx || !peer_id) return;
+    try {
+        ctx_cast(ctx)->audio().remove_peer(peer_id);
+    } catch (...) {}
+}
+
+void mello_voice_set_peer_volume(MelloContext* ctx, const char* peer_id, float gain) {
+    if (!ctx || !peer_id) return;
+    try {
+        ctx_cast(ctx)->audio().set_peer_volume(peer_id, gain);
+    } catch (...) {}
+}
+
+void mello_voice_set_peer_pan(MelloContext* ctx, const char* peer_id, float pan) {
+    if (!ctx || !peer_id) return;
+    try {
+        ctx_cast(ctx)->audio().set_peer_pan(peer_id, pan);
+    } catch (...) {}
+}
+
+float mello_voice_get_peer_volume(MelloContext* ctx, const char* peer_id) {
+    if (!ctx || !peer_id) return 1.0f;
+    try {
+        return ctx_cast(ctx)->audio().peer_volume(peer_id);
+    } catch (...) {
+        return 1.0f;
+    }
+}
+
+float mello_voice_get_peer_pan(MelloContext* ctx, const char* peer_id) {
+    if (!ctx || !peer_id) return 0.0f;
+    try {
+        return ctx_cast(ctx)->audio().peer_pan(peer_id);
+    } catch (...) {
+        return 0.0f;
+    }
+}
+
 MelloResult mello_voice_start_capture_inject(MelloContext* ctx) {
     if (!ctx) return MELLO_ERROR_INVALID_PARAM;
     try {
@@ -700,6 +755,14 @@ void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTr
     try {
         auto* pc = peer_cast(peer);
         pc->set_audio_track_callback(callback, user_data);
+    } catch (...) {}
+}
+
+void mello_peer_set_audio_rtp_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
+    if (!peer) return;
+    try {
+        auto* pc = peer_cast(peer);
+        pc->set_audio_rtp_callback(callback, user_data);
     } catch (...) {}
 }
 
@@ -1008,23 +1071,53 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->rtp_recv_total  = audio.rtp_recv_total();
         out->pipeline_delay_ms = audio.pipeline_delay_ms();
         const auto rx = audio.receive_stats();
-        out->rx_frames_decoded          = rx.frames_decoded;
-        out->rx_decode_errors           = rx.decode_errors;
-        out->rx_conceal_missing_plc     = rx.conceal_missing_plc;
-        out->rx_conceal_gap_fec         = rx.conceal_gap_fec;
-        out->rx_conceal_gap_plc         = rx.conceal_gap_plc;
-        out->rx_conceal_fill_plc        = rx.conceal_fill_plc;
-        out->rx_jitter_missing          = rx.jitter_missing;
-        out->rx_jitter_dropped_late     = rx.jitter_dropped_late;
-        out->rx_jitter_dropped_overflow = rx.jitter_dropped_overflow;
-        out->rx_jitter_resets           = rx.jitter_resets;
-        out->rx_jitter_buffered_packets = rx.jitter_buffered_packets;
-        out->rx_jitter_target_delay_ms  = rx.jitter_target_delay_ms;
-        out->rx_playout_buffer_ms       = rx.playout_buffer_ms;
-        out->rx_late_underruns          = rx.late_underruns;
+        const auto& p = rx.playout;
+        auto u32 = [](uint64_t v) {
+            return static_cast<uint32_t>(v > 0xFFFFFFFFull ? 0xFFFFFFFFull : v);
+        };
+        // Fields of the jitter buffer era (see mello.h): the NetEQ
+        // equivalent where one exists, 0 where none does.
+        out->rx_frames_decoded          = 0;
+        out->rx_decode_errors           = u32(p.get_audio_errors);
+        out->rx_conceal_missing_plc     = 0;
+        out->rx_conceal_gap_fec         = 0;
+        out->rx_conceal_gap_plc         = 0;
+        out->rx_conceal_fill_plc        = 0;
+        out->rx_jitter_missing          = 0;
+        out->rx_jitter_dropped_late     = u32(p.packets_discarded);
+        out->rx_jitter_dropped_overflow = 0;
+        out->rx_jitter_resets           = u32(p.stream_resets + p.packet_buffer_flushes);
+        out->rx_jitter_buffered_packets = 0;
+        out->rx_jitter_target_delay_ms  = p.target_delay_ms;
+        out->rx_playout_buffer_ms       = p.buffer_ms;
+        out->rx_late_underruns          = u32(p.late_frames);
         out->input_sensitivity_auto     = audio.input_sensitivity_auto();
         out->input_sensitivity_db       = audio.input_sensitivity_db();
         out->input_gate_dbfs            = audio.input_gate_dbfs();
+        out->rx_target_delay_ms                   = p.target_delay_ms;
+        out->rx_filtered_delay_ms                 = p.filtered_delay_ms;
+        out->rx_buffer_ms                         = p.buffer_ms;
+        out->rx_output_ring_ms                    = rx.output_ring_ms;
+        out->rx_total_samples_received            = p.total_samples_received;
+        out->rx_concealed_samples                 = p.concealed_samples;
+        out->rx_silent_concealed_samples          = p.silent_concealed_samples;
+        out->rx_concealment_events                = p.concealment_events;
+        out->rx_inserted_samples_for_deceleration = p.inserted_samples_for_deceleration;
+        out->rx_removed_samples_for_acceleration  = p.removed_samples_for_acceleration;
+        out->rx_fec_packets_received              = p.fec_packets_received;
+        out->rx_fec_packets_discarded             = p.fec_packets_discarded;
+        out->rx_packets_discarded                 = p.packets_discarded;
+        out->rx_jitter_buffer_delay_ms            = p.jitter_buffer_delay_ms;
+        out->rx_jitter_buffer_emitted_count       = p.jitter_buffer_emitted_count;
+        out->rx_interruption_count                = p.interruption_count;
+        out->rx_interruption_duration_ms          = p.total_interruption_duration_ms;
+        out->rx_buffer_flushes                    = p.packet_buffer_flushes;
+        out->rx_packets_inserted                  = p.packets_inserted;
+        out->rx_insert_errors                     = p.insert_errors;
+        out->rx_packets_rejected                  = p.packets_rejected;
+        out->rx_stream_resets                     = p.stream_resets;
+        out->rx_talk_spurts                       = p.talk_spurts;
+        out->rx_spurt_hold_ms                     = p.spurt_hold_ms;
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

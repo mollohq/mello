@@ -1,16 +1,19 @@
-//! Impairment shim: what the network and the SFU do to a packet between
-//! `mello_voice_get_packet` on the sender and `mello_voice_feed_packet` on
-//! the receiver.
+//! Impairment shim: what the network and the SFU do to a packet between the
+//! sender's packet sink and `mello_voice_feed_rtp` on the receiver.
 //!
-//! Header rewrite. On the SFU path the sender's 4-byte little-endian
-//! sequence is stripped (mello-core, voice/mod.rs) and the packet travels as
-//! RTP with a 16-bit sequence. The receiver rebuilds a 4-byte header from the
-//! RTP sequence: low two bytes = the 16-bit sequence, high two bytes = 0
-//! (libmello/src/transport/peer_connection.cpp, incoming audio track). The
-//! shim does the same: RTP sequence = (start + sender sequence) mod 65536.
+//! RTP. On the SFU path the sender's packetizer sends the Opus payload as
+//! RTP: payload type 111, a 16-bit sequence, a timestamp that is a random
+//! start plus the media time, and an SSRC. The SFU forwards it with the SSRC
+//! of the receiver's track (libmello/src/transport/peer_connection.cpp and
+//! mello-sfu). The receiver gives the whole packet to NetEQ. The shim builds
+//! the same packet: the sequence is (rtp_seq_start + sender sequence) mod
+//! 65536, the timestamp is the start plus the media time mod 2^32, and the
+//! SSRC is fixed. The timestamp start and the SSRC come from the profile seed
+//! (stream "rtp"), so the frozen profile inputs do not change.
 
 use crate::profile::{Network, Profile};
 use crate::rng::Rng;
+use crate::run::SentPacket;
 use std::cmp::Reverse;
 use std::collections::BinaryHeap;
 
@@ -23,6 +26,9 @@ pub struct ShimCounters {
     pub lost_outage: u64,
     pub reordered: u64,
     pub delivered: u64,
+    /// Lost packets that carried an Opus DTX frame (2 bytes or less): the
+    /// receiver plays comfort noise through them, nothing to conceal.
+    pub lost_dtx: u64,
 }
 
 impl ShimCounters {
@@ -54,9 +60,26 @@ impl Ord for InFlight {
     }
 }
 
+/// Payload type of Opus on the SFU path.
+const OPUS_PAYLOAD_TYPE: u8 = 111;
+
+/// A complete RTP packet (version 2, no CSRC, no extension).
+pub fn rtp_packet(sequence: u16, timestamp: u32, ssrc: u32, payload: &[u8]) -> Vec<u8> {
+    let mut p = Vec::with_capacity(12 + payload.len());
+    p.push(0x80);
+    p.push(OPUS_PAYLOAD_TYPE);
+    p.extend_from_slice(&sequence.to_be_bytes());
+    p.extend_from_slice(&timestamp.to_be_bytes());
+    p.extend_from_slice(&ssrc.to_be_bytes());
+    p.extend_from_slice(payload);
+    p
+}
+
 pub struct Shim {
     net: Network,
     rtp_seq_start: u16,
+    rtp_ts_start: u32,
+    ssrc: u32,
     rng_loss: Rng,
     rng_burst: Rng,
     rng_delay: Rng,
@@ -93,8 +116,13 @@ impl Shim {
                 stalls.push((s, s + e.stall_ms));
             }
         }
+        let mut rtp_rng = Rng::stream(profile.seed, "rtp");
+        let rtp_ts_start = (rtp_rng.next_u64() >> 32) as u32;
+        let ssrc = (rtp_rng.next_u64() >> 32) as u32;
         Self {
             rtp_seq_start: profile.rtp_seq_start,
+            rtp_ts_start,
+            ssrc,
             rng_loss: Rng::stream(profile.seed, "loss"),
             rng_burst: Rng::stream(profile.seed, "burst"),
             rng_delay: Rng::stream(profile.seed, "delay"),
@@ -121,24 +149,24 @@ impl Shim {
         (self.net.jitter_sigma_ms, self.net.loss_random)
     }
 
-    /// Take one packet from `mello_voice_get_packet` sent at run time
+    /// Take one packet from the sender's packet sink, sent at run time
     /// `now_ms`. `sender_sample` is the sender capture position at that time.
-    pub fn send(&mut self, packet: &[u8], now_ms: i64, sender_sample: usize) {
-        if packet.len() < 4 {
+    pub fn send(&mut self, packet: &SentPacket, now_ms: i64, sender_sample: usize) {
+        if packet.payload.is_empty() {
             return;
         }
         self.counters.sent += 1;
-        let sender_seq = u32::from_le_bytes([packet[0], packet[1], packet[2], packet[3]]);
-        let wide = u32::from(self.rtp_seq_start) + sender_seq;
+        let wide = u32::from(self.rtp_seq_start) + packet.sequence;
         if wide >= 65_536 && self.wrap_sender_sample.is_none() {
             self.wrap_sender_sample = Some(sender_sample);
         }
         let rtp_seq = (wide & 0xFFFF) as u16;
-        let mut bytes = packet.to_vec();
-        bytes[0] = rtp_seq as u8;
-        bytes[1] = (rtp_seq >> 8) as u8;
-        bytes[2] = 0;
-        bytes[3] = 0;
+        let bytes = rtp_packet(
+            rtp_seq,
+            self.rtp_ts_start.wrapping_add(packet.timestamp),
+            self.ssrc,
+            &packet.payload,
+        );
 
         let t = now_ms as f64;
         let (sigma, loss_random) = self.conditions(t);
@@ -167,16 +195,20 @@ impl Shim {
             .outage
             .map(|(s, d)| t >= s * 1000.0 && t < (s + d) * 1000.0)
             .unwrap_or(false);
+        let dtx = u64::from(packet.payload.len() <= 2);
         if in_outage {
             self.counters.lost_outage += 1;
+            self.counters.lost_dtx += dtx;
             return;
         }
         if burst_lost {
             self.counters.lost_burst += 1;
+            self.counters.lost_dtx += dtx;
             return;
         }
         if u_loss < loss_random {
             self.counters.lost_random += 1;
+            self.counters.lost_dtx += dtx;
             return;
         }
 
@@ -239,14 +271,25 @@ mod tests {
         }
     }
 
-    fn pkt(seq: u32) -> Vec<u8> {
-        let mut v = seq.to_le_bytes().to_vec();
-        v.extend_from_slice(&[0xAA; 20]);
-        v
+    fn pkt(seq: u32) -> SentPacket {
+        SentPacket {
+            chunks: 0,
+            sequence: seq,
+            timestamp: seq * 960,
+            payload: vec![0xAA; 20],
+        }
+    }
+
+    fn rtp_seq(p: &[u8]) -> u16 {
+        u16::from_be_bytes([p[2], p[3]])
+    }
+
+    fn rtp_ts(p: &[u8]) -> u32 {
+        u32::from_be_bytes([p[4], p[5], p[6], p[7]])
     }
 
     #[test]
-    fn rewrites_header_like_the_sfu_path_and_wraps() {
+    fn builds_rtp_like_the_sfu_path_and_wraps() {
         let net = Network {
             base_delay_ms: 20.0,
             ..Default::default()
@@ -256,17 +299,21 @@ mod tests {
             shim.send(&pkt(s), i64::from(s) * 20, s as usize * 960);
         }
         let got = shim.due(1000);
-        let seqs: Vec<(u8, u8, u8, u8)> = got.iter().map(|p| (p[0], p[1], p[2], p[3])).collect();
-        assert_eq!(
-            seqs,
-            vec![
-                (0xFE, 0xFF, 0, 0),
-                (0xFF, 0xFF, 0, 0),
-                (0, 0, 0, 0),
-                (1, 0, 0, 0)
-            ]
-        );
+        let seqs: Vec<u16> = got.iter().map(|p| rtp_seq(p)).collect();
+        assert_eq!(seqs, vec![65534, 65535, 0, 1]);
         assert_eq!(shim.wrap_sender_sample, Some(2 * 960));
+        for (i, p) in got.iter().enumerate() {
+            assert_eq!(p[0], 0x80, "RTP version 2, no padding, extension or CSRC");
+            assert_eq!(p[1], 111, "Opus payload type, no marker");
+            assert_eq!(&p[12..], &[0xAA; 20], "the Opus payload follows the header");
+            let step = rtp_ts(p).wrapping_sub(rtp_ts(&got[0]));
+            assert_eq!(
+                step,
+                i as u32 * 960,
+                "the timestamp advances with media time"
+            );
+            assert_eq!(&p[8..12], &got[0][8..12], "one SSRC per stream");
+        }
     }
 
     #[test]
@@ -281,10 +328,7 @@ mod tests {
             shim.send(&pkt(s), i64::from(s) * 20, 0);
         }
         let got = shim.due(1_000_000);
-        let seqs: Vec<u16> = got
-            .iter()
-            .map(|p| u16::from_le_bytes([p[0], p[1]]))
-            .collect();
+        let seqs: Vec<u16> = got.iter().map(|p| rtp_seq(p)).collect();
         let mut sorted = seqs.clone();
         sorted.sort_unstable();
         assert_eq!(seqs, sorted);

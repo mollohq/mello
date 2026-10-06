@@ -334,9 +334,9 @@ pub enum Event {
         incoming_streams: i32,
         underrun_count: i32,
         /// Late-playout underruns in the last 5s while audio was incoming
-        /// (libmello `rx_late_underruns`): the real health signal.
-        /// `underrun_count` is the lifetime count of callbacks with no
-        /// remote audio at all.
+        /// (libmello `rx_late_underruns`: 10 ms frames of NetEQ concealment
+        /// while packets waited): the real health signal. `underrun_count`
+        /// is the lifetime count of 10 ms mixes with no remote audio at all.
         underrun_windowed: i32,
         rtp_recv_total: i32,
         pipeline_delay_ms: f32,

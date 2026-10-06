@@ -26,13 +26,15 @@
 //! clock ratio of the profile (drift).
 //!
 //! Receiver clock. [`run_receiver`] drives libmello's playout clock with
-//! `mello_test_set_clock_ms` and steps it 1 ms at a time. The jitter buffer
-//! times its holds against that clock, so a run is deterministic (equal
-//! input, equal output) and faster than real time. Real-time pacing would
-//! make the 10 minute drift profile alone take 10 minutes and would depend
-//! on the scheduler of the machine. In each 1 ms step:
+//! `mello_test_set_clock_ms` and steps it 1 ms at a time. NetEQ times its
+//! playout by the 10 ms pulls and stamps arrivals with that clock, so a run
+//! is deterministic (equal input, equal output) and faster than real time.
+//! Real-time pacing would make the 10 minute drift profile alone take 10
+//! minutes and would depend on the scheduler of the machine. In each 1 ms
+//! step:
 //! 1. send every packet whose send tick is due,
-//! 2. deliver every packet the shim has due (`mello_voice_feed_packet`),
+//! 2. deliver every packet the shim has due as a complete RTP packet
+//!    (`mello_voice_feed_rtp`), as the SFU path does since stage 3,
 //! 3. every 10 ms, pull 10 ms of mixed output the way the playback device
 //!    thread does (`mello_voice_test_pull_output`).
 
@@ -136,20 +138,37 @@ pub fn build_reference(
     (reference, spans)
 }
 
-/// Receiver state sampled during the run.
+/// Receiver state sampled during the run (NetEQ, spec 10 section 5.4).
 #[derive(Clone, Debug)]
 pub struct StatSample {
     pub t_ms: i64,
+    /// NetEQ filtered buffer delay plus the output ring.
     pub pipeline_delay_ms: f32,
+    /// NetEQ target delay.
     pub jitter_target_ms: f32,
+    /// NetEQ packet and sync buffer plus the output ring.
     pub playout_buffer_ms: f32,
-    pub jitter_buffered: i32,
+    /// NetEQ filtered buffer delay.
+    pub filtered_delay_ms: f32,
+    /// Minimum delay the talk-spurt controller holds for the pre-roll.
+    pub spurt_hold_ms: f32,
+}
+
+/// One encoded frame as the packet sink received it.
+#[derive(Clone, Debug)]
+pub struct SentPacket {
+    /// Chunks injected when the packet left the encoder.
+    pub chunks: usize,
+    /// The sender's 32-bit packet counter.
+    pub sequence: u32,
+    /// Media time in 48 kHz samples (the sender's RTP timestamp offset).
+    pub timestamp: u32,
+    pub payload: Vec<u8>,
 }
 
 /// The sender's output for one reference signal.
 pub struct SenderTrace {
-    /// (chunks injected when the packet left the encoder, packet bytes).
-    pub packets: Vec<(usize, Vec<u8>)>,
+    pub packets: Vec<SentPacket>,
     pub packets_encoded: u32,
     pub wall_s: f64,
 }
@@ -246,12 +265,12 @@ const SEND_TICK_PHASE_MS: usize = 10;
 struct SinkTrace {
     /// Chunks injected so far, including the one being injected now.
     chunks: usize,
-    packets: Vec<(usize, Vec<u8>)>,
+    packets: Vec<SentPacket>,
 }
 
-/// Packet sink of the sender context. Rebuilds the bytes that
-/// `mello_voice_get_packet` returns: the 4-byte little-endian sequence and
-/// the Opus payload, which the shim rewrites as the SFU path does.
+/// Packet sink of the sender context: the Opus payload, the media time and
+/// the sequence, as the SFU send path gets them. The shim builds the RTP
+/// packet from them.
 ///
 /// # Safety
 /// `user_data` points to the `SinkTrace` of [`encode`], which outlives the
@@ -260,7 +279,7 @@ unsafe extern "C" fn collect_packet(
     user_data: *mut std::ffi::c_void,
     data: *const u8,
     size: i32,
-    _timestamp: u32,
+    timestamp: u32,
     sequence: u32,
 ) {
     if user_data.is_null() || data.is_null() || size <= 0 {
@@ -268,10 +287,12 @@ unsafe extern "C" fn collect_packet(
     }
     let trace = &mut *(user_data as *mut SinkTrace);
     let payload = std::slice::from_raw_parts(data, size as usize);
-    let mut pkt = Vec::with_capacity(4 + payload.len());
-    pkt.extend_from_slice(&sequence.to_le_bytes());
-    pkt.extend_from_slice(payload);
-    trace.packets.push((trace.chunks, pkt));
+    trace.packets.push(SentPacket {
+        chunks: trace.chunks,
+        sequence,
+        timestamp,
+        payload: payload.to_vec(),
+    });
 }
 
 /// Encode `reference` with a sender context set up as `sender`. See the
@@ -361,10 +382,10 @@ pub fn run_receiver(
     let clock_ratio = 1.0 / (1.0 + profile.drift_ppm * 1e-6);
     let n_chunks = reference.len() / CHUNK;
     let end_ms = (reference.len() as f64 / 48.0 * clock_ratio).ceil() as i64 + i64::from(tail_ms);
-    let packets: Vec<&(usize, Vec<u8>)> = trace
+    let packets: Vec<&SentPacket> = trace
         .packets
         .iter()
-        .filter(|(c, _)| *c <= n_chunks)
+        .filter(|p| p.chunks <= n_chunks)
         .collect();
 
     let mut shim = Shim::new(profile);
@@ -378,20 +399,21 @@ pub fn run_receiver(
         set_clock(now);
 
         // 1. Sender.
-        while next < packets.len() && send_time_ms(packets[next].0, clock_ratio, model) <= now {
-            let (chunks, bytes) = packets[next];
-            shim.send(bytes, now, chunks * CHUNK);
+        while next < packets.len() && send_time_ms(packets[next].chunks, clock_ratio, model) <= now
+        {
+            let pkt = packets[next];
+            shim.send(pkt, now, pkt.chunks * CHUNK);
             next += 1;
         }
 
-        // 2. Network.
+        // 2. Network. Receive time -1: libmello stamps it with the clock.
         for p in shim.due(now) {
             // SAFETY: p and peer outlive the call; libmello copies the data.
             let r = unsafe {
-                mello_sys::mello_voice_feed_packet(rx.0, peer.as_ptr(), p.as_ptr(), p.len() as i32)
+                mello_sys::mello_voice_feed_rtp(rx.0, peer.as_ptr(), p.as_ptr(), p.len() as i32, -1)
             };
             if r != mello_sys::MelloResult_MELLO_OK {
-                return Err(format!("feed_packet failed: {r}"));
+                return Err(format!("feed_rtp failed: {r}"));
             }
             packets_fed += 1;
         }
@@ -412,9 +434,10 @@ pub fn run_receiver(
             stats.push(StatSample {
                 t_ms: now,
                 pipeline_delay_ms: s.pipeline_delay_ms,
-                jitter_target_ms: s.rx_jitter_target_delay_ms,
-                playout_buffer_ms: s.rx_playout_buffer_ms,
-                jitter_buffered: s.rx_jitter_buffered_packets,
+                jitter_target_ms: s.rx_target_delay_ms,
+                playout_buffer_ms: s.rx_buffer_ms + s.rx_output_ring_ms,
+                filtered_delay_ms: s.rx_filtered_delay_ms,
+                spurt_hold_ms: s.rx_spurt_hold_ms,
             });
         }
     }

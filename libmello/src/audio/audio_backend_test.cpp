@@ -22,6 +22,18 @@ bool test_audio_backend_requested() {
 #endif
 }
 
+std::string test_backend_env(const char* name) {
+#ifdef _WIN32
+    char buf[256] = {};
+    DWORD n = GetEnvironmentVariableA(name, buf, sizeof(buf));
+    if (n == 0 || n >= sizeof(buf)) return {};
+    return std::string(buf, n);
+#else
+    const char* env = std::getenv(name);
+    return env ? std::string(env) : std::string();
+#endif
+}
+
 bool TestCapture::initialize(const char*) {
     MELLO_LOG_INFO("capture", "test backend: no capture device (use capture inject)");
     return true;

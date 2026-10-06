@@ -366,6 +366,57 @@ pub unsafe fn feed_viewer_audio_packet(
     }
 }
 
+/// The payload of a complete RTP packet (RFC 3550): after the fixed header,
+/// the CSRC list and a header extension, before padding. None when the packet
+/// is not RTP version 2 or carries no payload.
+pub(super) fn rtp_payload(packet: &[u8]) -> Option<&[u8]> {
+    const FIXED: usize = 12;
+    let first = *packet.first()?;
+    if packet.len() < FIXED || first >> 6 != 2 {
+        return None;
+    }
+    let mut header = FIXED + usize::from(first & 0x0F) * 4;
+    if first & 0x10 != 0 {
+        let ext = packet.get(header..header + 4)?;
+        let words = usize::from(u16::from_be_bytes([ext[2], ext[3]]));
+        header += 4 + words * 4;
+    }
+    let mut end = packet.len();
+    if first & 0x20 != 0 {
+        let pad = usize::from(*packet.last()?);
+        if pad == 0 || header + pad > end {
+            return None;
+        }
+        end -= pad;
+    }
+    if header >= end {
+        return None;
+    }
+    packet.get(header..end)
+}
+
+/// Feed one audio packet of an SFU stream (a complete RTP packet,
+/// `SfuEvent::AudioRtp`) to the viewer's audio decoder. Returns `true` when
+/// libmello accepted it.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer, or null.
+pub unsafe fn feed_viewer_audio_rtp(viewer: *mut mello_sys::MelloStreamView, rtp: &[u8]) -> bool {
+    if viewer.is_null() {
+        return false;
+    }
+    let Some(opus) = rtp_payload(rtp) else {
+        return false;
+    };
+    unsafe {
+        mello_sys::mello_stream_feed_audio_packet(
+            viewer,
+            opus.as_ptr(),
+            i32::try_from(opus.len()).unwrap_or(0),
+        ) == mello_sys::MelloResult_MELLO_OK
+    }
+}
+
 pub(super) unsafe extern "C" fn stream_audio_track_callback(
     user_data: *mut std::ffi::c_void,
     _sender_id: *const std::ffi::c_char,
@@ -920,6 +971,30 @@ mod tests {
     fn audio_packets_with_a_null_viewer_are_rejected() {
         let pkt = [0x01, 0x00, 0x00, 0x00, 0xAA, 0xBB];
         assert!(!unsafe { feed_viewer_audio_packet(std::ptr::null_mut(), &pkt) });
+    }
+
+    #[test]
+    fn rtp_payload_skips_csrcs_extension_and_padding() {
+        // Plain header.
+        let plain = [0x80, 111, 0, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0xAA, 0xBB];
+        assert_eq!(rtp_payload(&plain), Some(&[0xAA, 0xBB][..]));
+        // One CSRC, a one-word extension, two bytes of padding.
+        let mut p = vec![0x80 | 0x20 | 0x10 | 0x01, 111, 0, 1, 0, 0, 0, 0, 0, 0, 0, 7];
+        p.extend_from_slice(&[9, 9, 9, 9]); // CSRC
+        p.extend_from_slice(&[0xBE, 0xDE, 0x00, 0x01, 1, 2, 3, 4]); // extension
+        p.extend_from_slice(&[0xCC]); // payload
+        p.extend_from_slice(&[0x00, 0x02]); // padding
+        assert_eq!(rtp_payload(&p), Some(&[0xCC][..]));
+        // Not RTP v2, too short, no payload.
+        assert_eq!(rtp_payload(&[0x40; 14]), None);
+        assert_eq!(rtp_payload(&plain[..11]), None);
+        assert_eq!(rtp_payload(&plain[..12]), None);
+    }
+
+    #[test]
+    fn rtp_audio_with_a_null_viewer_is_rejected() {
+        let plain = [0x80, 111, 0, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0xAA];
+        assert!(!unsafe { feed_viewer_audio_rtp(std::ptr::null_mut(), &plain) });
     }
 
     /// Documents the wire framing so it does not have to be re-derived from

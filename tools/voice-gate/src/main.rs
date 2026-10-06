@@ -31,8 +31,11 @@ Definitions:
   end minus start, so it compares the same speech.
 - In-clip growth is the median over clips of the delay change from the first
   to the last third of the clip.
-- Concealment per lost frame counts PLC and FEC frames for losses (network
-  loss plus receiver drops). The target is 1.
+- Concealment per lost frame counts concealment frames for losses (network
+  loss plus receiver drops). The target is 1. Since NetEQ: the run's
+  concealed samples (in 20 ms frames) plus frames repaired from in-band FEC,
+  minus the same for the same packets on the same network without loss. A
+  lost Opus DTX frame is not counted as lost: comfort noise plays through it.
 - A dropout is a 20 ms speech frame that comes out 20 dB too quiet, or does
   not match the input (concealment or wrong audio).
 ";
@@ -234,7 +237,29 @@ fn real_main() -> Result<bool, String> {
             gf.tail_ms,
             args.send_model,
         )?;
-        let m = measure(p, &r, &gf.analysis, gf.corpus.clips.len());
+        // The same packets on the same network without loss: the
+        // concealment that loss did not cause (lib.rs, measure).
+        let lossless = if p.network.has_loss() {
+            let mut twin = (*p).clone();
+            twin.network = p.network.without_loss();
+            Some(run::run_receiver(
+                &twin,
+                &reference[..n],
+                &spans,
+                &traces[&p.sender],
+                gf.tail_ms,
+                args.send_model,
+            )?)
+        } else {
+            None
+        };
+        let m = measure(
+            p,
+            &r,
+            lossless.as_ref(),
+            &gf.analysis,
+            gf.corpus.clips.len(),
+        );
         eprintln!("{:.1} s", r.wall_s);
 
         let pdir = out_dir.join(&p.name);
@@ -253,15 +278,16 @@ fn real_main() -> Result<bool, String> {
         )?;
         write_csv(
             &pdir.join("receiver.csv"),
-            "t_ms,pipeline_delay_ms,jitter_target_ms,playout_buffer_ms,jitter_buffered",
+            "t_ms,pipeline_delay_ms,neteq_target_ms,playout_buffer_ms,neteq_filtered_delay_ms,spurt_hold_ms",
             r.stats.iter().map(|s| {
                 format!(
-                    "{},{:.1},{:.1},{:.1},{}",
+                    "{},{:.1},{:.1},{:.1},{:.1},{:.1}",
                     s.t_ms,
                     s.pipeline_delay_ms,
                     s.jitter_target_ms,
                     s.playout_buffer_ms,
-                    s.jitter_buffered
+                    s.filtered_delay_ms,
+                    s.spurt_hold_ms
                 )
             }),
         )?;
@@ -371,7 +397,7 @@ fn real_main() -> Result<bool, String> {
             d
         } else { scores.detail.clone() },
         "method": {
-            "path": "mello_voice_inject_capture -> mello_voice_set_packet_sink -> shim (SFU header rewrite, impairments) -> mello_voice_feed_packet -> mello_voice_test_pull_output",
+            "path": "mello_voice_inject_capture -> mello_voice_set_packet_sink -> shim (RTP packet as the SFU forwards it, impairments) -> mello_voice_feed_rtp (NetEQ) -> mello_voice_test_pull_output",
             "backend": "MELLO_AUDIO_BACKEND=test (no device, no device thread)",
             "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace",
             "send": args.send_model.describe(),

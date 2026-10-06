@@ -996,6 +996,30 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
             return;
         }
 
+        MelloAudioTrackCallback callback = nullptr;
+        void* user_data = nullptr;
+        MelloAudioTrackCallback rtp_callback = nullptr;
+        void* rtp_user_data = nullptr;
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            if (!self->is_current_pc_generation(generation)) {
+                return;
+            }
+            callback = self->audio_track_cb_;
+            user_data = self->audio_track_ud_;
+            rtp_callback = self->audio_rtp_cb_;
+            rtp_user_data = self->audio_rtp_ud_;
+        }
+
+        // Voice: the whole RTP packet, so NetEQ sees the real sequence,
+        // timestamp and SSRC (spec 10 section 5.1).
+        if (rtp_callback) {
+            rtp_callback(rtp_user_data, sender_id.c_str(), bytes, total);
+        }
+        if (!callback) {
+            return;
+        }
+
         const uint16_t seq = static_cast<uint16_t>(
             (static_cast<uint16_t>(bytes[2]) << 8)
             | static_cast<uint16_t>(bytes[3])
@@ -1027,24 +1051,14 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
         pkt[3] = 0;
         std::memcpy(pkt.data() + 4, opus, opus_len);
 
-        MelloAudioTrackCallback callback = nullptr;
-        void* user_data = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(self->mutex_);
-            if (!self->is_current_pc_generation(generation)) {
-                return;
-            }
-            callback = self->audio_track_cb_;
-            user_data = self->audio_track_ud_;
-        }
-        if (callback) {
-            callback(
-                user_data,
-                sender_id.c_str(),
-                pkt.data(),
-                static_cast<int>(pkt.size())
-            );
-        }
+        // Stream audio and tools: the Opus payload behind a 4-byte header
+        // with the 16-bit RTP sequence.
+        callback(
+            user_data,
+            sender_id.c_str(),
+            pkt.data(),
+            static_cast<int>(pkt.size())
+        );
     });
 }
 
@@ -1612,6 +1626,15 @@ void PeerConnectionImpl::set_audio_track_callback(
     std::lock_guard<std::mutex> lock(mutex_);
     audio_track_cb_ = cb;
     audio_track_ud_ = user_data;
+}
+
+void PeerConnectionImpl::set_audio_rtp_callback(
+    MelloAudioTrackCallback cb,
+    void* user_data
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    audio_rtp_cb_ = cb;
+    audio_rtp_ud_ = user_data;
 }
 
 bool PeerConnectionImpl::send_unreliable(const uint8_t* data, int size) {
