@@ -945,6 +945,7 @@ impl Client {
                 pid,
                 preset,
                 exe,
+                igdb_id,
             } => {
                 self.handle_start_stream(
                     &crew_id,
@@ -955,6 +956,7 @@ impl Client {
                     pid,
                     preset,
                     &exe,
+                    igdb_id,
                 )
                 .await;
             }

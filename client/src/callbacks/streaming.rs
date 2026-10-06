@@ -56,6 +56,41 @@ fn resolve_stream_source_exe(
         .unwrap_or_default()
 }
 
+fn source_igdb_id_from_model(
+    model: slint::ModelRc<crate::CaptureSourceData>,
+    source_id: &str,
+) -> Option<u32> {
+    for row in 0..model.row_count() {
+        if let Some(entry) = model.row_data(row) {
+            if entry.id == source_id && entry.igdb_id > 0 {
+                return Some(entry.igdb_id as u32);
+            }
+        }
+    }
+    None
+}
+
+/// The catalogue identity of the picked source, for the hook policy. It
+/// matches the same row as `resolve_stream_source_exe`, the same way, so the
+/// identity belongs to the process that is captured. 0 when not found.
+fn resolve_stream_source_igdb_id(
+    app: &crate::MainWindow,
+    source_id: &str,
+    source_mode: &str,
+) -> u32 {
+    let by_mode = match source_mode {
+        "monitor" => source_igdb_id_from_model(app.get_stream_monitors(), source_id),
+        "process" | "game" => source_igdb_id_from_model(app.get_stream_games(), source_id),
+        "window" => source_igdb_id_from_model(app.get_stream_windows(), source_id),
+        _ => None,
+    };
+    by_mode
+        .or_else(|| source_igdb_id_from_model(app.get_stream_monitors(), source_id))
+        .or_else(|| source_igdb_id_from_model(app.get_stream_games(), source_id))
+        .or_else(|| source_igdb_id_from_model(app.get_stream_windows(), source_id))
+        .unwrap_or(0)
+}
+
 fn resolve_stream_source_name(
     app: &crate::MainWindow,
     source_id: &str,
@@ -115,9 +150,14 @@ pub fn wire(ctx: &AppContext) {
                 };
 
                 let (monitor_index, hwnd, pid) = parse_capture_source_id(&id, &mode);
-                let exe = app_weak
+                let (exe, igdb_id) = app_weak
                     .upgrade()
-                    .map(|app| resolve_stream_source_exe(&app, &id, &mode))
+                    .map(|app| {
+                        (
+                            resolve_stream_source_exe(&app, &id, &mode),
+                            resolve_stream_source_igdb_id(&app, &id, &mode),
+                        )
+                    })
                     .unwrap_or_default();
 
                 let _ = cmd.send(Command::StopThumbnailRefresh);
@@ -130,6 +170,7 @@ pub fn wire(ctx: &AppContext) {
                     pid,
                     preset: preset_idx as u32,
                     exe,
+                    igdb_id,
                 });
             });
     }

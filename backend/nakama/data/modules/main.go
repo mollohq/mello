@@ -124,6 +124,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("admin_recent_signups", AdminRecentSignupsRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("admin_capture_policy_get", AdminCapturePolicyGetRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("admin_capture_policy_set", AdminCapturePolicySetRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — presence

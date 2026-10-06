@@ -123,21 +123,11 @@ pub fn wire(ctx: &AppContext) {
             // A hardcoded preset here made the pills a lie on the one path
             // most people take.
             let preset = app.get_stream_preset().max(0) as u32;
-            // Look up the exe for the hook policy decision. Empty means the
-            // core denies the hook, which is the safe default.
-            let exe = {
-                let games = app.get_stream_games();
-                let mut found = String::new();
-                for row in 0..games.row_count() {
-                    if let Some(entry) = games.row_data(row) {
-                        if entry.pid == game_pid as i32 && !entry.exe.is_empty() {
-                            found = entry.exe.to_string();
-                            break;
-                        }
-                    }
-                }
-                found
-            };
+            // The hook policy identity and the exe come from the one
+            // `stream_games` row of this pid, in the same loop iteration, so
+            // the backend decision applies to the process that is captured.
+            // 0 means the core denies the hook, which is the safe default.
+            let (exe, igdb_id) = stream_game_identity(&app.get_stream_games(), game_pid);
             let _ = cmd.send(Command::StartStream {
                 crew_id,
                 title,
@@ -147,9 +137,27 @@ pub fn wire(ctx: &AppContext) {
                 pid: Some(game_pid),
                 preset,
                 exe,
+                igdb_id,
             });
         });
     }
+}
+
+/// The exe and the catalogue identity of the `stream_games` row for `pid`.
+/// Both come from one row, so they describe the same process. A pid with no
+/// row gives `("", 0)`.
+fn stream_game_identity(
+    games: &slint::ModelRc<crate::CaptureSourceData>,
+    pid: u32,
+) -> (String, u32) {
+    for row in 0..games.row_count() {
+        if let Some(entry) = games.row_data(row) {
+            if entry.pid == pid as i32 {
+                return (entry.exe.to_string(), entry.igdb_id.max(0) as u32);
+            }
+        }
+    }
+    (String::new(), 0)
 }
 
 fn start_confirmed_timer(app_weak: slint::Weak<MainWindow>) {
