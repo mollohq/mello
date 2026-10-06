@@ -7,19 +7,22 @@
 //! canceller as far-end audio.
 //!
 //! Sender. [`encode`] injects the reference in 10 ms chunks with
-//! `mello_voice_inject_capture` and drains `mello_voice_get_packet` after
-//! each chunk. The sender path reads no clock and never sees the receiver,
+//! `mello_voice_inject_capture`. A packet sink (`mello_voice_set_packet_sink`)
+//! takes each frame right after Opus encode, as on the SFU send path in
+//! mello-core. The sender path reads no clock and never sees the receiver,
 //! so its packets are a pure function of the captured samples. The harness
 //! therefore encodes the longest reference once and every profile replays a
 //! prefix of that packet trace. Same packets as a live interleaved run, and
 //! the sender DSP (about 5 ms per 20 ms frame) runs once instead of once per
 //! profile.
 //!
-//! Send timing. A packet that leaves the encoder after chunk `c` is
-//! available at sender time `10 c` ms. Today `VoiceManager::tick` in
-//! mello-core drains `mello_voice_get_packet` every 20 ms on the command
-//! loop and sends what it finds. The replay does the same, with ticks at
-//! sender time `20 k + 10` ms. Sender time maps to receiver time by the
+//! Send timing ([`SendModel`]). A packet that leaves the encoder after chunk
+//! `c` is available at sender time `10 c` ms. The SFU path of mello-core
+//! sends it then, from the capture thread (spec 10 section 4.5):
+//! [`SendModel::Direct`], the default. Before that path, `VoiceManager::tick`
+//! drained `mello_voice_get_packet` every 20 ms on the command loop:
+//! [`SendModel::Tick`] replays that with ticks at sender time `20 k + 10` ms,
+//! for comparison (`--send-tick`). Sender time maps to receiver time by the
 //! clock ratio of the profile (drift).
 //!
 //! Receiver clock. [`run_receiver`] drives libmello's playout clock with
@@ -211,10 +214,65 @@ fn set_clock(now_ms: i64) {
     unsafe { mello_sys::mello_test_set_clock_ms(CLOCK_ORIGIN_MS + now_ms) };
 }
 
-/// Send tick of today's mello-core voice loop: every 20 ms, drain all.
+/// When the sender puts an encoded packet on the network.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SendModel {
+    /// At encode time, from the capture thread (the SFU path since stage 2).
+    Direct,
+    /// On the 20 ms voice tick of the command loop (the SFU path before
+    /// stage 2, and the P2P path).
+    Tick,
+}
+
+impl SendModel {
+    pub fn describe(self) -> &'static str {
+        match self {
+            SendModel::Direct => {
+                "packets leave at encode time (sender time 10c ms), like the SFU packet sink on the capture thread"
+            }
+            SendModel::Tick => {
+                "packets leave on a 20 ms tick at sender time 20k+10 ms, like VoiceManager::tick before stage 2"
+            }
+        }
+    }
+}
+
+/// Send tick of the voice loop before stage 2: every 20 ms, drain all.
 const SEND_TICK_MS: usize = 20;
 /// Phase of the send tick against the capture frames (sender ms).
 const SEND_TICK_PHASE_MS: usize = 10;
+
+/// Packets the sink collects while the reference is injected.
+struct SinkTrace {
+    /// Chunks injected so far, including the one being injected now.
+    chunks: usize,
+    packets: Vec<(usize, Vec<u8>)>,
+}
+
+/// Packet sink of the sender context. Rebuilds the bytes that
+/// `mello_voice_get_packet` returns: the 4-byte little-endian sequence and
+/// the Opus payload, which the shim rewrites as the SFU path does.
+///
+/// # Safety
+/// `user_data` points to the `SinkTrace` of [`encode`], which outlives the
+/// sink; `data` is valid for `size` bytes.
+unsafe extern "C" fn collect_packet(
+    user_data: *mut std::ffi::c_void,
+    data: *const u8,
+    size: i32,
+    _timestamp: u32,
+    sequence: u32,
+) {
+    if user_data.is_null() || data.is_null() || size <= 0 {
+        return;
+    }
+    let trace = &mut *(user_data as *mut SinkTrace);
+    let payload = std::slice::from_raw_parts(data, size as usize);
+    let mut pkt = Vec::with_capacity(4 + payload.len());
+    pkt.extend_from_slice(&sequence.to_le_bytes());
+    pkt.extend_from_slice(payload);
+    trace.packets.push((trace.chunks, pkt));
+}
 
 /// Encode `reference` with a sender context set up as `sender`. See the
 /// module notes.
@@ -231,25 +289,38 @@ pub fn encode(reference: &[i16], sender: &SenderSpec) -> Result<SenderTrace, Str
     if r != mello_sys::MelloResult_MELLO_OK {
         return Err(format!("start_capture_inject failed: {r}"));
     }
-    let mut packets = Vec::new();
-    let mut pkt = vec![0u8; 4000];
+    let mut trace = Box::new(SinkTrace {
+        chunks: 0,
+        packets: Vec::new(),
+    });
+    let trace_ptr: *mut SinkTrace = &mut *trace;
+    // SAFETY: tx.0 is a live context. The sink runs only inside
+    // mello_voice_inject_capture on this thread, and it is cleared below
+    // before `trace` is read or dropped.
+    let r = unsafe {
+        mello_sys::mello_voice_set_packet_sink(
+            tx.0,
+            Some(collect_packet),
+            trace_ptr as *mut std::ffi::c_void,
+        )
+    };
+    if r != mello_sys::MelloResult_MELLO_OK {
+        return Err(format!("set_packet_sink failed: {r}"));
+    }
     for (i, chunk) in reference.chunks_exact(CHUNK).enumerate() {
+        // SAFETY: the sink touches the trace only inside the inject call.
+        unsafe { (*trace_ptr).chunks = i + 1 };
         // SAFETY: chunk outlives the call; libmello copies the samples.
         unsafe { mello_sys::mello_voice_inject_capture(tx.0, chunk.as_ptr(), CHUNK as i32) };
-        loop {
-            // SAFETY: pkt is a writable buffer of the given length.
-            let n = unsafe {
-                mello_sys::mello_voice_get_packet(tx.0, pkt.as_mut_ptr(), pkt.len() as i32)
-            };
-            if n <= 0 {
-                break;
-            }
-            packets.push((i + 1, pkt[..n as usize].to_vec()));
-        }
+    }
+    // SAFETY: tx.0 is a live context; the clear waits for a running sink.
+    unsafe {
+        mello_sys::mello_voice_set_packet_sink(tx.0, None, std::ptr::null_mut());
     }
     let packets_encoded = tx.stats().packets_encoded;
     // SAFETY: tx.0 is a live context.
     unsafe { mello_sys::mello_voice_stop_capture_inject(tx.0) };
+    let packets = std::mem::take(&mut trace.packets);
     Ok(SenderTrace {
         packets,
         packets_encoded,
@@ -257,16 +328,18 @@ pub fn encode(reference: &[i16], sender: &SenderSpec) -> Result<SenderTrace, Str
     })
 }
 
-/// Receiver time (ms, rounded up) at which the send tick sends a packet
-/// that left the encoder after `chunks` chunks.
-fn send_time_ms(chunks: usize, clock_ratio: f64) -> i64 {
+/// Receiver time (ms, rounded up) at which the sender sends a packet that
+/// left the encoder after `chunks` chunks.
+fn send_time_ms(chunks: usize, clock_ratio: f64, model: SendModel) -> i64 {
     let ready = chunks * 10;
-    let tick = if ready <= SEND_TICK_PHASE_MS {
-        SEND_TICK_PHASE_MS
-    } else {
-        (ready - SEND_TICK_PHASE_MS).div_ceil(SEND_TICK_MS) * SEND_TICK_MS + SEND_TICK_PHASE_MS
+    let sent = match model {
+        SendModel::Direct => ready,
+        SendModel::Tick if ready <= SEND_TICK_PHASE_MS => SEND_TICK_PHASE_MS,
+        SendModel::Tick => {
+            (ready - SEND_TICK_PHASE_MS).div_ceil(SEND_TICK_MS) * SEND_TICK_MS + SEND_TICK_PHASE_MS
+        }
     };
-    (tick as f64 * clock_ratio).ceil() as i64
+    (sent as f64 * clock_ratio).ceil() as i64
 }
 
 /// Replay the sender trace for `reference` (a prefix of the encoded
@@ -277,6 +350,7 @@ pub fn run_receiver(
     clips: &[ClipSpan],
     trace: &SenderTrace,
     tail_ms: u32,
+    model: SendModel,
 ) -> Result<RunResult, String> {
     let started = Instant::now();
     let _clock = ClockGuard;
@@ -303,8 +377,8 @@ pub fn run_receiver(
     for now in 0..=end_ms {
         set_clock(now);
 
-        // 1. Sender send tick.
-        while next < packets.len() && send_time_ms(packets[next].0, clock_ratio) <= now {
+        // 1. Sender.
+        while next < packets.len() && send_time_ms(packets[next].0, clock_ratio, model) <= now {
             let (chunks, bytes) = packets[next];
             shim.send(bytes, now, chunks * CHUNK);
             next += 1;

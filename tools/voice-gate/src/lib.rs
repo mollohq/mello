@@ -201,7 +201,8 @@ mod smoke {
         p.duration_s = 14.0;
         let (reference, spans) = run::build_reference(&clips, &gf.corpus, p.duration_s);
         let trace = run::encode(&reference, &p.sender).expect("encode");
-        let r = run::run_receiver(&p, &reference, &spans, &trace, 1000).expect("run");
+        let r = run::run_receiver(&p, &reference, &spans, &trace, 1000, run::SendModel::Direct)
+            .expect("run");
         let m = measure(&p, &r, &gf.analysis, gf.corpus.clips.len());
         let get = |k: &str| m.metrics.get(k).cloned().flatten();
 
@@ -218,7 +219,8 @@ mod smoke {
 
         // The baseline delta only means something if a run is repeatable:
         // the same trace through the same profile gives the same output.
-        let again = run::run_receiver(&p, &reference, &spans, &trace, 1000).expect("second run");
+        let again = run::run_receiver(&p, &reference, &spans, &trace, 1000, run::SendModel::Direct)
+            .expect("second run");
         assert!(
             again.output == r.output,
             "receiver output is not deterministic"

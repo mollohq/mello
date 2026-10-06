@@ -1,8 +1,12 @@
 //! voice-gate: run the voice quality gate. Use scripts/voice-gate.sh.
 //!
 //! ```text
-//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--write-baseline]
+//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--send-tick] [--write-baseline]
 //! ```
+//!
+//! `--send-tick` replays the sender on the 20 ms voice tick of the command
+//! loop, as before the stage 2 packet sink, for comparison. The default sends
+//! each packet at its encode time, as the SFU path does now.
 //!
 //! Exit codes: 0 = every enforced gate passed, 1 = an enforced gate failed,
 //! 2 = setup error.
@@ -37,6 +41,7 @@ struct Args {
     only: Option<Vec<String>>,
     out: Option<PathBuf>,
     no_score: bool,
+    send_model: run::SendModel,
     write_baseline: bool,
 }
 
@@ -45,6 +50,7 @@ fn parse_args() -> Result<Args, String> {
         only: None,
         out: None,
         no_score: false,
+        send_model: run::SendModel::Direct,
         write_baseline: false,
     };
     let mut it = std::env::args().skip(1);
@@ -56,9 +62,12 @@ fn parse_args() -> Result<Args, String> {
             }
             "--out" => a.out = Some(PathBuf::from(it.next().ok_or("--out needs a directory")?)),
             "--no-score" => a.no_score = true,
+            "--send-tick" => a.send_model = run::SendModel::Tick,
             "--write-baseline" => a.write_baseline = true,
             "-h" | "--help" => {
-                println!("voice-gate [--only a,b] [--out DIR] [--no-score] [--write-baseline]");
+                println!(
+                    "voice-gate [--only a,b] [--out DIR] [--no-score] [--send-tick] [--write-baseline]"
+                );
                 std::process::exit(0);
             }
             other => return Err(format!("unknown argument '{other}'")),
@@ -217,7 +226,14 @@ fn real_main() -> Result<bool, String> {
             p.name, p.duration_s
         );
         let n = run::reference_len(p.duration_s);
-        let r = run::run_receiver(p, &reference[..n], &spans, &traces[&p.sender], gf.tail_ms)?;
+        let r = run::run_receiver(
+            p,
+            &reference[..n],
+            &spans,
+            &traces[&p.sender],
+            gf.tail_ms,
+            args.send_model,
+        )?;
         let m = measure(p, &r, &gf.analysis, gf.corpus.clips.len());
         eprintln!("{:.1} s", r.wall_s);
 
@@ -355,10 +371,10 @@ fn real_main() -> Result<bool, String> {
             d
         } else { scores.detail.clone() },
         "method": {
-            "path": "mello_voice_inject_capture -> mello_voice_get_packet -> shim (SFU header rewrite, impairments) -> mello_voice_feed_packet -> mello_voice_test_pull_output",
+            "path": "mello_voice_inject_capture -> mello_voice_set_packet_sink -> shim (SFU header rewrite, impairments) -> mello_voice_feed_packet -> mello_voice_test_pull_output",
             "backend": "MELLO_AUDIO_BACKEND=test (no device, no device thread)",
             "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace",
-            "send_tick": "packets leave on a 20 ms tick at sender time 20k+10 ms, like VoiceManager::tick",
+            "send": args.send_model.describe(),
             "clock": "virtual: mello_test_set_clock_ms, 1 ms steps; receiver pulls 10 ms per step of 10 ms",
             "delay": "windowed cross-correlation at 4 kHz, reference vs output; latency = playout time - capture time",
         },
