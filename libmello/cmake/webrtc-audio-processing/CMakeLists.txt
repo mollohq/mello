@@ -481,3 +481,130 @@ else()
         -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
     )
 endif()
+
+# ============================================================================
+# NetEQ + audio mixer (stage 3 spike, option MELLO_WEBRTC_NETEQ)
+# ============================================================================
+# Source: https://webrtc.googlesource.com/src refs/branch-heads/6778 (M131),
+# commit 79aff54b0fa9238ce3518dd9eaf9610cd6f22e82, the same milestone as the
+# APM in the submodule. The files live in a separate overlay tree,
+# third_party/webrtc-neteq/webrtc, because the submodule points at a
+# repository that mello cannot push to. The overlay holds only files the
+# submodule does not have; both trees share the same include root layout.
+# The decoder side has Opus and CNG only (no builtin decoder factory).
+# Nothing in libmello links this target yet: only the spike test uses it.
+option(MELLO_WEBRTC_NETEQ "Build the vendored WebRTC NetEQ and audio mixer" ON)
+
+if(MELLO_WEBRTC_NETEQ)
+    find_package(Opus CONFIG REQUIRED)
+
+    set(NETEQ_ROOT ${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/webrtc-neteq)
+
+    set(NETEQ_SOURCES
+        webrtc/api/audio_codecs/audio_codec_pair_id.cc
+        webrtc/api/audio_codecs/audio_decoder.cc
+        webrtc/api/audio_codecs/audio_format.cc
+        webrtc/api/audio_codecs/opus/audio_decoder_opus.cc
+        webrtc/api/environment/environment_factory.cc
+        webrtc/api/field_trials_registry.cc
+        webrtc/api/media_types.cc
+        webrtc/api/neteq/custom_neteq_factory.cc
+        webrtc/api/neteq/default_neteq_controller_factory.cc
+        webrtc/api/neteq/default_neteq_factory.cc
+        webrtc/api/neteq/neteq.cc
+        webrtc/api/neteq/tick_timer.cc
+        webrtc/api/rtc_event_log/rtc_event.cc
+        webrtc/api/rtc_event_log/rtc_event_log.cc
+        webrtc/api/rtp_parameters.cc
+        webrtc/api/task_queue/default_task_queue_factory_stdlib.cc
+        webrtc/api/transport/field_trial_based_config.cc
+        webrtc/api/units/data_rate.cc
+        webrtc/api/units/data_size.cc
+        webrtc/audio/utility/channel_mixer.cc
+        webrtc/audio/utility/channel_mixing_matrix.cc
+        webrtc/media/base/media_constants.cc
+        webrtc/modules/audio_coding/codecs/cng/webrtc_cng.cc
+        webrtc/modules/audio_coding/codecs/opus/audio_coder_opus_common.cc
+        webrtc/modules/audio_coding/codecs/opus/audio_decoder_opus.cc
+        webrtc/modules/audio_coding/codecs/opus/opus_interface.cc
+        webrtc/modules/audio_coding/neteq/accelerate.cc
+        webrtc/modules/audio_coding/neteq/audio_multi_vector.cc
+        webrtc/modules/audio_coding/neteq/audio_vector.cc
+        webrtc/modules/audio_coding/neteq/background_noise.cc
+        webrtc/modules/audio_coding/neteq/buffer_level_filter.cc
+        webrtc/modules/audio_coding/neteq/comfort_noise.cc
+        webrtc/modules/audio_coding/neteq/cross_correlation.cc
+        webrtc/modules/audio_coding/neteq/decision_logic.cc
+        webrtc/modules/audio_coding/neteq/decoder_database.cc
+        webrtc/modules/audio_coding/neteq/delay_constraints.cc
+        webrtc/modules/audio_coding/neteq/delay_manager.cc
+        webrtc/modules/audio_coding/neteq/dsp_helper.cc
+        webrtc/modules/audio_coding/neteq/dtmf_buffer.cc
+        webrtc/modules/audio_coding/neteq/dtmf_tone_generator.cc
+        webrtc/modules/audio_coding/neteq/expand.cc
+        webrtc/modules/audio_coding/neteq/expand_uma_logger.cc
+        webrtc/modules/audio_coding/neteq/histogram.cc
+        webrtc/modules/audio_coding/neteq/merge.cc
+        webrtc/modules/audio_coding/neteq/nack_tracker.cc
+        webrtc/modules/audio_coding/neteq/neteq_impl.cc
+        webrtc/modules/audio_coding/neteq/normal.cc
+        webrtc/modules/audio_coding/neteq/packet.cc
+        webrtc/modules/audio_coding/neteq/packet_arrival_history.cc
+        webrtc/modules/audio_coding/neteq/packet_buffer.cc
+        webrtc/modules/audio_coding/neteq/preemptive_expand.cc
+        webrtc/modules/audio_coding/neteq/random_vector.cc
+        webrtc/modules/audio_coding/neteq/red_payload_splitter.cc
+        webrtc/modules/audio_coding/neteq/reorder_optimizer.cc
+        webrtc/modules/audio_coding/neteq/statistics_calculator.cc
+        webrtc/modules/audio_coding/neteq/sync_buffer.cc
+        webrtc/modules/audio_coding/neteq/time_stretch.cc
+        webrtc/modules/audio_coding/neteq/timestamp_scaler.cc
+        webrtc/modules/audio_coding/neteq/underrun_optimizer.cc
+        webrtc/modules/audio_mixer/audio_frame_manipulator.cc
+        webrtc/modules/audio_mixer/audio_mixer_impl.cc
+        webrtc/modules/audio_mixer/default_output_rate_calculator.cc
+        webrtc/modules/audio_mixer/frame_combiner.cc
+        webrtc/rtc_base/experiments/field_trial_units.cc
+        webrtc/rtc_base/experiments/struct_parameters_parser.cc
+        webrtc/rtc_base/strings/audio_format_to_string.cc
+        webrtc/rtc_base/task_queue_stdlib.cc
+        webrtc/system_wrappers/source/clock.cc
+    )
+    list(TRANSFORM NETEQ_SOURCES PREPEND "${NETEQ_ROOT}/")
+    # Files that the submodule carries but its own build does not compile.
+    list(APPEND NETEQ_SOURCES
+        ${WAP_ROOT}/webrtc/audio/utility/audio_frame_operations.cc
+    )
+
+    add_library(webrtc_neteq STATIC ${NETEQ_SOURCES})
+    set_target_properties(webrtc_neteq PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_compile_definitions(webrtc_neteq PRIVATE ${WAP_DEFINES})
+    # Consumers include NetEQ headers (rtc_base, api) that branch on the
+    # platform macros, so those three travel with the target.
+    if(WIN32)
+        target_compile_definitions(webrtc_neteq PUBLIC WEBRTC_WIN)
+    elseif(APPLE)
+        target_compile_definitions(webrtc_neteq PUBLIC WEBRTC_MAC WEBRTC_POSIX)
+    else()
+        target_compile_definitions(webrtc_neteq PUBLIC WEBRTC_LINUX WEBRTC_POSIX)
+    endif()
+    target_include_directories(webrtc_neteq BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
+    target_include_directories(webrtc_neteq PUBLIC ${NETEQ_ROOT}/webrtc)
+    target_link_libraries(webrtc_neteq
+        PUBLIC
+            webrtc_audio_processing
+            Opus::opus
+    )
+    if(MSVC)
+        # Same list as the APM target, plus C4715 (task_queue_stdlib.cc ends a
+        # switch with RTC_CHECK_NOTREACHED, which MSVC does not see as noreturn).
+        target_compile_options(webrtc_neteq PRIVATE
+            /wd4244 /wd4267 /wd4305 /wd4838 /wd4065 /wd4702 /wd4018
+            /wd4334 /wd4996 /wd4100 /wd4127 /wd4189 /wd4456 /wd4715
+        )
+    else()
+        target_compile_options(webrtc_neteq PRIVATE
+            -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
+        )
+    endif()
+endif()
