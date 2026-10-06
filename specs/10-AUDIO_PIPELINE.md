@@ -295,6 +295,8 @@ Voice transport has two modes:
 
 Server flow is serialized via per-peer renegotiation mutex to avoid offer/answer races.
 
+A busy session sends other signaling while a join waits for `joined` (step 2) or `answer` (step 3): `member_joined`, `member_left`, `ice_candidate`, a server `offer`. The client reads until the wanted type or `error` (`read_signal_until`). It keeps every other message in arrival order (at most 256) and does not fail the join on it. The signaling listener handles the kept messages first, then reads the socket. So no membership event and no server ICE candidate is lost.
+
 ### 7.2 Leave/Close Semantics
 
 Leave must use a proper websocket close handshake:
