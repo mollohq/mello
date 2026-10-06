@@ -17,7 +17,7 @@ namespace {
 constexpr const char* TAG = "video/hook";
 
 // The hook has 4 s to load and report ready, the same deadline the injection
-// helper works to (plan 3.4).
+// helper works to (streaming-reliability plan section 7.3).
 constexpr uint32_t kInjectTimeoutMs = 4000;
 
 // A game whose present count has not moved for this long has stopped drawing.
@@ -341,9 +341,10 @@ bool HookCapture::wait_for_first_frame(uint32_t timeout_ms) {
     return false;
 }
 
-// Opens the block a Direct3D 9 game writes its frames into. That API cannot
-// share a surface with the client's D3D11 device, so its frames come through
-// memory (plan 3.2).
+// Opens the block a Direct3D 9 game writes its frames into when it cannot
+// share textures: a plain D3D9 device, or a D3D9Ex device on another adapter
+// than the client's. Those frames come through memory (streaming-reliability
+// plan section 7.4).
 bool HookCapture::refresh_memory_frames() {
     const uint32_t bytes = info_->cpu_frame_bytes;
     const uint32_t pitch = info_->cpu_pitch;

@@ -543,9 +543,9 @@ bool ProcessCapture::initialize(const GraphicsDevice& device, const CaptureSourc
     }
 
     allow_hook_ = desc.allow_hook;
-    // The developer override names one executable and stands in for the backend
-    // safe list, which does not exist yet. The ladder has to offer the step for
-    // the override to reach the policy check at all.
+    // The developer override names one executable and skips the backend hook
+    // policy for it. The ladder has to offer the step for the override to
+    // reach the policy check at all.
     const bool hook_step_available =
         allow_hook_ || GetEnvironmentVariableA(hook::kDeveloperAllowVariable, nullptr, 0) > 0;
     ladder_ = ladder::initial_order(hook_step_available);

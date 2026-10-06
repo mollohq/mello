@@ -8,10 +8,11 @@ namespace mello::video::hook {
 
 /// Why the hook may or may not go into one process.
 ///
-/// These are the run-time checks from plan 3.6, and they run on every stream
-/// start, not once. The catalogue and the backend decide whether a game is
-/// allowed at all; these checks decide whether this process, right now, is the
-/// one the catalogue meant.
+/// These are the run-time checks of the hook policy (streaming-reliability plan
+/// section 8, gate 3), and they run on every stream start, not once. The backend
+/// policy decides whether a game is allowed at all, by catalogue identity; these
+/// checks decide whether this process, right now, is the one the catalogue
+/// meant.
 ///
 /// Bob's rule: the hook must not get anyone banned. Any doubt means no hook,
 /// and the capture ladder falls back to screen capture.
@@ -37,7 +38,7 @@ struct PolicyResult {
 };
 
 /// Runs every run-time check against one process. `allowed_by_caller` carries
-/// the catalogue and backend decision, which the client makes before this.
+/// the backend policy decision (gate 1), which mello-core makes before this.
 PolicyResult check_process(uint32_t pid, bool allowed_by_caller);
 
 // --- The parts that are worth testing without a game ---
@@ -58,10 +59,11 @@ bool is_chromium_window_class(const std::string& window_class);
 
 /// Name of the environment variable that allows the hook for one executable.
 ///
-/// It stands in for the backend `hook_allow` list until the `capture` block in
-/// the `start_stream` response exists (plan 3.6). It is for testing the hook
-/// against a real game, it names exactly one executable, and it changes nothing
-/// else: every run-time check below still has to pass.
+/// A developer override, for testing the hook against a real game. For the one
+/// executable it names, it skips gate 1: the backend `capture` block
+/// (`hook_enabled`, `hook_allow_ids`, `hook_deny_ids`), which mello-core
+/// matches by IGDB id. It changes nothing else: every check in check_process
+/// still has to pass.
 constexpr const char* kDeveloperAllowVariable = "MELLO_HOOK_ALLOW_EXE";
 
 /// True when `kDeveloperAllowVariable` names this executable. `variable_value`

@@ -153,7 +153,7 @@ bool build_resources(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
     td.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
     // The legacy shared flag, not the NT-handle one: a legacy handle is a
     // 32-bit value that opens in the 64-bit client with no DuplicateHandle,
-    // including from a 32-bit game (plan 3.5).
+    // including from a 32-bit game (streaming-reliability plan section 7.4).
     td.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
 
     uint32_t handles[MELLO_HOOK_TEXTURE_COUNT]{};

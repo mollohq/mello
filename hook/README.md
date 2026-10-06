@@ -50,8 +50,10 @@ hook/build/x64/Debug/mello_hook_tests.exe
 
 ## Try it against a real game
 
-The client never hooks a game until the backend sends its capture policy
-(plan 3.6). Until that exists, one environment variable allows one executable:
+The client hooks a game only when the backend capture policy allows it, by
+IGDB id (plan section 8). The policy is edited in the admin tool, and
+`hook_enabled` is off. To test the hook on your own machine, one environment
+variable allows one executable and skips the backend policy for it:
 
 ```
 MELLO_HOOK_ALLOW_EXE=Heaven.exe
@@ -74,7 +76,7 @@ ladder falls back to screen capture.
 
 ## Rules this code lives by
 
-From plan 3.7, because breaking one of them crashes somebody's game:
+From plan section 7.5, because breaking one of them crashes somebody's game:
 
 - `DllMain` starts a thread and returns. No work under the loader lock.
 - Every detour body runs inside a structured exception guard. A fault turns

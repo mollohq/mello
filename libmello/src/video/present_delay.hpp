@@ -9,7 +9,7 @@ namespace mello::video {
 /// Delay from the moment a frame was presented to the moment the capture
 /// backend received it, in 1 ms buckets. Cumulative; readers diff snapshots.
 ///
-/// Used by the DXGI vs WGC benchmark (streaming reliability plan 2.6) to
+/// Used by the DXGI vs WGC benchmark (streaming-reliability plan section 5.2) to
 /// compare capture latency. Written on capture threads, read by stats callers.
 class PresentDelayHistogram {
 public:

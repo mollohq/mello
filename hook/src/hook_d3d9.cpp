@@ -516,8 +516,8 @@ void capture_present(IDirect3DDevice9* device) {
     // GPU, which is the only kind that can be read back, and it resolves a
     // multisampled back buffer on the way. GetRenderTargetData then brings that
     // copy into system memory, which costs a stall on the render thread. This
-    // is the path plan 3.2 asks for first: it works on every D3D9 device,
-    // including the plain ones that cannot share a surface at all.
+    // is the fallback for a game that cannot share textures: it works on every
+    // D3D9 device, including the plain ones that cannot share a surface at all.
     HRESULT hr = device->StretchRect(back, nullptr, g_res.resolve, nullptr, D3DTEXF_NONE);
     back->Release();
     if (SUCCEEDED(hr)) {

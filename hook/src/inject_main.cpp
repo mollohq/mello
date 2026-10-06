@@ -2,9 +2,10 @@
 //
 // Usage: mello-inject64.exe <pid> [timeout_ms]
 //
-// The method is the one from plan 3.4: a WH_GETMESSAGE window hook on a thread
-// of the game that owns a window. Windows loads the DLL into the game when that
-// thread next handles a message, so the helper posts one. There is no
+// The method is the one from the streaming-reliability plan section 7.3: a
+// WH_GETMESSAGE window hook on a thread of the game that owns a window. Windows
+// loads the DLL into the game when that thread next handles a message, so the
+// helper posts one. There is no
 // CreateRemoteThread path, now or later: anti-cheat products flag a remote
 // thread far more often than a window hook.
 //
