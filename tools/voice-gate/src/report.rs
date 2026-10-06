@@ -97,16 +97,23 @@ fn fmt_num(v: Option<f64>) -> String {
     }
 }
 
+fn round4(x: f64) -> f64 {
+    (x * 1e4).round() / 1e4
+}
+
 fn fmt_delta(cur: Option<f64>, base: Option<f64>) -> String {
     match (cur, base) {
         (Some(c), Some(b)) => {
-            let d = c - b;
+            // Result files keep 4 decimals; compare at that precision.
+            let d = round4(c) - round4(b);
             if d.abs() < 1e-9 {
                 "0".into()
             } else if d.abs() >= 10.0 {
                 format!("{d:+.0}")
-            } else {
+            } else if d.abs() >= 0.01 {
                 format!("{d:+.2}")
+            } else {
+                format!("{d:+.4}")
             }
         }
         _ => "".into(),
