@@ -62,6 +62,12 @@ public:
     // lost packet for Missing.
     JitterPopResult pop(std::vector<uint8_t>& out_data, int64_t* out_sequence = nullptr);
 
+    // Copies the payload of the buffered packet with extended sequence
+    // `sequence` into out_data, and leaves it in the buffer. False when the
+    // packet is not buffered. The receive path reads the packet after a
+    // Missing one this way, to conceal the loss with its in-band FEC.
+    bool peek(int64_t sequence, std::vector<uint8_t>& out_data) const;
+
     int buffered_count() const;
     int target_delay_ms() const { return target_delay_ms_; }
     float avg_hold_ms() const { return avg_hold_ms_; }

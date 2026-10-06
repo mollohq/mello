@@ -36,9 +36,9 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ("lost_frames", "Lost frames (network + receiver drops)", 0),
     ("shim_lost", "Packets lost in the network", 0),
     ("conceal_frames", "Concealment frames for losses", 0),
-    ("conceal_missing_plc", "  PLC on jitter Missing", 0),
-    ("conceal_gap_fec", "  FEC on sequence gap", 0),
-    ("conceal_gap_plc", "  PLC on sequence gap", 0),
+    ("conceal_missing_plc", "  PLC for a lost packet", 0),
+    ("conceal_gap_fec", "  FEC for a lost packet", 0),
+    ("conceal_gap_plc", "  PLC for an undecodable packet", 0),
     (
         "fill_plc_frames",
         "PLC frames filling an empty playout buffer",

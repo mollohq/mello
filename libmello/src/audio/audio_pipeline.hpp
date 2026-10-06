@@ -42,8 +42,11 @@ struct EncodedPacket {
 struct ReceiveStats {
     uint32_t frames_decoded = 0;
     uint32_t decode_errors = 0;
+    // One concealment frame per lost packet: FEC from the next packet when
+    // it is buffered (conceal_gap_fec), else PLC (conceal_missing_plc).
     uint32_t conceal_missing_plc = 0;
     uint32_t conceal_gap_fec = 0;
+    // PLC for a packet that arrived but failed to decode.
     uint32_t conceal_gap_plc = 0;
     uint32_t conceal_fill_plc = 0;
     uint32_t jitter_missing = 0;

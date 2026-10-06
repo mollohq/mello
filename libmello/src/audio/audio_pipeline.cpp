@@ -728,7 +728,6 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
 
     // Drain jitter buffers into ring buffers. Cap per-peer drain work per
     // callback so a backlog on one stream doesn't monopolize the audio lock.
-    constexpr uint32_t kMaxConcealFramesPerPacket = 3;
     constexpr int kMaxDrainPacketsPerPeer = 6;
     int total_popped = 0;
     int total_decoded = 0;
@@ -736,8 +735,8 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     int concealment_fec = 0;
     int concealment_plc = 0;
     // Split of concealment_plc for the receive counters (debug stats only).
-    int missing_plc = 0;  // jitter buffer reported Missing
-    int gap_plc = 0;      // sequence gap seen at the next decoded packet
+    int missing_plc = 0;  // jitter buffer reported Missing, no FEC available
+    int gap_plc = 0;      // a popped packet failed to decode
     int fill_plc = 0;     // playout ring ran short inside this callback
     int decoded_ok = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
@@ -756,56 +755,49 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             if (bit == peer_buffers_.end()) continue;
 
             if (pop_result == JitterPopResult::Missing) {
+                // One concealment per lost frame. The playout timeline has
+                // reached the lost packet pkt_seq. Conceal it here, once: from
+                // the in-band FEC of the next packet when that packet is
+                // already buffered, else with PLC. Then mark the lost packet
+                // as played, so the next packet sees no gap and does not
+                // conceal the same frame again.
                 if (decoder_primed_[pid]) {
-                    int16_t plc_pcm[FRAME_SIZE];
-                    int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
-                    if (plc_samples > 0) {
-                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
-                        concealment_plc++;
-                        missing_plc++;
+                    int16_t conceal_pcm[FRAME_SIZE];
+                    int conceal_samples = 0;
+                    std::vector<uint8_t> next_pkt;
+                    if (jb.peek(pkt_seq + 1, next_pkt)) {
+                        conceal_samples = dit->second.decode_fec(
+                            next_pkt.data(), static_cast<int>(next_pkt.size()),
+                            conceal_pcm, FRAME_SIZE);
+                        if (conceal_samples > 0) {
+                            concealment_fec++;
+                        }
+                    }
+                    if (conceal_samples <= 0) {
+                        conceal_samples = dit->second.decode_plc(conceal_pcm, FRAME_SIZE);
+                        if (conceal_samples > 0) {
+                            concealment_plc++;
+                            missing_plc++;
+                        }
+                    }
+                    if (conceal_samples > 0) {
+                        bit->second->write(conceal_pcm, static_cast<size_t>(conceal_samples));
                         total_decoded++;
                     }
+                    last_decoded_seq_[pid] = pkt_seq;
                 }
                 continue;
             }
 
             total_popped++;
-            bool primed = decoder_primed_[pid];
+            // Every loss reaches this loop as a Missing event first, so a gap
+            // here means the jitter buffer moved its timeline (a reset on a
+            // sequence jump). There is nothing left to conceal.
             auto last_it = last_decoded_seq_.find(pid);
-            uint32_t missing_frames = 0;
             if (last_it != last_decoded_seq_.end() && pkt_seq > last_it->second + 1) {
-                missing_frames = static_cast<uint32_t>(
-                    (std::min<int64_t>)(pkt_seq - last_it->second - 1, kMaxConcealFramesPerPacket));
-            }
-
-            if (primed && missing_frames > 0) {
-                bool used_fec = false;
-                // With one-frame loss, try in-band FEC from the current packet first.
-                if (missing_frames == 1) {
-                    int16_t fec_pcm[FRAME_SIZE];
-                    int fec_samples = dit->second.decode_fec(
-                        pkt_data.data(), static_cast<int>(pkt_data.size()), fec_pcm, FRAME_SIZE);
-                    if (fec_samples > 0) {
-                        bit->second->write(fec_pcm, static_cast<size_t>(fec_samples));
-                        concealment_fec++;
-                        total_decoded++;
-                        used_fec = true;
-                    }
-                }
-
-                if (!used_fec) {
-                    uint32_t plc_frames =
-                        std::min<uint32_t>(missing_frames, kMaxConcealFramesPerPacket);
-                    for (uint32_t i = 0; i < plc_frames; ++i) {
-                        int16_t plc_pcm[FRAME_SIZE];
-                        int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
-                        if (plc_samples <= 0) break;
-                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
-                        concealment_plc++;
-                        gap_plc++;
-                        total_decoded++;
-                    }
-                }
+                MELLO_LOG_DEBUG("pipeline", "peer '%s': timeline jump of %lld packets",
+                                pid.c_str(),
+                                static_cast<long long>(pkt_seq - last_it->second - 1));
             }
 
             int16_t pcm[FRAME_SIZE];
@@ -820,6 +812,17 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                 last_decoded_seq_[pid] = pkt_seq;
             } else {
                 decode_errors++;
+                // An undecodable packet is a lost frame: conceal it once.
+                if (decoder_primed_[pid]) {
+                    int plc_samples = dit->second.decode_plc(pcm, FRAME_SIZE);
+                    if (plc_samples > 0) {
+                        bit->second->write(pcm, static_cast<size_t>(plc_samples));
+                        concealment_plc++;
+                        gap_plc++;
+                        total_decoded++;
+                    }
+                    last_decoded_seq_[pid] = pkt_seq;
+                }
             }
         }
     }

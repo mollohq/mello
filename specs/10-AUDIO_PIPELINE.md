@@ -211,13 +211,17 @@ Current adaptive bounds:
 
 ### 5.1 Concealment Policy
 
-When timeline indicates loss:
+Rule: one concealment frame per lost frame. A lost 20 ms frame produces 20 ms of concealed audio, never 40.
 
-- single-frame gap: attempt Opus in-band `decode_fec` from the next packet
-- otherwise: `decode_plc` for bounded concealment frames
-- explicit `Missing` events also trigger PLC when decoder is primed
+Every loss reaches the playout loop as one `Missing` event from the jitter buffer. `pop()` reports the extended sequence of the lost packet. On `Missing`, when the decoder is primed:
 
-This keeps continuity under jitter/loss while preventing unbounded latency growth.
+1. If the jitter buffer holds the next packet (`peek(seq + 1)`), conceal the frame with Opus in-band `decode_fec` from that packet.
+2. Else conceal it with `decode_plc`.
+3. Record the lost sequence as played (`last_decoded_seq_`).
+
+The next packet then decodes with no gap and conceals nothing. A gap at decode means the jitter buffer moved its timeline (a reset on a sequence jump). The playout loop conceals nothing for it. A packet that fails to decode gets one PLC frame.
+
+Counters (`MelloDebugStats`): `rx_conceal_gap_fec` (FEC for a lost packet), `rx_conceal_missing_plc` (PLC for a lost packet), `rx_conceal_gap_plc` (PLC for an undecodable packet).
 
 ### 5.2 Mix and Render
 

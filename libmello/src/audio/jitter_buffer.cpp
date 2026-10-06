@@ -134,6 +134,9 @@ JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, int64_t* out_s
             if (oldest_hold >= target_delay_ms_ ||
                 static_cast<int>(packets_.size()) >= JITTER_MAX_PACKETS/3) {
                 underruns_++;
+                if (out_sequence) {
+                    *out_sequence = next_seq_;
+                }
                 next_seq_++;
                 return JitterPopResult::Missing;
             }
@@ -158,6 +161,16 @@ JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, int64_t* out_s
     next_seq_++;
     last_pop_time_ = now_ms();
     return JitterPopResult::Packet;
+}
+
+bool JitterBuffer::peek(int64_t sequence, std::vector<uint8_t>& out_data) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = packets_.find(sequence);
+    if (it == packets_.end()) {
+        return false;
+    }
+    out_data = it->second.data;
+    return true;
 }
 
 int JitterBuffer::buffered_count() const {

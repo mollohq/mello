@@ -861,9 +861,9 @@ typedef struct MelloDebugStats {
      * context started. Jitter fields cover the current remote peers. */
     uint32_t rx_frames_decoded;          /* packets decoded normally */
     uint32_t rx_decode_errors;           /* Opus decode failures */
-    uint32_t rx_conceal_missing_plc;     /* PLC frames for a jitter "Missing" event */
-    uint32_t rx_conceal_gap_fec;         /* FEC frames for a sequence gap at decode */
-    uint32_t rx_conceal_gap_plc;         /* PLC frames for a sequence gap at decode */
+    uint32_t rx_conceal_missing_plc;     /* PLC frames for a lost packet ("Missing"), no FEC */
+    uint32_t rx_conceal_gap_fec;         /* FEC frames for a lost packet, from the next packet */
+    uint32_t rx_conceal_gap_plc;         /* PLC frames for a packet that failed to decode */
     uint32_t rx_conceal_fill_plc;        /* PLC frames that fill a short playout buffer */
     uint32_t rx_jitter_missing;          /* packets the jitter buffer declared lost */
     uint32_t rx_jitter_dropped_late;     /* packets dropped: older than the playout point */
