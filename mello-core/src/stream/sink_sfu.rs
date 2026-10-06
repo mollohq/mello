@@ -67,11 +67,11 @@ impl PacketSink for SfuSink {
             .send_video_access_unit(annex_b, capture_timestamp_us)
     }
 
-    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+    async fn send_audio(&self, opus: &[u8], timestamp: u32) -> Result<(), StreamError> {
         if opus.is_empty() {
             return Ok(());
         }
-        self.connection.send_audio(opus)
+        self.connection.send_audio(opus, timestamp)
     }
 
     async fn set_pacing_kbps(&self, target_kbps: u32) {

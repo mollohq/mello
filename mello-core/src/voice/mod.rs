@@ -949,13 +949,16 @@ impl VoiceManager {
         let mut buf = [0u8; PACKET_BUF_SIZE];
         let loopback_id = std::ffi::CString::new("loopback").unwrap();
 
-        // Read outgoing audio packets from capture
+        // Read outgoing audio packets from capture, each with its media time
+        // (48 kHz capture clock) for the RTP timestamp.
         loop {
+            let mut timestamp: u32 = 0;
             let size = unsafe {
-                mello_sys::mello_voice_get_packet(
+                mello_sys::mello_voice_get_packet_with_timestamp(
                     self.ctx,
                     buf.as_mut_ptr(),
                     PACKET_BUF_SIZE as i32,
+                    &mut timestamp,
                 )
             };
             if size <= 0 {
@@ -973,7 +976,7 @@ impl VoiceManager {
                         if let Some(ref conn) = self.sfu_connection {
                             // Strip the 4-byte LE sequence header; RTP handles sequencing
                             let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
-                            match conn.send_audio(opus_payload) {
+                            match conn.send_audio(opus_payload, timestamp) {
                                 Ok(()) => {}
                                 Err(e) => {
                                     log::warn!("SFU voice send failed: {}", e);

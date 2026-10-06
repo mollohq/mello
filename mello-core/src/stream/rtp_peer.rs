@@ -169,16 +169,23 @@ pub fn send_access_unit(
     map_mello_result(result)
 }
 
-/// Send one Opus frame on a stream-host peer.
-pub fn send_audio(peer: NonNull<MelloPeerConnection>, opus: &[u8]) -> Result<(), RtpPeerError> {
+/// Send one Opus frame on a stream-host peer. `timestamp` is the frame's
+/// media time in 48 kHz samples; libmello adds the track's RTP start
+/// timestamp.
+pub fn send_audio(
+    peer: NonNull<MelloPeerConnection>,
+    opus: &[u8],
+    timestamp: u32,
+) -> Result<(), RtpPeerError> {
     if opus.is_empty() {
         return Ok(());
     }
     let result = unsafe {
-        mello_sys::mello_peer_send_audio(
+        mello_sys::mello_peer_send_audio_frame(
             peer.as_ptr(),
             opus.as_ptr(),
             i32::try_from(opus.len()).map_err(|_| RtpPeerError::InvalidParam)?,
+            timestamp,
         )
     };
     map_mello_result(result)

@@ -360,6 +360,20 @@ int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size) 
     }
 }
 
+int mello_voice_get_packet_with_timestamp(
+    MelloContext* ctx,
+    uint8_t* buffer,
+    int buffer_size,
+    uint32_t* timestamp
+) {
+    if (!ctx || !buffer || buffer_size <= 0) return 0;
+    try {
+        return ctx_cast(ctx)->audio().get_packet(buffer, buffer_size, timestamp);
+    } catch (...) {
+        return 0;
+    }
+}
+
 MelloResult mello_voice_feed_packet(
     MelloContext* ctx,
     const char* peer_id,
@@ -680,6 +694,22 @@ MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data
     try {
         auto* pc = peer_cast(peer);
         return pc->send_audio(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+MelloResult mello_peer_send_audio_frame(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint32_t timestamp
+) {
+    if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->send_audio_frame(data, size, timestamp) ? MELLO_OK
+                                                           : MELLO_ERROR_TRANSPORT_FAILED;
     } catch (...) {
         return MELLO_ERROR_TRANSPORT_FAILED;
     }

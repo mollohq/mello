@@ -142,6 +142,19 @@ MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
 /** Get next encoded audio packet to send to peers. Returns packet size, or 0 if none. */
 MELLO_API int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
 
+/** As mello_voice_get_packet, and writes the packet's media timestamp to
+ *  `timestamp` (may be NULL): the 48 kHz capture sample index of the frame's
+ *  first sample. It counts every captured 20 ms frame, encoded or not, so a
+ *  gap from the speech gate or mute advances it like DTX. Two consecutive
+ *  frames differ by 960. Pass it to mello_peer_send_audio_frame. The packet
+ *  bytes are the same as mello_voice_get_packet returns. */
+MELLO_API int mello_voice_get_packet_with_timestamp(
+    MelloContext* ctx,
+    uint8_t* buffer,
+    int buffer_size,
+    uint32_t* timestamp
+);
+
 /** Feed an encoded audio packet received from a peer. */
 MELLO_API MelloResult mello_voice_feed_packet(
     MelloContext* ctx,
@@ -429,8 +442,21 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 MELLO_API bool mello_peer_is_unreliable_open(MelloPeerConnection* peer);
 MELLO_API bool mello_peer_is_reliable_open(MelloPeerConnection* peer);
 
-/** Send raw Opus frame via the RTP audio track. Packetization is automatic. */
+/** Send raw Opus frame via the RTP audio track. Packetization is automatic.
+ *  The RTP timestamp does not advance with this call: every packet carries
+ *  the track's start timestamp. Use mello_peer_send_audio_frame. */
 MELLO_API MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size);
+
+/** Send one Opus frame via the RTP audio track. `timestamp` is the frame's
+ *  media time in 48 kHz samples from any origin (for voice:
+ *  mello_voice_get_packet_with_timestamp). The RTP timestamp of the packet is
+ *  the track's random start timestamp plus `timestamp`, modulo 2^32. */
+MELLO_API MelloResult mello_peer_send_audio_frame(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint32_t timestamp
+);
 
 /** Handle a server-initiated SDP renegotiation offer. Returns answer SDP. */
 MELLO_API const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp);

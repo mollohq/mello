@@ -33,6 +33,9 @@ namespace mello::audio {
 struct EncodedPacket {
     std::vector<uint8_t> data;
     uint32_t sequence;
+    // Media time of the frame's first sample: the 48 kHz capture sample
+    // index (see AudioPipeline::capture_timestamp_). The RTP timestamp.
+    uint32_t timestamp;
 };
 
 /// Receive-path counters for mello_get_debug_stats (voice quality gate).
@@ -116,7 +119,7 @@ public:
     bool is_muted() const { return muted_; }
     bool is_deafened() const { return deafened_; }
 
-    int get_packet(uint8_t* buffer, int buffer_size);
+    int get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp = nullptr);
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
     bool is_capturing() const { return capturing_; }
@@ -167,7 +170,7 @@ public:
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
-    void process_and_encode_frame(int16_t* frame);
+    void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
     void reset_speech_gate_state();
     void clear_remote_streams();
     /// (Re)build the capture+playback backend pair for the desired
@@ -240,7 +243,16 @@ private:
     int64_t last_underrun_warn_ms_ = 0;
 
     std::vector<int16_t> capture_accum_;
-    std::deque<std::array<int16_t, FRAME_SIZE>> speech_pre_roll_;
+    struct PreRollFrame {
+        uint32_t timestamp;
+        std::array<int16_t, FRAME_SIZE> pcm;
+    };
+    std::deque<PreRollFrame> speech_pre_roll_;
+    // 48 kHz sample index of the next captured frame. Counts every frame
+    // that reaches on_captured_audio, encoded or not, so a gap from the
+    // speech gate or mute advances the RTP timestamp like DTX instead of
+    // looking like a stall. Guarded by accum_mutex_ (capture thread).
+    uint32_t capture_timestamp_ = 0;
     std::mutex accum_mutex_;
 
     std::queue<EncodedPacket> outgoing_;

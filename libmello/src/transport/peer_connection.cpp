@@ -608,14 +608,31 @@ void PeerConnectionImpl::wire_opus_send_packetizer(
     if (audio_cname_.empty()) {
         audio_cname_ = generate_cname();
     }
+    attach_opus_send_packetizer(track, audio_ssrc_, audio_cname_);
+#else
+    (void)track;
+#endif
+}
+
+void PeerConnectionImpl::attach_opus_send_packetizer(
+    const std::shared_ptr<rtc::Track>& track,
+    uint32_t ssrc,
+    const std::string& cname
+) {
+#if RTC_ENABLE_MEDIA
+    // Same cname in the RTCP sender reports as in the SDP.
     const auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-        audio_ssrc_, audio_cname_, kAudioPayloadType,
-        rtc::OpusRtpPacketizer::DefaultClockRate);
+        ssrc, cname, kAudioPayloadType, rtc::OpusRtpPacketizer::DefaultClockRate);
+    // The packetizer takes the RTP timestamp only from a FrameInfo
+    // (send_audio_frame). Keep its random start to offset the media time.
+    audio_rtp_start_timestamp_.store(rtpConfig->startTimestamp, std::memory_order_release);
     const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
     track->setMediaHandler(packetizer);
 #else
     (void)track;
+    (void)ssrc;
+    (void)cname;
 #endif
 }
 
@@ -1218,13 +1235,7 @@ void PeerConnectionImpl::setup_voice_channels() {
     audio.addOpusCodec(111, "minptime=10;useinbandfec=1");
     audio.addSSRC(ssrc, cname, peer_id_, "audio");
     auto audio_track = pc_->addTrack(audio);
-
-    // Same cname in the RTCP sender reports as in the SDP.
-    const auto rtpConfig = std::make_shared<rtc::RtpPacketizationConfig>(
-        ssrc, cname, 111, rtc::OpusRtpPacketizer::DefaultClockRate);
-    const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
-    packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
-    audio_track->setMediaHandler(packetizer);
+    attach_opus_send_packetizer(audio_track, ssrc, cname);
     {
         std::lock_guard<std::mutex> lock(mutex_);
         audio_track_ = audio_track;
@@ -1644,6 +1655,18 @@ bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
 }
 
 bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
+    return send_audio_message(data, size, nullptr);
+}
+
+bool PeerConnectionImpl::send_audio_frame(const uint8_t* data, int size, uint32_t timestamp) {
+    return send_audio_message(data, size, &timestamp);
+}
+
+bool PeerConnectionImpl::send_audio_message(
+    const uint8_t* data,
+    int size,
+    const uint32_t* timestamp
+) {
     std::shared_ptr<rtc::Track> track;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -1661,10 +1684,21 @@ bool PeerConnectionImpl::send_audio(const uint8_t* data, int size) {
         return false;
     }
     try {
-        track->send(
-            reinterpret_cast<const std::byte*>(data),
-            static_cast<size_t>(size)
-        );
+        if (timestamp) {
+            // RTP timestamp = packetizer start + media time (48 kHz), mod 2^32.
+            const uint32_t rtp_timestamp =
+                audio_rtp_start_timestamp_.load(std::memory_order_acquire) + *timestamp;
+            track->sendFrame(
+                reinterpret_cast<const std::byte*>(data),
+                static_cast<size_t>(size),
+                rtc::FrameInfo(rtp_timestamp)
+            );
+        } else {
+            track->send(
+                reinterpret_cast<const std::byte*>(data),
+                static_cast<size_t>(size)
+            );
+        }
         const int prev_skips = send_audio_count_.exchange(0, std::memory_order_relaxed);
         if (prev_skips > 0) {
             fprintf(stderr, "[mello-rtp] send_audio RECOVERED after %d skips\n", prev_skips);

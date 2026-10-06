@@ -157,7 +157,15 @@ For endpoint packet API (`mello_voice_get_packet` / `mello_voice_feed_packet`), 
 [seq0 seq1 seq2 seq3][opus_payload...]
 ```
 
-In SFU RTP mode, `mello-core` strips this 4-byte sequence before `mello_peer_send_audio()` because RTP sequence/timestamp are handled by transport.
+RTP timestamp (media time):
+
+- The capture thread keeps a 48 kHz sample counter. It counts every captured 20 ms frame, encoded or not. A frame that the speech gate or mute holds back still advances it, so a gap looks like DTX and not like a stall.
+- Each encoded packet carries the counter value of its first sample. Pre-roll frames keep the value of the time they were captured.
+- `mello_voice_get_packet_with_timestamp()` returns the packet and this value. Consecutive frames differ by 960. A 1 s gate gap adds 48000.
+- In SFU RTP mode, `mello-core` strips the 4-byte sequence and calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)`. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
+- `mello_peer_send_audio()` does not advance the RTP timestamp (libdatachannel takes it only from a `FrameInfo`). No caller in the repo uses it.
+- Stream game audio uses the same packetizer. Its capture clock counts every 20 ms frame (`ts_us`); mello-core converts it to 48 kHz samples for `mello_peer_send_audio_frame`.
+- The P2P data-channel path keeps the 4-byte header only. The receiver does not use the RTP timestamp yet.
 
 Receive side:
 
@@ -316,6 +324,7 @@ void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
 void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled);
 int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
+int  mello_voice_get_packet_with_timestamp(MelloContext* ctx, uint8_t* buffer, int buffer_size, uint32_t* timestamp);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);
 ```
 

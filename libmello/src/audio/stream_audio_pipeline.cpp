@@ -146,10 +146,13 @@ void StreamAudioHostPipeline::on_pcm(const int16_t* samples, size_t count) {
             STREAM_AUDIO_FRAME_SAMPLES,
             encode_buf_,
             static_cast<int>(sizeof(encode_buf_)));
+        // Media time of this frame. It advances for every frame, sent or
+        // not, so the RTP timestamp (ts_us * 48 / 1000 samples) stays on the
+        // capture clock.
+        const uint64_t ts_us = frame_index_ * 20000;
+        ++frame_index_;
         if (encoded > 0) {
-            const uint64_t ts_us = frame_index_ * 20000;
             callback_(encode_buf_, encoded, ts_us);
-            ++frame_index_;
         } else if (encoded < 0) {
             // encoded == 0 is Opus DTX ("nothing to transmit") and is normal.
             // A negative value is a real encoder error; voice logs it the same

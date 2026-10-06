@@ -158,9 +158,15 @@ fn main() {
     // Wait for connection + send some test audio
     eprintln!("\n[step 2] Waiting for connection, sending test audio...");
     let audio_data = [0u8; 80]; // silence opus frame
-    for i in 0..50 {
+    for i in 0..50u32 {
         unsafe {
-            mello_sys::mello_peer_send_audio(peer, audio_data.as_ptr(), audio_data.len() as i32);
+            // 20 ms frames: 960 samples apart on the 48 kHz RTP clock.
+            mello_sys::mello_peer_send_audio_frame(
+                peer,
+                audio_data.as_ptr(),
+                audio_data.len() as i32,
+                i * 960,
+            );
         }
         if (i + 1) % 25 == 0 {
             eprintln!("[client] Sent {} audio packets", i + 1);
