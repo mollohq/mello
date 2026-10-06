@@ -34,6 +34,11 @@ run cargo fmt --all -- --check
 run cargo clippy --workspace --all-targets -- -D warnings
 run cargo test --workspace
 
+# About 2 minutes, so it lives here and not in check.sh (budget 60 s).
+# check.sh still runs its smoke test through `cargo test --workspace`.
+step "voice quality gate (delta against benchmarks/baselines/voice/baseline-2.9.json)"
+run ./scripts/voice-gate.sh
+
 # MELLO_BUILD_TESTS defaults to OFF: mello-sys/build.rs configures libmello on
 # every cargo build and we do not want the gtest suite compiled into every dev
 # build. CMAKE_TOOLCHAIN_FILE must be absolute — CMake resolves a relative
