@@ -193,3 +193,33 @@ TEST_F(VoiceReceiveTest, OutageRecoversToThePreOutagePlayoutBuffer) {
 }
 
 }  // namespace
+
+namespace {
+
+// Late audio must reach the underrun health. A 200 ms stall delays packets
+// 50..59; they arrive together. While they wait in the jitter buffer the
+// playout ring is empty and the mixer fills with PLC. Before the fix the
+// mixer still returned audio, so no counter saw the late packets.
+TEST_F(VoiceReceiveTest, StallWithPacketsWaitingCountsAsLateUnderrun) {
+    auto arrivals = steady_stream(100, {});
+    for (auto& a : arrivals) {
+        // Packets 50..59 (arrival 1020..1200 ms) arrive at 1220 ms.
+        if (a.arrival_ms >= 1020 && a.arrival_ms <= 1200) a.arrival_ms = 1220;
+    }
+    play(std::move(arrivals), 100 * 20 + 500);
+
+    const auto s = pipeline.receive_stats();
+    EXPECT_GT(s.late_underruns, 0u);
+}
+
+// A talk pause is not an underrun: nothing was received, so nothing is late,
+// even though the mixer fills the pause with PLC.
+TEST_F(VoiceReceiveTest, TalkPauseIsNotALateUnderrun) {
+    play(steady_stream(50, {}), 50 * 20 + 2000);
+
+    const auto s = pipeline.receive_stats();
+    EXPECT_GT(s.conceal_fill_plc, 0u) << "the pause must have been filled";
+    EXPECT_EQ(s.late_underruns, 0u);
+}
+
+}  // namespace

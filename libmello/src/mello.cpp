@@ -957,6 +957,7 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->rx_jitter_buffered_packets = rx.jitter_buffered_packets;
         out->rx_jitter_target_delay_ms  = rx.jitter_target_delay_ms;
         out->rx_playout_buffer_ms       = rx.playout_buffer_ms;
+        out->rx_late_underruns          = rx.late_underruns;
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

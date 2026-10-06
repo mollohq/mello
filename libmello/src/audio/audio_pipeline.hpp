@@ -56,6 +56,9 @@ struct ReceiveStats {
     int32_t jitter_buffered_packets = 0;
     float jitter_target_delay_ms = 0.0f;
     float playout_buffer_ms = 0.0f;
+    // Playback callbacks in which a stream's decoded audio ran short while
+    // its jitter buffer held packets for it (late audio).
+    uint32_t late_underruns = 0;
 };
 
 enum class NsMode {
@@ -229,8 +232,9 @@ private:
     std::atomic<uint32_t> rx_conceal_gap_fec_{0};
     std::atomic<uint32_t> rx_conceal_gap_plc_{0};
     std::atomic<uint32_t> rx_conceal_fill_plc_{0};
+    std::atomic<uint32_t> rx_late_underruns_{0};
 
-    // Windowed underrun health (audio-thread only; no atomics needed).
+    // Windowed late-playout health (audio-thread only; no atomics needed).
     int underrun_window_count_ = 0;
     int64_t underrun_window_start_ms_ = 0;
     int64_t last_underrun_warn_ms_ = 0;
