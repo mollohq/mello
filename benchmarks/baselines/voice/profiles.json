@@ -69,8 +69,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1: one concealment per lost frame" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 1 gate: flat delay at 2 % loss" }
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1: one concealment per lost frame" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss" }
       ]
     },
     {
@@ -91,8 +91,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 3: delay goes down as well as up" }
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" }
       ]
     },
     {
@@ -113,8 +113,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "stage 3: delay goes down as well as up" }
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" }
       ]
     },
     {
@@ -165,7 +165,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "recovery_s", "max": 5, "enforced": false, "note": "stage 3: back to the pre-outage delay within 5 s" }
+        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 1.7: back to the pre-outage delay within 5 s" }
       ]
     },
     {
@@ -180,9 +180,9 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "rx_jitter_resets", "max": 0, "enforced": false, "note": "stage 1.2: the wrap must not reset the jitter buffer" },
-        { "metric": "rx_dropped_late", "max": 0, "enforced": false, "note": "stage 1.2: no packet dropped at the wrap" },
-        { "metric": "wrap_dropout_ms", "max": 0, "enforced": false, "note": "stage 1.2: no dropout at the wrap" }
+        { "metric": "rx_jitter_resets", "max": 0, "enforced": true, "note": "stage 1.2: the wrap must not reset the jitter buffer" },
+        { "metric": "rx_dropped_late", "max": 0, "enforced": true, "note": "stage 1.2: no packet dropped at the wrap" },
+        { "metric": "wrap_dropout_ms", "max": 0, "enforced": true, "note": "stage 1.2: no dropout at the wrap" }
       ]
     }
   ]
