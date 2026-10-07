@@ -247,7 +247,14 @@ mello-core details are in §7.3. The thread rules for the sink are in spec 03 §
 
 ### 4.6 Encoder Adaptation (Send Leg)
 
-Rule: the encoder follows the send leg. The SFU reports the loss and the round trip of the microphone track once per second (§7.5). `SendAdaptation` (`libmello/src/audio/send_adaptation.{hpp,cpp}`) turns each report into an Opus bitrate and an expected loss.
+Rule: the encoder follows the send leg. The SFU reports the loss, the jitter and the round trip of the microphone track once per second (§7.5). `SendAdaptation` (`libmello/src/audio/send_adaptation.{hpp,cpp}`) turns each report into an expected loss and an Opus bitrate.
+
+Two signals, two controls:
+
+| Signal | Control | Why |
+|---|---|---|
+| Loss of any cause | `OPUS_SET_PACKET_LOSS_PERC` only | In-band FEC repairs random loss. A lower bitrate does not lower random loss and costs quality: the loss-driven ladder of the first version cost `mobile` 0.17 and `bad` 0.14 MOS in the voice gate. |
+| Congestion: loss together with a rising round trip or a rising jitter | The bitrate ladder | A queue that the sender's own rate fills drops packets and delays them. A lower rate drains it. |
 
 Encoder settings that do not change: `OPUS_APPLICATION_VOIP`, `OPUS_SIGNAL_VOICE`, in-band FEC on, DTX on, complexity 8, 20 ms frames.
 
@@ -262,20 +269,30 @@ Bitrate ladder:
 | Channel change below the top | The encoder keeps the highest rung at or below its bitrate |
 | New voice session (`start_capture`, `start_capture_inject`) | Top rung, loss perc 5, no history |
 
-Step down one rung at the report when either condition is true:
+Congestion (all at one report):
 
 | Condition | Detail |
 |---|---|
 | Loss | The packets lost over the last 2 s of reports are more than 10 % of the packets expected. The window starts after the last step down, and holds at least 25 expected packets (0.5 s of speech). |
-| Round trip | The median round trip of the last 3 s (at least 2 samples) is more than 2 x the median of the last 30 s (at least 5 samples). The 30 s median counts as at least 50 ms. |
+| and round-trip inflation | The median round trip of the last 3 s (at least 2 samples) is more than 2 x the median of the last 30 s (at least 5 samples). The 30 s median counts as at least 50 ms. Only fresh samples count: a report whose LSR repeats the previous one (`rtt_fresh` false) repeats an old forward delay. |
+| or jitter growth | The same test on the RFC 3550 jitter of the reports that carry packets. The 30 s median counts as at least 10 ms. |
 
-- After a step down, the next step down needs 2 new reports. One lossy second does not step down twice.
-- Step up one rung after 10 s with no step-down condition, when the loss over the 10 s is at most 10 % and the reports in it expect at least 250 packets (5 s of speech).
-- A report with too few packets (a closed speech gate) gives no evidence. It does not step down and does not count as clean speech.
-- Hysteresis is in time: down at the report, up after 10 s. A loss that crosses 10 % again starts a new cycle of at least 12 s, so the bitrate does not flap.
-- Each rung change logs at info (`send_adapt`) with the loss over 2 s, the round trip, its 30 s median and the loss perc.
+Windows count reports: a window of N s holds the reports of the last N s of arrivals, and starts half a report interval late, because the reports arrive a few ms early or late on the SFU's 1 s ticker.
 
-Expected loss (`OPUS_SET_PACKET_LOSS_PERC`): the loss over the last 4 s of reports, in percent, rounded up, clamped to 5 to 30. A 4 s window with fewer than 25 expected packets keeps the last value. Opus spends more of the bitrate on in-band FEC (LBRR) as the value rises. The voice gate shows that a low rung needs it: at 24 kbps with loss perc 5 the FEC is too weak to repair single losses.
+Ladder rules:
+
+| Rule | Detail |
+|---|---|
+| Step down | One rung at a report with congestion. The next step down needs 2 new reports, so one lossy second does not step down twice. |
+| Ineffective step | 4 s of reports after a step down, the loss over them must be at most 10 %, or at most half the loss that caused the step. If not, the ladder steps back up one rung and holds for 30 s: no step in either direction. A later step down replaces the check of the earlier one. |
+| Step up | One rung after 10 s with no congestion, when the reports in the 10 s expect at least 250 packets (5 s of speech). Loss without congestion does not stop it. |
+| No evidence | A report with too few packets (a closed speech gate) does not step and does not count as clean speech. |
+| Hysteresis | In time: down at the report, up after 10 s, a 30 s hold after a wrong step. |
+| Log | Each rung change logs at info (`send_adapt`) with the loss over 2 s, the round trip and the jitter with their 30 s medians, and the loss perc. |
+
+Expected loss (`OPUS_SET_PACKET_LOSS_PERC`): the loss over the last 4 s of reports, in percent, rounded up, clamped to 5 to 30, whatever the cause. A 4 s window with fewer than 25 expected packets keeps the last value. Opus spends more of the bitrate on in-band FEC (LBRR) as the value rises. The voice gate shows that a low rung needs it: at 24 kbps with loss perc 5 the FEC is too weak to repair single losses.
+
+Measured in the voice gate (stage 5, `TESTING.md`): on the eight baseline profiles the ladder stays at the top except for one wrong step on `bad` (back by the ineffective-step rule) and the jitter burst of `burst`; MOS is within 0.02 of stage 4. On the `congestion` profile the ladder steps down 1.7 s after the loss starts and lowers the delay in the bottleneck by 134 ms, but PESQ scores it 0.16 lower than no adaptation (open, see `TESTING.md`).
 
 Threads:
 
@@ -527,7 +544,7 @@ Receive path in libmello (`libmello/src/transport/voice_send_feedback.{hpp,cpp}`
 
 1. libdatachannel routes an RTCP packet to the track whose SSRC a report block names. The voice send track declares its SSRC (`a=ssrc`), so the SFU's report reaches it.
 2. `SendFeedbackHandler`, last in the send track's media handler chain, finds the report blocks about the send SSRC in each RTCP packet (`find_reception_reports`; receiver and sender reports, compound packets).
-3. `SendFeedbackTracker` turns a block into `MelloSendFeedback`: fraction lost, cumulative lost, jitter in ms, and the round trip A - LSR - DLSR against the NTP time of `RtcpSrReporter` (the system clock). It also gives the packets expected and lost since the previous report (RFC 3550 appendix A.3): the difference of the extended sequence numbers and of the cumulative counts, or the fraction times the expected count when the difference is not usable. The first report counts from the track's first sequence. A report before the first packet gives no interval.
+3. `SendFeedbackTracker` turns a block into `MelloSendFeedback`: fraction lost, cumulative lost, jitter in ms, and the round trip A - LSR - DLSR against the NTP time of `RtcpSrReporter` (the system clock). `rtt_fresh` is true when the LSR differs from the previous report's: a full queue drops sender reports, and the reports after it repeat an old, low forward delay. It also gives the packets expected and lost since the previous report (RFC 3550 appendix A.3): the difference of the extended sequence numbers and of the cumulative counts, or the fraction times the expected count when the difference is not usable. The first report counts from the track's first sequence. A report before the first packet gives no interval.
 4. The peer calls `MelloSendFeedbackCallback` on the libdatachannel thread. `mello_peer_get_send_feedback` returns the last one.
 
 mello-core (`transport/sfu_connection.rs`, `send_feedback_callback`): on the libdatachannel thread, while the direct voice sink is set, the feedback goes to `mello_voice_report_send_feedback` of the voice context. The voice sink's read lock guards the context pointer, as on the receive path (§7.3). The teardown clears the callback with the other peer callbacks. The command loop is not in the path.
@@ -632,6 +649,9 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
 - the SFU's receiver reports (a port of Pion's receiver stream) reach the
   sender's encoder adaptation with the report cadence and the network delay
   of the profile (§4.6, §7.5). `--no-adapt` runs without them
+- `profiles-congestion.json` adds profiles after the baseline, with their own
+  seeds and fingerprint: `congestion`, a rate-limited bottleneck with a
+  tail-drop queue, and its `congestion-no-adapt` twin
 - reports MOS-LQO (PESQ wideband), playout delay over time, concealment
   frames per lost frame, receiver drops and dropouts, the send bitrate and
   loss perc over time, with the delta against

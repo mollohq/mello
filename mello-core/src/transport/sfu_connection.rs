@@ -2119,7 +2119,11 @@ mod tests {
         handle_send_feedback(&cb, &fb);
         let s = stats();
         assert_eq!(s.tx_rr_reports, 1);
-        assert_eq!(s.tx_bitrate_kbps, 48, "40 % loss steps one rung down");
+        assert_eq!(
+            s.tx_packet_loss_perc, 30,
+            "40 % loss raises the expected loss"
+        );
+        assert_eq!(s.tx_bitrate_kbps, 64, "loss alone is no congestion");
         assert_eq!(s.tx_rtt_ms, 80.0);
 
         // Voice detached: the report goes nowhere.

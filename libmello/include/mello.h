@@ -244,11 +244,13 @@ MELLO_API MelloResult mello_voice_set_packet_sink(
 
 /** Encoder adaptation to the send leg (spec 10 section 4.6). Give each
  *  receiver report about the voice send track to the context (from
- *  MelloSendFeedbackCallback). libmello steps the Opus bitrate down a ladder
- *  (the channel bitrate, then 64, 48, 32, 24 kbps) when the loss over the
- *  last 2 s exceeds 10 % or the round trip doubles, and up one rung after
- *  10 s clean. OPUS_SET_PACKET_LOSS_PERC follows the loss of the last 4 s,
- *  5 to 30. The capture thread applies the result before the next encode.
+ *  MelloSendFeedbackCallback). OPUS_SET_PACKET_LOSS_PERC follows the loss of
+ *  the last 4 s, 5 to 30. The Opus bitrate steps down a ladder (the channel
+ *  bitrate, then 64, 48, 32, 24 kbps) only on congestion: loss over 10 % in
+ *  the last 2 s together with a doubled round trip (fresh samples only) or a
+ *  doubled jitter. A step that does not lower the loss within 4 s goes back
+ *  and holds the ladder for 30 s. One rung up after 10 s without
+ *  congestion. The capture thread applies the result before the next encode.
  *  Any thread; it never waits for the capture thread. The time is the
  *  playout clock (mello_test_set_clock_ms in tests). */
 MELLO_API void mello_voice_report_send_feedback(MelloContext* ctx, const MelloSendFeedback* feedback);
