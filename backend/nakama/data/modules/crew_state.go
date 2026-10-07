@@ -39,10 +39,12 @@ type VoiceMemberInfo struct {
 
 // VoiceChannelStateView is a per-channel voice state returned in CrewState.
 type VoiceChannelStateView struct {
-	ID        string             `json:"id"`
-	Name      string             `json:"name"`
-	IsDefault bool               `json:"is_default"`
-	Members   []*VoiceMemberInfo `json:"members"`
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsDefault bool   `json:"is_default"`
+	// BitrateKbps is the channel's voice bitrate (spec 13 section 3.1).
+	BitrateKbps int                `json:"bitrate_kbps"`
+	Members     []*VoiceMemberInfo `json:"members"`
 }
 
 type CrewStreamState struct {
@@ -222,12 +224,8 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		voiceChannels = make([]*VoiceChannelStateView, 0, len(channelDefs.Channels))
 		for _, ch := range channelDefs.Channels {
 			chSnap := GetVoiceChannelSnapshot(ch.ID)
-			chView := &VoiceChannelStateView{
-				ID:        ch.ID,
-				Name:      ch.Name,
-				IsDefault: ch.IsDefault,
-				Members:   make([]*VoiceMemberInfo, 0, len(chSnap.Members)),
-			}
+			chView := newVoiceChannelStateView(ch)
+			chView.Members = make([]*VoiceMemberInfo, 0, len(chSnap.Members))
 			for _, vm := range chSnap.Members {
 				speaking := vm.Speaking
 				chView.Members = append(chView.Members, &VoiceMemberInfo{
@@ -391,10 +389,11 @@ func (cs *CrewState) ToSidebar() *CrewSidebarState {
 		sidebar.VoiceChannels = make([]*VoiceChannelStateView, len(cs.VoiceChannels))
 		for i, ch := range cs.VoiceChannels {
 			sidebarCh := &VoiceChannelStateView{
-				ID:        ch.ID,
-				Name:      ch.Name,
-				IsDefault: ch.IsDefault,
-				Members:   make([]*VoiceMemberInfo, len(ch.Members)),
+				ID:          ch.ID,
+				Name:        ch.Name,
+				IsDefault:   ch.IsDefault,
+				BitrateKbps: ch.BitrateKbps,
+				Members:     make([]*VoiceMemberInfo, len(ch.Members)),
 			}
 			for j, m := range ch.Members {
 				sidebarCh.Members[j] = &VoiceMemberInfo{

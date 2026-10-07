@@ -455,6 +455,10 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return "", err
 	}
 
+	// The channel bitrate: the top rung of the joiner's encoder ladder
+	// (spec 10 section 4.6).
+	bitrate := channelBitrateKbps(ctx, nk, req.CrewID, channelID)
+
 	if sfuMode {
 		if endpoint, token, ok := issueVoiceSFUToken(logger, params); ok {
 			resp, _ := json.Marshal(map[string]interface{}{
@@ -464,6 +468,7 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 				"mode":         "sfu",
 				"sfu_endpoint": endpoint,
 				"sfu_token":    token,
+				"bitrate_kbps": bitrate,
 			})
 			return string(resp), nil
 		}
@@ -472,12 +477,28 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 
 	logger.Info("Voice join (P2P): user=%s crew=%s channel=%s", userID, req.CrewID, channelID)
 	resp, _ := json.Marshal(map[string]interface{}{
-		"success":     true,
-		"channel_id":  channelID,
-		"voice_state": snap,
-		"mode":        "p2p",
+		"success":      true,
+		"channel_id":   channelID,
+		"voice_state":  snap,
+		"mode":         "p2p",
+		"bitrate_kbps": bitrate,
 	})
 	return string(resp), nil
+}
+
+// channelBitrateKbps is the bitrate of a crew's voice channel, or the
+// default when the channel is not found.
+func channelBitrateKbps(ctx context.Context, nk runtime.NakamaModule, crewID, channelID string) int {
+	list, err := GetVoiceChannels(ctx, nk, crewID)
+	if err != nil || list == nil {
+		return DefaultChannelBitrateKbps
+	}
+	for _, ch := range list.Channels {
+		if ch.ID == channelID {
+			return ch.EffectiveBitrateKbps()
+		}
+	}
+	return DefaultChannelBitrateKbps
 }
 
 func VoiceLeaveRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {

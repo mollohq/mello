@@ -399,10 +399,11 @@ func PushVoiceUpdate(ctx context.Context, logger runtime.Logger, nk runtime.Naka
 				})
 			}
 			channels = append(channels, map[string]interface{}{
-				"id":         ch.ID,
-				"name":       ch.Name,
-				"is_default": ch.IsDefault,
-				"members":    members,
+				"id":           ch.ID,
+				"name":         ch.Name,
+				"is_default":   ch.IsDefault,
+				"bitrate_kbps": ch.EffectiveBitrateKbps(),
+				"members":      members,
 			})
 		}
 	}

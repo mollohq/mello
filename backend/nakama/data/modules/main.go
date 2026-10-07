@@ -244,6 +244,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("channel_rename", ChannelRenameRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("channel_update", ChannelUpdateRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("channel_delete", ChannelDeleteRPC); err != nil {
 		return err
 	}
