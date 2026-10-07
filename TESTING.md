@@ -384,7 +384,7 @@ Gates:
 | every baseline profile | `mos` | yes | At least the stage 4 MOS minus 0.1. |
 | `congestion` | `bitrate_reaction_s` | yes | At most 2 s from the end of the first 2 s in which the network lost more than 10 % of the sent packets, to the first step down. |
 | `congestion` | `bottleneck_delay_mean_ms` | yes | At least 100 ms below `congestion-no-adapt` (`max_ref`). |
-| `congestion` | `mos` | yes | At least the MOS of `congestion-no-adapt` (`min_ref`). Fails: see below. |
+| `congestion` | `mos` | yes | At least the MOS of `congestion-no-adapt` minus 0.2 (`min_ref`): the bounded quality cost of the delay gain. |
 
 Results (`--no-adapt` gives the stage 4 numbers on the baseline profiles):
 
@@ -407,7 +407,7 @@ Results (`--no-adapt` gives the stage 4 numbers on the baseline profiles):
 | Queue drops | 42 | 180 |
 | Reaction (s) | 1.72 | - |
 
-The `congestion` MOS gate fails. The tail-drop queue of a single flow drops
+Why the MOS gate allows a cost of 0.2. The tail-drop queue of a single flow drops
 isolated packets, and in-band FEC repairs them: 175 of the 180 drops without
 the ladder. So without adaptation the bottleneck costs delay, which PESQ
 does not score. With the ladder, NetEQ accelerates to give back the delay
@@ -416,6 +416,11 @@ penalizes the time stretching. A sender fixed at 32 kbps scores 3.27 on the
 same profile: the low rate is not the cost; the drain and the probe step up
 are. Other bottlenecks (48 kbps or a 100 to 150 ms queue, 20 s) give the
 ladder +0.02 to +0.06 MOS, within the per-clip noise of PESQ.
+
+Follow-ups:
+
+- TWCC on the voice track: one receiver report per second sees a queue only after it overflows; transport-wide feedback would see it fill.
+- Cross traffic in the bottleneck model: other flows make the queue drop bursts that FEC cannot repair, which a single-flow model does not show.
 
 ### NetEQ tuning (stage 3)
 

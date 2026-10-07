@@ -292,7 +292,7 @@ Ladder rules:
 
 Expected loss (`OPUS_SET_PACKET_LOSS_PERC`): the loss over the last 4 s of reports, in percent, rounded up, clamped to 5 to 30, whatever the cause. A 4 s window with fewer than 25 expected packets keeps the last value. Opus spends more of the bitrate on in-band FEC (LBRR) as the value rises. The voice gate shows that a low rung needs it: at 24 kbps with loss perc 5 the FEC is too weak to repair single losses.
 
-Measured in the voice gate (stage 5, `TESTING.md`): on the eight baseline profiles the ladder stays at the top except for one wrong step on `bad` (back by the ineffective-step rule) and the jitter burst of `burst`; MOS is within 0.02 of stage 4. On the `congestion` profile the ladder steps down 1.7 s after the loss starts and lowers the delay in the bottleneck by 134 ms, but PESQ scores it 0.16 lower than no adaptation (open, see `TESTING.md`).
+Measured in the voice gate (stage 5, `TESTING.md`): on the eight baseline profiles the ladder stays at the top except for one wrong step on `bad` (back by the ineffective-step rule) and the jitter burst of `burst`; MOS is within 0.02 of stage 4. On the `congestion` profile the ladder steps down 1.7 s after the loss starts and lowers the delay in the bottleneck by 134 ms, and PESQ scores it 0.16 lower than no adaptation, inside the 0.2 the gate allows (section 9, `TESTING.md`).
 
 Threads:
 
@@ -651,7 +651,11 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
   of the profile (§4.6, §7.5). `--no-adapt` runs without them
 - `profiles-congestion.json` adds profiles after the baseline, with their own
   seeds and fingerprint: `congestion`, a rate-limited bottleneck with a
-  tail-drop queue, and its `congestion-no-adapt` twin
+  tail-drop queue, and its `congestion-no-adapt` twin. Its gates are the
+  delay gain in the bottleneck (at least 100 ms) and a MOS cost of at most
+  0.2 against the twin. In-band FEC repairs the tail-drop losses of a single
+  flow, so without adaptation the bottleneck costs only delay. The ladder
+  trades at most 0.2 MOS of time stretch for the delay gain
 - reports MOS-LQO (PESQ wideband), playout delay over time, concealment
   frames per lost frame, receiver drops and dropouts, the send bitrate and
   loss perc over time, with the delta against

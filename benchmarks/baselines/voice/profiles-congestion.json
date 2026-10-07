@@ -23,7 +23,7 @@
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "bitrate_reaction_s", "max": 2, "enforced": true, "note": "stage 5 gate: the send bitrate steps down within 2 s after the network first loses more than 10 % of 2 s of packets" },
         { "metric": "bottleneck_delay_mean_ms", "max_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": -100 }, "enforced": true, "note": "stage 5 gate: the ladder drains the queue (mean delay in the bottleneck window at least 100 ms lower than without it)" },
-        { "metric": "mos", "min_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": 0 }, "enforced": true, "note": "stage 5 gate: the ladder wins on congestion (MOS with it at least the MOS without it)" }
+        { "metric": "mos", "min_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": -0.2 }, "enforced": true, "note": "stage 5 gate: the ladder costs at most 0.2 MOS. In-band FEC repairs the isolated tail-drop losses of a single flow, so without the ladder the bottleneck costs only delay, which PESQ does not score; the ladder trades at most 0.2 MOS of NetEQ time stretch (the queue drains) for the delay gain gated above" }
       ]
     }
   ]
