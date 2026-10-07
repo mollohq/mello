@@ -162,11 +162,6 @@ async fn media_sfu() -> MediaSfu {
                 _ => {}
             }
         };
-        // The real SFU forwards a member's audio with the member's user id
-        // as msid. libmello accepts an incoming voice track only with such an
-        // id, so give the client's track one.
-        let offer = offer.replace("msid:sfu ", "msid:client-uplink ");
-
         let candidates: Candidates = Arc::new(Mutex::new(Vec::new()));
         let id = CString::new("fake-sfu").expect("static id");
         let offer_c = CString::new(offer).expect("offer has no NUL");
@@ -189,6 +184,14 @@ async fn media_sfu() -> MediaSfu {
             );
             let answer = mello_sys::mello_peer_create_answer(peer, offer_c.as_ptr());
             assert!(!answer.is_null(), "fake SFU answer");
+            // A voice peer routes incoming audio by mid, as the SFU's slot
+            // map names it. The client's microphone is m-line "audio".
+            let mid = CString::new("audio").expect("static mid");
+            let sender = CString::new("client-uplink").expect("static sender");
+            assert_eq!(
+                mello_sys::mello_peer_set_audio_mid_sender(peer, mid.as_ptr(), sender.as_ptr()),
+                mello_sys::MelloResult_MELLO_OK
+            );
             let fake = FakeSfuPeer {
                 peer: peer as usize,
                 arrivals: arrivals_ptr,

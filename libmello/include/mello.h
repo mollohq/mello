@@ -72,6 +72,9 @@ typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandida
 typedef void (*MelloPeerStateCallback)(void* user_data, int state);
 typedef void (*MelloPeerDataCallback)(void* user_data, const uint8_t* data, int size, bool reliable);
 typedef void (*MelloAudioTrackCallback)(void* user_data, const char* sender_id, const uint8_t* data, int size);
+/** One text message from the reliable control DataChannel. `text` is not
+ *  NUL-terminated; `size` is its length in bytes. */
+typedef void (*MelloControlTextCallback)(void* user_data, const char* text, int size);
 
 /* ============================================================================
  * Context
@@ -601,8 +604,40 @@ MELLO_API int64_t mello_peer_pong_age_ms(MelloPeerConnection* peer);
 /** Number of send_audio calls that were skipped because the track wasn't open. */
 MELLO_API int mello_peer_send_audio_skips(MelloPeerConnection* peer);
 
-/** Number of incoming RTP tracks currently wired (recv_track_count). */
+/** Number of incoming RTP tracks currently wired (recv_track_count). For a
+ *  voice peer with receive slots: the count of mids that carry a sender. */
 MELLO_API int mello_peer_recv_track_count(MelloPeerConnection* peer);
+
+/** Receive slots in an SFU voice offer (mello-sfu 01-SFU.md section 5.5). */
+#define MELLO_VOICE_RECV_SLOTS 16
+
+/** Voice SFU receive slots: the next mello_peer_create_offer of this voice
+ *  peer carries `count` recvonly audio m-lines (mids "s0", "s1", ...) after
+ *  its sendrecv mic m-line. The SFU forwards one member on each and names
+ *  the member with a `slot` control message (mello_peer_set_audio_mid_sender).
+ *  Default 0, for P2P. Clamped to 0..64. Ignored for stream roles. */
+MELLO_API void mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count);
+
+/** Voice: incoming RTP on m-line `mid` is from `sender_id` from now on. NULL
+ *  or "" frees the mid: its packets are dropped. The audio callbacks get
+ *  `sender_id` as the sender. Thread safe. Mids reset with each new offer. */
+MELLO_API MelloResult mello_peer_set_audio_mid_sender(
+    MelloPeerConnection* peer,
+    const char* mid,
+    const char* sender_id
+);
+
+/** Text messages on the reliable control DataChannel, except `pong` (RTT is
+ *  handled inside). Called on the libdatachannel thread; must return fast. */
+MELLO_API void mello_peer_set_control_text_callback(
+    MelloPeerConnection* peer,
+    MelloControlTextCallback callback,
+    void* user_data
+);
+
+/** Send one text message on the reliable control DataChannel. Thread safe.
+ *  MELLO_ERROR_TRANSPORT_FAILED when the channel is not open. */
+MELLO_API MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
 
 /** Send one Annex-B H.264 access unit on a StreamHost peer. */
 MELLO_API MelloResult mello_peer_video_send_access_unit(

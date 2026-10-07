@@ -1,28 +1,15 @@
 #pragma once
 
-#include "mello.h"
-
 #include <string>
 
 namespace mello::transport {
 
-// Voice SFU tracks use msid = sender user UUID (contains '-').
-// Stream SFU egress uses msid = session id ("stream_<user>_<ts>").
-// Pion undeclared-SSRC phantoms lack both shapes and are dropped.
-inline bool is_valid_incoming_audio_sender(
-    MelloPeerMediaRole role,
-    const std::string& sender_id
-) {
-    if (sender_id.empty() || sender_id == "unknown") {
-        return false;
-    }
-    if (role == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
-        return sender_id.rfind("stream_", 0) == 0;
-    }
-    if (role == MELLO_PEER_MEDIA_ROLE_VOICE) {
-        return sender_id.find('-') != std::string::npos;
-    }
-    return false;
+// Stream SFU egress names its audio track msid after the session id
+// ("stream_<user>_<ts>"). A stream viewer drops other incoming audio tracks
+// (Pion undeclared-SSRC phantoms). Voice does not use msid: it resolves the
+// sender by mid from the SFU slot map (voice_slot_map.hpp).
+inline bool is_stream_audio_sender(const std::string& sender_id) {
+    return sender_id.rfind("stream_", 0) == 0;
 }
 
 }  // namespace mello::transport

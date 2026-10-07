@@ -900,6 +900,49 @@ int mello_peer_recv_track_count(MelloPeerConnection* peer) {
     }
 }
 
+void mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count) {
+    if (!peer) return;
+    try {
+        peer_cast(peer)->set_voice_recv_slots(count);
+    } catch (...) {}
+}
+
+MelloResult mello_peer_set_audio_mid_sender(
+    MelloPeerConnection* peer,
+    const char* mid,
+    const char* sender_id
+) {
+    if (!peer || !mid || !*mid) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        peer_cast(peer)->set_audio_mid_sender(mid, sender_id ? sender_id : "");
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+void mello_peer_set_control_text_callback(
+    MelloPeerConnection* peer,
+    MelloControlTextCallback callback,
+    void* user_data
+) {
+    if (!peer) return;
+    try {
+        peer_cast(peer)->set_control_text_callback(callback, user_data);
+    } catch (...) {}
+}
+
+MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text) {
+    if (!peer || !text || !*text) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        return peer_cast(peer)->send_control_text(text)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
 int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
     if (!peer || !buffer || buffer_size <= 0) return 0;
     try {

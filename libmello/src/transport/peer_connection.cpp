@@ -261,6 +261,8 @@ void PeerConnectionImpl::close_pc_locked() noexcept {
         audio = std::move(audio_track_);
         incoming = std::move(incoming_tracks_);
         connected_.store(false, std::memory_order_release);
+        // Mids belong to one PeerConnection: the next offer starts empty.
+        voice_slots_.clear();
         reliable_open_.store(false, std::memory_order_release);
         unreliable_open_.store(false, std::memory_order_release);
     }
@@ -939,7 +941,8 @@ void PeerConnectionImpl::enqueue_video_feedback(
 void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
     const std::shared_ptr<rtc::Track>& track,
     uint64_t generation,
-    const std::string& sender_id
+    const std::string& sender_id,
+    bool by_mid
 ) {
     if (!track) {
         return;
@@ -969,9 +972,12 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
     });
 
     auto msg_count = std::make_shared<std::atomic<int>>(0);
+    auto unowned_count = std::make_shared<std::atomic<int>>(0);
     const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
     track->onMessage(
-        [weak_self, generation, sender_id, msg_count](rtc::message_variant data) {
+        [weak_self, generation, sender_id, by_mid, mid, msg_count, unowned_count](
+            rtc::message_variant data
+        ) {
         const auto self = weak_self.lock();
         if (!self || !self->is_current_pc_generation(generation)) {
             return;
@@ -984,16 +990,29 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
         const auto* bytes = reinterpret_cast<const uint8_t*>(bin->data());
         const int total = static_cast<int>(bin->size());
 
-        const int n = msg_count->fetch_add(1, std::memory_order_relaxed) + 1;
-        if (n <= 3 || n == 50 || n == 500) {
-            fprintf(stderr, "[mello-rtp] onMessage #%d: sender=%s size=%d\n",
-                    n, sender_id.c_str(), total);
-            fflush(stderr);
-        }
-
         const uint8_t pt = bytes[1] & 0x7F;
         if (pt != 111) {
             return;
+        }
+
+        // Voice: the SFU's slot map names the sender of this m-line now. A
+        // slot without an owner (or before its slot message) drops the packet.
+        const std::string sender = by_mid ? self->voice_slots_.lookup(mid) : sender_id;
+        if (sender.empty()) {
+            const int u = unowned_count->fetch_add(1, std::memory_order_relaxed) + 1;
+            if (u <= 3 || (u % 500) == 0) {
+                fprintf(stderr, "[mello-rtp] drop #%d: mid=%s has no sender\n",
+                        u, mid.c_str());
+                fflush(stderr);
+            }
+            return;
+        }
+
+        const int n = msg_count->fetch_add(1, std::memory_order_relaxed) + 1;
+        if (n <= 3 || n == 50 || n == 500) {
+            fprintf(stderr, "[mello-rtp] onMessage #%d: mid=%s sender=%s size=%d\n",
+                    n, mid.c_str(), sender.c_str(), total);
+            fflush(stderr);
         }
 
         MelloAudioTrackCallback callback = nullptr;
@@ -1014,7 +1033,7 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
         // Voice: the whole RTP packet, so NetEQ sees the real sequence,
         // timestamp and SSRC (spec 10 section 5.1).
         if (rtp_callback) {
-            rtp_callback(rtp_user_data, sender_id.c_str(), bytes, total);
+            rtp_callback(rtp_user_data, sender.c_str(), bytes, total);
         }
         if (!callback) {
             return;
@@ -1055,7 +1074,7 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
         // with the 16-bit RTP sequence.
         callback(
             user_data,
-            sender_id.c_str(),
+            sender.c_str(),
             pkt.data(),
             static_cast<int>(pkt.size())
         );
@@ -1066,6 +1085,21 @@ void PeerConnectionImpl::setup_incoming_track(
     std::shared_ptr<rtc::Track> track,
     uint64_t generation
 ) {
+    if (role_ == MELLO_PEER_MEDIA_ROLE_VOICE) {
+        // An m-line the SFU added past the receive slots. Like a slot, its
+        // sender comes from the SFU's slot map by mid, not from msid. A
+        // Pion phantom m-line never gets a slot message: its packets drop.
+        wire_incoming_audio_track_callbacks(track, generation, std::string(), true);
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (is_current_pc_generation(generation)) {
+            incoming_tracks_.push_back(track);
+        }
+        return;
+    }
+    if (role_ != MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+        return;
+    }
+
     const auto desc = track->description();
 
     std::string sender_id = "unknown";
@@ -1079,11 +1113,11 @@ void PeerConnectionImpl::setup_incoming_track(
         }
     }
 
-    if (!is_valid_incoming_audio_sender(role_, sender_id)) {
+    if (!is_stream_audio_sender(sender_id)) {
         return;
     }
 
-    if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+    {
         std::shared_ptr<rtc::Track> local_audio;
         {
             std::lock_guard<std::mutex> lock(mutex_);
@@ -1171,6 +1205,23 @@ void PeerConnectionImpl::setup_dc_handlers(
             return;
         }
         if (auto* str = std::get_if<std::string>(&data)) {
+            if (reliable && !(str->size() > 14 && str->substr(0, 14) == R"({"type":"pong")")) {
+                // Voice control messages (slot map, speaking) for mello-core.
+                MelloControlTextCallback callback = nullptr;
+                void* user_data = nullptr;
+                {
+                    std::lock_guard<std::mutex> lock(self->mutex_);
+                    if (!self->is_current_pc_generation(generation)) {
+                        return;
+                    }
+                    callback = self->control_text_cb_;
+                    user_data = self->control_text_ud_;
+                }
+                if (callback) {
+                    callback(user_data, str->data(), static_cast<int>(str->size()));
+                }
+                return;
+            }
             if (reliable && str->size() > 14 && str->substr(0, 14) == R"({"type":"pong")") {
                 const auto pos = str->find("\"ts\":");
                 if (pos != std::string::npos) {
@@ -1253,6 +1304,22 @@ void PeerConnectionImpl::setup_voice_channels() {
     {
         std::lock_guard<std::mutex> lock(mutex_);
         audio_track_ = audio_track;
+    }
+
+    // SFU receive slots (mello-sfu 01-SFU.md section 6.2): one recvonly
+    // m-line per remote member, so a join or leave needs no renegotiation.
+    // The SFU's slot messages name each mid's sender (voice_slots_).
+    const int slots = voice_recv_slots_.load(std::memory_order_acquire);
+    for (int i = 0; i < slots; ++i) {
+        rtc::Description::Audio slot(
+            "s" + std::to_string(i),
+            rtc::Description::Direction::RecvOnly
+        );
+        slot.addOpusCodec(111, "minptime=10;useinbandfec=1");
+        auto slot_track = pc_->addTrack(slot);
+        wire_incoming_audio_track_callbacks(slot_track, generation, std::string(), true);
+        std::lock_guard<std::mutex> lock(mutex_);
+        incoming_tracks_.push_back(slot_track);
     }
 #endif
 
@@ -1635,6 +1702,49 @@ void PeerConnectionImpl::set_audio_rtp_callback(
     std::lock_guard<std::mutex> lock(mutex_);
     audio_rtp_cb_ = cb;
     audio_rtp_ud_ = user_data;
+}
+
+void PeerConnectionImpl::set_control_text_callback(
+    MelloControlTextCallback cb,
+    void* user_data
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    control_text_cb_ = cb;
+    control_text_ud_ = user_data;
+}
+
+void PeerConnectionImpl::set_voice_recv_slots(int count) {
+    voice_recv_slots_.store(std::clamp(count, 0, 64), std::memory_order_release);
+}
+
+void PeerConnectionImpl::set_audio_mid_sender(
+    const std::string& mid,
+    const std::string& sender_id
+) {
+    voice_slots_.set(mid, sender_id);
+}
+
+int PeerConnectionImpl::recv_track_count() const {
+    if (role_ == MELLO_PEER_MEDIA_ROLE_VOICE) {
+        return voice_slots_.assigned();
+    }
+    return recv_track_count_.load(std::memory_order_relaxed);
+}
+
+bool PeerConnectionImpl::send_control_text(const std::string& text) {
+    std::shared_ptr<rtc::DataChannel> channel;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        channel = reliable_dc_;
+    }
+    if (!channel || !channel->isOpen()) {
+        return false;
+    }
+    try {
+        return channel->send(text);
+    } catch (...) {
+        return false;
+    }
 }
 
 bool PeerConnectionImpl::send_unreliable(const uint8_t* data, int size) {

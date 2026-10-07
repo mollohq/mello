@@ -12,6 +12,7 @@
 #include "mello.h"
 #include "rtp_video_sender.hpp"
 #include "rtp_video_receiver_session.hpp"
+#include "voice_slot_map.hpp"
 
 namespace mello::transport {
 
@@ -72,7 +73,13 @@ public:
     float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
     int64_t pong_age_ms() const;
     int send_audio_skips() const { return send_audio_count_.load(std::memory_order_relaxed); }
-    int recv_track_count() const { return recv_track_count_.load(std::memory_order_relaxed); }
+    int recv_track_count() const;
+
+    // Voice SFU receive slots (mello.h mello_peer_set_voice_recv_slots).
+    void set_voice_recv_slots(int count);
+    void set_audio_mid_sender(const std::string& mid, const std::string& sender_id);
+    void set_control_text_callback(MelloControlTextCallback cb, void* user_data);
+    bool send_control_text(const std::string& text);
 
 private:
     enum class VideoFeedbackType : uint8_t {
@@ -103,10 +110,13 @@ private:
         std::shared_ptr<rtc::Track> track,
         uint64_t generation
     );
+    // `sender_id` names every packet's sender, or, with `by_mid`, the voice
+    // slot map names it per packet from the track's mid.
     void wire_incoming_audio_track_callbacks(
         const std::shared_ptr<rtc::Track>& track,
         uint64_t generation,
-        const std::string& sender_id
+        const std::string& sender_id,
+        bool by_mid = false
     );
 
     rtc::Description::Video make_stream_video_description(
@@ -200,6 +210,15 @@ private:
     // Whole RTP packets for the voice receive path (mello_voice_feed_rtp).
     MelloAudioTrackCallback audio_rtp_cb_ = nullptr;
     void* audio_rtp_ud_ = nullptr;
+    // Control-channel text messages other than pong.
+    MelloControlTextCallback control_text_cb_ = nullptr;
+    void* control_text_ud_ = nullptr;
+
+    // Recvonly receive slots in the next voice offer. Set before
+    // create_offer, read under negotiation_mutex_.
+    std::atomic<int> voice_recv_slots_{0};
+    // Voice: mid -> sender user id, from the SFU's slot messages.
+    VoiceSlotMap voice_slots_;
 
     std::atomic<bool> connected_{false};
     std::atomic<bool> unreliable_open_{false};

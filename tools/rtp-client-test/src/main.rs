@@ -22,6 +22,21 @@ struct CallbackState {
     audio_bytes: AtomicU64,
 }
 
+/// The mid of each sendonly audio m-line in `sdp`. A voice peer routes
+/// incoming audio by mid; the mello SFU names each mid's sender in a `slot`
+/// message, which the mini-SFU does not send.
+fn offered_audio_mids(sdp: &str) -> Vec<String> {
+    sdp.split("m=")
+        .filter(|section| section.starts_with("audio") && section.contains("a=sendonly"))
+        .filter_map(|section| {
+            section
+                .lines()
+                .find_map(|line| line.trim().strip_prefix("a=mid:"))
+                .map(str::to_string)
+        })
+        .collect()
+}
+
 unsafe extern "C" fn on_state(user_data: *mut c_void, state: i32) {
     let _ = user_data;
     let label = match state {
@@ -183,12 +198,21 @@ fn main() {
         reneg_msg.sdp.len()
     );
 
+    let mids = offered_audio_mids(&reneg_msg.sdp);
     let offer_cstr = CString::new(reneg_msg.sdp).unwrap();
     let answer_ptr =
         unsafe { mello_sys::mello_peer_handle_remote_offer(peer, offer_cstr.as_ptr()) };
     if answer_ptr.is_null() {
         eprintln!("ERROR: mello_peer_handle_remote_offer() returned null");
         std::process::exit(1);
+    }
+    let sender = CString::new("mini-sfu").unwrap();
+    for mid in mids {
+        eprintln!("[step 3] Audio m-line mid={} carries the mini-SFU", mid);
+        let mid_c = CString::new(mid).unwrap();
+        unsafe {
+            mello_sys::mello_peer_set_audio_mid_sender(peer, mid_c.as_ptr(), sender.as_ptr())
+        };
     }
     let answer_sdp = unsafe { CStr::from_ptr(answer_ptr).to_string_lossy().to_string() };
     eprintln!(
