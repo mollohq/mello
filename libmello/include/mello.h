@@ -639,6 +639,49 @@ MELLO_API void mello_peer_set_control_text_callback(
  *  MELLO_ERROR_TRANSPORT_FAILED when the channel is not open. */
 MELLO_API MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
 
+/** What the remote end (the SFU) reports about the audio this peer sends:
+ *  one RTCP receiver report block about the send track's SSRC (RFC 3550
+ *  section 6.4.1). Spec 10 section 7.5. */
+typedef struct MelloSendFeedback {
+    /** Report blocks about the send track since the peer was created. */
+    uint32_t reports;
+    /** Fraction of packets lost since the previous report, 0..1. */
+    float    fraction_lost;
+    /** Cumulative packets lost (signed 24-bit on the wire). */
+    int32_t  cumulative_lost;
+    /** Extended highest sequence number received. */
+    uint32_t extended_highest_seq;
+    /** Interarrival jitter in ms. */
+    float    jitter_ms;
+    /** Round trip from the report's LSR and DLSR against this peer's sender
+     *  reports, in ms. -1 when unknown (no sender report reached the remote). */
+    float    rtt_ms;
+    /** Packets expected since the previous report: the difference of the
+     *  extended highest sequence numbers. 0 when unknown. */
+    uint32_t interval_expected;
+    /** Packets lost since the previous report: the difference of the
+     *  cumulative counts, or fraction_lost x interval_expected when that
+     *  difference is not usable. At most interval_expected. */
+    uint32_t interval_lost;
+} MelloSendFeedback;
+
+/** Receives one MelloSendFeedback per receiver report about the send track.
+ *  Called on the libdatachannel thread; must return fast. */
+typedef void (*MelloSendFeedbackCallback)(void* user_data, const MelloSendFeedback* feedback);
+
+/** Set or clear (NULL) the send feedback callback. Any thread. A call that
+ *  runs now can still use the old `user_data`; the caller keeps it valid
+ *  until mello_peer_destroy. */
+MELLO_API void mello_peer_set_send_feedback_callback(
+    MelloPeerConnection* peer,
+    MelloSendFeedbackCallback callback,
+    void* user_data
+);
+
+/** The feedback of the last receiver report about the send track. Returns
+ *  false (and leaves `out` unchanged) when no report arrived yet. Any thread. */
+MELLO_API bool mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* out);
+
 /** Send one Annex-B H.264 access unit on a StreamHost peer. */
 MELLO_API MelloResult mello_peer_video_send_access_unit(
     MelloPeerConnection* peer,

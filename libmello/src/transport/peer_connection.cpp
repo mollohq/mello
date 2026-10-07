@@ -3,10 +3,12 @@
 
 #include "twcc.hpp"
 #include "ulpfec.hpp"
+#include "../util/log.hpp"
 
 #include <chrono>
 #include <algorithm>
 #include <cstring>
+#include <functional>
 #include <limits>
 #include <random>
 
@@ -195,6 +197,44 @@ int media_index_for_mid(
     }
     return -1;
 }
+
+#if RTC_ENABLE_MEDIA
+// Reads the receiver reports about the audio send track (spec 10 section
+// 7.5). Last in the send chain, so libdatachannel gives it each incoming
+// RTCP packet first. It only reads: the messages go on unchanged.
+class SendFeedbackHandler final : public rtc::MediaHandler {
+public:
+    using Deliver = std::function<void(const MelloSendFeedback&)>;
+
+    SendFeedbackHandler(uint32_t ssrc,
+                        std::shared_ptr<SendFeedbackTracker> tracker,
+                        Deliver deliver)
+        : ssrc_(ssrc), tracker_(std::move(tracker)), deliver_(std::move(deliver)) {}
+
+    void incoming(rtc::message_vector& messages, const rtc::message_callback& /*send*/) override {
+        for (const auto& message : messages) {
+            if (!message || message->type != rtc::Message::Control) {
+                continue;
+            }
+            const auto reports = find_reception_reports(
+                reinterpret_cast<const uint8_t*>(message->data()), message->size(), ssrc_);
+            if (reports.empty()) {
+                continue;
+            }
+            const uint32_t arrival = ntp_compact_now();
+            for (const auto& report : reports) {
+                deliver_(tracker_->on_report(report, arrival,
+                                             rtc::OpusRtpPacketizer::DefaultClockRate));
+            }
+        }
+    }
+
+private:
+    const uint32_t ssrc_;
+    const std::shared_ptr<SendFeedbackTracker> tracker_;
+    const Deliver deliver_;
+};
+#endif
 
 } // namespace
 
@@ -630,6 +670,16 @@ void PeerConnectionImpl::attach_opus_send_packetizer(
     audio_rtp_start_timestamp_.store(rtpConfig->startTimestamp, std::memory_order_release);
     const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
+    // The remote end's receiver reports about this track: loss and round
+    // trip of the send leg, for the encoder adaptation (spec 10 section 7.5).
+    send_feedback_->set_first_sequence(rtpConfig->sequenceNumber);
+    std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
+    packetizer->addToChain(std::make_shared<SendFeedbackHandler>(
+        ssrc, send_feedback_, [weak_self](const MelloSendFeedback& feedback) {
+            if (auto self = weak_self.lock()) {
+                self->deliver_send_feedback(feedback);
+            }
+        }));
     track->setMediaHandler(packetizer);
 #else
     (void)track;
@@ -1711,6 +1761,40 @@ void PeerConnectionImpl::set_control_text_callback(
     std::lock_guard<std::mutex> lock(mutex_);
     control_text_cb_ = cb;
     control_text_ud_ = user_data;
+}
+
+void PeerConnectionImpl::set_send_feedback_callback(
+    MelloSendFeedbackCallback cb,
+    void* user_data
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    send_feedback_cb_ = cb;
+    send_feedback_ud_ = user_data;
+}
+
+bool PeerConnectionImpl::get_send_feedback(MelloSendFeedback* out) const {
+    return send_feedback_->latest(out);
+}
+
+void PeerConnectionImpl::deliver_send_feedback(const MelloSendFeedback& feedback) {
+    MelloSendFeedbackCallback callback = nullptr;
+    void* user_data = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        callback = send_feedback_cb_;
+        user_data = send_feedback_ud_;
+    }
+    if (feedback.reports == 1 || (feedback.reports % 60) == 0) {
+        MELLO_LOG_DEBUG("peer",
+                        "send feedback #%u: lost %.1f %% (%u of %u), cumulative %d, "
+                        "jitter %.1f ms, rtt %.0f ms",
+                        feedback.reports, feedback.fraction_lost * 100.0f,
+                        feedback.interval_lost, feedback.interval_expected,
+                        feedback.cumulative_lost, feedback.jitter_ms, feedback.rtt_ms);
+    }
+    if (callback) {
+        callback(user_data, &feedback);
+    }
 }
 
 void PeerConnectionImpl::set_voice_recv_slots(int count) {

@@ -943,6 +943,26 @@ MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* 
     }
 }
 
+void mello_peer_set_send_feedback_callback(
+    MelloPeerConnection* peer,
+    MelloSendFeedbackCallback callback,
+    void* user_data
+) {
+    if (!peer) return;
+    try {
+        peer_cast(peer)->set_send_feedback_callback(callback, user_data);
+    } catch (...) {}
+}
+
+bool mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* out) {
+    if (!peer || !out) return false;
+    try {
+        return peer_cast(peer)->get_send_feedback(out);
+    } catch (...) {
+        return false;
+    }
+}
+
 int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
     if (!peer || !buffer || buffer_size <= 0) return 0;
     try {
