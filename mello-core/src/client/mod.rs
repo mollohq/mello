@@ -149,6 +149,8 @@ pub struct Client {
     giphy: GiphyClient,
     /// Pending SFU voice reconnect: (when, channel_id, attempt)
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
+    /// When the SFU voice session dropped: the reconnect gives up 30 s later.
+    sfu_voice_dropped_at: Option<tokio::time::Instant>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
     /// The last `voice_join` answer for `last_voice_channel`. A reconnect
@@ -338,6 +340,7 @@ impl Client {
             input_idle_secs: 0,
             reported_activity: None,
             sfu_voice_reconnect: None,
+            sfu_voice_dropped_at: None,
             last_voice_channel: None,
             voice_join_grant: None,
             sfu_regions: Arc::default(),

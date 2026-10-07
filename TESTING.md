@@ -497,7 +497,7 @@ Unit tests run in `cargo test --workspace` and in libmello `ctest`:
 |---|---|
 | Region ranking: the median of three probes, 2xx only, 2 s timeout, fastest first | `mello-core/src/transport/sfu_region.rs` |
 | `get_sfu_regions` lists both regions with their health URLs | `backend/nakama/data/modules/sfu_routing_test.go` |
-| First reconnect attempt after 500 ms, then 2, 4, 8, 16 s; a valid voice token is reused, an expired one is not; a failed reconnect does not fall back to P2P | `mello-core/src/client/voice.rs` |
+| First reconnect attempt after 500 ms, then 1 s, then every 2 s; no gap over 2 s, and the give-up 30 s after the drop; a valid voice token is reused, an expired one is not; a failed reconnect does not fall back to P2P | `mello-core/src/client/voice.rs` |
 | A server close of the signaling socket is a disconnect; the close after `left` is not; a connect without an answer fails at its 5 s limit | `mello-core/src/client/sfu_voice_join.rs` |
 | No local ICE candidate before the offer; a candidate found after the answer still reaches the SFU (a fake SFU and a fake STUN server that answers late) | `mello-core/src/client/sfu_voice_join.rs`, `transport/sfu_connection.rs` |
 | The ICE servers reach libdatachannel: a TURN server on a local UDP port gets the Allocate request | `transport/sfu_connection.rs` |

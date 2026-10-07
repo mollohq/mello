@@ -571,7 +571,7 @@ The voice SFU does not get the send-leg values in `client_stats`: that message i
 
 | Item | Value |
 |---|---|
-| Schedule | Attempt 1 at 500 ms after the drop, then 2, 4, 8 and 16 s after the attempt before it. After 5 attempts the client leaves the call (`VoiceStateChanged { in_call: false }`). |
+| Schedule | Attempt 1 at 500 ms after the drop, attempt 2 at 1 s after attempt 1, then one attempt every 2 s (the gap is never more than 2 s). The first attempt that is due 30 s or more after the drop gives up instead: the client leaves the call (`VoiceStateChanged { in_call: false }`). That is 16 attempts. Each attempt keeps its step limits (below). |
 | Voice token | The SFU token from `voice_join` lives 5 minutes. The client keeps the last answer and the time it received it (`VoiceJoinGrant`). An attempt reuses the endpoint and token while the token has more than 15 s left, with no backend round trip. Else it calls `voice_join` again. |
 | Membership | A realtime (Nakama) reconnect sends `voice_join` also while a voice reconnect waits, so the room keeps the member, and the fresh token replaces the kept one. |
 | Failure | A failed reconnect attempt leaves voice disconnected for the next attempt. It does not fall back to P2P: the other members are on the SFU. A first join still falls back to P2P. |
@@ -600,11 +600,11 @@ Measured 2026-10-07 on Windows against the SFU in Docker (`client/sfu_reconnect_
 |---|---:|---:|---:|
 | `docker kill` (sockets reset) | 1 s | 0.11 to 0.18 s | 0.72 to 0.94 s |
 | `docker kill` | 3 s | 0.09 to 0.17 s | 0.13 to 2.99 s |
-| `docker kill` | 10 s | 0.11 to 0.17 s | 4.04 to 4.24 s |
+| `docker kill` | 10 s | 0.15 to 0.17 s | 0.29 to 1.41 s (4.04 to 4.24 s with the earlier 2, 4, 8, 16 s backoff) |
 | `docker pause` (silent link) | 3 s | 0.71 to 0.78 s | 0.12 s (the session resumes) |
 | `docker pause` | 15 s | 0.79 to 0.86 s | 0.54 to 0.64 s (a new session) |
 
-After a socket reset the time to audio depends on where the link comes back in the attempt schedule: up to the next attempt plus about 0.2 s for the join.
+After a socket reset the time to audio depends on where the link comes back in the attempt schedule: up to the next attempt (at most 2 s) plus about 0.2 s for the join. The 1 s and 3 s `docker kill` rows were measured with the earlier 2, 4, 8, 16 s backoff; the capped schedule can only shorten them.
 
 ---
 

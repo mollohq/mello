@@ -8,8 +8,14 @@ use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 /// (spec 10 section 7.6).
 pub(super) const SFU_RECONNECT_FIRST_DELAY: tokio::time::Duration =
     tokio::time::Duration::from_millis(500);
-/// Reconnect attempts before the client gives up and leaves the call.
-pub(super) const SFU_RECONNECT_MAX_ATTEMPTS: u32 = 5;
+/// The longest gap between two reconnect attempts. A capped gap brings the
+/// call back within about 2 s of the link returning, however long it was
+/// down.
+pub(super) const SFU_RECONNECT_MAX_GAP: tokio::time::Duration = tokio::time::Duration::from_secs(2);
+/// The client attempts until this long after the drop, then gives up and
+/// leaves the call (16 attempts).
+pub(super) const SFU_RECONNECT_GIVE_UP_AFTER: tokio::time::Duration =
+    tokio::time::Duration::from_secs(30);
 /// The life of the SFU voice token from `voice_join` (backend `sfu_auth.go`).
 pub(super) const SFU_VOICE_TOKEN_LIFETIME: tokio::time::Duration =
     tokio::time::Duration::from_secs(5 * 60);
@@ -19,13 +25,13 @@ pub(super) const SFU_VOICE_TOKEN_LIFETIME: tokio::time::Duration =
 pub(super) const SFU_VOICE_TOKEN_MARGIN: tokio::time::Duration =
     tokio::time::Duration::from_secs(15);
 
-/// The delay before reconnect attempt `attempt` (0 is the first): 500 ms,
-/// then 2, 4, 8 and 16 s.
+/// The delay before reconnect attempt `attempt` (0 is the first): 500 ms
+/// after the drop, then 1 s, then 2 s after each attempt before it.
 pub(super) fn sfu_reconnect_delay(attempt: u32) -> tokio::time::Duration {
-    if attempt == 0 {
-        SFU_RECONNECT_FIRST_DELAY
-    } else {
-        tokio::time::Duration::from_secs(2u64.saturating_pow(attempt))
+    match attempt {
+        0 => SFU_RECONNECT_FIRST_DELAY,
+        1 => tokio::time::Duration::from_secs(1),
+        _ => SFU_RECONNECT_MAX_GAP,
     }
 }
 
@@ -73,7 +79,7 @@ impl super::Client {
         let join_pending = self.sfu_voice_joins.is_pending();
 
         // SFU voice reconnect: if voice mode went Disconnected but we still have a
-        // last_voice_channel, schedule a reconnect with exponential backoff.
+        // last_voice_channel, schedule attempts until 30 s after the drop.
         if !join_pending
             && self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected
             && self.sfu_voice_reconnect.is_none()
@@ -81,14 +87,22 @@ impl super::Client {
             if let Some(channel) = self.last_voice_channel.clone() {
                 let delay = sfu_reconnect_delay(0);
                 log::info!("SFU voice dropped, scheduling reconnect in {:?}", delay);
-                self.sfu_voice_reconnect = Some((tokio::time::Instant::now() + delay, channel, 0));
+                let now = tokio::time::Instant::now();
+                self.sfu_voice_dropped_at = Some(now);
+                self.sfu_voice_reconnect = Some((now + delay, channel, 0));
             }
         }
 
         if let Some((at, ref channel, attempt)) = self.sfu_voice_reconnect.clone() {
-            if !join_pending && tokio::time::Instant::now() >= at {
-                if attempt >= SFU_RECONNECT_MAX_ATTEMPTS {
-                    log::warn!("SFU voice reconnect: giving up after {} attempts", attempt);
+            let now = tokio::time::Instant::now();
+            if !join_pending && now >= at {
+                let dropped_at = *self.sfu_voice_dropped_at.get_or_insert(now);
+                if now.duration_since(dropped_at) >= SFU_RECONNECT_GIVE_UP_AFTER {
+                    log::warn!(
+                        "SFU voice reconnect: giving up after {} attempts, {:?} after the drop",
+                        attempt,
+                        now.duration_since(dropped_at)
+                    );
                     self.sfu_voice_reconnect = None;
                     self.last_voice_channel = None;
                     self.voice_join_grant = None;
@@ -104,7 +118,7 @@ impl super::Client {
                     );
                     let ch = channel.clone();
                     self.reconnect_voice(&ch).await;
-                    // If still disconnected after rejoin, bump the attempt with backoff.
+                    // If still disconnected after rejoin, schedule the next attempt.
                     // An SFU join that still runs is disconnected too. Its outcome
                     // clears the next attempt if voice starts.
                     if self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected {
@@ -790,7 +804,7 @@ mod tests {
     }
 
     /// Spec 10 section 7.6: the first reconnect attempt starts 500 ms after
-    /// the drop, then 2, 4, 8 and 16 s, five attempts.
+    /// the drop, the second 1 s after the first, then one every 2 s.
     #[tokio::test]
     async fn the_first_sfu_reconnect_attempt_starts_after_500_ms() {
         let (mut client, _events) = client_without_audio();
@@ -811,10 +825,61 @@ mod tests {
             at - before
         );
 
-        let delays: Vec<u64> = (0..super::SFU_RECONNECT_MAX_ATTEMPTS)
+        let delays: Vec<u64> = (0..5)
             .map(|a| super::sfu_reconnect_delay(a).as_millis() as u64)
             .collect();
-        assert_eq!(delays, [500, 2_000, 4_000, 8_000, 16_000]);
+        assert_eq!(delays, [500, 1_000, 2_000, 2_000, 2_000]);
+    }
+
+    /// Spec 10 section 7.6: the gap between two reconnect attempts is never
+    /// more than 2 s, so the call comes back within about 2 s of the link,
+    /// and the client gives up 30 s after the drop, not after 5 attempts.
+    #[tokio::test]
+    async fn sfu_reconnect_attempts_come_every_2_s_until_30_s_after_the_drop() {
+        let (mut client, events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+
+        // Every attempt inside the 30 s schedules the next one within 2 s.
+        // This client has no session: each attempt fails at once.
+        for attempt in 0..20u32 {
+            let now = tokio::time::Instant::now();
+            client.sfu_voice_dropped_at = Some(now - Duration::from_secs(29));
+            client.sfu_voice_reconnect = Some((now, "ch-1".into(), attempt));
+            client.voice_tick().await;
+            let (at, _, next) = client
+                .sfu_voice_reconnect
+                .clone()
+                .unwrap_or_else(|| panic!("attempt {attempt} at 29 s ended the reconnect"));
+            assert_eq!(next, attempt + 1);
+            let gap = at.saturating_duration_since(now);
+            assert!(
+                gap <= Duration::from_millis(2_100),
+                "gap after attempt {attempt}: {gap:?}"
+            );
+        }
+
+        // 30 s after the drop the next due attempt gives up and leaves the call.
+        let now = tokio::time::Instant::now();
+        client.sfu_voice_dropped_at = Some(now - Duration::from_secs(30));
+        client.sfu_voice_reconnect = Some((now, "ch-1".into(), 3));
+        client.voice_tick().await;
+        assert!(client.sfu_voice_reconnect.is_none(), "still reconnecting");
+        assert!(client.last_voice_channel.is_none());
+        assert!(
+            events
+                .try_iter()
+                .any(|ev| matches!(ev, Event::VoiceStateChanged { in_call: false, .. })),
+            "the give-up leaves the call"
+        );
+
+        // The real schedule: 16 attempts start inside the 30 s.
+        let mut t = Duration::ZERO;
+        let mut attempts = 0;
+        while t + super::sfu_reconnect_delay(attempts) < super::SFU_RECONNECT_GIVE_UP_AFTER {
+            t += super::sfu_reconnect_delay(attempts);
+            attempts += 1;
+        }
+        assert_eq!(attempts, 16, "attempts before the give-up");
     }
 
     fn grant_for(endpoint: &str, issued_at: tokio::time::Instant) -> super::VoiceJoinGrant {
