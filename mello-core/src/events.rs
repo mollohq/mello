@@ -479,6 +479,13 @@ pub enum Event {
         channel_id: String,
         name: String,
     },
+    /// The local member changed a voice channel's bitrate (`channel_update`).
+    /// Other members get it with the next `VoiceChannelsUpdated`.
+    VoiceChannelBitrateChanged {
+        crew_id: String,
+        channel_id: String,
+        bitrate_kbps: u32,
+    },
     /// A voice channel was deleted.
     VoiceChannelDeleted {
         crew_id: String,

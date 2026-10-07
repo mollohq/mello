@@ -95,6 +95,18 @@ pub struct VoiceJoinResponse {
     pub sfu_endpoint: Option<String>,
     #[serde(default)]
     pub sfu_token: Option<String>,
+    /// The channel bitrate in kbps: the top rung of the encoder ladder
+    /// (spec 10 section 4.6). None from a backend before the field.
+    #[serde(default)]
+    pub bitrate_kbps: Option<u32>,
+}
+
+/// Channel bitrate of a channel stored before the field existed (spec 13
+/// section 3.1).
+pub const DEFAULT_CHANNEL_BITRATE_KBPS: u32 = 64;
+
+fn default_channel_bitrate_kbps() -> u32 {
+    DEFAULT_CHANNEL_BITRATE_KBPS
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -110,15 +122,30 @@ pub struct VoiceSnapshot {
 // Voice channel state (multi-channel)
 // ---------------------------------------------------------------------------
 
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VoiceChannelState {
     pub id: String,
     #[serde(default)]
     pub name: String,
     #[serde(default)]
     pub is_default: bool,
+    /// The channel bitrate in kbps (spec 13 section 3.1).
+    #[serde(default = "default_channel_bitrate_kbps")]
+    pub bitrate_kbps: u32,
     #[serde(default)]
     pub members: Vec<VoiceMember>,
+}
+
+impl Default for VoiceChannelState {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            is_default: false,
+            bitrate_kbps: DEFAULT_CHANNEL_BITRATE_KBPS,
+            members: Vec::new(),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -630,6 +657,21 @@ mod tests {
     }
 
     #[test]
+    fn voice_channel_bitrate_defaults_for_an_older_backend() {
+        let ch: VoiceChannelState =
+            serde_json::from_str(r#"{"id":"ch_a","name":"A","is_default":true}"#).unwrap();
+        assert_eq!(ch.bitrate_kbps, 64);
+        let ch: VoiceChannelState =
+            serde_json::from_str(r#"{"id":"ch_a","name":"A","bitrate_kbps":96}"#).unwrap();
+        assert_eq!(ch.bitrate_kbps, 96);
+        let resp: VoiceJoinResponse = serde_json::from_str(
+            r#"{"channel_id":"ch_a","voice_state":{"channel_id":"ch_a"},"bitrate_kbps":32}"#,
+        )
+        .unwrap();
+        assert_eq!(resp.bitrate_kbps, Some(32));
+    }
+
+    #[test]
     fn voice_update_with_channel_id() {
         let json = r#"{
             "crew_id": "crew_xyz",
@@ -651,6 +693,7 @@ mod tests {
             id: "ch_test".to_string(),
             name: "Test".to_string(),
             is_default: false,
+            bitrate_kbps: 48,
             members: vec![VoiceMember {
                 user_id: "u1".to_string(),
                 username: "alice".to_string(),
@@ -667,6 +710,7 @@ mod tests {
         assert_eq!(deserialized.id, "ch_test");
         assert_eq!(deserialized.name, "Test");
         assert!(!deserialized.is_default);
+        assert_eq!(deserialized.bitrate_kbps, 48);
         assert_eq!(deserialized.members.len(), 1);
         assert_eq!(deserialized.members[0].speaking, Some(true));
     }

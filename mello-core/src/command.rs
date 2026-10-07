@@ -282,6 +282,13 @@ pub enum Command {
         auto: bool,
         db: f32,
     },
+    /// The bitrate of the joined voice channel in kbps: the top rung of the
+    /// encoder ladder (spec 10 section 4.6). The client sends it when a
+    /// channel update changes the joined channel's bitrate; a join applies
+    /// the bitrate of the `voice_join` response without it.
+    SetVoiceChannelBitrate {
+        kbps: u32,
+    },
     SetLoopback {
         enabled: bool,
     },
@@ -394,6 +401,13 @@ pub enum Command {
     DeleteVoiceChannel {
         crew_id: String,
         channel_id: String,
+    },
+    /// Change a channel's bitrate (`channel_update` RPC, spec 13 section
+    /// 4.1). 24 to 96 kbps.
+    UpdateVoiceChannelBitrate {
+        crew_id: String,
+        channel_id: String,
+        bitrate_kbps: u32,
     },
 
     // --- Presence & crew state ---

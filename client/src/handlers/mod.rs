@@ -68,6 +68,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::VoiceChannelsUpdated { .. }
         | Event::VoiceChannelCreated { .. }
         | Event::VoiceChannelRenamed { .. }
+        | Event::VoiceChannelBitrateChanged { .. }
         | Event::VoiceChannelDeleted { .. }
         | Event::VoiceSfuDisconnected { .. }
         | Event::VoiceMembershipChanged { .. }
