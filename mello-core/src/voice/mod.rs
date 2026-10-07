@@ -1,6 +1,9 @@
 pub(crate) mod frame;
 mod mesh;
 pub(crate) mod send_sink;
+#[cfg(test)]
+mod slots_live_tests;
+pub mod speaking;
 
 use std::collections::VecDeque;
 use std::ffi::CString;
@@ -13,6 +16,7 @@ use crate::events::Event;
 use crate::transport::{SfuConnection, SfuEvent};
 use send_sink::SfuPacketSink;
 use serde::{Deserialize, Serialize};
+use speaking::InbandSpeaking;
 
 pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
@@ -65,6 +69,7 @@ impl NsMode {
 struct VadCallbackData {
     tx: std_mpsc::Sender<Event>,
     local_id: String,
+    inband: Arc<InbandSpeaking>,
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -115,6 +120,9 @@ pub struct VoiceManager {
     /// before it drives a reconnect.
     prev_rtp_recv_total: i32,
     rtp_stall_checks: u32,
+    /// The local speaking state as in-band messages on the SFU control
+    /// channel, sent from the VAD callback (speaking.rs).
+    inband_speaking: Arc<InbandSpeaking>,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -213,6 +221,7 @@ impl VoiceManager {
             sfu_connected_at: None,
             prev_rtp_recv_total: 0,
             rtp_stall_checks: 0,
+            inband_speaking: Arc::new(InbandSpeaking::new()),
         }
     }
 
@@ -274,6 +283,11 @@ impl VoiceManager {
         // Encoded voice goes to the SFU peer from the capture thread, so a
         // busy command loop cannot delay or stop the microphone.
         self.attach_sfu_send_sink(&connection);
+        // Speaking rings in one SFU hop: the VAD callback sends the local
+        // state on the control channel, and remote states raise
+        // VoiceActivity from the connection's control callback.
+        self.inband_speaking.attach(connection.audio_send_target());
+        connection.set_activity_sink(self.event_tx.clone());
         self.sfu_connection = Some(connection);
         self.sfu_crew_id = crew_id.to_string();
         self.active = true;
@@ -298,6 +312,7 @@ impl VoiceManager {
             }
             VoiceMode::SFU => {
                 self.detach_sfu_send_sink();
+                self.inband_speaking.detach();
                 if let Some(conn) = self.sfu_connection.take() {
                     conn.clear_direct_voice_sink();
                 }
@@ -345,6 +360,7 @@ impl VoiceManager {
         // The leave task below keeps the connection alive for a while. No
         // frame may reach its peer after this point.
         self.detach_sfu_send_sink();
+        self.inband_speaking.detach();
         if let Some(conn) = self.sfu_connection.take() {
             conn.clear_direct_voice_sink();
             Self::spawn_best_effort_sfu_leave(conn);
@@ -477,6 +493,8 @@ impl VoiceManager {
         unsafe {
             extern "C" fn vad_cb(user_data: *mut std::ffi::c_void, speaking: bool) {
                 let data = unsafe { &*(user_data as *const VadCallbackData) };
+                // In-band first: the remote ring must not wait for the UI.
+                data.inband.on_vad(speaking);
                 let _ = data.tx.send(Event::VoiceActivity {
                     member_id: data.local_id.clone(),
                     speaking,
@@ -486,6 +504,7 @@ impl VoiceManager {
             let cb_data = Box::new(VadCallbackData {
                 tx: event_tx,
                 local_id: local_id_owned,
+                inband: Arc::clone(&self.inband_speaking),
             });
             let cb_ptr = Box::into_raw(cb_data) as *mut std::ffi::c_void;
             mello_sys::mello_voice_set_vad_callback(self.ctx, Some(vad_cb), cb_ptr);
@@ -498,6 +517,18 @@ impl VoiceManager {
             unsafe {
                 mello_sys::mello_voice_set_mute(self.ctx, muted);
             }
+        }
+        // A muted microphone stops the VAD where it is: close the remote ring.
+        if muted {
+            self.inband_speaking.on_vad(false);
+        }
+    }
+
+    /// The push-to-talk key decides the speaking state, not the VAD (spec
+    /// 10 section 4.3). Sends it in-band; no-op with push-to-talk off.
+    pub fn on_push_to_talk_speaking(&self, speaking: bool) {
+        if self.push_to_talk {
+            self.inband_speaking.on_vad(speaking);
         }
     }
 
@@ -1087,6 +1118,10 @@ impl VoiceManager {
         }
         steps.mark("packet_send");
 
+        // A speaking change that waited for its 100 ms interval.
+        if self.mode == VoiceMode::SFU {
+            self.inband_speaking.poll();
+        }
         self.receive_and_poll_events();
         steps.mark(if self.mode == VoiceMode::P2P {
             "p2p_receive"
@@ -1198,12 +1233,21 @@ impl VoiceManager {
                                 }
                                 SfuEvent::MemberLeft { user_id, reason } => {
                                     log::info!("SFU: member left voice: {} ({})", user_id, reason);
-                                    // The SFU names each voice track after its
-                                    // sender's user id.
+                                    // Receive state is keyed by user id. The
+                                    // slot release usually removed it already.
                                     self.remove_receive_peer(&user_id);
+                                    // The SFU sends no speaking=false for a
+                                    // member that leaves: clear the ring.
+                                    let _ = self.event_tx.send(Event::VoiceActivity {
+                                        member_id: user_id,
+                                        speaking: false,
+                                    });
                                     let _ = self.event_tx.send(Event::VoiceMembershipChanged {
                                         crew_id: self.sfu_crew_id.clone(),
                                     });
+                                }
+                                SfuEvent::SlotReleased { user_id } => {
+                                    self.remove_receive_peer(&user_id);
                                 }
                                 SfuEvent::Disconnected { reason } => {
                                     log::warn!("SFU voice disconnected: {}", reason);

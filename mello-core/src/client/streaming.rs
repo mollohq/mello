@@ -726,7 +726,8 @@ impl super::Client {
                     }
                     crate::transport::SfuEvent::ControlPacket { .. }
                     | crate::transport::SfuEvent::MemberJoined { .. }
-                    | crate::transport::SfuEvent::MemberLeft { .. } => {}
+                    | crate::transport::SfuEvent::MemberLeft { .. }
+                    | crate::transport::SfuEvent::SlotReleased { .. } => {}
                     crate::transport::SfuEvent::AudioRtp { rtp, .. } => {
                         if let Some(viewer) = vs.viewer {
                             // SAFETY: `vs.viewer` is set only from a successful
@@ -907,7 +908,7 @@ impl super::Client {
                     log::warn!("Stream SFU host disconnected: {}", reason);
                 }
                 SfuEvent::MediaPacket { .. } | SfuEvent::ControlPacket { .. } => {}
-                SfuEvent::AudioRtp { .. } => {}
+                SfuEvent::AudioRtp { .. } | SfuEvent::SlotReleased { .. } => {}
             }
         }
     }

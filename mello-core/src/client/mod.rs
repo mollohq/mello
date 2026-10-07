@@ -199,6 +199,10 @@ pub struct Client {
     mic_permission: mic_permission::MicPermissionSource,
     /// Reports a voice tick over its budget in SFU mode.
     voice_tick_budget: loop_watchdog::VoiceTickBudget,
+    /// Rate limit of the `voice_speaking` presence RPC in an SFU call. In
+    /// the call the SFU carries speaking in-band; the RPC only serves crew
+    /// members outside the channel (voice/speaking.rs).
+    speaking_presence: crate::voice::speaking::ChangeLimiter,
 }
 
 impl Client {
@@ -347,6 +351,9 @@ impl Client {
             browser_flows: browser_flow::BrowserFlows::default(),
             mic_permission: mic_permission::MicPermissionSource::from_env(),
             voice_tick_budget: loop_watchdog::VoiceTickBudget::default(),
+            speaking_presence: crate::voice::speaking::ChangeLimiter::new(
+                crate::voice::speaking::PRESENCE_MIN_CHANGE_INTERVAL,
+            ),
         }
     }
 
@@ -379,6 +386,9 @@ impl Client {
         let mut stats_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
         stats_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         stats_tick.tick().await;
+        // Sends a rate-limited speaking presence change that waited.
+        let mut presence_tick = tokio::time::interval(tokio::time::Duration::from_millis(250));
+        presence_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             for game_event in self.drain_game_events() {
@@ -511,6 +521,12 @@ impl Client {
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
+                }
+                _ = presence_tick.tick(), if self.speaking_presence.has_pending() => {
+                    let _step = watchdog.step("speaking_presence");
+                    if let Some(speaking) = self.speaking_presence.poll(Instant::now()) {
+                        self.send_speaking_presence(speaking).await;
+                    }
                 }
             }
         }
@@ -796,13 +812,16 @@ impl Client {
                 self.handle_leave_voice().await;
             }
             Command::VoiceSpeaking { speaking } => {
-                if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                    log::debug!("voice_speaking RPC: crew={} speaking={}", crew_id, speaking);
-                    if let Err(e) = self.nakama.voice_speaking(&crew_id, speaking).await {
-                        log::warn!("voice_speaking RPC failed: {}", e);
+                // Push-to-talk: the key is the speaking state, in-band too.
+                self.voice.on_push_to_talk_speaking(speaking);
+                if self.voice.voice_mode() == crate::voice::VoiceMode::SFU {
+                    // The call itself hears it in-band; presence outside the
+                    // channel gets at most one change per second.
+                    if let Some(s) = self.speaking_presence.on_change(speaking, Instant::now()) {
+                        self.send_speaking_presence(s).await;
                     }
                 } else {
-                    log::debug!("voice_speaking: no active crew");
+                    self.send_speaking_presence(speaking).await;
                 }
             }
             Command::SetMute { muted } => {
