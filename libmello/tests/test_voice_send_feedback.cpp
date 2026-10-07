@@ -197,6 +197,14 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
     EXPECT_FALSE(tracker.latest(&fb));
     tracker.set_first_sequence(65530);
 
+    // Pion reports the stream before its first packet: sequence 0, nothing
+    // lost. No interval, and the next report still counts from the start.
+    ReceptionReport empty{};
+    empty.source_ssrc = kOurSsrc;
+    fb = tracker.on_report(empty, 0x40000000u, 48000);
+    EXPECT_EQ(fb.reports, 1u);
+    EXPECT_EQ(fb.interval_expected, 0u);
+
     // First report: the stream started at 65530, wrapped, and reached 19:
     // 26 packets expected, 2 lost.
     ReceptionReport r{};
@@ -207,7 +215,7 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
     r.jitter = 96;
     const uint32_t now = 0x40000000u;
     fb = tracker.on_report(r, now, 48000);
-    EXPECT_EQ(fb.reports, 1u);
+    EXPECT_EQ(fb.reports, 2u);
     EXPECT_EQ(fb.interval_expected, 26u);
     EXPECT_EQ(fb.interval_lost, 2u);
     EXPECT_NEAR(fb.fraction_lost, 20.0f / 256.0f, 1e-6f);
@@ -221,7 +229,7 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
     r.last_sr = now - 0x4000u;
     r.delay_since_last_sr = 0x3000u;
     fb = tracker.on_report(r, now, 48000);
-    EXPECT_EQ(fb.reports, 2u);
+    EXPECT_EQ(fb.reports, 3u);
     EXPECT_EQ(fb.interval_expected, 50u);
     EXPECT_EQ(fb.interval_lost, 5u);
     EXPECT_NEAR(fb.rtt_ms, 1000.0f * 0x1000 / 65536.0f, 0.1f);
@@ -248,7 +256,7 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
 
     MelloSendFeedback latest{};
     ASSERT_TRUE(tracker.latest(&latest));
-    EXPECT_EQ(latest.reports, 5u);
+    EXPECT_EQ(latest.reports, 6u);
     EXPECT_EQ(latest.cumulative_lost, 1);
 }
 

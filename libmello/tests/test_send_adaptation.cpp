@@ -70,38 +70,66 @@ TEST(SendAdaptation, StepsDownFastAndUpOneRungAfterTenCleanSeconds) {
     std::vector<Step> trace;
     repeat(trace, 5, {50, 1, 40.0f});    // t 1..5 s: 2 % loss
     trace.push_back({50, 12, 40.0f});    // t 6: 13 % over the last 2 s
-    trace.push_back({50, 10, 40.0f});    // t 7: 20 % since the step
-    trace.push_back({50, 2, 40.0f});     // t 8: 4 %
-    repeat(trace, 9, {50, 1, 40.0f});    // t 9..17: clean
-    repeat(trace, 10, {50, 1, 40.0f});   // t 18..27: clean
-    repeat(trace, 13, {50, 4, 40.0f});   // t 28..40: 8 %, between the thresholds
-    trace.push_back({50, 1, 120.0f});    // t 41: the round trip triples
-    repeat(trace, 20, {50, 4, 40.0f});   // t 42..61: 8 % again
-    repeat(trace, 20, {0, 0, 40.0f});    // t 62..81: the speech gate is closed
-    repeat(trace, 12, {50, 0, 40.0f});   // t 82..93: clean speech
+    trace.push_back({50, 10, 40.0f});    // t 7: 20 %, one report after the step
+    trace.push_back({50, 2, 40.0f});     // t 8: 12 % over the 2 s after the step
+    repeat(trace, 10, {50, 1, 40.0f});   // t 9..18: clean
+    repeat(trace, 10, {50, 1, 40.0f});   // t 19..28: clean
+    repeat(trace, 13, {50, 4, 40.0f});   // t 29..41: 8 %, at most 10 %
+    repeat(trace, 2, {50, 1, 130.0f});   // t 42..43: the round trip triples
+    repeat(trace, 11, {50, 1, 40.0f});   // t 44..54: back to 40 ms, clean
+    repeat(trace, 3, {50, 15, 40.0f});   // t 55..57: 30 %
+    repeat(trace, 20, {0, 0, 40.0f});    // t 58..77: the speech gate is closed
+    repeat(trace, 15, {50, 0, 40.0f});   // t 78..92: clean speech
 
     const auto changes = run_trace(c, trace);
     const std::vector<std::pair<int64_t, int>> want = {
         {6000, 48},   // loss over 2 s above 10 %: one rung down at once
-        {7000, 32},   // still above 10 % in the second after the step
-        {17000, 48},  // 10 s clean since the last step
-        {27000, 64},  // 10 s clean since the step up; 64 is the top
-        {41000, 48},  // round trip above 2 x the floor
-        {86000, 64},  // silence is no evidence: the clean time (from 61 s)
+        {8000, 32},   // above 10 % again over the 2 s after the step
+        {18000, 48},  // 10 s clean since the step down
+        {28000, 64},  // 10 s clean since the step up; 64 is the top
+        {43000, 48},  // the median round trip of 3 s is 2 x the 30 s median
+        {54000, 64},  // 10 s clean from 44 s (the 3 s median was high at 44 s)
+        {55000, 48},  // a step up does not shorten the loss window
+        {57000, 32},  // 30 % over the two reports after the step
+        {82000, 48},  // silence is no evidence: the clean time (from 57 s)
                       // completes with 5 s of clean speech
+        {92000, 64},
     };
     EXPECT_EQ(changes, want);
     EXPECT_EQ(c.rung_changes(), want.size());
 }
 
-TEST(SendAdaptation, HoldsTheRungWhenLossSitsBetweenTheThresholds) {
+TEST(SendAdaptation, OneLossySecondStepsDownOnce) {
+    SendAdaptation c;
+    std::vector<Step> trace;
+    repeat(trace, 3, {50, 0, 40.0f});
+    trace.push_back({50, 25, 40.0f});   // t 4: 50 % in one second
+    repeat(trace, 4, {50, 0, 40.0f});   // t 5..8: clean
+    const auto changes = run_trace(c, trace);
+    EXPECT_EQ(changes, (std::vector<std::pair<int64_t, int>>{{4000, 48}}));
+}
+
+TEST(SendAdaptation, ClimbsBackWhenTheLossStaysAtOrBelowTenPercent) {
     SendAdaptation c;
     c.set_max_kbps(96);
     std::vector<Step> trace;
     trace.push_back({50, 15, 30.0f});   // t 1: 30 %, down to 64
     repeat(trace, 60, {50, 4, 30.0f});  // a minute at 8 %
     const auto changes = run_trace(c, trace);
-    EXPECT_EQ(changes, (std::vector<std::pair<int64_t, int>>{{1000, 64}}));
+    // Fast down, 10 s up: no flapping, and 8 % random loss does not hold
+    // the rung down for good.
+    EXPECT_EQ(changes, (std::vector<std::pair<int64_t, int>>{{1000, 64}, {11000, 96}}));
+}
+
+TEST(SendAdaptation, JitterSpikesInTheRoundTripDoNotStepDown) {
+    SendAdaptation c;
+    std::vector<Step> trace;
+    // 160 ms round trips with a 450 ms spike every 5 s (one stalled sender
+    // report each time): the 3 s median never doubles.
+    for (int i = 0; i < 60; ++i) {
+        trace.push_back({50, 0, (i % 5 == 4) ? 450.0f : 160.0f});
+    }
+    EXPECT_TRUE(run_trace(c, trace).empty());
 }
 
 TEST(SendAdaptation, TooFewPacketsGiveNoDecision) {
@@ -155,7 +183,7 @@ TEST(SendAdaptation, LossPercFollowsFourSecondsOfLossBetweenFloorAndCap) {
 TEST(SendAdaptation, ResetGoesBackToTheTopAndTheFloor) {
     SendAdaptation c;
     std::vector<Step> trace;
-    repeat(trace, 3, {50, 20, 40.0f});
+    repeat(trace, 3, {50, 20, 40.0f});  // 64, 48 at t 1, hold, 32 at t 3
     run_trace(c, trace);
     EXPECT_LT(c.bitrate_kbps(), 64);
     EXPECT_GT(c.loss_perc(), 5);
@@ -234,15 +262,16 @@ TEST(SendAdaptationPipeline, ReportsSetTheEncoderBitrateAndLossPerc) {
     EXPECT_EQ(stats.loss_perc, 5);
     EXPECT_EQ(stats.reports, 0u);
 
-    // Three reports of 40 % loss, one second apart on the playout clock:
-    // three rungs down to 24 kbps, loss perc at the cap.
+    // Five reports of 40 % loss, one second apart on the playout clock:
+    // a step down at the first, third and fifth, to 24 kbps; loss perc at
+    // the cap.
     mello_test_set_clock_ms(5000000);
     MelloSendFeedback fb{};
     fb.interval_expected = 50;
     fb.interval_lost = 20;
     fb.fraction_lost = 0.4f;
     fb.rtt_ms = 60.0f;
-    for (int i = 0; i < 3; ++i) {
+    for (int i = 0; i < 5; ++i) {
         mello_test_set_clock_ms(5000000 + 1000 * (i + 1));
         fb.reports = static_cast<uint32_t>(i + 1);
         pipeline.report_send_feedback(fb);
@@ -251,7 +280,7 @@ TEST(SendAdaptationPipeline, ReportsSetTheEncoderBitrateAndLossPerc) {
     stats = pipeline.send_stats();
     EXPECT_EQ(stats.bitrate_kbps, 24);
     EXPECT_EQ(stats.loss_perc, 30);
-    EXPECT_EQ(stats.reports, 3u);
+    EXPECT_EQ(stats.reports, 5u);
     EXPECT_EQ(stats.rung_changes, 3u);
     EXPECT_NEAR(stats.feedback.rtt_ms, 60.0f, 1e-6f);
 

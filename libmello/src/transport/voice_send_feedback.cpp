@@ -143,7 +143,14 @@ MelloSendFeedback SendFeedbackTracker::on_report(const ReceptionReport& report,
     // bits only.
     uint32_t expected = 0;
     int64_t lost_delta = 0;
-    if (have_previous_) {
+    // Pion reports a stream from the time it binds it, also before the first
+    // packet: sequence 0, nothing lost. Such a report says nothing, and it
+    // must not become the previous report of the first real one.
+    const bool before_first_packet = !have_previous_ && report.extended_highest_seq == 0 &&
+                                     report.cumulative_lost == 0 && report.fraction_lost == 0;
+    if (before_first_packet) {
+        // No interval.
+    } else if (have_previous_) {
         const uint32_t delta = report.extended_highest_seq - previous_extended_seq_;
         expected = delta <= kMaxIntervalPackets ? delta : 0;
         lost_delta = static_cast<int64_t>(report.cumulative_lost) - previous_cumulative_lost_;
@@ -167,7 +174,7 @@ MelloSendFeedback SendFeedbackTracker::on_report(const ReceptionReport& report,
     fb.interval_expected = expected;
     fb.interval_lost = lost;
 
-    have_previous_ = true;
+    have_previous_ = have_previous_ || !before_first_packet;
     previous_extended_seq_ = report.extended_highest_seq;
     previous_cumulative_lost_ = report.cumulative_lost;
     latest_ = fb;

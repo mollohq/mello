@@ -31,13 +31,17 @@ inline constexpr int kLossPercCap = 30;
 
 class SendAdaptation {
 public:
-    /// Step down when the loss over this window exceeds kDownLoss.
+    /// Step down when the loss over this window exceeds kDownLoss. The
+    /// window never reaches back before the last step down, and the next
+    /// step down needs kDownMinReports reports after it: one lossy second
+    /// does not count twice.
     static constexpr int64_t kDownWindowMs = 2000;
     static constexpr double kDownLoss = 0.10;
-    /// Step up one rung after this long with no step down and a loss of at
-    /// most kCleanLoss over the time.
+    static constexpr int kDownMinReports = 2;
+    /// Step up one rung after this long without a step-down condition, when
+    /// the loss over the time is at most kCleanLoss.
     static constexpr int64_t kCleanMs = 10000;
-    static constexpr double kCleanLoss = 0.05;
+    static constexpr double kCleanLoss = 0.10;
     /// A loss window needs this many expected packets (0.5 s of speech) to
     /// count; a speech gate pause gives no evidence either way.
     static constexpr uint32_t kMinExpected = 25;
@@ -46,12 +50,17 @@ public:
     static constexpr uint32_t kMinExpectedUp = 250;
     /// OPUS_SET_PACKET_LOSS_PERC follows the loss over this window.
     static constexpr int64_t kLossPercWindowMs = 4000;
-    /// The round trip "doubles" when a sample exceeds 2 x the floor, and the
-    /// floor counts as at least kRttFloorMinMs (a 2 ms LAN round trip that
-    /// becomes 5 ms is no congestion).
-    static constexpr int64_t kRttFloorWindowMs = 30000;
-    static constexpr float kRttFloorMinMs = 50.0f;
-    static constexpr int kRttMinSamples = 3;
+    /// The round trip "doubles" when the median of the last 3 s (at least
+    /// 2 samples) exceeds 2 x the median of the last 30 s (at least 5
+    /// samples). Medians, because one stalled sender report or one jitter
+    /// spike doubles a single sample. The 30 s median counts as at least
+    /// kRttBaseMinMs: a 2 ms LAN round trip that becomes 5 ms is no
+    /// congestion.
+    static constexpr int64_t kRttShortWindowMs = 3000;
+    static constexpr int kRttShortMinSamples = 2;
+    static constexpr int64_t kRttBaseWindowMs = 30000;
+    static constexpr int kRttBaseMinSamples = 5;
+    static constexpr float kRttBaseMinMs = 50.0f;
 
     explicit SendAdaptation(int max_kbps = kSendDefaultKbps);
 
@@ -79,8 +88,8 @@ public:
     /// Loss over the step-down window at the last report, 0..1; -1 when the
     /// window had too few packets.
     double window_loss() const { return window_loss_; }
-    /// Lowest round trip of the last 30 s, ms; -1 with no sample.
-    float rtt_floor_ms() const;
+    /// Median round trip of the last 30 s, ms; -1 with no sample.
+    float rtt_base_ms() const;
 
 private:
     struct Report {
@@ -95,13 +104,19 @@ private:
 
     void build_ladder(int max_kbps);
     void change_rung(int rung, int64_t now_ms, const char* why, float rtt_ms);
+    void restart_clean_time(int64_t now_ms);
+    /// Median of the round trips after `from_ms`; -1 with fewer than
+    /// `min_samples`.
+    float rtt_median_after(int64_t from_ms, int min_samples) const;
 
     std::vector<int> rungs_;
     int rung_ = 0;
     int loss_perc_ = kLossPercFloor;
     std::deque<Report> reports_;
     std::deque<RttSample> rtt_;
-    int64_t last_change_ms_ = std::numeric_limits<int64_t>::min();
+    int64_t last_down_ms_ = std::numeric_limits<int64_t>::min();
+    // Reports since the last step down.
+    int reports_since_down_ = 0;
     // Start of the clean time and the packets in it.
     int64_t clean_since_ms_ = std::numeric_limits<int64_t>::min();
     uint64_t clean_expected_ = 0;
