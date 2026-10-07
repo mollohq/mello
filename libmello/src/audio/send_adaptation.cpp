@@ -25,6 +25,7 @@ void SendAdaptation::build_ladder(int max_kbps) {
 void SendAdaptation::set_max_kbps(int kbps) {
     const bool at_top = rung_ == 0;
     const int current = bitrate_kbps();
+    const int old_top = max_kbps();
     build_ladder(kbps);
     // At the top: the new top. Stepped down: the highest rung at or below
     // the current bitrate, and the clean steps climb from there.
@@ -32,8 +33,10 @@ void SendAdaptation::set_max_kbps(int kbps) {
     while (!at_top && rung_ + 1 < static_cast<int>(rungs_.size()) && rungs_[rung_] > current) {
         ++rung_;
     }
-    MELLO_LOG_INFO("send_adapt", "channel bitrate %d kbps: ladder top %d, now %d kbps",
-                   kbps, rungs_.front(), bitrate_kbps());
+    if (max_kbps() != old_top) {
+        MELLO_LOG_INFO("send_adapt", "channel bitrate %d kbps: ladder top %d, now %d kbps",
+                       kbps, max_kbps(), bitrate_kbps());
+    }
 }
 
 void SendAdaptation::reset() {

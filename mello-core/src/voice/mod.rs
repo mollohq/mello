@@ -675,16 +675,18 @@ impl VoiceManager {
     /// ladder (spec 10 section 4.6). libmello clamps it to 24..96. The
     /// receiver reports of the SFU move the encoder down the ladder and back
     /// up to this rung, on the libdatachannel and capture threads.
+    /// The client repeats it on every channel update: an unchanged value
+    /// does nothing.
     pub fn set_channel_bitrate(&mut self, kbps: u32) {
-        let changed = kbps != self.channel_bitrate_kbps;
+        if kbps == self.channel_bitrate_kbps {
+            return;
+        }
         self.channel_bitrate_kbps = kbps;
         if !self.ctx.is_null() {
             let kbps = i32::try_from(kbps).unwrap_or(i32::MAX);
             unsafe { mello_sys::mello_voice_set_max_bitrate(self.ctx, kbps) };
         }
-        if changed {
-            log::info!("Voice channel bitrate: {} kbps", kbps);
-        }
+        log::info!("Voice channel bitrate: {} kbps", kbps);
     }
 
     pub fn set_loopback(&mut self, enabled: bool) {
