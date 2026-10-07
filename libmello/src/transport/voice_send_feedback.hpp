@@ -88,6 +88,8 @@ private:
     bool have_previous_ = false;
     uint32_t previous_extended_seq_ = 0;
     int32_t previous_cumulative_lost_ = 0;
+    // LSR of the previous report, for rtt_fresh.
+    uint32_t previous_last_sr_ = 0;
     uint32_t reports_ = 0;
     bool have_latest_ = false;
     MelloSendFeedback latest_{};

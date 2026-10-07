@@ -555,8 +555,10 @@ void AudioPipeline::report_send_feedback(const MelloSendFeedback& feedback) {
     std::lock_guard<std::mutex> lock(adapt_mutex_);
     last_feedback_ = feedback;
     ++session_reports_;
+    // A repeated LSR repeats an old forward delay: no round-trip sample.
     adapt_.on_report(util::steady_now_ms(), feedback.interval_expected,
-                     feedback.interval_lost, feedback.rtt_ms, feedback.jitter_ms);
+                     feedback.interval_lost, feedback.rtt_fresh ? feedback.rtt_ms : -1.0f,
+                     feedback.jitter_ms);
     adapt_bitrate_bps_.store(adapt_.bitrate_kbps() * 1000, std::memory_order_relaxed);
     adapt_loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
 }

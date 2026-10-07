@@ -66,7 +66,7 @@ bool SendAdaptation::inflated(const std::deque<Sample>& samples, int64_t now_ms,
     std::vector<float> all;
     for (const auto& s : samples) {
         all.push_back(s.value);
-        if (s.t_ms > now_ms - kShortWindowMs) {
+        if (s.t_ms > now_ms - kShortWindowMs + kWindowSlackMs) {
             recent.push_back(s.value);
         }
     }
@@ -147,7 +147,8 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
         jitter_.push_back({now_ms, jitter_ms});
     }
     for (auto* samples : {&rtt_, &jitter_}) {
-        while (!samples->empty() && samples->front().t_ms <= now_ms - kBaseWindowMs) {
+        while (!samples->empty() &&
+               samples->front().t_ms <= now_ms - kBaseWindowMs + kWindowSlackMs) {
             samples->pop_front();
         }
     }
@@ -158,7 +159,7 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
     // of any cause raises it: in-band FEC repairs random loss too.
     uint64_t perc_expected = 0;
     uint64_t perc_lost = 0;
-    loss_after(now_ms - kLossPercWindowMs, perc_expected, perc_lost);
+    loss_after(now_ms - kLossPercWindowMs + kWindowSlackMs, perc_expected, perc_lost);
     if (perc_expected >= kMinExpected) {
         const double pct = 100.0 * static_cast<double>(perc_lost) /
                            static_cast<double>(perc_expected);
@@ -169,13 +170,15 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
     // Congestion loss: the last 2 s, but never before the last step down.
     uint64_t down_expected = 0;
     uint64_t down_lost = 0;
-    loss_after(std::max(now_ms - kDownWindowMs, last_down_ms_), down_expected, down_lost);
+    loss_after(std::max(now_ms - kDownWindowMs + kWindowSlackMs, last_down_ms_), down_expected,
+               down_lost);
     window_loss_ = down_expected >= kMinExpected
                        ? static_cast<double>(down_lost) / static_cast<double>(down_expected)
                        : -1.0;
 
     // Was the last step down effective? It must lower the loss within 4 s.
-    if (check_step_ms_ != kNever && now_ms - check_step_ms_ >= kEffectiveWindowMs) {
+    if (check_step_ms_ != kNever &&
+        now_ms - check_step_ms_ >= kEffectiveWindowMs - kWindowSlackMs) {
         uint64_t after_expected = 0;
         uint64_t after_lost = 0;
         loss_after(check_step_ms_, after_expected, after_lost);
@@ -224,7 +227,7 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
         clean_since_ms_ = now_ms;
     }
     clean_expected_ += expected;
-    if (rung_ > 0 && !held && now_ms - clean_since_ms_ >= kCleanMs &&
+    if (rung_ > 0 && !held && now_ms - clean_since_ms_ >= kCleanMs - kWindowSlackMs &&
         clean_expected_ >= kMinExpectedUp) {
         change_rung(rung_ - 1, now_ms, "clean");
     }

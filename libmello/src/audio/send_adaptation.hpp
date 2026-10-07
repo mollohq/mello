@@ -77,6 +77,12 @@ public:
     static constexpr double kEffectiveFactor = 0.5;
     static constexpr int64_t kHoldMs = 30000;
 
+    /// A window of N ms holds the reports of the last N ms of report
+    /// arrivals: N / 1000 reports at the SFU's cadence. The arrival times
+    /// vary by a few ms, so a window starts half a report interval later
+    /// than now - N; otherwise it holds one report more or less.
+    static constexpr int64_t kWindowSlackMs = 500;
+
     explicit SendAdaptation(int max_kbps = kSendDefaultKbps);
 
     /// The channel bitrate: the top rung. Clamped to 24..96. At the top

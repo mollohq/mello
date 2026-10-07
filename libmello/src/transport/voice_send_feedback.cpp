@@ -136,6 +136,8 @@ MelloSendFeedback SendFeedbackTracker::on_report(const ReceptionReport& report,
                        : 0.0f;
     fb.rtt_ms = rtt_ms_from_report(report.last_sr, report.delay_since_last_sr,
                                    arrival_ntp_compact);
+    fb.rtt_fresh = fb.rtt_ms >= 0.0f && report.last_sr != previous_last_sr_;
+    previous_last_sr_ = report.last_sr;
 
     // Packets expected since the previous report (RFC 3550 appendix A.3).
     // The first report of a track counts from the track's first sequence;

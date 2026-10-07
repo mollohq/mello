@@ -233,6 +233,7 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
     EXPECT_EQ(fb.interval_expected, 50u);
     EXPECT_EQ(fb.interval_lost, 5u);
     EXPECT_NEAR(fb.rtt_ms, 1000.0f * 0x1000 / 65536.0f, 0.1f);
+    EXPECT_TRUE(fb.rtt_fresh) << "a new LSR";
 
     // Third: the cumulative count went down (duplicates). The loss falls
     // back to the fraction: 64/256 of 40.
@@ -242,6 +243,8 @@ TEST(VoiceSendFeedback, TrackerGivesPacketsExpectedAndLostPerReport) {
     fb = tracker.on_report(r, now, 48000);
     EXPECT_EQ(fb.interval_expected, 40u);
     EXPECT_EQ(fb.interval_lost, 10u);
+    EXPECT_GE(fb.rtt_ms, 0.0f);
+    EXPECT_FALSE(fb.rtt_fresh) << "the same LSR: no newer sender report arrived";
 
     // Fourth: no new packets (the speech gate is closed).
     fb = tracker.on_report(r, now, 48000);

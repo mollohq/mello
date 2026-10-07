@@ -144,6 +144,18 @@ TEST(SendAdaptation, AStepThatDoesNotLowerTheLossGoesBackAndHoldsTheLadder) {
     EXPECT_FALSE(c.holding(48000));
 }
 
+TEST(SendAdaptation, ReportArrivalJitterDoesNotWidenTheWindow) {
+    // The SFU's ticker is 1 s, but the reports arrive a few ms early or
+    // late. The 2 s window holds the last two reports, not three.
+    SendAdaptation c;
+    for (int k = 1; k <= 11; ++k) {
+        feed(c, 1000 * k + 30, {50, 0, 40.0f});
+    }
+    feed(c, 12029, {48, 7, 333.0f});
+    feed(c, 13028, {49, 5, 351.0f});  // 12 of 97 over the last two: 12.4 %
+    EXPECT_EQ(c.bitrate_kbps(), 48);
+}
+
 TEST(SendAdaptation, OneLossySecondStepsDownOnce) {
     SendAdaptation c;
     std::vector<Step> trace;
@@ -312,6 +324,7 @@ TEST(SendAdaptationPipeline, ReportsSetTheEncoderBitrateAndLossPerc) {
     MelloSendFeedback fb{};
     fb.interval_expected = 50;
     fb.jitter_ms = 5.0f;
+    fb.rtt_fresh = true;
     for (int i = 0; i < 14; ++i) {
         const bool congested = i >= 8;
         fb.interval_lost = congested ? 20 : 0;

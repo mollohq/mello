@@ -100,6 +100,11 @@ typedef struct MelloSendFeedback {
      *  cumulative counts, or fraction_lost x interval_expected when that
      *  difference is not usable. At most interval_expected. */
     uint32_t interval_lost;
+    /** True when the report refers to a sender report that no earlier report
+     *  referred to (a new LSR). False: rtt_ms repeats the forward delay of an
+     *  older sender report, because no newer one reached the remote end (a
+     *  closed speech gate, or a full queue that dropped it). */
+    bool     rtt_fresh;
 } MelloSendFeedback;
 
 /** Receives one MelloSendFeedback per receiver report about the send track.
