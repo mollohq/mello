@@ -458,6 +458,18 @@ pub enum Event {
     VoiceMembershipChanged {
         crew_id: String,
     },
+    /// The client measured the round trip to each SFU region (at login and
+    /// every 10 minutes). Fastest first; empty when no region answered.
+    SfuRegionsMeasured {
+        regions: Vec<crate::transport::sfu_region::RegionRtt>,
+    },
+    /// The SFU voice link went silent (no control-channel pong for 1 s), or
+    /// came back. The session stays; the UI shows the call as reconnecting
+    /// while `stalled` (spec 10 section 7.6).
+    VoiceLinkStalled {
+        crew_id: String,
+        stalled: bool,
+    },
     /// SFU voice connection was lost; client should attempt to re-join.
     VoiceSfuDisconnected {
         crew_id: String,

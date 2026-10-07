@@ -30,6 +30,21 @@ const SFU_SIGNALING_GRACE_MS: u64 = 5_000;
 /// observed yet" (pong_age_ms < 0) is tolerated. After this, a persistent lack
 /// of pongs means the control round-trip is dead and the session is unhealthy.
 const SFU_PONG_GRACE_MS: i64 = 15_000;
+/// In SFU mode the tick pings the SFU on the control channel this often
+/// (6 ticks of 20 ms: 120 ms) and checks the age of the last pong.
+const SFU_STALL_CHECK_TICKS: u32 = 6;
+/// No pong for this long: the link is silent (a pulled cable, a frozen
+/// SFU). With the pong age up to one ping old and one check interval of
+/// delay, `Event::VoiceLinkStalled` reaches the UI 0.7 to 0.94 s after the
+/// link goes silent. The session stays, and comes back by itself when the
+/// link does. The liveness check below still tears a dead session down.
+const SFU_STALL_PONG_AGE_MS: i64 = 700;
+/// A stall this long ends in a new session. The SFU marks a peer that sent
+/// nothing for 5 s disconnected and removes it from the voice session 5 s
+/// later (mello-sfu `webrtc_disconnected`, `peer_timeout_disconnected`); the
+/// control channel can still answer pings after that, so the old session
+/// would look alive and carry no audio.
+const SFU_STALL_REBUILD_MS: i64 = 5_000;
 
 /// How voice is carried: through the SFU, over P2P, or not at all.
 /// `VoiceStateChanged` reports it. Serialized as `"sfu"`, `"p2p"` or
@@ -114,6 +129,11 @@ pub struct VoiceManager {
     /// When the current SFU connection was established. Used to apply a grace
     /// window before treating "no pong observed yet" as unhealthy.
     sfu_connected_at: Option<Instant>,
+    /// The last pong is older than `SFU_STALL_PONG_AGE_MS`: the UI shows
+    /// the call as reconnecting (`Event::VoiceLinkStalled`).
+    sfu_link_stalled: bool,
+    /// The longest silence of the current stall, in ms.
+    sfu_stall_peak_ms: i64,
     /// Previous `rtp_recv_total` and consecutive liveness ticks (~2s each) where
     /// inbound RTP was flat while a remote stream was present. Detection-only
     /// for now (logged, not acted on) so the field signal can be validated
@@ -156,6 +176,17 @@ unsafe extern "C" fn libmello_log_bridge(
         2 => log::warn!(target: target, "{}", msg),
         _ => log::error!(target: target, "{}", msg),
     }
+}
+
+/// Whether the SFU link is stalled, from the age of the last control-channel
+/// pong (`-1`: none yet) and the age of the session. A session gets its
+/// first pong within one ping of the connect, so no pong for as long as a
+/// stall counts as a stall too.
+fn sfu_link_is_stalled(pong_age_ms: i64, since_connect_ms: i64) -> bool {
+    if pong_age_ms < 0 {
+        return since_connect_ms > SFU_STALL_PONG_AGE_MS;
+    }
+    pong_age_ms > SFU_STALL_PONG_AGE_MS
 }
 
 impl VoiceManager {
@@ -222,6 +253,8 @@ impl VoiceManager {
             sfu_crew_id: String::new(),
             sfu_unhealthy_checks: 0,
             sfu_connected_at: None,
+            sfu_link_stalled: false,
+            sfu_stall_peak_ms: 0,
             prev_rtp_recv_total: 0,
             rtp_stall_checks: 0,
             inband_speaking: Arc::new(InbandSpeaking::new()),
@@ -297,6 +330,8 @@ impl VoiceManager {
         self.active = true;
         self.mode = VoiceMode::SFU;
         self.sfu_connected_at = Some(Instant::now());
+        self.sfu_link_stalled = false;
+        self.sfu_stall_peak_ms = 0;
         self.prev_rtp_recv_total = 0;
         self.rtp_stall_checks = 0;
         self.apply_push_to_talk();
@@ -322,6 +357,8 @@ impl VoiceManager {
                 }
                 self.sfu_crew_id.clear();
                 self.sfu_connected_at = None;
+                self.sfu_link_stalled = false;
+                self.sfu_stall_peak_ms = 0;
                 self.rtp_stall_checks = 0;
             }
             VoiceMode::Disconnected => {}
@@ -373,12 +410,65 @@ impl VoiceManager {
         self.mode = VoiceMode::Disconnected;
         self.sfu_unhealthy_checks = 0;
         self.sfu_connected_at = None;
+        self.sfu_link_stalled = false;
+        self.sfu_stall_peak_ms = 0;
         self.rtp_stall_checks = 0;
         self.sfu_crew_id.clear();
         log::info!("Voice stopped (SFU disconnect): reason={}", reason);
         let _ = self
             .event_tx
             .send(Event::VoiceSfuDisconnected { crew_id, reason });
+    }
+
+    /// Ping the SFU and report a change of the link stall (spec 10 section
+    /// 7.6). A silent link closes nothing, so the pong age is the only
+    /// signal; it shows the call as reconnecting within about 1 s.
+    ///
+    /// A stall of `SFU_STALL_REBUILD_MS` or more ends in a new session, not
+    /// in the old one: by then the SFU has marked the peer disconnected and
+    /// drops it from the voice session 5 s later, while its control channel
+    /// can still answer pings.
+    fn check_sfu_link_stall(&mut self) {
+        let Some(conn) = &self.sfu_connection else {
+            return;
+        };
+        conn.send_ping();
+        let since_connect_ms = self
+            .sfu_connected_at
+            .map(|t| t.elapsed().as_millis() as i64)
+            .unwrap_or(0);
+        let pong_age_ms = conn.pong_age_ms();
+        let stalled = sfu_link_is_stalled(pong_age_ms, since_connect_ms);
+        if stalled {
+            let silent_ms = if pong_age_ms < 0 {
+                since_connect_ms
+            } else {
+                pong_age_ms
+            };
+            self.sfu_stall_peak_ms = self.sfu_stall_peak_ms.max(silent_ms);
+        }
+        if stalled == self.sfu_link_stalled {
+            return;
+        }
+        self.sfu_link_stalled = stalled;
+        if stalled {
+            log::warn!("SFU link stalled: pong age {} ms", pong_age_ms);
+        } else {
+            let peak_ms = std::mem::take(&mut self.sfu_stall_peak_ms);
+            if peak_ms >= SFU_STALL_REBUILD_MS {
+                log::warn!(
+                    "SFU link back after {} ms of silence: the SFU dropped the session, rebuilding it",
+                    peak_ms
+                );
+                self.mark_disconnected_with_reason("link_stalled");
+                return;
+            }
+            log::info!("SFU link back after {} ms of silence", peak_ms);
+        }
+        let _ = self.event_tx.send(Event::VoiceLinkStalled {
+            crew_id: self.sfu_crew_id.clone(),
+            stalled,
+        });
     }
 
     /// Send SFU voice frames from the capture thread (spec 10 section 4.5).
@@ -995,6 +1085,14 @@ impl VoiceManager {
         }
         steps.mark("mic_level");
 
+        if self.mode == VoiceMode::SFU && self.tick_counter.is_multiple_of(SFU_STALL_CHECK_TICKS) {
+            self.check_sfu_link_stall();
+            if self.mode != VoiceMode::SFU {
+                // A long stall ended: the session was dropped for a new one.
+                return;
+            }
+        }
+
         // Send a DC ping every ~2 seconds (200 ticks at 100Hz) and run an SFU
         // liveness check. Health is multi-signal (PC connected, control channel
         // open, fresh pong RTT) with a short signaling grace so transient
@@ -1308,6 +1406,33 @@ impl Drop for VoiceManager {
                 mello_sys::mello_set_log_callback(None, std::ptr::null_mut());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod stall_tests {
+    /// Pings go every 120 ms. No pong for 700 ms is a stall, so a silent
+    /// link shows within the 1 s the plan allows for a pulled cable: the
+    /// last pong can be one ping old, and the check can come one interval
+    /// late.
+    #[test]
+    fn a_link_with_no_pong_for_700_ms_is_stalled() {
+        assert!(
+            !super::sfu_link_is_stalled(-1, 500),
+            "no pong yet, right after the connect"
+        );
+        assert!(
+            super::sfu_link_is_stalled(-1, 701),
+            "no first pong for as long is a stall too"
+        );
+        assert!(!super::sfu_link_is_stalled(0, 60_000));
+        assert!(!super::sfu_link_is_stalled(700, 60_000));
+        assert!(super::sfu_link_is_stalled(701, 60_000));
+        let interval_ms = i64::from(super::SFU_STALL_CHECK_TICKS) * 20;
+        assert!(
+            super::SFU_STALL_PONG_AGE_MS + 2 * interval_ms < 1_000,
+            "the worst case shows within 1 s"
+        );
     }
 }
 

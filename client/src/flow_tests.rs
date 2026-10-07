@@ -745,6 +745,173 @@ fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
     assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
 }
 
+/// The texts on screen now.
+fn visible_texts(h: &Harness) -> Vec<String> {
+    h.elements()
+        .iter()
+        .filter_map(|e| e.accessible_label())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+/// Spec 10 section 7.6: a dropped SFU voice link shows "reconnecting" on the
+/// joined channel's header and on the local member's row, from
+/// `VoiceSfuDisconnected` until the call is back or the reconnect gives up.
+#[test]
+fn a_dropped_sfu_link_shows_reconnecting_until_the_call_is_back() {
+    use crate::CrewData;
+
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app()
+        .set_crews(slint::ModelRc::new(slint::VecModel::from(vec![CrewData {
+            id: "crew-1".into(),
+            name: "Crew".into(),
+            ..Default::default()
+        }])));
+    join_squad_before_the_call_starts(&mut h);
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob"]),
+    });
+    let shows = |h: &Harness, text: &str| visible_texts(h).iter().any(|t| t == text);
+    assert!(!h.app().get_voice_reconnecting());
+    assert!(!shows(&h, "RECONNECTING"));
+
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "ws_closed".into(),
+    });
+    assert!(h.app().get_voice_reconnecting());
+    assert!(
+        shows(&h, "RECONNECTING"),
+        "the channel header: {:?}",
+        visible_texts(&h)
+    );
+    // The test backend's tree walk meets each row more than once, so
+    // compare counts: the line shows as often as the local member's name,
+    // and never with the other member's.
+    let count = |h: &Harness, text: &str| {
+        visible_texts(h)
+            .iter()
+            .filter(|t| t.as_str() == text)
+            .count()
+    };
+    assert!(count(&h, "Reconnecting") > 0, "the local member's row");
+    assert_eq!(
+        count(&h, "Reconnecting"),
+        count(&h, "u-me"),
+        "only the local member's row says so"
+    );
+    assert_eq!(
+        active_voice_channels(&h),
+        vec!["ch-squad"],
+        "the channel stays joined while it reconnects"
+    );
+
+    // The reconnect succeeds.
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    assert!(!h.app().get_voice_reconnecting());
+    assert!(!shows(&h, "RECONNECTING"));
+    assert!(!shows(&h, "Reconnecting"));
+
+    // The reconnect gives up.
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "liveness_timeout".into(),
+    });
+    assert!(h.app().get_voice_reconnecting());
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
+    assert!(!h.app().get_voice_reconnecting());
+    assert!(!shows(&h, "RECONNECTING"));
+}
+
+/// A silent SFU link (no pong for 1 s, a pulled cable) shows the same
+/// "reconnecting" state while the session waits for the link, and clears
+/// when pongs come back.
+#[test]
+fn a_stalled_sfu_link_shows_reconnecting_until_pongs_return() {
+    use crate::CrewData;
+
+    let mut h = Harness::new();
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app()
+        .set_crews(slint::ModelRc::new(slint::VecModel::from(vec![CrewData {
+            id: "crew-1".into(),
+            name: "Crew".into(),
+            ..Default::default()
+        }])));
+    join_squad_before_the_call_starts(&mut h);
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    let shows = |h: &Harness| visible_texts(h).iter().any(|t| t == "RECONNECTING");
+    assert!(!shows(&h));
+
+    h.emit(Event::VoiceLinkStalled {
+        crew_id: "crew-1".into(),
+        stalled: true,
+    });
+    assert!(shows(&h), "a stalled link shows on the channel header");
+    h.emit(Event::VoiceLinkStalled {
+        crew_id: "crew-1".into(),
+        stalled: false,
+    });
+    assert!(!shows(&h), "the link came back");
+
+    // A stall that ends in a drop and a reconnect clears with the new call.
+    h.emit(Event::VoiceLinkStalled {
+        crew_id: "crew-1".into(),
+        stalled: true,
+    });
+    h.emit(Event::VoiceSfuDisconnected {
+        crew_id: "crew-1".into(),
+        reason: "liveness_timeout".into(),
+    });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport: VoiceMode::SFU,
+    });
+    assert!(!shows(&h), "the new session starts unstalled");
+}
+
+/// The debug panel's network section names the preferred SFU region and its
+/// round trip.
+#[test]
+fn the_debug_panel_shows_the_preferred_sfu_region() {
+    let mut h = Harness::new();
+    assert_eq!(h.app().get_dbg_sfu_region(), "");
+    h.emit(Event::SfuRegionsMeasured {
+        regions: vec![
+            mello_core::transport::sfu_region::RegionRtt {
+                region: "us-east".into(),
+                rtt_ms: 31,
+            },
+            mello_core::transport::sfu_region::RegionRtt {
+                region: "eu-west".into(),
+                rtt_ms: 112,
+            },
+        ],
+    });
+    assert_eq!(h.app().get_dbg_sfu_region(), "us-east 31ms");
+    h.emit(Event::SfuRegionsMeasured { regions: vec![] });
+    assert_eq!(h.app().get_dbg_sfu_region(), "");
+}
+
 fn channel_bitrates(cmds: &[Command]) -> Vec<u32> {
     cmds.iter()
         .filter_map(|c| match c {

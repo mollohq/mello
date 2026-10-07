@@ -132,9 +132,9 @@ pub struct RtpVideoStats {
 
 /// Create a peer for `role`. Caller must eventually call `mello_peer_destroy`.
 ///
-/// `ctx` must be a valid, live `MelloContext` pointer for the process lifetime
-/// of the returned peer (libmello currently ignores it, but the contract is
-/// retained for future context-scoped resources).
+/// `ctx` must be a valid, live `MelloContext` pointer when this is called.
+/// libmello keeps only a shared counter of the context (dropped voice slot
+/// packets), so the peer may outlive it.
 pub fn create_peer_for_role(
     ctx: NonNull<MelloContext>,
     peer_id: &str,

@@ -32,6 +32,10 @@ pub(crate) fn apply_joined_channel_bitrate(
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::VoiceStateChanged { in_call, transport } => {
+            // The call is back (in_call) or over (the reconnect gave up, or
+            // the user left): either way it no longer reconnects.
+            ctx.app.set_voice_reconnecting(false);
+            ctx.app.set_voice_link_stalled(false);
             ctx.app.set_in_voice(in_call);
             log::info!("UI: voice state changed, in_call={}", in_call);
             let sfu = in_call && transport == VoiceMode::SFU;
@@ -479,7 +483,25 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
         }
         Event::VoiceSfuDisconnected { crew_id, reason } => {
-            log::warn!("SFU voice disconnected: crew={} reason={}", crew_id, reason);
+            log::warn!(
+                "SFU voice disconnected: crew={} reason={}; reconnecting",
+                crew_id,
+                reason
+            );
+            // The voice tick's scheduler reconnects; the channel header and
+            // the local member's row say so until VoiceStateChanged.
+            ctx.app.set_voice_reconnecting(true);
+        }
+        Event::VoiceLinkStalled { crew_id, stalled } => {
+            log::info!("SFU voice link stalled={} crew={}", stalled, crew_id);
+            ctx.app.set_voice_link_stalled(stalled);
+        }
+        Event::SfuRegionsMeasured { regions } => {
+            let preferred = regions
+                .first()
+                .map(|r| format!("{} {}ms", r.region, r.rtt_ms))
+                .unwrap_or_default();
+            ctx.app.set_dbg_sfu_region(preferred.into());
         }
         Event::VoiceMembershipChanged { crew_id } => {
             log::debug!("SFU voice membership changed in crew {}", crew_id);

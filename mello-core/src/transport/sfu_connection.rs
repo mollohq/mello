@@ -150,13 +150,14 @@ pub enum SfuEvent {
 
 type WsStream =
     tokio_tungstenite::WebSocketStream<tokio_tungstenite::MaybeTlsStream<tokio::net::TcpStream>>;
+type WsSink = Arc<tokio::sync::Mutex<futures::stream::SplitSink<WsStream, Message>>>;
 
 pub struct SfuConnection {
     peer: *mut mello_sys::MelloPeerConnection,
     _peer_id_c: Option<CString>,
     ice_cb_data: *mut IceCallbackData,
     audio_cb_data: *mut AudioTrackCallbackData,
-    ws_tx: Arc<tokio::sync::Mutex<futures::stream::SplitSink<WsStream, Message>>>,
+    ws_tx: WsSink,
     ws_rx: Option<futures::stream::SplitStream<WsStream>>,
     event_rx: tokio::sync::Mutex<mpsc::Receiver<SfuEvent>>,
     #[allow(dead_code)]
@@ -164,6 +165,9 @@ pub struct SfuConnection {
     server_id: String,
     region: String,
     ice_state: Arc<AtomicI32>,
+    /// Woken by the peer's transport callback: a state change, or a
+    /// DataChannel or the video track opened or closed.
+    transport_changed: Arc<tokio::sync::Notify>,
     last_signaling_activity_ms: Arc<AtomicU64>,
     /// Background tasks (signaling listener, stats reporter) spawned for this
     /// connection. Aborted on drop so a stale connection's tasks don't linger
@@ -211,12 +215,72 @@ pub struct SessionInfo {
 // ---------------------------------------------------------------------------
 
 struct IceCallbackData {
-    #[allow(dead_code)]
-    ws_tx: Arc<tokio::sync::Mutex<Option<futures::stream::SplitSink<WsStream, Message>>>>,
-    #[allow(dead_code)]
     rt_handle: tokio::runtime::Handle,
-    ice_queue: Arc<Mutex<Vec<serde_json::Value>>>,
+    /// Local candidates, and where they go. The SFU refuses an
+    /// `ice_candidate` before the `offer` (01-SFU.md section 5.5), so they
+    /// wait here until the offer is sent.
+    ice_out: Mutex<IceOut>,
     ice_state: Arc<AtomicI32>,
+    transport_changed: Arc<tokio::sync::Notify>,
+}
+
+/// Where a local ICE candidate goes: the queue before the offer is sent,
+/// the signaling socket after.
+struct IceOut {
+    queue: Vec<serde_json::Value>,
+    /// Set once the offer is on the wire. A candidate then goes straight
+    /// to the socket.
+    live: Option<WsSink>,
+}
+
+impl IceCallbackData {
+    fn new(ice_state: Arc<AtomicI32>, transport_changed: Arc<tokio::sync::Notify>) -> Self {
+        Self {
+            rt_handle: tokio::runtime::Handle::current(),
+            ice_out: Mutex::new(IceOut {
+                queue: Vec::new(),
+                live: None,
+            }),
+            ice_state,
+            transport_changed,
+        }
+    }
+
+    /// One local candidate from libmello (libdatachannel thread). Queued
+    /// before the offer is sent, sent after.
+    fn on_local_candidate(&self, msg: serde_json::Value) {
+        let Ok(mut out) = self.ice_out.lock() else {
+            return;
+        };
+        match out.live.clone() {
+            Some(ws_tx) => {
+                drop(out);
+                // The order of candidates among themselves does not matter;
+                // the offer went out before any of them.
+                self.rt_handle.spawn(async move {
+                    let mut tx = ws_tx.lock().await;
+                    if let Err(e) = tx.send(Message::Text(msg.to_string())).await {
+                        log::debug!("SFU: late ICE candidate send failed: {}", e);
+                    } else {
+                        log::debug!("SFU: sent a local ICE candidate after the offer");
+                    }
+                });
+            }
+            None => out.queue.push(msg),
+        }
+    }
+
+    /// The offer is on the wire: take the queued candidates, and send every
+    /// later one straight to `ws_tx`.
+    fn go_live(&self, ws_tx: WsSink) -> Vec<serde_json::Value> {
+        match self.ice_out.lock() {
+            Ok(mut out) => {
+                out.live = Some(ws_tx);
+                std::mem::take(&mut out.queue)
+            }
+            Err(_) => Vec::new(),
+        }
+    }
 }
 
 struct AudioTrackCallbackData {
@@ -432,14 +496,18 @@ struct SendPtr<T>(*mut T);
 unsafe impl<T> Send for SendPtr<T> {}
 
 impl SfuConnection {
-    /// Create the PeerConnection synchronously (must be called where the
-    /// MelloContext pointer is valid). Then call `join_stream` or `join_voice`
-    /// to negotiate WebRTC.
+    /// Create the voice PeerConnection synchronously (must be called where
+    /// the MelloContext pointer is valid). Then call `join_voice` to
+    /// negotiate WebRTC. `ice_servers` are the `get_ice_servers` URLs
+    /// (STUN, and TURN over UDP, TCP and TLS); empty keeps libmello's
+    /// default STUN servers.
     ///
     /// # Safety
-    /// `ctx` must be a valid, non-null `MelloContext` pointer.
+    /// `ctx` must be a valid `MelloContext` pointer or null. With a context,
+    /// the peer counts its dropped slot packets there.
     pub unsafe fn create_peer(
         ctx: *mut mello_sys::MelloContext,
+        ice_servers: &[String],
     ) -> Result<PeerHandle, StreamError> {
         let peer_id_c = CString::new("sfu").expect("CString::new failed");
         let peer = unsafe { mello_sys::mello_peer_create(ctx, peer_id_c.as_ptr()) };
@@ -448,6 +516,10 @@ impl SfuConnection {
                 "failed to create PeerConnection".into(),
             ));
         }
+        // The same STUN and TURN servers as the stream peers, so a network
+        // that blocks the SFU's UDP port can still relay voice (spec 10
+        // section 7.6). An empty list keeps libmello's default STUN servers.
+        unsafe { set_peer_ice_servers(peer, ice_servers) };
         // One recvonly m-line per remote member: a join or leave within the
         // slots needs no renegotiation (mello-sfu 01-SFU.md section 5.5).
         unsafe {
@@ -551,6 +623,7 @@ impl SfuConnection {
             server_id,
             region,
             ice_state: Arc::new(AtomicI32::new(0)),
+            transport_changed: Arc::new(tokio::sync::Notify::new()),
             last_signaling_activity_ms,
             tasks: Mutex::new(Vec::new()),
             media_role: None,
@@ -766,12 +839,20 @@ impl SfuConnection {
     /// Voice peers require unreliable media + reliable control DataChannels.
     /// Stream peers require reliable control + an open native RTP video track.
     /// Returns an error if ICE fails/closes or a 5-second timeout expires.
+    ///
+    /// Event driven: the peer's transport callback wakes the wait on each
+    /// state change and each DataChannel or video track open or close.
     pub async fn wait_for_datachannel_open(&self) -> Result<(), StreamError> {
         let role = self.media_role.ok_or_else(|| {
             StreamError::SfuProtocolError("wait_for_datachannel_open before join".into())
         })?;
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         loop {
+            // Register before the check: a change between the check and the
+            // wait still wakes it (notify_one also keeps one permit).
+            let changed = self.transport_changed.notified();
+            tokio::pin!(changed);
+            changed.as_mut().enable();
             let state = self.ice_state.load(Ordering::Acquire);
             match state {
                 2 => {
@@ -791,12 +872,11 @@ impl SfuConnection {
                 }
                 _ => {}
             }
-            if tokio::time::Instant::now() >= deadline {
+            if tokio::time::timeout_at(deadline, changed).await.is_err() {
                 return Err(StreamError::SfuConnectFailed(
-                    self.transport_timeout_message(role, state),
+                    self.transport_timeout_message(role, self.ice_state.load(Ordering::Acquire)),
                 ));
             }
-            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
         }
     }
 
@@ -1096,16 +1176,13 @@ impl SfuConnection {
 
         // Steps 3-6: Create PeerConnection, set callbacks, generate SDP offer
         // All raw pointer work in this sync block — peer_handle is Send across awaits
-        let ice_queue: Arc<Mutex<Vec<serde_json::Value>>> = Arc::new(Mutex::new(Vec::new()));
         let (offer_sdp, cb_data_wrapped, audio_cb_wrapped) = {
             let peer = peer_handle.peer;
 
-            let cb_data = Box::into_raw(Box::new(IceCallbackData {
-                ws_tx: Arc::new(tokio::sync::Mutex::new(None)),
-                rt_handle: tokio::runtime::Handle::current(),
-                ice_queue: Arc::clone(&ice_queue),
-                ice_state: Arc::clone(&self.ice_state),
-            }));
+            let cb_data = Box::into_raw(Box::new(IceCallbackData::new(
+                Arc::clone(&self.ice_state),
+                Arc::clone(&self.transport_changed),
+            )));
 
             unsafe extern "C" fn ice_callback(
                 user_data: *mut std::ffi::c_void,
@@ -1129,10 +1206,9 @@ impl SfuConnection {
                         "sdp_mline_index": idx
                     }
                 });
-
-                if let Ok(mut queue) = data.ice_queue.lock() {
-                    queue.push(msg);
-                }
+                // Queued until the offer is on the wire, even when
+                // libdatachannel emits it before create_offer returns.
+                data.on_local_candidate(msg);
             }
 
             unsafe {
@@ -1170,6 +1246,24 @@ impl SfuConnection {
                 mello_sys::mello_peer_set_state_callback(
                     peer,
                     Some(state_callback),
+                    cb_data as *mut std::ffi::c_void,
+                );
+            }
+
+            // Wakes `wait_for_datachannel_open` on each state change and
+            // each DataChannel or video track open or close.
+            unsafe extern "C" fn transport_callback(user_data: *mut std::ffi::c_void) {
+                if user_data.is_null() {
+                    return;
+                }
+                let data = &*(user_data as *const IceCallbackData);
+                data.transport_changed.notify_one();
+            }
+
+            unsafe {
+                mello_sys::mello_peer_set_transport_callback(
+                    peer,
+                    Some(transport_callback),
                     cb_data as *mut std::ffi::c_void,
                 );
             }
@@ -1308,11 +1402,15 @@ impl SfuConnection {
         });
         self.send_signaling(&offer_msg).await?;
 
-        // Flush queued ICE candidates
+        // The offer is on the wire. Send the queued candidates, and from now
+        // on each new candidate as it comes (a TURN relay candidate can take
+        // longer than the answer).
         {
-            let candidates: Vec<serde_json::Value> = {
-                let mut q = ice_queue.lock().unwrap();
-                q.drain(..).collect()
+            let candidates = {
+                // SAFETY: the callback data lives until the teardown frees
+                // it, after it clears the ICE callback.
+                let cb_data = unsafe { &*cb_data_wrapped.0 };
+                cb_data.go_live(Arc::clone(&self.ws_tx))
             };
             let mut tx = self.ws_tx.lock().await;
             for c in candidates {
@@ -1362,19 +1460,6 @@ impl SfuConnection {
             }
         }
         log::info!("SFU: WebRTC answer applied, waiting for ICE");
-
-        // Step 11: Flush remaining ICE candidates
-        {
-            let candidates: Vec<serde_json::Value> = {
-                let mut q = ice_queue.lock().unwrap();
-                q.drain(..).collect()
-            };
-            let mut tx = self.ws_tx.lock().await;
-            for c in candidates {
-                let _ = tx.send(Message::Text(c.to_string())).await;
-            }
-        }
-
         // Store the peer state now that negotiation is complete
         self.peer = peer_handle.peer;
         self.audio_send.attach(self.peer);
@@ -1400,8 +1485,21 @@ impl SfuConnection {
                 }
             }
             while open {
-                let Some(msg_result) = ws_rx.next().await else {
-                    break;
+                // A close frame or the end of the stream without a `left`
+                // first: the SFU dropped this peer, or it went down. Report
+                // it at once instead of waiting for the liveness check.
+                let msg_result = match ws_rx.next().await {
+                    None | Some(Ok(Message::Close(_))) => {
+                        log::warn!("SFU WebSocket closed by the server");
+                        let _ = listener
+                            .event_tx
+                            .send(SfuEvent::Disconnected {
+                                reason: "ws_closed".into(),
+                            })
+                            .await;
+                        break;
+                    }
+                    Some(result) => result,
                 };
                 match msg_result {
                     Ok(msg) => {
@@ -1578,6 +1676,11 @@ impl Drop for SfuConnection {
                         None,
                         std::ptr::null_mut(),
                     );
+                    mello_sys::mello_peer_set_transport_callback(
+                        peer.get(),
+                        None,
+                        std::ptr::null_mut(),
+                    );
                     mello_sys::mello_peer_set_audio_rtp_callback(
                         peer.get(),
                         None,
@@ -1739,6 +1842,12 @@ impl SignalListener {
                         reason: "session_ended".into(),
                     })
                     .await;
+                return false;
+            }
+            "left" => {
+                // The SFU acknowledged our `leave` and closes the socket.
+                // That close is not a drop.
+                log::info!("SFU: leave acknowledged");
                 return false;
             }
             _ => {
@@ -2004,6 +2113,32 @@ fn now_millis() -> u64 {
         .unwrap_or(0)
 }
 
+/// Give `peer` the ICE servers `urls` (`get_ice_servers`, TURN credentials
+/// in the URL). An empty list changes nothing: libmello keeps its default
+/// STUN servers (an empty list there would bind ICE to loopback).
+///
+/// # Safety
+/// `peer` must be a live peer.
+unsafe fn set_peer_ice_servers(peer: *mut mello_sys::MelloPeerConnection, urls: &[String]) {
+    let urls: Vec<CString> = urls
+        .iter()
+        .filter_map(|u| CString::new(u.as_str()).ok())
+        .collect();
+    if urls.is_empty() || peer.is_null() {
+        return;
+    }
+    let ptrs: Vec<*const std::os::raw::c_char> = urls.iter().map(|s| s.as_ptr()).collect();
+    // SAFETY: the peer is live; libmello copies the strings before return.
+    unsafe {
+        mello_sys::mello_peer_set_ice_servers(
+            peer,
+            ptrs.as_ptr() as *mut *const std::os::raw::c_char,
+            ptrs.len() as std::os::raw::c_int,
+        )
+    };
+    log::info!("SFU voice peer: {} ICE server URL(s) set", urls.len());
+}
+
 fn rtp_peer_error_to_stream_error(err: RtpPeerError) -> StreamError {
     match err {
         RtpPeerError::RecvFailed => {
@@ -2143,7 +2278,7 @@ mod tests {
         let voice = crate::voice::VoiceManager::with_test_audio_backend(tx);
         let ctx = voice.mello_ctx();
         let id = CString::new("slot-test").expect("static id");
-        // SAFETY: libmello ignores the context argument of mello_peer_create.
+        // SAFETY: a null context is allowed.
         let peer = unsafe { mello_sys::mello_peer_create(std::ptr::null_mut(), id.as_ptr()) };
         assert!(!peer.is_null());
         let (cb, mut events) = control_fixture(peer, Some(ctx));
@@ -2256,6 +2391,108 @@ mod tests {
     /// The voice packet sink sends through the target from the capture
     /// thread. Before the join and after the connection drops the peer, a
     /// send skips and never touches a peer pointer.
+    /// A local WebSocket pair: the client's send half as an `IceOut` sink,
+    /// and the text messages the server side receives.
+    async fn ws_pair() -> (WsSink, mpsc::UnboundedReceiver<String>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let addr = listener.local_addr().expect("listener has an address");
+        let (tx, rx) = mpsc::unbounded_channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            while let Some(Ok(Message::Text(t))) = ws.next().await {
+                let _ = tx.send(t);
+            }
+        });
+        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
+            .await
+            .expect("connect");
+        let (sink, _stream) = ws.split();
+        (Arc::new(tokio::sync::Mutex::new(sink)), rx)
+    }
+
+    /// mello-sfu 01-SFU.md section 5.5: no local candidate leaves before the
+    /// offer. A candidate before `go_live` (libdatachannel can emit one
+    /// while `create_offer` runs) waits in the queue; `go_live` hands the
+    /// queue over in order; a later candidate goes straight to the socket.
+    #[tokio::test]
+    async fn local_candidates_wait_for_the_offer_then_go_straight_out() {
+        let (sink, mut received) = ws_pair().await;
+        let cb = IceCallbackData::new(
+            Arc::new(AtomicI32::new(0)),
+            Arc::new(tokio::sync::Notify::new()),
+        );
+        let candidate = |n: u32| serde_json::json!({ "type": "ice_candidate", "data": { "candidate": format!("c{n}") } });
+
+        cb.on_local_candidate(candidate(1));
+        cb.on_local_candidate(candidate(2));
+        {
+            let out = cb.ice_out.lock().expect("ice_out");
+            assert_eq!(out.queue.len(), 2, "candidates before the offer wait");
+            assert!(out.live.is_none());
+        }
+
+        // The offer went out: the queue comes back in order.
+        let queued = cb.go_live(Arc::clone(&sink));
+        assert_eq!(queued, vec![candidate(1), candidate(2)]);
+        assert!(cb.ice_out.lock().expect("ice_out").queue.is_empty());
+
+        cb.on_local_candidate(candidate(3));
+        let sent = tokio::time::timeout(std::time::Duration::from_secs(5), received.recv())
+            .await
+            .expect("the late candidate is sent")
+            .expect("server open");
+        assert_eq!(
+            serde_json::from_str::<serde_json::Value>(&sent).expect("JSON"),
+            candidate(3)
+        );
+    }
+
+    /// Spec 10 section 7.6: the voice SFU peer gets the ICE servers from
+    /// `get_ice_servers`, and they reach libdatachannel. A TURN server on a
+    /// local UDP port gets the peer's Allocate request once the offer starts
+    /// ICE gathering. libjuice (the ICE agent in this build) uses TURN over
+    /// UDP only; it skips the TCP and TLS entries with a warning.
+    #[tokio::test]
+    async fn create_peer_gives_the_ice_servers_to_libdatachannel() {
+        let turn = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local UDP port");
+        let port = turn.local_addr().expect("socket has an address").port();
+        let ice = [
+            "stun:stun.l.google.com:19302".to_string(),
+            format!("turn:user%3A1:secret@127.0.0.1:{port}?transport=udp"),
+            format!("turn:user%3A1:secret@127.0.0.1:{port}?transport=tcp"),
+            "turns:user%3A1:secret@127.0.0.1:5349?transport=tcp".to_string(),
+        ];
+        // SAFETY: a null context is allowed.
+        let handle =
+            unsafe { SfuConnection::create_peer(std::ptr::null_mut(), &ice) }.expect("peer");
+        // SAFETY: the peer is live until the destroy below.
+        let offer = unsafe { mello_sys::mello_peer_create_offer(handle.peer) };
+        assert!(!offer.is_null(), "offer");
+
+        let mut buf = [0u8; 1500];
+        let (n, _) =
+            tokio::time::timeout(std::time::Duration::from_secs(5), turn.recv_from(&mut buf))
+                .await
+                .expect("the TURN server got a request")
+                .expect("recv");
+        assert!(n >= 20, "a STUN message");
+        assert_eq!(&buf[0..2], &[0x00, 0x03], "a TURN Allocate request");
+        assert_eq!(
+            &buf[4..8],
+            &[0x21, 0x12, 0xA4, 0x42],
+            "the STUN magic cookie"
+        );
+        // SAFETY: created above, destroyed once.
+        unsafe { mello_sys::mello_peer_destroy(handle.peer) };
+    }
+
     #[test]
     fn audio_send_target_skips_without_a_peer() {
         let target = AudioSendTarget::new();
@@ -2263,7 +2500,7 @@ mod tests {
 
         // A native peer that never connected has no open audio track.
         let id = CString::new("send-target").expect("static id");
-        // SAFETY: libmello ignores the context argument; the peer is
+        // SAFETY: a null context is allowed; the peer is
         // destroyed below, after the target let go of it.
         let peer = unsafe { mello_sys::mello_peer_create(std::ptr::null_mut(), id.as_ptr()) };
         assert!(!peer.is_null());

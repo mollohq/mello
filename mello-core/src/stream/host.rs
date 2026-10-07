@@ -32,6 +32,10 @@ pub struct StartStreamRequest {
     /// cannot verify it. The client matches it against the capture block.
     #[serde(default)]
     pub igdb_id: u32,
+    /// The SFU region the client measured as fastest (spec 10 section 7.6).
+    /// Absent when no region answered: the backend uses its default.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub preferred_region: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -116,6 +120,7 @@ pub async fn request_start_stream(
     bitrate_kbps: u32,
     exe: &str,
     igdb_id: u32,
+    preferred_region: Option<String>,
 ) -> Result<StartStreamResponse, StreamError> {
     let req = StartStreamRequest {
         crew_id: crew_id.to_string(),
@@ -126,6 +131,7 @@ pub async fn request_start_stream(
         bitrate_kbps,
         exe: exe.to_string(),
         igdb_id,
+        preferred_region,
     };
     let payload = serde_json::to_value(&req).map_err(|e| StreamError::Backend(e.to_string()))?;
 
@@ -473,6 +479,7 @@ mod tests {
             bitrate_kbps: 2_500,
             exe: "witcher3.exe".to_string(),
             igdb_id: WITCHER3,
+            preferred_region: None,
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert_eq!(json["igdb_id"], WITCHER3);
@@ -489,6 +496,7 @@ mod tests {
             bitrate_kbps: 4_500,
             exe: String::new(),
             igdb_id: 0,
+            preferred_region: None,
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert_eq!(json["bitrate_kbps"], 4_500);
@@ -505,8 +513,30 @@ mod tests {
             bitrate_kbps: 2_500,
             exe: String::new(),
             igdb_id: 0,
+            preferred_region: None,
         };
         let json = serde_json::to_value(request).expect("serialize request");
         assert!(json.get("exe").is_none(), "empty exe stays off the wire");
+        assert!(
+            json.get("preferred_region").is_none(),
+            "no preference stays off the wire"
+        );
+    }
+
+    #[test]
+    fn start_stream_request_carries_the_preferred_region() {
+        let request = StartStreamRequest {
+            crew_id: "crew".to_string(),
+            title: String::new(),
+            supports_av1: false,
+            width: 1280,
+            height: 720,
+            bitrate_kbps: 2_500,
+            exe: String::new(),
+            igdb_id: 0,
+            preferred_region: Some("us-east".to_string()),
+        };
+        let json = serde_json::to_value(request).expect("serialize request");
+        assert_eq!(json["preferred_region"], "us-east");
     }
 }

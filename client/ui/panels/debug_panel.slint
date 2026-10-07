@@ -259,6 +259,7 @@ export component DebugPanel inherits Rectangle {
     in property <int> rtp-recv: 0;
     in property <float> delay-ms: 0.0;
     in property <float> rtt-ms: 0.0;
+    in property <string> sfu-region: "";
     in property <string> stream-mode: "idle";
     in property <int> stream-frames: 0;
     in property <int> stream-packets: 0;
@@ -582,6 +583,25 @@ export component DebugPanel inherits Rectangle {
                     // Windowed (real signal) with lifetime total for reference.
                     text: "\{root.underruns-5s} (tot \{root.underruns})";
                     col: 1;
+                }
+                Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    text: "Region";
+                    col: 2;
+                }
+                Text {
+                    letter-spacing: Theme.track-label;
+                    font-weight: Theme.weight-label;
+                    font-family: Theme.font-label;
+                    font-size: 10px;
+                    color: Theme.text-secondary;
+                    // The preferred SFU region and its round trip.
+                    text: root.sfu-region != "" ? root.sfu-region : "none";
+                    col: 3;
                 }
             }
         }

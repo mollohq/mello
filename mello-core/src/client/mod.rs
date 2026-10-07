@@ -13,6 +13,8 @@ mod mic_permission;
 mod presence;
 mod push;
 mod reconnect;
+#[cfg(test)]
+mod sfu_reconnect_live_tests;
 mod sfu_voice_join;
 mod stats_emit;
 mod stream_ffi;
@@ -149,6 +151,15 @@ pub struct Client {
     sfu_voice_reconnect: Option<(tokio::time::Instant, String, u32)>,
     /// Last voice channel we joined (for reconnection)
     last_voice_channel: Option<String>,
+    /// The last `voice_join` answer for `last_voice_channel`. A reconnect
+    /// reuses its SFU endpoint and token until the token expires.
+    voice_join_grant: Option<voice::VoiceJoinGrant>,
+    /// The measured SFU region ranking (spec 10 section 7.6). The measurer
+    /// task writes it; joins and stream starts read the preferred region.
+    sfu_regions: crate::transport::sfu_region::SharedRanking,
+    /// Measures the SFU regions at login and every 10 minutes. Dropping it
+    /// stops the task.
+    region_measurer: Option<crate::transport::sfu_region::RegionMeasurer>,
     /// The SFU voice join that runs off the loop; the loop takes each step's
     /// outcome in `select!`. See `sfu_voice_join.rs`.
     sfu_voice_joins: sfu_voice_join::SfuVoiceJoins,
@@ -328,6 +339,9 @@ impl Client {
             reported_activity: None,
             sfu_voice_reconnect: None,
             last_voice_channel: None,
+            voice_join_grant: None,
+            sfu_regions: Arc::default(),
+            region_measurer: None,
             sfu_voice_joins: sfu_voice_join::SfuVoiceJoins::default(),
             game_state: GameStateManager::new(),
             published_game: None,

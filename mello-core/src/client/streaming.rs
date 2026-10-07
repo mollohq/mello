@@ -1275,6 +1275,7 @@ impl super::Client {
             config.bitrate_kbps,
             exe,
             igdb_id,
+            crate::transport::sfu_region::preferred_region(&self.sfu_regions),
         )
         .await
         {

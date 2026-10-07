@@ -165,7 +165,7 @@ async fn media_sfu() -> MediaSfu {
         let candidates: Candidates = Arc::new(Mutex::new(Vec::new()));
         let id = CString::new("fake-sfu").expect("static id");
         let offer_c = CString::new(offer).expect("offer has no NUL");
-        // SAFETY: libmello ignores the context argument; the callback state
+        // SAFETY: a null context is allowed; the callback state
         // stays alive until FakeSfuPeer::destroy, after the peer is gone.
         let (fake, answer) = unsafe {
             let arrivals_ptr = Arc::into_raw(Arc::clone(&task_arrivals));
@@ -510,7 +510,12 @@ async fn with_sfu_voice<T: Send + 'static>(
     let (cmd_tx, cmd_rx) = tokio::sync::mpsc::unbounded_channel();
 
     client
-        .start_voice_media("crew-1", Some("me"), &sfu_join_response(&sfu.endpoint))
+        .start_voice_media(
+            "crew-1",
+            Some("me"),
+            &sfu_join_response(&sfu.endpoint),
+            false,
+        )
         .await;
     let arrivals = Arc::clone(&sfu.arrivals);
     let driver = async move {

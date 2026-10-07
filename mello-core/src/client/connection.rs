@@ -27,6 +27,38 @@ impl super::Client {
                 log::warn!("Failed to fetch ICE servers, using defaults: {}", e);
             }
         }
+
+        self.start_region_measurement().await;
+    }
+
+    /// Fetch the SFU regions and measure them now and every 10 minutes, on a
+    /// task (spec 10 section 7.6). A backend without `get_sfu_regions` leaves
+    /// the ranking empty: joins then send no preferred region.
+    pub(super) async fn start_region_measurement(&mut self) {
+        // A new login measures again from the start.
+        self.region_measurer = None;
+        if let Ok(mut ranking) = self.sfu_regions.lock() {
+            *ranking = Default::default();
+        }
+        match self.nakama.get_sfu_regions().await {
+            Ok(regions) if !regions.is_empty() => {
+                log::info!(
+                    "SFU regions to measure: {}",
+                    regions
+                        .iter()
+                        .map(|r| r.region.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+                self.region_measurer = Some(crate::transport::sfu_region::RegionMeasurer::start(
+                    regions,
+                    std::sync::Arc::clone(&self.sfu_regions),
+                    self.event_tx.clone(),
+                ));
+            }
+            Ok(_) => log::info!("SFU regions: the backend lists none"),
+            Err(e) => log::warn!("SFU regions not available, no region preference: {}", e),
+        }
     }
 
     pub(super) async fn check_protocol_version(&self) {
@@ -179,17 +211,28 @@ impl super::Client {
     /// - If the media session is live, send only the idempotent `voice_join` RPC
     ///   to re-assert membership in the (possibly GC'd) room and refresh the
     ///   roster.
-    /// - If voice is already Disconnected, do nothing: the voice tick's reconnect
-    ///   scheduler handles the rebuild.
+    /// - If voice is Disconnected and the voice tick's reconnect scheduler
+    ///   owns the rebuild, send the same RPC: the scheduler reuses a valid
+    ///   voice token without the RPC, so the membership must be re-asserted
+    ///   here. The answer's fresh token replaces the kept one.
     pub(super) async fn reassert_voice_after_reconnect(&mut self, channel_id: &str) {
-        if !self.voice.is_active() {
+        let reconnect_pending = self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected
+            && !self.sfu_voice_joins.is_pending();
+        if !self.voice.is_active() && !reconnect_pending {
             return;
         }
         let Some(crew_id) = self.nakama.active_crew_id().map(String::from) else {
             return;
         };
-        match self.nakama.voice_join(&crew_id, channel_id).await {
+        let preferred_region = crate::transport::sfu_region::preferred_region(&self.sfu_regions);
+        match self
+            .nakama
+            .voice_join(&crew_id, channel_id, preferred_region.as_deref())
+            .await
+        {
             Ok(resp) => {
+                let local_id = self.nakama.current_user_id().map(String::from);
+                self.store_voice_join_grant(&crew_id, local_id.as_deref(), &resp);
                 self.last_voice_channel = Some(resp.channel_id.clone());
                 let _ = self.event_tx.send(Event::VoiceJoined {
                     crew_id,

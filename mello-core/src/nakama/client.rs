@@ -1611,12 +1611,33 @@ impl NakamaClient {
         Ok(urls)
     }
 
+    /// The SFU regions and their health URLs (`get_sfu_regions`).
+    pub async fn get_sfu_regions(
+        &self,
+    ) -> Result<Vec<crate::transport::sfu_region::SfuRegionEndpoint>> {
+        #[derive(serde::Deserialize)]
+        struct Resp {
+            #[serde(default)]
+            regions: Vec<crate::transport::sfu_region::SfuRegionEndpoint>,
+        }
+        let resp = self.rpc("get_sfu_regions", &serde_json::json!({})).await?;
+        let parsed: Resp = serde_json::from_str(&resp)?;
+        Ok(parsed.regions)
+    }
+
+    /// Join a voice channel. `preferred_region` is the SFU region the client
+    /// measured as fastest; the backend uses it for a room that has no
+    /// region yet (spec 13 section 4.2).
     pub async fn voice_join(
         &self,
         crew_id: &str,
         channel_id: &str,
+        preferred_region: Option<&str>,
     ) -> Result<crate::crew_state::VoiceJoinResponse> {
-        let payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
+        let mut payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
+        if let Some(region) = preferred_region {
+            payload["preferred_region"] = serde_json::Value::String(region.to_string());
+        }
         let resp = self.rpc("voice_join", &payload).await?;
         let parsed: crate::crew_state::VoiceJoinResponse = serde_json::from_str(&resp)?;
         Ok(parsed)
