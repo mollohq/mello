@@ -260,6 +260,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("get_ice_servers", GetIceServersRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("get_sfu_regions", GetSFURegionsRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("start_stream", StartStreamRPC); err != nil {
 		return err
 	}

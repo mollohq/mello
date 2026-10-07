@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/rsa"
 	"encoding/base64"
@@ -125,5 +126,93 @@ func TestStartStreamRequest_AcceptsPreferredRegion(t *testing.T) {
 	}
 	if start.PreferredRegion != "us-east" {
 		t.Fatalf("start_stream: got %q", start.PreferredRegion)
+	}
+}
+
+func TestSFUHealthURL_DerivedFromTheSignalingEndpoint(t *testing.T) {
+	cases := map[string]string{
+		"wss://sfu-eu.m3llo.app/ws":      "https://sfu-eu.m3llo.app:8080/health",
+		"wss://sfu-eu.m3llo.app:8443/ws": "https://sfu-eu.m3llo.app:8080/health",
+		"ws://localhost:8443/ws":         "http://localhost:8080/health",
+		"ws://192.168.1.67:8443/ws":      "http://192.168.1.67:8080/health",
+		"ws://[::1]:8443/ws":             "http://[::1]:8080/health",
+		"https://sfu-eu.m3llo.app/ws":    "",
+		"":                               "",
+		"not a url":                      "",
+	}
+	for endpoint, want := range cases {
+		if got := sfuHealthURL(endpoint); got != want {
+			t.Errorf("sfuHealthURL(%q) = %q, want %q", endpoint, got, want)
+		}
+	}
+}
+
+func TestGetSFURegionsRPC_ListsBothRegionsWithHealthURLs(t *testing.T) {
+	saved := map[string]string{}
+	for k, v := range sfuEndpoints {
+		saved[k] = v
+	}
+	defer func() {
+		for k := range sfuEndpoints {
+			delete(sfuEndpoints, k)
+		}
+		for k, v := range saved {
+			sfuEndpoints[k] = v
+		}
+	}()
+	sfuEndpoints["eu-west"] = "wss://sfu-eu.m3llo.app:8443/ws"
+	sfuEndpoints["us-east"] = "wss://sfu-us.m3llo.app:8443/ws"
+
+	out, err := GetSFURegionsRPC(ctxWithUser("u1"), testLogger(), nil, nil, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp GetSFURegionsResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatalf("response is not JSON: %v: %s", err, out)
+	}
+	want := []SFURegion{
+		{Region: "eu-west", HealthURL: "https://sfu-eu.m3llo.app:8080/health"},
+		{Region: "us-east", HealthURL: "https://sfu-us.m3llo.app:8080/health"},
+	}
+	if len(resp.Regions) != len(want) {
+		t.Fatalf("regions %+v, want %+v", resp.Regions, want)
+	}
+	for i := range want {
+		if resp.Regions[i] != want[i] {
+			t.Errorf("region %d: %+v, want %+v", i, resp.Regions[i], want[i])
+		}
+	}
+	// Every region the RPC names is one that voice_join accepts.
+	for _, r := range resp.Regions {
+		if !isSFURegion(r.Region) {
+			t.Errorf("region %q is not a configured SFU region", r.Region)
+		}
+	}
+}
+
+func TestGetSFURegionsRPC_LeavesOutAnEndpointWithoutHealthURL(t *testing.T) {
+	saved := sfuEndpoints["us-east"]
+	defer func() { sfuEndpoints["us-east"] = saved }()
+	sfuEndpoints["us-east"] = "not a url"
+
+	out, err := GetSFURegionsRPC(ctxWithUser("u1"), testLogger(), nil, nil, "{}")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var resp GetSFURegionsResponse
+	if err := json.Unmarshal([]byte(out), &resp); err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range resp.Regions {
+		if r.Region == "us-east" {
+			t.Fatalf("us-east listed with an unusable endpoint: %+v", r)
+		}
+	}
+}
+
+func TestGetSFURegionsRPC_RequiresAUser(t *testing.T) {
+	if _, err := GetSFURegionsRPC(context.Background(), testLogger(), nil, nil, "{}"); err == nil {
+		t.Fatal("an unauthenticated call got the region list")
 	}
 }

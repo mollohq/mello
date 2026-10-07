@@ -1,8 +1,16 @@
 package main
 
 import (
+	"context"
+	"database/sql"
+	"encoding/json"
+	"net"
+	"net/url"
 	"os"
+	"sort"
 	"strings"
+
+	"github.com/heroiclabs/nakama-common/runtime"
 )
 
 var sfuEndpoints = map[string]string{
@@ -56,4 +64,76 @@ func sfuEndpointForRegion(region string) string {
 		return ep
 	}
 	return sfuEndpoints[fallbackSFURegion]
+}
+
+// sfuHealthPort is the port of the SFU's health and admin server
+// (mello-sfu SFU_ADMIN_ADDR, ":8080" in every deployment). The signaling
+// server on the endpoint's port does not serve /health.
+const sfuHealthPort = "8080"
+
+// sfuHealthURL derives the public health URL of the SFU that serves the
+// signaling endpoint: the same host, the health port, and https for wss
+// (http for ws). It returns "" for an endpoint it cannot parse.
+func sfuHealthURL(endpoint string) string {
+	u, err := url.Parse(endpoint)
+	if err != nil || u.Hostname() == "" {
+		return ""
+	}
+	scheme := ""
+	switch u.Scheme {
+	case "wss":
+		scheme = "https"
+	case "ws":
+		scheme = "http"
+	default:
+		return ""
+	}
+	health := url.URL{
+		Scheme: scheme,
+		Host:   net.JoinHostPort(u.Hostname(), sfuHealthPort),
+		Path:   "/health",
+	}
+	return health.String()
+}
+
+// SFURegion is one configured SFU region and the URL the client measures
+// its round trip against.
+type SFURegion struct {
+	Region    string `json:"region"`
+	HealthURL string `json:"health_url"`
+}
+
+// GetSFURegionsResponse is the get_sfu_regions reply.
+type GetSFURegionsResponse struct {
+	Regions []SFURegion `json:"regions"`
+}
+
+// sfuRegions lists the configured regions, sorted by name. A region whose
+// endpoint gives no health URL is left out: the client cannot measure it.
+func sfuRegions() []SFURegion {
+	regions := make([]SFURegion, 0, len(sfuEndpoints))
+	for region, endpoint := range sfuEndpoints {
+		health := sfuHealthURL(endpoint)
+		if region == "" || health == "" {
+			continue
+		}
+		regions = append(regions, SFURegion{Region: region, HealthURL: health})
+	}
+	sort.Slice(regions, func(i, j int) bool { return regions[i].Region < regions[j].Region })
+	return regions
+}
+
+// GetSFURegionsRPC returns the SFU regions and their health URLs. The client
+// measures the round trip to each and sends the fastest as preferred_region
+// in voice_join and start_stream (plans/voice-quality.md stage 6).
+func GetSFURegionsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	if _, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string); !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	resp, err := json.Marshal(GetSFURegionsResponse{Regions: sfuRegions()})
+	if err != nil {
+		logger.Error("get_sfu_regions: marshal: %v", err)
+		return "", runtime.NewError("internal error", 13)
+	}
+	return string(resp), nil
 }
