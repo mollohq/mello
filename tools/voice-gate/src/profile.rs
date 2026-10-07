@@ -77,10 +77,31 @@ pub struct Gate {
     pub metric: String,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// A lower bound from another profile's value of the same metric, plus
+    /// an offset.
+    pub min_ref: Option<GateRef>,
     /// A failing enforced gate fails the run. A failing informational gate
     /// is printed only.
     pub enforced: bool,
     pub note: String,
+}
+
+/// Where a relative bound comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefSource {
+    /// The frozen baseline (baseline-2.9.json).
+    Baseline,
+    /// This run.
+    Run,
+}
+
+/// A bound relative to another profile: its value of the gate's metric in
+/// `source`, plus `offset`.
+#[derive(Clone, Debug)]
+pub struct GateRef {
+    pub source: RefSource,
+    pub profile: String,
+    pub offset: f64,
 }
 
 /// Sender settings. Default: the production defaults (VAD gate, RNNoise).
@@ -239,10 +260,27 @@ fn parse_gates(v: &Value) -> Result<Vec<Gate>, String> {
     let mut out = Vec::new();
     if let Some(list) = v.as_array() {
         for g in list {
+            let min_ref = match g.get("min_ref") {
+                Some(r) if !r.is_null() => Some(GateRef {
+                    source: match s(r, "source")?.as_str() {
+                        "baseline" => RefSource::Baseline,
+                        "run" => RefSource::Run,
+                        other => {
+                            return Err(format!(
+                                "min_ref.source '{other}': use 'baseline' or 'run'"
+                            ))
+                        }
+                    },
+                    profile: s(r, "profile")?,
+                    offset: f_or(r, "offset", 0.0),
+                }),
+                _ => None,
+            };
             out.push(Gate {
                 metric: s(g, "metric")?,
                 min: g.get("min").and_then(Value::as_f64),
                 max: g.get("max").and_then(Value::as_f64),
+                min_ref,
                 enforced: g.get("enforced").and_then(Value::as_bool).unwrap_or(true),
                 note: g
                     .get("note")

@@ -29,6 +29,9 @@ pub struct ShimCounters {
     /// Lost packets that carried an Opus DTX frame (2 bytes or less): the
     /// receiver plays comfort noise through them, nothing to conceal.
     pub lost_dtx: u64,
+    /// Every sent packet: run time of the send, and whether the network
+    /// lost it. The truth that the receiver reports estimate.
+    pub sent_log: Vec<(i64, bool)>,
 }
 
 impl ShimCounters {
@@ -196,6 +199,8 @@ impl Shim {
             .map(|(s, d)| t >= s * 1000.0 && t < (s + d) * 1000.0)
             .unwrap_or(false);
         let dtx = u64::from(packet.payload.len() <= 2);
+        let lost = in_outage || burst_lost || u_loss < loss_random;
+        self.counters.sent_log.push((now_ms, lost));
         if in_outage {
             self.counters.lost_outage += 1;
             self.counters.lost_dtx += dtx;
@@ -234,6 +239,35 @@ impl Shim {
             order: self.order,
             bytes,
         }));
+    }
+
+    /// One-way delay in ms of a packet sent at run time `t_ms` with a
+    /// standard normal jitter draw `gaussian`: the base delay, the jitter of
+    /// the conditions at `t_ms`, and a stall that holds the packet to its
+    /// end. The RTCP model (rtcp.rs) uses it for the sender reports, which
+    /// travel the same path as the RTP packets. FIFO order and reorder do
+    /// not apply.
+    pub fn one_way_delay_ms(&self, t_ms: f64, gaussian: f64) -> f64 {
+        let (sigma, _) = self.conditions(t_ms);
+        let mut deliver = t_ms + (self.net.base_delay_ms + gaussian * sigma).max(0.0);
+        for &(s, e) in &self.stalls {
+            if t_ms >= s && t_ms < e {
+                deliver = deliver.max(e + self.net.base_delay_ms);
+            }
+        }
+        deliver - t_ms
+    }
+
+    /// Base delay and jitter of the network at run time `t_ms`, for a path
+    /// without stalls (the reverse path of the receiver reports).
+    pub fn base_and_sigma_ms(&self, t_ms: f64) -> (f64, f64) {
+        (self.net.base_delay_ms, self.conditions(t_ms).0)
+    }
+
+    /// The RTP sequence number that the shim gives the sender's packet
+    /// `sequence`.
+    pub fn rtp_sequence(&self, sequence: u32) -> u16 {
+        ((u32::from(self.rtp_seq_start) + sequence) & 0xFFFF) as u16
     }
 
     /// Packets due at or before `now_ms`, in delivery order.
