@@ -33,6 +33,13 @@ pub struct AppContext {
     pub settings: Rc<RefCell<Settings>>,
     pub rt: tokio::runtime::Handle,
     pub active_voice_channel: Rc<RefCell<String>>,
+    /// Speaking state of the members of the current SFU call, from
+    /// `VoiceActivity` (local VAD and the SFU's in-band messages). In an SFU
+    /// call it wins over the backend's `voice_update`, which lags and may be
+    /// stale. Empty outside an SFU call.
+    pub call_speaking: Rc<RefCell<HashMap<String, bool>>>,
+    /// True while in a voice call over the SFU.
+    pub in_sfu_call: Rc<Cell<bool>>,
     pub new_crew_avatar_b64: Arc<Mutex<Option<String>>>,
     pub crew_settings_avatar_b64: Arc<Mutex<Option<String>>>,
     pub invited_users: Rc<RefCell<InvitedUserList>>,
@@ -143,6 +150,8 @@ impl AppContext {
             settings: Rc::new(RefCell::new(Settings::default())),
             rt: rt.clone(),
             active_voice_channel: Rc::new(RefCell::new(String::new())),
+            call_speaking: Rc::new(RefCell::new(HashMap::new())),
+            in_sfu_call: Rc::new(Cell::new(false)),
             new_crew_avatar_b64: Arc::new(Mutex::new(None)),
             crew_settings_avatar_b64: Arc::new(Mutex::new(None)),
             invited_users: Rc::new(RefCell::new(Vec::new())),
@@ -201,6 +210,8 @@ impl Clone for AppContext {
             settings: self.settings.clone(),
             rt: self.rt.clone(),
             active_voice_channel: self.active_voice_channel.clone(),
+            call_speaking: self.call_speaking.clone(),
+            in_sfu_call: self.in_sfu_call.clone(),
             new_crew_avatar_b64: self.new_crew_avatar_b64.clone(),
             crew_settings_avatar_b64: self.crew_settings_avatar_b64.clone(),
             invited_users: self.invited_users.clone(),

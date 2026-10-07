@@ -1,6 +1,6 @@
 use std::rc::Rc;
 
-use mello_core::{Command, Event};
+use mello_core::{Command, Event, VoiceMode};
 use slint::Model;
 
 use crate::app_context::AppContext;
@@ -12,9 +12,14 @@ use crate::{AudioDeviceData, MemberData, VoiceChannelData, VoiceChannelMember};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
-        Event::VoiceStateChanged { in_call, .. } => {
+        Event::VoiceStateChanged { in_call, transport } => {
             ctx.app.set_in_voice(in_call);
             log::info!("UI: voice state changed, in_call={}", in_call);
+            let sfu = in_call && transport == VoiceMode::SFU;
+            ctx.in_sfu_call.set(sfu);
+            if !sfu {
+                ctx.call_speaking.borrow_mut().clear();
+            }
 
             if !in_call {
                 *ctx.active_voice_channel.borrow_mut() = String::new();
@@ -55,7 +60,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
             member_id,
             speaking,
         } => {
-            let _ = ctx.cmd_tx.send(Command::VoiceSpeaking { speaking });
+            // The local VAD, or a remote member from the SFU's control
+            // channel. Only the local state goes to the backend presence.
+            if member_id == ctx.app.get_user_id().as_str() {
+                let _ = ctx.cmd_tx.send(Command::VoiceSpeaking { speaking });
+            }
+            if ctx.in_sfu_call.get() {
+                ctx.call_speaking
+                    .borrow_mut()
+                    .insert(member_id.clone(), speaking);
+            }
 
             set_member_speaking(&ctx.app, member_id.as_str(), speaking);
             set_voice_member_speaking(&ctx.app, member_id.as_str(), speaking);
@@ -257,6 +271,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
+                prefer_call_speaking(ctx);
             }
         }
         Event::VoiceUpdated {
@@ -313,6 +328,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(updated_channels)).into());
+                prefer_call_speaking(ctx);
             }
         }
         Event::VoiceChannelsUpdated { crew_id, channels } => {
@@ -339,6 +355,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let vc_data = channels_to_ui(&channels, &avc_id, &vctx);
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
+                prefer_call_speaking(ctx);
             }
         }
         Event::VoiceChannelCreated { crew_id, channel } => {
@@ -432,5 +449,34 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let _ = ctx.cmd_tx.send(Command::SetActiveCrew { crew_id });
         }
         _ => {}
+    }
+}
+
+/// In an SFU call, the call's own speaking state (local VAD and the SFU's
+/// in-band messages) wins for the members of the joined channel. The
+/// backend's `voice_update` lags it by an RPC, a 200 ms coalesce and a push,
+/// and may carry a state that already changed: without this a ring would
+/// flicker back on after it went off.
+fn prefer_call_speaking(ctx: &AppContext) {
+    if !ctx.in_sfu_call.get() {
+        return;
+    }
+    let channel_id = ctx.active_voice_channel.borrow().clone();
+    let channels = ctx.app.get_voice_channels();
+    let member_ids: Vec<String> = (0..channels.row_count())
+        .filter_map(|i| channels.row_data(i))
+        .filter(|ch| ch.id == channel_id.as_str())
+        .flat_map(|ch| {
+            (0..ch.members.row_count())
+                .filter_map(|j| ch.members.row_data(j))
+                .map(|m| m.id.to_string())
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    let speaking = ctx.call_speaking.borrow();
+    for id in member_ids {
+        let on = speaking.get(&id).copied().unwrap_or(false);
+        set_member_speaking(&ctx.app, &id, on);
+        set_voice_member_speaking(&ctx.app, &id, on);
     }
 }

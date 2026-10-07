@@ -128,7 +128,12 @@ impl PollState {
                         poll_ctx.status_item.borrow_mut().set_voice_state(state);
                         poll_ctx.fg_monitor.borrow_mut().set_in_voice(*in_call);
                     }
-                    Event::VoiceActivity { speaking, .. } => {
+                    // The tray shows the local member only; remote members
+                    // also raise VoiceActivity in an SFU call.
+                    Event::VoiceActivity {
+                        member_id,
+                        speaking,
+                    } if member_id.as_str() == poll_ctx.app.get_user_id().as_str() => {
                         if poll_ctx.app.get_mic_muted() {
                             poll_ctx
                                 .status_item
