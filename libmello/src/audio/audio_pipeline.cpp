@@ -556,7 +556,7 @@ void AudioPipeline::report_send_feedback(const MelloSendFeedback& feedback) {
     last_feedback_ = feedback;
     ++session_reports_;
     adapt_.on_report(util::steady_now_ms(), feedback.interval_expected,
-                     feedback.interval_lost, feedback.rtt_ms);
+                     feedback.interval_lost, feedback.rtt_ms, feedback.jitter_ms);
     adapt_bitrate_bps_.store(adapt_.bitrate_kbps() * 1000, std::memory_order_relaxed);
     adapt_loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
 }
