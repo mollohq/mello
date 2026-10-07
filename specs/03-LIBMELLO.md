@@ -119,6 +119,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 - `MelloAudioFrameCallback` / `MelloVideoFrameCallback` — raw frame delivery
 - `MelloIceCandidateCallback` — ICE trickle candidate generated
 - `MelloPeerStateCallback` — peer connection state change
+- `MelloPeerTransportCallback` — the peer's transport changed: a state change, or a DataChannel or the video track opened or closed (`mello_peer_set_transport_callback`). A waiter reads the `mello_peer_is_*` functions instead of polling them
 
 ### Transport liveness helpers
 

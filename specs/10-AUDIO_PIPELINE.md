@@ -455,7 +455,9 @@ The SFU names the member on each mid in JSON text on the control DataChannel:
 | `{"type":"speaking","user":"<id>","on":true}` | `Event::VoiceActivity { member_id: id, speaking: true }` (section 7.4) |
 
 - The SFU sends the whole map (and who speaks now) when the control channel opens.
-- libmello keeps the map in `VoiceSlotMap` and resolves the sender per packet; a packet on a mid with no member drops. RTP and the control channel are separate transports, so the first packets of a new member can drop before its slot message arrives (soak: under 0.1 %).
+- libmello keeps the map in `VoiceSlotMap` and resolves the sender per packet. RTP and the control channel are separate transports, so the first packets of a new member can arrive before its slot message (stage 4b soak: about 0.009 % of slot packets, up to 116 ms early). `VoiceSlotMap` holds RTP on a mid with no member for 200 ms, at most 32 packets per mid. The bind (`mello_peer_set_audio_mid_sender`) gives the held packets to the audio callbacks first, in arrival order, on the calling thread. A held packet older than 200 ms drops.
+- A released mid can still get late packets of its old member. They continue that member's RTP timestamps (the SFU keeps the slot's SSRC and rewrites only the sequence). A packet within 1 s (48,000 samples) of the last timestamp before the release drops at once, so it never reaches the next member.
+- Each dropped packet counts in `MelloDebugStats.rx_unmapped_dropped` of the context that created the peer (`mello_peer_create(ctx, ...)`).
 - mello-core parses the messages (`handle_control_text` in `transport/sfu_connection.rs`) on the libdatachannel thread, so no slot change and no speaking ring waits on the command loop. Without the direct voice sink, a release goes to the voice tick as `SfuEvent::SlotReleased`.
 - The SDP attribute `msid` names nothing for voice any more. A stream viewer still checks the stream audio track's msid (`is_stream_audio_sender`).
 - Each mid map belongs to one PeerConnection: a new offer starts empty.
@@ -521,7 +523,7 @@ Measured 2026-10-07 on localhost (control-channel RTT 0 to 1.6 ms), a member joi
 | SFU `joined` to the first packet a member hears from the joiner | 147 to 170 ms (one run 85 ms) | under 300 ms |
 | VAD open to the remote `VoiceActivity` | 0.2 to 2 ms | under 100 ms |
 
-Most of the join time is ICE, DTLS and the DataChannel open. The joiner's microphone starts only after `wait_for_datachannel_open`, which polls every 50 ms.
+Most of the join time is ICE, DTLS and the DataChannel open. The joiner's microphone starts only after `wait_for_datachannel_open`. Since stage 6 that wait is event driven (section 7.6): stage 6 measured 10 to 25 ms from `joined` to the joiner hearing each member and 19 to 20 ms for the members hearing the joiner, on the same localhost setup.
 
 ### 7.5 Send-Leg Feedback
 
@@ -552,6 +554,57 @@ mello-core (`transport/sfu_connection.rs`, `send_feedback_callback`): on the lib
 Debug statistics (`MelloDebugStats`, appended): `tx_rr_reports` (reports in this voice session), `tx_rr_fraction_lost_pct`, `tx_rr_cumulative_lost`, `tx_rr_jitter_ms`, `tx_rtt_ms`, `tx_loss_window_pct` (the 2 s step-down window), `tx_bitrate_kbps`, `tx_max_bitrate_kbps`, `tx_packet_loss_perc`, `tx_rung_changes`. The diagnostic capture log line carries the bitrate, loss perc, reported loss, round trip and steps.
 
 The voice SFU does not get the send-leg values in `client_stats`: that message is part of the SFU signaling contract.
+
+### 7.6 SFU Region, Reconnect and Link Health
+
+**Region choice.** The backend lists each SFU region and its public health URL (`get_sfu_regions`, spec 13 section 4.2). mello-core measures the regions on a Tokio task, off the command loop (`transport/sfu_region.rs`, `RegionMeasurer`):
+
+| Item | Value |
+|---|---|
+| When | At login (`on_connected`), then every 10 minutes. A logout stops the task and clears the ranking. |
+| Probe | Three HTTP GET requests per region on one HTTP client, one after the other, each with a 2 s timeout. The time of a request is from the send to the response headers. Only a 2xx answer counts (`/health` answers 503 when the SFU cannot make media). |
+| Value | The median of the requests that answered. The first request also opens TCP and TLS; the next two reuse the connection, so the median is one HTTP round trip. Regions are measured at the same time. |
+| Ranking | The regions that answered, fastest first. Logged at info level once per measurement, and sent as `Event::SfuRegionsMeasured`. The debug panel shows the fastest one and its round trip (Network, "Region"). |
+| Use | `voice_join` and `start_stream` send the fastest region as `preferred_region`. With no answer from any region the client sends no preference. A voice room keeps the region of its first member (backend `voice_state.go`). |
+
+**Reconnect.** When the SFU session drops (`VoiceSfuDisconnected`), the voice tick schedules reconnect attempts (`client/voice.rs`):
+
+| Item | Value |
+|---|---|
+| Schedule | Attempt 1 at 500 ms after the drop, then 2, 4, 8 and 16 s after the attempt before it. After 5 attempts the client leaves the call (`VoiceStateChanged { in_call: false }`). |
+| Voice token | The SFU token from `voice_join` lives 5 minutes. The client keeps the last answer and the time it received it (`VoiceJoinGrant`). An attempt reuses the endpoint and token while the token has more than 15 s left, with no backend round trip. Else it calls `voice_join` again. |
+| Membership | A realtime (Nakama) reconnect sends `voice_join` also while a voice reconnect waits, so the room keeps the member, and the fresh token replaces the kept one. |
+| Failure | A failed reconnect attempt leaves voice disconnected for the next attempt. It does not fall back to P2P: the other members are on the SFU. A first join still falls back to P2P. |
+| Step limits | The WebSocket connect may take 5 s, the voice join step (join, offer, answer, DataChannels) 10 s. A link that drops packets never refuses a connection; without the limit an attempt would wait for the OS TCP timeout and block the next one. |
+
+**Drop detection.**
+
+| Signal | Detection |
+|---|---|
+| The SFU closes the signaling socket (close frame, end of stream or a reset) | `SfuEvent::Disconnected` at once. A `left` message (the answer to our `leave`) first means the close is not a drop. |
+| The link goes silent (a pulled cable, a frozen SFU) | In SFU mode the voice tick pings on the control channel every 120 ms. With no pong for 700 ms (or no first pong 700 ms after the connect), `Event::VoiceLinkStalled { stalled: true }`: 0.7 to 0.94 s after the link goes silent. The session stays; when pongs come back, `stalled: false`. |
+| A stall of 5 s or more ends | The SFU marks a peer that sent nothing for 5 s disconnected and removes it from the voice session 5 s later, while its control channel can still answer. So the client drops that session (`VoiceSfuDisconnected`, reason `link_stalled`) and reconnects. |
+| No fresh pong for 8 s, three checks in a row | `liveness_timeout`, as before (every 200 voice ticks). |
+
+**UI.** The joined channel's header shows "RECONNECTING" and the local member's row shows "Reconnecting", in the state red (`Theme.live`), from `VoiceSfuDisconnected` or `VoiceLinkStalled { stalled: true }` until `VoiceStateChanged` (the call is back, or the reconnect gave up) or `VoiceLinkStalled { stalled: false }`.
+
+**DataChannel wait.** `wait_for_datachannel_open` waits on a `tokio::sync::Notify`. libmello's transport callback (`mello_peer_set_transport_callback`) wakes it after each peer state change and when a DataChannel or the video track opens or closes. The 5 s deadline stays.
+
+**ICE servers.** `SfuConnection::create_peer` gives the voice peer the `get_ice_servers` URLs (STUN, and TURN over UDP, TCP and TLS), as the stream peers get. An empty list keeps libmello's default STUN servers. The SFU is ICE-lite and offers host candidates only, so a host pair wins when its UDP port is open; libmello logs the selected pair (`ICE selected pair: local <type>/<transport>, remote ...`). libdatachannel in this build uses libjuice, which uses TURN over UDP only: it skips TURN over TCP and TLS with a warning. A network that blocks all UDP therefore gets no relay yet.
+
+**Local candidates.** The SFU refuses an `ice_candidate` that arrives before the `offer` (`INVALID_REQUEST`). Every local candidate waits in `IceCallbackData` until the offer is on the wire, also one that libdatachannel emits while `create_offer` runs. After the offer, each new candidate goes to the socket at once; before stage 6 a candidate found after the answer (a slow STUN or TURN answer) was never sent.
+
+Measured 2026-10-07 on Windows against the SFU in Docker (`client/sfu_reconnect_live_tests.rs`, three rounds each; "reconnecting" counts from the start of the `docker` call, which itself takes 0.2 s for a pause and 1.1 s for a kill):
+
+| Fault | Outage | Fault to "reconnecting" | Link back to audio both ways |
+|---|---:|---:|---:|
+| `docker kill` (sockets reset) | 1 s | 0.11 to 0.18 s | 0.72 to 0.94 s |
+| `docker kill` | 3 s | 0.09 to 0.17 s | 0.13 to 2.99 s |
+| `docker kill` | 10 s | 0.11 to 0.17 s | 4.04 to 4.24 s |
+| `docker pause` (silent link) | 3 s | 0.71 to 0.78 s | 0.12 s (the session resumes) |
+| `docker pause` | 15 s | 0.79 to 0.86 s | 0.54 to 0.64 s (a new session) |
+
+After a socket reset the time to audio depends on where the link comes back in the attempt schedule: up to the next attempt plus about 0.2 s for the join.
 
 ---
 
@@ -683,7 +736,8 @@ libmello/src/audio/
 └── vad.hpp / .cpp
 
 libmello/src/transport/
-└── voice_send_feedback.hpp / .cpp  # receiver reports about the voice send track (§7.5)
+├── voice_send_feedback.hpp / .cpp  # receiver reports about the voice send track (§7.5)
+└── voice_slot_map.hpp              # slot map and the 200 ms hold of unbound RTP (§7.1)
 
 libmello/third_party/webrtc-neteq/  # vendored NetEQ, Opus decoder, CNG, mixer (M131)
 
@@ -691,6 +745,8 @@ mello-core/src/
 ├── voice/mod.rs
 ├── voice/frame.rs              # P2P and mic test voice frame (§4.2)
 ├── voice/send_sink.rs          # SFU packet sink on the capture thread (§7.3)
+├── client/voice.rs             # SFU reconnect scheduler and voice token reuse (§7.6)
+├── transport/sfu_region.rs     # SFU region measurement (§7.6)
 └── transport/sfu_connection.rs
 
 mello-sfu/internal/server/

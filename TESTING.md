@@ -489,6 +489,56 @@ MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
 The SFU side (offers per join, the 50-member path past the slots) is
 `voice-soak --max-offers-within-slots 0`, below.
 
+### SFU region, reconnect and slot hold (stage 6)
+
+Unit tests run in `cargo test --workspace` and in libmello `ctest`:
+
+| What | Where |
+|---|---|
+| Region ranking: the median of three probes, 2xx only, 2 s timeout, fastest first | `mello-core/src/transport/sfu_region.rs` |
+| `get_sfu_regions` lists both regions with their health URLs | `backend/nakama/data/modules/sfu_routing_test.go` |
+| First reconnect attempt after 500 ms, then 2, 4, 8, 16 s; a valid voice token is reused, an expired one is not; a failed reconnect does not fall back to P2P | `mello-core/src/client/voice.rs` |
+| A server close of the signaling socket is a disconnect; the close after `left` is not; a connect without an answer fails at its 5 s limit | `mello-core/src/client/sfu_voice_join.rs` |
+| No local ICE candidate before the offer; a candidate found after the answer still reaches the SFU (a fake SFU and a fake STUN server that answers late) | `mello-core/src/client/sfu_voice_join.rs`, `transport/sfu_connection.rs` |
+| The ICE servers reach libdatachannel: a TURN server on a local UDP port gets the Allocate request | `transport/sfu_connection.rs` |
+| A link with no pong for 700 ms is stalled | `mello-core/src/voice/mod.rs` |
+| The "reconnecting" state on the channel header and the local member's row; the region in the debug panel | `client/src/flow_tests.rs` |
+| RTP before its `slot` message plays once the slot binds; RTP held 300 ms drops and counts in `rx_unmapped_dropped`; a late packet of the released owner never reaches the next owner | `libmello/tests/test_voice_slot_hold.cpp` |
+
+`sfu_reconnect_live_timings` (`mello-core/src/client/sfu_reconnect_live_tests.rs`)
+measures the reconnect against a real SFU in Docker. It kills or pauses the
+container three times and reports the time to the "reconnecting" state and
+from the link coming back to audio in both directions, with the event
+timeline. Ignored by default. Build the SFU with Go 1.24 in the builder
+image (native Go 1.26.1 on Windows has golang/go#77975) and run it with the
+LAN address:
+
+```bash
+# mello-sfu, from Git Bash
+MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "$PWD"):/src:ro" -v "C:\\tmp\\sfu:/out" \
+  mello-sfu-builder:latest sh -c 'cp -r /src /tmp/b && cd /tmp/b && go build -tags openh264 -o /out/sfu ./cmd/sfu'
+MSYS_NO_PATHCONV=1 docker run -d --name mello-sfu-stage6 -p 8443:8443 -p 8080:8080 -p 10000:10000/udp \
+  -e SFU_PUBLIC_IP=<lan-ip> -e SFU_ADMIN_PASSWORD=devpass -v "C:\\tmp\\sfu:/opt/sfu" \
+  mello-sfu-builder:latest /opt/sfu/sfu
+# mello
+MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+MELLO_TEST_SFU_HEALTH=http://127.0.0.1:8080/health MELLO_TEST_SFU_CONTAINER=mello-sfu-stage6 \
+MELLO_TEST_FAULT=kill MELLO_TEST_OUTAGE_MS=3000 \
+  cargo test -p mello-core --lib -- --ignored --nocapture sfu_reconnect_live
+```
+
+`MELLO_TEST_FAULT=pause` freezes the container instead: the link goes silent,
+as with a pulled cable. `MELLO_TEST_ICE` (comma-separated URLs) gives the
+client's voice peer ICE servers; the log line `ICE selected pair` shows the
+pair that carries the call. The measured table is in spec 10 section 7.6.
+
+`region_ranking_live` (`transport/sfu_region.rs`) measures real regions:
+
+```bash
+MELLO_TEST_REGIONS=eu-west=https://sfu-eu.m3llo.app:8080/health,us-east=https://sfu-us.m3llo.app:8080/health \
+  cargo test -p mello-core --lib -- --ignored --nocapture region_ranking_live
+```
+
 ---
 
 ## Backend — Nakama Go modules
