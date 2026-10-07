@@ -349,6 +349,20 @@ void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled) {
     } catch (...) {}
 }
 
+void mello_voice_report_send_feedback(MelloContext* ctx, const MelloSendFeedback* feedback) {
+    if (!ctx || !feedback) return;
+    try {
+        ctx_cast(ctx)->audio().report_send_feedback(*feedback);
+    } catch (...) {}
+}
+
+void mello_voice_set_max_bitrate(MelloContext* ctx, int kbps) {
+    if (!ctx) return;
+    try {
+        ctx_cast(ctx)->audio().set_max_bitrate_kbps(kbps);
+    } catch (...) {}
+}
+
 float mello_voice_get_input_level(MelloContext* ctx) {
     if (!ctx) return 0.0f;
     try {
@@ -1181,6 +1195,17 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->rx_stream_resets                     = p.stream_resets;
         out->rx_talk_spurts                       = p.talk_spurts;
         out->rx_spurt_hold_ms                     = p.spurt_hold_ms;
+        const auto tx = audio.send_stats();
+        out->tx_rr_reports           = tx.reports;
+        out->tx_rr_fraction_lost_pct = tx.feedback.fraction_lost * 100.0f;
+        out->tx_rr_cumulative_lost   = tx.feedback.cumulative_lost;
+        out->tx_rr_jitter_ms         = tx.feedback.jitter_ms;
+        out->tx_rtt_ms               = tx.reports > 0 ? tx.feedback.rtt_ms : -1.0f;
+        out->tx_loss_window_pct      = tx.window_loss_pct;
+        out->tx_bitrate_kbps         = tx.bitrate_kbps;
+        out->tx_max_bitrate_kbps     = tx.max_bitrate_kbps;
+        out->tx_packet_loss_perc     = tx.loss_perc;
+        out->tx_rung_changes         = tx.rung_changes;
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

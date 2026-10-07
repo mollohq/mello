@@ -267,6 +267,8 @@ bool AudioPipeline::start_capture() {
 
     // Fresh GRU states + delay search for the new speech session.
     echo_suppressor_.reset();
+    // The send leg of the new session is unknown: start at the top rung.
+    reset_send_adaptation();
 
 #ifdef MELLO_HAS_VPIO_DUPLEX
     // Activate the duplex pair for the session when desired and not live.
@@ -326,6 +328,7 @@ bool AudioPipeline::start_capture_inject() {
         capture_->stop();
     }
 
+    reset_send_adaptation();
     capturing_ = true;
     capture_inject_mode_.store(true, std::memory_order_relaxed);
     // Same backend snapshot as start_capture(): injected frames must take
@@ -526,11 +529,65 @@ void AudioPipeline::set_push_to_talk(bool enabled) {
     MELLO_LOG_INFO("pipeline", "push_to_talk mode %s", enabled ? "enabled" : "disabled");
 }
 
+void AudioPipeline::apply_send_adaptation() {
+    const int bitrate = adapt_bitrate_bps_.load(std::memory_order_relaxed);
+    if (bitrate != applied_bitrate_bps_) {
+        encoder_.set_bitrate(bitrate);
+        applied_bitrate_bps_ = bitrate;
+    }
+    const int loss_perc = adapt_loss_perc_.load(std::memory_order_relaxed);
+    if (loss_perc != applied_loss_perc_) {
+        encoder_.set_packet_loss_perc(loss_perc);
+        applied_loss_perc_ = loss_perc;
+    }
+}
+
+void AudioPipeline::reset_send_adaptation() {
+    std::lock_guard<std::mutex> lock(adapt_mutex_);
+    adapt_.reset();
+    last_feedback_ = MelloSendFeedback{};
+    session_reports_ = 0;
+    adapt_bitrate_bps_.store(adapt_.bitrate_kbps() * 1000, std::memory_order_relaxed);
+    adapt_loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
+}
+
+void AudioPipeline::report_send_feedback(const MelloSendFeedback& feedback) {
+    std::lock_guard<std::mutex> lock(adapt_mutex_);
+    last_feedback_ = feedback;
+    ++session_reports_;
+    adapt_.on_report(util::steady_now_ms(), feedback.interval_expected,
+                     feedback.interval_lost, feedback.rtt_ms);
+    adapt_bitrate_bps_.store(adapt_.bitrate_kbps() * 1000, std::memory_order_relaxed);
+    adapt_loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
+}
+
+void AudioPipeline::set_max_bitrate_kbps(int kbps) {
+    std::lock_guard<std::mutex> lock(adapt_mutex_);
+    adapt_.set_max_kbps(kbps);
+    adapt_bitrate_bps_.store(adapt_.bitrate_kbps() * 1000, std::memory_order_relaxed);
+}
+
+SendStats AudioPipeline::send_stats() const {
+    std::lock_guard<std::mutex> lock(adapt_mutex_);
+    SendStats s;
+    s.feedback = last_feedback_;
+    s.reports = session_reports_;
+    s.bitrate_kbps = adapt_.bitrate_kbps();
+    s.max_bitrate_kbps = adapt_.max_kbps();
+    s.loss_perc = adapt_.loss_perc();
+    s.rung_changes = adapt_.rung_changes();
+    s.window_loss_pct = adapt_.window_loss() < 0.0
+                            ? -1.0f
+                            : static_cast<float>(adapt_.window_loss() * 100.0);
+    return s;
+}
+
 void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp) {
     if (ns_mode() == NsMode::Rnnoise) {
         noise_suppressor_.process(frame, FRAME_SIZE);
     }
 
+    apply_send_adaptation();
     uint8_t raw_pkt[MAX_PACKET_SIZE];
     int encoded = encoder_.encode(frame, FRAME_SIZE, raw_pkt, MAX_PACKET_SIZE);
 

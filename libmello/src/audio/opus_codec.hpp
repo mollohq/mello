@@ -33,6 +33,9 @@ public:
     int encode(const int16_t* pcm, int frame_size, uint8_t* out, int max_out);
 
     void set_bitrate(int bitrate);
+    /// OPUS_SET_PACKET_LOSS_PERC: the expected loss, 0..100. Opus spends
+    /// more of the bitrate on in-band FEC (LBRR) as it rises.
+    void set_packet_loss_perc(int percent);
 
 private:
     ::OpusEncoder* encoder_ = nullptr;
