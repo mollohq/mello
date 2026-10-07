@@ -283,6 +283,15 @@ Voice receive and playout (no device, no sleep, deterministic):
 | `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the P2P voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
 | `NetEqSpike` | `test_neteq_spike.cpp` | The stage 3 spike: NetEQ and the mixer driven directly (clean, loss, burst tuning, drift, gap, limiter, cost). |
 
+Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `SendAdaptation` | `test_send_adaptation.cpp` (`mello_tests`) | The controller with a loss and round-trip trace, one report per second: the rung sequence (fast down, one rung up after 10 s clean), one lossy second steps down once, 8 % loss climbs back, round-trip spikes do not count, too few packets give no decision, the loss perc mapping (floor 5, cap 30, 4 s), the ladder from the channel bitrate. |
+| `SendAdaptationPipeline` | `test_send_adaptation.cpp` (`mello_tests`) | Through a real `AudioPipeline` on the test backend: a report reaches the encoder at the next frame and the frames shrink with the bitrate; a new session starts at the top rung. |
+| `VoiceSendFeedback` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | The RTCP parser with crafted receiver and sender reports (compound, signed 24-bit loss, malformed lengths), the round trip from LSR and DLSR, the per-report interval of the tracker. |
+| `VoiceSendFeedbackWire` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | A plain libdatachannel peer answers our sender reports with crafted receiver reports; they reach the voice peer's send track and its callback with the right loss, jitter and a real round trip. |
+
 RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
 
 ```powershell
@@ -304,10 +313,11 @@ device and no backend. Every change to the audio path runs it
 (plans/voice-quality.md stage 7).
 
 ```bash
-./scripts/voice-gate.sh                    # all profiles, about 2 minutes
+./scripts/voice-gate.sh                    # all profiles, about 4 minutes
 ./scripts/voice-gate.sh --only clean,wrap  # some profiles
 ./scripts/voice-gate.sh --no-score         # structural metrics only
 ./scripts/voice-gate.sh --send-tick        # old sender timing, for comparison
+./scripts/voice-gate.sh --no-adapt         # no send-leg feedback (before stage 5)
 ```
 
 The table shows each metric with its delta against
@@ -320,6 +330,7 @@ drops by more than 0.1 on any profile or an enforced gate fails.
 | Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
 | Sender | `mello_voice_inject_capture`, `mello_voice_set_packet_sink` | Real capture DSP and Opus encode on a context with the test backend. Each packet leaves at its encode time, as on the SFU path. `--send-tick` replays the 20 ms voice tick of the command loop instead (the send timing before stage 2). |
 | Shim | `tools/voice-gate/src/shim.rs` | Builds the RTP packet as the SFU forwards it: payload type 111, the 16-bit sequence from `rtp_seq_start`, the timestamp (a seeded start + media time), a seeded SSRC. Then applies the profile. Seeded. |
+| Feedback | `tools/voice-gate/src/rtcp.rs` | The SFU's receiver reports (a port of Pion's receiver stream, one report per second) from the delivered packets, and the sender reports that give the round trip. Each report reaches the sender's encoder adaptation (`mello_voice_report_send_feedback`) at its arrival time. A run replays the shared sender trace with a probe context until the controller changes a setting, then encodes live with the reports applied. The lossless twin replays the packets that the live sender sent. Jitter draws from the seed stream `rtcp`. |
 | Receiver | `mello_voice_feed_rtp`, `mello_voice_test_pull_output` | Real NetEQ per peer (decode, FEC, concealment, time stretch), the mixer and the output ring, pulled 10 ms at a time like the device thread. |
 | Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
 
@@ -358,7 +369,41 @@ Rules:
   `check.sh` catches broken wiring.
 
 Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
-`results.json`) lands in `target/voice-gate/`.
+`results.json`) lands in `target/voice-gate/`. With the feedback loop each
+profile also gets `sender.csv` (the bitrate and loss perc every 100 ms) and
+`reports.csv` (each receiver report and the setting after it), and
+`results.json` carries both under `info.adaptation`.
+
+### Send-leg adaptation (stage 5)
+
+The stage 5 gates are on `bad` (13 % loss, the 15 % class). `mobile` (6 %
+loss) is the 5 % class.
+
+| Gate | Enforced | Rule |
+|---|---|---|
+| `bitrate_reaction_s` | yes | At most 2 s from the end of the first 2 s of sending in which the network lost more than 10 % of the packets, to the first step down. |
+| `mos` | yes | At least the `mobile` MOS of `baseline-2.9.json` minus 0.2 (`min_ref` with `"source": "baseline"`). |
+| `bitrate_drop_s` | no | At most 2 s from the first packet to the first step down. Not met: the first 1.7 s lose exactly 10.0 %. |
+| `mos` | no | At least the `mobile` MOS of this run minus 0.2 (`"source": "run"`). Not met. |
+
+Result against stage 4 (`--no-adapt` gives the same numbers as stage 4):
+
+| Profile | MOS stage 4 | MOS stage 5 | Bitrate min / mean kbps | Loss perc max |
+|---|---:|---:|---:|---:|
+| clean | 3.27 | 3.27 | 64 / 64 | 5 |
+| home-wifi | 3.25 | 3.25 | 64 / 64 | 5 |
+| mobile | 2.80 | 2.63 | 24 / 32.7 | 15 |
+| bad | 2.22 | 2.08 | 24 / 26.8 | 27 |
+| burst | 3.29 | 3.29 | 48 / 60.9 | 12 |
+| outage | 2.98 | 2.98 | 48 / 61.4 | 30 |
+
+The shim loses packets at random, not from congestion. A lower bitrate
+therefore costs quality and never lowers the loss: the gate measures the
+cost of the ladder, not its benefit. With the loss perc only (no ladder),
+`bad` scores 2.25 and `mobile` 2.80. With the ladder only (loss perc fixed
+at 5; an experiment with the first version of the step rules), `bad`
+scored 1.69 and its concealment ratio failed (0.93): at 24 kbps the in-band
+FEC needs the higher loss perc.
 
 ### NetEQ tuning (stage 3)
 

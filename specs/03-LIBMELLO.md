@@ -105,7 +105,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | Group | Key functions | Notes |
 |-------|---------------|-------|
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
-| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet`, `feed_rtp`, `remove_peer`, `set_peer_volume`, `set_peer_pan` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet`. Received audio plays through one NetEQ per peer (spec 10 section 5) |
+| **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet`, `feed_rtp`, `remove_peer`, `set_peer_volume`, `set_peer_pan`, `report_send_feedback`, `set_max_bitrate` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet`. Received audio plays through one NetEQ per peer (spec 10 section 5) |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
 | **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
@@ -115,6 +115,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 
 - `MelloVoiceActivityCallback` — fires on speaking state change (used for UI VAD indicators)
 - `MelloPacketSinkCallback` — one encoded voice frame, on the capture thread (§7, spec 10 §4.5)
+- `MelloSendFeedbackCallback` — one receiver report about the voice send track, on the libdatachannel thread (§7, spec 10 §7.5)
 - `MelloAudioFrameCallback` / `MelloVideoFrameCallback` — raw frame delivery
 - `MelloIceCandidateCallback` — ICE trickle candidate generated
 - `MelloPeerStateCallback` — peer connection state change
@@ -387,6 +388,16 @@ Each P2P connection uses libdatachannel and creates two data channels:
 | What the sink must not do | Block or wait on the network. Call `mello_voice_set_packet_sink`, or a capture control of the same context (start, stop, inject, push-to-talk, device switch): they take the capture or sink lock and wait for themselves. |
 | Set and clear | Any thread, never from inside the sink. Both wait for a sink call that runs now. After a clear returns, the caller may free `user_data`. |
 | Lock order | `accum_mutex_`, then `packet_sink_mutex_`, then `outgoing_mutex_`. `feed_packet` takes the `VoicePlayout` peer map mutex, which is after `accum_mutex_` also in `stop_capture`. |
+
+### Voice send-leg feedback and encoder adaptation
+
+| Question | Answer |
+|---|---|
+| Who reads the receiver reports | `SendFeedbackHandler`, last in the voice send track's media handler chain, on the libdatachannel thread. It only reads; the messages go on unchanged. |
+| Who gets them | `MelloSendFeedbackCallback` (`mello_peer_set_send_feedback_callback`), on the same thread. The peer copies the callback under its `mutex_` and calls it outside. |
+| Who runs the controller | The caller of `mello_voice_report_send_feedback` (in production that libdatachannel thread), under `adapt_mutex_`. `mello_voice_set_max_bitrate` (command loop) takes the same lock. |
+| Hand-off to the encoder | Two atomics (bitrate, loss perc). The capture thread reads them before each encode and calls `opus_encoder_ctl` when a value changed. |
+| Lock order | `adapt_mutex_` is a leaf. The capture thread never takes it, so a report never waits for the capture lock, and an encode never waits for a report. |
 
 ### Voice receive and playout (NetEQ)
 
