@@ -29,6 +29,38 @@ constexpr char kAudioMid[] = "audio";
 constexpr char kVideoFmtp[] =
     "profile-level-id=4d002a;packetization-mode=1;level-asymmetry-allowed=1";
 
+int64_t steady_now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
+const char* candidate_type_name(rtc::Candidate::Type type) {
+    switch (type) {
+    case rtc::Candidate::Type::Host:
+        return "host";
+    case rtc::Candidate::Type::ServerReflexive:
+        return "srflx";
+    case rtc::Candidate::Type::PeerReflexive:
+        return "prflx";
+    case rtc::Candidate::Type::Relayed:
+        return "relay";
+    default:
+        return "unknown";
+    }
+}
+
+const char* candidate_transport_name(rtc::Candidate::TransportType type) {
+    switch (type) {
+    case rtc::Candidate::TransportType::Udp:
+        return "udp";
+    case rtc::Candidate::TransportType::Unknown:
+        return "unknown";
+    default:
+        return "tcp";
+    }
+}
+
 uint32_t generate_ssrc() {
     thread_local std::mt19937 rng(std::random_device{}());
     std::uniform_int_distribution<uint32_t> dist(1, 0xFFFFFFFF);
@@ -401,7 +433,7 @@ void PeerConnectionImpl::create_pc_locked() {
         callback(user_data, &mello_candidate);
     });
 
-    pc->onStateChange([weak_self, generation](rtc::PeerConnection::State state) {
+    pc->onStateChange([weak_self, weak_pc, generation](rtc::PeerConnection::State state) {
         const auto self = weak_self.lock();
         if (!self) {
             return;
@@ -426,9 +458,15 @@ void PeerConnectionImpl::create_pc_locked() {
         if (connected && is_stream_role(self->role_)) {
             self->try_start_video_pipeline(generation);
         }
+        if (connected) {
+            if (const auto callback_pc = weak_pc.lock()) {
+                self->log_selected_candidate_pair(callback_pc);
+            }
+        }
         if (callback) {
             callback(user_data, static_cast<int>(state));
         }
+        self->notify_transport();
     });
 
     pc->onTrack([weak_self, generation](std::shared_ptr<rtc::Track> track) {
@@ -777,6 +815,7 @@ void PeerConnectionImpl::wire_video_track_callbacks(uint64_t generation) {
         const auto self = weak_self.lock();
         if (self) {
             self->try_start_video_pipeline(generation, track_generation);
+            self->notify_transport();
         }
     });
 }
@@ -1022,10 +1061,9 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
     });
 
     auto msg_count = std::make_shared<std::atomic<int>>(0);
-    auto unowned_count = std::make_shared<std::atomic<int>>(0);
     const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
     track->onMessage(
-        [weak_self, generation, sender_id, by_mid, mid, msg_count, unowned_count](
+        [weak_self, generation, sender_id, by_mid, mid, msg_count](
             rtc::message_variant data
         ) {
         const auto self = weak_self.lock();
@@ -1045,90 +1083,123 @@ void PeerConnectionImpl::wire_incoming_audio_track_callbacks(
             return;
         }
 
-        // Voice: the SFU's slot map names the sender of this m-line now. A
-        // slot without an owner (or before its slot message) drops the packet.
-        const std::string sender = by_mid ? self->voice_slots_.lookup(mid) : sender_id;
-        if (sender.empty()) {
-            const int u = unowned_count->fetch_add(1, std::memory_order_relaxed) + 1;
-            if (u <= 3 || (u % 500) == 0) {
-                fprintf(stderr, "[mello-rtp] drop #%d: mid=%s has no sender\n",
-                        u, mid.c_str());
-                fflush(stderr);
-            }
-            return;
-        }
-
         const int n = msg_count->fetch_add(1, std::memory_order_relaxed) + 1;
         if (n <= 3 || n == 50 || n == 500) {
-            fprintf(stderr, "[mello-rtp] onMessage #%d: mid=%s sender=%s size=%d\n",
-                    n, mid.c_str(), sender.c_str(), total);
+            fprintf(stderr, "[mello-rtp] onMessage #%d: mid=%s size=%d\n",
+                    n, mid.c_str(), total);
             fflush(stderr);
         }
 
-        MelloAudioTrackCallback callback = nullptr;
-        void* user_data = nullptr;
-        MelloAudioTrackCallback rtp_callback = nullptr;
-        void* rtp_user_data = nullptr;
-        {
-            std::lock_guard<std::mutex> lock(self->mutex_);
-            if (!self->is_current_pc_generation(generation)) {
-                return;
-            }
-            callback = self->audio_track_cb_;
-            user_data = self->audio_track_ud_;
-            rtp_callback = self->audio_rtp_cb_;
-            rtp_user_data = self->audio_rtp_ud_;
-        }
-
-        // Voice: the whole RTP packet, so NetEQ sees the real sequence,
-        // timestamp and SSRC (spec 10 section 5.1).
-        if (rtp_callback) {
-            rtp_callback(rtp_user_data, sender.c_str(), bytes, total);
-        }
-        if (!callback) {
+        // Voice: the SFU's slot map names the sender of this m-line now. A
+        // packet before its slot message waits there (VoiceSlotMap).
+        if (by_mid) {
+            self->route_voice_rtp(mid, bytes, total, steady_now_ms(), generation);
             return;
         }
-
-        const uint16_t seq = static_cast<uint16_t>(
-            (static_cast<uint16_t>(bytes[2]) << 8)
-            | static_cast<uint16_t>(bytes[3])
-        );
-
-        int cc = bytes[0] & 0x0F;
-        int header_len = 12 + cc * 4;
-
-        const bool has_ext = (bytes[0] & 0x10) != 0;
-        if (has_ext && header_len + 4 <= total) {
-            const uint16_t ext_len = static_cast<uint16_t>(
-                (static_cast<uint16_t>(bytes[header_len + 2]) << 8)
-                | static_cast<uint16_t>(bytes[header_len + 3])
-            );
-            header_len += 4 + ext_len * 4;
-        }
-
-        if (header_len >= total) {
-            return;
-        }
-
-        const uint8_t* opus = bytes + header_len;
-        const int opus_len = total - header_len;
-
-        std::vector<uint8_t> pkt(4 + opus_len);
-        pkt[0] = static_cast<uint8_t>(seq);
-        pkt[1] = static_cast<uint8_t>(seq >> 8);
-        pkt[2] = 0;
-        pkt[3] = 0;
-        std::memcpy(pkt.data() + 4, opus, opus_len);
-
-        // Stream audio and tools: the Opus payload behind a 4-byte header
-        // with the 16-bit RTP sequence.
-        callback(
-            user_data,
-            sender.c_str(),
-            pkt.data(),
-            static_cast<int>(pkt.size())
-        );
+        self->deliver_incoming_audio(sender_id, bytes, total, generation);
     });
+}
+
+void PeerConnectionImpl::route_voice_rtp(
+    const std::string& mid,
+    const uint8_t* rtp,
+    int size,
+    int64_t now_ms,
+    uint64_t generation
+) {
+    if (!rtp || size < 12) {
+        return;
+    }
+    if (generation == 0) {
+        generation = pc_generation_.load(std::memory_order_acquire);
+    }
+    // One lock for route and delivery: a bind cannot put its held packets
+    // behind a newer packet of the same mid.
+    std::lock_guard<std::mutex> feed(slot_feed_mutex_);
+    const std::string sender =
+        voice_slots_.route(mid, rtp, static_cast<size_t>(size), now_ms);
+    if (sender.empty()) {
+        static std::atomic<uint64_t> unowned{0};
+        const uint64_t u = unowned.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (u <= 3 || (u % 500) == 0) {
+            fprintf(stderr, "[mello-rtp] mid=%s has no sender (#%llu): held for its slot message\n",
+                    mid.c_str(), static_cast<unsigned long long>(u));
+            fflush(stderr);
+        }
+        return;
+    }
+    deliver_incoming_audio(sender, rtp, size, generation);
+}
+
+void PeerConnectionImpl::deliver_incoming_audio(
+    const std::string& sender,
+    const uint8_t* bytes,
+    int total,
+    uint64_t generation
+) {
+    MelloAudioTrackCallback callback = nullptr;
+    void* user_data = nullptr;
+    MelloAudioTrackCallback rtp_callback = nullptr;
+    void* rtp_user_data = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (!is_current_pc_generation(generation)) {
+            return;
+        }
+        callback = audio_track_cb_;
+        user_data = audio_track_ud_;
+        rtp_callback = audio_rtp_cb_;
+        rtp_user_data = audio_rtp_ud_;
+    }
+
+    // Voice: the whole RTP packet, so NetEQ sees the real sequence,
+    // timestamp and SSRC (spec 10 section 5.1).
+    if (rtp_callback) {
+        rtp_callback(rtp_user_data, sender.c_str(), bytes, total);
+    }
+    if (!callback) {
+        return;
+    }
+
+    const uint16_t seq = static_cast<uint16_t>(
+        (static_cast<uint16_t>(bytes[2]) << 8)
+        | static_cast<uint16_t>(bytes[3])
+    );
+
+    int cc = bytes[0] & 0x0F;
+    int header_len = 12 + cc * 4;
+
+    const bool has_ext = (bytes[0] & 0x10) != 0;
+    if (has_ext && header_len + 4 <= total) {
+        const uint16_t ext_len = static_cast<uint16_t>(
+            (static_cast<uint16_t>(bytes[header_len + 2]) << 8)
+            | static_cast<uint16_t>(bytes[header_len + 3])
+        );
+        header_len += 4 + ext_len * 4;
+    }
+
+    if (header_len >= total) {
+        return;
+    }
+
+    const uint8_t* opus = bytes + header_len;
+    const int opus_len = total - header_len;
+
+    std::vector<uint8_t> pkt(4 + opus_len);
+    pkt[0] = static_cast<uint8_t>(seq);
+    pkt[1] = static_cast<uint8_t>(seq >> 8);
+    pkt[2] = 0;
+    pkt[3] = 0;
+    std::memcpy(pkt.data() + 4, opus, opus_len);
+
+    // Stream audio and tools: the Opus payload behind a 4-byte header
+    // with the 16-bit RTP sequence.
+    callback(
+        user_data,
+        sender.c_str(),
+        pkt.data(),
+        static_cast<int>(pkt.size())
+    );
 }
 
 void PeerConnectionImpl::setup_incoming_track(
@@ -1206,48 +1277,27 @@ void PeerConnectionImpl::setup_dc_handlers(
     uint64_t generation
 ) {
     const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
-    dc->onOpen([weak_self, reliable, generation]() {
+    // Set the channel's open flag, then tell the transport callback.
+    const auto set_open = [weak_self, reliable, generation](bool open) {
         const auto self = weak_self.lock();
         if (!self) {
             return;
         }
-        std::lock_guard<std::mutex> lock(self->mutex_);
-        if (!self->is_current_pc_generation(generation)) {
-            return;
+        {
+            std::lock_guard<std::mutex> lock(self->mutex_);
+            if (!self->is_current_pc_generation(generation)) {
+                return;
+            }
+            auto& open_flag = reliable
+                ? self->reliable_open_
+                : self->unreliable_open_;
+            open_flag.store(open, std::memory_order_release);
         }
-        auto& open_flag = reliable
-            ? self->reliable_open_
-            : self->unreliable_open_;
-        open_flag.store(true, std::memory_order_release);
-    });
-    dc->onClosed([weak_self, reliable, generation]() {
-        const auto self = weak_self.lock();
-        if (!self) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(self->mutex_);
-        if (!self->is_current_pc_generation(generation)) {
-            return;
-        }
-        auto& open_flag = reliable
-            ? self->reliable_open_
-            : self->unreliable_open_;
-        open_flag.store(false, std::memory_order_release);
-    });
-    dc->onError([weak_self, reliable, generation](std::string) {
-        const auto self = weak_self.lock();
-        if (!self) {
-            return;
-        }
-        std::lock_guard<std::mutex> lock(self->mutex_);
-        if (!self->is_current_pc_generation(generation)) {
-            return;
-        }
-        auto& open_flag = reliable
-            ? self->reliable_open_
-            : self->unreliable_open_;
-        open_flag.store(false, std::memory_order_release);
-    });
+        self->notify_transport();
+    };
+    dc->onOpen([set_open]() { set_open(true); });
+    dc->onClosed([set_open]() { set_open(false); });
+    dc->onError([set_open](std::string) { set_open(false); });
 
     dc->onMessage([weak_self, reliable, generation](auto data) {
         const auto self = weak_self.lock();
@@ -1803,7 +1853,81 @@ void PeerConnectionImpl::set_audio_mid_sender(
     const std::string& mid,
     const std::string& sender_id
 ) {
-    voice_slots_.set(mid, sender_id);
+    set_audio_mid_sender_at(mid, sender_id, steady_now_ms());
+}
+
+void PeerConnectionImpl::set_audio_mid_sender_at(
+    const std::string& mid,
+    const std::string& sender_id,
+    int64_t now_ms
+) {
+    const uint64_t generation = pc_generation_.load(std::memory_order_acquire);
+    std::lock_guard<std::mutex> feed(slot_feed_mutex_);
+    const auto bound = voice_slots_.bind(mid, sender_id, now_ms);
+    if (sender_id.empty() || bound.held.empty()) {
+        return;
+    }
+    fprintf(stderr, "[mello-rtp] mid=%s bound to %s: %zu held packets played\n",
+            mid.c_str(), sender_id.c_str(), bound.held.size());
+    fflush(stderr);
+    for (const auto& packet : bound.held) {
+        deliver_incoming_audio(
+            sender_id,
+            packet.data(),
+            static_cast<int>(packet.size()),
+            generation
+        );
+    }
+}
+
+void PeerConnectionImpl::set_unmapped_drop_counter(
+    std::shared_ptr<std::atomic<uint64_t>> counter
+) {
+    voice_slots_.set_drop_counter(std::move(counter));
+}
+
+void PeerConnectionImpl::set_transport_callback(
+    MelloPeerTransportCallback cb,
+    void* user_data
+) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    transport_cb_ = cb;
+    transport_ud_ = user_data;
+}
+
+void PeerConnectionImpl::notify_transport() {
+    MelloPeerTransportCallback callback = nullptr;
+    void* user_data = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        callback = transport_cb_;
+        user_data = transport_ud_;
+    }
+    if (callback) {
+        callback(user_data);
+    }
+}
+
+void PeerConnectionImpl::log_selected_candidate_pair(
+    const std::shared_ptr<rtc::PeerConnection>& pc
+) const {
+    try {
+        rtc::Candidate local;
+        rtc::Candidate remote;
+        if (!pc || !pc->getSelectedCandidatePair(&local, &remote)) {
+            MELLO_LOG_INFO("peer", "peer=%s connected; selected candidate pair unknown",
+                           peer_id_.c_str());
+            return;
+        }
+        MELLO_LOG_INFO("peer",
+                       "peer=%s ICE selected pair: local %s/%s, remote %s/%s",
+                       peer_id_.c_str(),
+                       candidate_type_name(local.type()),
+                       candidate_transport_name(local.transportType()),
+                       candidate_type_name(remote.type()),
+                       candidate_transport_name(remote.transportType()));
+    } catch (...) {
+    }
 }
 
 int PeerConnectionImpl::recv_track_count() const {

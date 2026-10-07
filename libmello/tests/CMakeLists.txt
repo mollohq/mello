@@ -9,6 +9,7 @@ add_executable(mello_tests
     test_vpio_duplex.cpp
     test_voice_playout.cpp
     test_voice_receive.cpp
+    test_voice_slot_hold.cpp
     test_voice_capture.cpp
     test_voice_packet_sink.cpp
     test_send_adaptation.cpp

@@ -70,6 +70,9 @@ typedef void (*MelloVoiceActivityCallback)(void* user_data, bool speaking);
 typedef void (*MelloMicPermissionCallback)(void* user_data, bool granted);
 typedef void (*MelloIceCandidateCallback)(void* user_data, const MelloIceCandidate* candidate);
 typedef void (*MelloPeerStateCallback)(void* user_data, int state);
+/** The peer's transport changed: its state, a DataChannel or the video track
+ *  opened or closed. Read the state with the mello_peer_is_* functions. */
+typedef void (*MelloPeerTransportCallback)(void* user_data);
 typedef void (*MelloPeerDataCallback)(void* user_data, const uint8_t* data, int size, bool reliable);
 typedef void (*MelloAudioTrackCallback)(void* user_data, const char* sender_id, const uint8_t* data, int size);
 /** One text message from the reliable control DataChannel. `text` is not
@@ -540,6 +543,9 @@ typedef struct MelloRtpVideoStats {
     uint8_t rx_core_gated;
 } MelloRtpVideoStats;
 
+/** Create a peer. `ctx` may be NULL. With a context, a voice peer counts
+ *  its dropped slot packets in that context's MelloDebugStats
+ *  (rx_unmapped_dropped); the peer may outlive the context. */
 MELLO_API MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id);
 MELLO_API MelloPeerConnection* mello_peer_create_for_role(
     MelloContext* ctx,
@@ -583,6 +589,16 @@ MELLO_API void mello_peer_set_state_callback(
 MELLO_API void mello_peer_set_data_callback(
     MelloPeerConnection* peer,
     MelloPeerDataCallback callback,
+    void* user_data
+);
+
+/** Set or clear (NULL) the transport callback. It runs on the libdatachannel
+ *  thread after each peer state change (after the state callback), and when
+ *  a DataChannel or the video track opens or closes. It must return fast.
+ *  A waiter uses it instead of polling the mello_peer_is_* functions. */
+MELLO_API void mello_peer_set_transport_callback(
+    MelloPeerConnection* peer,
+    MelloPeerTransportCallback callback,
     void* user_data
 );
 
@@ -672,8 +688,15 @@ MELLO_API int mello_peer_recv_track_count(MelloPeerConnection* peer);
 MELLO_API void mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count);
 
 /** Voice: incoming RTP on m-line `mid` is from `sender_id` from now on. NULL
- *  or "" frees the mid: its packets are dropped. The audio callbacks get
- *  `sender_id` as the sender. Thread safe. Mids reset with each new offer. */
+ *  or "" frees the mid. The audio callbacks get `sender_id` as the sender.
+ *  Thread safe. Mids reset with each new offer.
+ *
+ *  RTP on a mid with no sender is held for 200 ms, because the first packets
+ *  of a new owner can arrive before its `slot` message. A bind gives the
+ *  held packets to the audio callbacks first, in arrival order, on the
+ *  calling thread. A held packet that waits 200 ms, or a late packet of the
+ *  mid's released owner, is dropped and counted in
+ *  MelloDebugStats.rx_unmapped_dropped. */
 MELLO_API MelloResult mello_peer_set_audio_mid_sender(
     MelloPeerConnection* peer,
     const char* mid,
@@ -1181,6 +1204,11 @@ typedef struct MelloDebugStats {
     int32_t  tx_max_bitrate_kbps;        /* the top rung: the channel bitrate */
     int32_t  tx_packet_loss_perc;        /* OPUS_SET_PACKET_LOSS_PERC now */
     uint32_t tx_rung_changes;            /* ladder steps since the context started */
+    /* Voice receive slots (spec 10 section 7.1): RTP on a mid with no slot
+     * owner that was dropped, because no `slot` message bound the mid within
+     * 200 ms or because it was a late packet of the mid's released owner.
+     * All voice peers created with this context, since the context started. */
+    uint64_t rx_unmapped_dropped;
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);
