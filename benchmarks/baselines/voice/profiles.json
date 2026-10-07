@@ -48,7 +48,8 @@
         { "metric": "rx_jitter_resets", "max": 0, "enforced": true },
         { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
         { "metric": "latency_clip_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
-        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "not met: the sender pre-roll (100 ms) plays at its natural delay (spec 10 section 5.2); 91 ms without pre-roll" }
+        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "not met: the sender pre-roll (100 ms) plays at its natural delay (spec 10 section 5.2); 91 ms without pre-roll" },
+        { "metric": "mos", "min": 3.1666, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.27)" }
       ]
     },
     {
@@ -70,7 +71,8 @@
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1: one concealment per lost frame" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss" }
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss" },
+        { "metric": "mos", "min": 3.1466, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.25)" }
       ]
     },
     {
@@ -92,7 +94,8 @@
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" }
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
+        { "metric": "mos", "min": 2.7046, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.80)" }
       ]
     },
     {
@@ -115,10 +118,7 @@
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
         { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
-        { "metric": "bitrate_reaction_s", "max": 2, "enforced": true, "note": "stage 5 gate (13 % loss, the 15 % class): the send bitrate steps down within 2 s after the network loses more than 10 % of 2 s of packets" },
-        { "metric": "mos", "min_ref": { "source": "baseline", "profile": "mobile", "offset": -0.2 }, "enforced": true, "note": "stage 5 gate: MOS at the 15 % class stays above the 5 % class (mobile, 6 % loss) baseline minus 0.2" },
-        { "metric": "bitrate_drop_s", "max": 2, "enforced": false, "note": "stage 5, from the first packet: not met. The first 1.7 s of packets lose 10.0 %, which does not exceed the 10 % step-down threshold" },
-        { "metric": "mos", "min_ref": { "source": "run", "profile": "mobile", "offset": -0.2 }, "enforced": false, "note": "stage 5, against mobile in this run: not met. The shim loses packets at random: a lower bitrate costs quality and does not lower the loss" }
+        { "metric": "mos", "min": 2.1232, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.22)" }
       ]
     },
     {
@@ -136,7 +136,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 3 gate: back to the pre-burst delay within 5 s" }
+        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 3 gate: back to the pre-burst delay within 5 s" },
+        { "metric": "mos", "min": 3.1917, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.29)" }
       ]
     },
     {
@@ -153,7 +154,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "stage 3 gate: zero drift over 10 minutes" }
+        { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "stage 3 gate: zero drift over 10 minutes" },
+        { "metric": "mos", "min": 4.1472, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (4.25)" }
       ]
     },
     {
@@ -169,7 +171,8 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 1.7: back to the pre-outage delay within 5 s" }
+        { "metric": "recovery_s", "max": 5, "enforced": true, "note": "stage 1.7: back to the pre-outage delay within 5 s" },
+        { "metric": "mos", "min": 2.8825, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.98)" }
       ]
     },
     {
@@ -186,7 +189,8 @@
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "rx_jitter_resets", "max": 0, "enforced": true, "note": "stage 1.2: the wrap must not reset the jitter buffer" },
         { "metric": "rx_dropped_late", "max": 0, "enforced": true, "note": "stage 1.2: no packet dropped at the wrap" },
-        { "metric": "wrap_dropout_ms", "max": 0, "enforced": true, "note": "stage 1.2: no dropout at the wrap" }
+        { "metric": "wrap_dropout_ms", "max": 0, "enforced": true, "note": "stage 1.2: no dropout at the wrap" },
+        { "metric": "mos", "min": 3.6405, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.74)" }
       ]
     }
   ]

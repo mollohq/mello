@@ -1,6 +1,6 @@
 //! Metrics table, baseline delta, gates, and the result files.
 
-use crate::profile::{Gate, GateFile, RefSource};
+use crate::profile::{Gate, GateFile, GateRef, RefSource};
 use serde_json::{json, Map, Value};
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -130,6 +130,21 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ("rr_loss_pct", "Loss the receiver reports gave (%)", 0),
     ("rr_rtt_p50_ms", "Round trip from the reports, p50 (ms)", 0),
     ("live_sender", "Sender encoded live (1) or replayed (0)", 0),
+    (
+        "bottleneck_delay_mean_ms",
+        "Delay mean over the bottleneck window (ms)",
+        -1,
+    ),
+    (
+        "bottleneck_delay_max_ms",
+        "Delay max over the bottleneck window (ms)",
+        -1,
+    ),
+    (
+        "bottleneck_lost",
+        "Packets the bottleneck queue dropped",
+        -1,
+    ),
 ];
 
 /// Metrics of one profile run. None = not applicable or not measured.
@@ -197,28 +212,39 @@ pub fn metric_of(doc: &Value, profile: &str, metric: &str) -> Option<f64> {
         .as_f64()
 }
 
-/// Check `v` against the gate. `ref_min` is the bound of `g.min_ref`,
-/// resolved by the caller.
-fn check(g: &Gate, profile: &str, v: Option<f64>, ref_min: Option<f64>) -> GateResult {
+fn ref_rule(op: &str, r: &GateRef, bound: f64) -> String {
+    format!(
+        "{op} {} {} {:+} = {}",
+        r.profile,
+        match r.source {
+            RefSource::Baseline => "in the baseline",
+            RefSource::Run => "in this run",
+        },
+        r.offset,
+        fmt_num(Some(bound))
+    )
+}
+
+/// Check `v` against the gate. `ref_min` and `ref_max` are the bounds of
+/// `g.min_ref` and `g.max_ref`, resolved by the caller.
+fn check(
+    g: &Gate,
+    profile: &str,
+    v: Option<f64>,
+    ref_min: Option<f64>,
+    ref_max: Option<f64>,
+) -> GateResult {
     let mut rule = String::new();
     if let Some(m) = g.min {
         let _ = write!(rule, ">= {}", fmt_num(Some(m)));
     }
-    if let (Some(r), Some(m)) = (&g.min_ref, ref_min) {
-        if !rule.is_empty() {
-            rule.push_str(", ");
+    for (op, r, bound) in [(">=", &g.min_ref, ref_min), ("<=", &g.max_ref, ref_max)] {
+        if let (Some(r), Some(b)) = (r, bound) {
+            if !rule.is_empty() {
+                rule.push_str(", ");
+            }
+            rule.push_str(&ref_rule(op, r, b));
         }
-        let _ = write!(
-            rule,
-            ">= {} {} {:+} = {}",
-            r.profile,
-            match r.source {
-                RefSource::Baseline => "in the baseline",
-                RefSource::Run => "in this run",
-            },
-            r.offset,
-            fmt_num(Some(m))
-        );
     }
     if let Some(m) = g.max {
         if !rule.is_empty() {
@@ -232,6 +258,7 @@ fn check(g: &Gate, profile: &str, v: Option<f64>, ref_min: Option<f64>) -> GateR
             g.min.is_none_or(|m| x >= m)
                 && g.max.is_none_or(|m| x <= m)
                 && ref_min.is_none_or(|m| x >= m)
+                && ref_max.is_none_or(|m| x <= m)
         }
     };
     GateResult {
@@ -265,32 +292,35 @@ pub fn evaluate(
             if g.metric.starts_with("mos") && !scored {
                 continue;
             }
-            let ref_min = match &g.min_ref {
-                None => None,
-                Some(r) => {
-                    let base = match r.source {
-                        RefSource::Baseline => {
-                            baseline.and_then(|b| metric_of(b, &r.profile, &g.metric))
-                        }
-                        RefSource::Run => results
-                            .get(&r.profile)
-                            .and_then(|rm| rm.get(&g.metric).cloned().flatten()),
-                    };
-                    let Some(base) = base else {
-                        notes.push(format!(
-                            "{} {}: no {} value for '{}' (not run, or no baseline); gate not checked.",
-                            p.name, g.metric, g.metric, r.profile
-                        ));
-                        continue;
-                    };
-                    Some(base + r.offset)
-                }
+            let resolve = |r: &GateRef| -> Option<f64> {
+                let base = match r.source {
+                    RefSource::Baseline => {
+                        baseline.and_then(|b| metric_of(b, &r.profile, &g.metric))
+                    }
+                    RefSource::Run => results
+                        .get(&r.profile)
+                        .and_then(|rm| rm.get(&g.metric).cloned().flatten()),
+                };
+                base.map(|b| b + r.offset)
             };
+            let ref_min = g.min_ref.as_ref().map(resolve);
+            let ref_max = g.max_ref.as_ref().map(resolve);
+            if ref_min == Some(None) || ref_max == Some(None) {
+                let r = g.min_ref.as_ref().or(g.max_ref.as_ref());
+                notes.push(format!(
+                    "{} {}: no value for '{}' (not run, or no baseline); gate not checked.",
+                    p.name,
+                    g.metric,
+                    r.map_or("?", |r| r.profile.as_str())
+                ));
+                continue;
+            }
             out.push(check(
                 g,
                 &p.name,
                 m.get(&g.metric).cloned().flatten(),
-                ref_min,
+                ref_min.flatten(),
+                ref_max.flatten(),
             ));
         }
     }
@@ -536,17 +566,17 @@ mod tests {
             min: Some(0.95),
             max: Some(1.05),
             min_ref: None,
+            max_ref: None,
             enforced: true,
             note: String::new(),
         };
-        assert!(check(&g, "p", Some(1.0), None).pass);
-        assert!(!check(&g, "p", Some(2.0), None).pass);
-        assert!(!check(&g, "p", None, None).pass);
+        assert!(check(&g, "p", Some(1.0), None, None).pass);
+        assert!(!check(&g, "p", Some(2.0), None, None).pass);
+        assert!(!check(&g, "p", None, None, None).pass);
     }
 
     #[test]
     fn gate_relative_to_another_profile() {
-        use crate::profile::{GateRef, RefSource};
         let gf_json = serde_json::json!({
             "profiles": { "mobile": { "metrics": { "mos": 1.84 } } }
         });
@@ -559,13 +589,14 @@ mod tests {
                 profile: "mobile".into(),
                 offset: -0.2,
             }),
+            max_ref: None,
             enforced: true,
             note: String::new(),
         };
         let bound = metric_of(&gf_json, "mobile", "mos").map(|b| b - 0.2);
-        let r = check(&g, "bad", Some(2.0), bound);
+        let r = check(&g, "bad", Some(2.0), bound, None);
         assert!(r.pass, "{}", r.rule);
         assert_eq!(r.rule, ">= mobile in the baseline -0.2 = 1.64");
-        assert!(!check(&g, "bad", Some(1.6), bound).pass);
+        assert!(!check(&g, "bad", Some(1.6), bound, None).pass);
     }
 }

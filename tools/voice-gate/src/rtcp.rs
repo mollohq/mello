@@ -38,6 +38,8 @@ use crate::rng::Rng;
 use crate::shim::Shim;
 use std::collections::VecDeque;
 
+/// A sender report with one SDES CNAME chunk on the wire.
+const SR_BYTES: usize = 52;
 /// Pion's receiver report interval.
 pub const RR_INTERVAL_MS: i64 = 1000;
 /// rtc::RtcpSrReporter sends at most one sender report per this interval.
@@ -174,6 +176,9 @@ pub struct FeedbackTracker {
     first_sequence: Option<u16>,
     previous: Option<(u32, i32)>,
     reports: u32,
+    /// The sender report that the previous report referred to (its send
+    /// time stands in for the LSR).
+    previous_sr: Option<i64>,
 }
 
 impl FeedbackTracker {
@@ -182,12 +187,20 @@ impl FeedbackTracker {
             first_sequence,
             previous: None,
             reports: 0,
+            previous_sr: None,
         }
     }
 
     /// The feedback for one report block with round trip `rtt_ms` (< 0:
-    /// unknown).
-    pub fn on_report(&mut self, b: &ReportBlock, rtt_ms: f32) -> mello_sys::MelloSendFeedback {
+    /// unknown) from the sender report sent at `sr_sent_ms` (the LSR).
+    pub fn on_report(
+        &mut self,
+        b: &ReportBlock,
+        rtt_ms: f32,
+        sr_sent_ms: Option<i64>,
+    ) -> mello_sys::MelloSendFeedback {
+        let rtt_fresh = rtt_ms >= 0.0 && sr_sent_ms != self.previous_sr;
+        self.previous_sr = sr_sent_ms;
         self.reports += 1;
         let before_first_packet = self.previous.is_none()
             && b.extended_highest_seq == 0
@@ -237,6 +250,7 @@ impl FeedbackTracker {
             rtt_ms,
             interval_expected: expected,
             interval_lost: lost,
+            rtt_fresh,
         }
     }
 }
@@ -285,7 +299,7 @@ impl RtcpModel {
     /// The sender sent RTP sequence `rtp_seq` at `now_ms`: the first packet
     /// fixes the tracker's start (libmello: the packetizer's first sequence),
     /// and a sender report goes with it when one is due.
-    pub fn on_rtp_sent(&mut self, now_ms: i64, rtp_seq: u16, shim: &Shim) {
+    pub fn on_rtp_sent(&mut self, now_ms: i64, rtp_seq: u16, shim: &mut Shim) {
         if self.tracker.is_none() {
             self.tracker = Some(FeedbackTracker::new(Some(rtp_seq)));
         }
@@ -294,7 +308,12 @@ impl RtcpModel {
             .is_none_or(|last| now_ms >= last + SR_INTERVAL_MS);
         if due {
             self.last_sr_sent_ms = Some(now_ms);
-            let delay = shim.one_way_delay_ms(now_ms as f64, self.rng.gaussian());
+            let gaussian = self.rng.gaussian();
+            // An SR with one SDES CNAME chunk: about 52 bytes.
+            let Some(delay) = shim.one_way_delay_ms(now_ms as f64, gaussian, SR_BYTES) else {
+                // A full bottleneck queue dropped it.
+                return;
+            };
             let arrive = now_ms + delay.ceil() as i64;
             // A path keeps order: a sender report never overtakes the one
             // before it.
@@ -334,10 +353,11 @@ impl RtcpModel {
         let rtt_ms = self.last_sr.map_or(-1.0, |(sent, arrive)| {
             ((arrive - sent) as f64 + reverse) as f32
         });
+        let sr_sent = self.last_sr.map(|(sent, _)| sent);
         let feedback = match self.tracker.as_mut() {
-            Some(t) => t.on_report(&block, rtt_ms),
+            Some(t) => t.on_report(&block, rtt_ms, sr_sent),
             // Before the first packet: Pion's empty report.
-            None => FeedbackTracker::new(None).on_report(&block, rtt_ms),
+            None => FeedbackTracker::new(None).on_report(&block, rtt_ms, sr_sent),
         };
         self.reports_sent += 1;
         let arrive_ms = now_ms + reverse.ceil() as i64;
@@ -408,7 +428,7 @@ mod tests {
         // The same trace as libmello's
         // VoiceSendFeedback.TrackerGivesPacketsExpectedAndLostPerReport.
         let mut t = FeedbackTracker::new(Some(65530));
-        let fb = t.on_report(&ReportBlock::default(), -1.0);
+        let fb = t.on_report(&ReportBlock::default(), -1.0, None);
         assert_eq!(fb.interval_expected, 0);
         let mut b = ReportBlock {
             fraction_lost: 20,
@@ -416,22 +436,24 @@ mod tests {
             extended_highest_seq: (1 << 16) | 19,
             jitter: 96,
         };
-        let fb = t.on_report(&b, -1.0);
+        let fb = t.on_report(&b, -1.0, None);
         assert_eq!((fb.interval_expected, fb.interval_lost), (26, 2));
         assert!((fb.jitter_ms - 2.0).abs() < 1e-6);
         b.extended_highest_seq += 50;
         b.cumulative_lost = 7;
-        let fb = t.on_report(&b, 62.5);
+        let fb = t.on_report(&b, 62.5, Some(1000));
         assert_eq!((fb.interval_expected, fb.interval_lost), (50, 5));
+        assert!(fb.rtt_fresh);
         b.extended_highest_seq += 40;
         b.cumulative_lost = 1;
         b.fraction_lost = 64;
-        let fb = t.on_report(&b, 62.5);
+        let fb = t.on_report(&b, 62.5, Some(1000));
         assert_eq!((fb.interval_expected, fb.interval_lost), (40, 10));
-        let fb = t.on_report(&b, 62.5);
+        assert!(!fb.rtt_fresh, "the same sender report");
+        let fb = t.on_report(&b, 62.5, Some(1000));
         assert_eq!((fb.interval_expected, fb.interval_lost), (0, 0));
         b.extended_highest_seq -= 100;
-        let fb = t.on_report(&b, 62.5);
+        let fb = t.on_report(&b, 62.5, Some(1000));
         assert_eq!((fb.interval_expected, fb.interval_lost), (0, 0));
         assert_eq!(fb.reports, 6);
     }

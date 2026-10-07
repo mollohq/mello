@@ -153,7 +153,13 @@ fn real_main() -> Result<bool, String> {
     // SAFETY: global setter, no pointers.
     unsafe { mello_sys::mello_set_log_level(log_level) };
 
-    let gf = profile::load(&base_dir.join("profiles.json"))?;
+    let mut gf = profile::load(&base_dir.join("profiles.json"))?;
+    // Profiles added after the baseline (stage 5: congestion). Their own
+    // file and fingerprint, so the baseline's frozen inputs do not change.
+    let added_path = base_dir.join("profiles-congestion.json");
+    if !args.write_baseline && added_path.exists() {
+        profile::load_added(&mut gf, &added_path)?;
+    }
     let clips = run::load_corpus(&root, &gf.corpus)?;
     let corpus_fp = corpus_fingerprint(&root, &gf.corpus)?;
 
@@ -235,7 +241,7 @@ fn real_main() -> Result<bool, String> {
             p.name, p.duration_s
         );
         let n = run::reference_len(p.duration_s);
-        let r = if args.no_adapt {
+        let r = if args.no_adapt || !p.adapt {
             run::run_receiver(
                 p,
                 &reference[..n],
@@ -264,7 +270,9 @@ fn real_main() -> Result<bool, String> {
         let sent_trace = live_trace.as_ref().unwrap_or(&traces[&p.sender]);
         // The same packets on the same network without loss: the
         // concealment that loss did not cause (lib.rs, measure).
-        let lossless = if p.network.has_loss() {
+        // A bottleneck's drops depend on the queue it fills: a twin without
+        // them has other delays, so it gives no concealment baseline.
+        let lossless = if p.network.has_loss() && p.network.bottleneck.is_none() {
             let mut twin = (*p).clone();
             twin.network = p.network.without_loss();
             Some(run::run_receiver(
@@ -450,6 +458,7 @@ fn real_main() -> Result<bool, String> {
         "taken_at_utc": report::utc_now(),
         "platform": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
         "inputs_fingerprint": gf.inputs_fingerprint,
+        "added_inputs_fingerprint": gf.added_inputs_fingerprint,
         "corpus": { "dir": gf.corpus.dir, "clips": gf.corpus.clips, "fingerprint": corpus_fp },
         "scorer": if scores.available {
             let mut d = scores.detail.clone();

@@ -199,6 +199,23 @@ pub fn measure(
         "neteq_delay_p50_ms".into(),
         dsp::percentile(&filtered, 50.0),
     );
+    // Congestion: the delay while the bottleneck runs (stage 5).
+    if let Some(b) = &profile.network.bottleneck {
+        let inside: Vec<f64> = points
+            .iter()
+            .filter(|q| q.t_s >= b.start_s && q.t_s < b.start_s + b.dur_s)
+            .map(|q| q.latency_ms)
+            .collect();
+        m.insert(
+            "bottleneck_delay_mean_ms".into(),
+            (!inside.is_empty()).then(|| inside.iter().sum::<f64>() / inside.len() as f64),
+        );
+        m.insert(
+            "bottleneck_delay_max_ms".into(),
+            inside.iter().cloned().reduce(f64::max),
+        );
+        m.insert("bottleneck_lost".into(), n(run.shim.lost_queue));
+    }
     let adaptation = run
         .adapt
         .as_ref()
@@ -214,6 +231,7 @@ pub fn measure(
             "lost_random": run.shim.lost_random,
             "lost_burst": run.shim.lost_burst,
             "lost_outage": run.shim.lost_outage,
+            "lost_queue": run.shim.lost_queue,
             "reordered": run.shim.reordered,
             "delivered": run.shim.delivered,
             "lost_dtx": run.shim.lost_dtx,

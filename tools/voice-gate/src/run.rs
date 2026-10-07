@@ -653,7 +653,8 @@ fn drive(
         for pkt in to_send {
             if !pkt.payload.is_empty() {
                 if let (Some(rtcp), Some(adapt)) = (rtcp.as_mut(), adapt.as_mut()) {
-                    rtcp.on_rtp_sent(now, shim.rtp_sequence(pkt.sequence), &shim);
+                    let seq = shim.rtp_sequence(pkt.sequence);
+                    rtcp.on_rtp_sent(now, seq, &mut shim);
                     adapt.first_send_ms.get_or_insert(now);
                 }
             }
