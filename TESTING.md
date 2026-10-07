@@ -403,6 +403,30 @@ and records each voice RTP packet with its arrival time.
 cargo test -p mello-core --lib send_path_latency -- --ignored --nocapture
 ```
 
+### Voice receive slots and in-band speaking (stage 4)
+
+Unit tests run in `cargo test --workspace`: the slot message rebinds a mid and
+drops the old member's NetEQ, and a `speaking` message raises `VoiceActivity`
+(`transport/sfu_connection.rs`), the rate limits (`voice/speaking.rs`), and
+the UI keeps the SFU speaking state over a stale `voice_update`
+(`client/src/flow_tests.rs`).
+
+`slots_live_join_and_speaking_latency` (`mello-core/src/voice/slots_live_tests.rs`)
+measures the stage 4 gate against a real SFU: 7 members talk, an 8th joins.
+It reports SFU `joined` to the first packet heard in each direction, and VAD
+open to the remote `VoiceActivity`. Ignored by default:
+
+```bash
+# mello-sfu
+SFU_PUBLIC_IP=127.0.0.1 SFU_ADMIN_PASSWORD=devpass go run ./cmd/sfu
+# mello
+MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+  cargo test -p mello-core --lib -- --ignored --nocapture slots_live
+```
+
+The SFU side (offers per join, the 50-member path past the slots) is
+`voice-soak --max-offers-within-slots 0`, below.
+
 ---
 
 ## Backend — Nakama Go modules
@@ -490,7 +514,13 @@ go run ./tools/voice-soak \
   --clients 30 --rounds 40 --hold-ms 400
 ```
 
-Full WebRTC lifecycle + RTP load: add `--negotiate-webrtc --rtp-audio`.
+Full WebRTC lifecycle + RTP load: add `--negotiate-webrtc --rtp-audio`. The RTP
+is real Opus speech with real timestamps; `--vad-gaps` adds talk spurts and the
+in-band speaking messages. Each client offers 16 receive slots
+(`--recv-slots`); `--max-offers-within-slots 0` fails the run when an offer
+reaches a client that the slots still cover (stage 4 gate). On Windows, start
+the SFU with `SFU_PUBLIC_IP` set to the LAN address: Pion clients do not use
+loopback candidates.
 Capacity sweep / auto-search: `--sweep-clients 25,50,75,100` or
 `--auto-capacity-search`. (Full flag list in `mello-sfu/README.md`.)
 

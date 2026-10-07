@@ -399,7 +399,9 @@ The former DataChannel hot path (`onHostMediaPacket` → `viewer.SendMedia`) is 
 
 Voice audio uses **RTP audio tracks** instead of DataChannels. Each member's Opus audio is sent as a standard RTP stream (PT 111, Opus/48000/2) over the same DTLS/ICE transport as DataChannels.
 
-**Per-sender track model:** When member B joins a session that already has member A, the SFU:
+**Receive slots (current, 2026-10):** the client offers 16 recvonly audio m-lines after its mic m-line. The SFU binds a placeholder sender to each and puts a member on a free slot with `RTPSender.ReplaceTrack`. A join or leave within 16 members sends no offer. The SFU names the member on each mid in `slot` messages on the control DataChannel, and in-band `speaking` messages carry the speaking ring. The model below is now only the path past 16 members. Authoritative: [mello-sfu/01-SFU.md](../../mello-sfu/01-SFU.md) sections 5.4, 5.5, 6.2.
+
+**Per-sender track model (past the slots):** When member B joins a session that already has member A, the SFU:
 1. Creates a `TrackLocalStaticRTP` for A's audio (SSRC = random, `msid` = A's user_id).
 2. Adds the track to B's PeerConnection via `AddTransceiverFromTrack` with `sendonly` direction.
 3. Sends a renegotiation offer to B.
@@ -423,7 +425,7 @@ func (s *VoiceSession) WireAudioTrack(peer *Peer, track *webrtc.TrackRemote) {
 }
 ```
 
-The client identifies each incoming track's sender via the `msid` SDP attribute (set to the sender's user_id). This eliminates the need for application-layer sender-id framing.
+The client identifies each incoming track's sender by its mid, from the SFU's `slot` messages. The `msid` SDP attribute is not used for voice.
 
 **Voice SSRC declaration:** the client declares `a=ssrc` on its voice audio m-line (`setup_voice_channels()` calls `audio.addSSRC()` with the same SSRC and cname it gives the Opus packetizer). This is required, not cosmetic. Without it Pion cannot bind the incoming mic to the negotiated m-line — libdatachannel does not send `mid` RTP header extensions either — so it falls through to `handleUndeclaredSSRC` and synthesizes an implicit `sendrecv` transceiver to carry the audio.
 

@@ -393,6 +393,20 @@ Voice updates now include channel context:
 }
 ```
 
+**Speaking state.** Two paths carry it (spec 10 section 7.4):
+
+| Who sees the ring | Path | Delay |
+|---|---|---|
+| Members in the same SFU call | In-band on the SFU control channel: the speaker's VAD -> SFU -> `Event::VoiceActivity` | One SFU hop (about 1 ms on localhost) |
+| Crew members outside the channel, and P2P calls | `voice_speaking` RPC -> `VoiceRoom.Members[].Speaking` -> coalesced `voice_update` push (200 ms) | RPC + up to 200 ms + push |
+
+- In an SFU call the client sends `voice_speaking` at most once per second.
+  The last state always goes out. In P2P it goes at once.
+- Only the local member's own state goes to `voice_speaking`. A remote
+  member's in-band state is never sent back to the backend.
+- In an SFU call the client prefers the in-band state over `voice_update`
+  for the members of its own channel.
+
 Channel CRUD events are pushed as priority crew events:
 
 ```json
@@ -528,6 +542,8 @@ pub struct VoiceMember {
 Event::VoiceConnected { crew_id: CrewId, channel_id: ChannelId },
 Event::VoiceDisconnected { crew_id: CrewId, channel_id: ChannelId },
 Event::VoiceActivity { channel_id: ChannelId, member_id: MemberId, speaking: bool },
+// Raised for the local member by the VAD, and in an SFU call for each remote
+// member from the SFU's in-band `speaking` message (section 4.4).
 Event::VoiceMoved { crew_id: CrewId, from_channel: ChannelId, to_channel: ChannelId },
 
 // Channel CRUD events
