@@ -5,7 +5,8 @@
     "Frozen inputs: corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
     "A change to a frozen input changes inputs_fingerprint; the harness then refuses to compare with the baseline.",
     "Gates may change. 'enforced': false prints a failing gate but does not fail the run.",
-    "Times are seconds of sender audio from the run start. Delays and stalls are ms."
+    "Times are seconds of sender audio from the run start. Delays and stalls are ms.",
+    "conceal_per_lost (stage 3b): the denominator counts a lost packet only when NetEQ could conceal it: not a lost Opus DTX frame, and not a loss at the head of a talk spurt before any packet of that spurt was delivered (NetEQ has played nothing of the spurt; it starts with the next packet). TESTING.md, voice quality gate."
   ],
   "corpus": {
     "dir": "libmello/tests/fixtures/voice",
@@ -71,7 +72,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1: one concealment per lost frame" },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1: one concealment per lost frame; concealable losses only since stage 3b" },
         { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss" },
         { "metric": "mos", "min": 3.1466, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.25)" }
       ]
@@ -94,7 +95,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1; concealable losses only since stage 3b" },
         { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
         { "metric": "mos", "min": 2.7046, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.80)" }
       ]
@@ -117,7 +118,7 @@
       },
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
-        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1" },
+        { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": true, "note": "stage 1.1; concealable losses only since stage 3b" },
         { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
         { "metric": "mos", "min": 2.1232, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.22)" }
       ]

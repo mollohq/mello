@@ -198,7 +198,7 @@ fn real_main() -> Result<bool, String> {
         .filter(|p| {
             args.only
                 .as_ref()
-                .is_none_or(|o| o.iter().any(|n| n == &p.name))
+                .is_none_or(|o| o.iter().any(|n| n == &p.name || n == &p.group))
         })
         .collect();
     if selected.is_empty() {
@@ -427,6 +427,47 @@ fn real_main() -> Result<bool, String> {
                 );
                 m.insert("mos_min".into(), vals.iter().cloned().reduce(f64::min));
             }
+        }
+    }
+
+    // Profiles that run on several seeds: the median over the seeds.
+    let groups: BTreeMap<&str, Vec<&str>> = selected.iter().fold(BTreeMap::new(), |mut g, p| {
+        g.entry(p.group.as_str())
+            .or_insert_with(Vec::new)
+            .push(p.name.as_str());
+        g
+    });
+    let mut seed_values = serde_json::Map::new();
+    for (group, names) in groups.iter().filter(|(_, n)| n.len() > 1) {
+        let mut per_metric = serde_json::Map::new();
+        for metric in profile::SEED_MEDIAN_METRICS {
+            let vals: Vec<Option<f64>> = names
+                .iter()
+                .map(|n| {
+                    results
+                        .get(*n)
+                        .and_then(|m| m.get(*metric).cloned().flatten())
+                })
+                .collect();
+            per_metric.insert((*metric).to_owned(), json!(vals));
+            let median = if vals.iter().all(Option::is_some) {
+                voice_gate::dsp::percentile(
+                    &vals.iter().flatten().cloned().collect::<Vec<_>>(),
+                    50.0,
+                )
+            } else {
+                None
+            };
+            if let Some(m) = results.get_mut(*group) {
+                m.insert(format!("{metric}_median"), median);
+            }
+        }
+        per_metric.insert("profiles".into(), json!(names));
+        seed_values.insert((*group).to_owned(), Value::Object(per_metric));
+    }
+    for (group, v) in &seed_values {
+        if let Some(e) = extras.get_mut(group).and_then(Value::as_object_mut) {
+            e.insert("seeds".into(), v.clone());
         }
     }
 

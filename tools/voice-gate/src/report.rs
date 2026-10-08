@@ -44,6 +44,11 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "  of them DTX frames (not counted as lost)",
         0,
     ),
+    (
+        "lost_spurt_head_frames",
+        "  of them at a talk spurt head (not counted as lost)",
+        0,
+    ),
     ("conceal_frames", "Concealment frames for losses (NetEQ)", 0),
     ("conceal_missing_plc", "  PLC for a lost packet", 0),
     ("conceal_gap_fec", "  FEC for a lost packet", 0),
@@ -151,6 +156,12 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "Delay max over the bottleneck window (ms)",
         -1,
     ),
+    (
+        "bottleneck_delay_mean_ms_median",
+        "Delay mean over the bottleneck window, median over seeds (ms)",
+        -1,
+    ),
+    ("mos_median", "MOS-LQO, median over seeds", 1),
     (
         "bottleneck_lost",
         "Packets the bottleneck queue dropped",

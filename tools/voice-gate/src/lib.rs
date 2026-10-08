@@ -96,9 +96,13 @@ pub fn measure(
         (neteq_conceal_frames(rx) - neteq_conceal_frames(&l.rx)).max(0.0)
     });
     // Lost frames that need concealment: network loss and receiver drops,
-    // without lost Opus DTX frames (2 bytes or less). Through those NetEQ
-    // keeps playing comfort noise, so there is nothing to conceal.
-    let lost = run.shim.lost() - run.shim.lost_dtx + rx.rx_packets_discarded;
+    // without lost Opus DTX frames (2 bytes or less): through those NetEQ
+    // keeps playing comfort noise, so there is nothing to conceal. Also
+    // without the lost packets at the head of a talk spurt, before any
+    // packet of the spurt was delivered: NetEQ has played nothing of the
+    // spurt and starts it with the next packet (shim::SpurtLosses).
+    let lost =
+        run.shim.lost() - run.shim.lost_dtx - run.shim.lost_spurt_head + rx.rx_packets_discarded;
 
     let buf: Vec<f64> = run
         .stats
@@ -143,6 +147,7 @@ pub fn measure(
     m.insert("lost_frames".into(), n(lost));
     m.insert("shim_lost".into(), n(run.shim.lost()));
     m.insert("lost_dtx_frames".into(), n(run.shim.lost_dtx));
+    m.insert("lost_spurt_head_frames".into(), n(run.shim.lost_spurt_head));
     m.insert(
         "conceal_frames".into(),
         lossless.is_some().then_some(conceal_frames),
@@ -269,6 +274,15 @@ pub fn measure(
             "interruption_duration_ms": run.rx.rx_interruption_duration_ms,
         },
         "adaptation": adaptation,
+        "lossless_twin_neteq": lossless.map(|l| json!({
+            "concealed_samples": l.rx.rx_concealed_samples,
+            "silent_concealed_samples": l.rx.rx_silent_concealed_samples,
+            "concealment_events": l.rx.rx_concealment_events,
+            "fec_packets_received": l.rx.rx_fec_packets_received,
+            "fec_packets_discarded": l.rx.rx_fec_packets_discarded,
+            "conceal_frames": neteq_conceal_frames(&l.rx),
+        })),
+        "conceal_frames_run": neteq_conceal_frames(rx),
         "wall_s": (run.wall_s * 10.0).round() / 10.0,
     });
     Measured {

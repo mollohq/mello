@@ -34,11 +34,63 @@ pub struct ShimCounters {
     /// Every sent packet: run time of the send, and whether the network
     /// lost it. The truth that the receiver reports estimate.
     pub sent_log: Vec<(i64, bool)>,
+    /// Lost packets (not DTX) of a talk spurt of which no earlier packet
+    /// was delivered: NetEQ has played nothing of the spurt yet, so it has
+    /// nothing to conceal (see [`SpurtLosses`]).
+    pub lost_spurt_head: u64,
+    spurts: SpurtLosses,
 }
 
 impl ShimCounters {
     pub fn lost(&self) -> u64 {
         self.lost_random + self.lost_burst + self.lost_outage + self.lost_queue
+    }
+}
+
+/// Talk spurts of the sender's packet stream, for the concealment ratio.
+///
+/// A loss is concealable only when NetEQ has played at least one frame of
+/// the loss's talk spurt before it. A lost first packet of a spurt (the
+/// pre-roll frame that opens it, or more) is not: NetEQ plays comfort noise
+/// or is muted, and starts the spurt with the next packet that arrives.
+/// Those losses leave the denominator of `conceal_per_lost`, as lost DTX
+/// frames do.
+///
+/// A spurt starts at the first packet, and at a packet whose timestamp moved
+/// more than `GAP_FRAMES` frames further than its sequence: the sender's
+/// gate was closed (the rule of the receiver's talk-spurt controller, spec
+/// 10 section 5.2). Packets come in send order.
+#[derive(Clone, Debug, Default)]
+pub struct SpurtLosses {
+    prev: Option<(u32, u32)>,
+    delivered_in_spurt: bool,
+}
+
+impl SpurtLosses {
+    const FRAME: i64 = 960;
+    const GAP_FRAMES: i64 = 2;
+
+    /// Record one sent packet. Returns true when it is lost and no earlier
+    /// packet of its spurt was delivered.
+    pub fn on_packet(&mut self, sequence: u32, timestamp: u32, lost: bool) -> bool {
+        let new_spurt = match self.prev {
+            None => true,
+            Some((seq, ts)) => {
+                let seq_step = i64::from(sequence.wrapping_sub(seq) as i32);
+                let ts_step = i64::from(timestamp.wrapping_sub(ts) as i32);
+                ts_step > (seq_step + Self::GAP_FRAMES) * Self::FRAME
+            }
+        };
+        self.prev = Some((sequence, timestamp));
+        if new_spurt {
+            self.delivered_in_spurt = false;
+        }
+        if lost {
+            !self.delivered_in_spurt
+        } else {
+            self.delivered_in_spurt = true;
+            false
+        }
     }
 }
 
@@ -157,6 +209,16 @@ impl Shim {
         (self.net.jitter_sigma_ms, self.net.loss_random)
     }
 
+    /// Whether the bottleneck queue is full at run time `t_ms`: the test of
+    /// [`Self::through_bottleneck`], without changing the link.
+    fn would_drop_in_bottleneck(&self, t_ms: f64) -> bool {
+        let Some(b) = &self.net.bottleneck else {
+            return false;
+        };
+        let (start, end) = (b.start_s * 1000.0, (b.start_s + b.dur_s) * 1000.0);
+        t_ms >= start && t_ms < end && (self.link_free_ms - t_ms).max(0.0) > b.queue_ms
+    }
+
     /// Pass `bytes` (an RTP or RTCP packet) through the bottleneck at run
     /// time `t_ms`. Returns the time it leaves the link (`t_ms` outside the
     /// window), or None when the queue is full and drops it.
@@ -226,6 +288,17 @@ impl Shim {
         let dtx = u64::from(packet.payload.len() <= 2);
         let lost = in_outage || burst_lost || u_loss < loss_random;
         self.counters.sent_log.push((now_ms, lost));
+        // The bottleneck queue decides further down; the tracker needs the
+        // final answer now.
+        let queue_lost = !lost && self.would_drop_in_bottleneck(t);
+        if self
+            .counters
+            .spurts
+            .on_packet(packet.sequence, packet.timestamp, lost || queue_lost)
+            && dtx == 0
+        {
+            self.counters.lost_spurt_head += 1;
+        }
         if in_outage {
             self.counters.lost_outage += 1;
             self.counters.lost_dtx += dtx;
@@ -340,6 +413,7 @@ mod tests {
             gates: Vec::new(),
             adapt: true,
             added: false,
+            group: "t".into(),
         }
     }
 
@@ -478,6 +552,71 @@ mod tests {
             0,
         ));
         assert_eq!(fresh.one_way_delay_ms(500.0, 0.0, 80), Some(10.0));
+    }
+
+    #[test]
+    fn a_lost_spurt_head_is_not_concealable() {
+        let mut t = SpurtLosses::default();
+        // Spurt 1: frames 0..5, frame 2 lost after frames 0 and 1 played.
+        let s1: Vec<bool> = (0..5u32).map(|i| t.on_packet(i, i * 960, i == 2)).collect();
+        assert_eq!(s1, [false; 5]);
+        // Spurt 2 after a 1 s gate gap: its first two packets lost (the
+        // pre-roll), then delivered, then one more loss inside it.
+        let base = 5 * 960 + 48_000;
+        let s2: Vec<bool> = (0..6u32)
+            .map(|i| t.on_packet(5 + i, base + i * 960, i < 2 || i == 4))
+            .collect();
+        assert_eq!(s2, [true, true, false, false, false, false]);
+        // A lost packet (sequence and timestamp move together) or a 2-frame
+        // jump is not a new spurt.
+        assert!(!t.on_packet(12, base + 7 * 960, true));
+        assert!(!t.on_packet(13, base + 10 * 960, true));
+        // 3 frames further than the sequence: the gate was closed.
+        assert!(t.on_packet(14, base + 14 * 960, true));
+    }
+
+    #[test]
+    fn the_shim_counts_lost_spurt_heads() {
+        // Spurt 1 (5 packets from 0 ms), spurt 2 after a 1 s gate gap (5
+        // packets from 1000 ms). The outage takes the first two of spurt 2.
+        let mut p = profile(
+            Network {
+                base_delay_ms: 10.0,
+                outage: Some((1.0, 0.04)),
+                ..Default::default()
+            },
+            0,
+        );
+        p.duration_s = 10.0;
+        let mut shim = Shim::new(&p);
+        for s in 0..5u32 {
+            shim.send(&pkt(s), i64::from(s) * 20, 0);
+        }
+        for i in 0..5u32 {
+            let q = SentPacket {
+                timestamp: 5 * 960 + 48_000 + i * 960,
+                ..pkt(5 + i)
+            };
+            shim.send(&q, 1000 + i64::from(i) * 20, 0);
+        }
+        assert_eq!(shim.counters.lost(), 2);
+        assert_eq!(shim.counters.lost_spurt_head, 2);
+        // The same outage inside a spurt: concealable.
+        let mut q = profile(
+            Network {
+                base_delay_ms: 10.0,
+                outage: Some((0.04, 0.02)),
+                ..Default::default()
+            },
+            0,
+        );
+        q.duration_s = 10.0;
+        let mut inside = Shim::new(&q);
+        for s in 0..5u32 {
+            inside.send(&pkt(s), i64::from(s) * 20, 0);
+        }
+        assert_eq!(inside.counters.lost(), 1);
+        assert_eq!(inside.counters.lost_spurt_head, 0);
     }
 
     #[test]
