@@ -57,6 +57,9 @@ pub(super) struct ViewerState {
     /// "sfu" or "p2p"
     pub mode: String,
     pub host_id: String,
+    /// The other members of the SFU session (host and viewers). Empty in
+    /// P2P mode.
+    pub members: crate::stream::StreamMembers,
     pub _frame_cb_data: *mut FrameCallbackData,
     pub _ice_cb_data: *mut StreamIceCallbackData,
     pub _audio_cb_data: *mut StreamAudioCallbackData,

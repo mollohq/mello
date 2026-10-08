@@ -65,6 +65,15 @@ pub struct CaptureSource {
     pub resolution: String,
 }
 
+/// One other member of a watched SFU stream session, as the SFU reports it
+/// (mello-sfu 01-SFU.md section 4.1).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct StreamMember {
+    pub user_id: String,
+    /// `"host"` or `"viewer"`.
+    pub role: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchResult {
     pub id: String,
@@ -378,6 +387,15 @@ pub enum Event {
         height: u32,
     },
     StreamWatchingStopped,
+    /// The other members of the watched SFU stream session changed: the
+    /// host and the other viewers, in join order, at most one host. Sent
+    /// once after the join (the `joined.members` snapshot) and after each
+    /// `member_joined` or `member_left` that changes the list. An SFU that
+    /// sends no membership events to viewers leaves the snapshot. No UI
+    /// shows the list today; the e2e state port reports it.
+    StreamMembersChanged {
+        members: Vec<StreamMember>,
+    },
     /// A watched stream paused or resumed: the host tabbed out of (or back
     /// into) the captured game. Viewers show a pause card instead of a
     /// frozen frame while `paused` holds. `reason` is the host's capture

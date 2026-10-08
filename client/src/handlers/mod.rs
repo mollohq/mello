@@ -99,6 +99,7 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::StreamViewerLeft { .. }
         | Event::StreamWatching { .. }
         | Event::StreamWatchingStopped
+        | Event::StreamMembersChanged { .. }
         | Event::StreamPaused { .. }
         | Event::StreamHostPaused { .. }
         | Event::StreamTargetExited

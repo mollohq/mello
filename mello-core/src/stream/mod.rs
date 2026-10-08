@@ -5,6 +5,7 @@ pub mod host;
 pub mod input;
 pub mod ladder;
 pub mod manager;
+pub mod members;
 pub mod pacer;
 pub mod pause;
 pub mod rtp_peer;
@@ -16,6 +17,7 @@ pub mod teardown;
 pub use config::{Codec, QualityPreset, StreamConfig};
 pub use error::StreamError;
 pub use manager::StreamManager;
+pub use members::StreamMembers;
 
 /// Returns true if a HW encoder (NVENC/AMF/QSV) is available on this machine.
 ///

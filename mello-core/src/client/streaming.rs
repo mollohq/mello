@@ -8,11 +8,34 @@ use crate::stream::config::Codec;
 use crate::stream::congestion::ViewerCongestionController;
 use crate::stream::rtp_peer::{self, PeerMediaRole};
 use crate::stream::sink_p2p::P2PFanoutSink;
+use crate::stream::StreamMembers;
 use crate::transport::sfu_connection::{SfuConnection, SfuEvent, StreamPeerRole};
 use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose};
 
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
+
+/// The viewer's step for one SFU membership event: apply it to the member
+/// list and return the UI event when the list changed. A `member_joined`
+/// with the host role, for a viewer that joined before the host, sets the
+/// one host of the list (see [`StreamMembers`]).
+fn viewer_membership_event(members: &mut StreamMembers, event: &SfuEvent) -> Option<Event> {
+    if !members.apply(event) {
+        return None;
+    }
+    match event {
+        SfuEvent::MemberJoined { user_id, role } => {
+            log::info!("Stream member joined: {} ({})", user_id, role);
+        }
+        SfuEvent::MemberLeft { user_id, reason } => {
+            log::info!("Stream member left: {} ({})", user_id, reason);
+        }
+        _ => {}
+    }
+    Some(Event::StreamMembersChanged {
+        members: members.members().to_vec(),
+    })
+}
 
 /// The bundled catalogue, parsed once.
 ///
@@ -724,9 +747,13 @@ impl super::Client {
                     crate::transport::SfuEvent::MediaPacket { .. } => {
                         log::debug!("Ignoring SFU MediaPacket — stream video uses native RTP");
                     }
+                    ev @ (crate::transport::SfuEvent::MemberJoined { .. }
+                    | crate::transport::SfuEvent::MemberLeft { .. }) => {
+                        if let Some(changed) = viewer_membership_event(&mut vs.members, &ev) {
+                            let _ = self.event_tx.send(changed);
+                        }
+                    }
                     crate::transport::SfuEvent::ControlPacket { .. }
-                    | crate::transport::SfuEvent::MemberJoined { .. }
-                    | crate::transport::SfuEvent::MemberLeft { .. }
                     | crate::transport::SfuEvent::SlotReleased { .. } => {}
                     crate::transport::SfuEvent::AudioRtp { rtp, .. } => {
                         if let Some(viewer) = vs.viewer {
@@ -1807,13 +1834,17 @@ impl super::Client {
             }
         };
 
-        if let Err(e) = conn.join_stream(ph, session_id, "viewer").await {
-            log::error!("SFU viewer join_stream failed: {}", e);
-            let _ = self.event_tx.send(Event::StreamError {
-                message: format!("SFU viewer join failed: {e}"),
-            });
-            return;
-        }
+        let session = match conn.join_stream(ph, session_id, "viewer").await {
+            Ok(session) => session,
+            Err(e) => {
+                log::error!("SFU viewer join_stream failed: {}", e);
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: format!("SFU viewer join failed: {e}"),
+                });
+                return;
+            }
+        };
+        let members = StreamMembers::from_joined(&session.members);
 
         if let Err(e) = conn.wait_for_datachannel_open().await {
             log::error!("SFU viewer stream transport failed: {}", e);
@@ -1926,6 +1957,14 @@ impl super::Client {
             width: w,
             height: h,
         });
+        log::info!(
+            "Stream members at join: {} (host in session: {})",
+            members.members().len(),
+            members.host().is_some()
+        );
+        let _ = self.event_tx.send(Event::StreamMembersChanged {
+            members: members.members().to_vec(),
+        });
 
         let config = crate::stream::StreamConfig::default();
         let receive_bitrate_kbps = if resp.bitrate_kbps > 0 {
@@ -1943,6 +1982,7 @@ impl super::Client {
             sfu_connection: Some(conn),
             mode: "sfu".to_string(),
             host_id: host_id.to_string(),
+            members,
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: std::ptr::null_mut(),
             _audio_cb_data: std::ptr::null_mut(),
@@ -2115,6 +2155,7 @@ impl super::Client {
             sfu_connection: None,
             mode: "p2p".to_string(),
             host_id: host_id.to_string(),
+            members: StreamMembers::default(),
             _frame_cb_data: frame_cb_data,
             _ice_cb_data: ice_cb_data,
             _audio_cb_data: audio_cb_data,
@@ -2374,5 +2415,330 @@ mod streaming_rtp_tests {
         assert!(src.contains("sink.on_viewer_joined"));
         assert!(src.contains("sink.on_viewer_left"));
         assert!(src.contains("stream_sfu_connection"));
+    }
+}
+
+/// A stream viewer against a fake SFU: the membership events reach the
+/// viewer's member list (mello-sfu 01-SFU.md section 4.1).
+#[cfg(test)]
+mod stream_members_tests {
+    use std::time::Duration;
+
+    use futures::{SinkExt, StreamExt};
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::viewer_membership_event;
+    use crate::events::{Event, StreamMember};
+    use crate::stream::StreamMembers;
+    use crate::transport::sfu_connection::{SfuConnection, SfuEvent, StreamPeerRole};
+
+    const LIMIT: Duration = Duration::from_secs(10);
+    const SESSION: &str = "stream-1";
+
+    fn text(value: serde_json::Value) -> Message {
+        Message::Text(value.to_string())
+    }
+
+    /// A real SDP answer to a viewer's offer, from a native stream host peer
+    /// that lives only inside this call.
+    fn host_answer(offer: &str) -> String {
+        let id = std::ffi::CString::new("fake-sfu").expect("static id");
+        let offer = std::ffi::CString::new(offer).expect("offer has no NUL");
+        // SAFETY: a null context is allowed; the peer is destroyed before
+        // return and the answer is copied first.
+        unsafe {
+            let peer = mello_sys::mello_peer_create_for_role(
+                std::ptr::null_mut(),
+                id.as_ptr(),
+                mello_sys::MelloPeerMediaRole_MELLO_PEER_MEDIA_ROLE_STREAM_HOST,
+            );
+            assert!(!peer.is_null(), "native answerer");
+            let answer = mello_sys::mello_peer_create_answer(peer, offer.as_ptr());
+            assert!(!answer.is_null(), "native answer");
+            let text = std::ffi::CStr::from_ptr(answer)
+                .to_string_lossy()
+                .into_owned();
+            mello_sys::mello_peer_destroy(peer);
+            text
+        }
+    }
+
+    /// A fake stream SFU. It answers `join_stream` with `joined` and
+    /// `members`, answers the offer, then sends `after` in order and keeps
+    /// the socket open.
+    async fn stream_sfu(members: serde_json::Value, after: Vec<serde_json::Value>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            let mut after = Some(after);
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                match v["type"].as_str() {
+                    Some("join_stream") => {
+                        assert_eq!(v["data"]["role"], "viewer", "{v}");
+                        ws.send(text(serde_json::json!({
+                            "type": "joined",
+                            "data": {
+                                "session_type": "stream",
+                                "session_id": SESSION,
+                                "members": members.clone(),
+                            }
+                        })))
+                        .await
+                        .expect("send joined");
+                    }
+                    Some("offer") => {
+                        let answer = host_answer(v["data"]["sdp"].as_str().expect("offer sdp"));
+                        ws.send(text(
+                            serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+                        ))
+                        .await
+                        .expect("send answer");
+                        for msg in after.take().unwrap_or_default() {
+                            ws.send(text(msg)).await.expect("send membership event");
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        endpoint
+    }
+
+    async fn join_as_viewer(endpoint: &str) -> (SfuConnection, StreamMembers) {
+        let mut conn = tokio::time::timeout(LIMIT, SfuConnection::connect(endpoint, "token"))
+            .await
+            .expect("connect in time")
+            .expect("connect");
+        // SAFETY: a null context is allowed.
+        let peer = unsafe {
+            SfuConnection::create_stream_peer(std::ptr::null_mut(), StreamPeerRole::Viewer)
+        }
+        .expect("viewer peer");
+        let session = tokio::time::timeout(LIMIT, conn.join_stream(peer, SESSION, "viewer"))
+            .await
+            .expect("join in time")
+            .expect("the join succeeds");
+        assert_eq!(session.session_id, SESSION);
+        (conn, StreamMembers::from_joined(&session.members))
+    }
+
+    fn member(user_id: &str, role: &str) -> StreamMember {
+        StreamMember {
+            user_id: user_id.into(),
+            role: role.into(),
+        }
+    }
+
+    fn joined(user_id: &str, role: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "member_joined",
+            "data": { "user_id": user_id, "role": role }
+        })
+    }
+
+    fn left(user_id: &str) -> serde_json::Value {
+        serde_json::json!({
+            "type": "member_left",
+            "data": { "user_id": user_id, "reason": "disconnect" }
+        })
+    }
+
+    /// A viewer that joins before the host learns of the host and of a later
+    /// viewer. The host's reconnect does not add a second host.
+    #[tokio::test]
+    async fn a_viewer_learns_of_a_late_host_and_of_later_viewers() {
+        let endpoint = stream_sfu(
+            serde_json::json!([]),
+            vec![
+                joined("host-1", "host"),
+                joined("viewer-2", "viewer"),
+                joined("host-1", "host"),
+                left("viewer-2"),
+            ],
+        )
+        .await;
+        let (conn, mut list) = join_as_viewer(&endpoint).await;
+        assert!(list.members().is_empty(), "the viewer joined first");
+
+        let mut ui = Vec::new();
+        for _ in 0..4 {
+            let ev = tokio::time::timeout(LIMIT, conn.recv_event())
+                .await
+                .expect("a membership event in time")
+                .expect("event channel open");
+            assert!(
+                matches!(
+                    ev,
+                    SfuEvent::MemberJoined { .. } | SfuEvent::MemberLeft { .. }
+                ),
+                "unexpected event {ev:?}"
+            );
+            ui.push(match viewer_membership_event(&mut list, &ev) {
+                Some(Event::StreamMembersChanged { members }) => Some(members),
+                Some(other) => panic!("unexpected UI event {other:?}"),
+                None => None,
+            });
+        }
+        assert_eq!(
+            ui,
+            [
+                Some(vec![member("host-1", "host")]),
+                Some(vec![member("host-1", "host"), member("viewer-2", "viewer")]),
+                None,
+                Some(vec![member("host-1", "host")]),
+            ]
+        );
+        assert_eq!(list.host(), Some("host-1"));
+        drop(conn);
+    }
+
+    /// An SFU that sends no membership events to viewers (the contract
+    /// before mello-sfu stage 4d): the join works and the list is the
+    /// `joined.members` snapshot.
+    #[tokio::test]
+    async fn an_sfu_without_viewer_events_leaves_the_join_snapshot() {
+        let endpoint = stream_sfu(
+            serde_json::json!([
+                { "user_id": "host-1", "role": "host" },
+                { "user_id": "viewer-0", "role": "viewer" }
+            ]),
+            Vec::new(),
+        )
+        .await;
+        let (conn, list) = join_as_viewer(&endpoint).await;
+        assert_eq!(
+            list.members(),
+            [member("host-1", "host"), member("viewer-0", "viewer")]
+        );
+        assert_eq!(list.host(), Some("host-1"));
+        let quiet = tokio::time::timeout(Duration::from_millis(300), conn.recv_event()).await;
+        assert!(quiet.is_err(), "no event from this SFU: {quiet:?}");
+        drop(conn);
+    }
+
+    /// Join `session` on a real SFU in test-password mode as `user`.
+    async fn live_join(
+        endpoint: &str,
+        password: &str,
+        session: &str,
+        user: &str,
+        role: StreamPeerRole,
+    ) -> (SfuConnection, StreamMembers) {
+        let token = format!(
+            "unused&test_password={password}&test_type=stream&test_user_id={user}&test_username={user}"
+        );
+        let mut conn = SfuConnection::connect(endpoint, &token)
+            .await
+            .expect("connect to the SFU");
+        // SAFETY: a null context is allowed.
+        let peer = unsafe { SfuConnection::create_stream_peer(std::ptr::null_mut(), role) }
+            .expect("stream peer");
+        let signaling_role = match role {
+            StreamPeerRole::Host => "host",
+            StreamPeerRole::Viewer => "viewer",
+        };
+        let joined = tokio::time::timeout(LIMIT, conn.join_stream(peer, session, signaling_role))
+            .await
+            .expect("join in time")
+            .expect("join");
+        (conn, StreamMembers::from_joined(&joined.members))
+    }
+
+    /// Against a real SFU: a viewer joins first, then the host, then a
+    /// second viewer that leaves again. The first viewer's list must follow.
+    /// Needs the mello-sfu contract where viewers get `member_joined` and
+    /// `member_left` (mello-sfu stage 4d). An older SFU fails the test: the
+    /// first viewer's list stays empty.
+    ///
+    /// ```bash
+    /// MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+    ///   cargo test -p mello-core --lib -- --ignored --nocapture stream_members_live
+    /// ```
+    #[tokio::test]
+    #[ignore = "needs a local SFU: MELLO_TEST_SFU and MELLO_TEST_SFU_PASSWORD"]
+    async fn stream_members_live() {
+        let (Ok(endpoint), Ok(password)) = (
+            std::env::var("MELLO_TEST_SFU"),
+            std::env::var("MELLO_TEST_SFU_PASSWORD"),
+        ) else {
+            panic!("set MELLO_TEST_SFU and MELLO_TEST_SFU_PASSWORD");
+        };
+        let session = format!(
+            "members-live-{}",
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|d| d.as_millis())
+                .unwrap_or_default()
+        );
+
+        let (first, mut list) = live_join(
+            &endpoint,
+            &password,
+            &session,
+            "viewer-1",
+            StreamPeerRole::Viewer,
+        )
+        .await;
+        println!("viewer-1 joined: {:?}", list.members());
+        let (host, _) = live_join(
+            &endpoint,
+            &password,
+            &session,
+            "host-1",
+            StreamPeerRole::Host,
+        )
+        .await;
+        let (second, second_list) = live_join(
+            &endpoint,
+            &password,
+            &session,
+            "viewer-2",
+            StreamPeerRole::Viewer,
+        )
+        .await;
+        println!("viewer-2 joined: {:?}", second_list.members());
+        second.leave().await;
+        drop(second);
+
+        let mut seen = Vec::new();
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
+        while let Ok(Some(ev)) = tokio::time::timeout_at(deadline, first.recv_event()).await {
+            if let Some(Event::StreamMembersChanged { members }) =
+                viewer_membership_event(&mut list, &ev)
+            {
+                println!("viewer-1 list: {members:?}");
+                seen.push(members);
+            }
+        }
+        drop(host);
+        drop(first);
+
+        assert!(
+            seen.iter()
+                .any(|m| m.iter().any(|x| x.user_id == "viewer-2")),
+            "viewer-1 never learned of viewer-2: {seen:?}"
+        );
+        assert_eq!(
+            list.members(),
+            [member("host-1", "host")],
+            "the late host stays, viewer-2 left"
+        );
     }
 }
