@@ -372,6 +372,13 @@ Rules:
   print `n/a` against the baseline, with no delta. Concealment per lost frame
   is now voice expand (concealed minus silent concealed samples) plus frames
   repaired from in-band FEC, per lost frame.
+- **Concealable losses only.** The denominator of `conceal_per_lost` is the
+  network loss and the receiver drops, without lost Opus DTX frames and
+  without losses at the head of a talk spurt before any packet of that spurt
+  was delivered (NetEQ has played nothing of the spurt and starts it with
+  the next packet). `lost_spurt_head_frames` counts the second kind.
+- **Seeds.** A profile in `profiles-congestion.json` with `extra_seeds` also
+  runs as `<name>@<seed>`; the gate reads `<metric>_median` over the seeds.
 - **MOS from different scorers is never compared.** Without the scorer the
   gate prints structural metrics only and says so.
 - `cargo test --workspace` runs a 14 s smoke test of the same path, so
@@ -460,6 +467,8 @@ Test backend switches (never in a committed result):
 |---|---|
 | `MELLO_VOICE_PRE_ROLL_FRAMES=N` | Sender pre-roll, 0 to 50 frames |
 | `MELLO_NETEQ_SPURT_HOLD=0` | Talk-spurt controller without the pre-roll handling (spec 10 section 5.2); the jump rule stays |
+| `MELLO_NETEQ_SPURT_HOLD_FLOOR_MS=N` | Spurt lateness below N ms gets no hold (default 40) |
+| `MELLO_NETEQ_JUMP_NO_EXPAND_MS=N` | No preemptive expand for N ms after a target jump (default 5000) |
 
 Sweep, 2026-10-08. "B+C" is this stage: the pre-roll exempt from the
 expander, the expander at unity when the gate opens, the Silero restart and
@@ -504,29 +513,84 @@ What the sweep shows:
   off (clean p50 101.5 ms, MOS within 0.1 everywhere). 0 frames loses
   0.13 to 0.16 MOS on home-wifi and mobile. 2 to 4 frames have a worse
   onset p95 (0.43 to 0.98 dB).
-- No row of this stage passes every enforced structural gate. The gates that
-  fail and why:
-  - `burst recovery_s` (5 s): below 5 frames, the pre-burst delay is the
-    network delay alone. After the burst, NetEQ's target is back at 20 to
-    40 ms about 4.5 s after the burst end, and the spurt delay follows at
-    the next talk pause: 5.75 s with the hold off, 13.5 to 14.5 s with it on
-    (the post-burst plateau sits 0.1 to 1 ms over the 20 ms tolerance).
-    A `forget_factor` of 0.5 does not change it. At 5 frames the 100 ms hold
-    hid the target decay; with B and C the plateau after the burst is 15 ms
-    higher and recovery is 5.75 s.
-  - `congestion bottleneck_delay_mean_ms` (100 ms under no-adapt): the
-    sender adaptation is the same in every row (reaction 1.72 s, 4 steps).
-    The difference is a late NetEQ target jump in the bottleneck window,
-    which depends on which packets the tail-drop queue drops. The mean moves
-    by 100 ms between rows with the same sender settings.
-  - `conceal_per_lost` (0.95 to 1.05) on home-wifi, mobile or bad: the
-    pre-roll at full level is real audio, not Opus DTX, so its loss at a
-    spurt start counts as lost, and NetEQ does not conceal before a spurt.
-    The values move 0.86 to 1.05 between rows.
-  - `mobile latency_clip_growth_ms` (20 ms): 22.5 ms at 1 frame with the
-    hold off.
-- The hold at 5 frames: off costs 0.30 MOS on clean and outage recovery
-  goes to 20 s. It stays on.
+- No row of this stage passes every enforced gate. The second pass
+  (below) corrected two metrics and tuned the receive path within the
+  existing knobs.
+
+Metric corrections (second pass):
+
+- `conceal_per_lost` counts concealable losses only. A lost packet at the
+  head of a talk spurt, before any packet of that spurt was delivered, leaves
+  the denominator, as a lost Opus DTX frame does (`shim::SpurtLosses`, test
+  `a_lost_spurt_head_is_not_concealable`). Stage 6 under the corrected rule:
+  home-wifi 0.984, mobile 0.982, bad 0.956 (0.952 before; 2 head losses).
+  It does not move bad at 5 frames with B and C (0.864; no head loss). The
+  cause there is the lossless twin: its concealment for jitter and stalls is
+  283.7 frames against 246.4 on stage 6 (`info.lossless_twin_neteq`), while
+  the run's total is the same (728.6 against 731.0). Losses that fall in a
+  stall share one expand with it in the run, and not in the twin.
+- `congestion` and `congestion-no-adapt` run on seeds 909, 910 and 911; the
+  delay gate reads the median (`bottleneck_delay_mean_ms_median`, the
+  threshold is unchanged). Bottleneck delay mean, ms, ladder / no-adapt:
+  stage 6 387, 387, 398 / 521, 519, 516; B and C at 5 frames 467, 403, 465 /
+  541, 525, 510. The seeds do not cause the spread. The ladder's second step
+  (48 to 32 kbps) comes at 19.1 s on stage 6 and at 22.1 s with B and C on
+  2 of 3 seeds: at 19 s the window loss is 11.2 % (over 10 %), but the full
+  tail-drop queue dropped the sender reports, so no fresh round trip
+  confirms the congestion, and the jitter test does not (6.4 against
+  5.1 ms). The step at 19 s gives 403 ms, at 22 s 465 ms.
+
+Receive-path tuning (second pass). Knobs: the delay manager field trial
+(ff = `forget_factor`, rff = `reorder_forget_factor`, `quantile`), the
+spurt-hold floor (`MELLO_NETEQ_SPURT_HOLD_FLOOR_MS`, inert at 1 frame: the
+lateness is 20 ms), the preemptive-expand window after a target jump
+(`MELLO_NETEQ_JUMP_NO_EXPAND_MS`, PE window). Rows without a congestion
+value ran without it. MOS gates: at most 0.1 under stage 4.
+
+| Pre-roll | Hold | Delay manager | Controller | burst recovery s | drift growth ms | burst MOS | home-wifi MOS | mobile MOS | bad MOS | outage MOS | mobile clip growth ms | bad conceal | congestion median ms (no-adapt) | Enforced gates that fail |
+|---|---|---|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|---|
+| 1 | off | ff 0.6, rff 0.98 (shipped tuning) | - | 5.75 | 3.7 | 3.19 | 3.23 | 2.77 | 2.21 | 3.02 | 22.5 | 0.968 | - | mobile clip growth 22.5, burst recovery 5.75 |
+| 1 | on | ff 0.6, rff 0.98 | - | 14.50 | 2.4 | 3.16 | 3.19 | 2.78 | 2.24 | 2.94 | -5.0 | 0.960 | - | burst recovery 14.5, burst MOS 3.16 |
+| 1 | off | ff 0.5 | - | 5.75 | 3.9 | 3.26 | 3.13 | 2.70 | 2.27 | 3.02 | 16.8 | 0.963 | - | home-wifi MOS 3.13, mobile MOS 2.7, burst recovery 5.75 |
+| 1 | off | ff 0.4 | - | 5.50 | 2.7 | 3.22 | 3.14 | 2.73 | 2.24 | 3.02 | -4.5 | 0.955 | - | home-wifi MOS 3.14, burst recovery 5.5 |
+| 1 | off | quantile 0.90 | - | 5.75 | 3.9 | 3.26 | 3.18 | 2.70 | 2.21 | 3.02 | -7.1 | 0.955 | - | mobile MOS 2.7, burst recovery 5.75 |
+| 1 | off | quantile 0.85 | - | 5.50 | -3.3 | 3.21 | 3.17 | 2.70 | 2.25 | 3.03 | -5.5 | 0.955 | - | mobile MOS 2.7, burst recovery 5.5 |
+| 1 | off | ff 0.5, quantile 0.90 | - | 5.50 | -3.3 | 3.22 | 3.14 | 2.71 | 2.24 | 3.02 | -4.8 | 0.955 | - | home-wifi MOS 3.14, burst recovery 5.5 |
+| 1 | off | rff 0.95 | - | 5.75 | 3.7 | 3.19 | 3.22 | 2.78 | 2.21 | 3.02 | 19.1 | 0.971 | - | burst recovery 5.75 |
+| 1 | off | ff 0.4, rff 0.95 | - | 5.50 | 2.7 | 3.22 | 3.17 | 2.71 | 2.23 | 3.02 | -8.5 | 0.955 | - | burst recovery 5.5 |
+| 1 | off | ff 0.3, rff 0.95 | - | 5.50 | -3.3 | 3.19 | 3.17 | 2.66 | 2.23 | 3.02 | -4.6 | 0.953 | - | mobile MOS 2.66, burst recovery 5.5 |
+| 1 | off | quantile 0.85, rff 0.95 | - | 5.50 | -3.3 | 3.21 | 3.15 | 2.70 | 2.26 | 3.03 | -5.5 | 0.956 | - | mobile MOS 2.7, burst recovery 5.5 |
+| 1 | off | quantile 0.80, rff 0.95 | - | 5.50 | -3.3 | 3.21 | 3.17 | 2.69 | 2.25 | 3.03 | -8.0 | 0.956 | - | mobile MOS 2.69, burst recovery 5.5 |
+| 1 | off | ff 0.5, quantile 0.85, rff 0.95 | - | 5.50 | -3.3 | 3.20 | 3.17 | 2.69 | 2.26 | 3.03 | -8.0 | 0.958 | - | mobile MOS 2.69, burst recovery 5.5 |
+| 1 | off | ff 0.4, quantile 0.90, rff 0.95 | - | 5.50 | -3.3 | 3.20 | 3.18 | 2.69 | 2.26 | 3.03 | -8.0 | 0.957 | - | mobile MOS 2.69, burst recovery 5.5 |
+| 1 | off | rff 0.95 | PE window 0 s | 5.75 | 2.9 | 3.19 | 3.18 | 2.75 | 2.18 | 3.02 | 19.2 | 0.957 | - | burst recovery 5.75 |
+| 1 | off | rff 0.95 | PE window 2 s | 5.75 | 0.7 | 3.19 | 3.19 | 2.73 | 2.21 | 3.02 | 1.9 | 0.959 | - | burst recovery 5.75 |
+| 5 | on | ff 0.6, rff 0.98 (shipped tuning) | - | 5.75 | 2.4 | 3.38 | 3.28 | 2.87 | 2.29 | 3.02 | 16.4 | 0.864 | 465 (525) | bad conceal 0.864, burst recovery 5.75, congestion congestion delay 465 |
+| 5 | on | rff 0.95 | - | 5.75 | 2.4 | 3.38 | 3.28 | 2.87 | 2.29 | 3.02 | 3.8 | 0.864 | 465 (525) | bad conceal 0.864, burst recovery 5.75, congestion congestion delay 465 |
+| 5 | on | ff 0.5, rff 0.95 | - | 5.75 | -5.1 | 3.37 | 3.30 | 2.81 | 2.25 | 3.05 | 15.1 | 0.848 | 456 (514) | bad conceal 0.848, burst recovery 5.75, congestion congestion delay 456 |
+| 5 | on | ff 0.4, rff 0.95 | - | 2.75 | -3.3 | 3.37 | 3.30 | 2.77 | 2.19 | 3.05 | 5.4 | 0.855 | 423 (492) | bad conceal 0.855, congestion congestion delay 423, congestion MOS 2.96 |
+| 5 | on | quantile 0.90 | - | 5.75 | -5.1 | 3.37 | 3.30 | 2.84 | 2.20 | 3.05 | 8.8 | 0.854 | 458 (514) | bad conceal 0.853, burst recovery 5.75, congestion congestion delay 458 |
+| 5 | on | rff 0.95 | PE window 2 s | 5.75 | 5.9 | 3.38 | 3.28 | 2.83 | 2.29 | 3.02 | 12.1 | 0.861 | 465 (532) | bad conceal 0.861, burst recovery 5.75, congestion congestion delay 465 |
+
+What the tuning shows:
+
+- Burst recovery at 1 frame stops at 5.5 s for every setting. The talk
+  spurt that spans the burst end runs to 29.7 s. NetEQ's target is down to
+  20 ms 3 to 3.5 s after the burst (ff 0.3 to 0.6), but accelerate drains
+  the buffer only about 60 ms per second of speech: at 29.5 s it still holds
+  67 ms (ff 0.3), and the delay is 129 ms against a limit of 124 ms. The
+  next spurt (30.9 s) plays at 106 to 124 ms. The first point under the
+  limit is at 30.5 s: 5.5 s. With the hold on, the post-burst spurts play
+  20 ms later (NetEQ target 40 ms from 31.8 s to 39.3 s), 0.1 to 1 ms over
+  the limit: 14.5 s.
+- Mobile clip growth with the hold off: a stall at the start of a spurt
+  enters NetEQ's arrival statistics (with the hold on, the first 200 ms of
+  a spurt stay out) and the spurt plays at the raised target (32.2 s: 376 ms
+  against 244 ms). The metric is the median over 8 clips of values from -78
+  to +194 ms, so one clip moves it. ff 0.4 or rff 0.95 bring it under 20 ms.
+- At 5 frames ff 0.4 with rff 0.95 brings burst recovery to 2.75 s, but
+  congestion MOS falls to 2.96 (limit 2.97) and the congestion and bad
+  concealment gates still fail.
 
 To rerun one row:
 

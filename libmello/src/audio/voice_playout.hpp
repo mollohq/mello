@@ -113,6 +113,10 @@ public:
         /// Off: NetEQ's own arrival statistics and delay. The rule against
         /// preemptive expand after a target jump stays in both cases.
         bool talk_spurt_hold = true;
+        /// Spurt lateness below this is network jitter: no delay is held.
+        int spurt_hold_floor_ms = 40;
+        /// No preemptive expand this long after a target jump.
+        int jump_no_expand_ms = 5000;
     };
 
     /// The delay manager tuning that ships: "forget_factor:0.6,

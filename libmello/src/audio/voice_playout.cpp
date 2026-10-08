@@ -127,7 +127,7 @@ struct SpurtTelemetry {
 // the delay manager raise its target in one step. NetEQ then stretches the
 // speech (preemptive expand) to fill the buffer up to the new target, and
 // shortly after compresses it again (accelerate) when the target decays.
-// For kJumpNoExpandMs after a target rise of kJumpMs or more this
+// For Config::jump_no_expand_ms after a target rise of kJumpMs or more this
 // controller does not stretch the speech: the buffer stays where it is.
 // Real lateness still fills it, through expand. Slow target changes and the
 // fill at stream start are NetEQ's own, unchanged.
@@ -138,8 +138,6 @@ struct SpurtTelemetry {
 // Thread: NetEqImpl calls every method under its own lock.
 class TalkSpurtController final : public webrtc::NetEqController {
 public:
-    // Lateness below this is network jitter, not a pre-roll: no hold.
-    static constexpr int kMinHoldMs = 40;
     static constexpr int kMaxHoldMs = 300;
     // The pre-roll and the current frame leave together; network jitter can
     // spread them over a few ticks. The window covers that and is short
@@ -150,16 +148,23 @@ public:
     static constexpr int kGapFrames = 2;
     // A target rise of at least this much in one decision is a jump.
     static constexpr int kJumpMs = 20;
-    // No preemptive expand this long after a jump.
-    static constexpr int64_t kJumpNoExpandMs = 5000;
+
+    // The pre-roll handling on or off; lateness below hold_floor_ms is
+    // network jitter, not a pre-roll: no hold; no preemptive expand for
+    // jump_no_expand_ms after a jump (VoicePlayout::Config).
+    struct Tuning {
+        bool spurt_hold = true;
+        int hold_floor_ms = 40;
+        int64_t jump_no_expand_ms = 5000;
+    };
 
     TalkSpurtController(std::unique_ptr<webrtc::NetEqController> inner,
                         const webrtc::TickTimer* tick_timer,
-                        std::shared_ptr<SpurtTelemetry> telemetry, bool spurt_hold)
+                        std::shared_ptr<SpurtTelemetry> telemetry, Tuning tuning)
         : inner_(std::move(inner)),
           tick_timer_(tick_timer),
           telemetry_(std::move(telemetry)),
-          spurt_hold_(spurt_hold) {}
+          tuning_(tuning) {}
 
     std::optional<int> PacketArrived(int fs_hz, bool should_update_stats,
                                      const PacketArrivedInfo& info) override {
@@ -194,7 +199,7 @@ public:
         }
 
         const bool in_window =
-            spurt_hold_ && now_ms - spurt_first_arrival_ms_ < kStartWindowMs;
+            tuning_.spurt_hold && now_ms - spurt_first_arrival_ms_ < kStartWindowMs;
         if (in_window) {
             // Arrival against the schedule of the spurt's first packet.
             // Negative: earlier than that schedule, so the first was late.
@@ -206,7 +211,7 @@ public:
 
         const auto result =
             inner_->PacketArrived(fs_hz, should_update_stats && !in_window, info);
-        if (!spurt_hold_) return result;
+        if (!tuning_.spurt_hold) return result;
 
         // The hold follows the spurt's lateness as the pre-roll arrives: 0 at
         // the spurt's first packet, then up to L. The pre-roll arrives before
@@ -216,7 +221,7 @@ public:
         // hold.
         const int lateness =
             static_cast<int>(std::min<int64_t>(-spurt_min_rel_ms_, kMaxHoldMs));
-        const int hold = lateness >= kMinHoldMs ? lateness : 0;
+        const int hold = lateness >= tuning_.hold_floor_ms ? lateness : 0;
         if (hold != hold_ms_ && inner_->SetMinimumDelay(hold)) {
             hold_ms_ = hold;
             telemetry_->hold_ms.store(hold, std::memory_order_relaxed);
@@ -233,7 +238,7 @@ public:
         }
         last_target_ms_ = target;
         if (op == webrtc::NetEq::Operation::kPreemptiveExpand && last_jump_ms_ >= 0 &&
-            now - last_jump_ms_ < kJumpNoExpandMs) {
+            now - last_jump_ms_ < tuning_.jump_no_expand_ms) {
             op = webrtc::NetEq::Operation::kNormal;
         }
         return op;
@@ -284,7 +289,7 @@ private:
     std::unique_ptr<webrtc::NetEqController> inner_;
     const webrtc::TickTimer* tick_timer_;
     std::shared_ptr<SpurtTelemetry> telemetry_;
-    const bool spurt_hold_;
+    const Tuning tuning_;
     bool have_newest_ = false;
     uint32_t newest_timestamp_ = 0;
     uint16_t newest_sequence_ = 0;
@@ -298,19 +303,20 @@ private:
 
 class TalkSpurtControllerFactory final : public webrtc::NetEqControllerFactory {
 public:
-    TalkSpurtControllerFactory(std::shared_ptr<SpurtTelemetry> telemetry, bool spurt_hold)
-        : telemetry_(std::move(telemetry)), spurt_hold_(spurt_hold) {}
+    TalkSpurtControllerFactory(std::shared_ptr<SpurtTelemetry> telemetry,
+                               TalkSpurtController::Tuning tuning)
+        : telemetry_(std::move(telemetry)), tuning_(tuning) {}
 
     std::unique_ptr<webrtc::NetEqController> Create(
         const webrtc::Environment& env, const webrtc::NetEqController::Config& config) const override {
         return std::make_unique<TalkSpurtController>(
             webrtc::DefaultNetEqControllerFactory().Create(env, config), config.tick_timer,
-            telemetry_, spurt_hold_);
+            telemetry_, tuning_);
     }
 
 private:
     std::shared_ptr<SpurtTelemetry> telemetry_;
-    bool spurt_hold_;
+    TalkSpurtController::Tuning tuning_;
 };
 
 int16_t scale_sample(int16_t s, float gain) {
@@ -492,7 +498,10 @@ struct VoicePlayout::Impl {
         // NetEQ with its own DecisionLogic inside the talk-spurt controller.
         auto neteq =
             webrtc::CustomNetEqFactory(
-                std::make_unique<TalkSpurtControllerFactory>(spurts, config.talk_spurt_hold))
+                std::make_unique<TalkSpurtControllerFactory>(
+                    spurts, TalkSpurtController::Tuning{config.talk_spurt_hold,
+                                                        config.spurt_hold_floor_ms,
+                                                        config.jump_no_expand_ms}))
                 .Create(env, c, decoder_factory);
         if (!neteq->RegisterPayloadType(kOpusPayloadType,
                                         webrtc::SdpAudioFormat("opus", kSampleRateHz, 2,
