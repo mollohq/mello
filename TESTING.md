@@ -592,6 +592,26 @@ What the tuning shows:
   congestion MOS falls to 2.96 (limit 2.97) and the congestion and bad
   concealment gates still fail.
 
+Third pass (2026-10-08): three approved changes.
+
+| Change | Result in the gate |
+|---|---|
+| Send side: congestion also on loss over 10 % with no fresh round trip for 2 reports in a row (spec 10 section 4.6) | No change in any profile. Our sender reports and the SFU's receiver reports both run on 1 s, so every other receiver report carries no fresh round trip also on a clean link; at the late step (19 s, `reports.csv` column `rtt_fresh`) only one report in a row is stale. The fresh sample before it (339 ms) is inflated, but the 3 s window holds one sample and needs two. |
+| Receive side: NetEQ fast accelerate on | No change in any profile, also not in MOS: it acts only at a playout delay of 4 x (target + max arrival delay + 20 ms). After the burst the buffer is at most about 1.5 x that. |
+| Metric: concealment inside each lost packet's playout window, no lossless twin | Not adopted: on stage 6 it reads home-wifi 0.96 to 0.99, mobile 0.88 to 0.92, bad 0.88 to 0.91 (window variants), against 0.98, 0.98 and 0.96 with the twin. That moves the natural level by more than 0.05. NetEQ expand for one 20 ms loss is often less than 960 samples (merge), and the media time to output position offset (about 30 to 40 ms: codec and DSP delay, output ring) must be estimated per run. The twin method stays. |
+
+Rows with both changes (the metric of the second pass; congestion limit in
+brackets):
+
+| Row | Enforced gates that fail |
+|---|---|
+| 1 frame, hold off, ff 0.6 rff 0.98 | mobile clip growth 22.5 ms (20); burst recovery 5.75 s (5); congestion median 506 ms (436) |
+| 1 frame, hold off, ff 0.4 rff 0.95 | burst recovery 5.5 s (5); congestion median 472 ms (398) |
+| 1 frame, hold on, ff 0.6 rff 0.98 | burst recovery 14.5 s (5); burst MOS 3.16 (3.19); congestion median 467 ms (432) |
+| 1 frame, hold on, ff 0.4 rff 0.95 | mobile MOS 2.68 (2.70); burst recovery 5.75 s (5); burst MOS 3.18 (3.19); congestion median 406 ms (391) |
+| 5 frames, hold on, ff 0.6 rff 0.98 (branch default) | bad conceal 0.864 (0.95); burst recovery 5.75 s (5); congestion median 465 ms (425) |
+| 5 frames, hold on, ff 0.4 rff 0.95 | bad conceal 0.855 (0.95); congestion median 423 ms (392); congestion MOS 2.96 (2.97) |
+
 To rerun one row:
 
 ```bash

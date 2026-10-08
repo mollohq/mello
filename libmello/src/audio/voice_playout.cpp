@@ -495,6 +495,7 @@ struct VoicePlayout::Impl {
         webrtc::NetEq::Config c;
         c.sample_rate_hz = kSampleRateHz;
         c.enable_muted_state = config.enable_muted_state;
+        c.enable_fast_accelerate = config.enable_fast_accelerate;
         // NetEQ with its own DecisionLogic inside the talk-spurt controller.
         auto neteq =
             webrtc::CustomNetEqFactory(

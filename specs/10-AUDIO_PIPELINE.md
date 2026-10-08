@@ -279,7 +279,7 @@ Two signals, two controls:
 | Signal | Control | Why |
 |---|---|---|
 | Loss of any cause | `OPUS_SET_PACKET_LOSS_PERC` only | In-band FEC repairs random loss. A lower bitrate does not lower random loss and costs quality: the loss-driven ladder of the first version cost `mobile` 0.17 and `bad` 0.14 MOS in the voice gate. |
-| Congestion: loss together with a rising round trip or a rising jitter | The bitrate ladder | A queue that the sender's own rate fills drops packets and delays them. A lower rate drains it. |
+| Congestion: loss together with a rising round trip, a rising jitter, or no round trip | The bitrate ladder | A queue that the sender's own rate fills drops packets and delays them. A lower rate drains it. |
 
 Encoder settings that do not change: `OPUS_APPLICATION_VOIP`, `OPUS_SIGNAL_VOICE`, in-band FEC on, DTX on, complexity 8, 20 ms frames.
 
@@ -301,6 +301,7 @@ Congestion (all at one report):
 | Loss | The packets lost over the last 2 s of reports are more than 10 % of the packets expected. The window starts after the last step down, and holds at least 25 expected packets (0.5 s of speech). |
 | and round-trip inflation | The median round trip of the last 3 s (at least 2 samples) is more than 2 x the median of the last 30 s (at least 5 samples). The 30 s median counts as at least 50 ms. Only fresh samples count: a report whose LSR repeats the previous one (`rtt_fresh` false) repeats an old forward delay. |
 | or jitter growth | The same test on the RFC 3550 jitter of the reports that carry packets. The 30 s median counts as at least 10 ms. |
+| or no round trip | 2 reports in a row brought no fresh round-trip sample. A full tail-drop queue drops our sender reports too, so the queue that causes the loss can also hide the round-trip inflation. Random loss rarely takes 2 sender reports in a row; the ineffective-step rule below catches a wrong step. |
 
 Windows count reports: a window of N s holds the reports of the last N s of arrivals, and starts half a report interval late, because the reports arrive a few ms early or late on the SFU's 1 s ticker.
 
@@ -428,6 +429,7 @@ Network jitter, loss, outages and clock drift are otherwise NetEQ's own decision
 - Delay follows the network both ways: the delay manager's target rises under jitter, and accelerate brings the buffer back down when the target falls. Preemptive expand fills a buffer that runs low.
 - Delay manager tuning (`WebRTC-Audio-NetEqDelayManagerConfig`): `forget_factor:0.6,reorder_forget_factor:0.98` (`VoicePlayout::default_delay_manager_config()`). Upstream defaults take about 26 s to forget a 3 s jitter burst; the gate requires 5 s. The measured sweep is in `TESTING.md`.
 - Clock drift: NetEQ times playout by the device's `GetAudio` calls and removes the sender's excess with accelerate (voice gate `drift`: growth within ±20 ms over 10 minutes).
+- Fast accelerate (`VoicePlayout::Config::enable_fast_accelerate`, on; the test backend reads `MELLO_NETEQ_FAST_ACCELERATE=0`): when the playout delay is at least 4 x (target + the arrival history's max delay + 20 ms), accelerate removes several pitch periods per 10 ms. No voice gate profile reaches that level: every result is the same with it off.
 - Long outage: NetEQ expands, mutes, and restarts from the first new packet. No backlog plays.
 
 ---

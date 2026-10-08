@@ -107,6 +107,11 @@ public:
         /// NetEq::Config::enable_muted_state: a peer silent for a long time
         /// costs no decode and does not mix.
         bool enable_muted_state = true;
+        /// NetEq::Config::enable_fast_accelerate: when the buffer is far
+        /// above the target, accelerate removes several pitch periods per
+        /// 10 ms, not one. A spurt that a jitter burst left late comes back
+        /// to the target within the spurt (voice gate `burst`).
+        bool enable_fast_accelerate = true;
         /// The talk-spurt controller's pre-roll handling (spec 10 section
         /// 5.2): the packets of a spurt's first 200 ms stay out of the
         /// arrival statistics, and the spurt plays at its pre-roll lateness.

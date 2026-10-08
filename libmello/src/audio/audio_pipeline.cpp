@@ -118,7 +118,8 @@ static std::string find_model_file(const char* filename) {
 
 // NetEQ configuration. The voice quality gate may override the delay
 // manager tuning (MELLO_NETEQ_DELAY_MANAGER_CONFIG), turn the talk-spurt
-// hold off (MELLO_NETEQ_SPURT_HOLD=0), and set the hold floor
+// hold off (MELLO_NETEQ_SPURT_HOLD=0) or fast accelerate off
+// (MELLO_NETEQ_FAST_ACCELERATE=0), and set the hold floor
 // (MELLO_NETEQ_SPURT_HOLD_FLOOR_MS) and the preemptive-expand window after a
 // target jump (MELLO_NETEQ_JUMP_NO_EXPAND_MS) through the environment, with
 // the test backend only, so a sweep needs no rebuild. Production always uses
@@ -130,6 +131,7 @@ static VoicePlayout::Config playout_config() {
         const std::string dm = test_backend_env("MELLO_NETEQ_DELAY_MANAGER_CONFIG");
         if (!dm.empty()) c.delay_manager_config = dm == "default" ? std::string() : dm;
         c.talk_spurt_hold = test_backend_env("MELLO_NETEQ_SPURT_HOLD") != "0";
+        if (test_backend_env("MELLO_NETEQ_FAST_ACCELERATE") == "0") c.enable_fast_accelerate = false;
         const std::string floor = test_backend_env("MELLO_NETEQ_SPURT_HOLD_FLOOR_MS");
         if (!floor.empty()) c.spurt_hold_floor_ms = std::atoi(floor.c_str());
         const std::string window = test_backend_env("MELLO_NETEQ_JUMP_NO_EXPAND_MS");
