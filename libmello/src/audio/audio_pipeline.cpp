@@ -513,6 +513,8 @@ void AudioPipeline::reset_speech_gate_state() {
     candidate_hangover_frames_ = 0;
     speech_hangover_frames_ = 0;
     speech_gate_active_ = false;
+    vad_fed_last_frame_ = false;
+    prev_frame_.fill(0);
     speech_expander_.reset();
     vad_.force_silence();
 }
@@ -683,7 +685,8 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             input_level_.store(level, std::memory_order_relaxed);
         }
 
-        if (!muted_) {
+        const bool muted = muted_.load(std::memory_order_relaxed);
+        if (!muted) {
             float ig = input_gain_.load(std::memory_order_relaxed);
             if (ig != 1.0f) {
                 for (int i = 0; i < FRAME_SIZE; ++i) {
@@ -728,6 +731,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
+                vad_fed_last_frame_ = false;
                 process_and_encode_frame(capture_accum_.data(), frame_ts);
             } else {
                 // Auto: track the ambient floor. Manual: the user's level,
@@ -752,8 +756,25 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                                       speech_hangover_frames_ > 0;
 
                 if (should_run_vad) {
-                    vad_.feed(capture_accum_.data(), FRAME_SIZE);
+                    // Silero decides per 32 ms chunk (spec 10 section 4.1).
+                    // When it starts again after the RMS gate kept it idle,
+                    // its first chunk is the end of the previous frame and
+                    // this frame, so it ends with this frame. The samples
+                    // left from the last run are old audio and are dropped.
+                    // While the gate waits for speech, a frame in which no
+                    // chunk completed gets a decision on its last 32 ms
+                    // (peek), so the gate does not open one frame late.
+                    if (!vad_fed_last_frame_) {
+                        vad_.restart(prev_frame_.data(), FRAME_SIZE,
+                                     VAD_CHUNK_SIZE - FRAME_SIZE / 3);
+                    }
+                    const int chunks = vad_.feed(capture_accum_.data(), FRAME_SIZE);
+                    if (chunks == 0 && candidate_speech && !vad_.is_speaking()) {
+                        vad_.peek();
+                    }
                 }
+                vad_fed_last_frame_ = should_run_vad;
+                std::copy_n(capture_accum_.data(), FRAME_SIZE, prev_frame_.data());
 
                 if (vad_.is_speaking()) {
                     speech_hangover_frames_ = SPEECH_ENCODE_HANGOVER_FRAMES;
@@ -827,6 +848,9 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                     noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * gate_rms;
                 }
             }
+        }
+        if (muted) {
+            vad_fed_last_frame_ = false;
         }
         capture_accum_.erase(capture_accum_.begin(),
                              capture_accum_.begin() + FRAME_SIZE);

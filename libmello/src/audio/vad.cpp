@@ -52,18 +52,55 @@ void VoiceActivityDetector::downsample_48_to_16(const int16_t* in, int count) {
     for (int i = 0; i < count; i += 3) {
         float sample = static_cast<float>(in[i]) / 32768.0f;
         accum_buf_.push_back(sample);
+        recent_.push_back(sample);
+    }
+    constexpr size_t kRecent = VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE;
+    if (recent_.size() > kRecent) {
+        recent_.erase(recent_.begin(), recent_.end() - kRecent);
     }
 }
 
-void VoiceActivityDetector::feed(const int16_t* samples, int count) {
-    if (!initialized_) return;
+int VoiceActivityDetector::feed(const int16_t* samples, int count) {
+    if (!initialized_) return 0;
 
     downsample_48_to_16(samples, count);
 
+    int chunks = 0;
     while (accum_buf_.size() >= static_cast<size_t>(VAD_CHUNK_SIZE)) {
         run_inference();
         accum_buf_.erase(accum_buf_.begin(), accum_buf_.begin() + VAD_CHUNK_SIZE);
+        ++chunks;
     }
+    return chunks;
+}
+
+void VoiceActivityDetector::peek() {
+    if (!initialized_ || recent_.size() < static_cast<size_t>(VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE)) {
+        return;
+    }
+    std::copy(recent_.begin(), recent_.end(), model_input_buf_.begin());
+    peek_state_.assign(h_state_.begin(), h_state_.end());
+    float prob = 0.0f;
+    if (infer(model_input_buf_.data(), peek_state_.data(), &prob)) {
+        apply(prob);
+    }
+}
+
+void VoiceActivityDetector::restart(const int16_t* history, int count, int chunk_lead) {
+    accum_buf_.clear();
+    recent_.clear();
+    if (!initialized_ || !history || chunk_lead < 0 || chunk_lead >= VAD_CHUNK_SIZE ||
+        count % 3 != 0 || count < 3 * (chunk_lead + VAD_CONTEXT_SIZE)) {
+        return;
+    }
+    // Same decimation phase as feed(): every third sample from a frame
+    // start, and count is a multiple of 3.
+    const int16_t* from = history + count - 3 * (chunk_lead + VAD_CONTEXT_SIZE);
+    for (int i = 0; i < VAD_CONTEXT_SIZE; ++i) {
+        context_[i] = static_cast<float>(from[3 * i]) / 32768.0f;
+        recent_.push_back(context_[i]);
+    }
+    downsample_48_to_16(from + 3 * VAD_CONTEXT_SIZE, 3 * chunk_lead);
 }
 
 void VoiceActivityDetector::force_silence() {
@@ -79,28 +116,33 @@ void VoiceActivityDetector::force_silence() {
 }
 
 void VoiceActivityDetector::run_inference() {
+    std::copy(context_.begin(), context_.end(), model_input_buf_.begin());
+    std::copy(accum_buf_.begin(), accum_buf_.begin() + VAD_CHUNK_SIZE,
+              model_input_buf_.begin() + VAD_CONTEXT_SIZE);
+    std::copy(accum_buf_.begin() + VAD_CHUNK_SIZE - VAD_CONTEXT_SIZE,
+              accum_buf_.begin() + VAD_CHUNK_SIZE,
+              context_.begin());
+    float prob = 0.0f;
+    if (infer(model_input_buf_.data(), h_state_.data(), &prob)) {
+        apply(prob);
+    }
+}
+
+bool VoiceActivityDetector::infer(float* input, float* state, float* prob) {
 #ifndef MELLO_IOS_NO_VAD
-    if (!session_) return;
+    if (!session_) return false;
 
     try {
-        std::copy(context_.begin(), context_.end(), model_input_buf_.begin());
-        std::copy(accum_buf_.begin(), accum_buf_.begin() + VAD_CHUNK_SIZE,
-                  model_input_buf_.begin() + VAD_CONTEXT_SIZE);
-
-        std::copy(accum_buf_.begin() + VAD_CHUNK_SIZE - VAD_CONTEXT_SIZE,
-                  accum_buf_.begin() + VAD_CHUNK_SIZE,
-                  context_.begin());
-
         auto memory_info = Ort::MemoryInfo::CreateCpu(OrtArenaAllocator, OrtMemTypeDefault);
 
         std::vector<int64_t> audio_shape = {1, VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE};
         Ort::Value audio_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, model_input_buf_.data(), model_input_buf_.size(),
+            memory_info, input, VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE,
             audio_shape.data(), audio_shape.size());
 
         std::vector<int64_t> state_shape = {2, 1, 128};
         Ort::Value state_tensor = Ort::Value::CreateTensor<float>(
-            memory_info, h_state_.data(), h_state_.size(),
+            memory_info, state, VAD_STATE_SIZE,
             state_shape.data(), state_shape.size());
 
         int64_t sr_val = sample_rate_;
@@ -122,32 +164,41 @@ void VoiceActivityDetector::run_inference() {
             input_names, input_tensors.data(), input_tensors.size(),
             output_names, 2);
 
-        float prob = results[0].GetTensorData<float>()[0];
+        *prob = results[0].GetTensorData<float>()[0];
 
-        float* state_data = results[1].GetTensorMutableData<float>();
-        std::copy(state_data, state_data + VAD_STATE_SIZE, h_state_.begin());
-
-        probability_ = prob;
-
-        bool now_speaking = (prob >= VAD_THRESHOLD);
-        if (now_speaking) {
-            holdover_ = HOLDOVER_FRAMES;
-        } else if (holdover_ > 0) {
-            holdover_--;
-            now_speaking = true;
-        }
-
-        if (now_speaking != was_speaking_) {
-            speaking_ = now_speaking;
-            was_speaking_ = now_speaking;
-            if (callback_) {
-                callback_(now_speaking);
-            }
-        }
+        const float* state_data = results[1].GetTensorData<float>();
+        std::copy(state_data, state_data + VAD_STATE_SIZE, state);
+        return true;
     } catch (const Ort::Exception& e) {
         MELLO_LOG_WARN("vad", "inference error: %s", e.what());
+        return false;
     }
+#else
+    (void)input;
+    (void)state;
+    (void)prob;
+    return false;
 #endif // MELLO_IOS_NO_VAD
+}
+
+void VoiceActivityDetector::apply(float prob) {
+    probability_ = prob;
+
+    bool now_speaking = (prob >= VAD_THRESHOLD);
+    if (now_speaking) {
+        holdover_ = HOLDOVER_FRAMES;
+    } else if (holdover_ > 0) {
+        holdover_--;
+        now_speaking = true;
+    }
+
+    if (now_speaking != was_speaking_) {
+        speaking_ = now_speaking;
+        was_speaking_ = now_speaking;
+        if (callback_) {
+            callback_(now_speaking);
+        }
+    }
 }
 
 } // namespace mello::audio

@@ -404,6 +404,11 @@ private:
     int candidate_hangover_frames_ = 0;
     int speech_hangover_frames_ = 0;
     bool speech_gate_active_ = false;
+    // Silero ran on the previous frame. When it starts again after the RMS
+    // gate kept it idle, its first chunk takes the end of prev_frame_ (the
+    // previous frame as captured, before the expander). Capture thread.
+    bool vad_fed_last_frame_ = false;
+    std::array<int16_t, FRAME_SIZE> prev_frame_{};
 
     uint32_t get_pkt_ctr_ = 0;
 

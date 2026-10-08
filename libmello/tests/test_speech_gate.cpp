@@ -10,7 +10,9 @@
 
 #include "audio/audio_pipeline.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <fstream>
 #include <iterator>
@@ -169,6 +171,77 @@ TEST_F(SpeechGateTest, PreRollLeavesAtTheCapturedLevel) {
     // of an expander attack from its floor.
     EXPECT_NEAR(db(first.back().rms / input_rms(first.back().timestamp)), 0.0, 0.5)
         << "the first live frame";
+}
+
+// Speech decision latency (plans/voice-quality.md stage 3b): from the
+// speech onset to the end of the first encoded frame, with no pre-roll, over
+// the talk spurts of the four corpus clips. A spurt starts like in the voice
+// gate: the first 10 ms at -45 dBFS or more after at least 500 ms below.
+// Spurts at which the gate was still open are not counted.
+//
+// The gate opens at the end of a 20 ms frame. Silero decides once per 32 ms
+// chunk, and while the gate waits for speech it also decides at the end of
+// each frame in which no chunk completed (VoiceActivityDetector::peek).
+// Measured on this corpus: 7 spurts, mean 30 ms, worst 40 ms. Before the
+// peek and the chunk restart: 8 spurts, mean 38.8 ms, worst 60 ms.
+TEST_F(SpeechGateTest, DecisionLatencyFromOnset) {
+    pipeline.set_speech_pre_roll_frames(0);
+    for (const char* name : {"m1_davison.wav", "f1_farris.wav", "m2_grothmann.wav",
+                             "f2_patterson.wav"}) {
+        const auto clip = load_corpus_clip(name);
+        ASSERT_GT(clip.size(), static_cast<size_t>(2 * kSampleRate)) << name << " missing";
+        append_floor(1.0);
+        input.insert(input.end(), clip.begin(), clip.end());
+    }
+    append_floor(1.0);
+
+    const double active = 32768.0 * std::pow(10.0, -45.0 / 20.0);
+    std::vector<size_t> onsets;
+    int quiet = 0;
+    for (size_t k = 0; k + kChunk <= input.size(); k += kChunk) {
+        if (rms(&input[k], kChunk) >= active) {
+            if (quiet >= 50) onsets.push_back(k);
+            quiet = 0;
+        } else {
+            ++quiet;
+        }
+    }
+    inject_all();
+    ASSERT_FALSE(encoded.empty()) << "the gate never opened (Silero model not found?)";
+
+    std::vector<double> latencies;
+    for (const size_t onset : onsets) {
+        bool open_before = false;
+        const TapFrame* first = nullptr;
+        for (const auto& f : encoded) {
+            if (f.timestamp + 300 * 48 >= onset && f.timestamp + FRAME_SIZE <= onset) {
+                open_before = true;
+            }
+            if (f.timestamp + FRAME_SIZE > onset) {  // holds the onset, or later
+                first = &f;
+                break;
+            }
+        }
+        if (open_before) continue;
+        ASSERT_NE(first, nullptr) << "the spurt at " << onset / 48 << " ms never opened the gate";
+        latencies.push_back((static_cast<double>(first->timestamp) + FRAME_SIZE -
+                             static_cast<double>(onset)) /
+                            48.0);
+    }
+    ASSERT_GE(latencies.size(), 6u);
+    double sum = 0.0;
+    double worst = 0.0;
+    for (const double l : latencies) {
+        sum += l;
+        worst = std::max(worst, l);
+    }
+    const double mean = sum / static_cast<double>(latencies.size());
+    std::printf("[ decision ] %zu spurts: mean %.1f ms, worst %.0f ms\n", latencies.size(), mean,
+                worst);
+    RecordProperty("decision_latency_mean_ms", static_cast<int>(std::lround(mean)));
+    RecordProperty("decision_latency_worst_ms", static_cast<int>(worst));
+    EXPECT_LE(mean, 34.0);
+    EXPECT_LE(worst, 50.0);
 }
 
 }  // namespace
