@@ -428,6 +428,26 @@ Both sinks expose `native_rtp_telemetry()`, `poll_video_feedback()` (PLI/REMB), 
 
 When the RTP video track or control channel closes, send attempts return errors that flow through `video_send_fail_total` telemetry counters.
 
+Stream peers use active ICE-TCP like voice peers: a network that blocks UDP can reach the SFU's passive ICE-TCP port. Spec 10 section 7.6 lists the libjuice limits of that path.
+
+### 6.2.1 Stream membership
+
+The SFU lists the other members of the session in `joined.members`. It then sends `member_joined {user_id, role}` and `member_left {user_id, reason}` to every stream member (mello-sfu 01-SFU.md section 4.1). An SFU older than mello-sfu stage 4d sends them to the host only.
+
+| Side | What the client does |
+|---|---|
+| Host | `MemberJoined` with role `viewer` and `MemberLeft` go to the `PacketSink` (`on_viewer_joined`, `on_viewer_left`). |
+| Viewer | `ViewerState.members` (`stream::StreamMembers`) starts from `joined.members`. Each `MemberJoined` and `MemberLeft` updates it. A change emits `Event::StreamMembersChanged` with the whole list. |
+
+Rules of the viewer list (`mello-core/src/stream/members.rs`):
+
+- The list holds the other members in join order. Each user is in it once: a reconnect sends `member_joined` again.
+- The list holds at most one host. A viewer that joined before the host gets `member_joined {role: host}`; that sets the host. A second host entry replaces the first.
+- An SFU that sends no events to viewers leaves the `joined.members` snapshot.
+- A P2P viewer has no list.
+
+No UI shows the list. The UI viewer count comes from crew state (`viewer_count`). The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
+
 ### 6.3 Topology Selection
 
 The backend is authoritative for topology. `start_stream` / `watch_stream` return `mode: "p2p" | "sfu"` based on entitlement and SFU configuration. If SFU token creation is unavailable, the backend may return P2P. Once an RPC returns `mode: "sfu"`, client connect/join/control-channel setup is fail-closed: it reports a stream error instead of silently switching that session to P2P.

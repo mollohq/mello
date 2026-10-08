@@ -532,6 +532,33 @@ as with a pulled cable. `MELLO_TEST_ICE` (comma-separated URLs) gives the
 client's voice peer ICE servers; the log line `ICE selected pair` shows the
 pair that carries the call. The measured table is in spec 10 section 7.6.
 
+### Stream membership and ICE-TCP (stage 6b)
+
+Unit tests run in `cargo test --workspace` and in libmello `ctest`:
+
+| What | Where |
+|---|---|
+| The viewer's member list: the join snapshot, one entry per user, one host | `mello-core/src/stream/members.rs` |
+| A viewer that joined before the host learns of the host and of a later viewer from a fake SFU; an SFU that sends viewers no events leaves the snapshot | `mello-core/src/client/streaming.rs` (`stream_members_tests`) |
+| The e2e state port reports the list and clears it when watching stops | `client/src/e2e_state.rs` (`e2e` feature) |
+| Every peer role gathers a `tcptype active` candidate | `libmello/tests/test_peer_rtp_roles.cpp` |
+| Given a passive TCP candidate, the client connects to it and sends a STUN Binding request in RFC 4571 framing | `mello-core/src/client/sfu_voice_join.rs` |
+
+`stream_members_live` runs the membership case against a real SFU: a viewer
+joins, then the host, then a second viewer that leaves. It needs the
+mello-sfu contract where viewers get `member_joined` and `member_left`; an
+older SFU fails it with an empty list for the first viewer. Ignored by
+default:
+
+```bash
+MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+  cargo test -p mello-core --lib -- --ignored --nocapture stream_members_live
+```
+
+To force the TCP path against an SFU with passive ICE-TCP, publish only the
+TCP port of the media mux: `-p 10000:10000/tcp`, no `/udp`. Then run
+`slots_live` as above. The limits of the TCP path are in spec 10 section 7.6.
+
 `region_ranking_live` (`transport/sfu_region.rs`) measures real regions:
 
 ```bash
