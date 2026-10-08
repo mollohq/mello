@@ -345,10 +345,10 @@ fn real_main() -> Result<bool, String> {
             )?;
             write_csv(
                 &pdir.join("reports.csv"),
-                "sent_ms,arrive_ms,fraction_lost,cumulative_lost,expected,lost,jitter_ms,rtt_ms,bitrate_kbps,loss_perc",
+                "sent_ms,arrive_ms,fraction_lost,cumulative_lost,expected,lost,jitter_ms,rtt_ms,rtt_fresh,bitrate_kbps,loss_perc",
                 a.reports.iter().map(|x| {
                     format!(
-                        "{},{},{:.4},{},{},{},{:.1},{:.1},{},{}",
+                        "{},{},{:.4},{},{},{},{:.1},{:.1},{},{},{}",
                         x.sent_ms,
                         x.arrive_ms,
                         x.feedback.fraction_lost,
@@ -357,6 +357,7 @@ fn real_main() -> Result<bool, String> {
                         x.feedback.interval_lost,
                         x.feedback.jitter_ms,
                         x.feedback.rtt_ms,
+                        u8::from(x.feedback.rtt_fresh),
                         x.bitrate_kbps,
                         x.loss_perc
                     )

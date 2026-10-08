@@ -52,6 +52,7 @@ void SendAdaptation::reset() {
     jitter_.clear();
     last_down_ms_ = kNever;
     reports_since_down_ = 0;
+    stale_rtt_reports_ = 0;
     check_step_ms_ = kNever;
     check_step_loss_ = 0.0;
     hold_until_ms_ = kNever;
@@ -141,6 +142,9 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
     }
     if (rtt_ms >= 0.0f) {
         rtt_.push_back({now_ms, rtt_ms});
+        stale_rtt_reports_ = 0;
+    } else {
+        ++stale_rtt_reports_;
     }
     // The jitter of a report without packets is the last one again.
     if (expected > 0 && jitter_ms >= 0.0f) {
@@ -207,7 +211,8 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
     const bool loss_bad = window_loss_ > kDownLoss;
     const bool rtt_bad = inflated(rtt_, now_ms, kRttBaseMinMs, nullptr, nullptr);
     const bool jitter_bad = inflated(jitter_, now_ms, kJitterBaseMinMs, nullptr, nullptr);
-    const bool congested = loss_bad && (rtt_bad || jitter_bad);
+    const bool rtt_lost = stale_rtt_reports_ >= kStaleRttReports;
+    const bool congested = loss_bad && (rtt_bad || jitter_bad || rtt_lost);
     const bool held = holding(now_ms);
 
     if (congested) {
@@ -216,7 +221,10 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
         if (rung_ < bottom && fresh && !held) {
             check_step_ms_ = now_ms;
             check_step_loss_ = window_loss_;
-            change_rung(rung_ + 1, now_ms, rtt_bad ? "loss and rtt" : "loss and jitter");
+            change_rung(rung_ + 1, now_ms,
+                        rtt_bad      ? "loss and rtt"
+                        : jitter_bad ? "loss and jitter"
+                                     : "loss and no round trip");
         }
         // Not clean: the clean time starts again.
         restart_clean_time(now_ms);

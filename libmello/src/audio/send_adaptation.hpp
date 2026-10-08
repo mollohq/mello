@@ -69,6 +69,14 @@ public:
     /// that carry packets. The 30 s median counts as at least
     /// kJitterBaseMinMs.
     static constexpr float kJitterBaseMinMs = 10.0f;
+    /// Lost round trip: this many reports in a row brought no fresh
+    /// round-trip sample. A full tail-drop queue drops our sender reports
+    /// too, so the queue that causes the loss also hides the round-trip
+    /// inflation. With the loss over kDownLoss it is congestion evidence,
+    /// like an inflated round trip. Random loss rarely takes the sender
+    /// report of two reports in a row; the ineffective-step rule catches it
+    /// when it does.
+    static constexpr int kStaleRttReports = 2;
     /// Ineffective step: the loss over the kEffectiveWindowMs of reports
     /// after a step down must fall to kDownLoss or to kEffectiveFactor x the
     /// loss that caused the step. If not, the step goes back up one rung and
@@ -143,6 +151,8 @@ private:
     int64_t last_down_ms_ = std::numeric_limits<int64_t>::min();
     // Reports since the last step down.
     int reports_since_down_ = 0;
+    // Reports in a row without a fresh round-trip sample.
+    int stale_rtt_reports_ = 0;
     // The last step down while its effect is checked: time and the loss
     // that caused it. check_step_ms_ = min: nothing to check.
     int64_t check_step_ms_ = std::numeric_limits<int64_t>::min();
