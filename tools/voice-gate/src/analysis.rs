@@ -379,6 +379,169 @@ pub fn dropouts(
     }
 }
 
+/// Talk-spurt onsets (plans/voice-quality.md stage 3b). A spurt starts at
+/// the first 10 ms reference frame at or above the active level after at
+/// least [`ONSET_MIN_PAUSE_MS`] of frames below it. The pause is longer than
+/// the time the sender's speech gate needs to close (about 420 ms: the
+/// Silero holdover and the encode hangover), so each spurt is a gate open.
+pub const ONSET_FRAME_MS: usize = 10;
+pub const ONSET_MIN_PAUSE_MS: usize = 500;
+/// The part of the spurt that the onset metric compares.
+pub const ONSET_WINDOW_MS: usize = 200;
+/// The span from the spurt start that chooses the lag, and whose part
+/// after the onset window gives the spurt's own level (see [`onsets`]).
+const ONSET_SPAN_MS: usize = 1000;
+/// An onset that comes out as digital silence counts as this loss.
+pub const ONSET_MAX_LOSS_DB: f64 = 60.0;
+
+/// Reference sample positions of the talk-spurt starts. Only spurts with a
+/// full [`ONSET_SPAN_MS`] of reference after the start count.
+pub fn spurt_starts(reference: &[i16], active_dbfs: f64) -> Vec<usize> {
+    let frame = SAMPLE_RATE * ONSET_FRAME_MS / 1000;
+    let need_pause = ONSET_MIN_PAUSE_MS / ONSET_FRAME_MS;
+    let span = SAMPLE_RATE * ONSET_SPAN_MS / 1000;
+    let mut starts = Vec::new();
+    let mut quiet = 0usize;
+    let mut k = 0usize;
+    while k + frame <= reference.len() {
+        if dsp::dbfs(dsp::rms_i16(&reference[k..k + frame])) >= active_dbfs {
+            if quiet >= need_pause && k + span <= reference.len() {
+                starts.push(k);
+            }
+            quiet = 0;
+        } else {
+            quiet += 1;
+        }
+        k += frame;
+    }
+    starts
+}
+
+/// Onset loss of every talk spurt.
+#[derive(Clone, Debug, Default)]
+pub struct Onsets {
+    /// Reference sample position of each measured spurt start.
+    pub starts: Vec<usize>,
+    /// Loss in dB of each spurt's first [`ONSET_WINDOW_MS`]: how much
+    /// quieter the output is there than in the rest of the spurt's first
+    /// second, each against the reference. Positive is quieter.
+    pub losses_db: Vec<f64>,
+    /// Spurts with no matching output at any candidate lag (a network
+    /// outage): not measured.
+    pub unmatched: usize,
+}
+
+impl Onsets {
+    pub fn mean(&self) -> Option<f64> {
+        (!self.losses_db.is_empty())
+            .then(|| self.losses_db.iter().sum::<f64>() / self.losses_db.len() as f64)
+    }
+
+    pub fn p95(&self) -> Option<f64> {
+        dsp::percentile(&self.losses_db, 95.0)
+    }
+}
+
+/// Normalized correlation of `r` against `output` at offset `o`.
+fn ncc_at(r: &[i16], output: &[i16], o: usize) -> f64 {
+    if o + r.len() > output.len() {
+        return -1.0;
+    }
+    let seg = &output[o..o + r.len()];
+    let (mut dot, mut er, mut eo) = (0.0, 0.0, 0.0);
+    for (&a, &b) in r.iter().zip(seg) {
+        dot += f64::from(a) * f64::from(b);
+        er += f64::from(a) * f64::from(a);
+        eo += f64::from(b) * f64::from(b);
+    }
+    if er > 0.0 && eo > 0.0 {
+        dot / (er * eo).sqrt()
+    } else {
+        -1.0
+    }
+}
+
+/// Energy of the output's first [`ONSET_WINDOW_MS`] of each talk spurt
+/// against the reference's, aligned by the measured delay.
+///
+/// Lag: the lag of one of the delay points whose window centre lies in the
+/// spurt's first second (else the nearest point), the one whose output best
+/// matches the reference over that second. A spurt plays at one delay, so
+/// this is also the delay of its onset. A spurt whose best match is below
+/// the analysis `min_ncc` is not measured (the output is not this speech).
+///
+/// Level: the output against the reference over the rest of the first
+/// second is the spurt's own level. It takes out the AGC, which sets a
+/// different gain for each talker. When the reference there is below the
+/// active level, `level_offset_db` (the run's overall level offset,
+/// [`Dropouts::level_offset_db`]) is used instead.
+pub fn onsets(
+    reference: &[i16],
+    output: &[i16],
+    points: &[LagPoint],
+    level_offset_db: Option<f64>,
+    a: &AnalysisSpec,
+) -> Onsets {
+    let mut out = Onsets::default();
+    if points.is_empty() {
+        return out;
+    }
+    let sr = SAMPLE_RATE as f64;
+    let window = SAMPLE_RATE * ONSET_WINDOW_MS / 1000;
+    let span = SAMPLE_RATE * ONSET_SPAN_MS / 1000;
+    for s in spurt_starts(reference, a.active_dbfs) {
+        let t0 = s as f64 / sr;
+        let mut cands: Vec<&LagPoint> = points
+            .iter()
+            .filter(|p| p.t_s >= t0 && p.t_s <= t0 + 1.0)
+            .collect();
+        if cands.is_empty() {
+            let near = points.iter().min_by(|x, y| {
+                (x.t_s - t0 - 0.5)
+                    .abs()
+                    .partial_cmp(&(y.t_s - t0 - 0.5).abs())
+                    .unwrap_or(std::cmp::Ordering::Equal)
+            });
+            cands.extend(near);
+        }
+        let r_span = &reference[s..s + span];
+        let mut best: Option<(usize, f64)> = None;
+        for p in cands {
+            let lag = (p.lag_ms * sr / 1000.0).round() as usize;
+            let v = ncc_at(r_span, output, s + lag);
+            if best.is_none_or(|(_, b)| v > b) {
+                best = Some((lag, v));
+            }
+        }
+        let Some((lag, ncc)) = best else { continue };
+        let o = s + lag;
+        if ncc < a.min_ncc || o + span > output.len() {
+            out.unmatched += 1;
+            continue;
+        }
+        let rest_ref = dsp::rms_i16(&reference[s + window..s + span]);
+        let rest_out = dsp::rms_i16(&output[o + window..o + span]);
+        let level_db = if dsp::dbfs(rest_ref) >= a.active_dbfs && rest_out > 0.0 {
+            20.0 * (rest_out / rest_ref).log10()
+        } else if let Some(l) = level_offset_db {
+            l
+        } else {
+            out.unmatched += 1;
+            continue;
+        };
+        let rr = dsp::rms_i16(&reference[s..s + window]);
+        let orms = dsp::rms_i16(&output[o..o + window]);
+        let loss = if orms > 0.0 && rr > 0.0 {
+            (level_db - 20.0 * (orms / rr).log10()).min(ONSET_MAX_LOSS_DB)
+        } else {
+            ONSET_MAX_LOSS_DB
+        };
+        out.starts.push(s);
+        out.losses_db.push(loss);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -446,6 +609,87 @@ mod tests {
         assert_eq!(across.end, None);
         let d = dropouts(&x, &y, &pts, &a);
         assert!(d.total_ms() <= 100.0);
+    }
+
+    /// Synthetic talk spurts: noise bursts of speech level, 1.5 s long, with
+    /// 800 ms pauses between them and one 200 ms dip inside each (not a new
+    /// spurt). The reference has a -70 dBFS floor like the corpus.
+    fn spurts(n: usize) -> (Vec<i16>, Vec<usize>) {
+        let sr = SAMPLE_RATE;
+        let mut r = crate::rng::Rng::new(7);
+        let mut x: Vec<i16> = Vec::new();
+        let mut starts = Vec::new();
+        let floor = 32768.0 * 10f64.powf(-70.0 / 20.0);
+        let mut push = |x: &mut Vec<i16>, len: usize, level: f64| {
+            for _ in 0..len {
+                x.push((r.gaussian() * level).round().clamp(-32768.0, 32767.0) as i16);
+            }
+        };
+        push(&mut x, sr, floor);
+        for _ in 0..n {
+            starts.push(x.len());
+            push(&mut x, sr * 7 / 10, 3000.0);
+            push(&mut x, sr / 5, floor);
+            push(&mut x, sr * 6 / 10, 3000.0);
+            push(&mut x, sr * 8 / 10, floor);
+        }
+        (x, starts)
+    }
+
+    #[test]
+    fn spurt_starts_need_a_pause() {
+        let (x, starts) = spurts(4);
+        let found = spurt_starts(&x, -50.0);
+        assert_eq!(
+            found, starts,
+            "one start per spurt; the 200 ms dip is not a spurt"
+        );
+    }
+
+    #[test]
+    fn onset_loss_of_a_quiet_first_100_ms() {
+        let (x, starts) = spurts(6);
+        let delay = 48 * 137;
+        let a = spec();
+        // Output 137 ms late, at -6 dB, and every other spurt at -12 dB: the
+        // AGC gives each talker its own gain. That is not onset loss.
+        let mut clean = vec![0i16; delay];
+        clean.extend(x.iter().map(|v| v / 2));
+        for &s in starts.iter().skip(1).step_by(2) {
+            for v in &mut clean[delay + s..delay + s + 48 * 1500] {
+                *v /= 2;
+            }
+        }
+        // The same with each spurt's first 100 ms 20 dB down.
+        let mut clipped = clean.clone();
+        for &s in &starts {
+            for v in &mut clipped[delay + s..delay + s + 4800] {
+                *v /= 10;
+            }
+        }
+        for (y, want) in [(&clean, 0.0), (&clipped, 2.97)] {
+            let pts = lag_curve(&x, y, 1.0, &a);
+            let drops = dropouts(&x, y, &pts, &a);
+            let on = onsets(&x, y, &pts, drops.level_offset_db, &a);
+            assert_eq!(on.starts, starts);
+            for l in &on.losses_db {
+                assert!((l - want).abs() < 0.3, "loss {l} dB, want {want}");
+            }
+            assert!((on.mean().expect("mean") - want).abs() < 0.3);
+            assert!((on.p95().expect("p95") - want).abs() < 0.3);
+        }
+        // A silent onset counts as the maximum loss, not as no value.
+        let mut muted = clean.clone();
+        for &s in &starts {
+            for v in &mut muted[delay + s..delay + s + 9600] {
+                *v = 0;
+            }
+        }
+        let pts = lag_curve(&x, &muted, 1.0, &a);
+        let drops = dropouts(&x, &muted, &pts, &a);
+        let on = onsets(&x, &muted, &pts, drops.level_offset_db, &a);
+        assert_eq!(on.losses_db.len(), starts.len());
+        assert!(on.losses_db.iter().all(|&l| l == ONSET_MAX_LOSS_DB));
     }
 
     #[test]

@@ -82,6 +82,17 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ("rx_jitter_resets", "Jitter buffer resets", -1),
     ("dropout_ms", "Speech dropout (ms)", -1),
     (
+        "onset_loss_db_mean",
+        "Talk-spurt onset loss, first 200 ms, mean (dB)",
+        -1,
+    ),
+    (
+        "onset_loss_db_p95",
+        "Talk-spurt onset loss, first 200 ms, p95 (dB)",
+        -1,
+    ),
+    ("onset_spurts", "Talk spurts in the reference (onsets)", 0),
+    (
         "wrap_dropout_ms",
         "Speech dropout around the RTP wrap (ms)",
         -1,
@@ -377,6 +388,8 @@ const SUMMARY: &[(&str, &str)] = &[
     ("rx_dropped_late", "rx late"),
     ("rx_jitter_resets", "resets"),
     ("dropout_ms", "dropout ms"),
+    ("onset_loss_db_mean", "onset dB"),
+    ("onset_loss_db_p95", "onset p95 dB"),
     ("bitrate_min_kbps", "kbps min"),
     ("bitrate_mean_kbps", "kbps mean"),
     ("loss_perc_max", "loss perc max"),

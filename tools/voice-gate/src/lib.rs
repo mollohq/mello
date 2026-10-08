@@ -60,6 +60,13 @@ pub fn measure(
     let points = analysis::lag_curve(&run.reference, &run.output, run.clock_ratio, a);
     let delay = analysis::summarize(&points, &run.clips, clips_per_loop);
     let drops = analysis::dropouts(&run.reference, &run.output, &points, a);
+    let onsets = analysis::onsets(
+        &run.reference,
+        &run.output,
+        &points,
+        drops.level_offset_db,
+        a,
+    );
 
     // The event whose recovery the gate checks: the first jitter episode,
     // else the outage.
@@ -180,6 +187,9 @@ pub fn measure(
         n(rx.rx_stream_resets + rx.rx_buffer_flushes),
     );
     m.insert("dropout_ms".into(), Some(drops.total_ms()));
+    m.insert("onset_loss_db_mean".into(), onsets.mean());
+    m.insert("onset_loss_db_p95".into(), onsets.p95());
+    m.insert("onset_spurts".into(), n(onsets.losses_db.len() as u64));
     if run.wrap_sender_sample.is_some() {
         m.insert("wrap_dropout_ms".into(), wrap_dropout);
     }
@@ -224,6 +234,11 @@ pub fn measure(
     let extra = json!({
         "delay_points": delay.points,
         "output_level_offset_db": drops.level_offset_db,
+        "onsets_unmatched": onsets.unmatched,
+        "onsets": onsets.starts.iter().zip(&onsets.losses_db).map(|(&k, &l)| json!({
+            "t_s": (k as f64 / SAMPLE_RATE as f64 * 1000.0).round() / 1000.0,
+            "loss_db": (l * 100.0).round() / 100.0,
+        })).collect::<Vec<_>>(),
         "wrap_at_s": run.wrap_sender_sample.map(|w| w as f64 / SAMPLE_RATE as f64),
         "event_s": event.map(|(s, e)| json!([s, e])),
         "shim": {

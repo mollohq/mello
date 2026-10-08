@@ -41,6 +41,10 @@ Definitions:
   lost Opus DTX frame is not counted as lost: comfort noise plays through it.
 - A dropout is a 20 ms speech frame that comes out 20 dB too quiet, or does
   not match the input (concealment or wrong audio).
+- A talk spurt starts at the first 10 ms reference frame at the active level
+  after at least 500 ms below it. Onset loss is the level of the output's
+  first 200 ms of the spurt against the reference's, at the spurt's measured
+  delay, less the run's overall level offset. Positive is quieter.
 ";
 
 struct Args {
