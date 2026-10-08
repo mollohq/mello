@@ -107,6 +107,12 @@ public:
         /// NetEq::Config::enable_muted_state: a peer silent for a long time
         /// costs no decode and does not mix.
         bool enable_muted_state = true;
+        /// The talk-spurt controller's pre-roll handling (spec 10 section
+        /// 5.2): the packets of a spurt's first 200 ms stay out of the
+        /// arrival statistics, and the spurt plays at its pre-roll lateness.
+        /// Off: NetEQ's own arrival statistics and delay. The rule against
+        /// preemptive expand after a target jump stays in both cases.
+        bool talk_spurt_hold = true;
     };
 
     /// The delay manager tuning that ships: "forget_factor:0.6,

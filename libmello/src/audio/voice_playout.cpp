@@ -155,8 +155,11 @@ public:
 
     TalkSpurtController(std::unique_ptr<webrtc::NetEqController> inner,
                         const webrtc::TickTimer* tick_timer,
-                        std::shared_ptr<SpurtTelemetry> telemetry)
-        : inner_(std::move(inner)), tick_timer_(tick_timer), telemetry_(std::move(telemetry)) {}
+                        std::shared_ptr<SpurtTelemetry> telemetry, bool spurt_hold)
+        : inner_(std::move(inner)),
+          tick_timer_(tick_timer),
+          telemetry_(std::move(telemetry)),
+          spurt_hold_(spurt_hold) {}
 
     std::optional<int> PacketArrived(int fs_hz, bool should_update_stats,
                                      const PacketArrivedInfo& info) override {
@@ -190,7 +193,8 @@ public:
             telemetry_->talk_spurts.fetch_add(1, std::memory_order_relaxed);
         }
 
-        const bool in_window = now_ms - spurt_first_arrival_ms_ < kStartWindowMs;
+        const bool in_window =
+            spurt_hold_ && now_ms - spurt_first_arrival_ms_ < kStartWindowMs;
         if (in_window) {
             // Arrival against the schedule of the spurt's first packet.
             // Negative: earlier than that schedule, so the first was late.
@@ -202,6 +206,7 @@ public:
 
         const auto result =
             inner_->PacketArrived(fs_hz, should_update_stats && !in_window, info);
+        if (!spurt_hold_) return result;
 
         // The hold follows the spurt's lateness as the pre-roll arrives: 0 at
         // the spurt's first packet, then up to L. The pre-roll arrives before
@@ -279,6 +284,7 @@ private:
     std::unique_ptr<webrtc::NetEqController> inner_;
     const webrtc::TickTimer* tick_timer_;
     std::shared_ptr<SpurtTelemetry> telemetry_;
+    const bool spurt_hold_;
     bool have_newest_ = false;
     uint32_t newest_timestamp_ = 0;
     uint16_t newest_sequence_ = 0;
@@ -292,18 +298,19 @@ private:
 
 class TalkSpurtControllerFactory final : public webrtc::NetEqControllerFactory {
 public:
-    explicit TalkSpurtControllerFactory(std::shared_ptr<SpurtTelemetry> telemetry)
-        : telemetry_(std::move(telemetry)) {}
+    TalkSpurtControllerFactory(std::shared_ptr<SpurtTelemetry> telemetry, bool spurt_hold)
+        : telemetry_(std::move(telemetry)), spurt_hold_(spurt_hold) {}
 
     std::unique_ptr<webrtc::NetEqController> Create(
         const webrtc::Environment& env, const webrtc::NetEqController::Config& config) const override {
         return std::make_unique<TalkSpurtController>(
             webrtc::DefaultNetEqControllerFactory().Create(env, config), config.tick_timer,
-            telemetry_);
+            telemetry_, spurt_hold_);
     }
 
 private:
     std::shared_ptr<SpurtTelemetry> telemetry_;
+    bool spurt_hold_;
 };
 
 int16_t scale_sample(int16_t s, float gain) {
@@ -484,7 +491,8 @@ struct VoicePlayout::Impl {
         c.enable_muted_state = config.enable_muted_state;
         // NetEQ with its own DecisionLogic inside the talk-spurt controller.
         auto neteq =
-            webrtc::CustomNetEqFactory(std::make_unique<TalkSpurtControllerFactory>(spurts))
+            webrtc::CustomNetEqFactory(
+                std::make_unique<TalkSpurtControllerFactory>(spurts, config.talk_spurt_hold))
                 .Create(env, c, decoder_factory);
         if (!neteq->RegisterPayloadType(kOpusPayloadType,
                                         webrtc::SdpAudioFormat("opus", kSampleRateHz, 2,
