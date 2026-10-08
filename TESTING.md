@@ -274,6 +274,13 @@ Four binaries: `mello_tests`, `mello_rtp_tests`, `mello_procenum_tests` and
 hardware cases skip (`VideoPipelineTest` and the device suites). If you see 0
 tests, the `-DMELLO_BUILD_TESTS=ON` flag didn't take.
 
+Voice capture and speech gate (test backend, Silero, the voice gate corpus):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `VoiceCaptureTest`, `PacketSinkTest`, `InputSensitivityTest` | `test_voice_capture.cpp` | RTP media time per frame and over a gate gap, the packet sink, the input sensitivity gate threshold. |
+| `SpeechGateTest` | `test_speech_gate.cpp` | The pre-roll and the first live frame leave at the captured level (within 0.5 dB), not through the expander. The Silero decision latency from the speech onset to the first encoded frame, no pre-roll, over the corpus spurts: mean 34 ms or less, worst 50 ms or less (measured 30 and 40; 38.8 and 60 before the restart and peek). |
+
 Voice receive and playout (no device, no sleep, deterministic):
 
 | Suite | File | What it proves |
@@ -347,9 +354,10 @@ Test hooks in `mello.h` (not for production use):
 - `MelloDebugStats` has the NetEQ statistics at its end (`rx_*`, spec 10
   section 5.4).
 - Test backend only: `MELLO_NETEQ_DELAY_MANAGER_CONFIG` replaces the delay
-  manager field trial value (`default` = upstream), and
-  `MELLO_VOICE_PRE_ROLL_FRAMES` changes the sender pre-roll. For tuning runs
-  and measurements, never in a committed result.
+  manager field trial value (`default` = upstream),
+  `MELLO_VOICE_PRE_ROLL_FRAMES` changes the sender pre-roll, and
+  `MELLO_NETEQ_SPURT_HOLD=0` turns the talk-spurt hold off (talk-spurt gate,
+  below). For tuning runs and measurements, never in a committed result.
 
 Rules:
 
@@ -421,6 +429,111 @@ Follow-ups:
 
 - TWCC on the voice track: one receiver report per second sees a queue only after it overflows; transport-wide feedback would see it fill.
 - Cross traffic in the bottleneck model: other flows make the queue drop bursts that FEC cannot repair, which a single-flow model does not show.
+
+### Talk-spurt gate (stage 3b)
+
+plans/voice-quality.md stage 3b, option A: a short pre-roll, the Silero
+decision on its chunk, the pre-roll exempt from the expander.
+
+Onset metric (`tools/voice-gate/src/analysis.rs`, `onsets`):
+
+- A talk spurt starts at the first 10 ms reference frame at the active level
+  (-45 dBFS) after at least 500 ms below it. The pause is longer than the
+  sender gate needs to close (about 420 ms), so each spurt is a gate open.
+- Onset loss: the output's level over the spurt's first 200 ms against the
+  reference's, at the spurt's measured delay, less the same over the rest of
+  the spurt's first second. That takes out the AGC, which gives each talker
+  its own gain. Positive is quieter. A spurt with no matching output (an
+  outage) is not measured.
+- Metrics: `onset_loss_db_mean`, `onset_loss_db_p95`, `onset_spurts`; each
+  spurt in `results.json` under `info.onsets`. The clean profile has 20
+  spurts. With push-to-talk (`drift`) the metric reads 0 +- 0.4 dB, except
+  the first spurt of the run (AGC2 starts at 0 dB): about 2 dB.
+- The baseline finding of 25 to 33 dB low onsets (plans/voice-quality.md
+  section 8a) is not seen with this metric on the stage 6 code: mean 0.61
+  dB, p95 1.70 dB. The pre-roll frames came out up to 20 dB low, but the
+  first 200 ms of a spurt hold most of their energy in the live frames.
+
+Test backend switches (never in a committed result):
+
+| Variable | Effect |
+|---|---|
+| `MELLO_VOICE_PRE_ROLL_FRAMES=N` | Sender pre-roll, 0 to 50 frames |
+| `MELLO_NETEQ_SPURT_HOLD=0` | Talk-spurt controller without the pre-roll handling (spec 10 section 5.2); the jump rule stays |
+
+Sweep, 2026-10-08. "B+C" is this stage: the pre-roll exempt from the
+expander, the expander at unity when the gate opens, the Silero restart and
+peek. MOS marked (!) is more than 0.1 below stage 6. Stage 6 MOS: clean
+3.27, home-wifi 3.25, mobile 2.80, bad 2.20, burst 3.28, drift 4.25, outage
+2.98, wrap 3.74, congestion 2.91.
+
+| Row | Clean p50 | Clean p95 | Clean MOS | Onset mean dB | Onset p95 dB | home-wifi | mobile | bad | burst | drift | outage | wrap | congestion | Enforced gates that fail |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| stage 6, 5 (shipped before) | 183.0 | 187.0 | 3.27 | 0.61 | 1.70 | 3.25 | 2.80 | 2.20 | 3.28 | 4.25 | 2.98 | 3.74 | 2.91 | none |
+| stage 6, 2 | 124.2 | 131.5 | 3.23 | 0.52 | 1.57 | 3.18 | 2.70 | 2.06 (!) | 3.13 (!) | 4.25 | 3.05 | 3.74 | 3.02 | mobile conceal 1.17, mobile MOS 2.7, bad MOS 2.06, burst recovery 5.75, burst MOS 3.13, congestion bottleneck delay 462 |
+| stage 6, 1 | 101.5 | 111.5 | 3.22 | 0.49 | 1.25 | 3.07 (!) | 2.71 | 2.17 | 3.11 (!) | 4.25 | 2.88 | 3.53 (!) | 2.86 | home-wifi MOS 3.07, burst recovery 6.75, burst MOS 3.11, wrap MOS 3.53 |
+| stage 6, 0 | 103.8 | 110.2 | 3.07 | 0.51 | 1.34 | 2.98 (!) | 2.61 (!) | 2.06 (!) | 2.92 (!) | 4.25 | 2.88 (!) | 3.58 (!) | 2.79 (!) | clean MOS 3.07, home-wifi MOS 2.98, mobile MOS 2.61, bad MOS 2.06, burst recovery 10.8, burst MOS 2.92, outage MOS 2.88, wrap MOS 3.58, congestion bottleneck delay 457, burst MOS vs 2.9 0.264, clean MOS vs 2.9 0.217 |
+| B+C, 5 (ships) | 183.5 | 192.8 | 3.38 | 0.05 | 0.39 | 3.28 | 2.87 | 2.29 | 3.38 | 4.25 | 3.02 | 3.86 | 3.10 | bad conceal 0.864, burst recovery 5.75, congestion bottleneck delay 467 |
+| B+C, 4 | 161.8 | 171.5 | 3.36 | 0.04 | 0.43 | 3.29 | 2.84 | 2.25 | 3.30 | 4.25 | 3.05 | 3.88 | 3.00 | mobile conceal 0.947, burst recovery 5.5 |
+| B+C, 3 | 144.0 | 148.0 | 3.35 | 0.06 | 0.46 | 3.30 | 2.84 | 2.24 | 3.30 | 4.25 | 3.11 | 3.88 | 2.99 | home-wifi conceal 0.946, bad conceal 1.05, burst recovery 5.75 |
+| B+C, 2 | 123.5 | 131.5 | 3.32 | 0.08 | 0.98 | 3.26 | 2.84 | 2.17 | 3.24 | 4.25 | 3.10 | 3.86 | 2.98 | home-wifi conceal 0.947, burst recovery 13.5 |
+| B+C, 1 | 103.8 | 111.5 | 3.31 | -0.05 | 0.30 | 3.19 | 2.78 | 2.24 | 3.16 (!) | 4.25 | 2.94 | 3.68 | 2.97 | burst recovery 14.5, burst MOS 3.16, congestion bottleneck delay 471 |
+| B+C, 0 | 101.5 | 112.8 | 3.17 | 0.08 | 0.52 | 3.12 (!) | 2.64 (!) | 2.16 | 3.10 (!) | 4.25 | 2.95 | 3.68 | 2.90 | home-wifi MOS 3.12, mobile MOS 2.64, burst recovery 14.5, burst MOS 3.1, congestion bottleneck delay 445, clean MOS vs 2.9 0.111 |
+| B+C hold off, 5 | 172.0 | 183.8 | 3.08 | 0.06 | 0.50 | 3.13 (!) | 2.88 | 2.31 | 3.22 | 4.25 | 2.83 (!) | 3.72 | 2.98 | clean clip growth -34.8, clean MOS 3.08, home-wifi conceal 0.939, home-wifi MOS 3.13, bad conceal 0.876, burst recovery 5.5, outage recovery 20, outage MOS 2.83, congestion bottleneck delay 482, clean MOS vs 2.9 0.199, outage MOS vs 2.9 0.125 |
+| B+C hold off, 2 | 112.0 | 125.8 | 3.32 | 0.02 | 0.46 | 3.25 | 2.79 | 2.18 | 3.23 | 4.25 | 3.06 | 3.86 | 2.94 | home-wifi conceal 0.937, bad conceal 0.949, burst recovery 14.5 |
+| B+C hold off, 1 | 101.5 | 111.5 | 3.29 | -0.05 | 0.30 | 3.23 | 2.77 | 2.21 | 3.19 | 4.25 | 3.02 | 3.74 | 3.02 | mobile clip growth 22.5, burst recovery 5.75, congestion bottleneck delay 506 |
+| B+C hold off, 0 | 87.8 | 108.2 | 3.26 | 0.09 | 0.45 | 3.07 (!) | 2.69 (!) | 2.14 | 3.10 (!) | 4.25 | 2.92 | 3.70 | 2.88 | home-wifi MOS 3.07, mobile MOS 2.69, burst recovery 6.75, burst MOS 3.1 |
+
+Attribution and one receive-side probe (not shipped):
+
+| Row | Clean p50 | Clean p95 | Clean MOS | Onset mean dB | Onset p95 dB | home-wifi | mobile | bad | burst | drift | outage | wrap | congestion | Enforced gates that fail |
+|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---|
+| B only, 5 | 187.5 | 191.5 | 3.34 | 0.07 | 0.47 | 3.32 | 2.85 | 2.25 | 3.38 | 4.25 | 3.03 | 3.81 | 3.05 | bad conceal 0.947, congestion bottleneck delay 473 |
+| B only, 1 | 104.0 | 111.5 | 3.25 | 0.01 | 0.30 | 3.12 (!) | 2.76 | 2.23 | 3.14 (!) | 4.25 | 2.90 | 3.64 (!) | 2.84 | home-wifi MOS 3.12, mobile conceal 0.95, burst recovery 6.75, burst MOS 3.14, wrap MOS 3.64 |
+| B+C forget_factor 0.5, 1 | 103.8 | 111.5 | 3.30 | -0.05 | 0.31 | 3.18 | 2.65 (!) | 2.18 | 3.16 (!) | 4.25 | 2.94 | 3.68 | 3.01 | mobile MOS 2.65, burst recovery 5.75, burst MOS 3.16, congestion bottleneck delay 461 |
+| B+C forget_factor 0.5 hold off, 1 | 102.2 | 111.5 | 3.29 | -0.05 | 0.30 | 3.13 (!) | 2.70 | 2.27 | 3.26 | 4.25 | 3.02 | 3.74 | 3.00 | home-wifi MOS 3.13, mobile MOS 2.7, burst recovery 5.75, congestion bottleneck delay 507 |
+
+What the sweep shows:
+
+- B and C raise MOS on every gated profile at 5 frames (clean 3.27 to
+  3.38, bad 2.20 to 2.29, burst 3.28 to 3.38, wrap 3.74 to 3.86) and cut the
+  clean onset loss p95 from 1.70 to 0.39 dB.
+- The selection rule of the brief (lowest delay; onset p95 no worse than
+  the 5-frame row; MOS within 0.1 of stage 6 on every profile) picks 5
+  frames with the talk-spurt hold on. 1 frame passes it only with the hold
+  off (clean p50 101.5 ms, MOS within 0.1 everywhere). 0 frames loses
+  0.13 to 0.16 MOS on home-wifi and mobile. 2 to 4 frames have a worse
+  onset p95 (0.43 to 0.98 dB).
+- No row of this stage passes every enforced structural gate. The gates that
+  fail and why:
+  - `burst recovery_s` (5 s): below 5 frames, the pre-burst delay is the
+    network delay alone. After the burst, NetEQ's target is back at 20 to
+    40 ms about 4.5 s after the burst end, and the spurt delay follows at
+    the next talk pause: 5.75 s with the hold off, 13.5 to 14.5 s with it on
+    (the post-burst plateau sits 0.1 to 1 ms over the 20 ms tolerance).
+    A `forget_factor` of 0.5 does not change it. At 5 frames the 100 ms hold
+    hid the target decay; with B and C the plateau after the burst is 15 ms
+    higher and recovery is 5.75 s.
+  - `congestion bottleneck_delay_mean_ms` (100 ms under no-adapt): the
+    sender adaptation is the same in every row (reaction 1.72 s, 4 steps).
+    The difference is a late NetEQ target jump in the bottleneck window,
+    which depends on which packets the tail-drop queue drops. The mean moves
+    by 100 ms between rows with the same sender settings.
+  - `conceal_per_lost` (0.95 to 1.05) on home-wifi, mobile or bad: the
+    pre-roll at full level is real audio, not Opus DTX, so its loss at a
+    spurt start counts as lost, and NetEQ does not conceal before a spurt.
+    The values move 0.86 to 1.05 between rows.
+  - `mobile latency_clip_growth_ms` (20 ms): 22.5 ms at 1 frame with the
+    hold off.
+- The hold at 5 frames: off costs 0.30 MOS on clean and outage recovery
+  goes to 20 s. It stays on.
+
+To rerun one row:
+
+```bash
+MELLO_VOICE_PRE_ROLL_FRAMES=1 MELLO_NETEQ_SPURT_HOLD=0 \
+  ./scripts/voice-gate.sh --out target/voice-gate-pr1
+```
 
 ### NetEQ tuning (stage 3)
 

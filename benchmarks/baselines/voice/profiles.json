@@ -48,8 +48,8 @@
         { "metric": "rx_jitter_resets", "max": 0, "enforced": true },
         { "metric": "latency_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
         { "metric": "latency_clip_growth_ms", "min": -20, "max": 20, "enforced": true, "note": "no delay build-up on a clean link" },
-        { "metric": "latency_p50_ms", "max": 100, "enforced": false, "note": "not met: the sender pre-roll (100 ms) plays at its natural delay (spec 10 section 5.2); 91 ms without pre-roll" },
-        { "metric": "onset_loss_db_p95", "max": 1.70, "enforced": false, "note": "stage 3b: talk-spurt onset loss, first 200 ms; informational at the stage 3 value (pre-roll 5 frames)" },
+        { "metric": "latency_p50_ms", "max": 193.5, "enforced": true, "note": "stage 3b: the shipped pre-roll (5 frames) plus 10 ms; the 100 ms target is not met (183.5 ms). 1 frame gives 101.5 to 104 ms but fails other enforced gates (TESTING.md, talk-spurt gate)" },
+        { "metric": "onset_loss_db_p95", "max": 1.39, "enforced": true, "note": "stage 3b: talk-spurt onset loss, first 200 ms; the shipped row (0.39 dB) plus 1 dB; stage 3 was 1.70" },
         { "metric": "mos", "min": 3.1666, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.27)" }
       ]
     },

@@ -113,11 +113,12 @@ Per 20ms frame, endpoint processing order is adaptive:
 3. neural residual-echo suppression when `echo_suppression` is on (software path only; post-AEC mic plus far-end reference ring, silence bypass)
 4. clip ring tap (when clip buffer is active)
 5. cheap RMS/noise-floor gate updates input level and decides whether this is a speech candidate (uses post-stage RMS when the suppressor ran, pre-AEC level otherwise)
-6. Silero VAD runs only for candidate speech / hangover windows
-7. downward expander attenuates the frame toward a floor gain when the VAD is below threshold (see §4.4)
-8. when speech opens, flush pre-roll frames so starts are not clipped
-9. while speech or hangover is active, apply the selected enhancement mode and Opus encode, at the bitrate and expected loss of the send-leg adaptation (§4.6)
-10. give the encoded packet, with a monotonically increasing sequence, to the packet sink (§4.5), or put it in the `get_packet` queue when no sink is set
+6. Silero VAD runs only for candidate speech / hangover windows (decision timing: §4.1)
+7. while the gate is closed, keep a copy of the frame as captured for the pre-roll (before the expander)
+8. downward expander attenuates the live frame toward a floor gain when the VAD is below threshold (see §4.4)
+9. when speech opens, flush the pre-roll frames at their captured level so starts are not clipped
+10. while speech or hangover is active, apply the selected enhancement mode and Opus encode, at the bitrate and expected loss of the send-leg adaptation (§4.6)
+11. give the encoded packet, with a monotonically increasing sequence, to the packet sink (§4.5), or put it in the `get_packet` queue when no sink is set
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
 silence or non-speech background. This preserves Discord-like voice quality during speech
@@ -132,19 +133,36 @@ bool candidate = gate_rms >= max(MIN_SPEECH_RMS, noise_floor * NOISE_FLOOR_GATE_
 if (candidate || candidate_hangover || speech_hangover) {
     vad_.feed(capture_accum_.data(), FRAME_SIZE);
 }
+if (!(vad_.is_speaking() || speech_hangover)) keep_pre_roll_copy();  // before the expander
+if (gate_just_opened) speech_expander_.reset();                       // unity, §4.4
 speech_expander_.process(capture_accum_.data(), FRAME_SIZE,
                          vad_.probability() >= VAD_THRESHOLD);  // §4.4
 if (vad_.is_speaking() || speech_hangover) {
     flush_pre_roll_if_gate_just_opened();
     process_and_encode_frame(capture_accum_.data()); // RNNoise/WebRTC mode + Opus
 } else {
-    keep_pre_roll_and_update_noise_floor();
+    update_noise_floor();
 }
 ```
 
 ### 4.1 Adaptive Speech Gate
 
-The capture path keeps a short pre-roll buffer (currently about `100ms`) and two hangovers:
+The capture path keeps a short pre-roll buffer and two hangovers.
+
+Pre-roll:
+
+- The frames captured while the gate is closed, as captured: the copy is taken before the expander (§4.4). When the gate opens they leave with the first speech frame, at their captured level.
+- Length: `DEFAULT_SPEECH_PRE_ROLL_FRAMES` = 5 frames (100 ms). `AudioPipeline::set_speech_pre_roll_frames` changes it (0..50). The test backend reads `MELLO_VOICE_PRE_ROLL_FRAMES` at construction.
+- Each pre-roll frame makes the talk spurt play one frame later at the receiver (§5.2): the pre-roll leaves late against its media time. The voice gate sweep of the length is in `TESTING.md` (talk-spurt gate).
+
+Silero decision timing:
+
+- Silero decides once per 32 ms chunk (512 samples at 16 kHz). The gate opens at the end of a 20 ms frame.
+- When Silero starts again after the RMS gate kept it idle, it drops the samples left from its last run and its first chunk is the end of the previous frame plus the current frame. The first decision is ready at the end of the frame that started it.
+- While the gate waits for speech (a candidate frame, not speaking), a frame in which no chunk completed gets a decision on its last 32 ms (`VoiceActivityDetector::peek`: the model state of the last chunk, nothing kept).
+- Decision latency, from the speech onset to the end of the first encoded frame, with no pre-roll, on the corpus spurts: mean 30 ms, worst 40 ms (`SpeechGateTest.DecisionLatencyFromOnset`).
+
+Hangovers:
 
 - **Candidate hangover:** keeps Silero active through brief RMS dips once a candidate speech window opens.
 - **Speech encode hangover:** keeps RNNoise/Opus active briefly after VAD drops to avoid chopped endings.
@@ -217,6 +235,13 @@ Problem: a quiet mic (field case: −39 dBFS speech) forces AGC2 to a large gain
 Fix: the expander passes speech at unity gain and attenuates the frame toward a floor gain (default −20 dB) when the VAD reports no speech. Attack is fast (~1 frame); release is smoothed (~150 ms) so word onsets and tails are not chopped.
 
 Key detail: the expander is keyed off the **raw** `vad_.probability() >= VAD_THRESHOLD`, not `is_speaking()`. `is_speaking()` latches through an 8-frame holdover and stays true through the gaps that pump. The raw probability drops in those gaps and closes the expander there.
+
+Pre-roll and gate open (plans/voice-quality.md stage 3b):
+
+- The expander acts on live frames only. The pre-roll copy is taken before it, so the pre-roll leaves at its captured level. Before stage 3b the pre-roll went out up to 20 dB low: those frames were captured while Silero said "no speech".
+- When the gate opens, the expander starts at unity. The pre-roll in front of the first live frame leaves at unity; an attack from the floor would put a dip of about 4 dB right after the start of the word.
+- The expander still closes in the gaps of a talk spurt and in the hangover frames.
+- Test: `SpeechGateTest.PreRollLeavesAtTheCapturedLevel`. Voice gate: clean onset loss p95 1.70 dB before, 0.39 dB after, at 5 frames of pre-roll.
 
 The gate decision above is unchanged: it reads the frame before the expander runs. The expander state resets with the gate state on session boundaries. AGC2 also starts at `initial_gain_db = 0` (not the M131 default +15) to remove a separate start-gain pump on the listener path (`echo_canceller.cpp`).
 
@@ -362,6 +387,8 @@ The first change handles one property of the mello sender: the speech gate sends
 - Spurt start: the first packet, or a packet whose RTP timestamp moved more than 2 frames further than its sequence number (the sender skipped frames).
 - Lateness: how late the spurt's first packet arrived against the schedule of the earliest-scheduled packet in the first 200 ms of the spurt. The hold follows it from 0 as the pre-roll arrives; a spurt never inherits the previous spurt's hold. Below 40 ms it is network jitter, and no delay is held. At most 300 ms.
 - A stream with no gate gap (push-to-talk) is one spurt.
+- With a pre-roll of 1 frame the lateness is about 20 ms, below the 40 ms floor: no delay is held, and only the first 200 ms of the spurt stay out of the statistics.
+- `VoicePlayout::Config::talk_spurt_hold` (default on) turns both off together; the jump rule below stays. The test backend reads `MELLO_NETEQ_SPURT_HOLD=0`. Voice gate results with it off are in `TESTING.md` (talk-spurt gate). It stays on: see there.
 
 The second change: no preemptive expand for 5 s after a target jump. A stall, a jitter spike or reordered packets make the delay manager raise its target in one step (20 ms or more). Upstream NetEQ then stretches the speech to fill the buffer up to the new target, and soon after compresses it again when the target decays. The controller does not stretch the speech in those 5 s; real lateness still fills the buffer, through expand. The fill at stream start and slow target changes are NetEQ's own.
 
@@ -721,8 +748,9 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
   0.2 against the twin. In-band FEC repairs the tail-drop losses of a single
   flow, so without adaptation the bottleneck costs only delay. The ladder
   trades at most 0.2 MOS of time stretch for the delay gain
-- reports MOS-LQO (PESQ wideband), playout delay over time, concealment
-  frames per lost frame, receiver drops and dropouts, the send bitrate and
+- reports MOS-LQO (PESQ wideband), playout delay over time, the talk-spurt
+  onset loss (the output's first 200 ms of each spurt against the reference,
+  §4.1), concealment frames per lost frame, receiver drops and dropouts, the send bitrate and
   loss perc over time, with the delta against
   `benchmarks/baselines/voice/baseline-2.9.json`. See `TESTING.md`.
 
