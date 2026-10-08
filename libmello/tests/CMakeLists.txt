@@ -11,6 +11,7 @@ add_executable(mello_tests
     test_voice_receive.cpp
     test_voice_slot_hold.cpp
     test_voice_capture.cpp
+    test_speech_gate.cpp
     test_voice_packet_sink.cpp
     test_send_adaptation.cpp
     test_vad.cpp

@@ -107,6 +107,19 @@ public:
     float input_gate_dbfs() const;
     /// Frames that passed the RMS gate (candidate speech), lifetime.
     uint32_t gate_candidate_frames() const { return gate_candidate_frames_.load(std::memory_order_relaxed); }
+    /// Speech gate pre-roll (spec 10 section 4.1): the frames captured
+    /// before the gate opens that leave with the first speech frame.
+    /// Clamped to 0..kMaxPreRollFrames. The default comes from the voice
+    /// gate sweep; the test backend may override it at construction
+    /// (MELLO_VOICE_PRE_ROLL_FRAMES). Any thread; takes the capture lock.
+    static constexpr int kMaxPreRollFrames = 50;
+    void set_speech_pre_roll_frames(int frames);
+    int speech_pre_roll_frames() const { return pre_roll_frames_.load(std::memory_order_relaxed); }
+    /// Test seam: called on the capture thread with each 20 ms frame right
+    /// before Opus encode (after noise suppression), with its media time.
+    /// Tests compare it with the injected audio. Takes the capture lock.
+    using EncodeTap = std::function<void(const int16_t* pcm, int samples, uint32_t timestamp)>;
+    void set_encode_tap(EncodeTap tap);
     void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
     void set_output_volume(float vol);
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
@@ -340,9 +353,10 @@ private:
         std::array<int16_t, FRAME_SIZE> pcm;
     };
     std::deque<PreRollFrame> speech_pre_roll_;
-    // Frames kept before the speech gate opens (SPEECH_PRE_ROLL_FRAMES; the
-    // test backend may override it). Fixed at construction.
-    const int pre_roll_frames_;
+    // Frames kept before the speech gate opens. Written under accum_mutex_,
+    // read by speech_pre_roll_frames() on any thread.
+    std::atomic<int> pre_roll_frames_;
+    EncodeTap encode_tap_;  // accum_mutex_
     // 48 kHz sample index of the next captured frame. Counts every frame
     // that reaches on_captured_audio, encoded or not, so a gap from the
     // speech gate or mute advances the RTP timestamp like DTX instead of

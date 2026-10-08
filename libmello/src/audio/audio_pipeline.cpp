@@ -37,7 +37,9 @@ static bool wants_vpio_duplex(bool aec_enabled) {
 }
 #endif
 
-static constexpr int SPEECH_PRE_ROLL_FRAMES = 5;       // 100ms at 20ms/frame.
+// Default speech gate pre-roll, chosen with the voice gate (TESTING.md,
+// talk-spurt gate).
+static constexpr int DEFAULT_SPEECH_PRE_ROLL_FRAMES = 5;
 static constexpr int CANDIDATE_HANGOVER_FRAMES = 10;   // Keep Silero warm across brief dips.
 static constexpr int SPEECH_ENCODE_HANGOVER_FRAMES = 8;
 static constexpr float MIN_SPEECH_RMS = 0.002f;        // ~-54 dBFS, before adaptive floor.
@@ -128,17 +130,17 @@ static VoicePlayout::Config playout_config() {
 }
 
 // Pre-roll length in frames. The voice quality gate may change it through the
-// environment, with the test backend only, to measure what the pre-roll
-// costs in delay. Production always uses SPEECH_PRE_ROLL_FRAMES.
+// environment, with the test backend only, to sweep the delay against the
+// onset loss. Production always starts with DEFAULT_SPEECH_PRE_ROLL_FRAMES.
 static int pre_roll_frames_config() {
     if (test_audio_backend_requested()) {
         const std::string v = test_backend_env("MELLO_VOICE_PRE_ROLL_FRAMES");
         if (!v.empty()) {
             const int n = std::atoi(v.c_str());
-            if (n >= 0 && n <= 50) return n;
+            if (n >= 0 && n <= AudioPipeline::kMaxPreRollFrames) return n;
         }
     }
-    return SPEECH_PRE_ROLL_FRAMES;
+    return DEFAULT_SPEECH_PRE_ROLL_FRAMES;
 }
 
 AudioPipeline::AudioPipeline()
@@ -515,6 +517,21 @@ void AudioPipeline::reset_speech_gate_state() {
     vad_.force_silence();
 }
 
+void AudioPipeline::set_speech_pre_roll_frames(int frames) {
+    frames = (std::min)(kMaxPreRollFrames, (std::max)(0, frames));
+    std::lock_guard<std::mutex> lock(accum_mutex_);
+    pre_roll_frames_.store(frames, std::memory_order_relaxed);
+    while (speech_pre_roll_.size() > static_cast<size_t>(frames)) {
+        speech_pre_roll_.pop_front();
+    }
+    MELLO_LOG_INFO("pipeline", "speech pre-roll %d frames", frames);
+}
+
+void AudioPipeline::set_encode_tap(EncodeTap tap) {
+    std::lock_guard<std::mutex> lock(accum_mutex_);
+    encode_tap_ = std::move(tap);
+}
+
 void AudioPipeline::set_input_sensitivity(float db) {
     if (!std::isfinite(db)) return;
     db = (std::min)(0.0f, (std::max)(-100.0f, db));
@@ -599,6 +616,8 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp)
     if (ns_mode() == NsMode::Rnnoise) {
         noise_suppressor_.process(frame, FRAME_SIZE);
     }
+
+    if (encode_tap_) encode_tap_(frame, FRAME_SIZE, timestamp);
 
     apply_send_adaptation();
     uint8_t raw_pkt[MAX_PACKET_SIZE];
@@ -743,13 +762,31 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 }
 
                 bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
+                const bool gate_opens = should_encode && !speech_gate_active_;
+
+                // Pre-roll (spec 10 section 4.1): keep the frame as captured,
+                // before the expander. These frames were captured while
+                // Silero said "no speech"; when the gate opens they are the
+                // start of the word and leave at their captured level.
+                if (!should_encode) {
+                    PreRollFrame frame{};
+                    frame.timestamp = frame_ts;
+                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
+                    speech_pre_roll_.push_back(frame);
+                    const size_t keep = static_cast<size_t>(
+                        pre_roll_frames_.load(std::memory_order_relaxed));
+                    while (speech_pre_roll_.size() > keep) {
+                        speech_pre_roll_.pop_front();
+                    }
+                }
 
                 // Downward expander (post-AGC): attenuate the frame toward its
                 // floor when the VAD says no speech, so AGC gain ramped for a
                 // quiet talker cannot pump the noise floor in gaps. Smoothed
                 // release keeps word tails; the gate decision above is
-                // unchanged (it read capture_accum_ before this point). Applied
-                // to the current frame and to stored pre-roll frames alike.
+                // unchanged (it read capture_accum_ before this point). It
+                // acts on live frames only: the pre-roll copy above is taken
+                // before it.
                 //
                 // Keyed off the RAW VAD probability, not is_speaking(): the
                 // latter latches true through an 8-frame holdover, so it stays
@@ -757,13 +794,21 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 // (observed in ostkatt's log: prob 0.04 but is_speaking still
                 // true). The raw probability drops in those gaps and closes the
                 // expander there.
+                //
+                // When the gate opens, the expander starts at unity: the
+                // pre-roll in front of this frame leaves at unity, and an
+                // attack from the floor would put a dip of about 4 dB right
+                // after the start of the word.
+                if (gate_opens) {
+                    speech_expander_.reset();
+                }
                 const bool expander_speech =
                     vad_.probability() >= VAD_THRESHOLD;
                 speech_expander_.process(capture_accum_.data(), FRAME_SIZE,
                                          expander_speech);
 
                 if (should_encode) {
-                    if (!speech_gate_active_) {
+                    if (gate_opens) {
                         for (auto& frame : speech_pre_roll_) {
                             process_and_encode_frame(frame.pcm.data(), frame.timestamp);
                         }
@@ -776,14 +821,6 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                         vad_.force_silence();
                     }
                     speech_gate_active_ = false;
-
-                    PreRollFrame frame{};
-                    frame.timestamp = frame_ts;
-                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
-                    speech_pre_roll_.push_back(frame);
-                    while (speech_pre_roll_.size() > static_cast<size_t>(pre_roll_frames_)) {
-                        speech_pre_roll_.pop_front();
-                    }
 
                     // Track ambient floor only while closed so the speech threshold adapts
                     // without chasing active speech.
