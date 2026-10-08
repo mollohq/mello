@@ -524,6 +524,48 @@ TEST_F(PeerRtpRolesTest, HostOfferViewerAnswerNegotiates) {
     ASSERT_NE(pair.viewer, nullptr);
 }
 
+// Every peer role gathers an active ICE-TCP candidate (RFC 6544), so it can
+// connect to the SFU's passive ICE-TCP port when UDP is blocked
+// (rtc::Configuration::enableIceTcp, libjuice ICE-TCP active mode).
+TEST_F(PeerRtpRolesTest, EveryRoleOffersAnActiveIceTcpCandidate) {
+    const MelloPeerMediaRole roles[] = {
+        MELLO_PEER_MEDIA_ROLE_VOICE,
+        MELLO_PEER_MEDIA_ROLE_STREAM_HOST,
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+    };
+    for (const auto role : roles) {
+        {
+            std::lock_guard<std::mutex> lock(g_relay_a_to_b.mutex);
+            g_relay_a_to_b.candidates.clear();
+        }
+        auto* peer = mello_peer_create_for_role(nullptr, "ice-tcp", role);
+        ASSERT_NE(peer, nullptr) << "role " << role;
+        mello_peer_set_ice_servers(peer, nullptr, 0);
+        mello_peer_set_ice_callback(peer, ice_cb_a, nullptr);
+
+        const char* offer_ptr = mello_peer_create_offer(peer);
+        ASSERT_NE(offer_ptr, nullptr) << "role " << role;
+        const std::string offer(offer_ptr);
+
+        std::string candidates;
+        const bool found = wait_until(
+            [&]() {
+                std::lock_guard<std::mutex> lock(g_relay_a_to_b.mutex);
+                candidates.clear();
+                for (const auto& entry : g_relay_a_to_b.candidates) {
+                    candidates += std::get<0>(entry) + "\n";
+                }
+                return candidates.find("tcptype active") != std::string::npos
+                    || offer.find("tcptype active") != std::string::npos;
+            },
+            2s
+        );
+        EXPECT_TRUE(found) << "role " << role << "\noffer:\n" << offer
+                           << "\ncandidates:\n" << candidates;
+        mello_peer_destroy(peer);
+    }
+}
+
 TEST_F(PeerRtpRolesTest, HostOfferViewerAnswerConnects) {
     auto pair = negotiate_host_offer();
     ASSERT_NE(pair.host, nullptr);
