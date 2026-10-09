@@ -60,8 +60,22 @@ public:
     /// samples). Medians, because one stalled sender report doubles a
     /// single sample. The 30 s median counts as at least kRttBaseMinMs: a
     /// 2 ms LAN round trip that becomes 5 ms is no queue.
+    ///
+    /// One fresh sample: when the last 3 s hold exactly one round-trip
+    /// sample, it counts as inflated at kSingleSampleFactor x the same base
+    /// (3 x, not 2 x: one stalled sender report can double a sample). A full
+    /// tail-drop queue drops our sender reports, so the 3 s window holds
+    /// one fresh sample where the median rule needs two. The stale-report
+    /// rule (kStaleRttReports) does not catch that case: our sender reports
+    /// and the SFU's receiver reports both run on 1 s, so every other
+    /// receiver report carries no fresh round trip also on a clean link,
+    /// and a queue that drops one sender report gives one stale report in a
+    /// row, not two. The round-trip rule applies only to round trips; the
+    /// jitter test keeps the two-sample rule (a jitter sample comes with
+    /// every report that carries packets).
     static constexpr int64_t kShortWindowMs = 3000;
     static constexpr int kShortMinSamples = 2;
+    static constexpr float kSingleSampleFactor = 3.0f;
     static constexpr int64_t kBaseWindowMs = 30000;
     static constexpr int kBaseMinSamples = 5;
     static constexpr float kRttBaseMinMs = 50.0f;
@@ -138,9 +152,11 @@ private:
     void restart_clean_time(int64_t now_ms);
     /// Loss over the reports after `from_ms`: expected and lost.
     void loss_after(int64_t from_ms, uint64_t& expected, uint64_t& lost) const;
-    /// The short median exceeds 2 x max(the base median, `base_min`).
+    /// The short median exceeds 2 x max(the base median, `base_min`). With
+    /// `single_sample`, a short window of exactly one sample counts when
+    /// that sample exceeds kSingleSampleFactor x the same base.
     static bool inflated(const std::deque<Sample>& samples, int64_t now_ms, float base_min,
-                         float* short_out, float* base_out);
+                         bool single_sample, float* short_out, float* base_out);
 
     std::vector<int> rungs_;
     int rung_ = 0;

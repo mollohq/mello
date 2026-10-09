@@ -152,6 +152,38 @@ TEST(SendAdaptation, LossWithoutAFreshRoundTripForTwoReportsStepsDown) {
     EXPECT_EQ(run_trace(start, first), (Changes{{2000, 48}}));
 }
 
+// The voice gate's congestion profile, stage 3b, second case: our sender
+// reports and the SFU's receiver reports both run on 1 s, so every other
+// receiver report carries no fresh round trip, also on a clean link. The
+// full queue drops one sender report: the 3 s window holds one fresh,
+// inflated round trip, where the median rule needs two samples, and only one
+// report in a row is stale. One fresh sample at 3 x the 30 s median counts.
+std::vector<Step> one_fresh_sample_trace(float inflated_rtt_ms) {
+    std::vector<Step> trace;
+    for (int i = 1; i <= 10; ++i) {  // t 1..10: clean; odd t fresh, even t stale
+        trace.push_back({50, 0, (i % 2 == 1) ? 42.0f : -1.0f, 3.0f});
+    }
+    trace.push_back({50, 7, inflated_rtt_ms, 3.5f});  // t 11: 14 %, fresh, inflated
+    trace.push_back({50, 5, -1.0f, 3.5f});            // t 12: 10 %, stale
+    repeat(trace, 6, {50, 0, 45.0f, 3.0f});           // t 13..18: clean
+    return trace;
+}
+
+TEST(SendAdaptation, OneFreshRoundTripAtThreeTimesTheBaseStepsDown) {
+    // 160 ms against max(42 ms median, 50 ms floor): 3.2 x. Loss over the
+    // two reports: 12 of 100.
+    SendAdaptation c;
+    EXPECT_EQ(run_trace(c, one_fresh_sample_trace(160.0f)), (Changes{{12000, 48}}));
+}
+
+TEST(SendAdaptation, OneFreshRoundTripUnderThreeTimesTheBaseDoesNotStepDown) {
+    // 125 ms: 2.5 x the base. Over the two-sample factor, but one sample
+    // needs 3 x.
+    SendAdaptation c;
+    EXPECT_TRUE(run_trace(c, one_fresh_sample_trace(125.0f)).empty());
+    EXPECT_EQ(c.bitrate_kbps(), 64);
+}
+
 TEST(SendAdaptation, AStepThatDoesNotLowerTheLossGoesBackAndHoldsTheLadder) {
     SendAdaptation c;
     std::vector<Step> trace;

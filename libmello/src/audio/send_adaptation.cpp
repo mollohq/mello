@@ -62,7 +62,8 @@ void SendAdaptation::reset() {
 }
 
 bool SendAdaptation::inflated(const std::deque<Sample>& samples, int64_t now_ms,
-                              float base_min, float* short_out, float* base_out) {
+                              float base_min, bool single_sample, float* short_out,
+                              float* base_out) {
     std::vector<float> recent;
     std::vector<float> all;
     for (const auto& s : samples) {
@@ -82,15 +83,24 @@ bool SendAdaptation::inflated(const std::deque<Sample>& samples, int64_t now_ms,
             *std::max_element(v.begin(), v.begin() + static_cast<std::ptrdiff_t>(mid));
         return (lower + upper) / 2.0f;
     };
-    if (static_cast<int>(recent.size()) < kShortMinSamples ||
-        static_cast<int>(all.size()) < kBaseMinSamples) {
+    if (static_cast<int>(all.size()) < kBaseMinSamples || recent.empty()) {
+        return false;
+    }
+    const bool one = recent.size() == 1;
+    if (one && !single_sample) {
         return false;
     }
     const float short_median = median(recent);
     const float base_median = median(all);
     if (short_out) *short_out = short_median;
     if (base_out) *base_out = base_median;
-    return short_median > 2.0f * std::max(base_median, base_min);
+    const float base = std::max(base_median, base_min);
+    // One fresh sample in the short window: a stricter factor stands in for
+    // the median (header, kSingleSampleFactor).
+    if (one) {
+        return short_median >= kSingleSampleFactor * base;
+    }
+    return short_median > 2.0f * base;
 }
 
 void SendAdaptation::loss_after(int64_t from_ms, uint64_t& expected, uint64_t& lost) const {
@@ -123,8 +133,8 @@ void SendAdaptation::change_rung(int rung, int64_t now_ms, const char* why) {
     float rtt_base = -1.0f;
     float jit_short = -1.0f;
     float jit_base = -1.0f;
-    inflated(rtt_, now_ms, kRttBaseMinMs, &rtt_short, &rtt_base);
-    inflated(jitter_, now_ms, kJitterBaseMinMs, &jit_short, &jit_base);
+    inflated(rtt_, now_ms, kRttBaseMinMs, true, &rtt_short, &rtt_base);
+    inflated(jitter_, now_ms, kJitterBaseMinMs, false, &jit_short, &jit_base);
     MELLO_LOG_INFO("send_adapt",
                    "bitrate %d -> %d kbps (%s): loss over 2 s %.1f %%, rtt %.0f ms "
                    "(30 s median %.0f ms), jitter %.1f ms (30 s median %.1f ms), loss perc %d",
@@ -209,8 +219,8 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
     }
 
     const bool loss_bad = window_loss_ > kDownLoss;
-    const bool rtt_bad = inflated(rtt_, now_ms, kRttBaseMinMs, nullptr, nullptr);
-    const bool jitter_bad = inflated(jitter_, now_ms, kJitterBaseMinMs, nullptr, nullptr);
+    const bool rtt_bad = inflated(rtt_, now_ms, kRttBaseMinMs, true, nullptr, nullptr);
+    const bool jitter_bad = inflated(jitter_, now_ms, kJitterBaseMinMs, false, nullptr, nullptr);
     const bool rtt_lost = stale_rtt_reports_ >= kStaleRttReports;
     const bool congested = loss_bad && (rtt_bad || jitter_bad || rtt_lost);
     const bool held = holding(now_ms);
