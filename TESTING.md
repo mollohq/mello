@@ -377,6 +377,7 @@ Rules:
   without losses at the head of a talk spurt before any packet of that spurt
   was delivered (NetEQ has played nothing of the spurt and starts it with
   the next packet). `lost_spurt_head_frames` counts the second kind.
+  Since stage 3b the gate is informational (talk-spurt gate, below).
 - **Seeds.** A profile in `profiles-congestion.json` with `extra_seeds` also
   runs as `<name>@<seed>`; the gate reads `<metric>_median` over the seeds.
 - **MOS from different scorers is never compared.** Without the scorer the
@@ -611,6 +612,45 @@ brackets):
 | 1 frame, hold on, ff 0.4 rff 0.95 | mobile MOS 2.68 (2.70); burst recovery 5.75 s (5); burst MOS 3.18 (3.19); congestion median 406 ms (391) |
 | 5 frames, hold on, ff 0.6 rff 0.98 (branch default) | bad conceal 0.864 (0.95); burst recovery 5.75 s (5); congestion median 465 ms (425) |
 | 5 frames, hold on, ff 0.4 rff 0.95 | bad conceal 0.855 (0.95); congestion median 423 ms (392); congestion MOS 2.96 (2.97) |
+
+Fourth pass (2026-10-09): two measurement changes and a stage 5 fix.
+
+- `conceal_per_lost` is informational. On stage 6 the total concealment on
+  `bad` is the same (728.6 against 731.0 frames); NetEQ's expand for one
+  lost frame is often shorter than a frame (merge), and a loss in a stall
+  shares one expand with it. Delay growth, its harm, stays enforced
+  (`latency_clip_growth_ms`, drift).
+- `recovery_s` reads the NetEQ buffer (packet buffer, sync buffer, output
+  ring), the audio that accelerate removes. The run samples it at every
+  10 ms pull. A pull counts when NetEQ concealed less than the whole pull.
+  The curve is the mean per 250 ms over the counted pulls (`buffer.csv`); a
+  bin of mostly concealment (a pause, an outage) has no point, so an empty
+  buffer is never a recovery. Same tolerance (20 ms), hold (2 s) and limit
+  (5 s). The target delay is not used: it is the level accelerate aims for,
+  and it comes back seconds before the buffer does. Informational:
+  `recovery_e2e_s` (the earlier definition) and `recovery_target_s`.
+- The send ladder: when the 3 s round-trip window holds exactly one fresh
+  sample, the sample counts as inflated at 3 x max(30 s median, 50 ms). The
+  two-sample rule (2 x) is unchanged. The 48 to 32 kbps step on
+  `congestion` is at 19.1 s again on all three seeds; reaction 1.72 s.
+
+| Row | burst recovery s (buffer / e2e / target) | burst buffer before, peak ms | congestion median ms (limit) | Enforced gates that fail |
+|---|---|---|---:|---|
+| 5 frames, hold on (branch default) | 4.50 / 5.75 / 3.50 | 108, 265 | 397 (425) | none |
+| 1 frame, hold off | 14.25 / 5.75 / 3.75 | 32, 289 | 402 (436) | mobile clip growth 22.5 ms (20); burst recovery 14.25 s (5) |
+| 1 frame, hold on | 14.25 / 14.5 / 3.75 | - | 384 (432) | burst recovery 14.25 s (5); burst MOS 3.16 (3.19) |
+
+Outage recovery is 0 s on the buffer in every row. `bad` conceal per lost:
+0.864 at 5 frames, 0.968 at 1 frame hold off, 0.960 hold on.
+
+Why 1 frame still fails burst recovery: NetEQ's target is back to 20 ms
+3.75 s after the burst. The buffer drains in the spurt that spans the
+burst end (289 ms at 25.5 s, 83 ms at 30 s). In the next spurts (31 s to
+39 s) the delay manager holds a target of 40 ms, so the buffer plays at
+about 52 ms against 32 ms before the burst: 20 ms over, on the tolerance
+line. At 5 frames the pre-roll hold sets the target (100 ms before, 110 ms
+after the burst), and the buffer stays 14 ms over its level before the
+burst. 1 frame is not shipped; the default stays 5 frames.
 
 To rerun one row:
 
