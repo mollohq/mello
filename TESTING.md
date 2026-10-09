@@ -652,6 +652,48 @@ line. At 5 frames the pre-roll hold sets the target (100 ms before, 110 ms
 after the burst), and the buffer stays 14 ms over its level before the
 burst. 1 frame is not shipped; the default stays 5 frames.
 
+Fifth pass (2026-10-09): the delay manager at 1 frame, hold off. Sweep of
+`forget_factor` (ff) x `reorder_forget_factor` (rff) on burst, mobile, bad
+and home-wifi. "Target 20 ms" is when NetEQ's target is back to 20 ms after
+the burst (it ends at 25 s). In every row the target then holds 40 ms from
+31.6 s to 38 to 39 s, and again from 48.3 s.
+
+| ff | rff | burst recovery s (buffer / target / e2e) | burst MOS | mobile clip growth ms | mobile MOS | bad MOS | home-wifi MOS | Target 20 ms at s | Enforced gates that fail (4 profiles) |
+|---:|---:|---|---:|---:|---:|---:|---:|---:|---|
+| 0.6 | 0.98 | 14.25 / 3.75 / 5.75 | 3.19 | 22.5 | 2.77 | 2.21 | 3.23 | 29.3 | burst recovery; mobile clip growth |
+| 0.6 | 0.95 | 14.25 / 3.75 / 5.75 | 3.19 | 19.1 | 2.78 | 2.21 | 3.22 | 29.3 | burst recovery |
+| 0.6 | 0.9 | 14.25 / 3.75 / 5.75 | 3.19 | 25.0 | 2.78 | 2.21 | 3.22 | 29.3 | burst recovery; mobile clip growth |
+| 0.5 | 0.98 | 5.25 / 3.50 / 5.75 | 3.26 | 16.8 | 2.70 | 2.27 | 3.13 | 28.8 | burst recovery; mobile MOS; home-wifi MOS |
+| 0.5 | 0.95 | 5.25 / 3.50 / 5.75 | 3.26 | 17.0 | 2.72 | 2.26 | 3.13 | 28.8 | burst recovery; home-wifi MOS |
+| 0.5 | 0.9 | 5.25 / 3.50 / 5.75 | 3.26 | 19.9 | 2.71 | 2.23 | 3.13 | 28.8 | burst recovery; home-wifi MOS |
+| 0.4 | 0.98 | 4.75 / 2.75 / 5.50 | 3.22 | -4.5 | 2.73 | 2.24 | 3.14 | 28.3 | home-wifi MOS |
+| 0.4 | 0.95 | 4.75 / 2.75 / 5.50 | 3.22 | -8.5 | 2.71 | 2.23 | 3.17 | 28.3 | none |
+| 0.4 | 0.9 | 4.75 / 2.75 / 5.50 | 3.22 | -4.5 | 2.71 | 2.25 | 3.17 | 28.3 | none |
+| 0.3 | 0.98 | 4.50 / 2.25 / 5.50 | 3.19 | -4.2 | 2.67 | 2.25 | 3.14 | 27.8 | mobile MOS; home-wifi MOS |
+| 0.3 | 0.95 | 4.50 / 2.25 / 5.50 | 3.19 | -4.6 | 2.66 | 2.23 | 3.17 | 27.8 | mobile MOS |
+| 0.3 | 0.9 | 4.50 / 2.25 / 5.50 | 3.19 | -0.9 | 2.66 | 2.28 | 3.17 | 27.8 | mobile MOS |
+| 0.4, hold on | 0.95 | 5.25 / 3.00 / 5.75 | 3.18 | 12.5 | 2.68 | 2.22 | 3.18 | 28.0 | burst recovery; burst MOS; mobile MOS |
+
+The two rows that pass on the four profiles fail the full gate on
+`congestion` MOS: 2.86 against no-adapt 3.10 - 0.2 = 2.90, with ff 0.4 and
+rff 0.95 or 0.9. The faster forget drains the queue delay with more
+accelerate (406 ms against 139 ms without the ladder), which PESQ scores.
+Congestion MOS, seed 909 (910, 911): ff 0.6 rff 0.95 2.92 (2.88, 2.90);
+ff 0.5 rff 0.95 2.92 (2.88, 2.85); ff 0.4 rff 0.95 2.86 (2.90, 2.89); ff 0.3
+rff 0.95 2.78 (2.83, 2.88). No row passes every enforced gate. The
+defaults stay: 5 frames, hold on, ff 0.6 rff 0.98.
+
+The other fields of the delay manager field trial are `quantile` (0.95),
+`start_forget_weight` (2), `resample_interval_ms` (500),
+`use_reorder_optimizer` (true) and `ms_per_loss_percent` (20). None was
+changed. `MELLO_NETEQ_SPURT_HOLD_FLOOR_MS=20` with the hold on gives the same
+result as the hold on: at 1 frame the cost comes from the 200 ms of each
+spurt that stay out of the arrival statistics, not from the held delay.
+
+Mixed versions. A receiver with the hold off and ff 0.4 rff 0.95 that plays
+a 5-frame sender: clean MOS 3.07 (3.38 with the hold on), onset loss p95
+2.42 dB, clean in-clip growth -61.9 ms, burst recovery 13.5 s.
+
 To rerun one row:
 
 ```bash
