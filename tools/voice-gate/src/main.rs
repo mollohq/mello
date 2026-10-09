@@ -34,6 +34,14 @@ Definitions:
   end minus start, so it compares the same speech.
 - In-clip growth is the median over clips of the delay change from the first
   to the last third of the clip.
+- Recovery (since stage 3b) is on the receiver's NetEQ buffer: packet
+  buffer, sync buffer and output ring at every 10 ms pull, the mean per
+  250 ms over the pulls that played decoded audio. It is the time from the
+  event end until that level is within the tolerance of its median over the
+  10 s before the event, and stays there for the hold time. The baseline
+  value of recovery_s is the earlier definition, on the mouth-to-ear delay;
+  that one is now recovery_e2e_s. recovery_target_s is the same test on
+  NetEQ's target delay.
 - Concealment per lost frame counts concealment frames for losses (network
   loss plus receiver drops). The target is 1. Since NetEQ: the run's
   concealed samples (in 20 ms frames) plus frames repaired from in-band FEC,
@@ -319,6 +327,13 @@ fn real_main() -> Result<bool, String> {
                     q.t_s, q.lag_ms, q.latency_ms, q.ncc
                 )
             }),
+        )?;
+        write_csv(
+            &pdir.join("buffer.csv"),
+            "t_s,neteq_buffer_ms,neteq_target_ms",
+            m.buffer_curve
+                .iter()
+                .map(|q| format!("{:.3},{:.1},{:.1}", q.t_s, q.level_ms, q.target_ms)),
         )?;
         write_csv(
             &pdir.join("receiver.csv"),

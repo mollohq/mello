@@ -29,9 +29,29 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         -1,
     ),
     ("latency_max_ms", "Delay max (ms)", -1),
+    ("buffer_before_ms", "NetEQ buffer before the event (ms)", -1),
+    (
+        "buffer_peak_ms",
+        "NetEQ buffer peak from the event on (ms)",
+        -1,
+    ),
+    (
+        "recovery_s",
+        "Back to the pre-event NetEQ buffer after (s)",
+        -1,
+    ),
+    (
+        "recovery_target_s",
+        "Back to the pre-event NetEQ target after (s)",
+        -1,
+    ),
     ("event_before_ms", "Delay before the event (ms)", -1),
     ("event_peak_ms", "Delay peak from the event on (ms)", -1),
-    ("recovery_s", "Back to the pre-event delay after (s)", -1),
+    (
+        "recovery_e2e_s",
+        "Back to the pre-event delay after (s)",
+        -1,
+    ),
     ("conceal_per_lost", "Concealment frames per lost frame", 0),
     (
         "lost_frames",
@@ -390,6 +410,7 @@ const SUMMARY: &[(&str, &str)] = &[
     ("latency_growth_ms", "growth"),
     ("latency_clip_growth_ms", "in-clip growth"),
     ("recovery_s", "recover s"),
+    ("recovery_e2e_s", "recover e2e s"),
     ("conceal_per_lost", "conceal/lost"),
     ("fill_plc_frames", "fill PLC"),
     ("underruns", "underruns"),

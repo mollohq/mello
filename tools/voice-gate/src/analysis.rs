@@ -1,10 +1,10 @@
 //! Structural metrics from the reference and the received output:
-//! playout delay over time (windowed cross-correlation), recovery after an
-//! event, and speech dropouts.
+//! playout delay over time (windowed cross-correlation), the NetEQ buffer
+//! level over time, recovery after an event, and speech dropouts.
 
 use crate::dsp;
 use crate::profile::AnalysisSpec;
-use crate::run::{ClipSpan, SAMPLE_RATE};
+use crate::run::{BufferSample, ClipSpan, SAMPLE_RATE};
 
 /// Decimation factor for the delay search: 48 kHz to 4 kHz.
 const DECIM: usize = 12;
@@ -197,49 +197,52 @@ pub fn summarize(points: &[LagPoint], clips: &[ClipSpan], clips_per_loop: usize)
 /// [event_start_s, event_end_s] of reference time.
 #[derive(Clone, Debug)]
 pub struct Recovery {
-    /// Median latency in the 10 s before the event.
+    /// Median level in the 10 s before the event.
     pub before_ms: Option<f64>,
-    /// Highest latency from the event start to the end of the run.
+    /// Highest level from the event start to the end of the run.
     pub peak_ms: Option<f64>,
-    /// Seconds from the event end until the latency is back within the
+    /// Seconds from the event end until the level is back within the
     /// tolerance of `before_ms` and stays there for the hold time. None when
     /// that never happens in the run.
     pub recovery_s: Option<f64>,
 }
 
-pub fn recovery(
-    points: &[LagPoint],
+/// Recovery on a curve of (reference time in s, level in ms) points in time
+/// order. A gap in the curve (no speech, no playout) is no evidence either
+/// way: the hold window must hold points over at least half its length.
+fn recover(
+    points: &[(f64, f64)],
     event_start_s: f64,
     event_end_s: f64,
     a: &AnalysisSpec,
 ) -> Recovery {
     let before: Vec<f64> = points
         .iter()
-        .filter(|p| p.t_s >= event_start_s - 10.0 && p.t_s < event_start_s)
-        .map(|p| p.latency_ms)
+        .filter(|p| p.0 >= event_start_s - 10.0 && p.0 < event_start_s)
+        .map(|p| p.1)
         .collect();
     let before_ms = median(&before);
     let peak_ms = points
         .iter()
-        .filter(|p| p.t_s >= event_start_s)
-        .map(|p| p.latency_ms)
+        .filter(|p| p.0 >= event_start_s)
+        .map(|p| p.1)
         .fold(None, |m: Option<f64>, v| Some(m.map_or(v, |m| m.max(v))));
     let mut recovery_s = None;
     if let Some(b) = before_ms {
         let limit = b + a.recovery_tolerance_ms;
         let hold = a.recovery_hold_ms / 1000.0;
-        let after: Vec<&LagPoint> = points.iter().filter(|p| p.t_s >= event_end_s).collect();
+        let after: Vec<&(f64, f64)> = points.iter().filter(|p| p.0 >= event_end_s).collect();
         for (i, p) in after.iter().enumerate() {
-            let window: Vec<&&LagPoint> = after[i..]
+            let window: Vec<&&(f64, f64)> = after[i..]
                 .iter()
-                .take_while(|q| q.t_s <= p.t_s + hold)
+                .take_while(|q| q.0 <= p.0 + hold)
                 .collect();
             let covers = window
                 .last()
-                .map(|q| q.t_s - p.t_s >= hold * 0.5)
+                .map(|q| q.0 - p.0 >= hold * 0.5)
                 .unwrap_or(false);
-            if covers && window.iter().all(|q| q.latency_ms <= limit) {
-                recovery_s = Some((p.t_s - event_end_s).max(0.0));
+            if covers && window.iter().all(|q| q.1 <= limit) {
+                recovery_s = Some((p.0 - event_end_s).max(0.0));
                 break;
             }
         }
@@ -249,6 +252,111 @@ pub fn recovery(
         peak_ms,
         recovery_s,
     }
+}
+
+/// End-to-end recovery: on the cross-correlated mouth-to-ear delay
+/// ([`lag_curve`]). The delay has points only where the reference is speech,
+/// so the first point under the limit after a slow drain is often the next
+/// talk spurt: the value moves in steps of the pause schedule.
+pub fn recovery(
+    points: &[LagPoint],
+    event_start_s: f64,
+    event_end_s: f64,
+    a: &AnalysisSpec,
+) -> Recovery {
+    let curve: Vec<(f64, f64)> = points.iter().map(|p| (p.t_s, p.latency_ms)).collect();
+    recover(&curve, event_start_s, event_end_s, a)
+}
+
+/// One point of the NetEQ buffer curve.
+#[derive(Clone, Debug)]
+pub struct LevelPoint {
+    /// Reference (sender) time of the bin start, seconds.
+    pub t_s: f64,
+    /// Mean buffer level over the bin's playing pulls, ms.
+    pub level_ms: f64,
+    /// Mean NetEQ target delay over the same pulls, ms.
+    pub target_ms: f64,
+}
+
+/// The receiver's NetEQ buffer level (packet buffer, sync buffer and output
+/// ring: the audio that waits to play) per `hop_ms` bin of the run.
+///
+/// This is the delay that accelerate removes: NetEQ's accelerate cuts
+/// samples out of the sync buffer while the playout delay is over its
+/// target, and the buffer is what is left to play. The delay manager target
+/// (`rx_target_delay_ms`) is only the level that accelerate aims for: it
+/// drops seconds before the buffer does. The buffer is in the mouth-to-ear
+/// delay one for one, and it has a value at every 10 ms pull, also in the
+/// quiet parts of a talk spurt, so the curve does not wait for the next
+/// speech window or pause.
+///
+/// Each bin is the mean over the pulls in it that played decoded audio
+/// (`BufferSample::playing`). The mean takes out the one-packet sawtooth of
+/// the level between two arrivals. A bin where most pulls are concealment
+/// (a talk pause, an outage) gives no point: an empty buffer there is no
+/// audio to play, not a recovered delay. Bin times are sender time
+/// (receiver time / `clock_ratio`), as the event times are.
+pub fn buffer_curve(
+    samples: &[BufferSample],
+    clock_ratio: f64,
+    a: &AnalysisSpec,
+) -> Vec<LevelPoint> {
+    let mut out = Vec::new();
+    let bin_of = |s: &BufferSample| (s.t_ms as f64 / clock_ratio / a.hop_ms).floor() as i64;
+    let mut i = 0usize;
+    while i < samples.len() {
+        let bin = bin_of(&samples[i]);
+        let mut j = i;
+        let mut sum = 0.0;
+        let mut target = 0.0;
+        let mut playing = 0usize;
+        while j < samples.len() && bin_of(&samples[j]) == bin {
+            if samples[j].playing {
+                sum += f64::from(samples[j].buffer_ms);
+                target += f64::from(samples[j].target_ms);
+                playing += 1;
+            }
+            j += 1;
+        }
+        if playing > 0 && 2 * playing >= j - i {
+            out.push(LevelPoint {
+                t_s: bin as f64 * a.hop_ms / 1000.0,
+                level_ms: sum / playing as f64,
+                target_ms: target / playing as f64,
+            });
+        }
+        i = j;
+    }
+    out
+}
+
+/// Recovery on the NetEQ buffer level ([`buffer_curve`]): back within the
+/// tolerance of the median level of the 10 s before the event, and held
+/// there for the hold time. After an outage the buffer starts empty and
+/// fills to the target with the first packets; the bins of the outage
+/// itself have no point.
+pub fn buffer_recovery(
+    curve: &[LevelPoint],
+    event_start_s: f64,
+    event_end_s: f64,
+    a: &AnalysisSpec,
+) -> Recovery {
+    let pts: Vec<(f64, f64)> = curve.iter().map(|p| (p.t_s, p.level_ms)).collect();
+    recover(&pts, event_start_s, event_end_s, a)
+}
+
+/// The same recovery on NetEQ's target delay: when the delay manager wants
+/// the pre-event delay again. Informational: the buffer follows the target
+/// only as fast as accelerate removes audio.
+pub fn target_recovery(
+    curve: &[LevelPoint],
+    event_start_s: f64,
+    event_end_s: f64,
+    a: &AnalysisSpec,
+) -> Recovery {
+    let pts: Vec<(f64, f64)> = curve.iter().map(|p| (p.t_s, p.target_ms)).collect();
+    recover(&pts, event_start_s, event_end_s, a)
 }
 
 /// Output lag (samples) at reference position `k`: the lag of the nearest
@@ -716,5 +824,65 @@ mod tests {
         assert_eq!(r.before_ms, Some(60.0));
         assert_eq!(r.peak_ms, Some(200.0));
         assert_eq!(r.recovery_s, Some(3.0));
+    }
+
+    /// The NetEQ buffer at every 10 ms pull: a one-packet sawtooth (mean 30
+    /// ms) with talk pauses that play concealment, a 5 s burst at 250 ms,
+    /// 2.5 s of concealment with an empty buffer (as in an outage), 0.5 s
+    /// that still drains at 120 ms, and the pre-event level from 28 s.
+    #[test]
+    fn buffer_recovery_measures_the_neteq_level() {
+        let a = spec();
+        let sawtooth = |i: i64| 20.0 + 5.0 * (i % 5) as f32;
+        let samples: Vec<BufferSample> = (0..5000i64)
+            .map(|i| {
+                let t_ms = i * 10;
+                let t = t_ms as f64 / 1000.0;
+                let (buffer_ms, playing) = if t < 20.0 && t % 4.0 >= 3.5 {
+                    (2.0, false)
+                } else if t < 20.0 {
+                    (sawtooth(i), true)
+                } else if t < 25.0 {
+                    (250.0, true)
+                } else if t < 27.5 {
+                    (0.0, false)
+                } else if t < 28.0 {
+                    (120.0, true)
+                } else {
+                    (sawtooth(i), true)
+                };
+                BufferSample {
+                    t_ms,
+                    buffer_ms,
+                    target_ms: if (20.0..26.0).contains(&t) {
+                        200.0
+                    } else {
+                        20.0
+                    },
+                    playing,
+                }
+            })
+            .collect();
+        let curve = buffer_curve(&samples, 1.0, &a);
+        // One point per 250 ms bin; none in a pause or while concealment
+        // plays; the mean takes out the sawtooth.
+        assert_eq!(curve.len(), 200 - 10 - 10);
+        assert!(curve.iter().all(|p| p.t_s >= 20.0 || p.t_s % 4.0 < 3.5));
+        assert!(curve.iter().all(|p| !(25.0..27.5).contains(&p.t_s)));
+        assert!(curve
+            .iter()
+            .filter(|p| p.t_s < 20.0 || p.t_s >= 28.0)
+            .all(|p| (p.level_ms - 30.0).abs() < 1e-9));
+        let r = buffer_recovery(&curve, 20.0, 25.0, &a);
+        assert_eq!(r.before_ms, Some(30.0));
+        assert_eq!(r.peak_ms, Some(250.0));
+        // The empty buffer of the gap is not a recovery: the first point
+        // under 50 ms that holds is at 28 s.
+        assert_eq!(r.recovery_s, Some(3.0));
+        // The target is back at the first point after the gap, before the
+        // buffer is.
+        let t = target_recovery(&curve, 20.0, 25.0, &a);
+        assert_eq!(t.before_ms, Some(20.0));
+        assert_eq!(t.recovery_s, Some(2.5));
     }
 }

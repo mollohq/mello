@@ -18,7 +18,7 @@ pub mod score;
 pub mod shim;
 pub mod wav;
 
-use analysis::LagPoint;
+use analysis::{LagPoint, LevelPoint};
 use profile::{AnalysisSpec, Profile};
 use report::Metrics;
 use run::{RunResult, SAMPLE_RATE};
@@ -28,6 +28,8 @@ use serde_json::{json, Value};
 pub struct Measured {
     pub metrics: Metrics,
     pub points: Vec<LagPoint>,
+    /// The NetEQ buffer level per analysis hop (burst recovery).
+    pub buffer_curve: Vec<LevelPoint>,
     pub extra: Value,
 }
 
@@ -76,7 +78,13 @@ pub fn measure(
         .first()
         .map(|e| (e.start_s, e.start_s + e.dur_s))
         .or(profile.network.outage.map(|(s, d)| (s, s + d)));
+    // Enforced since stage 3b: recovery on the NetEQ buffer level, the
+    // delay that accelerate drains (analysis::buffer_curve). The end-to-end
+    // variant stays as an informational metric.
+    let buffer_curve = analysis::buffer_curve(&run.buffer, run.clock_ratio, a);
     let rec = event.map(|(s, e)| analysis::recovery(&points, s, e, a));
+    let buffer_rec = event.map(|(s, e)| analysis::buffer_recovery(&buffer_curve, s, e, a));
+    let target_rec = event.map(|(s, e)| analysis::target_recovery(&buffer_curve, s, e, a));
 
     let rx = &run.rx;
     // Concealment for losses, NetEQ era. NetEQ conceals by time: also while
@@ -131,10 +139,18 @@ pub fn measure(
     m.insert("latency_growth_ms".into(), delay.growth);
     m.insert("latency_clip_growth_ms".into(), delay.clip_growth);
     m.insert("latency_max_ms".into(), delay.max);
+    if let Some(r) = &buffer_rec {
+        m.insert("buffer_before_ms".into(), r.before_ms);
+        m.insert("buffer_peak_ms".into(), r.peak_ms);
+        m.insert("recovery_s".into(), r.recovery_s);
+    }
+    if let Some(r) = &target_rec {
+        m.insert("recovery_target_s".into(), r.recovery_s);
+    }
     if let Some(r) = &rec {
         m.insert("event_before_ms".into(), r.before_ms);
         m.insert("event_peak_ms".into(), r.peak_ms);
-        m.insert("recovery_s".into(), r.recovery_s);
+        m.insert("recovery_e2e_s".into(), r.recovery_s);
     }
     m.insert(
         "conceal_per_lost".into(),
@@ -288,6 +304,7 @@ pub fn measure(
     Measured {
         metrics: m,
         points,
+        buffer_curve,
         extra,
     }
 }

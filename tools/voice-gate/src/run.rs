@@ -168,6 +168,23 @@ pub struct StatSample {
     pub spurt_hold_ms: f32,
 }
 
+/// The receiver's NetEQ buffer at one 10 ms device pull (burst recovery,
+/// stage 3b; analysis::buffer_curve).
+#[derive(Clone, Copy, Debug)]
+pub struct BufferSample {
+    /// Receiver time of the pull, ms.
+    pub t_ms: i64,
+    /// NetEQ packet and sync buffer plus the output ring after the pull, ms:
+    /// the audio that waits to play, which accelerate removes.
+    pub buffer_ms: f32,
+    /// NetEQ's target delay after the pull, ms.
+    pub target_ms: f32,
+    /// The pull played decoded audio: NetEQ concealed less than the whole
+    /// pull. False in a talk pause (expand, comfort noise, muted state) and
+    /// in an outage.
+    pub playing: bool,
+}
+
 /// One encoded frame as the packet sink received it.
 #[derive(Clone, Debug)]
 pub struct SentPacket {
@@ -199,6 +216,8 @@ pub struct RunResult {
     pub rx: mello_sys::MelloDebugStats,
     pub packets_fed: u64,
     pub stats: Vec<StatSample>,
+    /// The NetEQ buffer at every 10 ms pull.
+    pub buffer: Vec<BufferSample>,
     /// The send-leg feedback loop; None for a run without feedback.
     pub adapt: Option<Adaptation>,
     /// The packets of a live sender, in send order; None for a replay.
@@ -596,6 +615,8 @@ fn drive(
     let mut pull = vec![0i16; CHUNK];
     let mut packets_fed = 0u64;
     let mut stats = Vec::new();
+    let mut buffer = Vec::with_capacity(end_ms as usize / 10 + 1);
+    let mut concealed_before = 0u64;
 
     for now in 0..=end_ms {
         set_clock(now);
@@ -692,6 +713,16 @@ fn drive(
                 return Err("mello_voice_test_pull_output: test backend not active (MELLO_AUDIO_BACKEND=test)".into());
             }
             output.extend_from_slice(&pull);
+            let s = rx.stats();
+            let concealed = s.rx_concealed_samples;
+            buffer.push(BufferSample {
+                t_ms: now,
+                buffer_ms: s.rx_buffer_ms + s.rx_output_ring_ms,
+                target_ms: s.rx_target_delay_ms,
+                // A merge can correct the count down; that pull played audio.
+                playing: concealed < concealed_before + CHUNK as u64,
+            });
+            concealed_before = concealed;
         }
         if now % 100 == 0 {
             let s = rx.stats();
@@ -737,6 +768,7 @@ fn drive(
         rx: rx_stats,
         packets_fed,
         stats,
+        buffer,
         adapt,
         live_trace,
         wall_s: started.elapsed().as_secs_f64(),
