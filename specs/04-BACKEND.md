@@ -83,7 +83,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `main.go` | RPC and hook registration |
 | `auth.go` | Post-authentication hooks (create default metadata) |
 | `crews.go` | `CreateCrewRPC`, `DiscoverCrewsRPC`, `UpdateCrewRPC`, `DeleteCrewRPC`, `ChangeCrewRoleRPC`, `KickCrewMemberRPC`, `GetCrewAvatarRPC`, after-join/leave hooks |
-| `streaming.go` | `StartStreamRPC`, `StopStreamRPC`, `UploadThumbnailRPC` |
+| `streaming.go` | `StartStreamRPC`, `StopStreamRPC`, `UploadThumbnailRPC`; `CapturePolicy` and `loadCapturePolicy` for the `capture` block (§4.2) |
 | `search_users.go` | `SearchUsersRPC` — friends first, then other matches by display name |
 | `invite_codes.go` | `GenerateInviteCode`, `JoinByInviteCodeRPC` |
 | `signaling.go` | `GetIceServersRPC`, TURN credential generation (HMAC-SHA1, time-limited) |
@@ -97,6 +97,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
 | `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |
+| `admin_capture_policy.go` | `AdminCapturePolicyGetRPC`, `AdminCapturePolicySetRPC` — server-to-server read and conditional write of the game capture hook policy (§4.2). Powers the admin Hook policy page. |
 | `dev_seed.go` | Development seed data |
 
 ---
@@ -115,7 +116,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `change_crew_role` | Yes | Promotes/demotes a member between admin (1) and member (2). Requires owner role (state 0). |
 | `kick_crew_member` | Yes | Removes a member from the crew. Admins can kick members; owner can kick anyone except self. |
 | `get_ice_servers` | Yes | Returns STUN server URLs + TURN server URLs with time-limited HMAC credentials (24h TTL). |
-| `start_stream` | Yes | Announces stream start to crew members via crew state stream. |
+| `start_stream` | Yes | Announces stream start to crew members via crew state stream. The response carries the `capture` block: the hook policy (§4.2). |
 | `stop_stream` | Yes | Announces stream end. |
 | `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
 | `post_clip` | Yes | Stores clip metadata in the durable per-crew `crew_clips` document (capped, outside the 7-day ledger trim). Pushes notification to crew. |
@@ -126,6 +127,8 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
 | `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
+| `admin_capture_policy_get` | No (`http_key`, server-to-server only) | Returns the stored hook policy and its storage version (see §4.2). Rejects client sessions. |
+| `admin_capture_policy_set` | No (`http_key`, server-to-server only) | Replaces the stored hook policy, only if the storage version still matches (see §4.2). Rejects client sessions. |
 
 Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
 
@@ -157,6 +160,59 @@ Rules:
 - Channel names resolve from `voice_channels/{crew_id}` storage. A missing definition falls back to the channel ID.
 - Crew names resolve with one batched group read. A missing group falls back to the crew ID prefix. Every crew runs a `General` channel, so the crew name is what tells rooms apart.
 - Streams come from the `stream_meta` collection scan (same read as stream GC). A record younger than the 60s GC interval can linger briefly after its host leaves.
+
+### 4.2 Game capture hook policy
+
+The policy is gate 1 of the game capture hook (`12-STREAMING.md` §3.1.1). It
+is one storage object, `capture_config/hook_policy`, owned by the system user,
+read 0 and write 0 (server only).
+
+```json
+{"hook_enabled": false, "policy_version": "2026-10-06T12:00:00Z:admin:bob",
+ "hook_allow_ids": [1942], "hook_deny_ids": [242408]}
+```
+
+| Field | Meaning |
+|---|---|
+| `hook_enabled` | Global kill switch. |
+| `hook_allow_ids` | IGDB ids that may be hooked. |
+| `hook_deny_ids` | IGDB ids that are never hooked. Deny wins. |
+| `policy_version` | `<UTC time>:admin:<actor>`, stamped on each admin write. |
+
+**`start_stream`** reads the object on every call and returns it as
+`capture`. A missing or unreadable object returns the safe default:
+`hook_enabled: false`, empty lists, `policy_version: "none"`. A stored blob
+with only the old exe lists (`hook_allow`, `hook_deny`) parses to empty id
+lists. The request carries `exe` and `igdb_id` for logs only; the server cannot
+verify either, and the client makes the decision.
+
+**`admin_capture_policy_get`** — request: empty. Response:
+`{"policy": {…}, "version": "<storage version>", "stored": true, "updated_at": "<RFC 3339>"}`.
+With nothing stored: the safe default, `version: ""`, `stored: false`.
+
+**`admin_capture_policy_set`** — request:
+`{"hook_enabled", "hook_allow_ids", "hook_deny_ids", "version", "actor"}`.
+`version` is the storage version from the last read, `""` when nothing was
+stored. Response: `{"policy", "version", "policy_version", "diff"}`, where
+`diff` counts the switch change and the ids added to and removed from each
+list, for the audit log.
+
+| Rule | Error |
+|---|---|
+| `actor` missing | `INVALID_ARGUMENT` |
+| A list missing, or over 20,000 ids | `INVALID_ARGUMENT` |
+| Id 0 on a list | `INVALID_ARGUMENT` |
+| One id on both lists | `INVALID_ARGUMENT` |
+| Counter-Strike 2 (242408) on the allow list | `INVALID_ARGUMENT` |
+| `version` is not the stored version, or a write wins the race between read and write | `ABORTED`: "policy changed since read" |
+
+The lists are sorted and de-duplicated before the write. The write is
+conditional on the storage version (`"*"`, create only, when nothing was
+stored).
+
+`hook_policy_seed.json` holds the catalogue lists, generated by
+`regen_hook_policy_seed.py` from `mello-backlog` `games.csv`, with the switch
+off. Tests read it. Nothing writes it to storage.
 
 ---
 

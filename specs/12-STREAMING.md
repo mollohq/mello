@@ -54,9 +54,11 @@ Four methods, tried in order by the capture ladder:
 | Backend | API | Notes |
 |---------|-----|-------|
 | **Hook** | m3llo game capture hook, inside the game | The game's own back buffer. The only method that sees exclusive fullscreen. Needs permission; see 3.1.1. |
-| **DXGI-DDI** | `IDXGIOutputDuplication` | The game window's monitor. Cannot see exclusive-fullscreen content. |
-| **WGC** | `Windows.Graphics.Capture`, `CreateForWindow` | The game window. Cannot see exclusive-fullscreen content either. |
+| **WGC** | `Windows.Graphics.Capture`, `CreateForWindow` | The game window. Cannot see exclusive-fullscreen content. |
 | **WGC-Monitor** | `Windows.Graphics.Capture`, `CreateForMonitor` | Fallback when window capture fails. |
+| **DXGI-DDI** | `IDXGIOutputDuplication` | The game window's monitor. Cannot see exclusive-fullscreen content either. Last, for the reason below. |
+
+Without permission for the hook, the ladder starts at WGC.
 
 `ProcessCapture` owns the ladder. Given a PID it finds the main game window
 (`EnumWindows`, largest restored-area, non-toolwindow) and tries the methods in
@@ -114,8 +116,9 @@ The user sees an error only with proof that the game is rendering: the game is
 in exclusive fullscreen, or the capture device is stuck. Host stats then carry
 `cap_failed`, the method history rides in `cap_hist`, and the client sends one
 `StreamError`. Without that proof the stream is quiet, not broken, and the user
-is not told anything. Exclusive-fullscreen games need the game capture hook
-(plan work stream 3), which does not exist yet.
+is not told anything. Only the game capture hook (3.1.1) sees an
+exclusive-fullscreen game, so such a game streams only when the hook policy
+allows it.
 
 **Target exit ends the stream.** Each backend holds the target process object
 through an open handle, so pid reuse cannot confuse it, and reports
@@ -136,12 +139,15 @@ stream never ends on uncertainty.
 The hook is the first ladder step, and the only method that sees an
 exclusive-fullscreen game. It is off unless the caller allows that game.
 
-**How a frame travels.** The hook DLL runs inside the game. It detours
-`IDXGISwapChain::Present`, `Present1` and `ResizeBuffers`, and on each present
-it copies the back buffer into one of two shared textures and signals an event.
-`HookCapture` (`libmello/src/video/capture_hook.cpp`) opens those textures on
-the encoder's device, copies the newest one, and hands it to the pipeline as
-any other backend does. No frame is copied through system memory.
+**How a frame travels.** The hook DLL runs inside the game. For a DXGI game it
+detours `IDXGISwapChain::Present`, `Present1` and `ResizeBuffers`. For a
+Direct3D 9 game it detours `Present`, `PresentEx`, the swap chain `Present`,
+`Reset` and `ResetEx`. On each present it copies the back buffer into one of
+two shared textures and signals an event. `HookCapture`
+(`libmello/src/video/capture_hook.cpp`) opens those textures on the encoder's
+device, copies the newest one, and hands it to the pipeline as any other
+backend does. Only the Direct3D 9 fallback below copies frames through system
+memory.
 
 **Binaries** (`hook/`, its own CMake project because it builds for x86 as well
 as x64 and links the static CRT):
@@ -152,12 +158,14 @@ as x64 and links the static CRT):
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
-**The shared block** (`hook/include/mello_hook_protocol.h`) is the whole
-contract. The client creates it, the events and the keepalive before it
-injects; the hook only opens them. Each field has one writer. Textures are
-shared with legacy DXGI handles (`D3D11_RESOURCE_MISC_SHARED`,
-`GetSharedHandle`), stored as `uint32_t`, so a 32-bit game's texture opens in
-the 64-bit client with no `DuplicateHandle`.
+**The shared block** (`hook/include/mello_hook_protocol.h`, protocol version 3)
+is the whole contract. The client creates it, the events and the keepalive
+before it injects; the hook only opens them. Each field has one writer. The
+client writes the LUID of its adapter into `client_adapter_luid`, so a Direct3D
+9 game can tell whether it may share. Textures are shared with legacy DXGI
+handles (`D3D11_RESOURCE_MISC_SHARED`, `GetSharedHandle`), stored as
+`uint32_t`, so a 32-bit game's texture opens in the 64-bit client with no
+`DuplicateHandle`.
 
 **Offsets, not probes.** The hook never creates a device inside a game to find
 `Present`. The offsets helper builds a throwaway D3D11 swap chain in its own
@@ -165,25 +173,55 @@ process, reads the addresses out of the COM virtual function table, and prints
 them as offsets from `dxgi.dll`. The client caches them against that file's
 version and writes them into the shared block before injection.
 
-**Safety rules the code keeps** (plan 3.7): `DllMain` starts a thread and
-returns; every detour body runs in a structured exception guard and a fault
-turns capture off for good; nothing on the present path allocates, locks or
-logs; the DLL pins itself and the detours are never removed, because a game
-thread can be inside one; the hook stops capturing 5 s after the client's
-heartbeat stops.
+**Safety rules the code keeps** (streaming-reliability plan §7.5): `DllMain`
+starts a thread and returns; every detour body runs in a structured exception
+guard and a fault turns capture off for good; nothing on the present path
+allocates, locks or logs; the DLL pins itself and the detours are never
+removed, because a game thread can be inside one; the hook stops capturing
+5 s after the client's heartbeat stops.
 
-**Permission.** Two gates, both needed:
+**Permission.** Two gates, both needed. Design and reasons:
+`mello-backlog/plans/streaming-reliability.md` §8 and
+`game-identity-hook-policy.md`.
 
-1. The caller allows this game. In the client that comes from the game
-   catalogue policy and the backend `capture` block (plan 3.6). Neither exists
-   yet, so the client passes `allow_hook: false` and nothing is hooked. The
-   environment variable `MELLO_HOOK_ALLOW_EXE` names one executable and stands
-   in for the backend list while the hook is being tested.
-2. The run-time checks in `hook_policy.cpp`, on every stream start: the process
-   can be opened for read, no anti-cheat module is loaded in it, no anti-cheat
-   service is running, it is not Store-packaged, not a Chromium shell, and not
-   elevated. Any one of these refuses the hook, and the ladder falls back to
-   screen capture.
+1. **The backend policy allows this game** (mello-core). The `start_stream`
+   response carries a `capture` block, which the backend reads from Nakama
+   storage `capture_config/hook_policy` on every call:
+
+   | Field | Meaning |
+   |---|---|
+   | `hook_enabled` | Global kill switch. |
+   | `hook_allow_ids` | IGDB ids that may be hooked. |
+   | `hook_deny_ids` | IGDB ids that are never hooked. Deny wins. |
+   | `policy_version` | `<UTC time>:admin:<name>`, for the logs. |
+
+   The client takes `igdb_id` from the catalogue lookup of the process it
+   captures: the `stream_games` row of that pid. `hook_allowed_for_game`
+   refuses when there is no block, the switch is off, the id is 0 (the
+   catalogue does not know the process), or the id is denied. Otherwise the id
+   must be on the allow list. The result is `allow_hook`, and the client logs
+   `Hook policy: exe=… igdb_id=… allow_hook=… policy_version=…`.
+
+   The lists come from the hook catalogue (`games.csv`): `hook` → allow,
+   `no_hook` → deny, `hook_review` → neither. Counter-Strike 2 is always
+   denied. The admin tool (`mello-admin`, Hook policy page) edits the stored
+   policy through `admin_capture_policy_get` and `admin_capture_policy_set`.
+   Those RPCs accept the `http_key` only, refuse a client session, and write
+   only if the storage version still matches the admin's read.
+   `hook_policy_seed.json` holds the catalogue lists for tests and has the
+   switch off.
+
+   With no stored policy, or with `hook_enabled: false`, nothing is hooked.
+   The switch stays off until the anti-cheat audit in
+   `game-identity-hook-policy.md` §6 is done.
+
+   The environment variable `MELLO_HOOK_ALLOW_EXE` names one executable and
+   skips this gate for it, on a developer machine. Gate 2 still applies.
+2. **The run-time checks** in `hook_policy.cpp`, on every stream start: the
+   process can be opened for read, no anti-cheat module is loaded in it, no
+   anti-cheat service is running, it is not Store-packaged, not a Chromium
+   shell, and not elevated. Any one of these refuses the hook, and the ladder
+   falls back to screen capture.
 
 **The shared D3D11 context is thread protected.** Capture threads copy frames
 into the immediate context and the encode thread converts them. A D3D11
@@ -193,11 +231,26 @@ views with `E_INVALIDARG` while another thread is inside a copy. Measured on
 2026-09-16 against a Direct3D 9 game: capture ran at 50 fps and every frame
 failed to convert. `create_d3d11_device` turns it on for every backend.
 
-**Direct3D 9 travels through memory.** A D3D9 surface cannot be opened on the
-client's D3D11 device, so that path does what plan 3.2 asks for first: on each
-present the hook reads the back buffer back with `GetRenderTargetData` into a
-system-memory surface, and copies the pixels into a second shared block
-(`Local\mello_hook_frames_<pid>`, two slots). The client uploads them into a
+**Direct3D 9 shares textures when it can.** The hook checks the game's device
+each time it builds its capture resources: on the first present, and after a
+change of back-buffer size or format. A D3D9Ex device on the client's adapter
+(its LUID equals `client_adapter_luid`) gets two shared textures on the game's
+own device.
+`StretchRect` resolves the back buffer into them on each present: no
+read-back, no CPU copy. Direct3D 9 queues that copy, and the client's device
+has nothing to wait on, so each slot has an event query. The hook hands a slot
+to the client only after its copy has retired, and it checks this at the next
+present, so the game's thread never waits. Without that wait the client opens
+the texture and reads zeros (`test_d3d9ex_share.cpp`). Measured with the
+fakegame (Direct3D 9, windowed, 20 s ladder bench): Hook on 20 of 20 samples,
+48 fps, 1 ms present-to-capture at p50 and p99, no drops.
+
+**Otherwise Direct3D 9 travels through memory.** A plain D3D9 device cannot
+share a surface, and a shared handle is valid on no other adapter. For those
+games, on each present the hook reads the back buffer back with
+`GetRenderTargetData` into a system-memory surface, and copies the pixels into
+a second shared block (`Local\mello_hook_frames_<pid>`, two slots). The
+read-back stalls the game's render thread. The client uploads them into a
 texture and the pipeline sees the same thing as from any other backend. The
 hook sets `MELLO_HOOK_FLAG_CPU_COPY` and the `cpu_frame_bytes` and `cpu_pitch`
 fields; those are how the client knows which transport to use. The back buffer
@@ -207,14 +260,11 @@ is one. `Reset` and
 `ResetEx` are detoured as well: a reset changes the back buffer, so the
 read-back surfaces are dropped and the next present rebuilds them.
 
-The shared-texture path for D3D9 comes later. It needs a D3D9Ex device, and a
-game that made a plain D3D9 device cannot share a surface at all without
-reaching into the device's internals.
-
 **What works today:** DXGI swap chains, which covers Direct3D 11 and 10, and
-Direct3D 9 through memory. Both for 32-bit and 64-bit games. D3D12 and OpenGL
+Direct3D 9: shared textures for a D3D9Ex game on the client's adapter, memory
+for every other D3D9 game. Both for 32-bit and 64-bit games. D3D12 and OpenGL
 are later steps in the plan. Vulkan games use the WGC steps by decision
-(plan 3.10).
+(streaming-reliability plan §9).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
 
@@ -626,8 +676,8 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Host start
 
-1. User picks a capture source (game process or monitor) in the UI.
-2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint.
+1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid.
+2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint, and the `capture` block. For a process target, `hook_allowed_for_game` turns the block and `igdb_id` into `allow_hook` (§3.1.1).
 3. `start_host` creates the libmello video pipeline (capture + preprocess + encoder) and sets up mpsc channels for encoded packets.
 4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop.
 

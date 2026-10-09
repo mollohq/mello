@@ -23,7 +23,7 @@ namespace mello::video {
 ///
 /// It is the only method that can see an exclusive-fullscreen game, and the
 /// only one that needs permission: `ProcessCapture` asks the hook policy before
-/// it builds one (plan 3.6).
+/// it builds one (streaming-reliability plan section 8).
 ///
 /// Threads:
 ///  - `initialize`, `start` and `stop` run on the pipeline thread.

@@ -668,8 +668,8 @@ TEST(HookPolicy, StorePackagedAndChromiumGamesAreRefused) {
     EXPECT_FALSE(is_chromium_window_class("UnigineWindowClass"));
 }
 
-// The developer override stands in for the backend safe list. It names one
-// executable, and a partial name must not widen it to other games.
+// The developer override skips the backend hook policy for one executable,
+// and a partial name must not widen it to other games.
 TEST(HookPolicy, TheDeveloperOverrideNamesOneExecutable) {
     using namespace mello::video::hook;
     EXPECT_TRUE(developer_allows("Heaven.exe", R"(C:\Games\Heaven\bin\Heaven.exe)"));

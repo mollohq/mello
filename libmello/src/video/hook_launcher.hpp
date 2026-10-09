@@ -11,9 +11,9 @@ namespace mello::video::hook {
 /// Present-function offsets for this machine, from the offsets helper.
 ///
 /// The offsets come from a helper process, never from a probe device inside the
-/// game (plan 3.3). They are cached for the life of the client, keyed by the
-/// file version of dxgi.dll: a Windows update changes the file and the offsets
-/// with it.
+/// game (streaming-reliability plan section 7.3). They are cached for the life
+/// of the client, keyed by the file version of dxgi.dll: a Windows update
+/// changes the file and the offsets with it.
 struct Offsets {
     bool        valid = false;
     std::string dxgi_file_version;

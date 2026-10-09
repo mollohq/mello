@@ -247,8 +247,8 @@ PolicyResult check_process(uint32_t pid, bool allowed_by_caller) {
             return result;
         }
         MELLO_LOG_WARN(TAG,
-                       "%s allows the hook for %s. This is a developer setting and it stands in "
-                       "for the backend safe list.",
+                       "%s allows the hook for %s. This is a developer setting and it skips "
+                       "the backend hook policy for this executable.",
                        kDeveloperAllowVariable, file_name_of(path).c_str());
     }
 

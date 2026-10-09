@@ -1,6 +1,7 @@
 // mello-offsets — prints the present-function offsets for this machine.
 //
-// The hook must never build a probe device inside a game (plan 3.3). This
+// The hook must never build a probe device inside a game (streaming-reliability
+// plan section 7.3). This
 // helper builds one in a process of its own, reads the addresses out of the
 // COM virtual function tables, and prints them as offsets from the module that
 // contains them. The client caches the result against the file version of

@@ -35,8 +35,9 @@ namespace ladder {
 ///
 /// `allow_hook` puts the game capture hook first. It is the only method that
 /// sees an exclusive-fullscreen game, and the only one that needs permission:
-/// the caller passes the catalogue and backend decision, and libmello runs its
-/// own run-time checks before it injects anything (plan 3.6).
+/// the caller passes the backend policy decision, and libmello runs its own
+/// run-time checks before it injects anything (streaming-reliability plan
+/// section 8).
 std::vector<LadderStep> initial_order(bool allow_hook);
 
 /// A method that delivered no frame at all by this point has failed.

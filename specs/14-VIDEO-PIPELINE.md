@@ -177,9 +177,9 @@ private:
 namespace mello::video {
 
 enum class CaptureMode {
-    Monitor,    // Full display output   → DXGI DDI backend
+    Monitor,    // Full display output   → DXGI DDI (WGC with prefer_wgc)
     Window,     // Specific HWND         → WGC backend
-    Process,    // Game / app by PID     → WGC (or DXGI DDI if exclusive fullscreen)
+    Process,    // Game / app by PID     → ProcessCapture, the capture ladder
 };
 
 struct CaptureSourceDesc {
@@ -189,6 +189,8 @@ struct CaptureSourceDesc {
         void*    hwnd;          // Window mode: HWND
         uint32_t pid;           // Process mode: process ID
     };
+    bool prefer_wgc = false;    // Monitor mode: WGC instead of DXGI (benchmark)
+    bool allow_hook = false;    // Process mode: the backend policy allows the hook
 };
 
 class CaptureSource {
@@ -204,9 +206,18 @@ public:
     virtual uint32_t width()  const = 0;
     virtual uint32_t height() const = 0;
     virtual const char* backend_name() const = 0;
+
+    // Ladder and status hooks, with defaults. See capture_source.hpp.
+    virtual bool get_cursor(CursorData& out);
+    virtual bool consume_swap_event();      // a method change: force a keyframe
+    virtual bool failed() const;            // every method failed, with proof
+    virtual std::string method_history() const;
+    virtual CaptureState state() const;     // Capturing, WaitingMinimized, WaitingForGame, Failed
+    virtual bool target_exited() const;     // the captured process quit
+    virtual bool captures_while_minimized() const;  // true for the hook only
 };
 
-/// Factory — selects DXGI or WGC based on desc and runtime conditions.
+/// Factory — DXGI or WGC for Monitor and Window, ProcessCapture for Process.
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc);
 
 } // namespace mello::video
@@ -219,17 +230,19 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& de
 | `Monitor` | Default | DXGI DDI |
 | `Monitor` | `prefer_wgc` (benchmark, `MELLO_CAPTURE_MONITOR_WGC`) | WGC on that monitor |
 | `Window` | Always | WGC on the HWND |
-| `Process` | First ladder step, window covers its monitor | DXGI DDI on that monitor |
-| `Process` | First ladder step, windowed | WGC on the process's main HWND |
-| `Process` | Later ladder steps | The remaining methods, in order |
+| `Process` | `allow_hook` true | Ladder: Hook, WGC window, WGC monitor, DXGI DDI |
+| `Process` | `allow_hook` false | Ladder: WGC window, WGC monitor, DXGI DDI |
 
-`Process` mode runs the capture ladder: the first method that delivers a frame
-within 2 s keeps the stream. See `12-STREAMING.md` §3.1 for the rules and
-`mello-backlog/plans/streaming-reliability.md` for why.
+`Process` mode runs the capture ladder (`capture_process.cpp`): the first
+method that delivers a frame keeps the stream. `allow_hook` is the backend hook
+policy decision, made in mello-core by IGDB id; the hook step still runs
+libmello's run-time checks before it injects. See `12-STREAMING.md` §3.1 for
+the rules and the hook, and `mello-backlog/plans/streaming-reliability.md` for
+why.
 
 ### 4.3 DXGI Desktop Duplication Backend
 
-Used for monitor capture and exclusive fullscreen games. Acquires frames directly from the DXGI output without going through DWM — lowest possible capture latency.
+Used for monitor capture, and as the last step of the process ladder. Acquires frames directly from the DXGI output without going through DWM. It cannot see an exclusive-fullscreen game: only the game capture hook can. On NVIDIA, `AcquireNextFrame` can block inside the driver and ignore its timeout, which is why the ladder tries it last (`12-STREAMING.md` §3.1).
 
 ```cpp
 // src/video/capture_dxgi.hpp
@@ -326,53 +339,29 @@ private:
 
 **WGC and cursor:** WGC composites the cursor into the captured texture by default. To match the DXGI path (cursor as separate channel), WGC capture must disable cursor capture via `GraphicsCaptureSession::IsCursorCaptureEnabled = false` and read cursor position via `GetCursorInfo()` instead.
 
-### 4.5 Exclusive Fullscreen Detection and Hot-swap
+### 4.5 ProcessCapture and the Capture Ladder
 
-For `Process` mode, the capture backend must automatically switch when a game transitions between windowed and exclusive fullscreen (common during game startup sequences).
+`ProcessCapture` (`src/video/capture_process.hpp/.cpp`) owns the ladder for
+`Process` mode. It finds the game's main window, builds the first method in
+the ladder, and moves to the next method only on evidence. The evidence rules,
+the 15 s wait for a game that has drawn nothing, the walk back up on exclusive
+fullscreen, and the 30 s retry are in `12-STREAMING.md` §3.1.
 
-```cpp
-// src/video/capture_source.cpp (factory + hot-swap logic)
+| Ladder step | Backend |
+|---|---|
+| `Hook` | `HookCapture` (`capture_hook.cpp`), the game capture hook. Only with `allow_hook`, and only after `hook::check_process` passes. |
+| `WgcWindow` | `WgcCapture` on the main window |
+| `WgcMonitor` | `WgcCapture` on the window's monitor |
+| `Dxgi` | `DxgiCapture` on the window's monitor |
 
-namespace mello::video {
+Exclusive fullscreen is detected with `SHQueryUserNotificationState`. It does
+not swap to DXGI: no screen method sees exclusive fullscreen. It rebuilds the
+current method and restarts the ladder from the top, so the hook gets another
+chance.
 
-/// Check whether a process currently owns a DXGI output (exclusive fullscreen).
-/// Returns the adapter/output index if true, -1 if windowed.
-static int query_exclusive_fullscreen_output(uint32_t pid);
-
-class ProcessCapture : public CaptureSource {
-public:
-    bool initialize(const GraphicsDevice& device, const CaptureSourceDesc& desc) override;
-    bool start(uint32_t target_fps, FrameCallback callback) override;
-    void stop() override;
-
-    uint32_t width()  const override;
-    uint32_t height() const override;
-    const char* backend_name() const override;
-
-private:
-    void monitor_thread();  // Polls for fullscreen transition every 500ms
-    void swap_to_dxgi();
-    void swap_to_wgc();
-
-    uint32_t                         pid_;
-    GraphicsDevice                   device_;
-    FrameCallback                    callback_;
-    uint32_t                         target_fps_ = 60;
-
-    std::unique_ptr<CaptureSource>   active_;    // Current backend (DXGI or WGC)
-    std::thread                      monitor_thread_;
-    std::atomic<bool>                running_{false};
-};
-
-} // namespace mello::video
-```
-
-Hot-swap sequence:
-1. `monitor_thread` detects fullscreen state change.
-2. Calls `active_->stop()` on the current backend.
-3. Instantiates the new backend, calls `initialize()` and `start()` with the same `callback_`.
-4. Swap is seamless from the pipeline's perspective — `on_packet` callbacks resume on the new backend within one frame interval.
-5. A keyframe is requested immediately after swap so the viewer can resync.
+Every method change raises `consume_swap_event()`, and the pipeline forces a
+keyframe so the viewer can resync. `state()` reports what the capture is doing
+for the pause card, and `target_exited()` ends the stream when the game quits.
 
 ### 4.6 Game Process Enumeration
 
@@ -390,28 +379,29 @@ namespace mello::video {
 
 struct GameProcess {
     uint32_t    pid;
-    std::string name;           // e.g. "Minecraft"
-    std::string exe;            // e.g. "javaw.exe"
-    bool        is_fullscreen;  // Currently in exclusive fullscreen
+    std::string name;
+    std::string exe;            // executable file name, the catalogue key
+    bool        is_fullscreen;  // main window covers its monitor
+    std::string path;           // full executable path; empty when windowless
+    std::string window_title;   // empty when windowless
+    bool        is_foreground = false;
+    int64_t     started_at_ms = 0;  // with pid, identifies a process across restarts
 };
 
-/// Returns running processes that match the known game list.
-/// The known list is a bundled JSON file: assets/games.json
+/// Returns every running process. libmello does not filter.
 std::vector<GameProcess> enumerate_game_processes();
 
 } // namespace mello::video
 ```
 
-`assets/games.json` format:
-```json
-[
-  { "name": "Minecraft",        "exe": "javaw.exe"        },
-  { "name": "Fortnite",         "exe": "FortniteClient-Win64-Shipping.exe" },
-  { "name": "League of Legends","exe": "League of Legends.exe" }
-]
-```
-
-The list is bundled with the client and updated via the auto-updater. Processes not on the list are not shown. A user can also pick "Share a window" (any visible HWND, not filtered) or "Share a monitor" as alternatives.
+mello-core decides which processes are games. It looks each one up in the
+bundled game catalogue (`client/assets/catalogue/head.bin`) with
+`Head::lookup_exe(exe, path)`, which is path-aware: a guarded entry such as
+`javaw.exe` matches only when its marker is in the path. A catalogue match
+gives the display name and the `igdb_id` that the hook policy uses. The picker
+lists catalogue games first, then other processes that own a visible window. A
+user can also pick "Share a window" (any visible HWND) or "Share a monitor".
+See `17-GAME-SENSING.md` §2.
 
 ---
 

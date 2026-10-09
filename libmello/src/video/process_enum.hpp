@@ -30,7 +30,8 @@ struct GameProcess {
     int64_t     started_at_ms = 0;
 };
 
-/// Returns running processes that match the bundled game list (assets/games.json).
+/// Returns every running process. The game catalogue in mello-core decides
+/// which of them is a game (spec 17 section 2.1); libmello does not filter.
 std::vector<GameProcess> enumerate_game_processes();
 
 struct VisibleWindow {

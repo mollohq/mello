@@ -13,7 +13,7 @@ libmello is the C++ library that handles all low-level audio/video capture, enco
 
 **Key Responsibilities:**
 - Audio capture (WASAPI), processing (WebRTC AEC3 + AGC2, RNNoise, Silero VAD), and encoding (Opus)
-- Video capture (DXGI), encoding (NVENC/AMF/QSV), and decoding
+- Video capture (the capture ladder: game capture hook, WGC, DXGI; ScreenCaptureKit on macOS), encoding (NVENC/AMF/QSV), and decoding
 - P2P transport (libdatachannel)
 - ICE/STUN/TURN connectivity
 
@@ -44,7 +44,14 @@ libmello/
 │   │
 │   ├── video/
 │   │   ├── video_pipeline.hpp/cpp
+│   │   ├── capture_source.hpp      # CaptureSource interface, CaptureState
+│   │   ├── capture_process.hpp/cpp # ProcessCapture: the capture ladder
+│   │   ├── capture_hook.hpp/cpp    # Game capture hook backend (client side)
+│   │   ├── hook_launcher.hpp/cpp   # Offsets helper and injection helper
+│   │   ├── hook_policy.hpp/cpp     # Run-time checks before any injection
+│   │   ├── capture_wgc.hpp/cpp     # Windows.Graphics.Capture
 │   │   ├── capture_dxgi.hpp/cpp    # Desktop Duplication API
+│   │   ├── process_enum.hpp/cpp    # Processes, windows, monitors
 │   │   ├── encoder.hpp             # Abstract encoder interface
 │   │   ├── encoder_nvenc.hpp/cpp   # NVIDIA NVENC
 │   │   ├── encoder_amf.hpp/cpp     # AMD AMF
@@ -253,8 +260,8 @@ Without this, the WASAPI playback thread falls through to `ring_.read()` (always
 │                         VIDEO PIPELINE (HOST)                           │
 │                                                                         │
 │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐                 │
-│  │  DXGI   │──▶│  Color  │──▶│ Hardware│──▶│ Packet  │                 │
-│  │ Capture │   │ Convert │   │ Encode  │   │ Queue   │                 │
+│  │ Capture │──▶│  Color  │──▶│ Hardware│──▶│ Packet  │                 │
+│  │ ladder  │   │ Convert │   │ Encode  │   │ Queue   │                 │
 │  │         │   │ (GPU)   │   │ NVENC/  │   │         │                 │
 │  │ D3D11   │   │ BGRA→   │   │ AMF/QSV │   │         │                 │
 │  │ Texture │   │ NV12    │   │         │   │         │                 │
@@ -287,8 +294,10 @@ Without this, the WASAPI playback thread falls through to `ring_.read()` (always
 ### Key design decisions
 
 - **Hardware encode only:** No software fallback. NVENC/AMF/QSV are fast enough (<5ms) and don't compete for CPU with the game being streamed. If no hardware encoder is detected, streaming is unavailable.
-- **Zero-copy VRAM pipeline:** DXGI captures to a D3D11 texture, color conversion (BGRA→NV12) happens on GPU via compute shader, and the encoder reads directly from VRAM. No GPU→CPU→GPU round-trips for the host.
-- **DXGI Desktop Duplication:** Captures all monitors at native resolution. Handles cursor compositing, display rotation, and secure desktop transitions. Requires Windows 8+.
+- **Zero-copy VRAM pipeline:** Every capture backend delivers a D3D11 texture, color conversion (BGRA→NV12) happens on GPU via compute shader, and the encoder reads directly from VRAM. One exception: a Direct3D 9 game that cannot share textures sends its frames through memory, and the client uploads them.
+- **Capture ladder for games:** `ProcessCapture` tries the game capture hook (only when the backend hook policy allows the game, and only after the run-time checks in `hook_policy.cpp`), then WGC window, WGC monitor, and DXGI desktop duplication. The rules, the hook, and its policy are in `12-STREAMING.md` §3.1. The capture classes are in `14-VIDEO-PIPELINE.md` §4.
+- **Game capture hook:** The hook DLL, the injector and the offsets helper are a separate CMake project in `hook/`, built for x86 and x64. `hook/include/mello_hook_protocol.h` is the contract between the hook and libmello. Breaking its safety rules crashes the game, not m3llo: read `hook/README.md` before you change it.
+- **DXGI Desktop Duplication:** Captures all monitors at native resolution. Handles cursor compositing, display rotation, and secure desktop transitions. Requires Windows 8+. It cannot see an exclusive-fullscreen game.
 - **Abstract encoder interface:** All three hardware encoders implement the same `Encoder` base class. `create_best_encoder()` probes available hardware at runtime.
 
 ---
