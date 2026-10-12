@@ -1,0 +1,1113 @@
+{
+  "baseline": "2.9",
+  "corpus": {
+    "clips": [
+      "m1_davison.wav",
+      "f1_farris.wav",
+      "m2_grothmann.wav",
+      "f2_patterson.wav"
+    ],
+    "dir": "libmello/tests/fixtures/voice",
+    "fingerprint": "ac3221b5ba3b8dc4"
+  },
+  "gates": [
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "rx_dropped_late",
+      "note": "",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "rx_jitter_resets",
+      "note": "",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "latency_growth_ms",
+      "note": "no delay build-up on a clean link",
+      "pass": true,
+      "profile": "clean",
+      "rule": ">= -20, <= 20",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "latency_clip_growth_ms",
+      "note": "no delay build-up on a clean link",
+      "pass": true,
+      "profile": "clean",
+      "rule": ">= -20, <= 20",
+      "value": -5.0
+    },
+    {
+      "enforced": false,
+      "metric": "latency_p50_ms",
+      "note": "stages 2 and 3: mouth-to-ear delay on a 20 ms link",
+      "pass": false,
+      "profile": "clean",
+      "rule": "<= 100",
+      "value": 261.5
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "home-wifi",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "conceal_per_lost",
+      "note": "stage 1.1: one concealment per lost frame",
+      "pass": false,
+      "profile": "home-wifi",
+      "rule": ">= 0.95, <= 1.05",
+      "value": 2.0
+    },
+    {
+      "enforced": false,
+      "metric": "latency_clip_growth_ms",
+      "note": "stage 1 gate: flat delay at 2 % loss",
+      "pass": false,
+      "profile": "home-wifi",
+      "rule": "<= 20",
+      "value": 60.125
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "mobile",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "conceal_per_lost",
+      "note": "stage 1.1",
+      "pass": false,
+      "profile": "mobile",
+      "rule": ">= 0.95, <= 1.05",
+      "value": 1.9184549356223175
+    },
+    {
+      "enforced": false,
+      "metric": "latency_clip_growth_ms",
+      "note": "stage 3: delay goes down as well as up",
+      "pass": false,
+      "profile": "mobile",
+      "rule": "<= 20",
+      "value": 184.875
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "bad",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "conceal_per_lost",
+      "note": "stage 1.1",
+      "pass": false,
+      "profile": "bad",
+      "rule": ">= 0.95, <= 1.05",
+      "value": 1.7672253258845438
+    },
+    {
+      "enforced": false,
+      "metric": "latency_clip_growth_ms",
+      "note": "stage 3: delay goes down as well as up",
+      "pass": false,
+      "profile": "bad",
+      "rule": "<= 20",
+      "value": 402.625
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "burst",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "recovery_s",
+      "note": "stage 3 gate: back to the pre-burst delay within 5 s",
+      "pass": false,
+      "profile": "burst",
+      "rule": "<= 5",
+      "value": 5.5
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "drift",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "latency_growth_ms",
+      "note": "stage 3 gate: zero drift over 10 minutes",
+      "pass": false,
+      "profile": "drift",
+      "rule": ">= -20, <= 20",
+      "value": 51.132386761332356
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "outage",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "recovery_s",
+      "note": "stage 3: back to the pre-outage delay within 5 s",
+      "pass": false,
+      "profile": "outage",
+      "rule": "<= 5",
+      "value": 12.0
+    },
+    {
+      "enforced": true,
+      "metric": "decode_errors",
+      "note": "",
+      "pass": true,
+      "profile": "wrap",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": false,
+      "metric": "rx_jitter_resets",
+      "note": "stage 1.2: the wrap must not reset the jitter buffer",
+      "pass": false,
+      "profile": "wrap",
+      "rule": "<= 0",
+      "value": 1.0
+    },
+    {
+      "enforced": false,
+      "metric": "rx_dropped_late",
+      "note": "stage 1.2: no packet dropped at the wrap",
+      "pass": false,
+      "profile": "wrap",
+      "rule": "<= 0",
+      "value": 2.0
+    },
+    {
+      "enforced": false,
+      "metric": "wrap_dropout_ms",
+      "note": "stage 1.2: no dropout at the wrap",
+      "pass": false,
+      "profile": "wrap",
+      "rule": "<= 0",
+      "value": 80.0
+    }
+  ],
+  "git": {
+    "commit": "af8c7f0a1c702773c754999cbcb8064e96c903ab",
+    "dirty": false
+  },
+  "inputs_fingerprint": "87b9c6fedca45671",
+  "kind": "voice-gate-baseline",
+  "method": {
+    "backend": "MELLO_AUDIO_BACKEND=test (no device, no device thread)",
+    "clock": "virtual: mello_test_set_clock_ms, 1 ms steps; receiver pulls 10 ms per step of 10 ms",
+    "delay": "windowed cross-correlation at 4 kHz, reference vs output; latency = playout time - capture time",
+    "path": "mello_voice_inject_capture -> mello_voice_get_packet -> shim (SFU header rewrite, impairments) -> mello_voice_feed_packet -> mello_voice_test_pull_output",
+    "send_tick": "packets leave on a 20 ms tick at sender time 20k+10 ms, like VoiceManager::tick",
+    "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace"
+  },
+  "platform": {
+    "arch": "x86_64",
+    "os": "windows"
+  },
+  "profiles": {
+    "bad": {
+      "clips": [
+        {
+          "clip": "bad-000-m1_davison",
+          "mos": 1.3639
+        },
+        {
+          "clip": "bad-001-f1_farris",
+          "mos": 1.222
+        },
+        {
+          "clip": "bad-002-m2_grothmann",
+          "mos": 1.8617
+        },
+        {
+          "clip": "bad-003-f2_patterson",
+          "mos": 1.2403
+        },
+        {
+          "clip": "bad-004-m1_davison",
+          "mos": 1.3062
+        },
+        {
+          "clip": "bad-005-f1_farris",
+          "mos": 1.5501
+        },
+        {
+          "clip": "bad-006-m2_grothmann",
+          "mos": 1.5673
+        },
+        {
+          "clip": "bad-007-f2_patterson",
+          "mos": 1.3009
+        }
+      ],
+      "description": "Bad link: 80 ms, 35 ms jitter, 7 % random loss, long bursts, 6 stalls of 400 ms per minute, reorder.",
+      "duration_s": 93.0,
+      "info": {
+        "delay_points": 205,
+        "event_s": null,
+        "frames_decoded": 3451,
+        "jitter_missing": 537,
+        "output_level_offset_db": 3.5845404890966037,
+        "receiver_rtp_recv_total": 3456,
+        "shim": {
+          "delivered": 3456,
+          "lost_burst": 264,
+          "lost_outage": 0,
+          "lost_random": 268,
+          "reordered": 36,
+          "sent": 3988
+        },
+        "wall_s": 1.2,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 949.0,
+        "conceal_gap_fec": 237.0,
+        "conceal_gap_plc": 175.0,
+        "conceal_missing_plc": 537.0,
+        "conceal_per_lost": 1.7672,
+        "decode_errors": 0.0,
+        "dropout_ms": 11980.0,
+        "fill_plc_frames": 833.0,
+        "jitter_target_p50_ms": 75.0,
+        "latency_clip_growth_ms": 402.625,
+        "latency_end_ms": 751.625,
+        "latency_growth_ms": 40.125,
+        "latency_max_ms": 1419.5,
+        "latency_p50_ms": 751.5,
+        "latency_p95_ms": 1171.5,
+        "latency_start_ms": 711.5,
+        "lost_frames": 537.0,
+        "mos": 1.4266,
+        "mos_min": 1.222,
+        "packets_fed": 3456.0,
+        "packets_sent": 3988.0,
+        "playout_buffer_max_ms": 990.0,
+        "playout_buffer_p50_ms": 470.0,
+        "rx_dropped_late": 5.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 532.0,
+        "underruns": 127.0
+      }
+    },
+    "burst": {
+      "clips": [
+        {
+          "clip": "burst-000-m1_davison",
+          "mos": 4.0668
+        },
+        {
+          "clip": "burst-001-f1_farris",
+          "mos": 2.2563
+        },
+        {
+          "clip": "burst-002-m2_grothmann",
+          "mos": 3.0229
+        },
+        {
+          "clip": "burst-003-f2_patterson",
+          "mos": 2.5494
+        },
+        {
+          "clip": "burst-004-m1_davison",
+          "mos": 4.0357
+        }
+      ],
+      "description": "Clean link (20 ms, 2 ms jitter) with one 5 s burst at 20 s: 60 ms jitter, 10 % loss, a 300 ms stall at its start.",
+      "duration_s": 60.0,
+      "info": {
+        "delay_points": 207,
+        "event_s": [
+          20.0,
+          25.0
+        ],
+        "frames_decoded": 2569,
+        "jitter_missing": 20,
+        "output_level_offset_db": 3.825109194587642,
+        "receiver_rtp_recv_total": 2569,
+        "shim": {
+          "delivered": 2569,
+          "lost_burst": 0,
+          "lost_outage": 0,
+          "lost_random": 20,
+          "reordered": 0,
+          "sent": 2589
+        },
+        "wall_s": 0.8,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 40.0,
+        "conceal_gap_fec": 20.0,
+        "conceal_gap_plc": 0.0,
+        "conceal_missing_plc": 20.0,
+        "conceal_per_lost": 2.0,
+        "decode_errors": 0.0,
+        "dropout_ms": 760.0,
+        "event_before_ms": 251.5,
+        "event_peak_ms": 781.5,
+        "fill_plc_frames": 958.0,
+        "jitter_target_p50_ms": 23.0,
+        "latency_clip_growth_ms": 0.0,
+        "latency_end_ms": null,
+        "latency_growth_ms": null,
+        "latency_max_ms": 781.5,
+        "latency_p50_ms": 261.5,
+        "latency_p95_ms": 321.5,
+        "latency_start_ms": 271.5,
+        "lost_frames": 20.0,
+        "mos": 3.1862,
+        "mos_min": 2.2563,
+        "packets_fed": 2569.0,
+        "packets_sent": 2589.0,
+        "playout_buffer_max_ms": 660.0,
+        "playout_buffer_p50_ms": 150.0,
+        "recovery_s": 5.5,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 20.0,
+        "underruns": 125.0
+      }
+    },
+    "clean": {
+      "clips": [
+        {
+          "clip": "clean-000-m1_davison",
+          "mos": 4.0668
+        },
+        {
+          "clip": "clean-001-f1_farris",
+          "mos": 3.4984
+        },
+        {
+          "clip": "clean-002-m2_grothmann",
+          "mos": 3.0848
+        },
+        {
+          "clip": "clean-003-f2_patterson",
+          "mos": 2.5492
+        },
+        {
+          "clip": "clean-004-m1_davison",
+          "mos": 4.036
+        },
+        {
+          "clip": "clean-005-f1_farris",
+          "mos": 3.4699
+        },
+        {
+          "clip": "clean-006-m2_grothmann",
+          "mos": 3.0046
+        },
+        {
+          "clip": "clean-007-f2_patterson",
+          "mos": 2.559
+        }
+      ],
+      "description": "LAN-like: 20 ms one way, 1 ms jitter, no loss.",
+      "duration_s": 93.0,
+      "info": {
+        "delay_points": 333,
+        "event_s": null,
+        "frames_decoded": 3988,
+        "jitter_missing": 0,
+        "output_level_offset_db": 4.074924830592234,
+        "receiver_rtp_recv_total": 3988,
+        "shim": {
+          "delivered": 3988,
+          "lost_burst": 0,
+          "lost_outage": 0,
+          "lost_random": 0,
+          "reordered": 0,
+          "sent": 3988
+        },
+        "wall_s": 1.2,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 0.0,
+        "conceal_gap_fec": 0.0,
+        "conceal_gap_plc": 0.0,
+        "conceal_missing_plc": 0.0,
+        "conceal_per_lost": null,
+        "decode_errors": 0.0,
+        "dropout_ms": 460.0,
+        "fill_plc_frames": 1500.0,
+        "jitter_target_p50_ms": 21.0,
+        "latency_clip_growth_ms": -5.0,
+        "latency_end_ms": 261.5,
+        "latency_growth_ms": 0.0,
+        "latency_max_ms": 311.5,
+        "latency_p50_ms": 261.5,
+        "latency_p95_ms": 311.5,
+        "latency_start_ms": 261.5,
+        "lost_frames": 0.0,
+        "mos": 3.2836,
+        "mos_min": 2.5492,
+        "packets_fed": 3988.0,
+        "packets_sent": 3988.0,
+        "playout_buffer_max_ms": 210.0,
+        "playout_buffer_p50_ms": 150.0,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 0.0,
+        "underruns": 125.0
+      }
+    },
+    "drift": {
+      "clips": [
+        {
+          "clip": "drift-000-m1_davison",
+          "mos": 4.5387
+        },
+        {
+          "clip": "drift-001-f1_farris",
+          "mos": 4.2288
+        },
+        {
+          "clip": "drift-002-m2_grothmann",
+          "mos": 3.8713
+        },
+        {
+          "clip": "drift-003-f2_patterson",
+          "mos": 4.3863
+        },
+        {
+          "clip": "drift-004-m1_davison",
+          "mos": 4.5419
+        },
+        {
+          "clip": "drift-005-f1_farris",
+          "mos": 4.2686
+        },
+        {
+          "clip": "drift-006-m2_grothmann",
+          "mos": 3.8599
+        },
+        {
+          "clip": "drift-007-f2_patterson",
+          "mos": 4.3924
+        },
+        {
+          "clip": "drift-008-m1_davison",
+          "mos": 4.5526
+        },
+        {
+          "clip": "drift-009-f1_farris",
+          "mos": 4.2021
+        },
+        {
+          "clip": "drift-010-m2_grothmann",
+          "mos": 3.8688
+        },
+        {
+          "clip": "drift-011-f2_patterson",
+          "mos": 4.3746
+        },
+        {
+          "clip": "drift-012-m1_davison",
+          "mos": 4.5409
+        },
+        {
+          "clip": "drift-013-f1_farris",
+          "mos": 4.1853
+        },
+        {
+          "clip": "drift-014-m2_grothmann",
+          "mos": 3.897
+        },
+        {
+          "clip": "drift-015-f2_patterson",
+          "mos": 4.3861
+        },
+        {
+          "clip": "drift-016-m1_davison",
+          "mos": 4.55
+        },
+        {
+          "clip": "drift-017-f1_farris",
+          "mos": 4.2311
+        },
+        {
+          "clip": "drift-018-m2_grothmann",
+          "mos": 3.9497
+        },
+        {
+          "clip": "drift-019-f2_patterson",
+          "mos": 4.3918
+        },
+        {
+          "clip": "drift-020-m1_davison",
+          "mos": 4.5473
+        },
+        {
+          "clip": "drift-021-f1_farris",
+          "mos": 4.2288
+        },
+        {
+          "clip": "drift-022-m2_grothmann",
+          "mos": 3.9009
+        },
+        {
+          "clip": "drift-023-f2_patterson",
+          "mos": 4.3966
+        },
+        {
+          "clip": "drift-024-m1_davison",
+          "mos": 4.5438
+        },
+        {
+          "clip": "drift-025-f1_farris",
+          "mos": 4.2162
+        },
+        {
+          "clip": "drift-026-m2_grothmann",
+          "mos": 3.9333
+        },
+        {
+          "clip": "drift-027-f2_patterson",
+          "mos": 4.3998
+        },
+        {
+          "clip": "drift-028-m1_davison",
+          "mos": 4.5475
+        },
+        {
+          "clip": "drift-029-f1_farris",
+          "mos": 4.2507
+        },
+        {
+          "clip": "drift-030-m2_grothmann",
+          "mos": 3.8665
+        },
+        {
+          "clip": "drift-031-f2_patterson",
+          "mos": 4.3981
+        },
+        {
+          "clip": "drift-032-m1_davison",
+          "mos": 4.5461
+        },
+        {
+          "clip": "drift-033-f1_farris",
+          "mos": 4.2108
+        },
+        {
+          "clip": "drift-034-m2_grothmann",
+          "mos": 3.8929
+        },
+        {
+          "clip": "drift-035-f2_patterson",
+          "mos": 4.3918
+        },
+        {
+          "clip": "drift-036-m1_davison",
+          "mos": 4.5363
+        },
+        {
+          "clip": "drift-037-f1_farris",
+          "mos": 4.2212
+        },
+        {
+          "clip": "drift-038-m2_grothmann",
+          "mos": 3.8695
+        },
+        {
+          "clip": "drift-039-f2_patterson",
+          "mos": 4.3989
+        },
+        {
+          "clip": "drift-040-m1_davison",
+          "mos": 4.5456
+        },
+        {
+          "clip": "drift-041-f1_farris",
+          "mos": 4.2197
+        },
+        {
+          "clip": "drift-042-m2_grothmann",
+          "mos": 3.8631
+        },
+        {
+          "clip": "drift-043-f2_patterson",
+          "mos": 4.4005
+        },
+        {
+          "clip": "drift-044-m1_davison",
+          "mos": 4.547
+        },
+        {
+          "clip": "drift-045-f1_farris",
+          "mos": 4.2308
+        },
+        {
+          "clip": "drift-046-m2_grothmann",
+          "mos": 3.8617
+        },
+        {
+          "clip": "drift-047-f2_patterson",
+          "mos": 4.3904
+        },
+        {
+          "clip": "drift-048-m1_davison",
+          "mos": 4.5504
+        },
+        {
+          "clip": "drift-049-f1_farris",
+          "mos": 4.2431
+        },
+        {
+          "clip": "drift-050-m2_grothmann",
+          "mos": 3.8296
+        }
+      ],
+      "description": "Clean link (20 ms, 2 ms jitter), sender clock +100 ppm fast, 10 minutes. Push-to-talk sender, so the stream has no pauses that reset the playout buffer. RNNoise off on the sender: it costs 5 ms per frame in this build and would make this profile alone take 3 minutes; the profile measures the receive clock path.",
+      "duration_s": 600.0,
+      "info": {
+        "delay_points": 2147,
+        "event_s": null,
+        "frames_decoded": 30000,
+        "jitter_missing": 0,
+        "output_level_offset_db": 4.827747136712167,
+        "receiver_rtp_recv_total": 30000,
+        "shim": {
+          "delivered": 30000,
+          "lost_burst": 0,
+          "lost_outage": 0,
+          "lost_random": 0,
+          "reordered": 0,
+          "sent": 30000
+        },
+        "wall_s": 7.0,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 0.0,
+        "conceal_gap_fec": 0.0,
+        "conceal_gap_plc": 0.0,
+        "conceal_missing_plc": 0.0,
+        "conceal_per_lost": null,
+        "decode_errors": 0.0,
+        "dropout_ms": 1480.0,
+        "fill_plc_frames": 285.0,
+        "jitter_target_p50_ms": 22.0,
+        "latency_clip_growth_ms": 0.6749,
+        "latency_end_ms": 164.9322,
+        "latency_growth_ms": 51.1324,
+        "latency_max_ms": 177.5941,
+        "latency_p50_ms": 140.9471,
+        "latency_p95_ms": 167.7869,
+        "latency_start_ms": 113.7998,
+        "lost_frames": 0.0,
+        "mos": 4.2588,
+        "mos_min": 3.8296,
+        "packets_fed": 30000.0,
+        "packets_sent": 30000.0,
+        "playout_buffer_max_ms": 90.0,
+        "playout_buffer_p50_ms": 50.0,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 0.0,
+        "underruns": 10.0
+      }
+    },
+    "home-wifi": {
+      "clips": [
+        {
+          "clip": "home-wifi-000-m1_davison",
+          "mos": 3.1156
+        },
+        {
+          "clip": "home-wifi-001-f1_farris",
+          "mos": 2.6209
+        },
+        {
+          "clip": "home-wifi-002-m2_grothmann",
+          "mos": 2.6324
+        },
+        {
+          "clip": "home-wifi-003-f2_patterson",
+          "mos": 2.0996
+        },
+        {
+          "clip": "home-wifi-004-m1_davison",
+          "mos": 2.5023
+        },
+        {
+          "clip": "home-wifi-005-f1_farris",
+          "mos": 3.2628
+        },
+        {
+          "clip": "home-wifi-006-m2_grothmann",
+          "mos": 2.3843
+        },
+        {
+          "clip": "home-wifi-007-f2_patterson",
+          "mos": 2.0559
+        }
+      ],
+      "description": "Home Wi-Fi: 15 ms, 6 ms jitter, 2 % random loss, short bursts, 2 stalls of 120 ms per minute, rare reorder.",
+      "duration_s": 93.0,
+      "info": {
+        "delay_points": 311,
+        "event_s": null,
+        "frames_decoded": 3902,
+        "jitter_missing": 86,
+        "output_level_offset_db": 4.0625014201719125,
+        "receiver_rtp_recv_total": 3902,
+        "shim": {
+          "delivered": 3902,
+          "lost_burst": 5,
+          "lost_outage": 0,
+          "lost_random": 81,
+          "reordered": 11,
+          "sent": 3988
+        },
+        "wall_s": 1.2,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 172.0,
+        "conceal_gap_fec": 81.0,
+        "conceal_gap_plc": 5.0,
+        "conceal_missing_plc": 86.0,
+        "conceal_per_lost": 2.0,
+        "decode_errors": 0.0,
+        "dropout_ms": 2260.0,
+        "fill_plc_frames": 1328.0,
+        "jitter_target_p50_ms": 32.0,
+        "latency_clip_growth_ms": 60.125,
+        "latency_end_ms": 331.25,
+        "latency_growth_ms": -7.125,
+        "latency_max_ms": 1349.5,
+        "latency_p50_ms": 335.25,
+        "latency_p95_ms": 601.5,
+        "latency_start_ms": 338.375,
+        "lost_frames": 86.0,
+        "mos": 2.5842,
+        "mos_min": 2.0559,
+        "packets_fed": 3902.0,
+        "packets_sent": 3988.0,
+        "playout_buffer_max_ms": 540.0,
+        "playout_buffer_p50_ms": 210.0,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 86.0,
+        "underruns": 125.0
+      }
+    },
+    "mobile": {
+      "clips": [
+        {
+          "clip": "mobile-000-m1_davison",
+          "mos": 1.8774
+        },
+        {
+          "clip": "mobile-001-f1_farris",
+          "mos": 1.8063
+        },
+        {
+          "clip": "mobile-002-m2_grothmann",
+          "mos": 1.8342
+        },
+        {
+          "clip": "mobile-003-f2_patterson",
+          "mos": 1.4407
+        },
+        {
+          "clip": "mobile-004-m1_davison",
+          "mos": 2.3005
+        },
+        {
+          "clip": "mobile-005-f1_farris",
+          "mos": 1.9097
+        },
+        {
+          "clip": "mobile-006-m2_grothmann",
+          "mos": 1.7411
+        },
+        {
+          "clip": "mobile-007-f2_patterson",
+          "mos": 1.7715
+        }
+      ],
+      "description": "Mobile hotspot: 50 ms, 15 ms jitter, 3 % random loss, bursts, 4 stalls of 250 ms per minute, reorder.",
+      "duration_s": 93.0,
+      "info": {
+        "delay_points": 266,
+        "event_s": null,
+        "frames_decoded": 3755,
+        "jitter_missing": 233,
+        "output_level_offset_db": 3.98387076730131,
+        "receiver_rtp_recv_total": 3755,
+        "shim": {
+          "delivered": 3755,
+          "lost_burst": 104,
+          "lost_outage": 0,
+          "lost_random": 129,
+          "reordered": 18,
+          "sent": 3988
+        },
+        "wall_s": 1.2,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 447.0,
+        "conceal_gap_fec": 136.0,
+        "conceal_gap_plc": 78.0,
+        "conceal_missing_plc": 233.0,
+        "conceal_per_lost": 1.9185,
+        "decode_errors": 0.0,
+        "dropout_ms": 5560.0,
+        "fill_plc_frames": 1070.0,
+        "jitter_target_p50_ms": 46.0,
+        "latency_clip_growth_ms": 184.875,
+        "latency_end_ms": 471.5,
+        "latency_growth_ms": 30.0,
+        "latency_max_ms": 1379.5,
+        "latency_p50_ms": 461.5,
+        "latency_p95_ms": 751.5,
+        "latency_start_ms": 441.5,
+        "lost_frames": 233.0,
+        "mos": 1.8352,
+        "mos_min": 1.4407,
+        "packets_fed": 3755.0,
+        "packets_sent": 3988.0,
+        "playout_buffer_max_ms": 980.0,
+        "playout_buffer_p50_ms": 280.0,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 233.0,
+        "underruns": 128.0
+      }
+    },
+    "outage": {
+      "clips": [
+        {
+          "clip": "outage-000-m1_davison",
+          "mos": 4.0668
+        },
+        {
+          "clip": "outage-001-f1_farris",
+          "mos": 1.1112
+        },
+        {
+          "clip": "outage-002-m2_grothmann",
+          "mos": 3.0214
+        },
+        {
+          "clip": "outage-003-f2_patterson",
+          "mos": 2.5496
+        },
+        {
+          "clip": "outage-004-m1_davison",
+          "mos": 4.0361
+        }
+      ],
+      "description": "Clean link (20 ms, 2 ms jitter) with a 5 s outage at 15 s: every packet in it is lost.",
+      "duration_s": 60.0,
+      "info": {
+        "delay_points": 194,
+        "event_s": [
+          15.0,
+          20.0
+        ],
+        "frames_decoded": 2400,
+        "jitter_missing": 189,
+        "output_level_offset_db": 3.7414986200031395,
+        "receiver_rtp_recv_total": 2400,
+        "shim": {
+          "delivered": 2400,
+          "lost_burst": 0,
+          "lost_outage": 189,
+          "lost_random": 0,
+          "reordered": 0,
+          "sent": 2589
+        },
+        "wall_s": 0.8,
+        "wrap_at_s": null
+      },
+      "metrics": {
+        "conceal_frames": 192.0,
+        "conceal_gap_fec": 0.0,
+        "conceal_gap_plc": 3.0,
+        "conceal_missing_plc": 189.0,
+        "conceal_per_lost": 1.0159,
+        "decode_errors": 0.0,
+        "dropout_ms": 3280.0,
+        "event_before_ms": 221.5,
+        "event_peak_ms": 1091.5,
+        "fill_plc_frames": 1289.0,
+        "jitter_target_p50_ms": 23.0,
+        "latency_clip_growth_ms": 0.0,
+        "latency_end_ms": null,
+        "latency_growth_ms": null,
+        "latency_max_ms": 1091.5,
+        "latency_p50_ms": 261.5,
+        "latency_p95_ms": 321.5,
+        "latency_start_ms": 281.5,
+        "lost_frames": 189.0,
+        "mos": 2.957,
+        "mos_min": 1.1112,
+        "packets_fed": 2400.0,
+        "packets_sent": 2589.0,
+        "playout_buffer_max_ms": 990.0,
+        "playout_buffer_p50_ms": 140.0,
+        "recovery_s": 12.0,
+        "rx_dropped_late": 0.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 0.0,
+        "shim_lost": 189.0,
+        "underruns": 125.0
+      }
+    },
+    "wrap": {
+      "clips": [
+        {
+          "clip": "wrap-000-m1_davison",
+          "mos": 3.5946
+        },
+        {
+          "clip": "wrap-001-f1_farris",
+          "mos": 3.4984
+        }
+      ],
+      "description": "Home Wi-Fi jitter (15 ms, 6 ms), no loss. The RTP sequence starts at 65280, so it wraps after 256 packets, at 6.2 s, inside a word.",
+      "duration_s": 30.0,
+      "info": {
+        "delay_points": 106,
+        "event_s": null,
+        "frames_decoded": 1284,
+        "jitter_missing": 0,
+        "output_level_offset_db": 4.200447158831241,
+        "receiver_rtp_recv_total": 1286,
+        "shim": {
+          "delivered": 1286,
+          "lost_burst": 0,
+          "lost_outage": 0,
+          "lost_random": 0,
+          "reordered": 0,
+          "sent": 1286
+        },
+        "wall_s": 0.4,
+        "wrap_at_s": 6.2
+      },
+      "metrics": {
+        "conceal_frames": 0.0,
+        "conceal_gap_fec": 0.0,
+        "conceal_gap_plc": 0.0,
+        "conceal_missing_plc": 0.0,
+        "conceal_per_lost": 0.0,
+        "decode_errors": 0.0,
+        "dropout_ms": 140.0,
+        "fill_plc_frames": 608.0,
+        "jitter_target_p50_ms": 31.0,
+        "latency_clip_growth_ms": -16.875,
+        "latency_end_ms": null,
+        "latency_growth_ms": null,
+        "latency_max_ms": 271.5,
+        "latency_p50_ms": 251.5,
+        "latency_p95_ms": 271.5,
+        "latency_start_ms": null,
+        "lost_frames": 2.0,
+        "mos": 3.5465,
+        "mos_min": 3.4984,
+        "packets_fed": 1286.0,
+        "packets_sent": 1286.0,
+        "playout_buffer_max_ms": 170.0,
+        "playout_buffer_p50_ms": 120.0,
+        "rx_dropped_late": 2.0,
+        "rx_dropped_overflow": 0.0,
+        "rx_jitter_resets": 1.0,
+        "shim_lost": 0.0,
+        "underruns": 125.0,
+        "wrap_dropout_ms": 80.0
+      }
+    }
+  },
+  "runtime_s": 95.9,
+  "schema": 1,
+  "scorer": {
+    "available": true,
+    "mode": "wb",
+    "numpy_version": "2.5.3",
+    "pesq_version": "0.0.4",
+    "python_version": "3.14.4",
+    "sample_rate": 16000,
+    "scorer": "pesq-wb (ITU-T P.862.2), pesq 0.0.4"
+  },
+  "sender": [
+    {
+      "encode_wall_s": 26.3,
+      "noise_suppression": true,
+      "packets": 3988,
+      "packets_encoded": 3988,
+      "push_to_talk": false
+    },
+    {
+      "encode_wall_s": 34.8,
+      "noise_suppression": false,
+      "packets": 30000,
+      "packets_encoded": 30000,
+      "push_to_talk": true
+    }
+  ],
+  "taken_at_utc": "2026-10-06T08:07:01Z"
+}

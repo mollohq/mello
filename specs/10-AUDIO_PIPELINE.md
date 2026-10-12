@@ -319,6 +319,18 @@ Operational tooling source of truth:
 - `mello-sfu/tools/voice-soak/main.go`
 - SFU admin troubleshoot endpoints and dashboard views
 
+Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
+
+- drives the real libmello voice path device-free through the test hooks in
+  `mello.h` (`MELLO_AUDIO_BACKEND=test`, `mello_voice_test_pull_output`,
+  `mello_test_set_clock_ms`, the `rx_*` fields of `MelloDebugStats`)
+- an impairment shim between sender and receiver rewrites the packet header
+  as the SFU path does and applies loss, jitter, stalls, reorder, outage,
+  clock drift and the RTP sequence wrap
+- reports MOS-LQO (PESQ wideband), playout delay over time, concealment
+  frames per lost frame, receiver drops and dropouts, with the delta against
+  `benchmarks/baselines/voice/baseline-2.9.json`. See `TESTING.md`.
+
 ---
 
 ## 10. File Structure

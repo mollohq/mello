@@ -131,6 +131,7 @@ gtest suite and the Nakama Go modules.
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
 | `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
 | `perf-harness` | Client CPU/RSS regression (headless) | Partial (`idle` no; voice yes) | No (local/agent) | `./scripts/perf/run.sh` |
+| Voice quality gate | libmello voice path: MOS, delay, concealment under impairments | No | Smoke test only (`cargo test`); full gate in `check-full.sh` | `./scripts/voice-gate.sh` |
 | `sfu-test.html` | Browser voice/stream + robustness | Yes (live SFU) | No (manual) | open via `npm run dev` in `mello-site` |
 
 Legend: ✅ runs today · ⚠️ runnable, not yet in the PR workflow · 🔧 needs an
@@ -282,6 +283,62 @@ libmello/build/tests/Release/mello_rtp_tests.exe
 
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
 (read `specs/03-LIBMELLO.md` first — threading/COM/callback invariants).
+
+---
+
+## Voice quality gate
+
+`tools/voice-gate` pushes a speech corpus through the real libmello voice
+path and scores the result against a frozen baseline. It needs no audio
+device and no backend. Every change to the audio path runs it
+(plans/voice-quality.md stage 7).
+
+```bash
+./scripts/voice-gate.sh                    # all profiles, about 2 minutes
+./scripts/voice-gate.sh --only clean,wrap  # some profiles
+./scripts/voice-gate.sh --no-score         # structural metrics only
+```
+
+The table shows each metric with its delta against
+`benchmarks/baselines/voice/baseline-2.9.json`. The exit code is 1 when MOS
+drops by more than 0.1 on any profile or an enforced gate fails.
+
+| Part | Where | What it does |
+|---|---|---|
+| Corpus | `libmello/tests/fixtures/voice/` | Four public-domain LibriVox clips, 48 kHz mono. Frozen. |
+| Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
+| Sender | `mello_voice_inject_capture`, `mello_voice_get_packet` | Real capture DSP and Opus encode on a context with the test backend. |
+| Shim | `tools/voice-gate/src/shim.rs` | Rewrites the 4-byte header to the 16-bit RTP sequence exactly as the SFU path does, then applies the profile. Seeded. |
+| Receiver | `mello_voice_feed_packet`, `mello_voice_test_pull_output` | Real jitter buffer, decode, concealment and mix, pulled 10 ms at a time like the device thread. |
+| Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
+
+Test hooks in `mello.h` (not for production use):
+
+- `MELLO_AUDIO_BACKEND=test` before `mello_init()` selects a device-free
+  backend. No device opens and no device thread starts.
+- `mello_voice_test_pull_output()` pulls mixed output through the playback
+  render path.
+- `mello_test_set_clock_ms()` drives the jitter buffer clock. The harness
+  steps it 1 ms at a time, so a run is deterministic and faster than real
+  time.
+- `MelloDebugStats` has receive counters at its end (`rx_*`): concealment by
+  kind, receiver drops, jitter resets.
+
+Rules:
+
+- **Frozen inputs.** The corpus, the profile parameters, the seeds, the
+  analysis settings and the scorer version are fixed. The harness refuses to
+  compare when they differ from the baseline. To change one, re-take the
+  baseline on the commit the old baseline came from.
+- **Gates may change.** A gate with `"enforced": false` prints but does not
+  fail. The stage that fixes a defect sets its gate to `true`.
+- **MOS from different scorers is never compared.** Without the scorer the
+  gate prints structural metrics only and says so.
+- `cargo test --workspace` runs a 14 s smoke test of the same path, so
+  `check.sh` catches broken wiring.
+
+Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
+`results.json`) lands in `target/voice-gate/`.
 
 ---
 
@@ -607,6 +664,8 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
   `--reuse-user-id`, `--idle-resume-ms`).
 - **Stream relay quality:** `stream-soak` RTP profiles / 1080 gate; client probes for visual + `host_probe_tick` / `viewer_probe_native_rtp` logs.
 - **Audio DSP quality (A/B, NS modes, MOS):** `voice-test-client` GUI.
+- **Any change to the voice audio path (libmello audio, jitter, codec, mix):**
+  `./scripts/voice-gate.sh`, and report its delta against baseline 2.9.
 - **Client CPU/RSS regression (after perf-sensitive changes):** `perf-harness` /
   `./scripts/perf/run.sh`.
 - **Interactive browser repro / live stats:** `sfu-test.html`.

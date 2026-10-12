@@ -1,4 +1,5 @@
 #include "audio_pipeline.hpp"
+#include "audio_backend_test.hpp"
 #include "../util/log.hpp"
 #include <cstring>
 #include <algorithm>
@@ -122,8 +123,11 @@ bool AudioPipeline::initialize() {
     device_enum_ = create_device_enumerator();
 
 #ifdef _WIN32
-    session_win_ = std::make_unique<AudioSessionWin>();
-    session_win_->initialize();
+    // The test backend opens no device, so it needs no ducking session.
+    if (!test_audio_backend_requested()) {
+        session_win_ = std::make_unique<AudioSessionWin>();
+        session_win_->initialize();
+    }
 #endif
 
     capture_ = create_audio_capture();
@@ -731,6 +735,11 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     int decode_errors = 0;
     int concealment_fec = 0;
     int concealment_plc = 0;
+    // Split of concealment_plc for the receive counters (debug stats only).
+    int missing_plc = 0;  // jitter buffer reported Missing
+    int gap_plc = 0;      // sequence gap seen at the next decoded packet
+    int fill_plc = 0;     // playout ring ran short inside this callback
+    int decoded_ok = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         std::vector<uint8_t> pkt_data;
         uint32_t pkt_seq = 0;
@@ -753,6 +762,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                     if (plc_samples > 0) {
                         bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
                         concealment_plc++;
+                        missing_plc++;
                         total_decoded++;
                     }
                 }
@@ -791,6 +801,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                         if (plc_samples <= 0) break;
                         bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
                         concealment_plc++;
+                        gap_plc++;
                         total_decoded++;
                     }
                 }
@@ -802,6 +813,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                                              pcm, FRAME_SIZE);
             if (samples > 0) {
                 total_decoded++;
+                decoded_ok++;
                 bit->second->write(pcm, static_cast<size_t>(samples));
                 decoder_primed_[pid] = true;
                 last_decoded_seq_[pid] = pkt_seq;
@@ -813,6 +825,13 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
 
     std::memset(out, 0, count * sizeof(int16_t));
     bool any_remote = false;
+    // Receive counters for mello_get_debug_stats. Counting only: nothing
+    // below reads them.
+    rx_frames_decoded_.fetch_add(static_cast<uint32_t>(decoded_ok), std::memory_order_relaxed);
+    rx_decode_errors_.fetch_add(static_cast<uint32_t>(decode_errors), std::memory_order_relaxed);
+    rx_conceal_missing_plc_.fetch_add(static_cast<uint32_t>(missing_plc), std::memory_order_relaxed);
+    rx_conceal_gap_fec_.fetch_add(static_cast<uint32_t>(concealment_fec), std::memory_order_relaxed);
+    rx_conceal_gap_plc_.fetch_add(static_cast<uint32_t>(gap_plc), std::memory_order_relaxed);
 
     if (!peer_buffers_.empty()) {
         std::vector<int16_t> temp(count);
@@ -830,6 +849,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                         std::memcpy(temp.data() + write_pos, plc_pcm, copy_n * sizeof(int16_t));
                         write_pos += copy_n;
                         concealment_plc++;
+                        fill_plc++;
                         total_decoded++;
                     }
                     got = write_pos;
@@ -846,6 +866,7 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             }
         }
     }
+    rx_conceal_fill_plc_.fetch_add(static_cast<uint32_t>(fill_plc), std::memory_order_relaxed);
 
     if (any_remote) {
         static uint32_t mix_log_ctr = 0;
@@ -960,6 +981,44 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     }
 
     return (any_remote || has_clip_audio) ? count : 0;
+}
+
+int AudioPipeline::render_test_output(int16_t* out, size_t count) {
+    auto* test_playback = dynamic_cast<TestPlayback*>(playback_.get());
+    if (!test_playback) return -1;
+    return static_cast<int>(test_playback->render(out, count));
+}
+
+ReceiveStats AudioPipeline::receive_stats() const {
+    ReceiveStats s;
+    s.frames_decoded = rx_frames_decoded_.load(std::memory_order_relaxed);
+    s.decode_errors = rx_decode_errors_.load(std::memory_order_relaxed);
+    s.conceal_missing_plc = rx_conceal_missing_plc_.load(std::memory_order_relaxed);
+    s.conceal_gap_fec = rx_conceal_gap_fec_.load(std::memory_order_relaxed);
+    s.conceal_gap_plc = rx_conceal_gap_plc_.load(std::memory_order_relaxed);
+    s.conceal_fill_plc = rx_conceal_fill_plc_.load(std::memory_order_relaxed);
+
+    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+    float target_sum = 0.0f;
+    for (auto& [pid, jb] : jitter_buffers_) {
+        s.jitter_missing += jb.underruns();
+        s.jitter_dropped_late += jb.dropped_late();
+        s.jitter_dropped_overflow += jb.dropped_overflow();
+        s.jitter_resets += jb.discontinuity_resets();
+        s.jitter_buffered_packets += jb.buffered_count();
+        target_sum += static_cast<float>(jb.target_delay_ms());
+    }
+    if (!jitter_buffers_.empty()) {
+        s.jitter_target_delay_ms = target_sum / static_cast<float>(jitter_buffers_.size());
+    }
+    float ring_ms = 0.0f;
+    for (auto& [pid, buf] : peer_buffers_) {
+        ring_ms += static_cast<float>(buf->available()) / 48.0f;
+    }
+    if (!peer_buffers_.empty()) {
+        s.playout_buffer_ms = ring_ms / static_cast<float>(peer_buffers_.size());
+    }
+    return s;
 }
 
 float AudioPipeline::pipeline_delay_ms() const {
@@ -1252,7 +1311,10 @@ void AudioPipeline::clip_seek(uint64_t position_samples) {
 #ifdef _WIN32
 void AudioPipeline::apply_session(AudioPlayback* pb) {
     if (!session_win_ || !pb) return;
-    static_cast<WasapiPlayback*>(pb)->set_session(session_win_.get());
+    // The test backend (MELLO_AUDIO_BACKEND=test) is not a WasapiPlayback.
+    auto* wasapi = dynamic_cast<WasapiPlayback*>(pb);
+    if (!wasapi) return;
+    wasapi->set_session(session_win_.get());
 }
 #endif
 

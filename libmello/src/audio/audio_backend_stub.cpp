@@ -1,6 +1,7 @@
 #if !defined(_WIN32) && !defined(__APPLE__)
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
+#include "audio_backend_test.hpp"
 #include "../util/log.hpp"
 
 namespace mello::audio {
@@ -32,10 +33,12 @@ public:
 };
 
 std::unique_ptr<AudioCapture> create_audio_capture() {
+    if (test_audio_backend_requested()) return create_test_audio_capture();
     return std::make_unique<StubCapture>();
 }
 
 std::unique_ptr<AudioPlayback> create_audio_playback() {
+    if (test_audio_backend_requested()) return create_test_audio_playback();
     return std::make_unique<StubPlayback>();
 }
 
