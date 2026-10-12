@@ -14,6 +14,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use mello_core::events::StreamMember;
 use mello_core::{Event, VoiceMode};
 use serde::Serialize;
 use slint::{ComponentHandle, Model};
@@ -27,6 +28,8 @@ static EVENTS: Mutex<VecDeque<EventRecord>> = Mutex::new(VecDeque::new());
 static EVENT_SEQ: Mutex<u64> = Mutex::new(0);
 /// The transport of the current voice call, from the core's events.
 static VOICE_TRANSPORT: Mutex<Option<&'static str>> = Mutex::new(None);
+/// The other members of the watched SFU stream, from the core's events.
+static STREAM_MEMBERS: Mutex<Vec<StreamMember>> = Mutex::new(Vec::new());
 
 #[derive(Serialize, Clone)]
 struct EventRecord {
@@ -99,7 +102,18 @@ struct Snapshot {
     /// The transport of the current voice call: `"sfu"` or `"p2p"`. `None`
     /// (JSON `null`) when not in a call. See [`transport_after`].
     voice_transport: Option<&'static str>,
+    /// The other members of the watched SFU stream: the host and the other
+    /// viewers, in join order. Empty when not watching, and in P2P mode.
+    /// See [`stream_members_after`].
+    stream_members: Vec<StreamMemberSnap>,
     last_event_seq: u64,
+}
+
+#[derive(Serialize)]
+struct StreamMemberSnap {
+    user_id: String,
+    /// `"host"` or `"viewer"`.
+    role: String,
 }
 
 #[derive(Serialize)]
@@ -164,6 +178,16 @@ fn transport_after(prev: Option<&'static str>, ev: &Event) -> Option<&'static st
     }
 }
 
+/// The stream members after `ev`, from `prev`. `StreamMembersChanged`
+/// carries the whole list; the end of watching clears it.
+fn stream_members_after(prev: Vec<StreamMember>, ev: &Event) -> Vec<StreamMember> {
+    match ev {
+        Event::StreamMembersChanged { members } => members.clone(),
+        Event::StreamWatchingStopped => Vec::new(),
+        _ => prev,
+    }
+}
+
 /// Record a core event before the UI handles it. Called from the poll loop.
 pub fn record_event(ev: &Event) {
     let message = match ev {
@@ -177,6 +201,10 @@ pub fn record_event(ev: &Event) {
     {
         let mut t = VOICE_TRANSPORT.lock().expect("voice transport lock");
         *t = transport_after(*t, ev);
+    }
+    {
+        let mut m = STREAM_MEMBERS.lock().expect("stream members lock");
+        *m = stream_members_after(std::mem::take(&mut *m), ev);
     }
     let seq = {
         let mut s = EVENT_SEQ.lock().expect("event seq lock");
@@ -375,6 +403,15 @@ fn read(app: &MainWindow) -> Snapshot {
             })
             .collect(),
         voice_transport: *VOICE_TRANSPORT.lock().expect("voice transport lock"),
+        stream_members: STREAM_MEMBERS
+            .lock()
+            .expect("stream members lock")
+            .iter()
+            .map(|m| StreamMemberSnap {
+                user_id: m.user_id.clone(),
+                role: m.role.clone(),
+            })
+            .collect(),
         last_event_seq: *EVENT_SEQ.lock().expect("event seq lock"),
     }
 }
@@ -385,6 +422,42 @@ mod tests {
 
     fn state_changed(in_call: bool, transport: VoiceMode) -> Event {
         Event::VoiceStateChanged { in_call, transport }
+    }
+
+    #[test]
+    fn the_stream_members_follow_the_core_stream_events() {
+        let host = StreamMember {
+            user_id: "host-1".into(),
+            role: "host".into(),
+        };
+        let viewer = StreamMember {
+            user_id: "viewer-2".into(),
+            role: "viewer".into(),
+        };
+        let both = stream_members_after(
+            Vec::new(),
+            &Event::StreamMembersChanged {
+                members: vec![host.clone(), viewer.clone()],
+            },
+        );
+        assert_eq!(both, [host.clone(), viewer]);
+        let one = stream_members_after(
+            both,
+            &Event::StreamMembersChanged {
+                members: vec![host.clone()],
+            },
+        );
+        assert_eq!(
+            one,
+            std::slice::from_ref(&host),
+            "the event carries the whole list"
+        );
+        let kept = stream_members_after(one, &Event::MicLevel { level: 0.5 });
+        assert_eq!(kept, [host], "other events keep the list");
+        assert!(
+            stream_members_after(kept, &Event::StreamWatchingStopped).is_empty(),
+            "the end of watching clears the list"
+        );
     }
 
     #[test]

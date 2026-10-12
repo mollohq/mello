@@ -803,4 +803,108 @@ pub(super) mod tests {
         );
         drop(conn);
     }
+
+    /// A fake SFU that answers the join and the offer, then announces one
+    /// passive ICE-TCP candidate on `tcp_port`, as mello-sfu does for
+    /// `SFU_ICE_TCP_PORT` (01-SFU.md section 3.1).
+    async fn ice_tcp_sfu(tcp_port: u16) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                match v["type"].as_str() {
+                    Some("join_voice") => ws
+                        .send(text(serde_json::json!({
+                            "type": "joined",
+                            "data": { "session_type": "voice", "session_id": "voice:crew-1:ch-1", "members": [] }
+                        })))
+                        .await
+                        .expect("send joined"),
+                    Some("offer") => {
+                        let offer = v["data"]["sdp"].as_str().expect("offer sdp");
+                        let mid = offer
+                            .lines()
+                            .find_map(|l| l.strip_prefix("a=mid:"))
+                            .expect("the offer has a mid")
+                            .trim()
+                            .to_string();
+                        let answer = native_answer(offer);
+                        ws.send(text(
+                            serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+                        ))
+                        .await
+                        .expect("send answer");
+                        ws.send(text(serde_json::json!({
+                            "type": "ice_candidate",
+                            "data": {
+                                "candidate": format!(
+                                    "candidate:1 1 TCP 1518280447 127.0.0.1 {tcp_port} typ host tcptype passive"
+                                ),
+                                "sdp_mid": mid,
+                                "sdp_mline_index": 0
+                            }
+                        })))
+                        .await
+                        .expect("send the passive TCP candidate");
+                    }
+                    _ => {}
+                }
+            }
+        });
+        endpoint
+    }
+
+    /// Active ICE-TCP (RFC 6544): given the SFU's passive TCP candidate, the
+    /// client connects to it and sends a STUN Binding request in RFC 4571
+    /// framing. This is the path a network that blocks UDP takes.
+    #[tokio::test]
+    async fn the_client_runs_ice_checks_over_tcp_to_a_passive_candidate() {
+        use tokio::io::AsyncReadExt;
+
+        let ice_tcp = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local TCP port");
+        let tcp_port = ice_tcp
+            .local_addr()
+            .expect("listener has an address")
+            .port();
+        let endpoint = ice_tcp_sfu(tcp_port).await;
+        let conn = joined_connection(&endpoint).await;
+
+        let (mut socket, _) = tokio::time::timeout(LIMIT, ice_tcp.accept())
+            .await
+            .expect("the client connects to the passive TCP candidate")
+            .expect("accept");
+        let mut len = [0u8; 2];
+        tokio::time::timeout(LIMIT, socket.read_exact(&mut len))
+            .await
+            .expect("a framed packet in time")
+            .expect("read the RFC 4571 length");
+        let mut packet = vec![0u8; u16::from_be_bytes(len) as usize];
+        tokio::time::timeout(LIMIT, socket.read_exact(&mut packet))
+            .await
+            .expect("the packet in time")
+            .expect("read the packet");
+        assert!(packet.len() >= 20, "a STUN message: {packet:?}");
+        assert_eq!(packet[0..2], [0x00, 0x01], "a Binding request");
+        assert_eq!(packet[4..8], [0x21, 0x12, 0xA4, 0x42], "the magic cookie");
+        drop(conn);
+    }
 }

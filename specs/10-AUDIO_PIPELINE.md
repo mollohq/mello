@@ -590,7 +590,19 @@ The voice SFU does not get the send-leg values in `client_stats`: that message i
 
 **DataChannel wait.** `wait_for_datachannel_open` waits on a `tokio::sync::Notify`. libmello's transport callback (`mello_peer_set_transport_callback`) wakes it after each peer state change and when a DataChannel or the video track opens or closes. The 5 s deadline stays.
 
-**ICE servers.** `SfuConnection::create_peer` gives the voice peer the `get_ice_servers` URLs (STUN, and TURN over UDP, TCP and TLS), as the stream peers get. An empty list keeps libmello's default STUN servers. The SFU is ICE-lite and offers host candidates only, so a host pair wins when its UDP port is open; libmello logs the selected pair (`ICE selected pair: local <type>/<transport>, remote ...`). libdatachannel in this build uses libjuice, which uses TURN over UDP only: it skips TURN over TCP and TLS with a warning. A network that blocks all UDP therefore gets no relay yet.
+**ICE servers.** `SfuConnection::create_peer` gives the voice peer the `get_ice_servers` URLs (STUN, and TURN over UDP, TCP and TLS), as the stream peers get. An empty list keeps libmello's default STUN servers. The SFU is ICE-lite and offers host candidates only, so a host pair wins when its UDP port is open; libmello logs the selected pair (`ICE selected pair: local <type>/<transport>, remote ...`). libdatachannel in this build uses libjuice, which uses TURN over UDP only: it skips TURN over TCP and TLS with a warning. A network that blocks all UDP therefore gets no relay.
+
+**ICE-TCP.** Every libmello peer sets `rtc::Configuration::enableIceTcp` (`PeerConnectionImpl` constructor). libjuice 1.7.0 then gathers one `tcptype active` host candidate per address family (port 9) and connects out to a remote `tcptype passive` candidate. The SFU offers a passive candidate on `SFU_PUBLIC_IP:SFU_ICE_TCP_PORT` (default 10000/tcp, mello-sfu 01-SFU.md). The facts of this build:
+
+| Fact | Effect |
+|---|---|
+| libjuice lowers a TCP candidate's priority by 50 type-preference points | A working UDP pair wins. Measured: 8 of 8 voice peers select `prflx/udp` against the local SFU. |
+| libjuice pairs a remote TCP candidate only when it is passive or simultaneous-open, one per address family | A P2P pair (libjuice on both sides) stays on UDP. Pion ignores the client's active candidate. |
+| ICE-TCP works only in libjuice's poll mode | `enableIceUdpMux` must stay off. |
+| With UDP blocked, the TCP pair is nominated after the UDP checks time out | Join to DataChannel open: about 2 s. |
+| libjuice keeps one framed datagram in its TCP send buffer and drops the next ones while it waits | Loss under load on a TCP pair. |
+| libjuice completes a partial TCP write on its poll thread without the send lock (`conn_poll.c`, also on upstream master) | Measured with UDP blocked and 8 voice members: a member's TCP connection fails after a partial write, and ICE reports "Lost connectivity". |
+| libjuice cannot print a passive remote candidate | The `ICE selected pair` log shows "selected candidate pair unknown" for a TCP pair. |
 
 **Local candidates.** The SFU refuses an `ice_candidate` that arrives before the `offer` (`INVALID_REQUEST`). Every local candidate waits in `IceCallbackData` until the offer is on the wire, also one that libdatachannel emits while `create_offer` runs. After the offer, each new candidate goes to the socket at once; before stage 6 a candidate found after the answer (a slow STUN or TURN answer) was never sent.
 

@@ -278,6 +278,13 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id,
     config_.iceServers.emplace_back("stun:stun.l.google.com:19302");
     config_.iceServers.emplace_back("stun:stun1.l.google.com:19302");
     config_.forceMediaTransport = true;
+    // Active ICE-TCP (RFC 6544): libjuice adds a "tcptype active" host
+    // candidate and connects out to a remote passive TCP candidate, such as
+    // the SFU's ICE-TCP port. A network that blocks UDP then still connects.
+    // libjuice ranks TCP candidates below UDP, so UDP stays preferred. It
+    // ignores remote active candidates, so a P2P pair keeps UDP only.
+    // Needs libjuice's poll mode: enableIceUdpMux must stay off.
+    config_.enableIceTcp = true;
 }
 
 PeerConnectionImpl::~PeerConnectionImpl() {

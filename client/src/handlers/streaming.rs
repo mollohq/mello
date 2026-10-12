@@ -168,6 +168,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::StreamViewerLeft { viewer_id } => {
             log::info!("Stream viewer left: {}", viewer_id);
         }
+        Event::StreamMembersChanged { members } => {
+            // No UI shows who else watches a stream. The e2e state port
+            // reports the list (e2e_state.rs).
+            log::debug!("Stream members: {}", members.len());
+        }
         Event::StreamWatching {
             host_id,
             width,
