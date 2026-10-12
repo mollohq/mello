@@ -20,6 +20,12 @@ const (
 	MaxChannelsPerCrew        = 8
 	MaxVoiceChannelMembers    = 6
 	MaxSFUVoiceChannelMembers = 50
+
+	// Voice bitrate of a channel in kbps: the top rung of the encoder ladder
+	// (spec 10 section 4.6). 96 is the highest rung for now.
+	DefaultChannelBitrateKbps = 64
+	MinChannelBitrateKbps     = 24
+	MaxChannelBitrateKbps     = 96
 )
 
 // ---------------------------------------------------------------------------
@@ -31,6 +37,45 @@ type VoiceChannelDef struct {
 	Name      string `json:"name"`
 	IsDefault bool   `json:"is_default"`
 	SortOrder int    `json:"sort_order"`
+	// BitrateKbps is the channel's voice bitrate in kbps: the top rung of
+	// the encoder ladder (spec 10 section 4.6, spec 13 section 3.1). 0 in a
+	// definition stored before the field existed: read it through
+	// EffectiveBitrateKbps.
+	BitrateKbps int `json:"bitrate_kbps,omitempty"`
+}
+
+// EffectiveBitrateKbps is the channel bitrate, or the default for a channel
+// stored before the field existed.
+func (c *VoiceChannelDef) EffectiveBitrateKbps() int {
+	if c.BitrateKbps == 0 {
+		return DefaultChannelBitrateKbps
+	}
+	return c.BitrateKbps
+}
+
+// validateChannelBitrate checks a requested channel bitrate. Absent (nil)
+// is the default. A present value must be within MinChannelBitrateKbps to
+// MaxChannelBitrateKbps.
+func validateChannelBitrate(kbps *int) (int, error) {
+	if kbps == nil {
+		return DefaultChannelBitrateKbps, nil
+	}
+	if *kbps < MinChannelBitrateKbps || *kbps > MaxChannelBitrateKbps {
+		return 0, runtime.NewError(fmt.Sprintf("bitrate_kbps must be %d to %d",
+			MinChannelBitrateKbps, MaxChannelBitrateKbps), 3)
+	}
+	return *kbps, nil
+}
+
+// newVoiceChannelStateView is the per-channel view of a channel definition,
+// without members.
+func newVoiceChannelStateView(ch *VoiceChannelDef) *VoiceChannelStateView {
+	return &VoiceChannelStateView{
+		ID:          ch.ID,
+		Name:        ch.Name,
+		IsDefault:   ch.IsDefault,
+		BitrateKbps: ch.EffectiveBitrateKbps(),
+	}
 }
 
 type VoiceChannelList struct {
@@ -169,6 +214,8 @@ func ChannelCreateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	var req struct {
 		CrewID string `json:"crew_id"`
 		Name   string `json:"name"`
+		// BitrateKbps is optional; absent is DefaultChannelBitrateKbps.
+		BitrateKbps *int `json:"bitrate_kbps"`
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
@@ -178,6 +225,10 @@ func ChannelCreateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	}
 	if len(req.Name) > 32 {
 		return "", runtime.NewError("name must be 32 characters or fewer", 3)
+	}
+	bitrate, err := validateChannelBitrate(req.BitrateKbps)
+	if err != nil {
+		return "", err
 	}
 
 	if !canManageChannels(ctx, nk, req.CrewID, userID) {
@@ -193,10 +244,11 @@ func ChannelCreateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	}
 
 	ch := &VoiceChannelDef{
-		ID:        generateChannelID(),
-		Name:      req.Name,
-		IsDefault: false,
-		SortOrder: len(list.Channels),
+		ID:          generateChannelID(),
+		Name:        req.Name,
+		IsDefault:   false,
+		SortOrder:   len(list.Channels),
+		BitrateKbps: bitrate,
 	}
 	list.Channels = append(list.Channels, ch)
 
@@ -212,10 +264,11 @@ func ChannelCreateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	})
 
 	resp, _ := json.Marshal(map[string]interface{}{
-		"id":         ch.ID,
-		"name":       ch.Name,
-		"is_default": ch.IsDefault,
-		"members":    []interface{}{},
+		"id":           ch.ID,
+		"name":         ch.Name,
+		"is_default":   ch.IsDefault,
+		"bitrate_kbps": ch.EffectiveBitrateKbps(),
+		"members":      []interface{}{},
 	})
 	return string(resp), nil
 }
@@ -392,4 +445,73 @@ func ChannelReorderRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	InvalidateCrewState(req.CrewID)
 
 	return `{"success":true}`, nil
+}
+
+// ChannelUpdateRPC changes the settings of one voice channel. Today that is
+// the bitrate (spec 13 section 4.1): every member's encoder takes it as the
+// top rung of its ladder (spec 10 section 4.6).
+func ChannelUpdateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+
+	var req struct {
+		CrewID      string `json:"crew_id"`
+		ChannelID   string `json:"channel_id"`
+		BitrateKbps *int   `json:"bitrate_kbps"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" || req.ChannelID == "" || req.BitrateKbps == nil {
+		return "", runtime.NewError("crew_id, channel_id and bitrate_kbps required", 3)
+	}
+	bitrate, err := validateChannelBitrate(req.BitrateKbps)
+	if err != nil {
+		return "", err
+	}
+
+	if !canManageChannels(ctx, nk, req.CrewID, userID) {
+		return "", runtime.NewError("not authorized to manage channels", 7)
+	}
+
+	list, err := GetVoiceChannels(ctx, nk, req.CrewID)
+	if err != nil {
+		return "", runtime.NewError("failed to load channels", 13)
+	}
+	var updated *VoiceChannelDef
+	for _, ch := range list.Channels {
+		if ch.ID == req.ChannelID {
+			ch.BitrateKbps = bitrate
+			updated = ch
+			break
+		}
+	}
+	if updated == nil {
+		return "", runtime.NewError("channel not found", 5)
+	}
+
+	if err := saveVoiceChannels(ctx, nk, req.CrewID, list); err != nil {
+		return "", runtime.NewError("failed to save channels", 13)
+	}
+	logger.Info("Voice channel updated: crew=%s channel=%s bitrate=%d kbps by user=%s",
+		req.CrewID, req.ChannelID, bitrate, userID)
+
+	InvalidateCrewState(req.CrewID)
+
+	PushCrewEvent(ctx, logger, nk, req.CrewID, "channel_updated", map[string]interface{}{
+		"channel_id":   req.ChannelID,
+		"bitrate_kbps": bitrate,
+	})
+	// The channel list in voice_update carries the bitrate: members in the
+	// channel apply it from there (spec 13 section 4.4).
+	PushVoiceUpdate(ctx, logger, nk, req.CrewID)
+
+	resp, _ := json.Marshal(map[string]interface{}{
+		"success":      true,
+		"channel_id":   req.ChannelID,
+		"bitrate_kbps": bitrate,
+	})
+	return string(resp), nil
 }

@@ -1662,6 +1662,22 @@ impl NakamaClient {
         Ok(())
     }
 
+    /// Set a voice channel's bitrate in kbps (24 to 96; spec 13 section 4.1).
+    pub async fn channel_update(
+        &self,
+        crew_id: &str,
+        channel_id: &str,
+        bitrate_kbps: u32,
+    ) -> Result<()> {
+        let payload = serde_json::json!({
+            "crew_id": crew_id,
+            "channel_id": channel_id,
+            "bitrate_kbps": bitrate_kbps,
+        });
+        self.rpc("channel_update", &payload).await?;
+        Ok(())
+    }
+
     pub async fn channel_delete(&self, crew_id: &str, channel_id: &str) -> Result<()> {
         let payload = serde_json::json!({ "crew_id": crew_id, "channel_id": channel_id });
         self.rpc("channel_delete", &payload).await?;

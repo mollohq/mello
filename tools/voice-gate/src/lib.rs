@@ -12,6 +12,7 @@ pub mod dsp;
 pub mod profile;
 pub mod report;
 pub mod rng;
+pub mod rtcp;
 pub mod run;
 pub mod score;
 pub mod shim;
@@ -198,6 +199,27 @@ pub fn measure(
         "neteq_delay_p50_ms".into(),
         dsp::percentile(&filtered, 50.0),
     );
+    // Congestion: the delay while the bottleneck runs (stage 5).
+    if let Some(b) = &profile.network.bottleneck {
+        let inside: Vec<f64> = points
+            .iter()
+            .filter(|q| q.t_s >= b.start_s && q.t_s < b.start_s + b.dur_s)
+            .map(|q| q.latency_ms)
+            .collect();
+        m.insert(
+            "bottleneck_delay_mean_ms".into(),
+            (!inside.is_empty()).then(|| inside.iter().sum::<f64>() / inside.len() as f64),
+        );
+        m.insert(
+            "bottleneck_delay_max_ms".into(),
+            inside.iter().cloned().reduce(f64::max),
+        );
+        m.insert("bottleneck_lost".into(), n(run.shim.lost_queue));
+    }
+    let adaptation = run
+        .adapt
+        .as_ref()
+        .map(|a| adaptation_metrics(a, &run.shim.sent_log, &mut m));
 
     let extra = json!({
         "delay_points": delay.points,
@@ -209,6 +231,7 @@ pub fn measure(
             "lost_random": run.shim.lost_random,
             "lost_burst": run.shim.lost_burst,
             "lost_outage": run.shim.lost_outage,
+            "lost_queue": run.shim.lost_queue,
             "reordered": run.shim.reordered,
             "delivered": run.shim.delivered,
             "lost_dtx": run.shim.lost_dtx,
@@ -230,12 +253,173 @@ pub fn measure(
             "interruption_count": run.rx.rx_interruption_count,
             "interruption_duration_ms": run.rx.rx_interruption_duration_ms,
         },
+        "adaptation": adaptation,
         "wall_s": (run.wall_s * 10.0).round() / 10.0,
     });
     Measured {
         metrics: m,
         points,
         extra,
+    }
+}
+
+fn ms_to_s(ms: i64) -> f64 {
+    ms as f64 / 1000.0
+}
+
+/// The first time at which the network lost more than `loss` of the packets
+/// sent in the `window_ms` before, over at least `min_packets` packets: the
+/// truth that the step-down rule of the encoder adaptation reacts to (spec
+/// 10 section 4.6: more than 10 % over the last 2 s, at least 25 packets).
+/// The window must span `window_ms` of sending: before that, there is no
+/// "last 2 s" of the stream.
+pub fn first_lossy_window_ms(
+    sent_log: &[(i64, bool)],
+    window_ms: i64,
+    loss: f64,
+    min_packets: usize,
+) -> Option<i64> {
+    let start = sent_log.first()?.0;
+    let mut from = 0usize;
+    let mut lost = 0usize;
+    for (i, &(t, l)) in sent_log.iter().enumerate() {
+        lost += usize::from(l);
+        while sent_log[from].0 <= t - window_ms {
+            lost -= usize::from(sent_log[from].1);
+            from += 1;
+        }
+        let n = i + 1 - from;
+        if t - start >= window_ms && n >= min_packets && lost as f64 > loss * n as f64 {
+            return Some(t);
+        }
+    }
+    None
+}
+
+/// The step-down rule of libmello's SendAdaptation (send_adaptation.hpp).
+const DOWN_WINDOW_MS: i64 = 2000;
+const DOWN_LOSS: f64 = 0.10;
+const DOWN_MIN_PACKETS: usize = 25;
+
+/// Metrics of the send-leg feedback loop (rtcp.rs, spec 10 section 4.6),
+/// and its time series for the result file.
+fn adaptation_metrics(a: &run::Adaptation, sent_log: &[(i64, bool)], m: &mut Metrics) -> Value {
+    let lossy_from = first_lossy_window_ms(sent_log, DOWN_WINDOW_MS, DOWN_LOSS, DOWN_MIN_PACKETS);
+    let from = a.first_send_ms.unwrap_or(0);
+    let active: Vec<&run::AdaptSample> = a.series.iter().filter(|s| s.t_ms >= from).collect();
+    let bitrate: Vec<f64> = active.iter().map(|s| f64::from(s.bitrate_kbps)).collect();
+    let loss_perc: Vec<f64> = active.iter().map(|s| f64::from(s.loss_perc)).collect();
+    let mean = |v: &[f64]| (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64);
+    let max = |v: &[f64]| v.iter().cloned().reduce(f64::max);
+    let min = |v: &[f64]| v.iter().cloned().reduce(f64::min);
+    let expected: u64 = a
+        .reports
+        .iter()
+        .map(|r| u64::from(r.feedback.interval_expected))
+        .sum();
+    let lost: u64 = a
+        .reports
+        .iter()
+        .map(|r| u64::from(r.feedback.interval_lost))
+        .sum();
+    let rtts: Vec<f64> = a
+        .reports
+        .iter()
+        .filter(|r| r.feedback.rtt_ms >= 0.0)
+        .map(|r| f64::from(r.feedback.rtt_ms))
+        .collect();
+    m.insert(
+        "bitrate_drop_s".into(),
+        match (a.first_send_ms, a.first_drop_ms) {
+            (Some(s), Some(d)) => Some(ms_to_s(d - s)),
+            _ => None,
+        },
+    );
+    // Reaction: from the first 2 s in which the network lost more than 10 %
+    // of the sent packets to the encoder's first step down. Receiver report
+    // cadence (1 s), network delay and the controller window are in it.
+    m.insert(
+        "bitrate_reaction_s".into(),
+        match (lossy_from, a.first_drop_ms) {
+            (Some(l), Some(d)) => Some(ms_to_s(d - l)),
+            _ => None,
+        },
+    );
+    m.insert("lossy_window_s".into(), lossy_from.map(ms_to_s));
+    m.insert("bitrate_min_kbps".into(), min(&bitrate));
+    m.insert("bitrate_mean_kbps".into(), mean(&bitrate));
+    m.insert("loss_perc_mean".into(), mean(&loss_perc));
+    m.insert("loss_perc_max".into(), max(&loss_perc));
+    m.insert("rung_changes".into(), Some(f64::from(a.rung_changes)));
+    m.insert("rr_reports".into(), Some(a.reports.len() as f64));
+    m.insert(
+        "rr_loss_pct".into(),
+        (expected > 0).then(|| 100.0 * lost as f64 / expected as f64),
+    );
+    m.insert("rr_rtt_p50_ms".into(), dsp::percentile(&rtts, 50.0));
+    m.insert(
+        "live_sender".into(),
+        Some(if a.live_sender { 1.0 } else { 0.0 }),
+    );
+    json!({
+        "live_sender": a.live_sender,
+        "diverged_at_s": a.diverged_ms.map(ms_to_s),
+        "first_send_s": a.first_send_ms.map(ms_to_s),
+        "first_drop_s": a.first_drop_ms.map(ms_to_s),
+        "first_lossy_window_s": lossy_from.map(ms_to_s),
+        "top_kbps": a.top_kbps,
+        "series": {
+            "t_s": a.series.iter().map(|s| ms_to_s(s.t_ms)).collect::<Vec<_>>(),
+            "bitrate_kbps": a.series.iter().map(|s| s.bitrate_kbps).collect::<Vec<_>>(),
+            "loss_perc": a.series.iter().map(|s| s.loss_perc).collect::<Vec<_>>(),
+        },
+        "reports": a.reports.iter().map(|r| json!({
+            "sent_s": ms_to_s(r.sent_ms),
+            "arrive_s": ms_to_s(r.arrive_ms),
+            "fraction_lost": (f64::from(r.feedback.fraction_lost) * 1e4).round() / 1e4,
+            "cumulative_lost": r.feedback.cumulative_lost,
+            "expected": r.feedback.interval_expected,
+            "lost": r.feedback.interval_lost,
+            "jitter_ms": (f64::from(r.feedback.jitter_ms) * 10.0).round() / 10.0,
+            "rtt_ms": (f64::from(r.feedback.rtt_ms) * 10.0).round() / 10.0,
+            "bitrate_kbps": r.bitrate_kbps,
+            "loss_perc": r.loss_perc,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+#[cfg(test)]
+mod adaptation_tests {
+    use super::first_lossy_window_ms;
+
+    #[test]
+    fn first_lossy_window_slides_over_send_times() {
+        // 50 packets a second; 4 of every 20 lost from 3 s on (20 %).
+        let log: Vec<(i64, bool)> = (0..300)
+            .map(|i| {
+                let t = i64::from(i) * 20;
+                (t, t >= 3000 && i % 20 < 4)
+            })
+            .collect();
+        let at = first_lossy_window_ms(&log, 2000, 0.10, 25).expect("lossy window");
+        // Over 2 s (100 packets) more than 10 lost: the 11th loss after 3 s.
+        assert!((3000..4500).contains(&at), "first lossy window at {at}");
+        assert_eq!(first_lossy_window_ms(&log[..150], 2000, 0.10, 25), None);
+        // Too few packets in the window never count.
+        let sparse = vec![(0, true), (1000, true), (1500, false)];
+        assert_eq!(first_lossy_window_ms(&sparse, 2000, 0.10, 25), None);
+        // Loss in the first 2 s of sending counts only once 2 s have passed.
+        let early: Vec<(i64, bool)> = (0..150)
+            .map(|i| (1000 + i64::from(i) * 20, i < 10))
+            .collect();
+        assert_eq!(first_lossy_window_ms(&early, 2000, 0.10, 25), None);
+        let early_heavy: Vec<(i64, bool)> = (0..150)
+            .map(|i| (1000 + i64::from(i) * 20, i < 30))
+            .collect();
+        assert_eq!(
+            first_lossy_window_ms(&early_heavy, 2000, 0.10, 25),
+            Some(3000)
+        );
     }
 }
 

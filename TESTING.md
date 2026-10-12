@@ -283,6 +283,15 @@ Voice receive and playout (no device, no sleep, deterministic):
 | `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the P2P voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
 | `NetEqSpike` | `test_neteq_spike.cpp` | The stage 3 spike: NetEQ and the mixer driven directly (clean, loss, burst tuning, drift, gap, limiter, cost). |
 
+Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `SendAdaptation` | `test_send_adaptation.cpp` (`mello_tests`) | The controller with a trace of reports, one per second: the rung sequence (down on loss with round-trip inflation or jitter growth, one rung up after 10 s without congestion), 13 % random loss with a flat round trip and flat jitter does not step down, an ineffective step goes back one rung and holds 30 s, report arrival jitter does not widen a window, one lossy second steps down once, too few packets give no decision, the loss perc mapping (floor 5, cap 30, 4 s), the ladder from the channel bitrate. |
+| `SendAdaptationPipeline` | `test_send_adaptation.cpp` (`mello_tests`) | Through a real `AudioPipeline` on the test backend: a report reaches the encoder at the next frame and the frames shrink with the bitrate; a new session starts at the top rung. |
+| `VoiceSendFeedback` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | The RTCP parser with crafted receiver and sender reports (compound, signed 24-bit loss, malformed lengths), the round trip from LSR and DLSR, the per-report interval of the tracker. |
+| `VoiceSendFeedbackWire` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | A plain libdatachannel peer answers our sender reports with crafted receiver reports; they reach the voice peer's send track and its callback with the right loss, jitter and a real round trip. |
+
 RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
 
 ```powershell
@@ -304,10 +313,11 @@ device and no backend. Every change to the audio path runs it
 (plans/voice-quality.md stage 7).
 
 ```bash
-./scripts/voice-gate.sh                    # all profiles, about 2 minutes
+./scripts/voice-gate.sh                    # all profiles, about 3.5 minutes
 ./scripts/voice-gate.sh --only clean,wrap  # some profiles
 ./scripts/voice-gate.sh --no-score         # structural metrics only
 ./scripts/voice-gate.sh --send-tick        # old sender timing, for comparison
+./scripts/voice-gate.sh --no-adapt         # no send-leg feedback (before stage 5)
 ```
 
 The table shows each metric with its delta against
@@ -318,8 +328,10 @@ drops by more than 0.1 on any profile or an enforced gate fails.
 |---|---|---|
 | Corpus | `libmello/tests/fixtures/voice/` | Four public-domain LibriVox clips, 48 kHz mono. Frozen. |
 | Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
+| Added profiles | `benchmarks/baselines/voice/profiles-congestion.json` | Profiles added after the baseline, with their own seeds and fingerprint (`added_inputs_fingerprint`). `congestion`: a rate-limited bottleneck with a tail-drop queue; `"compare_no_adapt": true` also runs it as `congestion-no-adapt` without feedback. No baseline values. |
 | Sender | `mello_voice_inject_capture`, `mello_voice_set_packet_sink` | Real capture DSP and Opus encode on a context with the test backend. Each packet leaves at its encode time, as on the SFU path. `--send-tick` replays the 20 ms voice tick of the command loop instead (the send timing before stage 2). |
 | Shim | `tools/voice-gate/src/shim.rs` | Builds the RTP packet as the SFU forwards it: payload type 111, the 16-bit sequence from `rtp_seq_start`, the timestamp (a seeded start + media time), a seeded SSRC. Then applies the profile. Seeded. |
+| Feedback | `tools/voice-gate/src/rtcp.rs` | The SFU's receiver reports (a port of Pion's receiver stream, one report per second) from the delivered packets, and the sender reports that give the round trip. Each report reaches the sender's encoder adaptation (`mello_voice_report_send_feedback`) at its arrival time. A run replays the shared sender trace with a probe context until the controller changes a setting, then encodes live with the reports applied. The lossless twin replays the packets that the live sender sent. Jitter draws from the seed stream `rtcp`. |
 | Receiver | `mello_voice_feed_rtp`, `mello_voice_test_pull_output` | Real NetEQ per peer (decode, FEC, concealment, time stretch), the mixer and the output ring, pulled 10 ms at a time like the device thread. |
 | Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
 
@@ -358,7 +370,57 @@ Rules:
   `check.sh` catches broken wiring.
 
 Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
-`results.json`) lands in `target/voice-gate/`.
+`results.json`) lands in `target/voice-gate/`. With the feedback loop each
+profile also gets `sender.csv` (the bitrate and loss perc every 100 ms) and
+`reports.csv` (each receiver report and the setting after it), and
+`results.json` carries both under `info.adaptation`.
+
+### Send-leg adaptation (stage 5)
+
+Gates:
+
+| Profile | Gate | Enforced | Rule |
+|---|---|---|---|
+| every baseline profile | `mos` | yes | At least the stage 4 MOS minus 0.1. |
+| `congestion` | `bitrate_reaction_s` | yes | At most 2 s from the end of the first 2 s in which the network lost more than 10 % of the sent packets, to the first step down. |
+| `congestion` | `bottleneck_delay_mean_ms` | yes | At least 100 ms below `congestion-no-adapt` (`max_ref`). |
+| `congestion` | `mos` | yes | At least the MOS of `congestion-no-adapt` minus 0.2 (`min_ref`): the bounded quality cost of the delay gain. |
+
+Results (`--no-adapt` gives the stage 4 numbers on the baseline profiles):
+
+| Profile | MOS stage 4 | MOS stage 5 | Bitrate min / mean kbps | Loss perc max | Ladder steps |
+|---|---:|---:|---:|---:|---:|
+| clean | 3.27 | 3.27 | 64 / 64 | 5 | 0 |
+| home-wifi | 3.25 | 3.25 | 64 / 64 | 5 | 0 |
+| mobile | 2.80 | 2.80 | 64 / 64 | 15 | 0 |
+| bad | 2.22 | 2.20 | 32 / 57.4 | 27 | 3 (one wrong step at 61 s, back at 67 s) |
+| burst | 3.29 | 3.28 | 48 / 61.2 | 12 | 2 (the jitter burst) |
+| drift | 4.25 | 4.25 | 64 / 64 | 5 | 0 |
+| outage | 2.98 | 2.98 | 64 / 64 | 30 | 0 |
+| wrap | 3.74 | 3.74 | 64 / 64 | 5 | 0 |
+
+| `congestion` | With the ladder | `congestion-no-adapt` |
+|---|---:|---:|
+| MOS | 2.91 | 3.07 |
+| Delay mean in the bottleneck (ms) | 387 | 521 |
+| Delay p95 (ms) | 508 | 558 |
+| Queue drops | 42 | 180 |
+| Reaction (s) | 1.72 | - |
+
+Why the MOS gate allows a cost of 0.2. The tail-drop queue of a single flow drops
+isolated packets, and in-band FEC repairs them: 175 of the 180 drops without
+the ladder. So without adaptation the bottleneck costs delay, which PESQ
+does not score. With the ladder, NetEQ accelerates to give back the delay
+when the queue drains (308 ms of accelerate against 130 ms), and PESQ
+penalizes the time stretching. A sender fixed at 32 kbps scores 3.27 on the
+same profile: the low rate is not the cost; the drain and the probe step up
+are. Other bottlenecks (48 kbps or a 100 to 150 ms queue, 20 s) give the
+ladder +0.02 to +0.06 MOS, within the per-clip noise of PESQ.
+
+Follow-ups:
+
+- TWCC on the voice track: one receiver report per second sees a queue only after it overflows; transport-wide feedback would see it fill.
+- Cross traffic in the bottleneck model: other flows make the queue drop bursts that FEC cannot repair, which a single-flow model does not show.
 
 ### NetEQ tuning (stage 3)
 

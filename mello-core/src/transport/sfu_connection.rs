@@ -1274,6 +1274,16 @@ impl SfuConnection {
                         audio_cb as *mut std::ffi::c_void,
                     );
                 }
+                // The SFU's receiver reports about the microphone track go
+                // to the encoder adaptation on the libdatachannel thread
+                // (spec 10 section 4.6).
+                unsafe {
+                    mello_sys::mello_peer_set_send_feedback_callback(
+                        peer,
+                        Some(send_feedback_callback),
+                        audio_cb as *mut std::ffi::c_void,
+                    );
+                }
             }
 
             let offer_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
@@ -1578,6 +1588,11 @@ impl Drop for SfuConnection {
                         None,
                         std::ptr::null_mut(),
                     );
+                    mello_sys::mello_peer_set_send_feedback_callback(
+                        peer.get(),
+                        None,
+                        std::ptr::null_mut(),
+                    );
                     steps.step("mello_peer_destroy");
                     mello_sys::mello_peer_destroy(peer.get());
                 }
@@ -1751,6 +1766,37 @@ unsafe extern "C" fn control_text_callback(
     let bytes = std::slice::from_raw_parts(text as *const u8, size as usize);
     if let Ok(text) = std::str::from_utf8(bytes) {
         handle_control_text(cb, text);
+    }
+}
+
+/// A receiver report of the SFU about the microphone track
+/// (mello_peer_set_send_feedback_callback). Goes to the voice context's
+/// encoder adaptation while the direct voice sink is set (spec 10 section
+/// 4.6). libdatachannel thread; it never waits on the command loop.
+///
+/// # Safety
+/// `user_data` is the connection's `AudioTrackCallbackData`, alive until
+/// the teardown clears this callback; `feedback` is valid for the call.
+unsafe extern "C" fn send_feedback_callback(
+    user_data: *mut std::ffi::c_void,
+    feedback: *const mello_sys::MelloSendFeedback,
+) {
+    if user_data.is_null() || feedback.is_null() {
+        return;
+    }
+    let cb = &*(user_data as *const AudioTrackCallbackData);
+    handle_send_feedback(cb, &*feedback);
+}
+
+fn handle_send_feedback(cb: &AudioTrackCallbackData, feedback: &mello_sys::MelloSendFeedback) {
+    if let Ok(sink) = cb.voice_sink.read() {
+        if let Some(VoiceSinkCtx(ctx)) = *sink {
+            // SAFETY: the context is valid while the sink is set (the voice
+            // manager clears it under the write lock before the context
+            // goes). libmello copies the feedback and takes only its own
+            // adaptation lock.
+            unsafe { mello_sys::mello_voice_report_send_feedback(ctx, feedback) };
+        }
     }
 }
 
@@ -2048,6 +2094,44 @@ mod tests {
             mello_sys::mello_voice_feed_rtp(ctx, id.as_ptr(), pkt.as_ptr(), pkt.len() as i32, -1)
         };
         assert_eq!(result, mello_sys::MelloResult_MELLO_OK);
+    }
+
+    /// A receiver report about the microphone track reaches the encoder
+    /// adaptation of the voice context while voice is attached, and nothing
+    /// happens after voice detaches (spec 10 section 4.6).
+    #[test]
+    fn send_feedback_reaches_the_encoder_adaptation_while_voice_is_attached() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let voice = crate::voice::VoiceManager::with_test_audio_backend(tx);
+        let ctx = voice.mello_ctx();
+        let (cb, _events) = control_fixture(std::ptr::null_mut(), Some(ctx));
+        let stats = || {
+            let mut s: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
+            unsafe { mello_sys::mello_get_debug_stats(ctx, &mut s) };
+            s
+        };
+        let mut fb: mello_sys::MelloSendFeedback = unsafe { std::mem::zeroed() };
+        fb.reports = 1;
+        fb.fraction_lost = 0.4;
+        fb.interval_expected = 50;
+        fb.interval_lost = 20;
+        fb.rtt_ms = 80.0;
+        handle_send_feedback(&cb, &fb);
+        let s = stats();
+        assert_eq!(s.tx_rr_reports, 1);
+        assert_eq!(
+            s.tx_packet_loss_perc, 30,
+            "40 % loss raises the expected loss"
+        );
+        assert_eq!(s.tx_bitrate_kbps, 64, "loss alone is no congestion");
+        assert_eq!(s.tx_rtt_ms, 80.0);
+
+        // Voice detached: the report goes nowhere.
+        if let Ok(mut sink) = cb.voice_sink.write() {
+            sink.take();
+        }
+        handle_send_feedback(&cb, &fb);
+        assert_eq!(stats().tx_rr_reports, 1);
     }
 
     /// A `slot` message routes the mid to the new member, and the old owner

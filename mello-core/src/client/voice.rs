@@ -156,6 +156,12 @@ impl super::Client {
     ) {
         self.sfu_leave_if_connected().await;
         self.voice.leave_voice();
+        // The channel bitrate is the top rung of the encoder ladder; set it
+        // before capture starts (spec 10 section 4.6).
+        self.voice.set_channel_bitrate(
+            resp.bitrate_kbps
+                .unwrap_or(crate::crew_state::DEFAULT_CHANNEL_BITRATE_KBPS),
+        );
         let Some(local_id) = local_id else {
             return;
         };
@@ -301,6 +307,38 @@ impl super::Client {
                 log::error!("channel_rename RPC failed: {}", e);
                 let _ = self.event_tx.send(Event::Error {
                     message: format!("Failed to rename voice channel: {}", e),
+                });
+            }
+        }
+    }
+
+    pub(super) async fn handle_update_voice_channel_bitrate(
+        &self,
+        crew_id: &str,
+        channel_id: &str,
+        bitrate_kbps: u32,
+    ) {
+        match self
+            .nakama
+            .channel_update(crew_id, channel_id, bitrate_kbps)
+            .await
+        {
+            Ok(()) => {
+                log::info!(
+                    "Voice channel {} bitrate set to {} kbps",
+                    channel_id,
+                    bitrate_kbps
+                );
+                let _ = self.event_tx.send(Event::VoiceChannelBitrateChanged {
+                    crew_id: crew_id.to_string(),
+                    channel_id: channel_id.to_string(),
+                    bitrate_kbps,
+                });
+            }
+            Err(e) => {
+                log::error!("channel_update RPC failed: {}", e);
+                let _ = self.event_tx.send(Event::Error {
+                    message: format!("Failed to change the voice channel bitrate: {}", e),
                 });
             }
         }
@@ -566,6 +604,63 @@ mod tests {
             })
             .await;
         assert_eq!(volume(&client, c"user-7"), 2.0, "libmello clamps to 2.0");
+    }
+
+    /// Spec 10 section 4.6: the channel bitrate reaches libmello as the top
+    /// rung of the encoder ladder, from a join and from the command.
+    #[tokio::test]
+    async fn channel_bitrate_reaches_libmello() {
+        let (event_tx, _events) = mpsc::channel();
+        let voice = VoiceManager::with_test_audio_backend(event_tx.clone());
+        let mut client = Client::with_voice(
+            Config::default(),
+            event_tx,
+            voice,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            false,
+            false,
+        );
+        let top = |client: &Client| {
+            // SAFETY: zeroed is a valid MelloDebugStats; the context is live
+            // while the client holds its voice manager.
+            unsafe {
+                let mut s: mello_sys::MelloDebugStats = std::mem::zeroed();
+                mello_sys::mello_get_debug_stats(client.voice.mello_ctx(), &mut s);
+                s.tx_max_bitrate_kbps
+            }
+        };
+        assert_eq!(top(&client), 64, "64 kbps is the default");
+
+        // A join applies the bitrate of the voice_join response.
+        let resp: VoiceJoinResponse = serde_json::from_value(serde_json::json!({
+            "channel_id": "ch-1",
+            "voice_state": { "channel_id": "ch-1", "members": [{ "user_id": "me" }] },
+            "mode": "p2p",
+            "bitrate_kbps": 32,
+        }))
+        .expect("valid voice_join response");
+        client.start_voice_media("crew-1", Some("me"), &resp).await;
+        assert_eq!(top(&client), 32);
+
+        // A channel update while in the channel.
+        client
+            .handle_command(Command::SetVoiceChannelBitrate { kbps: 96 })
+            .await;
+        assert_eq!(top(&client), 96);
+
+        // A backend before the field: the default.
+        let old: VoiceJoinResponse = serde_json::from_value(serde_json::json!({
+            "channel_id": "ch-1",
+            "voice_state": { "channel_id": "ch-1", "members": [{ "user_id": "me" }] },
+            "mode": "p2p",
+        }))
+        .expect("valid voice_join response");
+        client.start_voice_media("crew-1", Some("me"), &old).await;
+        assert_eq!(top(&client), 64);
+        client.voice.leave_voice();
     }
 
     #[tokio::test]

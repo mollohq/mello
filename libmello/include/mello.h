@@ -76,6 +76,41 @@ typedef void (*MelloAudioTrackCallback)(void* user_data, const char* sender_id, 
  *  NUL-terminated; `size` is its length in bytes. */
 typedef void (*MelloControlTextCallback)(void* user_data, const char* text, int size);
 
+/** What the remote end (the SFU) reports about the audio this peer sends:
+ *  one RTCP receiver report block about the send track's SSRC (RFC 3550
+ *  section 6.4.1). Spec 10 section 7.5. */
+typedef struct MelloSendFeedback {
+    /** Report blocks about the send track since the peer was created. */
+    uint32_t reports;
+    /** Fraction of packets lost since the previous report, 0..1. */
+    float    fraction_lost;
+    /** Cumulative packets lost (signed 24-bit on the wire). */
+    int32_t  cumulative_lost;
+    /** Extended highest sequence number received. */
+    uint32_t extended_highest_seq;
+    /** Interarrival jitter in ms. */
+    float    jitter_ms;
+    /** Round trip from the report's LSR and DLSR against this peer's sender
+     *  reports, in ms. -1 when unknown (no sender report reached the remote). */
+    float    rtt_ms;
+    /** Packets expected since the previous report: the difference of the
+     *  extended highest sequence numbers. 0 when unknown. */
+    uint32_t interval_expected;
+    /** Packets lost since the previous report: the difference of the
+     *  cumulative counts, or fraction_lost x interval_expected when that
+     *  difference is not usable. At most interval_expected. */
+    uint32_t interval_lost;
+    /** True when the report refers to a sender report that no earlier report
+     *  referred to (a new LSR). False: rtt_ms repeats the forward delay of an
+     *  older sender report, because no newer one reached the remote end (a
+     *  closed speech gate, or a full queue that dropped it). */
+    bool     rtt_fresh;
+} MelloSendFeedback;
+
+/** Receives one MelloSendFeedback per receiver report about the send track.
+ *  Called on the libdatachannel thread; must return fast. */
+typedef void (*MelloSendFeedbackCallback)(void* user_data, const MelloSendFeedback* feedback);
+
 /* ============================================================================
  * Context
  * ============================================================================ */
@@ -206,6 +241,24 @@ MELLO_API MelloResult mello_voice_set_packet_sink(
     MelloPacketSinkCallback callback,
     void* user_data
 );
+
+/** Encoder adaptation to the send leg (spec 10 section 4.6). Give each
+ *  receiver report about the voice send track to the context (from
+ *  MelloSendFeedbackCallback). OPUS_SET_PACKET_LOSS_PERC follows the loss of
+ *  the last 4 s, 5 to 30. The Opus bitrate steps down a ladder (the channel
+ *  bitrate, then 64, 48, 32, 24 kbps) only on congestion: loss over 10 % in
+ *  the last 2 s together with a doubled round trip (fresh samples only) or a
+ *  doubled jitter. A step that does not lower the loss within 4 s goes back
+ *  and holds the ladder for 30 s. One rung up after 10 s without
+ *  congestion. The capture thread applies the result before the next encode.
+ *  Any thread; it never waits for the capture thread. The time is the
+ *  playout clock (mello_test_set_clock_ms in tests). */
+MELLO_API void mello_voice_report_send_feedback(MelloContext* ctx, const MelloSendFeedback* feedback);
+
+/** The channel bitrate in kbps: the top rung of the ladder. Clamped to
+ *  24..96. Default 64. At the top rung the encoder moves to the new value
+ *  at the next frame. Any thread. */
+MELLO_API void mello_voice_set_max_bitrate(MelloContext* ctx, int kbps);
 
 /** Feed one voice frame received from a peer on the P2P data channel, or
  *  from the local mic test (loopback). Spec 10 section 4.2. The frame is an
@@ -638,6 +691,20 @@ MELLO_API void mello_peer_set_control_text_callback(
 /** Send one text message on the reliable control DataChannel. Thread safe.
  *  MELLO_ERROR_TRANSPORT_FAILED when the channel is not open. */
 MELLO_API MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
+
+/** Set or clear (NULL) the send feedback callback. Any thread. This call
+ *  waits for a callback that runs now: when it returns, the old callback
+ *  has returned and libmello does not use the old `user_data` again, so the
+ *  caller can free it. Do not call it from the callback. */
+MELLO_API void mello_peer_set_send_feedback_callback(
+    MelloPeerConnection* peer,
+    MelloSendFeedbackCallback callback,
+    void* user_data
+);
+
+/** The feedback of the last receiver report about the send track. Returns
+ *  false (and leaves `out` unchanged) when no report arrived yet. Any thread. */
+MELLO_API bool mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* out);
 
 /** Send one Annex-B H.264 access unit on a StreamHost peer. */
 MELLO_API MelloResult mello_peer_video_send_access_unit(
@@ -1100,6 +1167,20 @@ typedef struct MelloDebugStats {
     uint64_t rx_stream_resets;           /* new SSRC or sender restart: NetEQ rebuilt */
     uint64_t rx_talk_spurts;             /* talk spurts detected (sender speech gate gaps) */
     float    rx_spurt_hold_ms;           /* minimum delay held for the current spurt's pre-roll */
+    /* Send leg (spec 10 sections 4.6 and 7.5): the last receiver report about
+     * the voice send track given to mello_voice_report_send_feedback in this
+     * voice session (one per second from the SFU), and the encoder setting
+     * that the adaptation chose. */
+    uint32_t tx_rr_reports;              /* reports in this voice session */
+    float    tx_rr_fraction_lost_pct;    /* the last report's fraction lost, percent */
+    int32_t  tx_rr_cumulative_lost;      /* the last report's cumulative loss */
+    float    tx_rr_jitter_ms;            /* the last report's interarrival jitter */
+    float    tx_rtt_ms;                  /* round trip from the last report, -1 unknown */
+    float    tx_loss_window_pct;         /* loss over the last 2 s, percent; -1 too few packets */
+    int32_t  tx_bitrate_kbps;            /* Opus bitrate now */
+    int32_t  tx_max_bitrate_kbps;        /* the top rung: the channel bitrate */
+    int32_t  tx_packet_loss_perc;        /* OPUS_SET_PACKET_LOSS_PERC now */
+    uint32_t tx_rung_changes;            /* ladder steps since the context started */
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);

@@ -1,12 +1,15 @@
 //! voice-gate: run the voice quality gate. Use scripts/voice-gate.sh.
 //!
 //! ```text
-//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--send-tick] [--write-baseline]
+//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--send-tick] [--no-adapt] [--write-baseline]
 //! ```
 //!
 //! `--send-tick` replays the sender on the 20 ms voice tick of the command
 //! loop, as before the stage 2 packet sink, for comparison. The default sends
 //! each packet at its encode time, as the SFU path does now.
+//!
+//! `--no-adapt` runs without the send-leg feedback loop (rtcp.rs): no
+//! receiver report reaches the sender, as before stage 5, for comparison.
 //!
 //! Exit codes: 0 = every enforced gate passed, 1 = an enforced gate failed,
 //! 2 = setup error.
@@ -46,6 +49,7 @@ struct Args {
     no_score: bool,
     send_model: run::SendModel,
     write_baseline: bool,
+    no_adapt: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -55,6 +59,7 @@ fn parse_args() -> Result<Args, String> {
         no_score: false,
         send_model: run::SendModel::Direct,
         write_baseline: false,
+        no_adapt: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -67,9 +72,10 @@ fn parse_args() -> Result<Args, String> {
             "--no-score" => a.no_score = true,
             "--send-tick" => a.send_model = run::SendModel::Tick,
             "--write-baseline" => a.write_baseline = true,
+            "--no-adapt" => a.no_adapt = true,
             "-h" | "--help" => {
                 println!(
-                    "voice-gate [--only a,b] [--out DIR] [--no-score] [--send-tick] [--write-baseline]"
+                    "voice-gate [--only a,b] [--out DIR] [--no-score] [--send-tick] [--no-adapt] [--write-baseline]"
                 );
                 std::process::exit(0);
             }
@@ -147,7 +153,13 @@ fn real_main() -> Result<bool, String> {
     // SAFETY: global setter, no pointers.
     unsafe { mello_sys::mello_set_log_level(log_level) };
 
-    let gf = profile::load(&base_dir.join("profiles.json"))?;
+    let mut gf = profile::load(&base_dir.join("profiles.json"))?;
+    // Profiles added after the baseline (stage 5: congestion). Their own
+    // file and fingerprint, so the baseline's frozen inputs do not change.
+    let added_path = base_dir.join("profiles-congestion.json");
+    if !args.write_baseline && added_path.exists() {
+        profile::load_added(&mut gf, &added_path)?;
+    }
     let clips = run::load_corpus(&root, &gf.corpus)?;
     let corpus_fp = corpus_fingerprint(&root, &gf.corpus)?;
 
@@ -229,24 +241,45 @@ fn real_main() -> Result<bool, String> {
             p.name, p.duration_s
         );
         let n = run::reference_len(p.duration_s);
-        let r = run::run_receiver(
-            p,
-            &reference[..n],
-            &spans,
-            &traces[&p.sender],
-            gf.tail_ms,
-            args.send_model,
-        )?;
+        let r = if args.no_adapt || !p.adapt {
+            run::run_receiver(
+                p,
+                &reference[..n],
+                &spans,
+                &traces[&p.sender],
+                gf.tail_ms,
+                args.send_model,
+            )?
+        } else {
+            run::run_adaptive(
+                p,
+                &reference[..n],
+                &spans,
+                &traces[&p.sender],
+                gf.tail_ms,
+                args.send_model,
+            )?
+        };
+        // A live sender's packets differ from the shared trace; the twin
+        // replays the packets this run sent.
+        let live_trace = r.live_trace.as_ref().map(|packets| run::SenderTrace {
+            packets: packets.clone(),
+            packets_encoded: 0,
+            wall_s: 0.0,
+        });
+        let sent_trace = live_trace.as_ref().unwrap_or(&traces[&p.sender]);
         // The same packets on the same network without loss: the
         // concealment that loss did not cause (lib.rs, measure).
-        let lossless = if p.network.has_loss() {
+        // A bottleneck's drops depend on the queue it fills: a twin without
+        // them has other delays, so it gives no concealment baseline.
+        let lossless = if p.network.has_loss() && p.network.bottleneck.is_none() {
             let mut twin = (*p).clone();
             twin.network = p.network.without_loss();
             Some(run::run_receiver(
                 &twin,
                 &reference[..n],
                 &spans,
-                &traces[&p.sender],
+                sent_trace,
                 gf.tail_ms,
                 args.send_model,
             )?)
@@ -260,7 +293,14 @@ fn real_main() -> Result<bool, String> {
             &gf.analysis,
             gf.corpus.clips.len(),
         );
-        eprintln!("{:.1} s", r.wall_s);
+        match &r.adapt {
+            Some(a) if a.live_sender => eprintln!(
+                "{:.1} s (live sender from {:.1} s: the feedback changed the encoder)",
+                r.wall_s,
+                a.diverged_ms.unwrap_or(0) as f64 / 1000.0
+            ),
+            _ => eprintln!("{:.1} s", r.wall_s),
+        }
 
         let pdir = out_dir.join(&p.name);
         std::fs::create_dir_all(&pdir).map_err(|e| e.to_string())?;
@@ -291,6 +331,34 @@ fn real_main() -> Result<bool, String> {
                 )
             }),
         )?;
+        if let Some(a) = &r.adapt {
+            write_csv(
+                &pdir.join("sender.csv"),
+                "t_ms,bitrate_kbps,loss_perc",
+                a.series
+                    .iter()
+                    .map(|x| format!("{},{},{}", x.t_ms, x.bitrate_kbps, x.loss_perc)),
+            )?;
+            write_csv(
+                &pdir.join("reports.csv"),
+                "sent_ms,arrive_ms,fraction_lost,cumulative_lost,expected,lost,jitter_ms,rtt_ms,bitrate_kbps,loss_perc",
+                a.reports.iter().map(|x| {
+                    format!(
+                        "{},{},{:.4},{},{},{},{:.1},{:.1},{},{}",
+                        x.sent_ms,
+                        x.arrive_ms,
+                        x.feedback.fraction_lost,
+                        x.feedback.cumulative_lost,
+                        x.feedback.interval_expected,
+                        x.feedback.interval_lost,
+                        x.feedback.jitter_ms,
+                        x.feedback.rtt_ms,
+                        x.bitrate_kbps,
+                        x.loss_perc
+                    )
+                }),
+            )?;
+        }
         if !args.no_score {
             segments.extend(score::write_segments(
                 &seg_dir,
@@ -390,6 +458,7 @@ fn real_main() -> Result<bool, String> {
         "taken_at_utc": report::utc_now(),
         "platform": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
         "inputs_fingerprint": gf.inputs_fingerprint,
+        "added_inputs_fingerprint": gf.added_inputs_fingerprint,
         "corpus": { "dir": gf.corpus.dir, "clips": gf.corpus.clips, "fingerprint": corpus_fp },
         "scorer": if scores.available {
             let mut d = scores.detail.clone();
@@ -399,7 +468,12 @@ fn real_main() -> Result<bool, String> {
         "method": {
             "path": "mello_voice_inject_capture -> mello_voice_set_packet_sink -> shim (RTP packet as the SFU forwards it, impairments) -> mello_voice_feed_rtp (NetEQ) -> mello_voice_test_pull_output",
             "backend": "MELLO_AUDIO_BACKEND=test (no device, no device thread)",
-            "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace",
+            "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace until the send-leg feedback changes an encoder setting, then encode live",
+            "feedback": if args.no_adapt {
+                "none (--no-adapt)"
+            } else {
+                "Pion receiver reports once per second about the sender's track, from the delivered packets; sender reports with the RTP; reports reach the encoder adaptation at their arrival time (rtcp.rs)"
+            },
             "send": args.send_model.describe(),
             "clock": "virtual: mello_test_set_clock_ms, 1 ms steps; receiver pulls 10 ms per step of 10 ms",
             "delay": "windowed cross-correlation at 4 kHz, reference vs output; latency = playout time - capture time",

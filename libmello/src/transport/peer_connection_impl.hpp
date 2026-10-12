@@ -13,6 +13,7 @@
 #include "rtp_video_sender.hpp"
 #include "rtp_video_receiver_session.hpp"
 #include "voice_slot_map.hpp"
+#include "voice_send_feedback.hpp"
 
 namespace mello::transport {
 
@@ -80,6 +81,11 @@ public:
     void set_audio_mid_sender(const std::string& mid, const std::string& sender_id);
     void set_control_text_callback(MelloControlTextCallback cb, void* user_data);
     bool send_control_text(const std::string& text);
+
+    // Receiver reports about the audio send track (mello.h
+    // MelloSendFeedback, spec 10 section 7.5).
+    void set_send_feedback_callback(MelloSendFeedbackCallback cb, void* user_data);
+    bool get_send_feedback(MelloSendFeedback* out) const;
 
 private:
     enum class VideoFeedbackType : uint8_t {
@@ -150,6 +156,8 @@ private:
                                      uint32_t ssrc,
                                      const std::string& cname);
     bool send_audio_message(const uint8_t* data, int size, const uint32_t* timestamp);
+    // libdatachannel thread: one report about the send track arrived.
+    void deliver_send_feedback(const MelloSendFeedback& feedback);
     void wire_video_track_callbacks(uint64_t generation);
     void try_start_video_pipeline(
         uint64_t expected_pc_generation = 0,
@@ -213,6 +221,18 @@ private:
     // Control-channel text messages other than pong.
     MelloControlTextCallback control_text_cb_ = nullptr;
     void* control_text_ud_ = nullptr;
+    // Receiver reports about the audio send track. The tracker lives as
+    // long as the peer: a new send track (renegotiation) keeps counting.
+    // send_feedback_cb_mutex_ guards the callback and its user data, and
+    // deliver_send_feedback() holds it for the whole call, so a clear
+    // waits for a running call. Lock order: send_feedback_cb_mutex_ first,
+    // then the locks that the callback takes (in mello-core: the voice
+    // sink read lock, then AudioPipeline::adapt_mutex_).
+    std::mutex send_feedback_cb_mutex_;
+    MelloSendFeedbackCallback send_feedback_cb_ = nullptr;
+    void* send_feedback_ud_ = nullptr;
+    std::shared_ptr<SendFeedbackTracker> send_feedback_ =
+        std::make_shared<SendFeedbackTracker>();
 
     // Recvonly receive slots in the next voice offer. Set before
     // create_offer, read under negotiation_mutex_.

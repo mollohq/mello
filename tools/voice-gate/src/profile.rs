@@ -28,6 +28,20 @@ pub struct Episode {
     pub stall_ms: f64,
 }
 
+/// A rate-limited link with a tail-drop queue in a time window: congestion
+/// that the sender's own rate causes. A packet that finds more than
+/// `queue_ms` of backlog is dropped; the others leave the link at the rate.
+#[derive(Clone, Debug)]
+pub struct Bottleneck {
+    pub start_s: f64,
+    pub dur_s: f64,
+    pub rate_kbps: f64,
+    pub queue_ms: f64,
+    /// Bytes per packet on the link besides the RTP packet: SRTP tag, UDP
+    /// and IP headers.
+    pub overhead_bytes: f64,
+}
+
 /// Network impairments between the sender and the receiver.
 #[derive(Clone, Debug, Default)]
 pub struct Network {
@@ -44,6 +58,8 @@ pub struct Network {
     pub episodes: Vec<Episode>,
     /// Every packet sent in [start, start + dur) is lost.
     pub outage: Option<(f64, f64)>,
+    /// Profiles added after the baseline only (profiles-congestion.json).
+    pub bottleneck: Option<Bottleneck>,
 }
 
 impl Network {
@@ -52,6 +68,7 @@ impl Network {
     pub fn has_loss(&self) -> bool {
         self.loss_random > 0.0
             || self.burst.is_some()
+            || self.bottleneck.is_some()
             || self.outage.is_some()
             || self.episodes.iter().any(|e| e.loss_random > 0.0)
     }
@@ -77,10 +94,33 @@ pub struct Gate {
     pub metric: String,
     pub min: Option<f64>,
     pub max: Option<f64>,
+    /// A lower bound from another profile's value of the same metric, plus
+    /// an offset.
+    pub min_ref: Option<GateRef>,
+    /// An upper bound from another profile's value, plus an offset.
+    pub max_ref: Option<GateRef>,
     /// A failing enforced gate fails the run. A failing informational gate
     /// is printed only.
     pub enforced: bool,
     pub note: String,
+}
+
+/// Where a relative bound comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RefSource {
+    /// The frozen baseline (baseline-2.9.json).
+    Baseline,
+    /// This run.
+    Run,
+}
+
+/// A bound relative to another profile: its value of the gate's metric in
+/// `source`, plus `offset`.
+#[derive(Clone, Debug)]
+pub struct GateRef {
+    pub source: RefSource,
+    pub profile: String,
+    pub offset: f64,
 }
 
 /// Sender settings. Default: the production defaults (VAD gate, RNNoise).
@@ -120,6 +160,12 @@ impl std::fmt::Display for SenderSpec {
 #[derive(Clone, Debug)]
 pub struct Profile {
     pub name: String,
+    /// The send-leg feedback reaches the sender (stage 5). False for the
+    /// `-no-adapt` twin of a profile with `compare_no_adapt`.
+    pub adapt: bool,
+    /// Added after the baseline (profiles-congestion.json): no baseline
+    /// values, its own inputs fingerprint.
+    pub added: bool,
     pub description: String,
     pub duration_s: f64,
     pub seed: u64,
@@ -156,6 +202,9 @@ pub struct AnalysisSpec {
 
 #[derive(Clone, Debug)]
 pub struct GateFile {
+    /// FNV-1a of the frozen inputs of the profiles added after the baseline
+    /// (profiles-congestion.json); empty without that file.
+    pub added_inputs_fingerprint: String,
     pub corpus: CorpusSpec,
     pub tail_ms: u32,
     pub analysis: AnalysisSpec,
@@ -221,6 +270,16 @@ fn parse_network(v: &Value) -> Result<Network, String> {
         Some(o) if !o.is_null() => Some((f(o, "start_s")?, f(o, "dur_s")?)),
         _ => None,
     };
+    let bottleneck = match v.get("bottleneck") {
+        Some(b) if !b.is_null() => Some(Bottleneck {
+            start_s: f(b, "start_s")?,
+            dur_s: f(b, "dur_s")?,
+            rate_kbps: f(b, "rate_kbps")?,
+            queue_ms: f(b, "queue_ms")?,
+            overhead_bytes: f_or(b, "overhead_bytes", 0.0),
+        }),
+        _ => None,
+    };
     Ok(Network {
         base_delay_ms: f(v, "base_delay_ms")?,
         jitter_sigma_ms: base_sigma,
@@ -232,17 +291,38 @@ fn parse_network(v: &Value) -> Result<Network, String> {
         reorder_extra_ms: f_or(v, "reorder_extra_ms", 0.0),
         episodes,
         outage,
+        bottleneck,
     })
+}
+
+/// `min_ref` or `max_ref` of a gate: `{ "source", "profile", "offset" }`.
+fn parse_ref(g: &Value, key: &str) -> Result<Option<GateRef>, String> {
+    match g.get(key) {
+        Some(r) if !r.is_null() => Ok(Some(GateRef {
+            source: match s(r, "source")?.as_str() {
+                "baseline" => RefSource::Baseline,
+                "run" => RefSource::Run,
+                other => return Err(format!("{key}.source '{other}': use 'baseline' or 'run'")),
+            },
+            profile: s(r, "profile")?,
+            offset: f_or(r, "offset", 0.0),
+        })),
+        _ => Ok(None),
+    }
 }
 
 fn parse_gates(v: &Value) -> Result<Vec<Gate>, String> {
     let mut out = Vec::new();
     if let Some(list) = v.as_array() {
         for g in list {
+            let min_ref = parse_ref(g, "min_ref")?;
+            let max_ref = parse_ref(g, "max_ref")?;
             out.push(Gate {
                 metric: s(g, "metric")?,
                 min: g.get("min").and_then(Value::as_f64),
                 max: g.get("max").and_then(Value::as_f64),
+                min_ref,
+                max_ref,
                 enforced: g.get("enforced").and_then(Value::as_bool).unwrap_or(true),
                 note: g
                     .get("note")
@@ -293,6 +373,39 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
         .map(|g| f(g, "mos_max_drop"))
         .transpose()?
         .unwrap_or(0.1);
+    let profiles = parse_profiles(&root, false)?;
+    Ok(GateFile {
+        added_inputs_fingerprint: String::new(),
+        corpus,
+        tail_ms,
+        analysis,
+        mos_max_drop,
+        profiles,
+        inputs_fingerprint: inputs_fingerprint(&root),
+    })
+}
+
+/// Add the profiles of a file added after the baseline (it has only
+/// `profiles`). The baseline's fingerprint does not cover them; they get
+/// their own. A profile with `"compare_no_adapt": true` also runs as
+/// `<name>-no-adapt`, without the send-leg feedback and without gates, so a
+/// gate can compare the two with `min_ref`.
+pub fn load_added(gf: &mut GateFile, path: &Path) -> Result<(), String> {
+    let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let root: Value =
+        serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    let added = parse_profiles(&root, true)?;
+    for p in &added {
+        if gf.profiles.iter().any(|q| q.name == p.name) {
+            return Err(format!("{}: profile '{}' exists", path.display(), p.name));
+        }
+    }
+    gf.profiles.extend(added);
+    gf.added_inputs_fingerprint = inputs_fingerprint(&root);
+    Ok(())
+}
+
+fn parse_profiles(root: &Value, added: bool) -> Result<Vec<Profile>, String> {
     let mut profiles = Vec::new();
     for p in root
         .get("profiles")
@@ -305,8 +418,14 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
         if !(0.0..=65535.0).contains(&seq) {
             return Err(ctx("rtp_seq_start out of range".into()));
         }
+        let compare_no_adapt = p
+            .get("compare_no_adapt")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         profiles.push(Profile {
             name: name.clone(),
+            adapt: true,
+            added,
             description: s(p, "description").map_err(ctx)?,
             duration_s: f(p, "duration_s").map_err(ctx)?,
             seed: f(p, "seed").map_err(ctx)? as u64,
@@ -331,15 +450,16 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
             .map_err(ctx)?,
             gates: parse_gates(p.get("gates").unwrap_or(&Value::Null)).map_err(ctx)?,
         });
+        if compare_no_adapt {
+            let mut twin = profiles.last().cloned().ok_or("no profile")?;
+            twin.name = format!("{name}-no-adapt");
+            twin.description = format!("{name} without the send-leg feedback (comparison)");
+            twin.adapt = false;
+            twin.gates = Vec::new();
+            profiles.push(twin);
+        }
     }
-    Ok(GateFile {
-        corpus,
-        tail_ms,
-        analysis,
-        mos_max_drop,
-        profiles,
-        inputs_fingerprint: inputs_fingerprint(&root),
-    })
+    Ok(profiles)
 }
 
 /// Fingerprint of the frozen inputs. Gates may change between stages;

@@ -917,6 +917,9 @@ impl Client {
             Command::SetInputSensitivity { auto, db } => {
                 self.voice.set_input_sensitivity(auto, db);
             }
+            Command::SetVoiceChannelBitrate { kbps } => {
+                self.voice.set_channel_bitrate(kbps);
+            }
             Command::SetLoopback { enabled } => {
                 self.voice.set_loopback(enabled);
             }
@@ -1052,6 +1055,14 @@ impl Client {
                 name,
             } => {
                 self.handle_rename_voice_channel(&crew_id, &channel_id, &name)
+                    .await;
+            }
+            Command::UpdateVoiceChannelBitrate {
+                crew_id,
+                channel_id,
+                bitrate_kbps,
+            } => {
+                self.handle_update_voice_channel_bitrate(&crew_id, &channel_id, bitrate_kbps)
                     .await;
             }
             Command::DeleteVoiceChannel {

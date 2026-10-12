@@ -102,6 +102,8 @@ Right-clicking a channel header opens a context menu:
 
 "Create New Channel" is also accessible via a `+` button below the last channel in the accordion.
 
+The channel bitrate (section 3.1) has no control in the UI yet. `channel_update` and `Command::UpdateVoiceChannelBitrate` exist; a "Channel Settings" item with a bitrate choice is a follow-up.
+
 ### 2.3 Joining Flow
 
 When a user clicks a different channel:
@@ -156,6 +158,17 @@ Stored in Nakama storage: `voice_channels/{crew_id}`
 
 **Channel ID format:** `ch_` prefix + 8 random alphanumeric characters (e.g. `ch_a3f8b2c1`). The default channel uses `ch_general` as a well-known ID for simplicity.
 
+**Channel bitrate.** Each channel has `bitrate_kbps`: the voice bitrate of its members, the top rung of their encoder ladder (spec 10 section 4.6).
+
+| Item | Value |
+|---|---|
+| Field | `bitrate_kbps`, integer kbps |
+| Allowed | 24 to 96 |
+| Default | 64 |
+| Stored | Only when set. A channel stored before the field has none and reads as 64 (`VoiceChannelDef.EffectiveBitrateKbps`). |
+| Set by | `channel_create` (optional) and `channel_update` (section 4.1) |
+| Read by | The crew state, the `voice_update` channel list, the `voice_join` response |
+
 ### 3.2 Voice Room State (In-Memory)
 
 The existing `VoiceRoom` struct changes from `map[crewID]` to `map[channelID]`:
@@ -200,6 +213,7 @@ The `voice` field in `CrewState` changes from a single object to an array:
       "id": "ch_general",
       "name": "General",
       "is_default": true,
+      "bitrate_kbps": 64,
       "members": [
         { "user_id": "user_a", "username": "k0ji_tech", "speaking": false, "muted": false },
         { "user_id": "user_b", "username": "ash_22", "speaking": false, "muted": false },
@@ -227,6 +241,8 @@ The `voice` field in `CrewState` changes from a single object to an array:
 
 The `voice.active` boolean is removed — the UI derives "active" from whether any channel has members.
 
+Each channel carries `bitrate_kbps` (section 3.1), also in the sidebar state and in the `voice_channels` list of `voice_update`.
+
 ---
 
 ## 4. Backend RPCs
@@ -240,8 +256,9 @@ All channel management RPCs are registered in `main.go` via `initializer.Registe
 ```go
 // Request
 type ChannelCreateRequest struct {
-    CrewID string `json:"crew_id"`
-    Name   string `json:"name"`
+    CrewID      string `json:"crew_id"`
+    Name        string `json:"name"`
+    BitrateKbps *int   `json:"bitrate_kbps"` // optional; absent is 64
 }
 
 // Response
@@ -256,6 +273,31 @@ type ChannelCreateResponse struct {
 // - Channel ID generated server-side: "ch_" + 8 random alphanumeric
 // - Position = max existing position + 1
 ```
+
+Validation of `bitrate_kbps`: absent is 64; a present value outside 24 to 96 fails with code 3 (`INVALID_ARGUMENT`). The response carries the channel with its `bitrate_kbps`.
+
+#### `channel_update`
+
+```go
+// Request
+type ChannelUpdateRequest struct {
+    CrewID      string `json:"crew_id"`
+    ChannelID   string `json:"channel_id"`
+    BitrateKbps *int   `json:"bitrate_kbps"` // required
+}
+
+// Response
+{ "success": true, "channel_id": "ch_general", "bitrate_kbps": 48 }
+```
+
+| Check | Error |
+|---|---|
+| No authenticated user | code 16 |
+| Not JSON, a missing field, or `bitrate_kbps` outside 24 to 96 or not a number | code 3 |
+| Caller lacks `channel_manage` permission | code 7 |
+| No channel with `channel_id` in the crew | code 5 |
+
+On success the RPC stores the value, invalidates the crew state, pushes the crew event `channel_updated` (`{ "channel_id", "bitrate_kbps" }`) and a `voice_update`. Members in the channel take the new top rung from the `voice_update` channel list (section 6.2).
 
 #### `channel_rename`
 
@@ -321,6 +363,11 @@ type VoiceJoinRequest struct {
     ChannelID string `json:"channel_id"`
 }
 
+// Response (also before this change): success, channel_id, voice_state,
+// mode ("sfu" or "p2p"), sfu_endpoint and sfu_token in SFU mode, and
+// bitrate_kbps: the channel bitrate (section 3.1). The client sets it as
+// the top rung of its encoder ladder before capture starts.
+//
 // Behaviour:
 // 1. If user is already in a channel in this crew → leave it first (implicit move)
 // 2. If user is in a channel in a DIFFERENT crew → leave that too (one channel at a time globally)
@@ -426,6 +473,14 @@ Channel CRUD events are pushed as priority crew events:
   "crew_id": "crew_xyz",
   "event": "channel_renamed",
   "data": { "channel_id": "ch_general", "name": "Lounge" }
+}
+
+// channel_updated
+{
+  "type": "crew_event",
+  "crew_id": "crew_xyz",
+  "event": "channel_updated",
+  "data": { "channel_id": "ch_general", "bitrate_kbps": 48 }
 }
 
 // channel_deleted
@@ -549,6 +604,8 @@ Event::VoiceMoved { crew_id: CrewId, from_channel: ChannelId, to_channel: Channe
 // Channel CRUD events
 Event::ChannelCreated { crew_id: CrewId, channel: VoiceChannel },
 Event::ChannelRenamed { crew_id: CrewId, channel_id: ChannelId, name: String },
+// The local member changed a channel's bitrate (channel_update succeeded).
+Event::VoiceChannelBitrateChanged { crew_id: String, channel_id: String, bitrate_kbps: u32 },
 Event::ChannelDeleted { crew_id: CrewId, channel_id: ChannelId },
 Event::ChannelReordered { crew_id: CrewId, channel_ids: Vec<ChannelId> },
 
@@ -566,9 +623,20 @@ Command::VoiceLeave { crew_id: CrewId },  // unchanged — server resolves chann
 
 Command::ChannelCreate { crew_id: CrewId, name: String },
 Command::ChannelRename { crew_id: CrewId, channel_id: ChannelId, name: String },
+// channel_update RPC (section 4.1).
+Command::UpdateVoiceChannelBitrate { crew_id: String, channel_id: String, bitrate_kbps: u32 },
+// The joined channel's bitrate to the encoder (spec 10 section 4.6).
+Command::SetVoiceChannelBitrate { kbps: u32 },
 Command::ChannelDelete { crew_id: CrewId, channel_id: ChannelId },
 Command::ChannelReorder { crew_id: CrewId, channel_ids: Vec<ChannelId> },
 ```
+
+How the joined channel's bitrate reaches the encoder:
+
+| When | Path |
+|---|---|
+| Join, rejoin, reconnect | `Client::start_voice_media` takes `bitrate_kbps` of the `voice_join` response (64 when absent) -> `VoiceManager::set_channel_bitrate` -> `mello_voice_set_max_bitrate`, before capture starts |
+| A channel update | The client handlers find the joined channel in `VoiceChannelsUpdated` or `CrewStateLoaded`, or take `VoiceChannelBitrateChanged` for it, and send `Command::SetVoiceChannelBitrate`. mello-core ignores an unchanged value. |
 
 ### 6.4 VoiceManager Update
 

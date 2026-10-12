@@ -116,7 +116,7 @@ Per 20ms frame, endpoint processing order is adaptive:
 6. Silero VAD runs only for candidate speech / hangover windows
 7. downward expander attenuates the frame toward a floor gain when the VAD is below threshold (see §4.4)
 8. when speech opens, flush pre-roll frames so starts are not clipped
-9. while speech or hangover is active, apply the selected enhancement mode and Opus encode
+9. while speech or hangover is active, apply the selected enhancement mode and Opus encode, at the bitrate and expected loss of the send-leg adaptation (§4.6)
 10. give the encoded packet, with a monotonically increasing sequence, to the packet sink (§4.5), or put it in the `get_packet` queue when no sink is set
 
 RNNoise remains the default quality noise suppression path, but it is not run on obvious
@@ -244,6 +244,66 @@ Who uses which path:
 | Voice quality gate | Packet sink collects the trace (§9) | Caller thread |
 
 mello-core details are in §7.3. The thread rules for the sink are in spec 03 §7.
+
+### 4.6 Encoder Adaptation (Send Leg)
+
+Rule: the encoder follows the send leg. The SFU reports the loss, the jitter and the round trip of the microphone track once per second (§7.5). `SendAdaptation` (`libmello/src/audio/send_adaptation.{hpp,cpp}`) turns each report into an expected loss and an Opus bitrate.
+
+Two signals, two controls:
+
+| Signal | Control | Why |
+|---|---|---|
+| Loss of any cause | `OPUS_SET_PACKET_LOSS_PERC` only | In-band FEC repairs random loss. A lower bitrate does not lower random loss and costs quality: the loss-driven ladder of the first version cost `mobile` 0.17 and `bad` 0.14 MOS in the voice gate. |
+| Congestion: loss together with a rising round trip or a rising jitter | The bitrate ladder | A queue that the sender's own rate fills drops packets and delays them. A lower rate drains it. |
+
+Encoder settings that do not change: `OPUS_APPLICATION_VOIP`, `OPUS_SIGNAL_VOICE`, in-band FEC on, DTX on, complexity 8, 20 ms frames.
+
+Bitrate ladder:
+
+| Item | Value |
+|---|---|
+| Rungs | The channel bitrate (the top rung), then each of 96, 64, 48, 32, 24 kbps below it |
+| Channel bitrate | 24 to 96 kbps, default 64 (spec 13 section 3.1). `mello_voice_set_max_bitrate` |
+| Example | Channel 64: 64, 48, 32, 24. Channel 40: 40, 32, 24 |
+| Channel change at the top rung | The encoder moves to the new top |
+| Channel change below the top | The encoder keeps the highest rung at or below its bitrate |
+| New voice session (`start_capture`, `start_capture_inject`) | Top rung, loss perc 5, no history |
+
+Congestion (all at one report):
+
+| Condition | Detail |
+|---|---|
+| Loss | The packets lost over the last 2 s of reports are more than 10 % of the packets expected. The window starts after the last step down, and holds at least 25 expected packets (0.5 s of speech). |
+| and round-trip inflation | The median round trip of the last 3 s (at least 2 samples) is more than 2 x the median of the last 30 s (at least 5 samples). The 30 s median counts as at least 50 ms. Only fresh samples count: a report whose LSR repeats the previous one (`rtt_fresh` false) repeats an old forward delay. |
+| or jitter growth | The same test on the RFC 3550 jitter of the reports that carry packets. The 30 s median counts as at least 10 ms. |
+
+Windows count reports: a window of N s holds the reports of the last N s of arrivals, and starts half a report interval late, because the reports arrive a few ms early or late on the SFU's 1 s ticker.
+
+Ladder rules:
+
+| Rule | Detail |
+|---|---|
+| Step down | One rung at a report with congestion. The next step down needs 2 new reports, so one lossy second does not step down twice. |
+| Ineffective step | 4 s of reports after a step down, the loss over them must be at most 10 %, or at most half the loss that caused the step. If not, the ladder steps back up one rung and holds for 30 s: no step in either direction. A later step down replaces the check of the earlier one. |
+| Step up | One rung after 10 s with no congestion, when the reports in the 10 s expect at least 250 packets (5 s of speech). Loss without congestion does not stop it. |
+| No evidence | A report with too few packets (a closed speech gate) does not step and does not count as clean speech. |
+| Hysteresis | In time: down at the report, up after 10 s, a 30 s hold after a wrong step. |
+| Log | Each rung change logs at info (`send_adapt`) with the loss over 2 s, the round trip and the jitter with their 30 s medians, and the loss perc. |
+
+Expected loss (`OPUS_SET_PACKET_LOSS_PERC`): the loss over the last 4 s of reports, in percent, rounded up, clamped to 5 to 30, whatever the cause. A 4 s window with fewer than 25 expected packets keeps the last value. Opus spends more of the bitrate on in-band FEC (LBRR) as the value rises. The voice gate shows that a low rung needs it: at 24 kbps with loss perc 5 the FEC is too weak to repair single losses.
+
+Measured in the voice gate (stage 5, `TESTING.md`): on the eight baseline profiles the ladder stays at the top except for one wrong step on `bad` (back by the ineffective-step rule) and the jitter burst of `burst`; MOS is within 0.02 of stage 4. On the `congestion` profile the ladder steps down 1.7 s after the loss starts and lowers the delay in the bottleneck by 134 ms, and PESQ scores it 0.16 lower than no adaptation, inside the 0.2 the gate allows (section 9, `TESTING.md`).
+
+Threads:
+
+| Step | Thread | Lock |
+|---|---|---|
+| `mello_voice_report_send_feedback` runs the controller | libdatachannel thread (the SFU's report) | `adapt_mutex_`, a leaf lock. Never the capture lock. |
+| `mello_voice_set_max_bitrate` | Command loop | `adapt_mutex_` |
+| Hand-off | Two atomics: the bitrate and the loss perc | none |
+| `opus_encoder_ctl` when a value changed | Capture thread, before the next encode | the capture lock it holds already |
+
+The controller never runs on the command loop, and the capture thread never waits for the controller.
 
 ---
 
@@ -463,6 +523,36 @@ Measured 2026-10-07 on localhost (control-channel RTT 0 to 1.6 ms), a member joi
 
 Most of the join time is ICE, DTLS and the DataChannel open. The joiner's microphone starts only after `wait_for_datachannel_open`, which polls every 50 ms.
 
+### 7.5 Send-Leg Feedback
+
+The SFU (Pion, `ConfigureRTCPReports`) sends RTCP receiver reports about the client's microphone track. The client reads them and gives them to the encoder adaptation (§4.6).
+
+What the reports contain (pion/interceptor `pkg/report`, v0.1.44, `receiver_stream.go`):
+
+| Field | Content |
+|---|---|
+| Cadence | One receiver report per second per stream, on a ticker that starts when the SFU binds the track. Reports also go before the first packet: sequence 0, nothing lost. |
+| Fraction lost | Lost since the previous report divided by the sequence numbers since then, in 1/256. A packet that arrives late but before the report is not lost. A packet still missing at the report stays lost. |
+| Cumulative lost | The sum of the counts above, up to 2^24 - 1. |
+| Extended highest sequence | Cycles << 16 or the highest sequence received. |
+| Jitter | RFC 3550 interarrival jitter, in 48 kHz units. |
+| LSR, DLSR | The middle 32 bits of the NTP time of our last sender report, and the time since it arrived, in 1/65536 s. |
+
+Our sender reports come from `rtc::RtcpSrReporter` on the send track: one with the first packet, then with the first packet after each full second. A closed speech gate sends no packets and no sender reports; the next report still gives the round trip, because DLSR counts the time since the last sender report.
+
+Receive path in libmello (`libmello/src/transport/voice_send_feedback.{hpp,cpp}`):
+
+1. libdatachannel routes an RTCP packet to the track whose SSRC a report block names. The voice send track declares its SSRC (`a=ssrc`), so the SFU's report reaches it.
+2. `SendFeedbackHandler`, last in the send track's media handler chain, finds the report blocks about the send SSRC in each RTCP packet (`find_reception_reports`; receiver and sender reports, compound packets).
+3. `SendFeedbackTracker` turns a block into `MelloSendFeedback`: fraction lost, cumulative lost, jitter in ms, and the round trip A - LSR - DLSR against the NTP time of `RtcpSrReporter` (the system clock). `rtt_fresh` is true when the LSR differs from the previous report's: a full queue drops sender reports, and the reports after it repeat an old, low forward delay. It also gives the packets expected and lost since the previous report (RFC 3550 appendix A.3): the difference of the extended sequence numbers and of the cumulative counts, or the fraction times the expected count when the difference is not usable. The first report counts from the track's first sequence. A report before the first packet gives no interval.
+4. The peer calls `MelloSendFeedbackCallback` on the libdatachannel thread. `mello_peer_get_send_feedback` returns the last one.
+
+mello-core (`transport/sfu_connection.rs`, `send_feedback_callback`): on the libdatachannel thread, while the direct voice sink is set, the feedback goes to `mello_voice_report_send_feedback` of the voice context. The voice sink's read lock guards the context pointer, as on the receive path (§7.3). The teardown clears the callback with the other peer callbacks. The command loop is not in the path.
+
+Debug statistics (`MelloDebugStats`, appended): `tx_rr_reports` (reports in this voice session), `tx_rr_fraction_lost_pct`, `tx_rr_cumulative_lost`, `tx_rr_jitter_ms`, `tx_rtt_ms`, `tx_loss_window_pct` (the 2 s step-down window), `tx_bitrate_kbps`, `tx_max_bitrate_kbps`, `tx_packet_loss_perc`, `tx_rung_changes`. The diagnostic capture log line carries the bitrate, loss perc, reported loss, round trip and steps.
+
+The voice SFU does not get the send-leg values in `client_stats`: that message is part of the SFU signaling contract.
+
 ---
 
 ## 8. Public C API (Voice Surface)
@@ -500,6 +590,11 @@ void  mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count);
 MelloResult mello_peer_set_audio_mid_sender(MelloPeerConnection* peer, const char* mid, const char* sender_id);
 void  mello_peer_set_control_text_callback(MelloPeerConnection* peer, MelloControlTextCallback callback, void* user_data);
 MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
+// Send-leg feedback and encoder adaptation (sections 4.6 and 7.5)
+void  mello_peer_set_send_feedback_callback(MelloPeerConnection* peer, MelloSendFeedbackCallback callback, void* user_data);
+bool  mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* out);
+void  mello_voice_report_send_feedback(MelloContext* ctx, const MelloSendFeedback* feedback);
+void  mello_voice_set_max_bitrate(MelloContext* ctx, int kbps);
 ```
 
 Controls added with the NetEQ playout (section 5.3):
@@ -509,6 +604,14 @@ Controls added with the NetEQ playout (section 5.3):
 | Per-member volume | `mello_voice_set_peer_volume` | `Command::SetPeerVolume { peer_id, volume }` -> `VoiceManager::set_peer_volume` | Not exposed yet (member context menu, follow-up) |
 | Per-member pan | `mello_voice_set_peer_pan` | none (centre) | none |
 | Peer left | `mello_voice_remove_peer` | `VoiceManager::on_member_left`, SFU `MemberLeft`, SFU slot release (`handle_control_text`) | - |
+
+Controls added with the encoder adaptation (sections 4.6 and 7.5):
+
+| Control | C API | mello-core | Client |
+|---|---|---|---|
+| Channel bitrate (the top rung) | `mello_voice_set_max_bitrate` | The `voice_join` response at each join (`Client::start_voice_media`), and `Command::SetVoiceChannelBitrate { kbps }` -> `VoiceManager::set_channel_bitrate` | The handlers send `SetVoiceChannelBitrate` for the joined channel on `VoiceChannelsUpdated`, `CrewStateLoaded` and `VoiceChannelBitrateChanged` |
+| Change a channel's bitrate | - | `Command::UpdateVoiceChannelBitrate { crew_id, channel_id, bitrate_kbps }` -> `channel_update` RPC -> `Event::VoiceChannelBitrateChanged` | Not exposed yet (channel settings UI, follow-up) |
+| Receiver reports | `mello_peer_set_send_feedback_callback` -> `mello_voice_report_send_feedback` | `SfuConnection` wires them on the libdatachannel thread | - |
 
 All user-facing voice toggles in `client` and `mello-core` must map to these runtime controls (no dead settings).
 
@@ -543,8 +646,19 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
   the SFU path forwards it (16-bit sequence, timestamp, SSRC) and applies
   loss, jitter, stalls, reorder, outage, clock drift and the RTP sequence
   wrap. The receiver takes it with `mello_voice_feed_rtp`
+- the SFU's receiver reports (a port of Pion's receiver stream) reach the
+  sender's encoder adaptation with the report cadence and the network delay
+  of the profile (§4.6, §7.5). `--no-adapt` runs without them
+- `profiles-congestion.json` adds profiles after the baseline, with their own
+  seeds and fingerprint: `congestion`, a rate-limited bottleneck with a
+  tail-drop queue, and its `congestion-no-adapt` twin. Its gates are the
+  delay gain in the bottleneck (at least 100 ms) and a MOS cost of at most
+  0.2 against the twin. In-band FEC repairs the tail-drop losses of a single
+  flow, so without adaptation the bottleneck costs only delay. The ladder
+  trades at most 0.2 MOS of time stretch for the delay gain
 - reports MOS-LQO (PESQ wideband), playout delay over time, concealment
-  frames per lost frame, receiver drops and dropouts, with the delta against
+  frames per lost frame, receiver drops and dropouts, the send bitrate and
+  loss perc over time, with the delta against
   `benchmarks/baselines/voice/baseline-2.9.json`. See `TESTING.md`.
 
 ---
@@ -562,10 +676,14 @@ libmello/src/audio/
 ├── capture_coreaudio.cpp
 ├── playback_coreaudio.cpp
 ├── opus_codec.hpp / .cpp        # Opus encoder (voice), decoder (stream audio)
+├── send_adaptation.hpp / .cpp  # bitrate ladder and loss perc from the send leg (§4.6)
 ├── noise_suppressor.hpp / .cpp
 ├── echo_canceller.hpp / .cpp
 ├── speech_expander.hpp        # post-AGC downward expander (§4.4)
 └── vad.hpp / .cpp
+
+libmello/src/transport/
+└── voice_send_feedback.hpp / .cpp  # receiver reports about the voice send track (§7.5)
 
 libmello/third_party/webrtc-neteq/  # vendored NetEQ, Opus decoder, CNG, mixer (M131)
 

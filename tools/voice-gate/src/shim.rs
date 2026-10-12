@@ -24,16 +24,21 @@ pub struct ShimCounters {
     pub lost_random: u64,
     pub lost_burst: u64,
     pub lost_outage: u64,
+    /// Dropped by a full bottleneck queue.
+    pub lost_queue: u64,
     pub reordered: u64,
     pub delivered: u64,
     /// Lost packets that carried an Opus DTX frame (2 bytes or less): the
     /// receiver plays comfort noise through them, nothing to conceal.
     pub lost_dtx: u64,
+    /// Every sent packet: run time of the send, and whether the network
+    /// lost it. The truth that the receiver reports estimate.
+    pub sent_log: Vec<(i64, bool)>,
 }
 
 impl ShimCounters {
     pub fn lost(&self) -> u64 {
-        self.lost_random + self.lost_burst + self.lost_outage
+        self.lost_random + self.lost_burst + self.lost_outage + self.lost_queue
     }
 }
 
@@ -88,6 +93,8 @@ pub struct Shim {
     /// Stall windows in ms of run time: random spikes and episode stalls.
     stalls: Vec<(f64, f64)>,
     last_fifo_ms: f64,
+    /// Bottleneck: run time at which the link has sent its backlog.
+    link_free_ms: f64,
     in_flight: BinaryHeap<Reverse<InFlight>>,
     order: u64,
     pub counters: ShimCounters,
@@ -130,6 +137,7 @@ impl Shim {
             gilbert_bad: false,
             stalls,
             last_fifo_ms: 0.0,
+            link_free_ms: 0.0,
             in_flight: BinaryHeap::new(),
             order: 0,
             counters: ShimCounters::default(),
@@ -147,6 +155,26 @@ impl Shim {
             }
         }
         (self.net.jitter_sigma_ms, self.net.loss_random)
+    }
+
+    /// Pass `bytes` (an RTP or RTCP packet) through the bottleneck at run
+    /// time `t_ms`. Returns the time it leaves the link (`t_ms` outside the
+    /// window), or None when the queue is full and drops it.
+    fn through_bottleneck(&mut self, t_ms: f64, bytes: usize) -> Option<f64> {
+        let Some(b) = &self.net.bottleneck else {
+            return Some(t_ms);
+        };
+        let (start, end) = (b.start_s * 1000.0, (b.start_s + b.dur_s) * 1000.0);
+        if t_ms < start || t_ms >= end {
+            return Some(t_ms);
+        }
+        let backlog = (self.link_free_ms - t_ms).max(0.0);
+        if backlog > b.queue_ms {
+            return None;
+        }
+        let ser_ms = (bytes as f64 + b.overhead_bytes) * 8.0 / b.rate_kbps;
+        self.link_free_ms = self.link_free_ms.max(t_ms) + ser_ms;
+        Some(self.link_free_ms)
     }
 
     /// Take one packet from the sender's packet sink, sent at run time
@@ -196,6 +224,8 @@ impl Shim {
             .map(|(s, d)| t >= s * 1000.0 && t < (s + d) * 1000.0)
             .unwrap_or(false);
         let dtx = u64::from(packet.payload.len() <= 2);
+        let lost = in_outage || burst_lost || u_loss < loss_random;
+        self.counters.sent_log.push((now_ms, lost));
         if in_outage {
             self.counters.lost_outage += 1;
             self.counters.lost_dtx += dtx;
@@ -212,7 +242,15 @@ impl Shim {
             return;
         }
 
-        let mut deliver = t + (self.net.base_delay_ms + jitter).max(0.0);
+        let Some(departs) = self.through_bottleneck(t, bytes.len()) else {
+            self.counters.lost_queue += 1;
+            self.counters.lost_dtx += dtx;
+            if let Some(last) = self.counters.sent_log.last_mut() {
+                last.1 = true;
+            }
+            return;
+        };
+        let mut deliver = departs + (self.net.base_delay_ms + jitter).max(0.0);
         for &(s, e) in &self.stalls {
             if t >= s && t < e {
                 deliver = deliver.max(e + self.net.base_delay_ms);
@@ -234,6 +272,38 @@ impl Shim {
             order: self.order,
             bytes,
         }));
+    }
+
+    /// One-way delay in ms of a packet sent at run time `t_ms` with a
+    /// standard normal jitter draw `gaussian`: the base delay, the jitter of
+    /// the conditions at `t_ms`, and a stall that holds the packet to its
+    /// end. The RTCP model (rtcp.rs) uses it for the sender reports, which
+    /// travel the same path as the RTP packets. FIFO order and reorder do
+    /// not apply.
+    /// A sender report is `bytes` long on the link and queues behind the
+    /// RTP packets at a bottleneck; None when the queue drops it.
+    pub fn one_way_delay_ms(&mut self, t_ms: f64, gaussian: f64, bytes: usize) -> Option<f64> {
+        let (sigma, _) = self.conditions(t_ms);
+        let departs = self.through_bottleneck(t_ms, bytes)?;
+        let mut deliver = departs + (self.net.base_delay_ms + gaussian * sigma).max(0.0);
+        for &(s, e) in &self.stalls {
+            if t_ms >= s && t_ms < e {
+                deliver = deliver.max(e + self.net.base_delay_ms);
+            }
+        }
+        Some(deliver - t_ms)
+    }
+
+    /// Base delay and jitter of the network at run time `t_ms`, for a path
+    /// without stalls (the reverse path of the receiver reports).
+    pub fn base_and_sigma_ms(&self, t_ms: f64) -> (f64, f64) {
+        (self.net.base_delay_ms, self.conditions(t_ms).0)
+    }
+
+    /// The RTP sequence number that the shim gives the sender's packet
+    /// `sequence`.
+    pub fn rtp_sequence(&self, sequence: u32) -> u16 {
+        ((u32::from(self.rtp_seq_start) + sequence) & 0xFFFF) as u16
     }
 
     /// Packets due at or before `now_ms`, in delivery order.
@@ -268,6 +338,8 @@ mod tests {
             sender: Default::default(),
             network: net,
             gates: Vec::new(),
+            adapt: true,
+            added: false,
         }
     }
 
@@ -360,6 +432,52 @@ mod tests {
             (random - 0.05 * (1.0 - burst)).abs() < 0.006,
             "random {random}"
         );
+    }
+
+    #[test]
+    fn bottleneck_queues_then_drops_the_excess_rate() {
+        use crate::profile::Bottleneck;
+        // 84 kbps of packets (198 + 12 bytes per 20 ms) into a 56 kbps link
+        // with a 300 ms queue, from 1 s to 3 s.
+        let net = Network {
+            base_delay_ms: 10.0,
+            bottleneck: Some(Bottleneck {
+                start_s: 1.0,
+                dur_s: 2.0,
+                rate_kbps: 56.0,
+                queue_ms: 300.0,
+                overhead_bytes: 12.0,
+            }),
+            ..Default::default()
+        };
+        let mut shim = Shim::new(&profile(net, 0));
+        let mut sent_at = Vec::new();
+        for s in 0..250u32 {
+            let p = SentPacket {
+                payload: vec![0xAA; 198],
+                ..pkt(s)
+            };
+            shim.send(&p, i64::from(s) * 20, 0);
+            sent_at.push(i64::from(s) * 20);
+        }
+        let lost = shim.counters.lost_queue;
+        // 100 packets in the window, the link takes 2/3 of them, less the
+        // queue it fills.
+        assert!((25..=40).contains(&lost), "queue drops {lost}");
+        assert_eq!(shim.counters.lost(), lost);
+        assert!(shim.counters.sent_log.iter().filter(|x| x.1).count() as u64 == lost);
+        // Before the window: 10 ms. At its end: the queue, at most 300 ms
+        // plus one packet on the link.
+        let got = shim.due(10_000);
+        assert_eq!(got.len() as u64, 250 - lost);
+        let mut fresh = Shim::new(&profile(
+            Network {
+                base_delay_ms: 10.0,
+                ..Default::default()
+            },
+            0,
+        ));
+        assert_eq!(fresh.one_way_delay_ms(500.0, 0.0, 80), Some(10.0));
     }
 
     #[test]

@@ -451,6 +451,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &vctx);
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
+                super::voice::apply_joined_channel_bitrate(ctx, &state.voice_channels);
 
                 ctx.app.set_can_manage_channels(state.my_role <= 1);
                 ctx.app.set_crew_settings_my_role(state.my_role);

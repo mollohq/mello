@@ -123,6 +123,9 @@ pub struct VoiceManager {
     /// The local speaking state as in-band messages on the SFU control
     /// channel, sent from the VAD callback (speaking.rs).
     inband_speaking: Arc<InbandSpeaking>,
+    /// The joined channel's bitrate in kbps: the top rung of the encoder
+    /// ladder (spec 10 section 4.6).
+    channel_bitrate_kbps: u32,
 }
 
 // Safety: VoiceManager is only ever accessed from a single tokio task (the client run loop).
@@ -222,6 +225,7 @@ impl VoiceManager {
             prev_rtp_recv_total: 0,
             rtp_stall_checks: 0,
             inband_speaking: Arc::new(InbandSpeaking::new()),
+            channel_bitrate_kbps: crate::crew_state::DEFAULT_CHANNEL_BITRATE_KBPS,
         }
     }
 
@@ -667,6 +671,24 @@ impl VoiceManager {
         log::info!("Input sensitivity: auto={} db={:.1}", auto, db);
     }
 
+    /// The joined channel's bitrate in kbps: the top rung of the encoder
+    /// ladder (spec 10 section 4.6). libmello clamps it to 24..96. The
+    /// receiver reports of the SFU move the encoder down the ladder and back
+    /// up to this rung, on the libdatachannel and capture threads.
+    /// The client repeats it on every channel update: an unchanged value
+    /// does nothing.
+    pub fn set_channel_bitrate(&mut self, kbps: u32) {
+        if kbps == self.channel_bitrate_kbps {
+            return;
+        }
+        self.channel_bitrate_kbps = kbps;
+        if !self.ctx.is_null() {
+            let kbps = i32::try_from(kbps).unwrap_or(i32::MAX);
+            unsafe { mello_sys::mello_voice_set_max_bitrate(self.ctx, kbps) };
+        }
+        log::info!("Voice channel bitrate: {} kbps", kbps);
+    }
+
     pub fn set_loopback(&mut self, enabled: bool) {
         if self.ctx.is_null() {
             return;
@@ -1067,7 +1089,7 @@ impl VoiceManager {
             if self.capture_mode {
                 log::info!(
                     target: "audio_stats",
-                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} ur5s={} rtp_recv={} delay_ms={:.1} target_ms={:.1} rtt_ms={:.1}",
+                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} ur5s={} rtp_recv={} delay_ms={:.1} target_ms={:.1} rtt_ms={:.1} tx_kbps={} tx_loss_perc={} tx_rr_lost_pct={:.1} tx_rr_rtt_ms={:.0} tx_steps={}",
                     stats.input_level,
                     stats.silero_vad_prob,
                     stats.rnnoise_prob,
@@ -1083,6 +1105,11 @@ impl VoiceManager {
                     stats.pipeline_delay_ms,
                     stats.rx_target_delay_ms,
                     rtt,
+                    stats.tx_bitrate_kbps,
+                    stats.tx_packet_loss_perc,
+                    stats.tx_rr_fraction_lost_pct,
+                    stats.tx_rtt_ms,
+                    stats.tx_rung_changes,
                 );
             }
 

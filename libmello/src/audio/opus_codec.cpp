@@ -50,6 +50,10 @@ void OpusEnc::set_bitrate(int bitrate) {
     if (encoder_) opus_encoder_ctl(encoder_, OPUS_SET_BITRATE(bitrate));
 }
 
+void OpusEnc::set_packet_loss_perc(int percent) {
+    if (encoder_) opus_encoder_ctl(encoder_, OPUS_SET_PACKET_LOSS_PERC(percent));
+}
+
 // --- Decoder ---
 
 OpusDec::OpusDec() = default;

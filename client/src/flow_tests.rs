@@ -664,11 +664,13 @@ fn crew_state_with_channels(in_squad: &[&str]) -> mello_core::crew_state::CrewSt
                 name: "General".into(),
                 is_default: true,
                 members: vec![],
+                ..Default::default()
             },
             VoiceChannelState {
                 id: "ch-squad".into(),
                 name: "Squad".into(),
                 is_default: false,
+                bitrate_kbps: 96,
                 members: in_squad
                     .iter()
                     .map(|id| VoiceMember {
@@ -741,6 +743,61 @@ fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
         state: crew_state_with_channels(&["u-me"]),
     });
     assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
+}
+
+fn channel_bitrates(cmds: &[Command]) -> Vec<u32> {
+    cmds.iter()
+        .filter_map(|c| match c {
+            Command::SetVoiceChannelBitrate { kbps } => Some(*kbps),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Spec 10 section 4.6: the joined channel's bitrate reaches the encoder
+/// when a channel update changes it. Other channels do not count, and
+/// before a join nothing is sent.
+#[test]
+fn the_joined_channels_bitrate_goes_to_the_encoder_on_a_channel_update() {
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&[]),
+    });
+    assert!(
+        channel_bitrates(&h.commands()).is_empty(),
+        "no channel joined"
+    );
+
+    join_squad_before_the_call_starts(&mut h);
+    h.commands();
+
+    // Squad is at 96 kbps, General at the default.
+    h.emit(Event::VoiceChannelsUpdated {
+        crew_id: "crew-1".into(),
+        channels: crew_state_with_channels(&["u-me"]).voice_channels,
+    });
+    assert_eq!(channel_bitrates(&h.commands()), vec![96]);
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me"]),
+    });
+    assert_eq!(channel_bitrates(&h.commands()), vec![96]);
+
+    // The local member changed the bitrate of another channel: nothing.
+    h.emit(Event::VoiceChannelBitrateChanged {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-general".into(),
+        bitrate_kbps: 32,
+    });
+    assert!(channel_bitrates(&h.commands()).is_empty());
+    h.emit(Event::VoiceChannelBitrateChanged {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        bitrate_kbps: 48,
+    });
+    assert_eq!(channel_bitrates(&h.commands()), vec![48]);
 }
 
 /// Whether `member` shows the speaking ring in the `Squad` channel.

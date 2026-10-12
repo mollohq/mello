@@ -1,8 +1,10 @@
 #pragma once
+#include "mello.h"
 #include "audio_platform.hpp"
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
 #include "opus_codec.hpp"
+#include "send_adaptation.hpp"
 #include "noise_suppressor.hpp"
 #include "echo_canceller.hpp"
 #include "echo_suppressor.hpp"
@@ -44,6 +46,21 @@ struct EncodedPacket {
 static constexpr int VOICE_FRAME_HEADER_SIZE = 8;
 
 /// Receive-path statistics for mello_get_debug_stats (spec 10 section 5.4).
+/// Send-leg feedback and the encoder adaptation, for mello_get_debug_stats
+/// (spec 10 sections 4.6 and 7.5).
+struct SendStats {
+    /// The last receiver report about the send track in this session.
+    MelloSendFeedback feedback{};
+    /// Reports in this session; 0: `feedback` is empty.
+    uint32_t reports = 0;
+    int bitrate_kbps = 0;
+    int max_bitrate_kbps = 0;
+    int loss_perc = 0;
+    uint32_t rung_changes = 0;
+    /// Loss over the step-down window, percent; -1 when unknown.
+    float window_loss_pct = -1.0f;
+};
+
 struct ReceiveStats {
     /// NetEQ and mixer, over every remote peer.
     PlayoutStats playout;
@@ -120,6 +137,17 @@ public:
     bool is_deafened() const { return deafened_; }
 
     int get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp = nullptr);
+
+    /// One receiver report about the voice send track (spec 10 section
+    /// 4.6). Runs the adaptation controller at util::steady_now_ms() and
+    /// hands the new encoder bitrate and loss percentage to the capture
+    /// thread through atomics. Any thread; in production the
+    /// libdatachannel thread. Never takes the capture lock.
+    void report_send_feedback(const MelloSendFeedback& feedback);
+    /// The channel bitrate in kbps: the top rung of the ladder (24..96).
+    /// Any thread.
+    void set_max_bitrate_kbps(int kbps);
+    SendStats send_stats() const;
 
     /// Receives each encoded voice frame on the capture thread, right after
     /// Opus encode: the Opus payload (no sequence header) and its size, the
@@ -201,6 +229,11 @@ public:
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
     void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
+    /// Capture thread, under accum_mutex_: give the encoder the bitrate and
+    /// loss percentage that the controller chose, when they changed.
+    void apply_send_adaptation();
+    /// A new voice session: the top rung and the loss floor.
+    void reset_send_adaptation();
     void reset_speech_gate_state();
     void clear_remote_streams();
     /// (Re)build the capture+playback backend pair for the desired
@@ -254,6 +287,18 @@ private:
     std::unique_ptr<AudioSessionWin> session_win_;
 #endif
     OpusEnc encoder_;
+    // Encoder adaptation (spec 10 section 4.6). The controller and the last
+    // report live under adapt_mutex_ (report and control threads; never the
+    // capture thread). The capture thread reads the two atomics and keeps
+    // what it gave the encoder in applied_* (under accum_mutex_).
+    mutable std::mutex adapt_mutex_;
+    SendAdaptation adapt_;
+    MelloSendFeedback last_feedback_{};
+    uint32_t session_reports_ = 0;
+    std::atomic<int> adapt_bitrate_bps_{BITRATE};
+    std::atomic<int> adapt_loss_perc_{kLossPercFloor};
+    int applied_bitrate_bps_ = BITRATE;
+    int applied_loss_perc_ = kLossPercFloor;
     NoiseSuppressor noise_suppressor_;
     EchoCanceller echo_canceller_;
     EchoSuppressor echo_suppressor_;

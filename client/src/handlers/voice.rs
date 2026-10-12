@@ -10,6 +10,25 @@ use crate::converters::{
 };
 use crate::{AudioDeviceData, MemberData, VoiceChannelData, VoiceChannelMember};
 
+/// The joined channel's bitrate to the encoder: the top rung of its ladder
+/// (spec 10 section 4.6). mello-core applies the bitrate of the `voice_join`
+/// response at the join; this carries a later channel update. mello-core
+/// ignores an unchanged value.
+pub(crate) fn apply_joined_channel_bitrate(
+    ctx: &AppContext,
+    channels: &[mello_core::crew_state::VoiceChannelState],
+) {
+    let active = ctx.active_voice_channel.borrow().clone();
+    if active.is_empty() {
+        return;
+    }
+    if let Some(ch) = channels.iter().find(|ch| ch.id == active) {
+        let _ = ctx.cmd_tx.send(Command::SetVoiceChannelBitrate {
+            kbps: ch.bitrate_kbps,
+        });
+    }
+}
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::VoiceStateChanged { in_call, transport } => {
@@ -356,6 +375,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(vc_data)).into());
                 prefer_call_speaking(ctx);
+                apply_joined_channel_bitrate(ctx, &channels);
             }
         }
         Event::VoiceChannelCreated { crew_id, channel } => {
@@ -419,6 +439,23 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 ctx.app
                     .set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
+            }
+        }
+        Event::VoiceChannelBitrateChanged {
+            crew_id,
+            channel_id,
+            bitrate_kbps,
+        } => {
+            log::info!(
+                "UI: voice channel bitrate in crew={}: {} -> {} kbps",
+                crew_id,
+                channel_id,
+                bitrate_kbps
+            );
+            if *ctx.active_voice_channel.borrow() == channel_id {
+                let _ = ctx
+                    .cmd_tx
+                    .send(Command::SetVoiceChannelBitrate { kbps: bitrate_kbps });
             }
         }
         Event::VoiceChannelDeleted {
