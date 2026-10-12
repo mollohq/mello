@@ -27,6 +27,16 @@
 
 namespace mello::audio {
 
+#ifdef MELLO_HAS_VPIO_DUPLEX
+// The desired capture backend for an echo cancellation setting. The duplex
+// unit opens the real microphone and speaker through CoreAudio. The test
+// backend (MELLO_AUDIO_BACKEND=test) opens no device, so it never gets the
+// unit: the software APM runs, as on Windows.
+static bool wants_vpio_duplex(bool aec_enabled) {
+    return aec_enabled && !test_audio_backend_requested();
+}
+#endif
+
 static constexpr int SPEECH_PRE_ROLL_FRAMES = 5;       // 100ms at 20ms/frame.
 static constexpr int CANDIDATE_HANGOVER_FRAMES = 10;   // Keep Silero warm across brief dips.
 static constexpr int SPEECH_ENCODE_HANGOVER_FRAMES = 8;
@@ -172,7 +182,7 @@ bool AudioPipeline::initialize() {
     // session. Startup is always the plain pair (clips preview mic-free);
     // the toggle applies at capture start. Only the desired backend is
     // stored here.
-    voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+    voice_processing_capture_.store(wants_vpio_duplex(echo_canceller_.aec_enabled()),
                                     std::memory_order_relaxed);
 #endif
     if (!capture_->initialize(current_capture_device_id())) {
@@ -307,7 +317,7 @@ void AudioPipeline::stop_capture() {
     // mirrors it); only the live backend drops. Skipped while dying.
     if (initialized_ && capture_ && capture_->provides_echo_cancellation()) {
         switch_audio_backend(false);
-        voice_processing_capture_.store(echo_canceller_.aec_enabled(),
+        voice_processing_capture_.store(wants_vpio_duplex(echo_canceller_.aec_enabled()),
                                         std::memory_order_relaxed);
     }
 #endif
@@ -380,11 +390,12 @@ void AudioPipeline::set_echo_cancellation(bool enabled) {
     // switch applies immediately only mid-session; outside voice the
     // desired backend is stored for the next capture start, so no unit
     // ever runs (and no mic shows) without a session.
+    const bool duplex = wants_vpio_duplex(enabled);
     if (initialized_ && capturing_ &&
-        voice_processing_capture_.load(std::memory_order_relaxed) != enabled) {
-        switch_audio_backend(enabled);
+        voice_processing_capture_.load(std::memory_order_relaxed) != duplex) {
+        switch_audio_backend(duplex);
     } else {
-        voice_processing_capture_.store(enabled, std::memory_order_relaxed);
+        voice_processing_capture_.store(duplex, std::memory_order_relaxed);
     }
 #endif
 }
