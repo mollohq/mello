@@ -36,6 +36,9 @@ public:
 
     void set_ice_callback(MelloIceCandidateCallback cb, void* user_data);
     void set_state_callback(MelloPeerStateCallback cb, void* user_data);
+    // Runs after a state change and when a DataChannel or the video track
+    // opens or closes (mello.h mello_peer_set_transport_callback).
+    void set_transport_callback(MelloPeerTransportCallback cb, void* user_data);
     void set_data_callback(MelloPeerDataCallback cb, void* user_data);
     void set_audio_track_callback(MelloAudioTrackCallback cb, void* user_data);
     void set_audio_rtp_callback(MelloAudioTrackCallback cb, void* user_data);
@@ -78,7 +81,26 @@ public:
 
     // Voice SFU receive slots (mello.h mello_peer_set_voice_recv_slots).
     void set_voice_recv_slots(int count);
+    // Bind `mid` to `sender_id` ("" frees it) and give the packets held for
+    // the mid to the audio callbacks, on the calling thread.
     void set_audio_mid_sender(const std::string& mid, const std::string& sender_id);
+    // set_audio_mid_sender at a given steady-clock time, for tests.
+    void set_audio_mid_sender_at(const std::string& mid,
+                                 const std::string& sender_id,
+                                 int64_t now_ms);
+    // One RTP packet on voice m-line `mid` at `now_ms`: route it to the mid's
+    // sender, or hold it for the mid's `slot` message. The track thread calls
+    // it for every packet; tests call it to inject packets.
+    // `generation` 0 means the current PeerConnection.
+    void route_voice_rtp(const std::string& mid,
+                         const uint8_t* rtp,
+                         int size,
+                         int64_t now_ms,
+                         uint64_t generation = 0);
+    // Count dropped slot packets in `counter` (the context's
+    // MelloDebugStats.rx_unmapped_dropped).
+    void set_unmapped_drop_counter(std::shared_ptr<std::atomic<uint64_t>> counter);
+    uint64_t unmapped_dropped() const { return voice_slots_.dropped(); }
     void set_control_text_callback(MelloControlTextCallback cb, void* user_data);
     bool send_control_text(const std::string& text);
 
@@ -158,6 +180,18 @@ private:
     bool send_audio_message(const uint8_t* data, int size, const uint32_t* timestamp);
     // libdatachannel thread: one report about the send track arrived.
     void deliver_send_feedback(const MelloSendFeedback& feedback);
+    // Give one incoming audio RTP packet of `sender` to the audio callbacks
+    // of PeerConnection generation `generation`.
+    void deliver_incoming_audio(const std::string& sender,
+                                const uint8_t* bytes,
+                                int total,
+                                uint64_t generation);
+    // Call the transport callback (libdatachannel thread). Takes mutex_ to
+    // copy it; the caller must not hold mutex_.
+    void notify_transport();
+    // Log the ICE candidate pair that carries the connection (host, srflx,
+    // relay). libdatachannel thread, after the state becomes Connected.
+    void log_selected_candidate_pair(const std::shared_ptr<rtc::PeerConnection>& pc) const;
     void wire_video_track_callbacks(uint64_t generation);
     void try_start_video_pipeline(
         uint64_t expected_pc_generation = 0,
@@ -211,6 +245,8 @@ private:
     void* ice_ud_ = nullptr;
     MelloPeerStateCallback state_cb_ = nullptr;
     void* state_ud_ = nullptr;
+    MelloPeerTransportCallback transport_cb_ = nullptr;
+    void* transport_ud_ = nullptr;
     MelloPeerDataCallback data_cb_ = nullptr;
     void* data_ud_ = nullptr;
     MelloAudioTrackCallback audio_track_cb_ = nullptr;
@@ -237,8 +273,13 @@ private:
     // Recvonly receive slots in the next voice offer. Set before
     // create_offer, read under negotiation_mutex_.
     std::atomic<int> voice_recv_slots_{0};
-    // Voice: mid -> sender user id, from the SFU's slot messages.
+    // Voice: mid -> sender user id, from the SFU's slot messages, and the
+    // packets held for a mid with no owner yet.
     VoiceSlotMap voice_slots_;
+    // Orders slot packet delivery: the held packets of a bind reach the
+    // callbacks before a newer packet of the same mid. Taken before mutex_,
+    // never inside it.
+    std::mutex slot_feed_mutex_;
 
     std::atomic<bool> connected_{false};
     std::atomic<bool> unreliable_open_{false};

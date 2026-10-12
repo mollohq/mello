@@ -203,6 +203,12 @@ export component MainWindow inherits Window {
     in-out property <bool> mic-muted: false;
     in-out property <bool> deafened: false;
     in-out property <bool> in-voice: false;
+    // The SFU voice link dropped and the client reconnects (spec 10
+    // section 7.6). Set by VoiceSfuDisconnected, cleared by VoiceStateChanged.
+    in property <bool> voice-reconnecting: false;
+    // The SFU voice link is silent (no pong for 1 s); the session stays.
+    // Set by VoiceLinkStalled, cleared by VoiceStateChanged.
+    in property <bool> voice-link-stalled: false;
     in property <string> voice-channel-name: "";
     in property <[VoiceChannelData]> voice-channels: [];
     in-out property <bool> mic-permission-granted: true;
@@ -476,6 +482,8 @@ export component MainWindow inherits Window {
     in property <int> dbg-rtp-recv: 0;
     in property <float> dbg-delay-ms: 0.0;
     in property <float> dbg-rtt-ms: 0.0;
+    // The preferred SFU region and its measured round trip ("eu-west 38ms").
+    in property <string> dbg-sfu-region: "";
     in property <string> dbg-stream-mode: "idle";
     in property <int> dbg-stream-frames: 0;
     in property <int> dbg-stream-packets: 0;
@@ -893,6 +901,8 @@ export component MainWindow inherits Window {
                 active-crew-id: root.active-crew-id;
                 voice-channels: root.voice-channels;
                 can-manage: root.can-manage-channels;
+                voice-reconnecting: root.voice-reconnecting || root.voice-link-stalled;
+                local-user-id: root.user-id;
                 crew-selected(id) => {
                     root.show-discover = false;
                     root.select-crew(id);
@@ -1365,6 +1375,7 @@ export component MainWindow inherits Window {
             rtp-recv: root.dbg-rtp-recv;
             delay-ms: root.dbg-delay-ms;
             rtt-ms: root.dbg-rtt-ms;
+            sfu-region: root.dbg-sfu-region;
             stream-mode: root.dbg-stream-mode;
             stream-frames: root.dbg-stream-frames;
             stream-packets: root.dbg-stream-packets;

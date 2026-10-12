@@ -4,6 +4,56 @@ use crate::voice::{SignalEnvelope, SignalPurpose};
 
 use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 
+/// The first SFU voice reconnect attempt starts this long after the drop
+/// (spec 10 section 7.6).
+pub(super) const SFU_RECONNECT_FIRST_DELAY: tokio::time::Duration =
+    tokio::time::Duration::from_millis(500);
+/// The longest gap between two reconnect attempts. A capped gap brings the
+/// call back within about 2 s of the link returning, however long it was
+/// down.
+pub(super) const SFU_RECONNECT_MAX_GAP: tokio::time::Duration = tokio::time::Duration::from_secs(2);
+/// The client attempts until this long after the drop, then gives up and
+/// leaves the call (16 attempts).
+pub(super) const SFU_RECONNECT_GIVE_UP_AFTER: tokio::time::Duration =
+    tokio::time::Duration::from_secs(30);
+/// The life of the SFU voice token from `voice_join` (backend `sfu_auth.go`).
+pub(super) const SFU_VOICE_TOKEN_LIFETIME: tokio::time::Duration =
+    tokio::time::Duration::from_secs(5 * 60);
+/// A token this close to its expiry counts as expired. The client's clock
+/// for the token starts after the backend issued it, and the SFU checks the
+/// expiry when the WebSocket connects.
+pub(super) const SFU_VOICE_TOKEN_MARGIN: tokio::time::Duration =
+    tokio::time::Duration::from_secs(15);
+
+/// The delay before reconnect attempt `attempt` (0 is the first): 500 ms
+/// after the drop, then 1 s, then 2 s after each attempt before it.
+pub(super) fn sfu_reconnect_delay(attempt: u32) -> tokio::time::Duration {
+    match attempt {
+        0 => SFU_RECONNECT_FIRST_DELAY,
+        1 => tokio::time::Duration::from_secs(1),
+        _ => SFU_RECONNECT_MAX_GAP,
+    }
+}
+
+/// The last `voice_join` answer of the joined channel. A reconnect reuses
+/// its SFU endpoint and token while the token is valid, so it needs no
+/// backend round trip.
+#[derive(Debug, Clone)]
+pub(crate) struct VoiceJoinGrant {
+    pub crew_id: String,
+    pub local_id: String,
+    pub resp: VoiceJoinResponse,
+    /// When the client received the token.
+    pub issued_at: tokio::time::Instant,
+}
+
+impl VoiceJoinGrant {
+    /// True while the token is valid at `now`, with the margin.
+    pub fn is_fresh(&self, now: tokio::time::Instant) -> bool {
+        now < self.issued_at + SFU_VOICE_TOKEN_LIFETIME - SFU_VOICE_TOKEN_MARGIN
+    }
+}
+
 impl super::Client {
     /// The `voice_speaking` presence RPC. Crew members outside the channel
     /// read it from the backend's `voice_update` push. In an SFU call the
@@ -29,25 +79,33 @@ impl super::Client {
         let join_pending = self.sfu_voice_joins.is_pending();
 
         // SFU voice reconnect: if voice mode went Disconnected but we still have a
-        // last_voice_channel, schedule a reconnect with exponential backoff.
+        // last_voice_channel, schedule attempts until 30 s after the drop.
         if !join_pending
-            && self.last_voice_channel.is_some()
             && self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected
             && self.sfu_voice_reconnect.is_none()
         {
-            let channel = self.last_voice_channel.clone().unwrap();
-            let delay = tokio::time::Duration::from_secs(2);
-            log::info!("SFU voice dropped, scheduling reconnect in {:?}", delay);
-            self.sfu_voice_reconnect = Some((tokio::time::Instant::now() + delay, channel, 0));
+            if let Some(channel) = self.last_voice_channel.clone() {
+                let delay = sfu_reconnect_delay(0);
+                log::info!("SFU voice dropped, scheduling reconnect in {:?}", delay);
+                let now = tokio::time::Instant::now();
+                self.sfu_voice_dropped_at = Some(now);
+                self.sfu_voice_reconnect = Some((now + delay, channel, 0));
+            }
         }
 
         if let Some((at, ref channel, attempt)) = self.sfu_voice_reconnect.clone() {
-            if !join_pending && tokio::time::Instant::now() >= at {
-                const MAX_RECONNECT_ATTEMPTS: u32 = 5;
-                if attempt >= MAX_RECONNECT_ATTEMPTS {
-                    log::warn!("SFU voice reconnect: giving up after {} attempts", attempt);
+            let now = tokio::time::Instant::now();
+            if !join_pending && now >= at {
+                let dropped_at = *self.sfu_voice_dropped_at.get_or_insert(now);
+                if now.duration_since(dropped_at) >= SFU_RECONNECT_GIVE_UP_AFTER {
+                    log::warn!(
+                        "SFU voice reconnect: giving up after {} attempts, {:?} after the drop",
+                        attempt,
+                        now.duration_since(dropped_at)
+                    );
                     self.sfu_voice_reconnect = None;
                     self.last_voice_channel = None;
+                    self.voice_join_grant = None;
                     let _ = self.event_tx.send(Event::VoiceStateChanged {
                         in_call: false,
                         transport: crate::voice::VoiceMode::Disconnected,
@@ -59,12 +117,12 @@ impl super::Client {
                         channel
                     );
                     let ch = channel.clone();
-                    self.handle_join_voice(&ch).await;
-                    // If still disconnected after rejoin, bump the attempt with backoff.
+                    self.reconnect_voice(&ch).await;
+                    // If still disconnected after rejoin, schedule the next attempt.
                     // An SFU join that still runs is disconnected too. Its outcome
                     // clears the next attempt if voice starts.
                     if self.voice.voice_mode() == crate::voice::VoiceMode::Disconnected {
-                        let backoff = tokio::time::Duration::from_secs(2u64.pow(attempt + 1));
+                        let backoff = sfu_reconnect_delay(attempt + 1);
                         self.sfu_voice_reconnect =
                             Some((tokio::time::Instant::now() + backoff, ch, attempt + 1));
                     }
@@ -111,14 +169,53 @@ impl super::Client {
         None
     }
 
+    /// One SFU voice reconnect attempt for `channel_id`. While the voice
+    /// token of the last join is valid, the attempt goes straight to the SFU
+    /// with it. Else it asks the backend for a new token (`voice_join`).
+    /// A failed attempt leaves voice disconnected for the next one: it does
+    /// not fall back to P2P, because the other members stay on the SFU.
+    pub(super) async fn reconnect_voice(&mut self, channel_id: &str) {
+        let now = tokio::time::Instant::now();
+        let grant = self
+            .voice_join_grant
+            .as_ref()
+            .filter(|g| g.resp.channel_id == channel_id && g.is_fresh(now))
+            .cloned();
+        match grant {
+            Some(grant) => {
+                log::info!(
+                    "SFU voice reconnect reuses the voice token ({} ms old)",
+                    now.duration_since(grant.issued_at).as_millis()
+                );
+                self.start_voice_media(&grant.crew_id, Some(&grant.local_id), &grant.resp, true)
+                    .await;
+            }
+            None => {
+                log::info!("SFU voice reconnect: no valid voice token, asking for a new one");
+                self.join_voice_channel(channel_id, true).await;
+            }
+        }
+    }
+
     pub(super) async fn handle_join_voice(&mut self, channel_id: &str) {
+        self.join_voice_channel(channel_id, false).await;
+    }
+
+    /// `voice_join`, then start the media. `reconnect` is true for an
+    /// attempt of the reconnect scheduler.
+    async fn join_voice_channel(&mut self, channel_id: &str, reconnect: bool) {
         let crew_id = match self.nakama.active_crew_id().map(String::from) {
             Some(id) => id,
             None => return,
         };
 
+        let preferred_region = crate::transport::sfu_region::preferred_region(&self.sfu_regions);
         // RPC returns the authoritative channel state after join
-        let resp = match self.nakama.voice_join(&crew_id, channel_id).await {
+        let resp = match self
+            .nakama
+            .voice_join(&crew_id, channel_id, preferred_region.as_deref())
+            .await
+        {
             Ok(r) => r,
             Err(e) => {
                 log::error!("voice_join RPC failed: {}", e);
@@ -127,7 +224,9 @@ impl super::Client {
         };
 
         self.last_voice_channel = Some(resp.channel_id.clone());
-        self.sfu_voice_reconnect = None;
+        if !reconnect {
+            self.sfu_voice_reconnect = None;
+        }
 
         // Emit authoritative state immediately so the UI shows the initial member list.
         // Must happen BEFORE the SFU connection (which can take seconds), otherwise
@@ -139,8 +238,24 @@ impl super::Client {
         });
 
         let local_id = self.nakama.current_user_id().map(String::from);
-        self.start_voice_media(&crew_id, local_id.as_deref(), &resp)
+        self.store_voice_join_grant(&crew_id, local_id.as_deref(), &resp);
+        self.start_voice_media(&crew_id, local_id.as_deref(), &resp, reconnect)
             .await;
+    }
+
+    /// Keep a `voice_join` answer for the reconnect scheduler.
+    pub(super) fn store_voice_join_grant(
+        &mut self,
+        crew_id: &str,
+        local_id: Option<&str>,
+        resp: &VoiceJoinResponse,
+    ) {
+        self.voice_join_grant = local_id.map(|local_id| VoiceJoinGrant {
+            crew_id: crew_id.to_string(),
+            local_id: local_id.to_string(),
+            resp: resp.clone(),
+            issued_at: tokio::time::Instant::now(),
+        });
     }
 
     /// Stop the current voice media and start it for the joined channel.
@@ -148,11 +263,15 @@ impl super::Client {
     /// P2P starts here. An SFU join only starts here: its network steps run
     /// off the command loop, and `on_sfu_voice_join_step` finishes it. Voice
     /// ticks and other commands keep running while the SFU answers or fails.
+    ///
+    /// `reconnect` is true for an attempt of the reconnect scheduler. A
+    /// failed SFU reconnect does not fall back to P2P.
     pub(super) async fn start_voice_media(
         &mut self,
         crew_id: &str,
         local_id: Option<&str>,
         resp: &VoiceJoinResponse,
+        reconnect: bool,
     ) {
         self.sfu_leave_if_connected().await;
         self.voice.leave_voice();
@@ -180,6 +299,7 @@ impl super::Client {
                 channel_id: resp.channel_id.clone(),
                 local_id: local_id.to_string(),
                 p2p_peer_ids,
+                reconnect,
             };
             let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
             let token = resp.sfu_token.as_deref().unwrap_or_default();
@@ -199,11 +319,16 @@ impl super::Client {
             Ok(JoinStep::Connected(conn)) => {
                 let peer_handle = {
                     let ctx = self.voice.mello_ctx();
-                    unsafe { crate::transport::SfuConnection::create_peer(ctx) }
+                    // SAFETY: the voice manager owns the live context.
+                    unsafe { crate::transport::SfuConnection::create_peer(ctx, &self.ice_servers) }
                 };
                 match peer_handle {
                     Ok(ph) => {
                         self.sfu_voice_joins.join_session(join, conn, ph);
+                        return;
+                    }
+                    Err(e) if join.reconnect => {
+                        log::warn!("SFU reconnect: peer creation failed: {}", e);
                         return;
                     }
                     Err(e) => {
@@ -216,6 +341,16 @@ impl super::Client {
                 let conn = std::sync::Arc::new(conn);
                 self.voice
                     .join_voice_sfu(&join.local_id, &join.crew_id, conn);
+            }
+            Err(e) if join.reconnect => {
+                // The other members stay on the SFU: P2P would reach none of
+                // them. Voice stays disconnected; the scheduler tries again.
+                log::warn!(
+                    "SFU reconnect: {} failed: {}; the next attempt follows",
+                    step,
+                    e
+                );
+                return;
             }
             Err(e) => {
                 log::error!("SFU {} failed: {}, falling back to P2P", step, e);
@@ -259,6 +394,7 @@ impl super::Client {
         self.sfu_leave_if_connected().await;
         self.last_voice_channel = None;
         self.sfu_voice_reconnect = None;
+        self.voice_join_grant = None;
         // Notify server
         if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
             if let Err(e) = self.nakama.voice_leave(&crew_id).await {
@@ -449,7 +585,7 @@ mod tests {
         let resp = sfu_join_response("ch-1", &sfu.endpoint);
         tokio::time::timeout(
             Duration::from_secs(2),
-            client.start_voice_media("crew-1", Some("me"), &resp),
+            client.start_voice_media("crew-1", Some("me"), &resp, false),
         )
         .await
         .expect("the join handler waited for the SFU connect");
@@ -642,7 +778,9 @@ mod tests {
             "bitrate_kbps": 32,
         }))
         .expect("valid voice_join response");
-        client.start_voice_media("crew-1", Some("me"), &resp).await;
+        client
+            .start_voice_media("crew-1", Some("me"), &resp, false)
+            .await;
         assert_eq!(top(&client), 32);
 
         // A channel update while in the channel.
@@ -658,9 +796,167 @@ mod tests {
             "mode": "p2p",
         }))
         .expect("valid voice_join response");
-        client.start_voice_media("crew-1", Some("me"), &old).await;
+        client
+            .start_voice_media("crew-1", Some("me"), &old, false)
+            .await;
         assert_eq!(top(&client), 64);
         client.voice.leave_voice();
+    }
+
+    /// Spec 10 section 7.6: the first reconnect attempt starts 500 ms after
+    /// the drop, the second 1 s after the first, then one every 2 s.
+    #[tokio::test]
+    async fn the_first_sfu_reconnect_attempt_starts_after_500_ms() {
+        let (mut client, _events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+
+        let before = tokio::time::Instant::now();
+        client.voice_tick().await;
+        let after = tokio::time::Instant::now();
+        let (at, channel, attempt) = client
+            .sfu_voice_reconnect
+            .clone()
+            .expect("a dropped call schedules a reconnect");
+        assert_eq!(channel, "ch-1");
+        assert_eq!(attempt, 0);
+        assert!(
+            at >= before + Duration::from_millis(500) && at <= after + Duration::from_millis(500),
+            "first attempt {:?} after the drop, want 500 ms",
+            at - before
+        );
+
+        let delays: Vec<u64> = (0..5)
+            .map(|a| super::sfu_reconnect_delay(a).as_millis() as u64)
+            .collect();
+        assert_eq!(delays, [500, 1_000, 2_000, 2_000, 2_000]);
+    }
+
+    /// Spec 10 section 7.6: the gap between two reconnect attempts is never
+    /// more than 2 s, so the call comes back within about 2 s of the link,
+    /// and the client gives up 30 s after the drop, not after 5 attempts.
+    #[tokio::test]
+    async fn sfu_reconnect_attempts_come_every_2_s_until_30_s_after_the_drop() {
+        let (mut client, events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+
+        // Every attempt inside the 30 s schedules the next one within 2 s.
+        // This client has no session: each attempt fails at once.
+        for attempt in 0..20u32 {
+            let now = tokio::time::Instant::now();
+            client.sfu_voice_dropped_at = Some(now - Duration::from_secs(29));
+            client.sfu_voice_reconnect = Some((now, "ch-1".into(), attempt));
+            client.voice_tick().await;
+            let (at, _, next) = client
+                .sfu_voice_reconnect
+                .clone()
+                .unwrap_or_else(|| panic!("attempt {attempt} at 29 s ended the reconnect"));
+            assert_eq!(next, attempt + 1);
+            let gap = at.saturating_duration_since(now);
+            assert!(
+                gap <= Duration::from_millis(2_100),
+                "gap after attempt {attempt}: {gap:?}"
+            );
+        }
+
+        // 30 s after the drop the next due attempt gives up and leaves the call.
+        let now = tokio::time::Instant::now();
+        client.sfu_voice_dropped_at = Some(now - Duration::from_secs(30));
+        client.sfu_voice_reconnect = Some((now, "ch-1".into(), 3));
+        client.voice_tick().await;
+        assert!(client.sfu_voice_reconnect.is_none(), "still reconnecting");
+        assert!(client.last_voice_channel.is_none());
+        assert!(
+            events
+                .try_iter()
+                .any(|ev| matches!(ev, Event::VoiceStateChanged { in_call: false, .. })),
+            "the give-up leaves the call"
+        );
+
+        // The real schedule: 16 attempts start inside the 30 s.
+        let mut t = Duration::ZERO;
+        let mut attempts = 0;
+        while t + super::sfu_reconnect_delay(attempts) < super::SFU_RECONNECT_GIVE_UP_AFTER {
+            t += super::sfu_reconnect_delay(attempts);
+            attempts += 1;
+        }
+        assert_eq!(attempts, 16, "attempts before the give-up");
+    }
+
+    fn grant_for(endpoint: &str, issued_at: tokio::time::Instant) -> super::VoiceJoinGrant {
+        super::VoiceJoinGrant {
+            crew_id: "crew-1".into(),
+            local_id: "me".into(),
+            resp: sfu_join_response("ch-1", endpoint),
+            issued_at,
+        }
+    }
+
+    /// A reconnect reuses the voice token of the last join while it is
+    /// valid: it goes to the SFU with no backend round trip.
+    #[tokio::test]
+    async fn a_reconnect_reuses_a_valid_voice_token() {
+        let sfu = silent_sfu().await;
+        let (mut client, _events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+        client.voice_join_grant = Some(grant_for(
+            &sfu.endpoint,
+            tokio::time::Instant::now() - Duration::from_secs(4 * 60),
+        ));
+
+        client.reconnect_voice("ch-1").await;
+        assert!(
+            client.sfu_voice_joins.is_pending(),
+            "the reconnect went to the SFU with the kept token"
+        );
+        tokio::time::timeout(LIMIT, sfu.accepted)
+            .await
+            .expect("the SFU gets the connection")
+            .expect("accept task runs");
+    }
+
+    /// An expired token is not reused: the reconnect asks the backend for a
+    /// new one. This client has no session, so the backend step does nothing.
+    #[tokio::test]
+    async fn a_reconnect_does_not_reuse_an_expired_voice_token() {
+        let sfu = silent_sfu().await;
+        let (mut client, _events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+        let lifetime = super::SFU_VOICE_TOKEN_LIFETIME;
+        client.voice_join_grant = Some(grant_for(
+            &sfu.endpoint,
+            tokio::time::Instant::now() - lifetime,
+        ));
+
+        client.reconnect_voice("ch-1").await;
+        assert!(
+            !client.sfu_voice_joins.is_pending(),
+            "an expired token must not reach the SFU"
+        );
+    }
+
+    /// A failed SFU reconnect leaves voice disconnected for the next
+    /// attempt. It does not fall back to P2P: the other members are on the
+    /// SFU, and P2P would end the reconnect.
+    #[tokio::test]
+    async fn a_failed_sfu_reconnect_does_not_fall_back_to_p2p() {
+        let (mut client, events) = client_without_audio();
+        client.last_voice_channel = Some("ch-1".into());
+        let mut join = join_for("ch-1");
+        join.reconnect = true;
+        client.on_sfu_voice_join_step(super::super::sfu_voice_join::JoinOutcome {
+            join,
+            step: "connect",
+            result: Err("SFU connection failed: refused".into()),
+        });
+        assert_eq!(
+            client.voice.voice_mode(),
+            crate::voice::VoiceMode::Disconnected
+        );
+        assert!(
+            !events.try_iter().any(|ev| is_in_call(&ev)),
+            "a failed reconnect reported a call"
+        );
+        assert_eq!(client.last_voice_channel.as_deref(), Some("ch-1"));
     }
 
     #[tokio::test]
@@ -670,7 +966,7 @@ mod tests {
         let resp = sfu_join_response("ch-1", &sfu.endpoint);
         tokio::time::timeout(
             Duration::from_secs(2),
-            client.start_voice_media("crew-1", Some("me"), &resp),
+            client.start_voice_media("crew-1", Some("me"), &resp, false),
         )
         .await
         .expect("the join handler waited for the SFU connect");

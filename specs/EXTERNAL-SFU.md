@@ -714,7 +714,7 @@ Current behaviour (interim, plans/voice-quality.md stage 1.6):
 | `SFU_DEFAULT_REGION` (env) | The fallback when it names a key of `sfuEndpoints`. |
 | `eu-west` | The last fallback. |
 
-The client sends no `preferred_region` yet. Stage 6 adds the client ping that chooses it, and the IP geolocation fallback.
+The client measures the round trip to each region's `/health` (the `get_sfu_regions` RPC lists them) at login and every 10 minutes, and sends the fastest as `preferred_region` (spec 10 section 7.6, spec 13 section 4.2). The IP geolocation fallback is not built.
 
 For stream sessions, the **host's region** determines the SFU. Viewers connect to the same SFU as the host (`watch_stream` reads the stored session region) — cross-region relay between SFU instances is a post-v1 feature.
 

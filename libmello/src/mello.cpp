@@ -665,17 +665,20 @@ MelloPeerConnection* mello_peer_create_for_role(
     const char* peer_id,
     MelloPeerMediaRole role
 ) {
-    (void)ctx;
     if (!peer_id) {
         return nullptr;
     }
     try {
-        return new MelloPeerConnection{
-            std::make_shared<mello::transport::PeerConnectionImpl>(
-                peer_id,
-                role
-            )
-        };
+        auto impl = std::make_shared<mello::transport::PeerConnectionImpl>(
+            peer_id,
+            role
+        );
+        if (ctx) {
+            impl->set_unmapped_drop_counter(
+                ctx_cast(ctx)->rx_unmapped_dropped_counter()
+            );
+        }
+        return new MelloPeerConnection{std::move(impl)};
     } catch (...) {
         return nullptr;
     }
@@ -753,6 +756,17 @@ void mello_peer_set_state_callback(MelloPeerConnection* peer, MelloPeerStateCall
     try {
         auto* pc = peer_cast(peer);
         pc->set_state_callback(callback, user_data);
+    } catch (...) {}
+}
+
+void mello_peer_set_transport_callback(
+    MelloPeerConnection* peer,
+    MelloPeerTransportCallback callback,
+    void* user_data
+) {
+    if (!peer) return;
+    try {
+        peer_cast(peer)->set_transport_callback(callback, user_data);
     } catch (...) {}
 }
 
@@ -1206,6 +1220,8 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->tx_max_bitrate_kbps     = tx.max_bitrate_kbps;
         out->tx_packet_loss_perc     = tx.loss_perc;
         out->tx_rung_changes         = tx.rung_changes;
+        out->rx_unmapped_dropped     =
+            ctx_cast(ctx)->rx_unmapped_dropped_counter()->load(std::memory_order_relaxed);
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

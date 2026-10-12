@@ -64,8 +64,8 @@ async fn join(endpoint: &str, password: &str, channel: &str, user: &str) -> Memb
     let mut conn = SfuConnection::connect(endpoint, &token)
         .await
         .expect("connect to the SFU");
-    // SAFETY: the context is live; libmello ignores it for peer creation.
-    let peer = unsafe { SfuConnection::create_peer(voice.mello_ctx()) }.expect("peer");
+    // SAFETY: the context is live; the peer counts dropped slot packets there.
+    let peer = unsafe { SfuConnection::create_peer(voice.mello_ctx(), &[]) }.expect("peer");
     conn.join_voice(peer, CREW, channel).await.expect("join");
     conn.wait_for_datachannel_open()
         .await

@@ -71,6 +71,8 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
         | Event::VoiceChannelBitrateChanged { .. }
         | Event::VoiceChannelDeleted { .. }
         | Event::VoiceSfuDisconnected { .. }
+        | Event::SfuRegionsMeasured { .. }
+        | Event::VoiceLinkStalled { .. }
         | Event::VoiceMembershipChanged { .. }
         | Event::MicPermissionChanged { .. }
         | Event::MicLevel { .. }

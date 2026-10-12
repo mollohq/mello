@@ -155,6 +155,12 @@ impl super::Client {
         // scheduler can't try to rejoin the old channel after logout.
         self.last_voice_channel = None;
         self.sfu_voice_reconnect = None;
+        self.voice_join_grant = None;
+        // The next user measures the regions at their own login.
+        self.region_measurer = None;
+        if let Ok(mut ranking) = self.sfu_regions.lock() {
+            *ranking = Default::default();
+        }
         let _ = self.event_tx.send(Event::VoiceStateChanged {
             in_call: false,
             transport: crate::voice::VoiceMode::Disconnected,

@@ -361,6 +361,12 @@ type VoiceJoinRequest struct {
 type VoiceJoinRequest struct {
     CrewID    string `json:"crew_id"`
     ChannelID string `json:"channel_id"`
+    // Optional: the SFU region the client measured as fastest
+    // (get_sfu_regions below, spec 10 section 7.6). Used for a room that
+    // has no region yet; a room keeps the region of its first member. An
+    // empty or unknown value falls back to the default; it never fails the
+    // join. start_stream takes the same field.
+    PreferredRegion string `json:"preferred_region,omitempty"`
 }
 
 // Response (also before this change): success, channel_id, voice_state,
@@ -391,6 +397,25 @@ type VoiceLeaveRequest struct {
     CrewID string `json:"crew_id"`
 }
 ```
+
+#### `get_sfu_regions` (New)
+
+```go
+// Request: {} (an authenticated user)
+type GetSFURegionsResponse struct {
+    Regions []SFURegion `json:"regions"` // sorted by region name
+}
+type SFURegion struct {
+    Region    string `json:"region"`     // a key of sfuEndpoints: "eu-west", "us-east"
+    HealthURL string `json:"health_url"` // e.g. "https://sfu-eu.m3llo.app:8080/health"
+}
+```
+
+The health URL comes from the region's signaling endpoint: the same host,
+the SFU health port 8080 (mello-sfu `SFU_ADMIN_ADDR`), `https` for `wss`
+and `http` for `ws`. A region whose endpoint gives no URL is left out. The
+client measures the round trip to each URL at login and every 10 minutes
+and sends the fastest region as `preferred_region` (spec 10 section 7.6).
 
 ### 4.3 Crew Creation Hook (Updated)
 

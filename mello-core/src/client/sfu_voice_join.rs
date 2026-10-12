@@ -19,6 +19,8 @@
 //! One join runs at a time. A new join, a leave or a logout cancels the
 //! running join. A cancelled join drops its connection and reports nothing.
 
+use std::time::Duration;
+
 use tokio::task::JoinHandle;
 
 use crate::stream::StreamError;
@@ -34,6 +36,9 @@ pub struct SfuVoiceJoin {
     /// The channel members other than the local user. The P2P fallback
     /// connects to them.
     pub p2p_peer_ids: Vec<String>,
+    /// An attempt of the reconnect scheduler. A failed reconnect does not
+    /// fall back to P2P: the other members stay on the SFU.
+    pub reconnect: bool,
 }
 
 /// A network step that ended.
@@ -60,20 +65,49 @@ struct Pending {
     task: JoinHandle<Result<JoinStep, StreamError>>,
 }
 
+/// The longest the WebSocket connect and welcome may take. A link that
+/// drops packets (a pulled cable) never refuses: without a limit the step
+/// waits for the OS TCP timeout, and no reconnect attempt can follow.
+pub const SFU_CONNECT_STEP_LIMIT: Duration = Duration::from_secs(5);
+/// The longest the voice join step may take: join, offer and answer, and
+/// the DataChannel wait (itself at most 5 s).
+pub const SFU_SESSION_STEP_LIMIT: Duration = Duration::from_secs(10);
+
 /// The SFU voice join that runs now, if any. Owned by the command loop.
-#[derive(Default)]
 pub struct SfuVoiceJoins {
     pending: Option<Pending>,
+    connect_limit: Duration,
+    session_limit: Duration,
+}
+
+impl Default for SfuVoiceJoins {
+    fn default() -> Self {
+        Self {
+            pending: None,
+            connect_limit: SFU_CONNECT_STEP_LIMIT,
+            session_limit: SFU_SESSION_STEP_LIMIT,
+        }
+    }
 }
 
 impl SfuVoiceJoins {
+    /// Joins with other step limits, for tests.
+    #[cfg(test)]
+    pub(super) fn with_step_limits(connect: Duration, session: Duration) -> Self {
+        Self {
+            pending: None,
+            connect_limit: connect,
+            session_limit: session,
+        }
+    }
     /// Start step 1 on a task and return at once. Cancels the running join.
     ///
     /// Must be called inside a Tokio runtime.
     pub fn connect(&mut self, join: SfuVoiceJoin, endpoint: &str, token: &str) {
         let endpoint = endpoint.to_string();
         let token = token.to_string();
-        self.spawn(join, "connect", async move {
+        let limit = self.connect_limit;
+        self.spawn(join, "connect", limit, async move {
             SfuConnection::connect(&endpoint, &token)
                 .await
                 .map(JoinStep::Connected)
@@ -87,14 +121,15 @@ impl SfuVoiceJoins {
     pub fn join_session(&mut self, join: SfuVoiceJoin, mut conn: SfuConnection, peer: PeerHandle) {
         let crew_id = join.crew_id.clone();
         let channel_id = join.channel_id.clone();
-        self.spawn(join, "voice join", async move {
+        let limit = self.session_limit;
+        self.spawn(join, "voice join", limit, async move {
             conn.join_voice(peer, &crew_id, &channel_id).await?;
             conn.wait_for_datachannel_open().await?;
             Ok(JoinStep::Ready(conn))
         });
     }
 
-    fn spawn<F>(&mut self, join: SfuVoiceJoin, step: &'static str, work: F)
+    fn spawn<F>(&mut self, join: SfuVoiceJoin, step: &'static str, limit: Duration, work: F)
     where
         F: std::future::Future<Output = Result<JoinStep, StreamError>> + Send + 'static,
     {
@@ -104,6 +139,14 @@ impl SfuVoiceJoins {
             step,
             join.channel_id
         );
+        let work = async move {
+            match tokio::time::timeout(limit, work).await {
+                Ok(result) => result,
+                Err(_) => Err(StreamError::SfuConnectFailed(format!(
+                    "{step} took longer than {limit:?}"
+                ))),
+            }
+        };
         self.pending = Some(Pending {
             join,
             step,
@@ -172,6 +215,7 @@ pub(super) mod tests {
             channel_id: channel_id.into(),
             local_id: "me".into(),
             p2p_peer_ids: vec!["peer-1".into()],
+            reconnect: false,
         }
     }
 
@@ -254,6 +298,34 @@ pub(super) mod tests {
         assert_eq!(outcome.step, "connect");
         let err = outcome.result.err().expect("a refused connect fails");
         assert!(err.contains("SFU connection failed"), "{err}");
+    }
+
+    /// A connect that gets no answer ends at its limit, so the reconnect
+    /// scheduler can try again (a pulled cable drops packets; nothing
+    /// refuses the connection).
+    #[tokio::test]
+    async fn a_connect_without_an_answer_fails_at_its_limit() {
+        let sfu = silent_sfu().await;
+        let mut joins =
+            SfuVoiceJoins::with_step_limits(Duration::from_millis(300), SFU_SESSION_STEP_LIMIT);
+        let started = std::time::Instant::now();
+        joins.connect(join_for("ch-1"), &sfu.endpoint, "token");
+
+        let outcome = tokio::time::timeout(LIMIT, joins.finished())
+            .await
+            .expect("the step ends at its limit");
+        assert_eq!(outcome.step, "connect");
+        let err = outcome
+            .result
+            .err()
+            .expect("a silent SFU fails the connect");
+        assert!(err.contains("took longer than"), "{err}");
+        assert!(
+            started.elapsed() < Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+        drop(sfu.release);
     }
 
     #[tokio::test]
@@ -409,8 +481,8 @@ pub(super) mod tests {
             .await
             .expect("connect in time")
             .expect("connect");
-        // SAFETY: libmello ignores the context argument of mello_peer_create.
-        let peer = unsafe { SfuConnection::create_peer(std::ptr::null_mut()) }.expect("peer");
+        // SAFETY: a null context is allowed.
+        let peer = unsafe { SfuConnection::create_peer(std::ptr::null_mut(), &[]) }.expect("peer");
 
         let session = tokio::time::timeout(LIMIT, conn.join_voice(peer, "crew-1", "ch-1"))
             .await
@@ -431,5 +503,304 @@ pub(super) mod tests {
             }
         }
         assert_eq!(seen, ["joined:early-1", "joined:early-2", "left:early-2"]);
+    }
+
+    /// An SFU that completes the join, then closes the WebSocket with a
+    /// normal close frame when `close` fires. With `ack_leave` it first
+    /// sends `left`, as the SFU does after a client `leave`.
+    async fn closing_sfu(close: tokio::sync::oneshot::Receiver<()>, ack_leave: bool) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            loop {
+                let Some(Ok(Message::Text(t))) = ws.next().await else {
+                    return;
+                };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                match v["type"].as_str() {
+                    Some("join_voice") => ws
+                        .send(text(serde_json::json!({
+                            "type": "joined",
+                            "data": { "session_type": "voice", "session_id": "voice:crew-1:ch-1", "members": [] }
+                        })))
+                        .await
+                        .expect("send joined"),
+                    Some("offer") => {
+                        let answer = native_answer(v["data"]["sdp"].as_str().expect("sdp"));
+                        ws.send(text(serde_json::json!({ "type": "answer", "data": { "sdp": answer } })))
+                            .await
+                            .expect("send answer");
+                        break;
+                    }
+                    _ => {}
+                }
+            }
+            let _ = close.await;
+            if ack_leave {
+                let _ = ws
+                    .send(text(
+                        serde_json::json!({ "type": "left", "data": { "reason": "client_leave" } }),
+                    ))
+                    .await;
+            }
+            // A clean close handshake: the client's read then ends with no
+            // error. Hold the TCP connection until the client drops it.
+            let _ = ws.close(None).await;
+            while ws.next().await.is_some() {}
+            tokio::time::sleep(LIMIT).await;
+        });
+        endpoint
+    }
+
+    async fn joined_connection(endpoint: &str) -> SfuConnection {
+        let mut conn = tokio::time::timeout(LIMIT, SfuConnection::connect(endpoint, "token"))
+            .await
+            .expect("connect in time")
+            .expect("connect");
+        // SAFETY: a null context is allowed.
+        let peer = unsafe { SfuConnection::create_peer(std::ptr::null_mut(), &[]) }.expect("peer");
+        tokio::time::timeout(LIMIT, conn.join_voice(peer, "crew-1", "ch-1"))
+            .await
+            .expect("join in time")
+            .expect("the join succeeds");
+        conn
+    }
+
+    /// Spec 10 section 7.6: the SFU closing the signaling socket ends the
+    /// session (the SFU removes the peer). The client reports it at once, so
+    /// the call shows "reconnecting" without waiting for the liveness check.
+    #[tokio::test]
+    async fn a_server_close_of_the_signaling_socket_is_a_disconnect() {
+        let (close_tx, close) = tokio::sync::oneshot::channel();
+        let endpoint = closing_sfu(close, false).await;
+        let conn = joined_connection(&endpoint).await;
+
+        let started = std::time::Instant::now();
+        let _ = close_tx.send(());
+        let ev = tokio::time::timeout(LIMIT, conn.recv_event())
+            .await
+            .expect("an event in time")
+            .expect("event channel open");
+        assert!(
+            matches!(ev, SfuEvent::Disconnected { .. }),
+            "expected Disconnected, got {ev:?}"
+        );
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "{:?}",
+            started.elapsed()
+        );
+    }
+
+    /// The close after the SFU's `left` (the reply to our `leave`) is not
+    /// a drop.
+    #[tokio::test]
+    async fn the_close_after_left_is_not_a_disconnect() {
+        let (close_tx, close) = tokio::sync::oneshot::channel();
+        let endpoint = closing_sfu(close, true).await;
+        let conn = joined_connection(&endpoint).await;
+
+        let _ = close_tx.send(());
+        let ev = tokio::time::timeout(Duration::from_millis(500), conn.recv_event()).await;
+        assert!(
+            !matches!(ev, Ok(Some(SfuEvent::Disconnected { .. }))),
+            "a leave ack raised {ev:?}"
+        );
+    }
+
+    /// The mapped address the fake STUN server reports: a server reflexive
+    /// candidate with it can only come from that server's late answer.
+    const MAPPED_IP: [u8; 4] = [203, 0, 113, 7];
+    const MAPPED_PORT: u16 = 40_000;
+
+    /// A STUN server on a local UDP port that answers a Binding request
+    /// only after `release` fires, with the mapped address above. The
+    /// client's server reflexive candidate then appears after that moment.
+    async fn late_stun_server(release: tokio::sync::oneshot::Receiver<()>) -> u16 {
+        let socket = tokio::net::UdpSocket::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local UDP port");
+        let port = socket.local_addr().expect("socket has an address").port();
+        tokio::spawn(async move {
+            let mut release = release;
+            let mut released = false;
+            let mut last: Option<([u8; 12], std::net::SocketAddr)> = None;
+            let mut buf = [0u8; 1500];
+            loop {
+                tokio::select! {
+                    got = socket.recv_from(&mut buf) => {
+                        let Ok((n, from)) = got else { return };
+                        // Binding request with the RFC 5389 magic cookie.
+                        if n < 20 || buf[0..2] != [0x00, 0x01] || buf[4..8] != [0x21, 0x12, 0xA4, 0x42] {
+                            continue;
+                        }
+                        let mut tid = [0u8; 12];
+                        tid.copy_from_slice(&buf[8..20]);
+                        last = Some((tid, from));
+                    }
+                    _ = &mut release, if !released => {
+                        released = true;
+                    }
+                }
+                if released {
+                    if let Some((tid, to)) = last.take() {
+                        let mut resp = vec![0x01, 0x01, 0x00, 0x0C, 0x21, 0x12, 0xA4, 0x42];
+                        resp.extend_from_slice(&tid);
+                        // XOR-MAPPED-ADDRESS, IPv4.
+                        resp.extend_from_slice(&[0x00, 0x20, 0x00, 0x08, 0x00, 0x01]);
+                        resp.extend_from_slice(&(MAPPED_PORT ^ 0x2112).to_be_bytes());
+                        let cookie = [0x21, 0x12, 0xA4, 0x42];
+                        resp.extend(MAPPED_IP.iter().zip(cookie).map(|(a, c)| a ^ c));
+                        let _ = socket.send_to(&resp, to).await;
+                    }
+                }
+            }
+        });
+        port
+    }
+
+    /// A fake SFU that answers the join and the offer like the real one, and
+    /// records the type of each client message in arrival order. A
+    /// candidate that names the late STUN mapped address goes to `late`.
+    async fn recording_sfu(
+        log: std::sync::Arc<std::sync::Mutex<Vec<String>>>,
+        answered: tokio::sync::oneshot::Sender<()>,
+        late: tokio::sync::oneshot::Sender<String>,
+    ) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            let mut answered = Some(answered);
+            let mut late = Some(late);
+            let mapped = format!(
+                "{}.{}.{}.{}",
+                MAPPED_IP[0], MAPPED_IP[1], MAPPED_IP[2], MAPPED_IP[3]
+            );
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                let kind = v["type"].as_str().unwrap_or("").to_string();
+                log.lock().expect("log").push(kind.clone());
+                match kind.as_str() {
+                    "join_voice" => {
+                        ws.send(text(serde_json::json!({
+                            "type": "joined",
+                            "data": { "session_type": "voice", "session_id": "voice:crew-1:ch-1", "members": [] }
+                        })))
+                        .await
+                        .expect("send joined");
+                    }
+                    "offer" => {
+                        let offer = v["data"]["sdp"].as_str().expect("offer sdp");
+                        let answer = native_answer(offer);
+                        ws.send(text(
+                            serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+                        ))
+                        .await
+                        .expect("send answer");
+                        if let Some(tx) = answered.take() {
+                            let _ = tx.send(());
+                        }
+                    }
+                    "ice_candidate" => {
+                        let candidate = v["data"]["candidate"].as_str().unwrap_or("").to_string();
+                        if candidate.contains(&mapped) {
+                            if let Some(tx) = late.take() {
+                                let _ = tx.send(candidate);
+                            }
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        });
+        endpoint
+    }
+
+    /// mello-sfu 01-SFU.md section 5.5: the SFU refuses an `ice_candidate`
+    /// that arrives before the `offer` with INVALID_REQUEST. The client keeps
+    /// every local candidate until the offer is on the wire, also one that
+    /// libdatachannel emits while `create_offer` runs. A candidate found
+    /// after the answer (here a server reflexive one from a slow STUN
+    /// server, as a TURN relay candidate can be) still reaches the SFU.
+    #[tokio::test]
+    async fn local_candidates_follow_the_offer_and_late_ones_still_reach_the_sfu() {
+        let (release_stun, stun_release) = tokio::sync::oneshot::channel();
+        let stun_port = late_stun_server(stun_release).await;
+        let log = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let (answered_tx, answered) = tokio::sync::oneshot::channel();
+        let (late_tx, late) = tokio::sync::oneshot::channel();
+        let endpoint = recording_sfu(std::sync::Arc::clone(&log), answered_tx, late_tx).await;
+
+        let mut conn = tokio::time::timeout(LIMIT, SfuConnection::connect(&endpoint, "token"))
+            .await
+            .expect("connect in time")
+            .expect("connect");
+        let ice = [format!("stun:127.0.0.1:{stun_port}")];
+        // SAFETY: a null context is allowed.
+        let peer = unsafe { SfuConnection::create_peer(std::ptr::null_mut(), &ice) }.expect("peer");
+        tokio::time::timeout(LIMIT, conn.join_voice(peer, "crew-1", "ch-1"))
+            .await
+            .expect("join in time")
+            .expect("the join succeeds");
+
+        // The answer is out: now the STUN server answers, and the client
+        // finds its server reflexive candidate.
+        tokio::time::timeout(LIMIT, answered)
+            .await
+            .expect("the SFU answered")
+            .expect("answer signal");
+        let _ = release_stun.send(());
+        let candidate = tokio::time::timeout(LIMIT, late)
+            .await
+            .expect("the late candidate reached the SFU")
+            .expect("candidate signal");
+        assert!(candidate.contains("typ srflx"), "{candidate}");
+
+        let log = log.lock().expect("log").clone();
+        let offer_at = log
+            .iter()
+            .position(|t| t == "offer")
+            .expect("the client sent an offer");
+        let first_candidate = log
+            .iter()
+            .position(|t| t == "ice_candidate")
+            .expect("the client sent candidates");
+        assert_eq!(log[0], "join_voice", "{log:?}");
+        assert!(
+            offer_at < first_candidate,
+            "an ice_candidate went out before the offer: {log:?}"
+        );
+        drop(conn);
     }
 }
