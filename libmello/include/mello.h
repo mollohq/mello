@@ -204,13 +204,64 @@ MELLO_API MelloResult mello_voice_set_packet_sink(
     void* user_data
 );
 
-/** Feed an encoded audio packet received from a peer. */
+/** Feed one voice frame received from a peer on the P2P data channel, or
+ *  from the local mic test (loopback). Spec 10 section 4.2. The frame is an
+ *  8-byte header, then the Opus payload:
+ *    bytes 0..3  the 32-bit sender sequence (mello_voice_get_packet header),
+ *                little-endian
+ *    bytes 4..7  the RTP timestamp (mello_voice_get_packet_with_timestamp),
+ *                little-endian
+ *  libmello builds the RTP fields from it (payload type 111, the low 16 bits
+ *  of the sequence, the timestamp, SSRC 0) and inserts the frame into the
+ *  peer's NetEQ, the same path as mello_voice_feed_rtp. A frame of 8 bytes
+ *  or less is ignored. Any thread. */
 MELLO_API MelloResult mello_voice_feed_packet(
     MelloContext* ctx,
     const char* peer_id,
     const uint8_t* data,
     int size
 );
+
+/** Feed one complete RTP packet (header and Opus payload) received from the
+ *  SFU for `peer_id`. Spec 10 section 5.1. NetEQ uses the payload type,
+ *  sequence, timestamp and SSRC. A new SSRC for the same peer (the SFU
+ *  reassigned it) or a timestamp more than 2 s behind the newest one (the
+ *  sender restarted) rebuilds that peer's NetEQ. Payload types other than
+ *  111 (Opus) and 13 (CN) are dropped.
+ *  `receive_time_ms`: arrival time on the playout clock; < 0 lets libmello
+ *  stamp it (the steady clock, or the test clock of mello_test_set_clock_ms).
+ *  Any thread; in production the libdatachannel track thread. */
+MELLO_API MelloResult mello_voice_feed_rtp(
+    MelloContext* ctx,
+    const char* peer_id,
+    const uint8_t* rtp_packet,
+    int size,
+    int64_t receive_time_ms
+);
+
+/** Destroy one peer's receive state (its NetEQ), for example when the peer
+ *  leaves the channel. Its volume and pan settings stay. A later packet from
+ *  the peer starts a new stream. mello_voice_stop_capture destroys every
+ *  peer's state. Any thread. */
+MELLO_API void mello_voice_remove_peer(MelloContext* ctx, const char* peer_id);
+
+/** Per-peer playback volume. 0.0 = silent, 1.0 = unity (the default), up to
+ *  2.0 (clamped). Above 1.0 a loud peer can clip. Applied to the peer's
+ *  stream before the mixer's limiter, together with the output volume. Kept
+ *  for a peer with no stream yet, and across leave and rejoin of the
+ *  context's voice session. Any thread. */
+MELLO_API void mello_voice_set_peer_volume(MelloContext* ctx, const char* peer_id, float gain);
+
+/** Per-peer stereo pan. -1.0 = left, 0.0 = centre (the default), +1.0 =
+ *  right (clamped). Balance law: the far channel fades, the near channel
+ *  stays at unity. A mono output device plays the downmix. Any thread. */
+MELLO_API void mello_voice_set_peer_pan(MelloContext* ctx, const char* peer_id, float pan);
+
+/** The per-peer volume that libmello applies (1.0 when never set). */
+MELLO_API float mello_voice_get_peer_volume(MelloContext* ctx, const char* peer_id);
+
+/** The per-peer pan that libmello applies (0.0 when never set). */
+MELLO_API float mello_voice_get_peer_pan(MelloContext* ctx, const char* peer_id);
 
 MELLO_API MelloResult mello_voice_start_capture_inject(MelloContext* ctx);
 MELLO_API void mello_voice_inject_capture(MelloContext* ctx, const int16_t* samples, int count);
@@ -228,14 +279,24 @@ MELLO_API void mello_voice_stop_capture_inject(MelloContext* ctx);
  * ============================================================================ */
 
 /** Pull `count` samples (48 kHz mono int16) of mixed voice output through the
- *  playback render path, as the playback device thread does. Samples the mixer
- *  did not produce are zero. Returns the number of samples the mixer produced
- *  (0 = silence), or -1 when the context does not use the test backend. */
+ *  playback render path, as the playback device thread does. The test
+ *  backend is mono, so this is the downmix of the stereo mix (a centred peer
+ *  plays the same on both channels). Returns `count` when any of it came
+ *  from a peer or a clip, 0 when all of it is silence, or -1 when the
+ *  context does not use the test backend. */
 MELLO_API int mello_voice_test_pull_output(MelloContext* ctx, int16_t* out, int count);
 
-/** Drive the playout clock (jitter buffer hold timing) from the caller.
+/** Drive the playout clock from the caller: the receive time that
+ *  mello_voice_feed_packet and mello_voice_feed_rtp stamp, and NetEQ's
+ *  clock. NetEQ times its playout by its GetAudio calls (10 ms each), so the
+ *  caller also paces mello_voice_test_pull_output.
  *  now_ms >= 0 sets the clock to that value in milliseconds. now_ms < 0
- *  restores the steady clock. Process-wide: it affects every context. */
+ *  restores the steady clock. Process-wide: it affects every context.
+ *  With MELLO_AUDIO_BACKEND=test, two more variables apply to contexts
+ *  created after they are set, for tuning and measurement runs:
+ *  MELLO_NETEQ_DELAY_MANAGER_CONFIG replaces the NetEQ delay manager field
+ *  trial value ("default" = upstream defaults), and
+ *  MELLO_VOICE_PRE_ROLL_FRAMES sets the sender pre-roll in frames (0..50). */
 MELLO_API void mello_test_set_clock_ms(int64_t now_ms);
 
 /* ============================================================================
@@ -469,7 +530,22 @@ MELLO_API void mello_peer_set_data_callback(
     void* user_data
 );
 
+/** Incoming audio for stream viewers and tools: `data` is the Opus payload
+ *  behind a 4-byte header [seq_lo, seq_hi, 0, 0] (the 16-bit RTP sequence,
+ *  little-endian). The RTP timestamp is not carried. Voice uses
+ *  mello_peer_set_audio_rtp_callback. */
 MELLO_API void mello_peer_set_audio_track_callback(
+    MelloPeerConnection* peer,
+    MelloAudioTrackCallback callback,
+    void* user_data
+);
+
+/** Incoming audio as complete RTP packets (header and Opus payload), for
+ *  mello_voice_feed_rtp. Same callback type as the audio track callback:
+ *  `data` and `size` are the whole RTP packet, valid only during the call.
+ *  Only payload type 111 (Opus) is delivered. Both callbacks may be set;
+ *  each gets every packet. Called on the libdatachannel track thread. */
+MELLO_API void mello_peer_set_audio_rtp_callback(
     MelloPeerConnection* peer,
     MelloAudioTrackCallback callback,
     void* user_data
@@ -933,31 +1009,62 @@ typedef struct MelloDebugStats {
     float    pipeline_delay_ms;
     /* Receive-path counters, appended for the voice quality gate. Append new
      * fields after these; never reorder. Counters are totals since the
-     * context started. Jitter fields cover the current remote peers. */
-    uint32_t rx_frames_decoded;          /* packets decoded normally */
-    uint32_t rx_decode_errors;           /* Opus decode failures */
-    uint32_t rx_conceal_missing_plc;     /* PLC frames for a lost packet ("Missing"), no FEC */
-    uint32_t rx_conceal_gap_fec;         /* FEC frames for a lost packet, from the next packet */
-    uint32_t rx_conceal_gap_plc;         /* PLC frames for a packet that failed to decode */
-    uint32_t rx_conceal_fill_plc;        /* PLC frames that fill a short playout buffer */
-    uint32_t rx_jitter_missing;          /* packets the jitter buffer declared lost */
-    uint32_t rx_jitter_dropped_late;     /* packets dropped: older than the playout point */
-    uint32_t rx_jitter_dropped_overflow; /* packets dropped: jitter buffer full */
-    uint32_t rx_jitter_resets;           /* jitter buffer resets on a sequence jump */
-    int32_t  rx_jitter_buffered_packets; /* packets in the jitter buffers now */
-    float    rx_jitter_target_delay_ms;  /* mean jitter target delay now */
-    float    rx_playout_buffer_ms;       /* mean decoded audio queued for playout now */
-    /* Late playout: playback callbacks in which a remote stream's decoded
-     * audio ran short while its jitter buffer held packets for it. A talk
-     * pause (nothing received) does not count. underrun_count above counts
-     * only callbacks with no remote audio at all, so it stops once a stream
-     * conceals with PLC. The windowed voice health reads this counter. */
+     * context started.
+     * Since the NetEQ playout (spec 10 section 5) the jitter buffer and the
+     * custom concealment are gone. These fields stay for the ABI. Each one
+     * carries its NetEQ equivalent, or 0 where none exists. The full NetEQ
+     * statistics follow input_gate_dbfs below. */
+    uint32_t rx_frames_decoded;          /* 0: no equivalent */
+    uint32_t rx_decode_errors;           /* NetEQ GetAudio failures (decode errors) */
+    uint32_t rx_conceal_missing_plc;     /* 0: see rx_concealed_samples */
+    uint32_t rx_conceal_gap_fec;         /* 0: see rx_fec_packets_received and _discarded */
+    uint32_t rx_conceal_gap_plc;         /* 0: see rx_concealed_samples */
+    uint32_t rx_conceal_fill_plc;        /* 0: no fill concealment any more */
+    uint32_t rx_jitter_missing;          /* 0: no equivalent */
+    uint32_t rx_jitter_dropped_late;     /* = rx_packets_discarded (too late or duplicate) */
+    uint32_t rx_jitter_dropped_overflow; /* 0: NetEQ flushes instead, see rx_jitter_resets */
+    uint32_t rx_jitter_resets;           /* = rx_stream_resets + rx_buffer_flushes */
+    int32_t  rx_jitter_buffered_packets; /* 0: see rx_buffer_ms */
+    float    rx_jitter_target_delay_ms;  /* = rx_target_delay_ms */
+    float    rx_playout_buffer_ms;       /* = rx_buffer_ms */
+    /* Late playout: 10 ms frames in which a peer played voice concealment
+     * (NetEQ expand) while packets for it waited in its NetEQ buffer. A talk
+     * pause leaves the buffer empty and does not count. underrun_count above
+     * counts 10 ms mixes in which no peer produced audio. The windowed voice
+     * health reads this counter. */
     uint32_t rx_late_underruns;
     /* Input sensitivity (mello_voice_set_input_sensitivity*): the mode, the
      * manual level, and the gate threshold the last frame was compared with. */
     bool     input_sensitivity_auto;
     float    input_sensitivity_db;
     float    input_gate_dbfs;
+    /* NetEQ receive path (spec 10 section 5.4). Delay fields are means over
+     * the current remote peers, 0 with no peer. Counters are totals since the
+     * context started, over every peer, also peers whose stream ended. */
+    float    rx_target_delay_ms;         /* NetEQ TargetDelayMs: the delay it aims for */
+    float    rx_filtered_delay_ms;       /* NetEQ FilteredCurrentDelayMs: the buffer delay now */
+    float    rx_buffer_ms;               /* NetEQ packet and sync buffer now */
+    float    rx_output_ring_ms;          /* mixed audio that waits for the device callback */
+    uint64_t rx_total_samples_received;  /* NetEQ lifetime statistics (WebRTC stats spec) */
+    uint64_t rx_concealed_samples;
+    uint64_t rx_silent_concealed_samples;
+    uint64_t rx_concealment_events;
+    uint64_t rx_inserted_samples_for_deceleration;
+    uint64_t rx_removed_samples_for_acceleration;
+    uint64_t rx_fec_packets_received;
+    uint64_t rx_fec_packets_discarded;   /* FEC payloads not used (the primary arrived) */
+    uint64_t rx_packets_discarded;
+    uint64_t rx_jitter_buffer_delay_ms;  /* sum; divide by rx_jitter_buffer_emitted_count */
+    uint64_t rx_jitter_buffer_emitted_count;
+    uint64_t rx_interruption_count;      /* concealment runs of 150 ms or more */
+    uint64_t rx_interruption_duration_ms;
+    uint64_t rx_buffer_flushes;          /* NetEQ packet buffer flushes (not the one at a stream's first packet) */
+    uint64_t rx_packets_inserted;        /* packets given to NetEQ */
+    uint64_t rx_insert_errors;           /* packets NetEQ refused */
+    uint64_t rx_packets_rejected;        /* not RTP, or not payload type 111 or 13 */
+    uint64_t rx_stream_resets;           /* new SSRC or sender restart: NetEQ rebuilt */
+    uint64_t rx_talk_spurts;             /* talk spurts detected (sender speech gate gaps) */
+    float    rx_spurt_hold_ms;           /* minimum delay held for the current spurt's pre-roll */
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);

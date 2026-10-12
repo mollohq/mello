@@ -33,17 +33,37 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ("event_peak_ms", "Delay peak from the event on (ms)", -1),
     ("recovery_s", "Back to the pre-event delay after (s)", -1),
     ("conceal_per_lost", "Concealment frames per lost frame", 0),
-    ("lost_frames", "Lost frames (network + receiver drops)", 0),
+    (
+        "lost_frames",
+        "Lost frames (network + receiver drops, no DTX)",
+        0,
+    ),
     ("shim_lost", "Packets lost in the network", 0),
-    ("conceal_frames", "Concealment frames for losses", 0),
+    (
+        "lost_dtx_frames",
+        "  of them DTX frames (not counted as lost)",
+        0,
+    ),
+    ("conceal_frames", "Concealment frames for losses (NetEQ)", 0),
     ("conceal_missing_plc", "  PLC for a lost packet", 0),
     ("conceal_gap_fec", "  FEC for a lost packet", 0),
     ("conceal_gap_plc", "  PLC for an undecodable packet", 0),
+    ("fec_frames", "  FEC frames used (NetEQ)", 0),
+    (
+        "voice_concealed_ms",
+        "  Voice concealment (NetEQ expand, ms)",
+        0,
+    ),
+    ("concealment_events", "  Concealment events (NetEQ)", 0),
     (
         "fill_plc_frames",
         "PLC frames filling an empty playout buffer",
         -1,
     ),
+    ("accelerate_ms", "Audio removed by accelerate (ms)", 0),
+    ("decelerate_ms", "Audio added by preemptive expand (ms)", 0),
+    ("interruptions", "Concealment runs of 150 ms or more", -1),
+    ("talk_spurts", "Talk spurts the receiver detected", 0),
     ("underruns", "Mixer underruns (no audio at all)", -1),
     (
         "late_underruns",
@@ -68,15 +88,20 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ),
     (
         "playout_buffer_p50_ms",
-        "Decoded playout buffer p50 (ms)",
+        "Playout buffer p50, NetEQ + output ring (ms)",
         -1,
     ),
     (
         "playout_buffer_max_ms",
-        "Decoded playout buffer max (ms)",
+        "Playout buffer max, NetEQ + output ring (ms)",
         -1,
     ),
     ("jitter_target_p50_ms", "Jitter target delay p50 (ms)", 0),
+    (
+        "neteq_delay_p50_ms",
+        "NetEQ filtered buffer delay p50 (ms)",
+        0,
+    ),
 ];
 
 /// Metrics of one profile run. None = not applicable or not measured.
@@ -99,6 +124,16 @@ fn fmt_num(v: Option<f64>) -> String {
         Some(x) if x.abs() >= 100.0 || x.fract() == 0.0 => format!("{x:.0}"),
         Some(x) if x.abs() >= 10.0 => format!("{x:.1}"),
         Some(x) => format!("{x:.2}"),
+    }
+}
+
+/// A value for the tables: "n/a" when the metric has a baseline value but no
+/// value now (the playout that measured it is gone and nothing replaces it),
+/// so no delta is printed against it.
+fn fmt_now(cur: Option<f64>, base: Option<f64>) -> String {
+    match (cur, base) {
+        (None, Some(_)) => "n/a".into(),
+        _ => fmt_num(cur),
     }
 }
 
@@ -261,9 +296,10 @@ pub fn summary_table(
             let cur = m.get(*k).cloned().flatten();
             let cell = match baseline {
                 Some(b) => {
-                    let d = fmt_delta(cur, metric_of(b, name, k));
+                    let base = metric_of(b, name, k);
+                    let d = fmt_delta(cur, base);
                     if d.is_empty() || d == "0" {
-                        fmt_num(cur)
+                        fmt_now(cur, base)
                     } else {
                         format!("{} ({d})", fmt_num(cur))
                     }
@@ -302,7 +338,7 @@ pub fn detail_table(
                 s,
                 "  {:<44} {:>10} {:>10} {:>10}",
                 label,
-                fmt_num(cur),
+                fmt_now(cur, base),
                 fmt_num(base),
                 fmt_delta(cur, base)
             );
@@ -403,6 +439,14 @@ mod tests {
         assert_eq!(s.len(), 20);
         assert!(s.starts_with("20"));
         assert!(s.ends_with('Z'));
+    }
+
+    #[test]
+    fn a_retired_metric_prints_na_and_no_delta() {
+        assert_eq!(fmt_now(None, Some(1500.0)), "n/a");
+        assert_eq!(fmt_delta(None, Some(1500.0)), "");
+        assert_eq!(fmt_now(None, None), "-");
+        assert_eq!(fmt_now(Some(3.0), Some(1.0)), "3");
     }
 
     #[test]

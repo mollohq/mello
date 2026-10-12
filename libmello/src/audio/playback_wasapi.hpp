@@ -7,6 +7,8 @@
 #include <thread>
 #include <atomic>
 #include "../util/ring_buffer.hpp"
+#include "stream_resampler.hpp"
+#include <memory>
 #include <vector>
 
 namespace mello::audio {
@@ -20,6 +22,7 @@ public:
 
     void set_session(AudioSessionWin* session) { session_win_ = session; }
     void set_input_channels(uint32_t channels) override { input_channels_ = std::max<uint32_t>(1, channels); }
+    uint32_t render_channels() const override { return input_channels_; }
 
     bool initialize(const char* device_id = nullptr) override;
     bool start() override;
@@ -54,10 +57,12 @@ private:
     uint32_t buffer_frames_ = 0;
     int cached_output_latency_ms_ = 0;
 
-    // 48k internal stream -> device-rate stream resampler state
-    std::vector<float> src_fifo_;
-    double src_fifo_pos_ = 0.0;
+    // 48 kHz internal stream -> device-rate stream (sinc), created at
+    // start() when the rates differ. Playback thread only.
+    std::unique_ptr<StreamResampler> resampler_;
     std::vector<int16_t> render_src_i16_;
+    std::vector<float> render_src_f32_;
+    std::vector<float> render_dst_f32_;
 
     std::thread thread_;
     std::atomic<bool> running_{false};

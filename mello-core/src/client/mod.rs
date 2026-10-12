@@ -46,7 +46,7 @@ use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use stream_ffi::feed_viewer_audio_packet;
+pub use stream_ffi::{feed_viewer_audio_packet, feed_viewer_audio_rtp};
 use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
 
 /// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
@@ -891,6 +891,9 @@ impl Client {
             }
             Command::SetOutputVolume { volume } => {
                 self.voice.set_output_volume(volume);
+            }
+            Command::SetPeerVolume { peer_id, volume } => {
+                self.voice.set_peer_volume(&peer_id, volume);
             }
             Command::SetInputSensitivity { auto, db } => {
                 self.voice.set_input_sensitivity(auto, db);

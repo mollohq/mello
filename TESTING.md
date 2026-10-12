@@ -228,8 +228,8 @@ target/debug/mello --build-info
 
 ## libmello — C++ audio/video DSP
 
-Unit tests live in `libmello/tests/` (echo canceller, VAD, Opus, jitter buffer,
-noise suppressor, video pipeline). Per CLAUDE.md:
+Unit tests live in `libmello/tests/` (echo canceller, VAD, Opus, the NetEQ
+playout, the voice receive path, noise suppressor, video pipeline). Per CLAUDE.md:
 
 `MELLO_BUILD_TESTS` defaults to **OFF** — `mello-sys/build.rs` configures libmello
 on every `cargo build`, and we don't want the gtest suite compiled into every dev
@@ -269,9 +269,19 @@ on a machine lacking screen-recording permission the capture path dies with
 **SIGTRAP** rather than failing cleanly — three tests "fail" for reasons that
 have nothing to do with your change.
 
-Expect **104 tests** across two binaries (`mello_tests`, `mello_rtp_tests`), with
-the 4 `VideoPipelineTest` cases skipped under `CI=true`. If you see 0 tests, the
-`-DMELLO_BUILD_TESTS=ON` flag didn't take.
+Four binaries: `mello_tests`, `mello_rtp_tests`, `mello_procenum_tests` and
+`mello_neteq_spike_tests` (the stage 3 NetEQ proofs). Under `CI=true` the
+hardware cases skip (`VideoPipelineTest` and the device suites). If you see 0
+tests, the `-DMELLO_BUILD_TESTS=ON` flag didn't take.
+
+Voice receive and playout (no device, no sleep, deterministic):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `VoicePlayout` | `test_voice_playout.cpp` | One NetEQ per peer: clean playout, a new SSRC and a sender restart start a new stream, reorder is not a restart, late frames count a stall and not a talk pause, a long gate gap leaves no delay, the pre-roll burst is held and not learned as jitter, real jitter still raises the target, a target jump does not stretch speech, volume and pan per peer, two peers mix, removal keeps lifetime counts, junk is rejected. |
+| `ParseRtp`, `StreamResampler` | `test_voice_playout.cpp` | The RTP parser (CSRC, extension, padding) and the sinc resampler of the WASAPI edges (rate, level, frequency, channel order, block sizes). |
+| `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the P2P voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
+| `NetEqSpike` | `test_neteq_spike.cpp` | The stage 3 spike: NetEQ and the mixer driven directly (clean, loss, burst tuning, drift, gap, limiter, cost). |
 
 RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
 
@@ -309,8 +319,8 @@ drops by more than 0.1 on any profile or an enforced gate fails.
 | Corpus | `libmello/tests/fixtures/voice/` | Four public-domain LibriVox clips, 48 kHz mono. Frozen. |
 | Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
 | Sender | `mello_voice_inject_capture`, `mello_voice_set_packet_sink` | Real capture DSP and Opus encode on a context with the test backend. Each packet leaves at its encode time, as on the SFU path. `--send-tick` replays the 20 ms voice tick of the command loop instead (the send timing before stage 2). |
-| Shim | `tools/voice-gate/src/shim.rs` | Rewrites the 4-byte header to the 16-bit RTP sequence exactly as the SFU path does, then applies the profile. Seeded. |
-| Receiver | `mello_voice_feed_packet`, `mello_voice_test_pull_output` | Real jitter buffer, decode, concealment and mix, pulled 10 ms at a time like the device thread. |
+| Shim | `tools/voice-gate/src/shim.rs` | Builds the RTP packet as the SFU forwards it: payload type 111, the 16-bit sequence from `rtp_seq_start`, the timestamp (a seeded start + media time), a seeded SSRC. Then applies the profile. Seeded. |
+| Receiver | `mello_voice_feed_rtp`, `mello_voice_test_pull_output` | Real NetEQ per peer (decode, FEC, concealment, time stretch), the mixer and the output ring, pulled 10 ms at a time like the device thread. |
 | Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
 
 Test hooks in `mello.h` (not for production use):
@@ -319,11 +329,15 @@ Test hooks in `mello.h` (not for production use):
   backend. No device opens and no device thread starts.
 - `mello_voice_test_pull_output()` pulls mixed output through the playback
   render path.
-- `mello_test_set_clock_ms()` drives the jitter buffer clock. The harness
-  steps it 1 ms at a time, so a run is deterministic and faster than real
-  time.
-- `MelloDebugStats` has receive counters at its end (`rx_*`): concealment by
-  kind, receiver drops, jitter resets.
+- `mello_test_set_clock_ms()` drives the receive clock. NetEQ times its
+  playout by the 10 ms pulls. The harness steps the clock 1 ms at a time, so
+  a run is deterministic and faster than real time.
+- `MelloDebugStats` has the NetEQ statistics at its end (`rx_*`, spec 10
+  section 5.4).
+- Test backend only: `MELLO_NETEQ_DELAY_MANAGER_CONFIG` replaces the delay
+  manager field trial value (`default` = upstream), and
+  `MELLO_VOICE_PRE_ROLL_FRAMES` changes the sender pre-roll. For tuning runs
+  and measurements, never in a committed result.
 
 Rules:
 
@@ -333,6 +347,11 @@ Rules:
   baseline on the commit the old baseline came from.
 - **Gates may change.** A gate with `"enforced": false` prints but does not
   fail. The stage that fixes a defect sets its gate to `true`.
+- **Metrics of a removed playout print n/a.** The NetEQ playout has no fill
+  PLC, no per-kind concealment counters and no overflow drops. Those cells
+  print `n/a` against the baseline, with no delta. Concealment per lost frame
+  is now voice expand (concealed minus silent concealed samples) plus frames
+  repaired from in-band FEC, per lost frame.
 - **MOS from different scorers is never compared.** Without the scorer the
   gate prints structural metrics only and says so.
 - `cargo test --workspace` runs a 14 s smoke test of the same path, so
@@ -340,6 +359,33 @@ Rules:
 
 Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
 `results.json`) lands in `target/voice-gate/`.
+
+### NetEQ tuning (stage 3)
+
+The delay manager tuning and the talk-spurt controller (spec 10 section 5.2)
+were chosen with the gate. Sweep, all rows with the pre-roll hold of the
+talk-spurt controller unless noted. The binding gates are the burst recovery
+(5 s), the drift growth (±20 ms) and the MOS of `burst`, `mobile` and `bad`
+against stage 2 (3.39, 2.80, 2.26; at most 0.1 lower).
+
+| Delay manager | Preemptive expand | mobile | bad | burst | burst recovery s | drift growth ms |
+|---|---|---:|---:|---:|---:|---:|
+| `forget_factor:0.7` | upstream | 2.66 | 2.12 | 3.29 | 5.75 | 2.3 |
+| `forget_factor:0.8` | upstream | 2.76 | 2.14 | 3.27 | 10.8 | - |
+| `forget_factor:0.6` | upstream | 2.69 | 2.13 | 3.29 | 4.75 | 22.4 (before a controller fix) |
+| `forget_factor:0.5` | upstream | 2.69 | 2.09 | 3.27 | 3.25 | - |
+| `forget_factor:0.6` | none | 2.80 | 2.24 | 3.29 | 5.75 | - |
+| `forget_factor:0.6` | none for 20 ms+ deficits | 2.73 | 2.23 | 3.29 | 4.75 | 26.5 (low start-up level) |
+| `forget_factor:0.6` | none for 5 s after a target jump (ships) | 2.80 | 2.22 | 3.29 | 4.75 | 2.4 |
+| upstream NetEQ, no controller, `forget_factor:0.7` | upstream | 2.62 | 2.20 | 2.98 | 5.50 (outage: 21 s) | -0.5 |
+| time stretching off (test only) | off | 2.92 | 2.27 | 3.36 | 5.50 | - |
+
+`reorder_forget_factor:0.98` in every row. To rerun one row:
+
+```bash
+MELLO_NETEQ_DELAY_MANAGER_CONFIG=forget_factor:0.5,reorder_forget_factor:0.98 \
+  ./scripts/voice-gate.sh --only mobile,bad,burst,drift --out target/voice-gate-sweep
+```
 
 ### Voice send path off the command loop
 

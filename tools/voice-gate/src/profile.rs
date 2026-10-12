@@ -46,6 +46,31 @@ pub struct Network {
     pub outage: Option<(f64, f64)>,
 }
 
+impl Network {
+    /// True when the network loses packets: random or burst loss, an
+    /// episode with loss, or an outage.
+    pub fn has_loss(&self) -> bool {
+        self.loss_random > 0.0
+            || self.burst.is_some()
+            || self.outage.is_some()
+            || self.episodes.iter().any(|e| e.loss_random > 0.0)
+    }
+
+    /// The same network without loss: delay, jitter, stalls and reorder stay.
+    /// The shim draws every random stream once per packet, lost or not, so
+    /// every packet keeps its delay.
+    pub fn without_loss(&self) -> Network {
+        let mut n = self.clone();
+        n.loss_random = 0.0;
+        n.burst = None;
+        n.outage = None;
+        for e in &mut n.episodes {
+            e.loss_random = 0.0;
+        }
+        n
+    }
+}
+
 /// One gate on one metric of one profile.
 #[derive(Clone, Debug)]
 pub struct Gate {

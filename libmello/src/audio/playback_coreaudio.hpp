@@ -25,6 +25,7 @@ public:
     void set_input_channels(uint32_t channels) override {
         input_channels_ = channels < 1 ? 1 : channels;
     }
+    uint32_t render_channels() const override { return input_channels_; }
 
     uint32_t sample_rate() const override { return sample_rate_; }
     int output_latency_ms() const override { return cached_output_latency_ms_; }

@@ -111,15 +111,77 @@ fn voice_vad_callback_set_clear() {
 }
 
 #[test]
+fn voice_feed_rtp_null_safety() {
+    with_ctx(|ctx| unsafe {
+        let peer = std::ffi::CString::new("test_peer").unwrap();
+        let rtp = [
+            0x80u8, 111, 0, 1, 0, 0, 3, 0xC0, 0, 0, 0, 7, 0xFC, 0xFF, 0xFE,
+        ];
+        let r = mello_sys::mello_voice_feed_rtp(ctx, ptr::null(), rtp.as_ptr(), 15, -1);
+        assert_ne!(r, mello_sys::MelloResult_MELLO_OK);
+        let r = mello_sys::mello_voice_feed_rtp(ctx, peer.as_ptr(), ptr::null(), 0, -1);
+        assert_ne!(r, mello_sys::MelloResult_MELLO_OK);
+        let r =
+            mello_sys::mello_voice_feed_rtp(ptr::null_mut(), peer.as_ptr(), rtp.as_ptr(), 15, -1);
+        assert_ne!(r, mello_sys::MelloResult_MELLO_OK);
+        // A short or non-RTP packet is dropped, not decoded.
+        let r = mello_sys::mello_voice_feed_rtp(ctx, peer.as_ptr(), rtp.as_ptr(), 5, -1);
+        assert_eq!(r, mello_sys::MelloResult_MELLO_OK);
+        mello_sys::mello_voice_remove_peer(ctx, peer.as_ptr());
+        mello_sys::mello_voice_remove_peer(ctx, ptr::null());
+        mello_sys::mello_voice_remove_peer(ptr::null_mut(), peer.as_ptr());
+    });
+}
+
+#[test]
+fn peer_volume_and_pan_clamp_and_default() {
+    with_ctx(|ctx| unsafe {
+        let peer = std::ffi::CString::new("user-1").unwrap();
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_volume(ctx, peer.as_ptr()),
+            1.0
+        );
+        assert_eq!(mello_sys::mello_voice_get_peer_pan(ctx, peer.as_ptr()), 0.0);
+        mello_sys::mello_voice_set_peer_volume(ctx, peer.as_ptr(), 3.0);
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_volume(ctx, peer.as_ptr()),
+            2.0
+        );
+        mello_sys::mello_voice_set_peer_volume(ctx, peer.as_ptr(), -1.0);
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_volume(ctx, peer.as_ptr()),
+            0.0
+        );
+        mello_sys::mello_voice_set_peer_pan(ctx, peer.as_ptr(), -5.0);
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_pan(ctx, peer.as_ptr()),
+            -1.0
+        );
+        // NaN is ignored.
+        mello_sys::mello_voice_set_peer_pan(ctx, peer.as_ptr(), f32::NAN);
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_pan(ctx, peer.as_ptr()),
+            -1.0
+        );
+        // Null arguments are safe.
+        mello_sys::mello_voice_set_peer_volume(ctx, ptr::null(), 0.5);
+        assert_eq!(
+            mello_sys::mello_voice_get_peer_volume(ptr::null_mut(), peer.as_ptr()),
+            1.0
+        );
+    });
+}
+
+#[test]
 fn audio_loopback_packet_round_trip() {
     with_ctx(|ctx| unsafe {
         let peer_id = std::ffi::CString::new("loopback_test").unwrap();
-        // 4-byte sequence header + some Opus-like payload
+        // The voice frame: 4-byte sequence, 4-byte RTP timestamp, then an
+        // Opus-like payload.
         let mut packet = [0u8; 100];
-        packet[0] = 0x00;
-        packet[1] = 0x00;
-        packet[2] = 0x00;
-        packet[3] = 0x01;
+        packet[0] = 0x01;
+        packet[4] = 0xC0;
+        packet[5] = 0x03;
 
         let r = mello_sys::mello_voice_feed_packet(
             ctx,
@@ -138,11 +200,12 @@ fn multi_peer_feed_packet_concurrent() {
         let peer_a = std::ffi::CString::new("aaaa-bbbb-cccc").unwrap();
         let peer_b = std::ffi::CString::new("dddd-eeee-ffff").unwrap();
 
-        // 4-byte LE sequence header + minimal Opus-like payload
+        // The voice frame: LE sequence, LE RTP timestamp, Opus-like payload
         let make_packet = |seq: u32| -> Vec<u8> {
-            let mut pkt = Vec::with_capacity(104);
+            let mut pkt = Vec::with_capacity(108);
             pkt.extend_from_slice(&seq.to_le_bytes());
-            pkt.resize(104, 0xAB);
+            pkt.extend_from_slice(&(seq * 960).to_le_bytes());
+            pkt.resize(108, 0xAB);
             pkt
         };
 

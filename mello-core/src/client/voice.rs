@@ -510,6 +510,50 @@ mod tests {
         assert_eq!(s.input_sensitivity_db, -12.0);
     }
 
+    /// Spec 10 section 8: per-member volume reaches libmello, also for a
+    /// member that has not sent audio yet, and libmello clamps it.
+    #[tokio::test]
+    async fn peer_volume_command_reaches_libmello() {
+        let (event_tx, _events) = mpsc::channel();
+        let voice = VoiceManager::with_test_audio_backend(event_tx.clone());
+        let mut client = Client::with_voice(
+            Config::default(),
+            event_tx,
+            voice,
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::Mutex::new(None)),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            Arc::new(std::sync::atomic::AtomicU8::new(0)),
+            false,
+            false,
+        );
+        let volume = |client: &Client, peer: &std::ffi::CStr| {
+            // SAFETY: the context is live while the client holds its voice
+            // manager; the peer id is a valid C string.
+            unsafe {
+                mello_sys::mello_voice_get_peer_volume(client.voice.mello_ctx(), peer.as_ptr())
+            }
+        };
+        assert_eq!(volume(&client, c"user-7"), 1.0, "unity is the default");
+
+        client
+            .handle_command(Command::SetPeerVolume {
+                peer_id: "user-7".into(),
+                volume: 0.25,
+            })
+            .await;
+        assert_eq!(volume(&client, c"user-7"), 0.25);
+        assert_eq!(volume(&client, c"user-8"), 1.0, "other members keep unity");
+
+        client
+            .handle_command(Command::SetPeerVolume {
+                peer_id: "user-7".into(),
+                volume: 9.0,
+            })
+            .await;
+        assert_eq!(volume(&client, c"user-7"), 2.0, "libmello clamps to 2.0");
+    }
+
     #[tokio::test]
     async fn leaving_voice_cancels_the_sfu_join() {
         let sfu = silent_sfu().await;

@@ -7,7 +7,7 @@
 #include "echo_canceller.hpp"
 #include "echo_suppressor.hpp"
 #include "speech_expander.hpp"
-#include "jitter_buffer.hpp"
+#include "voice_playout.hpp"
 #include "device_enumerator.hpp"
 #include "clip_buffer.hpp"
 #include "clip_encoder.hpp"
@@ -38,30 +38,17 @@ struct EncodedPacket {
     uint32_t timestamp;
 };
 
-/// Receive-path counters for mello_get_debug_stats (voice quality gate).
-/// Counter fields are lifetime totals for the pipeline. Jitter fields are
-/// summed over the current remote peers; target delay and playout buffer are
-/// averages over them.
+/// Size of the voice frame header that mello_voice_feed_packet takes (spec
+/// 10 section 4.2): the 32-bit sender sequence and the 32-bit RTP timestamp,
+/// both little-endian, then the Opus payload.
+static constexpr int VOICE_FRAME_HEADER_SIZE = 8;
+
+/// Receive-path statistics for mello_get_debug_stats (spec 10 section 5.4).
 struct ReceiveStats {
-    uint32_t frames_decoded = 0;
-    uint32_t decode_errors = 0;
-    // One concealment frame per lost packet: FEC from the next packet when
-    // it is buffered (conceal_gap_fec), else PLC (conceal_missing_plc).
-    uint32_t conceal_missing_plc = 0;
-    uint32_t conceal_gap_fec = 0;
-    // PLC for a packet that arrived but failed to decode.
-    uint32_t conceal_gap_plc = 0;
-    uint32_t conceal_fill_plc = 0;
-    uint32_t jitter_missing = 0;
-    uint32_t jitter_dropped_late = 0;
-    uint32_t jitter_dropped_overflow = 0;
-    uint32_t jitter_resets = 0;
-    int32_t jitter_buffered_packets = 0;
-    float jitter_target_delay_ms = 0.0f;
-    float playout_buffer_ms = 0.0f;
-    // Playback callbacks in which a stream's decoded audio ran short while
-    // its jitter buffer held packets for it (late audio).
-    uint32_t late_underruns = 0;
+    /// NetEQ and mixer, over every remote peer.
+    PlayoutStats playout;
+    /// Mixed audio that waits in the output ring for the device callback.
+    float output_ring_ms = 0.0f;
 };
 
 enum class NsMode {
@@ -104,7 +91,7 @@ public:
     /// Frames that passed the RMS gate (candidate speech), lifetime.
     uint32_t gate_candidate_frames() const { return gate_candidate_frames_.load(std::memory_order_relaxed); }
     void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
-    void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
+    void set_output_volume(float vol);
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
     float output_volume() const { return output_gain_.load(std::memory_order_relaxed); }
     void set_echo_cancellation(bool enabled);
@@ -146,7 +133,24 @@ public:
     /// clear returns. Setting a sink drops the frames in the queue. Any
     /// thread, but never from inside the sink (it would wait for itself).
     void set_packet_sink(PacketSink sink);
+
+    /// Receive one voice frame of the P2P and loopback paths (spec 10
+    /// section 4.2): VOICE_FRAME_HEADER_SIZE bytes of header, then Opus.
+    /// Builds the RTP fields from the header (payload type 111, the low 16
+    /// bits of the sequence, the timestamp, SSRC 0) and inserts the frame
+    /// into the peer's NetEQ. Any thread.
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
+    /// Receive one complete RTP packet (the SFU path). `receive_time_ms` < 0:
+    /// stamp it with util::steady_now_ms(). Any thread.
+    void feed_rtp(const char* peer_id, const uint8_t* packet, int size, int64_t receive_time_ms);
+    /// Destroy one peer's NetEQ (the peer left). Any thread.
+    void remove_peer(const char* peer_id);
+    /// Per-peer gain 0..2 and pan -1..+1 (spec 10 section 5.3). Kept for a
+    /// peer with no stream yet and across leave and rejoin. Any thread.
+    void set_peer_volume(const char* peer_id, float gain);
+    void set_peer_pan(const char* peer_id, float pan);
+    float peer_volume(const char* peer_id) const;
+    float peer_pan(const char* peer_id) const;
 
     bool is_capturing() const { return capturing_; }
     bool is_speaking() const {
@@ -161,7 +165,7 @@ public:
     float rnnoise_probability() const { return noise_suppressor_.speech_probability(); }
     float input_level() const { return input_level_.load(std::memory_order_relaxed); }
     uint32_t packets_encoded() const { return sequence_; }
-    int active_streams() const { return active_streams_.load(std::memory_order_relaxed); }
+    int active_streams() const { return playout_->peer_count(); }
     int underrun_count() const { return underrun_count_.load(std::memory_order_relaxed); }
     int rtp_recv_total() const { return rtp_recv_total_.load(std::memory_order_relaxed); }
     float pipeline_delay_ms() const;
@@ -216,16 +220,33 @@ private:
     bool activate_vpio_pair();
     void activate_plain_pair();
 #endif
-    /// Recompute APM stream-delay hint from device latencies plus jitter
-    /// depth. Called on init and device switches (not per-frame: the
-    /// estimator converges from a close start; per-frame jitter tracking
-    /// is future work — see Windows handoff TODO).
+    /// Recompute APM stream-delay hint from device latencies. The render
+    /// reference is the mixer output, so NetEQ's buffer is not in the
+    /// render-to-capture path; the output ring is (at most 10 ms). Called on
+    /// init and device switches (not per-frame: the estimator converges from
+    /// a close start).
     void refresh_stream_delay_hint();
 #ifdef _WIN32
     void apply_session(AudioPlayback* pb);
 #endif
 
-    size_t mix_output(int16_t* out, size_t count);
+    /// Ask the new playback backend for stereo, before its initialize().
+    /// Backends that cannot (VPIO, RemoteIO, the test backend) stay mono
+    /// and report it through render_channels().
+    void request_stereo_output(AudioPlayback* pb);
+    /// Set the playback render source to mix_output with the channel count
+    /// of the current backend. Every playback replacement calls it before
+    /// start() (spec 03 section 4.2).
+    void wire_render_source();
+    /// Device-thread render source: `count` interleaved samples of
+    /// `channels` channels (1 or 2). Pulls 10 ms frames from render_frame()
+    /// through the output ring. Returns `count` when any of it is audible,
+    /// else 0 (all silence).
+    size_t mix_output(int16_t* out, size_t count, uint32_t channels);
+    /// Mix one 10 ms stereo frame into the output ring: NetEQ and the mixer,
+    /// deafen, the clip buffer tap, clip playback, and the AEC render
+    /// reference. Device thread.
+    void render_frame();
 
     std::unique_ptr<AudioCapture> capture_;
     std::unique_ptr<AudioPlayback> playback_;
@@ -242,28 +263,28 @@ private:
     // plans/AEC-CLIPPING-REPRO.md. Capture-thread only.
     SpeechExpander speech_expander_;
     VoiceActivityDetector vad_;
-    std::unordered_map<std::string, OpusDec> decoders_;
-    std::unordered_map<std::string, bool> decoder_primed_;
-    std::unordered_map<std::string, int64_t> last_decoded_seq_;
-    std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
 
-    // Per-peer playback ring buffers for mixing
-    std::unordered_map<std::string, std::unique_ptr<util::RingBuffer<int16_t>>> peer_buffers_;
-    mutable std::mutex peer_buffers_mutex_;
-    std::atomic<int> active_streams_{0};
+    // Receive and playout: one NetEQ per peer and the mixer (spec 10
+    // section 5). Created in the constructor and never replaced, so the
+    // network threads that insert never see it change. It locks itself.
+    std::unique_ptr<VoicePlayout> playout_;
     std::atomic<int> underrun_count_{0};
     std::atomic<int> rtp_recv_total_{0};
-    // Receive counters (ReceiveStats). Written by mix_output, read by stats.
-    std::atomic<uint32_t> rx_frames_decoded_{0};
-    std::atomic<uint32_t> rx_decode_errors_{0};
-    std::atomic<uint32_t> rx_conceal_missing_plc_{0};
-    std::atomic<uint32_t> rx_conceal_gap_fec_{0};
-    std::atomic<uint32_t> rx_conceal_gap_plc_{0};
-    std::atomic<uint32_t> rx_conceal_fill_plc_{0};
-    std::atomic<uint32_t> rx_late_underruns_{0};
 
-    // Windowed late-playout health (audio-thread only; no atomics needed).
+    // Output ring: the device callback asks for any size, the mixer makes
+    // 10 ms stereo frames. Device thread only (render_test_output: the
+    // caller thread, with no device thread on the test backend).
+    std::array<int16_t, VoicePlayout::kFrameSamples * VoicePlayout::kChannels> ring_{};
+    size_t ring_pos_ = VoicePlayout::kFrameSamples;  // frames consumed; 480 = empty
+    bool ring_audible_ = false;
+    // Frames left in the ring, for pipeline_delay_ms() on other threads.
+    std::atomic<int> ring_frames_left_{0};
+    // Scratch for render_frame(), device thread only.
+    std::array<int16_t, VoicePlayout::kFrameSamples> mono_{};
+
+    // Windowed late-playout health (device thread only; no atomics needed).
+    uint64_t last_late_frames_ = 0;
     int underrun_window_count_ = 0;
     int64_t underrun_window_start_ms_ = 0;
     int64_t last_underrun_warn_ms_ = 0;
@@ -274,6 +295,9 @@ private:
         std::array<int16_t, FRAME_SIZE> pcm;
     };
     std::deque<PreRollFrame> speech_pre_roll_;
+    // Frames kept before the speech gate opens (SPEECH_PRE_ROLL_FRAMES; the
+    // test backend may override it). Fixed at construction.
+    const int pre_roll_frames_;
     // 48 kHz sample index of the next captured frame. Counts every frame
     // that reaches on_captured_audio, encoded or not, so a gap from the
     // speech gate or mute advances the RTP timestamp like DTX instead of

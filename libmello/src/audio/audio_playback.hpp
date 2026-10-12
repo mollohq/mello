@@ -33,6 +33,11 @@ public:
     /// there and cannot change channel count afterwards.
     virtual void set_input_channels(uint32_t /*channels*/) {}
 
+    /// Interleaved channels the render source must produce: the value that
+    /// `set_input_channels` set when the backend honours it, else 1. The
+    /// voice pipeline reads it after `initialize()` and mixes to it.
+    virtual uint32_t render_channels() const { return 1; }
+
     /// Set an external render source that provides mixed audio.
     /// When set, the render callback pulls from this instead of feed().
     virtual void set_render_source(RenderSourceFn fn) { render_source_ = std::move(fn); }

@@ -2,6 +2,7 @@
 #include "audio_backend_test.hpp"
 #include "../util/log.hpp"
 #include "../util/test_clock.hpp"
+#include <cstdlib>
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -103,7 +104,36 @@ static std::string find_model_file(const char* filename) {
     return "";
 }
 
-AudioPipeline::AudioPipeline() = default;
+// NetEQ configuration. The voice quality gate may override the delay
+// manager tuning through the environment, with the test backend only, so a
+// tuning sweep needs no rebuild. Production always uses the default.
+static VoicePlayout::Config playout_config() {
+    VoicePlayout::Config c;
+    c.delay_manager_config = VoicePlayout::default_delay_manager_config();
+    if (test_audio_backend_requested()) {
+        const std::string dm = test_backend_env("MELLO_NETEQ_DELAY_MANAGER_CONFIG");
+        if (!dm.empty()) c.delay_manager_config = dm == "default" ? std::string() : dm;
+    }
+    return c;
+}
+
+// Pre-roll length in frames. The voice quality gate may change it through the
+// environment, with the test backend only, to measure what the pre-roll
+// costs in delay. Production always uses SPEECH_PRE_ROLL_FRAMES.
+static int pre_roll_frames_config() {
+    if (test_audio_backend_requested()) {
+        const std::string v = test_backend_env("MELLO_VOICE_PRE_ROLL_FRAMES");
+        if (!v.empty()) {
+            const int n = std::atoi(v.c_str());
+            if (n >= 0 && n <= 50) return n;
+        }
+    }
+    return SPEECH_PRE_ROLL_FRAMES;
+}
+
+AudioPipeline::AudioPipeline()
+    : playout_(std::make_unique<VoicePlayout>(playout_config())),
+      pre_roll_frames_(pre_roll_frames_config()) {}
 
 AudioPipeline::~AudioPipeline() {
     shutdown();
@@ -153,6 +183,7 @@ bool AudioPipeline::initialize() {
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
+    request_stereo_output(playback_.get());
     if (!playback_->initialize(current_playback_device_id())) {
         MELLO_LOG_ERROR("pipeline", "playback init failed");
         return false;
@@ -189,9 +220,7 @@ bool AudioPipeline::initialize() {
         MELLO_LOG_WARN("pipeline", "echo suppressor unavailable (model_path=%s)",
                        echo_model.c_str());
     }
-    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
-        return mix_output(out, count);
-    });
+    wire_render_source();
 
     if (!playback_->start()) {
         MELLO_LOG_ERROR("pipeline", "playback start failed");
@@ -375,6 +404,7 @@ void AudioPipeline::activate_plain_pair() {
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
+    request_stereo_output(playback_.get());
 }
 #endif
 
@@ -408,6 +438,7 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
+    request_stereo_output(playback_.get());
 #endif
 
     // (Re)wire both halves before start (device-switch invariants): the
@@ -426,15 +457,14 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
 #ifdef _WIN32
         apply_session(playback_.get());
 #endif
+        request_stereo_output(playback_.get());
 #endif
         if (!capture_->initialize(nullptr) || !playback_->initialize(nullptr)) {
             MELLO_LOG_ERROR("pipeline", "backend switch failed on fallback too");
             return;
         }
     }
-    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
-        return mix_output(out, count);
-    });
+    wire_render_source();
     if (!playback_->start()) {
         MELLO_LOG_ERROR("pipeline", "playback restart on backend switch failed");
         return;
@@ -454,6 +484,12 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
 }
 
 void AudioPipeline::set_mute(bool muted) { muted_ = muted; }
+
+void AudioPipeline::set_output_volume(float vol) {
+    output_gain_.store(vol, std::memory_order_relaxed);
+    // Applied in each mixer source, before the limiter (spec 10 section 5.3).
+    playout_->set_output_gain(vol);
+}
 void AudioPipeline::set_deafen(bool deafened) { deafened_ = deafened; }
 
 void AudioPipeline::reset_speech_gate_state() {
@@ -675,7 +711,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                     frame.timestamp = frame_ts;
                     std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
                     speech_pre_roll_.push_back(frame);
-                    while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
+                    while (speech_pre_roll_.size() > static_cast<size_t>(pre_roll_frames_)) {
                         speech_pre_roll_.pop_front();
                     }
 
@@ -743,230 +779,133 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_ti
 }
 
 void AudioPipeline::feed_packet(const char* peer_id, const uint8_t* data, int size) {
-    if (deafened_ || !initialized_ || size < 4) {
+    if (!initialized_ || !peer_id || !data || size <= VOICE_FRAME_HEADER_SIZE) {
         return;
     }
-
     rtp_recv_total_.fetch_add(1, std::memory_order_relaxed);
-    std::string pid(peer_id);
-
-    uint32_t seq = static_cast<uint32_t>(data[0]) |
-                   (static_cast<uint32_t>(data[1]) << 8) |
-                   (static_cast<uint32_t>(data[2]) << 16) |
-                   (static_cast<uint32_t>(data[3]) << 24);
-
-    // Ensure per-peer decoder, jitter buffer, and ring buffer exist.
-    // All three maps are guarded by peer_buffers_mutex_ since mix_output()
-    // on the audio device thread also iterates them.
-    {
-        std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-        if (decoders_.find(pid) == decoders_.end()) {
-            MELLO_LOG_INFO("pipeline", "creating decoder for peer '%s'", peer_id);
-            auto& dec = decoders_[pid];
-            if (!dec.initialize()) {
-                MELLO_LOG_ERROR("pipeline", "opus decoder init failed for '%s'", peer_id);
-                decoders_.erase(pid);
-                return;
-            }
-            decoder_primed_[pid] = false;
-            last_decoded_seq_.erase(pid);
-        }
-        if (peer_buffers_.find(pid) == peer_buffers_.end()) {
-            peer_buffers_[pid] = std::make_unique<util::RingBuffer<int16_t>>(48000);
-            active_streams_.store(static_cast<int>(peer_buffers_.size()), std::memory_order_relaxed);
-            MELLO_LOG_INFO("pipeline", "created playback buffer for peer '%s' (streams=%d)",
-                           peer_id, (int)peer_buffers_.size());
-        }
-        // Push into jitter buffer — device thread drives the pop.
-        jitter_buffers_[pid].push(seq, data + 4, size - 4);
-    }
-
-    if ((seq % 500) == 0) {
-        std::lock_guard<std::mutex> lock2(peer_buffers_mutex_);
-        auto jit = jitter_buffers_.find(pid);
-        int buf_count = jit != jitter_buffers_.end() ? jit->second.buffered_count() : 0;
-        MELLO_LOG_DEBUG("pipeline", "feed(%s): seq=%u jitter_buf=%d",
-                        peer_id, seq, buf_count);
-    }
+    auto le32 = [](const uint8_t* p) {
+        return static_cast<uint32_t>(p[0]) | (static_cast<uint32_t>(p[1]) << 8) |
+               (static_cast<uint32_t>(p[2]) << 16) | (static_cast<uint32_t>(p[3]) << 24);
+    };
+    // The RTP fields of the voice frame (spec 10 section 4.2). NetEQ keys on
+    // the payload type and the timestamp; the 16-bit sequence wraps like RTP.
+    RtpInfo rtp;
+    rtp.payload_type = VoicePlayout::kOpusPayloadType;
+    rtp.sequence = static_cast<uint16_t>(le32(data));
+    rtp.timestamp = le32(data + 4);
+    rtp.ssrc = 0;
+    playout_->insert(peer_id, rtp, data + VOICE_FRAME_HEADER_SIZE,
+                     static_cast<size_t>(size - VOICE_FRAME_HEADER_SIZE), util::steady_now_ms());
 }
 
-size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
-    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
+void AudioPipeline::feed_rtp(const char* peer_id, const uint8_t* packet, int size,
+                             int64_t receive_time_ms) {
+    if (!initialized_ || !peer_id || !packet || size <= 0) {
+        return;
+    }
+    rtp_recv_total_.fetch_add(1, std::memory_order_relaxed);
+    playout_->insert_rtp(peer_id, packet, static_cast<size_t>(size),
+                         receive_time_ms < 0 ? util::steady_now_ms() : receive_time_ms);
+}
 
-    // Drain jitter buffers into ring buffers. Cap per-peer drain work per
-    // callback so a backlog on one stream doesn't monopolize the audio lock.
-    constexpr int kMaxDrainPacketsPerPeer = 6;
-    int total_popped = 0;
-    int total_decoded = 0;
-    int decode_errors = 0;
-    int concealment_fec = 0;
-    int concealment_plc = 0;
-    // Split of concealment_plc for the receive counters (debug stats only).
-    int missing_plc = 0;  // jitter buffer reported Missing, no FEC available
-    int gap_plc = 0;      // a popped packet failed to decode
-    int fill_plc = 0;     // playout ring ran short inside this callback
-    int decoded_ok = 0;
-    for (auto& [pid, jb] : jitter_buffers_) {
-        std::vector<uint8_t> pkt_data;
-        int64_t pkt_seq = 0;
-        int drained = 0;
-        while (drained < kMaxDrainPacketsPerPeer) {
-            // Starved: the decoder is primed and its playout ring is empty,
-            // so the fill below has been covering the time with PLC.
-            auto ring_it = peer_buffers_.find(pid);
-            const bool starved = decoder_primed_[pid] && ring_it != peer_buffers_.end() &&
-                                 ring_it->second->available() == 0;
-            auto pop_result = jb.pop(pkt_data, &pkt_seq, starved);
-            if (pop_result == JitterPopResult::None) {
-                break;
-            }
-            drained++;
-            auto dit = decoders_.find(pid);
-            if (dit == decoders_.end()) continue;
-            auto bit = peer_buffers_.find(pid);
-            if (bit == peer_buffers_.end()) continue;
+void AudioPipeline::remove_peer(const char* peer_id) {
+    if (!peer_id) return;
+    playout_->remove_peer(peer_id);
+}
 
-            if (pop_result == JitterPopResult::Missing) {
-                // One concealment per lost frame. The playout timeline has
-                // reached the lost packet pkt_seq. Conceal it here, once: from
-                // the in-band FEC of the next packet when that packet is
-                // already buffered, else with PLC. Then mark the lost packet
-                // as played, so the next packet sees no gap and does not
-                // conceal the same frame again.
-                if (decoder_primed_[pid]) {
-                    int16_t conceal_pcm[FRAME_SIZE];
-                    int conceal_samples = 0;
-                    std::vector<uint8_t> next_pkt;
-                    if (jb.peek(pkt_seq + 1, next_pkt)) {
-                        conceal_samples = dit->second.decode_fec(
-                            next_pkt.data(), static_cast<int>(next_pkt.size()),
-                            conceal_pcm, FRAME_SIZE);
-                        if (conceal_samples > 0) {
-                            concealment_fec++;
-                        }
-                    }
-                    if (conceal_samples <= 0) {
-                        conceal_samples = dit->second.decode_plc(conceal_pcm, FRAME_SIZE);
-                        if (conceal_samples > 0) {
-                            concealment_plc++;
-                            missing_plc++;
-                        }
-                    }
-                    if (conceal_samples > 0) {
-                        bit->second->write(conceal_pcm, static_cast<size_t>(conceal_samples));
-                        total_decoded++;
-                    }
-                    last_decoded_seq_[pid] = pkt_seq;
-                }
-                continue;
-            }
+void AudioPipeline::set_peer_volume(const char* peer_id, float gain) {
+    if (!peer_id) return;
+    playout_->set_peer_volume(peer_id, gain);
+    MELLO_LOG_INFO("pipeline", "peer '%s' volume %.2f", peer_id, playout_->peer_volume(peer_id));
+}
 
-            total_popped++;
-            // Every loss reaches this loop as a Missing event first, so a gap
-            // here means the jitter buffer moved its timeline (a reset on a
-            // sequence jump). There is nothing left to conceal.
-            auto last_it = last_decoded_seq_.find(pid);
-            if (last_it != last_decoded_seq_.end() && pkt_seq > last_it->second + 1) {
-                MELLO_LOG_DEBUG("pipeline", "peer '%s': timeline jump of %lld packets",
-                                pid.c_str(),
-                                static_cast<long long>(pkt_seq - last_it->second - 1));
-            }
+void AudioPipeline::set_peer_pan(const char* peer_id, float pan) {
+    if (!peer_id) return;
+    playout_->set_peer_pan(peer_id, pan);
+    MELLO_LOG_INFO("pipeline", "peer '%s' pan %.2f", peer_id, playout_->peer_pan(peer_id));
+}
 
-            int16_t pcm[FRAME_SIZE];
-            int samples = dit->second.decode(pkt_data.data(),
-                                             static_cast<int>(pkt_data.size()),
-                                             pcm, FRAME_SIZE);
-            if (samples > 0) {
-                total_decoded++;
-                decoded_ok++;
-                bit->second->write(pcm, static_cast<size_t>(samples));
-                decoder_primed_[pid] = true;
-                last_decoded_seq_[pid] = pkt_seq;
-            } else {
-                decode_errors++;
-                // An undecodable packet is a lost frame: conceal it once.
-                if (decoder_primed_[pid]) {
-                    int plc_samples = dit->second.decode_plc(pcm, FRAME_SIZE);
-                    if (plc_samples > 0) {
-                        bit->second->write(pcm, static_cast<size_t>(plc_samples));
-                        concealment_plc++;
-                        gap_plc++;
-                        total_decoded++;
-                    }
-                    last_decoded_seq_[pid] = pkt_seq;
-                }
+float AudioPipeline::peer_volume(const char* peer_id) const {
+    return peer_id ? playout_->peer_volume(peer_id) : 1.0f;
+}
+
+float AudioPipeline::peer_pan(const char* peer_id) const {
+    return peer_id ? playout_->peer_pan(peer_id) : 0.0f;
+}
+
+void AudioPipeline::request_stereo_output(AudioPlayback* pb) {
+    if (pb) pb->set_input_channels(VoicePlayout::kChannels);
+}
+
+void AudioPipeline::wire_render_source() {
+    // The channel count is fixed for the life of this backend instance, so
+    // the device thread never reads playback_ (a device switch replaces it).
+    const uint32_t channels = playback_->render_channels();
+    playback_->set_render_source([this, channels](int16_t* out, size_t count) -> size_t {
+        return mix_output(out, count, channels);
+    });
+    MELLO_LOG_INFO("pipeline", "voice output: %u channel(s)", channels);
+}
+
+void AudioPipeline::render_frame() {
+    constexpr size_t kFrames = VoicePlayout::kFrameSamples;
+    int16_t* stereo = ring_.data();
+
+    // NetEQ GetAudio for every peer and the mix, also while deafened, so each
+    // peer's timeline and delay estimate keep running.
+    const int sources = playout_->mix(stereo);
+    bool remote = sources > 0;
+    if (remote && deafened_.load(std::memory_order_relaxed)) {
+        std::fill(ring_.begin(), ring_.end(), int16_t{0});
+        remote = false;
+    }
+
+    // What the speakers play, as one channel: the clip tap and the echo
+    // canceller reference. A centred peer gives L = R, so this is exact.
+    for (size_t i = 0; i < kFrames; ++i) {
+        mono_[i] = static_cast<int16_t>(
+            (static_cast<int32_t>(stereo[2 * i]) + static_cast<int32_t>(stereo[2 * i + 1])) / 2);
+    }
+
+    if (!remote) {
+        const uint32_t ur =
+            static_cast<uint32_t>(underrun_count_.fetch_add(1, std::memory_order_relaxed)) + 1;
+        if (ur <= 10 || (ur % 500) == 0) {
+            const int peers = playout_->peer_count();
+            if (peers > 0) {
+                MELLO_LOG_INFO("pipeline", "mix UNDERRUN #%u: peers=%d (no peer produced audio)",
+                               ur, peers);
             }
+        }
+    } else {
+        static uint32_t mix_log_ctr = 0;
+        if ((mix_log_ctr++ % 1000) == 0) {
+            double sum = 0.0;
+            for (size_t i = 0; i < kFrames; ++i) {
+                const double v = mono_[i] / 32768.0;
+                sum += v * v;
+            }
+            MELLO_LOG_INFO("pipeline", "mix #%u: rms=%.4f sources=%d late_frames=%llu",
+                           mix_log_ctr, std::sqrt(sum / kFrames), sources,
+                           static_cast<unsigned long long>(playout_->late_frames()));
         }
     }
 
-    std::memset(out, 0, count * sizeof(int16_t));
-    bool any_remote = false;
-    // Receive counters for mello_get_debug_stats. Counting only: nothing
-    // below reads them.
-    rx_frames_decoded_.fetch_add(static_cast<uint32_t>(decoded_ok), std::memory_order_relaxed);
-    rx_decode_errors_.fetch_add(static_cast<uint32_t>(decode_errors), std::memory_order_relaxed);
-    rx_conceal_missing_plc_.fetch_add(static_cast<uint32_t>(missing_plc), std::memory_order_relaxed);
-    rx_conceal_gap_fec_.fetch_add(static_cast<uint32_t>(concealment_fec), std::memory_order_relaxed);
-    rx_conceal_gap_plc_.fetch_add(static_cast<uint32_t>(gap_plc), std::memory_order_relaxed);
-
-    // Late playout: a primed stream ran short while its jitter buffer held
-    // packets for it. The fill below conceals it, so the mixer still returns
-    // audio and the no-audio underrun count above never sees it. A talk
-    // pause leaves the jitter buffer empty and does not count.
-    bool late_playout = false;
-    if (!peer_buffers_.empty()) {
-        std::vector<int16_t> temp(count);
-        for (auto& [pid, buf] : peer_buffers_) {
-            size_t got = buf->read(temp.data(), count);
-            if (got < count && decoder_primed_[pid]) {
-                auto jit = jitter_buffers_.find(pid);
-                if (jit != jitter_buffers_.end() && jit->second.buffered_count() > 0) {
-                    late_playout = true;
-                }
-                auto dit = decoders_.find(pid);
-                if (dit != decoders_.end()) {
-                    size_t write_pos = got;
-                    while (write_pos < count) {
-                        int16_t plc_pcm[FRAME_SIZE];
-                        int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
-                        if (plc_samples <= 0) break;
-                        size_t copy_n = (std::min)(static_cast<size_t>(plc_samples), count - write_pos);
-                        std::memcpy(temp.data() + write_pos, plc_pcm, copy_n * sizeof(int16_t));
-                        write_pos += copy_n;
-                        concealment_plc++;
-                        fill_plc++;
-                        total_decoded++;
-                    }
-                    got = write_pos;
-                }
-            }
-            if (got > 0) {
-                any_remote = true;
-                for (size_t i = 0; i < got; ++i) {
-                    int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(temp[i]);
-                    if (mixed > 32767) mixed = 32767;
-                    if (mixed < -32768) mixed = -32768;
-                    out[i] = static_cast<int16_t>(mixed);
-                }
-            }
-        }
-    }
-    rx_conceal_fill_plc_.fetch_add(static_cast<uint32_t>(fill_plc), std::memory_order_relaxed);
-    if (late_playout) {
-        rx_late_underruns_.fetch_add(1, std::memory_order_relaxed);
-        // Windowed late-playout rate: warn when late audio is *currently*
-        // sustained, not from the ever-growing lifetime counter.
+    // Windowed late playout: warn when late audio is sustained now, not
+    // from the lifetime counter.
+    const uint64_t late = playout_->late_frames();
+    if (late > last_late_frames_) {
         const int64_t now_ms = util::steady_now_ms();
         constexpr int64_t kUnderrunWindowMs = 5000;
         if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
-        ++underrun_window_count_;
+        underrun_window_count_ += static_cast<int>(late - last_late_frames_);
         const int64_t elapsed = now_ms - underrun_window_start_ms_;
         if (elapsed >= kUnderrunWindowMs) {
-            // ~5 late callbacks/sec sustained over the window => audibly degraded.
+            // About 5 late frames per second over the window: audibly degraded.
             if (underrun_window_count_ >= 25 &&
                 now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
                 MELLO_LOG_WARN("pipeline",
-                               "sustained late playout: %d underruns in last %lldms (%.1f/s) -- output likely degraded",
+                               "sustained late playout: %d late frames in last %lldms (%.1f/s) -- output likely degraded",
                                underrun_window_count_, (long long)elapsed,
                                underrun_window_count_ * 1000.0 / elapsed);
                 last_underrun_warn_ms_ = now_ms;
@@ -975,75 +914,42 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             underrun_window_count_ = 0;
         }
     }
+    last_late_frames_ = late;
 
-    if (any_remote) {
-        static uint32_t mix_log_ctr = 0;
-        if ((mix_log_ctr++ % 500) == 0) {
-            double sum = 0.0;
-            for (size_t i = 0; i < count; ++i) {
-                double s = out[i] / 32768.0;
-                sum += s * s;
-            }
-            float rms = static_cast<float>(std::sqrt(sum / count));
-            MELLO_LOG_INFO("pipeline", "mix_output #%u: rms=%.4f count=%zu peers=%zu popped=%d decoded=%d fec=%d plc=%d errs=%d",
-                           mix_log_ctr, rms, count, peer_buffers_.size(), total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
-        }
-
-        float og = output_gain_.load(std::memory_order_relaxed);
-        if (og != 1.0f) {
-            for (size_t i = 0; i < count; ++i) {
-                int32_t s = static_cast<int32_t>(out[i] * og);
-                if (s > 32767) s = 32767;
-                if (s < -32768) s = -32768;
-                out[i] = static_cast<int16_t>(s);
-            }
-        }
-    } else {
-        uint32_t ur = underrun_count_.fetch_add(1, std::memory_order_relaxed) + 1;
-        if (!peer_buffers_.empty() && (ur <= 10 || (ur % 500) == 0)) {
-            int total_jb = 0;
-            int total_rb = 0;
-            for (auto& [pid, jb] : jitter_buffers_) total_jb += jb.buffered_count();
-            for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
-            MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d fec=%d plc=%d errs=%d",
-                           ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
-        }
-    }
-
-    // Clip buffer: mix remote playback + local mic for "all participants" recording
+    // Clip buffer: remote playback plus the local mic ("all participants").
     if (clip_buffer_ && clip_buffer_->is_active()) {
-        if (local_clip_ring_ && local_clip_ring_->available() >= count) {
-            std::vector<int16_t> local(count);
-            local_clip_ring_->read(local.data(), count);
-            std::vector<int16_t> clip_mix(count);
-            for (size_t i = 0; i < count; ++i) {
-                int32_t mixed = static_cast<int32_t>(out[i]) + static_cast<int32_t>(local[i]);
-                if (mixed > 32767) mixed = 32767;
-                if (mixed < -32768) mixed = -32768;
-                clip_mix[i] = static_cast<int16_t>(mixed);
+        if (local_clip_ring_ && local_clip_ring_->available() >= kFrames) {
+            std::array<int16_t, kFrames> local{};
+            local_clip_ring_->read(local.data(), kFrames);
+            std::array<int16_t, kFrames> clip_mix{};
+            for (size_t i = 0; i < kFrames; ++i) {
+                const int32_t mixed = static_cast<int32_t>(mono_[i]) + static_cast<int32_t>(local[i]);
+                clip_mix[i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
             }
-            clip_buffer_->write(clip_mix.data(), count);
+            clip_buffer_->write(clip_mix.data(), kFrames);
         } else {
-            clip_buffer_->write(out, count);
+            clip_buffer_->write(mono_.data(), kFrames);
         }
     }
 
-    // Mix clip playback into speaker output (read directly from retained PCM vector)
+    // Clip playback into the speaker output (retained PCM, lock-free read).
     bool has_clip_audio = false;
     if (clip_playing_.load(std::memory_order_relaxed) &&
         !clip_paused_.load(std::memory_order_relaxed)) {
-        size_t pos = clip_playback_pos_.load(std::memory_order_relaxed);
-        size_t total = clip_playback_total_;
-        size_t avail = (pos < total) ? (total - pos) : 0;
-        size_t to_read = (std::min)(count, avail);
+        const size_t pos = clip_playback_pos_.load(std::memory_order_relaxed);
+        const size_t total = clip_playback_total_;
+        const size_t avail = (pos < total) ? (total - pos) : 0;
+        const size_t to_read = (std::min)(kFrames, avail);
         if (to_read > 0) {
             has_clip_audio = true;
             for (size_t i = 0; i < to_read; ++i) {
-                int32_t mixed = static_cast<int32_t>(out[i]) +
-                                static_cast<int32_t>(clip_playback_pcm_[pos + i]);
-                if (mixed > 32767) mixed = 32767;
-                if (mixed < -32768) mixed = -32768;
-                out[i] = static_cast<int16_t>(mixed);
+                const int32_t c = clip_playback_pcm_[pos + i];
+                for (size_t ch = 0; ch < 2; ++ch) {
+                    const int32_t mixed = static_cast<int32_t>(stereo[2 * i + ch]) + c;
+                    stereo[2 * i + ch] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
+                }
+                mono_[i] = static_cast<int16_t>(
+                    std::clamp(static_cast<int32_t>(mono_[i]) + c, -32768, 32767));
             }
             clip_playback_pos_.store(pos + to_read, std::memory_order_relaxed);
         }
@@ -1053,17 +959,50 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         }
     }
 
-    // Feed remote playback to AEC as far-end reference
-    if (any_remote || has_clip_audio) {
-        echo_canceller_.process_render(out, static_cast<int>(count));
+    // Far-end reference: the mixer output that plays, after NetEQ, so a
+    // silent peer feeds silence (comfort noise at most), not PLC noise.
+    if (remote || has_clip_audio) {
+        echo_canceller_.process_render(mono_.data(), static_cast<int>(kFrames));
+        if (echo_suppressor_.enabled()) {
+            echo_suppressor_.feed_far_end(mono_.data(), kFrames);
+        }
     }
 
-    // Same signal conditions the neural suppressor's reference ring.
-    if (echo_suppressor_.enabled() && (any_remote || has_clip_audio)) {
-        echo_suppressor_.feed_far_end(out, count);
-    }
+    ring_audible_ = remote || has_clip_audio;
+    ring_pos_ = 0;
+}
 
-    return (any_remote || has_clip_audio) ? count : 0;
+size_t AudioPipeline::mix_output(int16_t* out, size_t count, uint32_t channels) {
+    constexpr size_t kFrames = VoicePlayout::kFrameSamples;
+    if (channels == 0) channels = 1;
+    const size_t frames = count / channels;
+    bool audible = false;
+    size_t done = 0;
+    while (done < frames) {
+        if (ring_pos_ >= kFrames) render_frame();
+        const size_t n = (std::min)(kFrames - ring_pos_, frames - done);
+        const int16_t* src = ring_.data() + ring_pos_ * 2;
+        int16_t* dst = out + done * channels;
+        if (channels == 1) {
+            for (size_t i = 0; i < n; ++i) {
+                dst[i] = static_cast<int16_t>(
+                    (static_cast<int32_t>(src[2 * i]) + static_cast<int32_t>(src[2 * i + 1])) / 2);
+            }
+        } else {
+            for (size_t i = 0; i < n; ++i) {
+                dst[i * channels] = src[2 * i];
+                dst[i * channels + 1] = src[2 * i + 1];
+                for (uint32_t c = 2; c < channels; ++c) dst[i * channels + c] = 0;
+            }
+        }
+        audible = audible || ring_audible_;
+        ring_pos_ += n;
+        done += n;
+    }
+    // A count that is not whole frames: the rest is silence.
+    for (size_t i = frames * channels; i < count; ++i) out[i] = 0;
+    ring_frames_left_.store(static_cast<int>(kFrames - ring_pos_), std::memory_order_relaxed);
+    return audible ? count : 0;
 }
 
 int AudioPipeline::render_test_output(int16_t* out, size_t count) {
@@ -1074,90 +1013,43 @@ int AudioPipeline::render_test_output(int16_t* out, size_t count) {
 
 ReceiveStats AudioPipeline::receive_stats() const {
     ReceiveStats s;
-    s.frames_decoded = rx_frames_decoded_.load(std::memory_order_relaxed);
-    s.decode_errors = rx_decode_errors_.load(std::memory_order_relaxed);
-    s.conceal_missing_plc = rx_conceal_missing_plc_.load(std::memory_order_relaxed);
-    s.conceal_gap_fec = rx_conceal_gap_fec_.load(std::memory_order_relaxed);
-    s.conceal_gap_plc = rx_conceal_gap_plc_.load(std::memory_order_relaxed);
-    s.conceal_fill_plc = rx_conceal_fill_plc_.load(std::memory_order_relaxed);
-    s.late_underruns = rx_late_underruns_.load(std::memory_order_relaxed);
-
-    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-    float target_sum = 0.0f;
-    for (auto& [pid, jb] : jitter_buffers_) {
-        s.jitter_missing += jb.underruns();
-        s.jitter_dropped_late += jb.dropped_late();
-        s.jitter_dropped_overflow += jb.dropped_overflow();
-        s.jitter_resets += jb.discontinuity_resets();
-        s.jitter_buffered_packets += jb.buffered_count();
-        target_sum += static_cast<float>(jb.target_delay_ms());
-    }
-    if (!jitter_buffers_.empty()) {
-        s.jitter_target_delay_ms = target_sum / static_cast<float>(jitter_buffers_.size());
-    }
-    float ring_ms = 0.0f;
-    for (auto& [pid, buf] : peer_buffers_) {
-        ring_ms += static_cast<float>(buf->available()) / 48.0f;
-    }
-    if (!peer_buffers_.empty()) {
-        s.playout_buffer_ms = ring_ms / static_cast<float>(peer_buffers_.size());
-    }
+    s.playout = playout_->stats();
+    s.output_ring_ms =
+        static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f;
     return s;
 }
 
 float AudioPipeline::pipeline_delay_ms() const {
-    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-
-    float jb_ms = 0.0f;
-    int jb_count = 0;
-    for (auto& [pid, jb] : jitter_buffers_) {
-        jb_ms += jb.avg_hold_ms();
-        jb_count++;
-    }
-    if (jb_count > 0) jb_ms /= static_cast<float>(jb_count);
-
-    float pb_ms = 0.0f;
-    for (auto& [pid, buf] : peer_buffers_) {
-        pb_ms += static_cast<float>(buf->available()) / 48.0f;
-    }
-    if (!peer_buffers_.empty())
-        pb_ms /= static_cast<float>(peer_buffers_.size());
-
-    return jb_ms + pb_ms;
+    // NetEQ's filtered buffer delay (mean over peers) plus the output ring.
+    // Not the playout timestamp: NetEQ reports none during comfort noise.
+    const PlayoutStats p = playout_->stats();
+    const float ring_ms =
+        static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f;
+    return p.peers > 0 ? p.filtered_delay_ms + ring_ms : 0.0f;
 }
 
 void AudioPipeline::refresh_stream_delay_hint() {
     if (!capture_ || !playback_) return;
-    // Total render-to-capture latency ~= output device latency + input
-    // device latency + jitter/playout buffering. The jitter term is small
-    // at switch time (buffers just cleared); the AEC delay estimator
-    // converges the rest. Sum, not difference: both legs add delay.
-    // WASAPI latencies come from GetStreamLatency + GetDevicePeriod.
-    // Sign check (sum vs difference) is validated by the ERLE harness
-    // runs in the Windows handoff task 3.
-    int out_ms = playback_->output_latency_ms();
-    int in_ms = capture_->input_latency_ms();
-    float jb_ms = 0.0f;
-    if (initialized_) {
-        jb_ms = pipeline_delay_ms();
-    }
-    int delay = out_ms + in_ms + static_cast<int>(jb_ms + 0.5f);
+    // Render-to-capture latency = output ring + output device latency +
+    // input device latency. The render reference is the mixer output
+    // (render_frame), so NetEQ's buffer is before it and not in the echo
+    // path. Sum, not difference: both device legs add delay. WASAPI
+    // latencies come from GetStreamLatency + GetDevicePeriod. The AEC delay
+    // estimator converges the rest.
+    const int out_ms = playback_->output_latency_ms();
+    const int in_ms = capture_->input_latency_ms();
+    const float ring_ms =
+        static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f;
+    int delay = out_ms + in_ms + static_cast<int>(ring_ms + 0.5f);
     if (delay < 0) delay = 0;
     if (delay > 500) delay = 500;
     echo_canceller_.set_stream_delay_ms(delay);
-    MELLO_LOG_INFO("pipeline", "stream delay hint: out=%d in=%d jb=%.1f total=%d ms",
-                   out_ms, in_ms, jb_ms, delay);
+    MELLO_LOG_INFO("pipeline", "stream delay hint: out=%d in=%d ring=%.1f total=%d ms",
+                   out_ms, in_ms, ring_ms, delay);
 }
 
 void AudioPipeline::clear_remote_streams() {
-    std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
-    size_t had = peer_buffers_.size();
-    decoders_.clear();
-    decoder_primed_.clear();
-    last_decoded_seq_.clear();
-    jitter_buffers_.clear();
-    peer_buffers_.clear();
-    active_streams_.store(0, std::memory_order_relaxed);
+    const size_t had = playout_->clear();
     if (had > 0) {
         MELLO_LOG_INFO("pipeline", "cleared %zu remote voice streams", had);
     }
@@ -1245,6 +1137,7 @@ int AudioPipeline::set_playback_device(const char* device_id) {
 #ifdef _WIN32
     apply_session(playback_.get());
 #endif
+    request_stereo_output(playback_.get());
     try { init_ok = playback_->initialize(device_id); } catch (...) { init_ok = false; }
     if (!init_ok) {
         MELLO_LOG_WARN("pipeline", "playback device switch failed, falling back to default");
@@ -1252,15 +1145,14 @@ int AudioPipeline::set_playback_device(const char* device_id) {
 #ifdef _WIN32
         apply_session(playback_.get());
 #endif
+        request_stereo_output(playback_.get());
         if (!playback_->initialize(nullptr)) {
             MELLO_LOG_ERROR("pipeline", "default playback device also failed");
             return 0;
         }
         fell_back = true;
     }
-    playback_->set_render_source([this](int16_t* out, size_t count) -> size_t {
-        return mix_output(out, count);
-    });
+    wire_render_source();
     bool ok = playback_->start();
     MELLO_LOG_INFO("pipeline", "playback restarted on new device: %s", ok ? "ok" : "FAILED");
     if (ok) {

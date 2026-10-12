@@ -64,7 +64,7 @@ fn game_capture_source(
     Some((entry.is_some(), source))
 }
 use super::stream_ffi::{
-    feed_viewer_audio_packet, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
+    feed_viewer_audio_rtp, flush_ice_buffer, log_viewer_native_stats, on_viewer_native_frame,
     poll_p2p_viewer_access_units, poll_sfu_viewer_access_units, register_pause_callback,
     stream_audio_track_callback, stream_ice_callback, stream_state_callback,
     tick_viewer_congestion_p2p, tick_viewer_congestion_sfu, unregister_pause_callback,
@@ -727,12 +727,12 @@ impl super::Client {
                     crate::transport::SfuEvent::ControlPacket { .. }
                     | crate::transport::SfuEvent::MemberJoined { .. }
                     | crate::transport::SfuEvent::MemberLeft { .. } => {}
-                    crate::transport::SfuEvent::AudioTrackData { data, .. } => {
+                    crate::transport::SfuEvent::AudioRtp { rtp, .. } => {
                         if let Some(viewer) = vs.viewer {
                             // SAFETY: `vs.viewer` is set only from a successful
                             // viewer start and cleared on stop, so it is valid
                             // for the lifetime of this ViewerState.
-                            if unsafe { feed_viewer_audio_packet(viewer, &data) } {
+                            if unsafe { feed_viewer_audio_rtp(viewer, &rtp) } {
                                 vs.audio_packets_received =
                                     vs.audio_packets_received.saturating_add(1);
                             }
@@ -907,7 +907,7 @@ impl super::Client {
                     log::warn!("Stream SFU host disconnected: {}", reason);
                 }
                 SfuEvent::MediaPacket { .. } | SfuEvent::ControlPacket { .. } => {}
-                SfuEvent::AudioTrackData { .. } => {}
+                SfuEvent::AudioRtp { .. } => {}
             }
         }
     }

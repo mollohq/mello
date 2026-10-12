@@ -2,6 +2,7 @@
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
 #include <memory>
+#include <string>
 
 namespace mello::audio {
 
@@ -18,6 +19,10 @@ namespace mello::audio {
 
 /// True when MELLO_AUDIO_BACKEND=test is set in the environment.
 bool test_audio_backend_requested();
+
+/// Value of the environment variable `name`, read from the process
+/// environment block like test_audio_backend_requested(). Empty when unset.
+std::string test_backend_env(const char* name);
 
 class TestCapture : public AudioCapture {
 public:

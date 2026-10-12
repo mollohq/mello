@@ -178,6 +178,36 @@ endif()
 # WebRTC audio processing (AEC3 + AGC2) — CMake overlay for vendored submodule
 add_subdirectory(cmake/webrtc-audio-processing)
 
+# Voice playout (NetEQ + mixer) and the sinc resampler of the WASAPI edges.
+# The vendored NetEQ headers need C++20 and, on Windows, WIN32_LEAN_AND_MEAN
+# (rtc_base includes winsock2.h), so the files that include them compile in
+# their own object library. Their objects go into libmello itself; nothing
+# else in libmello includes a WebRTC NetEQ header. Spec 10 section 5.
+if(NOT MELLO_WEBRTC_NETEQ)
+    message(FATAL_ERROR "[mello] the voice playout needs MELLO_WEBRTC_NETEQ=ON")
+endif()
+add_library(mello_playout OBJECT
+    src/audio/voice_playout.cpp
+    src/audio/stream_resampler.cpp
+)
+set_target_properties(mello_playout PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(mello_playout PRIVATE webrtc_neteq)
+target_include_directories(mello_playout
+    BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/webrtc-audio-processing/compat
+)
+target_include_directories(mello_playout PRIVATE include src)
+target_compile_definitions(mello_playout PRIVATE NOMINMAX _USE_MATH_DEFINES)
+if(WIN32)
+    target_compile_definitions(mello_playout PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(MSVC)
+    target_compile_options(mello_playout PRIVATE /EHsc /wd4100 /wd4244 /wd4267)
+endif()
+
 # Platform-agnostic sources
 set(MELLO_SOURCES
     src/mello.cpp
@@ -192,7 +222,6 @@ set(MELLO_SOURCES
     src/audio/echo_canceller.cpp
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
-    src/audio/jitter_buffer.cpp
     src/audio/vad.cpp
     src/transport/peer_connection.cpp
     src/transport/rtp_h264_receiver.cpp
@@ -316,7 +345,7 @@ if(APPLE)
 endif()
 
 # Static library for Rust FFI linking
-add_library(mello STATIC ${MELLO_SOURCES})
+add_library(mello STATIC ${MELLO_SOURCES} $<TARGET_OBJECTS:mello_playout>)
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX _USE_MATH_DEFINES)
 
@@ -363,6 +392,7 @@ target_link_libraries(mello
         LibDataChannel::LibDataChannel
         rnnoise
         webrtc_audio_processing
+        webrtc_neteq
 )
 target_link_libraries(mello PUBLIC onnxruntime)
 
@@ -455,7 +485,7 @@ if(NOT IOS AND NOT EXISTS "${ECHO_SUPPRESSOR_MODEL}")
     message(STATUS "[mello] Echo-suppressor model downloaded")
 endif()
 
-install(TARGETS mello rnnoise webrtc_audio_processing
+install(TARGETS mello rnnoise webrtc_audio_processing webrtc_neteq
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin

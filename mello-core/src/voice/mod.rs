@@ -1,3 +1,4 @@
+pub(crate) mod frame;
 mod mesh;
 pub(crate) mod send_sink;
 
@@ -595,6 +596,33 @@ impl VoiceManager {
         }
     }
 
+    /// Playback volume of one remote member (spec 10 section 8): 0.0 silent,
+    /// 1.0 unity, up to 2.0. libmello keeps it for a member who is not
+    /// talking yet and across leave and rejoin.
+    pub fn set_peer_volume(&mut self, peer_id: &str, volume: f32) {
+        if self.ctx.is_null() {
+            return;
+        }
+        let Ok(peer) = CString::new(peer_id) else {
+            log::warn!("Peer volume: invalid peer id {:?}", peer_id);
+            return;
+        };
+        unsafe {
+            mello_sys::mello_voice_set_peer_volume(self.ctx, peer.as_ptr(), volume);
+        }
+        log::info!("Peer volume: {} = {:.2}", peer_id, volume);
+    }
+
+    /// Destroy one member's receive state (its NetEQ) in libmello.
+    fn remove_receive_peer(&self, peer_id: &str) {
+        if self.ctx.is_null() {
+            return;
+        }
+        if let Ok(peer) = CString::new(peer_id) {
+            unsafe { mello_sys::mello_voice_remove_peer(self.ctx, peer.as_ptr()) };
+        }
+    }
+
     /// Input sensitivity of the speech gate. `auto`: track the noise floor.
     /// Otherwise the gate opens at `db` dBFS of raw microphone level. The
     /// level is stored in both modes, so turning auto off applies it at once.
@@ -811,10 +839,11 @@ impl VoiceManager {
     }
 
     /// Late-playout underruns in the last [`UNDERRUN_WINDOW`], the voice health
-    /// signal. Reads `rx_late_underruns`: playback callbacks in which a remote
-    /// stream ran short while packets for it waited in the jitter buffer.
-    /// `underrun_count` is not used: it counts only callbacks with no remote
-    /// audio at all, and stops once a stream conceals with PLC.
+    /// signal. Reads `rx_late_underruns`: 10 ms frames in which a remote
+    /// peer's NetEQ played concealment (expand) while packets for it waited
+    /// in its buffer (spec 10 section 5.4). `underrun_count` is not used: it
+    /// counts mixes with no remote audio at all, which includes a silent
+    /// peer's muted state.
     fn windowed_late_underruns(&mut self, stats: &mello_sys::MelloDebugStats) -> i32 {
         let total = i32::try_from(stats.rx_late_underruns).unwrap_or(i32::MAX);
         self.windowed_underrun(total, stats.incoming_streams)
@@ -886,6 +915,7 @@ impl VoiceManager {
     /// Called when a member leaves the crew
     pub fn on_member_left(&mut self, member_id: &str) {
         self.mesh.destroy_peer(member_id);
+        self.remove_receive_peer(member_id);
         let _ = self.event_tx.send(Event::VoiceDisconnected {
             peer_id: member_id.to_string(),
         });
@@ -1006,7 +1036,7 @@ impl VoiceManager {
             if self.capture_mode {
                 log::info!(
                     target: "audio_stats",
-                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} ur5s={} rtp_recv={} delay_ms={:.1} rtt_ms={:.1}",
+                    "in={:.3} vad={:.3} rnn={:.3} spk={} cap={} mute={} deaf={} pkts={} streams={} underrun={} ur5s={} rtp_recv={} delay_ms={:.1} target_ms={:.1} rtt_ms={:.1}",
                     stats.input_level,
                     stats.silero_vad_prob,
                     stats.rnnoise_prob,
@@ -1020,6 +1050,7 @@ impl VoiceManager {
                     underrun_5s,
                     stats.rtp_recv_total,
                     stats.pipeline_delay_ms,
+                    stats.rx_target_delay_ms,
                     rtt,
                 );
             }
@@ -1087,11 +1118,16 @@ impl VoiceManager {
             }
 
             let pkt = &buf[..size as usize];
+            // P2P and the mic test carry the voice frame: sequence and RTP
+            // timestamp, then Opus (spec 10 section 4.2).
+            let voice_frame = frame::from_get_packet(pkt, timestamp);
 
             if self.active {
                 match self.mode {
                     VoiceMode::P2P => {
-                        self.mesh.broadcast_audio(pkt);
+                        if let Some(f) = &voice_frame {
+                            self.mesh.broadcast_audio(f);
+                        }
                     }
                     VoiceMode::SFU => {
                         // Only when the packet sink could not be set.
@@ -1111,13 +1147,15 @@ impl VoiceManager {
             }
 
             if self.loopback {
-                unsafe {
-                    mello_sys::mello_voice_feed_packet(
-                        self.ctx,
-                        loopback_id.as_ptr(),
-                        pkt.as_ptr(),
-                        size,
-                    );
+                if let Some(f) = &voice_frame {
+                    unsafe {
+                        mello_sys::mello_voice_feed_packet(
+                            self.ctx,
+                            loopback_id.as_ptr(),
+                            f.as_ptr(),
+                            f.len() as i32,
+                        );
+                    }
                 }
             }
         }
@@ -1133,20 +1171,22 @@ impl VoiceManager {
                     self.mesh.poll_incoming(self.ctx);
                 }
                 VoiceMode::SFU => {
-                    // Audio arrives via AudioTrackData events (RTP track callback),
-                    // signaling events (member join/leave/disconnect) also come here.
+                    // Audio arrives via AudioRtp events (RTP track callback)
+                    // only while the direct voice sink is not set. Signaling
+                    // events (member join/leave/disconnect) also come here.
                     if let Some(ref conn) = self.sfu_connection {
                         for event in conn.poll_events() {
                             match event {
-                                SfuEvent::AudioTrackData { sender_id, data } => {
+                                SfuEvent::AudioRtp { sender_id, rtp } => {
                                     let peer_id =
                                         CString::new(sender_id.as_str()).unwrap_or_default();
                                     unsafe {
-                                        mello_sys::mello_voice_feed_packet(
+                                        mello_sys::mello_voice_feed_rtp(
                                             self.ctx,
                                             peer_id.as_ptr(),
-                                            data.as_ptr(),
-                                            data.len() as i32,
+                                            rtp.as_ptr(),
+                                            rtp.len() as i32,
+                                            -1,
                                         );
                                     }
                                 }
@@ -1158,6 +1198,9 @@ impl VoiceManager {
                                 }
                                 SfuEvent::MemberLeft { user_id, reason } => {
                                     log::info!("SFU: member left voice: {} ({})", user_id, reason);
+                                    // The SFU names each voice track after its
+                                    // sender's user id.
+                                    self.remove_receive_peer(&user_id);
                                     let _ = self.event_tx.send(Event::VoiceMembershipChanged {
                                         crew_id: self.sfu_crew_id.clone(),
                                     });
@@ -1206,8 +1249,9 @@ mod tests {
         unsafe { std::mem::zeroed() }
     }
 
-    /// Late audio must reach the windowed health. Once a stream conceals with
-    /// PLC, `underrun_count` stops moving; `rx_late_underruns` keeps counting.
+    /// Late audio must reach the windowed health. While a peer's NetEQ
+    /// conceals, it still produces audio, so `underrun_count` does not move;
+    /// `rx_late_underruns` counts the late frames.
     #[test]
     fn windowed_health_reads_late_playout_underruns() {
         let (event_tx, _events) = std_mpsc::channel();

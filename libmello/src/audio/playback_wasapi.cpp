@@ -6,6 +6,7 @@
 #include <vector>
 #include <algorithm>
 #include <cmath>
+#include <cstring>
 #include <mmreg.h>
 #include <ks.h>
 #include <ksmedia.h>
@@ -149,9 +150,15 @@ bool WasapiPlayback::start() {
         running_ = false;
         return false;
     }
-    src_fifo_.clear();
-    src_fifo_pos_ = 0.0;
-    render_src_i16_.clear();
+    resampler_.reset();
+    if (device_sample_rate_ != sample_rate_) {
+        resampler_ = std::make_unique<StreamResampler>(
+            static_cast<int>(sample_rate_), static_cast<int>(device_sample_rate_),
+            static_cast<int>(input_channels_));
+        MELLO_LOG_INFO("playback", "sinc resampler %u -> %u Hz, %u ch, blocks %zu -> %zu frames",
+                       sample_rate_, device_sample_rate_, input_channels_,
+                       resampler_->in_block_frames(), resampler_->out_block_frames());
+    }
 
     thread_ = std::thread(&WasapiPlayback::playback_thread, this);
     MELLO_LOG_INFO("playback", "started");
@@ -190,23 +197,19 @@ void WasapiPlayback::playback_thread() {
         HRESULT hr = render_client_->GetBuffer(available, &data);
         if (FAILED(hr)) continue;
 
-        const size_t samples_needed =
-            static_cast<size_t>(available) * static_cast<size_t>(input_channels_);
+        const size_t in_ch = static_cast<size_t>(input_channels_);
+        const size_t samples_needed = static_cast<size_t>(available) * in_ch;
         mono_buf.assign(samples_needed, 0);
 
-        if (device_sample_rate_ == sample_rate_) {
-            const size_t samples_needed =
-                static_cast<size_t>(available) * static_cast<size_t>(input_channels_);
-            mono_buf.assign(samples_needed, 0);
-            size_t got = 0;
-            if (render_source_) {
-                got = render_source_(mono_buf.data(), samples_needed);
-            } else {
-                got = ring_.read(mono_buf.data(), samples_needed);
-            }
-            if (got < samples_needed) {
-                std::memset(&mono_buf[got], 0, (samples_needed - got) * sizeof(int16_t));
-            }
+        // The render source (voice mix) or the feed() ring (stream audio).
+        auto pull_source = [this](int16_t* dst, size_t count) -> size_t {
+            const size_t got = render_source_ ? render_source_(dst, count) : ring_.read(dst, count);
+            if (got < count) std::memset(dst + got, 0, (count - got) * sizeof(int16_t));
+            return got;
+        };
+
+        if (!resampler_) {
+            const size_t got = pull_source(mono_buf.data(), samples_needed);
             if (pb_log_ctr < 20 || (pb_log_ctr % 2000) == 0) {
                 MELLO_LOG_DEBUG(
                     "playback",
@@ -219,82 +222,67 @@ void WasapiPlayback::playback_thread() {
                     render_source_ ? "mix" : "ring");
             }
         } else {
-            const double step =
-                static_cast<double>(sample_rate_) / static_cast<double>(device_sample_rate_);
-            const size_t min_src_needed =
-                static_cast<size_t>(std::ceil(src_fifo_pos_ + (available + 1) * step)) + 2;
-
-            while (src_fifo_.size() < min_src_needed) {
-                const size_t request =
-                    std::max<size_t>(480, static_cast<size_t>(std::ceil(available * step)) + 8);
-                render_src_i16_.assign(request, 0);
-                size_t got = 0;
-                if (render_source_) {
-                    got = render_source_(render_src_i16_.data(), request);
-                } else {
-                    got = ring_.read(render_src_i16_.data(), request);
+            // Feed the sinc resampler whole internal blocks (10 ms at 48 kHz,
+            // the mixer's frame) until it holds this callback's frames. The
+            // rest stays in the resampler for the next callback.
+            const size_t block = resampler_->in_block_frames();
+            while (resampler_->available() < available) {
+                render_src_i16_.resize(block * in_ch);
+                pull_source(render_src_i16_.data(), block * in_ch);
+                render_src_f32_.resize(block * in_ch);
+                for (size_t i = 0; i < block * in_ch; ++i) {
+                    render_src_f32_[i] = static_cast<float>(render_src_i16_[i]) / 32768.0f;
                 }
-                if (got < request) {
-                    std::memset(
-                        &render_src_i16_[got], 0, (request - got) * sizeof(int16_t));
-                }
-                for (size_t i = 0; i < request; ++i) {
-                    src_fifo_.push_back(static_cast<float>(render_src_i16_[i]) / 32768.0f);
-                }
+                resampler_->push(render_src_f32_.data(), block);
             }
-
-            for (UINT32 i = 0; i < available; ++i) {
-                double src_pos = src_fifo_pos_ + static_cast<double>(i) * step;
-                size_t idx = static_cast<size_t>(src_pos);
-                double frac = src_pos - static_cast<double>(idx);
-                float s0 = src_fifo_[idx];
-                float s1 = (idx + 1 < src_fifo_.size()) ? src_fifo_[idx + 1] : s0;
-                float sample = std::clamp(s0 + static_cast<float>((s1 - s0) * frac), -1.0f, 1.0f);
-                mono_buf[i] = static_cast<int16_t>(sample * 32767.0f);
-            }
-
-            src_fifo_pos_ += static_cast<double>(available) * step;
-            size_t consumed = static_cast<size_t>(src_fifo_pos_);
-            if (consumed > 0) {
-                if (consumed >= src_fifo_.size()) {
-                    src_fifo_.clear();
-                } else {
-                    src_fifo_.erase(src_fifo_.begin(), src_fifo_.begin() + consumed);
-                }
-                src_fifo_pos_ -= static_cast<double>(consumed);
+            render_dst_f32_.resize(samples_needed);
+            resampler_->pull(render_dst_f32_.data(), available);
+            for (size_t i = 0; i < samples_needed; ++i) {
+                const float v = std::clamp(render_dst_f32_[i] * 32768.0f, -32768.0f, 32767.0f);
+                mono_buf[i] = static_cast<int16_t>(std::lrintf(v));
             }
 
             if (pb_log_ctr < 20 || (pb_log_ctr % 2000) == 0) {
                 MELLO_LOG_DEBUG(
                     "playback",
-                    "render: avail=%u internal_rate=%u device_rate=%u step=%.4f fifo=%zu",
+                    "render: avail=%u internal_rate=%u device_rate=%u ch=%u buffered=%zu",
                     available,
                     sample_rate_,
                     device_sample_rate_,
-                    step,
-                    src_fifo_.size());
+                    input_channels_,
+                    resampler_->available());
             }
         }
         pb_log_ctr++;
 
+        // Channel map: mono goes to every device channel. Stereo goes to the
+        // first two (front left and right); a surround device gets silence
+        // on the rest, the standard stereo-on-surround placement. A mono
+        // device gets the downmix.
+        auto device_sample = [&](UINT32 frame, uint32_t dev_ch) -> int16_t {
+            if (input_channels_ == 1) return mono_buf[frame];
+            const size_t base = static_cast<size_t>(frame) * input_channels_;
+            if (device_channels_ == 1) {
+                // A mono device plays the downmix of the first two channels.
+                return static_cast<int16_t>((static_cast<int32_t>(mono_buf[base]) +
+                                             static_cast<int32_t>(mono_buf[base + 1])) / 2);
+            }
+            if (dev_ch >= input_channels_) return 0;
+            return mono_buf[static_cast<size_t>(frame) * input_channels_ + dev_ch];
+        };
         if (device_float_format_) {
             float* fdata = reinterpret_cast<float*>(data);
             for (UINT32 i = 0; i < available; ++i) {
-                for (uint32_t ch = 0; ch < device_channels_; ++ch) {
-                    const uint32_t src_ch = std::min(ch, input_channels_ - 1);
-                    const int16_t sample_i16 =
-                        mono_buf[static_cast<size_t>(i) * input_channels_ + src_ch];
-                    fdata[i * device_channels_ + ch] =
-                        static_cast<float>(sample_i16) / 32768.0f;
+                for (uint32_t dev_ch = 0; dev_ch < device_channels_; ++dev_ch) {
+                    fdata[i * device_channels_ + dev_ch] =
+                        static_cast<float>(device_sample(i, dev_ch)) / 32768.0f;
                 }
             }
         } else {
             int16_t* idata = reinterpret_cast<int16_t*>(data);
             for (UINT32 i = 0; i < available; ++i) {
-                for (uint32_t ch = 0; ch < device_channels_; ++ch) {
-                    const uint32_t src_ch = std::min(ch, input_channels_ - 1);
-                    idata[i * device_channels_ + ch] =
-                        mono_buf[static_cast<size_t>(i) * input_channels_ + src_ch];
+                for (uint32_t dev_ch = 0; dev_ch < device_channels_; ++dev_ch) {
+                    idata[i * device_channels_ + dev_ch] = device_sample(i, dev_ch);
                 }
             }
         }

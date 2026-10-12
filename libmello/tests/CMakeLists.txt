@@ -7,7 +7,7 @@ add_executable(mello_tests
     test_echo_suppressor.cpp
     test_audio_pipeline.cpp
     test_vpio_duplex.cpp
-    test_jitter_buffer.cpp
+    test_voice_playout.cpp
     test_voice_receive.cpp
     test_voice_capture.cpp
     test_voice_packet_sink.cpp
@@ -22,9 +22,7 @@ add_executable(mello_tests
     test_capture_wgc_restart.cpp
 )
 
-# Separate target: mello_tests currently fails to build (test_jitter_buffer.cpp
-# predates the JitterPopResult API change) — keep process-enum coverage running
-# until that suite is repaired.
+# Separate target: process enumeration coverage, independent of mello_tests.
 add_executable(mello_procenum_tests
     test_process_enum.cpp
 )
@@ -44,6 +42,11 @@ target_link_libraries(mello_tests PRIVATE
     mello
     GTest::gtest
     GTest::gtest_main
+)
+# The speech corpus of the voice quality gate, for receive tests that need
+# real speech (Opus in-band FEC is coded for speech, not for a tone).
+target_compile_definitions(mello_tests PRIVATE
+    MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
 )
 
 # The D3D9Ex share spike links d3d9 directly. Test-only: production code
