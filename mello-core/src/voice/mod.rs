@@ -166,6 +166,18 @@ impl VoiceManager {
         Self::with_context(std::ptr::null_mut(), event_tx, false)
     }
 
+    /// A manager with a real libmello context on the device-free audio
+    /// backend (`MELLO_AUDIO_BACKEND=test`): no device opens and no device
+    /// thread starts, but every voice call reaches libmello.
+    #[cfg(test)]
+    pub(crate) fn with_test_audio_backend(event_tx: std_mpsc::Sender<Event>) -> Self {
+        static SELECT: std::sync::Once = std::sync::Once::new();
+        SELECT.call_once(|| std::env::set_var("MELLO_AUDIO_BACKEND", "test"));
+        let ctx = unsafe { mello_sys::mello_init() };
+        assert!(!ctx.is_null(), "mello_init on the test backend");
+        Self::with_context(ctx, event_tx, false)
+    }
+
     fn with_context(
         ctx: *mut mello_sys::MelloContext,
         event_tx: std_mpsc::Sender<Event>,
@@ -519,6 +531,19 @@ impl VoiceManager {
         }
     }
 
+    /// Input sensitivity of the speech gate. `auto`: track the noise floor.
+    /// Otherwise the gate opens at `db` dBFS of raw microphone level. The
+    /// level is stored in both modes, so turning auto off applies it at once.
+    pub fn set_input_sensitivity(&mut self, auto: bool, db: f32) {
+        if !self.ctx.is_null() {
+            unsafe {
+                mello_sys::mello_voice_set_input_sensitivity(self.ctx, db);
+                mello_sys::mello_voice_set_input_sensitivity_auto(self.ctx, auto);
+            }
+        }
+        log::info!("Input sensitivity: auto={} db={:.1}", auto, db);
+    }
+
     pub fn set_loopback(&mut self, enabled: bool) {
         if self.ctx.is_null() {
             return;
@@ -712,6 +737,16 @@ impl VoiceManager {
         );
     }
 
+    /// Late-playout underruns in the last [`UNDERRUN_WINDOW`], the voice health
+    /// signal. Reads `rx_late_underruns`: playback callbacks in which a remote
+    /// stream ran short while packets for it waited in the jitter buffer.
+    /// `underrun_count` is not used: it counts only callbacks with no remote
+    /// audio at all, and stops once a stream conceals with PLC.
+    fn windowed_late_underruns(&mut self, stats: &mello_sys::MelloDebugStats) -> i32 {
+        let total = i32::try_from(stats.rx_late_underruns).unwrap_or(i32::MAX);
+        self.windowed_underrun(total, stats.incoming_streams)
+    }
+
     /// Underruns observed in the last [`UNDERRUN_WINDOW`], counting only ticks
     /// where audio was incoming (`streams > 0`). Mirrors libmello's peer-gated
     /// warning logic so a quiet/solo session reads ~0 instead of the lifetime
@@ -883,7 +918,7 @@ impl VoiceManager {
                 mello_sys::mello_get_debug_stats(self.ctx, &mut stats);
             }
             let rtt = self.sfu_connection.as_ref().map_or(0.0, |c| c.rtt_ms());
-            let underrun_5s = self.windowed_underrun(stats.underrun_count, stats.incoming_streams);
+            let underrun_5s = self.windowed_late_underruns(&stats);
 
             // Diagnostic capture: persist the same stats to the log so a
             // user-uploaded repro shows the sender/receiver-side timeline.
@@ -939,13 +974,16 @@ impl VoiceManager {
         let mut buf = [0u8; PACKET_BUF_SIZE];
         let loopback_id = std::ffi::CString::new("loopback").unwrap();
 
-        // Read outgoing audio packets from capture
+        // Read outgoing audio packets from capture, each with its media time
+        // (48 kHz capture clock) for the RTP timestamp.
         loop {
+            let mut timestamp: u32 = 0;
             let size = unsafe {
-                mello_sys::mello_voice_get_packet(
+                mello_sys::mello_voice_get_packet_with_timestamp(
                     self.ctx,
                     buf.as_mut_ptr(),
                     PACKET_BUF_SIZE as i32,
+                    &mut timestamp,
                 )
             };
             if size <= 0 {
@@ -963,7 +1001,7 @@ impl VoiceManager {
                         if let Some(ref conn) = self.sfu_connection {
                             // Strip the 4-byte LE sequence header; RTP handles sequencing
                             let opus_payload = if pkt.len() > 4 { &pkt[4..] } else { pkt };
-                            match conn.send_audio(opus_payload) {
+                            match conn.send_audio(opus_payload, timestamp) {
                                 Ok(()) => {}
                                 Err(e) => {
                                     log::warn!("SFU voice send failed: {}", e);
@@ -1053,5 +1091,35 @@ impl Drop for VoiceManager {
                 mello_sys::mello_set_log_callback(None, std::ptr::null_mut());
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn stats() -> mello_sys::MelloDebugStats {
+        // SAFETY: MelloDebugStats is a plain C struct; all-zero is valid.
+        unsafe { std::mem::zeroed() }
+    }
+
+    /// Late audio must reach the windowed health. Once a stream conceals with
+    /// PLC, `underrun_count` stops moving; `rx_late_underruns` keeps counting.
+    #[test]
+    fn windowed_health_reads_late_playout_underruns() {
+        let (event_tx, _events) = std_mpsc::channel();
+        let mut voice = VoiceManager::without_audio(event_tx);
+
+        let mut s = stats();
+        s.incoming_streams = 1;
+        s.underrun_count = 125; // callbacks before the stream primed
+        assert_eq!(
+            voice.windowed_late_underruns(&s),
+            0,
+            "the first sample seeds the baseline"
+        );
+
+        s.rx_late_underruns = 7;
+        assert_eq!(voice.windowed_late_underruns(&s), 7);
     }
 }

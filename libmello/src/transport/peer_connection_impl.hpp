@@ -40,6 +40,9 @@ public:
     bool send_unreliable(const uint8_t* data, int size);
     bool send_reliable(const uint8_t* data, int size);
     bool send_audio(const uint8_t* data, int size);
+    // One Opus frame with its media time in 48 kHz samples. The RTP
+    // timestamp is the packetizer's start timestamp plus `timestamp`.
+    bool send_audio_frame(const uint8_t* data, int size, uint32_t timestamp);
     bool is_connected() const;
     bool is_unreliable_open() const;
     bool is_reliable_open() const;
@@ -132,6 +135,10 @@ private:
     bool replace_video_track_for_answer(rtc::Description::Video video);
     bool replace_audio_track_for_answer(rtc::Description::Audio audio);
     void wire_opus_send_packetizer(const std::shared_ptr<rtc::Track>& track);
+    void attach_opus_send_packetizer(const std::shared_ptr<rtc::Track>& track,
+                                     uint32_t ssrc,
+                                     const std::string& cname);
+    bool send_audio_message(const uint8_t* data, int size, const uint32_t* timestamp);
     void wire_video_track_callbacks(uint64_t generation);
     void try_start_video_pipeline(
         uint64_t expected_pc_generation = 0,
@@ -165,6 +172,9 @@ private:
     std::string video_cname_;
     uint32_t audio_ssrc_ = 0;
     std::string audio_cname_;
+    // Start timestamp of the send track's RTP packetizer (random per
+    // packetizer). send_audio_frame adds the frame's media time to it.
+    std::atomic<uint32_t> audio_rtp_start_timestamp_{0};
     uint64_t pacing_target_bps_ = 4'000'000;
     uint32_t receive_target_bps_ = 4'000'000;
     // Remote SDP advertised the TWCC RTP header extension on stream video.

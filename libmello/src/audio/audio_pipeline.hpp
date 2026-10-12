@@ -33,6 +33,9 @@ namespace mello::audio {
 struct EncodedPacket {
     std::vector<uint8_t> data;
     uint32_t sequence;
+    // Media time of the frame's first sample: the 48 kHz capture sample
+    // index (see AudioPipeline::capture_timestamp_). The RTP timestamp.
+    uint32_t timestamp;
 };
 
 /// Receive-path counters for mello_get_debug_stats (voice quality gate).
@@ -42,8 +45,11 @@ struct EncodedPacket {
 struct ReceiveStats {
     uint32_t frames_decoded = 0;
     uint32_t decode_errors = 0;
+    // One concealment frame per lost packet: FEC from the next packet when
+    // it is buffered (conceal_gap_fec), else PLC (conceal_missing_plc).
     uint32_t conceal_missing_plc = 0;
     uint32_t conceal_gap_fec = 0;
+    // PLC for a packet that arrived but failed to decode.
     uint32_t conceal_gap_plc = 0;
     uint32_t conceal_fill_plc = 0;
     uint32_t jitter_missing = 0;
@@ -53,6 +59,9 @@ struct ReceiveStats {
     int32_t jitter_buffered_packets = 0;
     float jitter_target_delay_ms = 0.0f;
     float playout_buffer_ms = 0.0f;
+    // Playback callbacks in which a stream's decoded audio ran short while
+    // its jitter buffer held packets for it (late audio).
+    uint32_t late_underruns = 0;
 };
 
 enum class NsMode {
@@ -81,6 +90,19 @@ public:
     void set_mute(bool muted);
     void set_deafen(bool deafened);
     void set_push_to_talk(bool enabled);
+    /// Input sensitivity (spec 10 section 4.1). Auto (the default): the RMS
+    /// speech gate tracks the ambient noise floor. Manual: the gate opens
+    /// when the raw microphone frame RMS reaches `db` dBFS (clamped to
+    /// -100..0). Silero VAD confirms speech at VAD_THRESHOLD in both modes.
+    /// Any thread.
+    void set_input_sensitivity(float db);
+    void set_input_sensitivity_auto(bool enabled);
+    bool input_sensitivity_auto() const { return sensitivity_auto_.load(std::memory_order_relaxed); }
+    float input_sensitivity_db() const { return sensitivity_db_.load(std::memory_order_relaxed); }
+    /// Gate threshold (dBFS) that the last captured frame was compared with.
+    float input_gate_dbfs() const;
+    /// Frames that passed the RMS gate (candidate speech), lifetime.
+    uint32_t gate_candidate_frames() const { return gate_candidate_frames_.load(std::memory_order_relaxed); }
     void set_input_volume(float vol) { input_gain_.store(vol, std::memory_order_relaxed); }
     void set_output_volume(float vol) { output_gain_.store(vol, std::memory_order_relaxed); }
     float input_volume() const { return input_gain_.load(std::memory_order_relaxed); }
@@ -110,7 +132,7 @@ public:
     bool is_muted() const { return muted_; }
     bool is_deafened() const { return deafened_; }
 
-    int get_packet(uint8_t* buffer, int buffer_size);
+    int get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp = nullptr);
     void feed_packet(const char* peer_id, const uint8_t* data, int size);
 
     bool is_capturing() const { return capturing_; }
@@ -161,7 +183,7 @@ public:
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
-    void process_and_encode_frame(int16_t* frame);
+    void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
     void reset_speech_gate_state();
     void clear_remote_streams();
     /// (Re)build the capture+playback backend pair for the desired
@@ -209,7 +231,7 @@ private:
     VoiceActivityDetector vad_;
     std::unordered_map<std::string, OpusDec> decoders_;
     std::unordered_map<std::string, bool> decoder_primed_;
-    std::unordered_map<std::string, uint32_t> last_decoded_seq_;
+    std::unordered_map<std::string, int64_t> last_decoded_seq_;
     std::unordered_map<std::string, JitterBuffer> jitter_buffers_;
     std::unique_ptr<AudioDeviceEnumerator> device_enum_;
 
@@ -226,14 +248,24 @@ private:
     std::atomic<uint32_t> rx_conceal_gap_fec_{0};
     std::atomic<uint32_t> rx_conceal_gap_plc_{0};
     std::atomic<uint32_t> rx_conceal_fill_plc_{0};
+    std::atomic<uint32_t> rx_late_underruns_{0};
 
-    // Windowed underrun health (audio-thread only; no atomics needed).
+    // Windowed late-playout health (audio-thread only; no atomics needed).
     int underrun_window_count_ = 0;
     int64_t underrun_window_start_ms_ = 0;
     int64_t last_underrun_warn_ms_ = 0;
 
     std::vector<int16_t> capture_accum_;
-    std::deque<std::array<int16_t, FRAME_SIZE>> speech_pre_roll_;
+    struct PreRollFrame {
+        uint32_t timestamp;
+        std::array<int16_t, FRAME_SIZE> pcm;
+    };
+    std::deque<PreRollFrame> speech_pre_roll_;
+    // 48 kHz sample index of the next captured frame. Counts every frame
+    // that reaches on_captured_audio, encoded or not, so a gap from the
+    // speech gate or mute advances the RTP timestamp like DTX instead of
+    // looking like a stall. Guarded by accum_mutex_ (capture thread).
+    uint32_t capture_timestamp_ = 0;
     std::mutex accum_mutex_;
 
     std::queue<EncodedPacket> outgoing_;
@@ -263,6 +295,10 @@ private:
     std::string capture_device_id_;
     std::string playback_device_id_;
     float noise_floor_rms_ = 0.001f;
+    std::atomic<bool> sensitivity_auto_{true};
+    std::atomic<float> sensitivity_db_{-40.0f};
+    std::atomic<float> gate_threshold_rms_{0.002f};
+    std::atomic<uint32_t> gate_candidate_frames_{0};
     int candidate_hangover_frames_ = 0;
     int speech_hangover_frames_ = 0;
     bool speech_gate_active_ = false;

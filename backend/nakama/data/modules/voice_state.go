@@ -32,6 +32,11 @@ type VoiceRoom struct {
 	ChannelID string                       `json:"channel_id"`
 	CrewID    string                       `json:"crew_id"`
 	Members   map[string]*VoiceMemberState `json:"members"` // keyed by user_id
+	// SFURegion is the SFU region of the room's voice session. The first SFU
+	// token for the room sets it; every later member gets the same region,
+	// because SFU instances do not relay between regions. It goes away with
+	// the room when the last member leaves.
+	SFURegion string `json:"sfu_region,omitempty"`
 }
 
 // VoiceSnapshot is a read-only view returned to callers.
@@ -226,6 +231,9 @@ type voiceJoinParams struct {
 	MaxMembers  int
 	// IsGuest marks a browser participant joining from an invite link.
 	IsGuest bool
+	// PreferredRegion is the client's SFU region choice (voice_join
+	// preferred_region). Optional; see voiceRoomSFURegion.
+	PreferredRegion string
 }
 
 // recordLedgerSession opens or extends the crew's ledger voice session for a
@@ -345,10 +353,33 @@ func joinVoiceRoom(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	return GetVoiceChannelSnapshot(p.ChannelID), nil
 }
 
+// voiceRoomSFURegion returns the SFU region for a member of the voice room on
+// channelID. The first member to get a token picks it with selectSFURegion
+// (preferred, else SFU_DEFAULT_REGION, else eu-west) and the room keeps it.
+// Later members get the room's region whatever they prefer: every member of a
+// voice session must reach the same SFU instance.
+func voiceRoomSFURegion(channelID, preferred string) string {
+	voiceRoomsMu.Lock()
+	defer voiceRoomsMu.Unlock()
+	room, ok := voiceRooms[channelID]
+	if ok && room.SFURegion != "" {
+		return room.SFURegion
+	}
+	region := selectSFURegion(preferred)
+	if ok {
+		room.SFURegion = region
+	}
+	return region
+}
+
 // issueVoiceSFUToken signs a short-lived SFU token for a voice participant.
 // Returns ok=false when signing fails, leaving the caller to fall back to P2P.
 func issueVoiceSFUToken(logger runtime.Logger, p voiceJoinParams) (endpoint, token string, ok bool) {
-	region := selectSFURegion("")
+	region := voiceRoomSFURegion(p.ChannelID, p.PreferredRegion)
+	if p.PreferredRegion != "" && p.PreferredRegion != region {
+		logger.Info("Voice SFU region: preferred=%q not used, room region=%s (channel=%s)",
+			p.PreferredRegion, region, p.ChannelID)
+	}
 	endpoint = sfuEndpointForRegion(region)
 	voiceSessionKey := fmt.Sprintf("voice:%s:%s", p.CrewID, p.ChannelID)
 
@@ -379,6 +410,9 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	var req struct {
 		CrewID    string `json:"crew_id"`
 		ChannelID string `json:"channel_id"`
+		// PreferredRegion is optional: an SFU region from sfu_routing.go.
+		// An empty or unknown value falls back (selectSFURegion).
+		PreferredRegion string `json:"preferred_region"`
 	}
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
@@ -407,12 +441,13 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	}
 
 	params := voiceJoinParams{
-		CrewID:      req.CrewID,
-		ChannelID:   channelID,
-		ChannelName: channelName,
-		UserID:      userID,
-		Username:    resolveUsername(ctx, nk, userID),
-		MaxMembers:  maxMembers,
+		CrewID:          req.CrewID,
+		ChannelID:       channelID,
+		ChannelName:     channelName,
+		UserID:          userID,
+		Username:        resolveUsername(ctx, nk, userID),
+		MaxMembers:      maxMembers,
+		PreferredRegion: req.PreferredRegion,
 	}
 
 	snap, err := joinVoiceRoom(ctx, logger, nk, params)

@@ -8,6 +8,8 @@ add_executable(mello_tests
     test_audio_pipeline.cpp
     test_vpio_duplex.cpp
     test_jitter_buffer.cpp
+    test_voice_receive.cpp
+    test_voice_capture.cpp
     test_vad.cpp
     test_video_pipeline.cpp
     test_stream_audio_pipeline.cpp
@@ -66,6 +68,7 @@ add_executable(mello_rtp_tests
     test_rtp_video_receiver_session.cpp
     test_rtp_video_sender.cpp
     test_peer_rtp_roles.cpp
+    test_voice_rtp_timestamps.cpp
     test_twcc.cpp
     test_ulpfec.cpp
 )

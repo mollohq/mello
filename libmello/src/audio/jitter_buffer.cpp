@@ -5,11 +5,26 @@
 
 namespace mello::audio {
 
+int64_t SequenceUnwrapper::unwrap(uint32_t sequence) {
+    const uint16_t low = static_cast<uint16_t>(sequence & 0xFFFFu);
+    if (!has_last_) {
+        has_last_ = true;
+        last_ = low;
+        return last_;
+    }
+    // Signed 16-bit distance from the previous value: wrap-safe.
+    const auto step = static_cast<int16_t>(
+        static_cast<uint16_t>(low - static_cast<uint16_t>(last_ & 0xFFFF)));
+    last_ += step;
+    return last_;
+}
+
 JitterBuffer::JitterBuffer() = default;
 
 void JitterBuffer::reset() {
     std::lock_guard<std::mutex> lock(mutex_);
     reset_locked();
+    unwrapper_.reset();
 }
 
 void JitterBuffer::reset_locked() {
@@ -22,6 +37,8 @@ void JitterBuffer::reset_locked() {
     stream_start_ms_ = 0;
     last_arrival_ = 0;
     jitter_estimate_ = 0.0f;
+    missing_run_ = 0;
+    has_last_push_seq_ = false;
 }
 
 int64_t JitterBuffer::now_ms() const {
@@ -29,9 +46,12 @@ int64_t JitterBuffer::now_ms() const {
     return util::steady_now_ms();
 }
 
-void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
+void JitterBuffer::push(uint32_t raw_sequence, const uint8_t* data, int size) {
     std::lock_guard<std::mutex> lock(mutex_);
 
+    // Every comparison below is on the extended sequence, so the 16-bit RTP
+    // wrap is an ordinary step of one.
+    const int64_t sequence = unwrapper_.unwrap(raw_sequence);
     int64_t arrival = now_ms();
 
     if (first_packet_) {
@@ -42,12 +62,14 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
         last_arrival_ = arrival;
     }
 
-    // Detect sequence discontinuity (track re-wire) and reset
+    // Detect sequence discontinuity (track re-wire, sender restart) and
+    // reset. Ahead: a jump past SEQ_DISCONTINUITY_THRESHOLD. Behind: more
+    // than the buffer holds (JITTER_MAX_PACKETS, 1 s); a late packet of this
+    // stream is never that late, so it is a new stream, not a late drop.
+    // The unwrapper keeps its state: the new stream continues from here.
     if (!first_packet_ && packets_.empty()) {
-        uint32_t gap = (sequence > next_seq_)
-            ? sequence - next_seq_
-            : next_seq_ - sequence;
-        if (gap > SEQ_DISCONTINUITY_THRESHOLD) {
+        const int64_t ahead = sequence - next_seq_;
+        if (ahead > SEQ_DISCONTINUITY_THRESHOLD || ahead < -JITTER_MAX_PACKETS) {
             discontinuity_resets_++;
             reset_locked();
             next_seq_ = sequence;
@@ -58,21 +80,33 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
         }
     }
 
-    if (last_arrival_ > 0 && arrival > last_arrival_) {
-        float delta = static_cast<float>(arrival - last_arrival_);
-        float deviation = std::abs(delta - 20.0f);
+    // Interarrival jitter on the media clock (RFC 3550 section 6.4.1): the
+    // arrival spacing against the 20 ms per sequence step the sender used.
+    // Lost packets therefore add no jitter, and neither does an outage: 5 s
+    // of silence after 250 lost packets is the expected spacing, not 5 s of
+    // jitter that would raise the target delay to its maximum.
+    if (last_arrival_ > 0 && arrival > last_arrival_ && has_last_push_seq_) {
+        const float delta = static_cast<float>(arrival - last_arrival_);
+        const float expected = 20.0f * static_cast<float>(sequence - last_push_seq_);
+        const float deviation = std::abs(delta - expected);
         jitter_estimate_ = jitter_estimate_ * 0.95f + deviation * 0.05f;
     }
     last_arrival_ = arrival;
+    last_push_seq_ = sequence;
+    has_last_push_seq_ = true;
+
+    // Older than the playout point: its slot was already played or
+    // concealed. Reject it also when the buffer is empty, or it sits at the
+    // front and hides the next loss from Missing detection. Checked before
+    // the overflow eviction, so a late packet never evicts a live one.
+    if (sequence < next_seq_) {
+        dropped_late_++;
+        return;
+    }
 
     if (packets_.size() >= JITTER_MAX_PACKETS) {
         packets_.erase(packets_.begin());
         dropped_overflow_++;
-    }
-
-    if (!packets_.empty() && sequence < next_seq_) {
-        dropped_late_++;
-        return;
     }
 
     JitterPacket pkt;
@@ -84,7 +118,8 @@ void JitterBuffer::push(uint32_t sequence, const uint8_t* data, int size) {
     adapt_target();
 }
 
-JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, uint32_t* out_sequence) {
+JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, int64_t* out_sequence,
+                                  bool playout_starved) {
     std::lock_guard<std::mutex> lock(mutex_);
 
     if (packets_.empty()) {
@@ -106,16 +141,35 @@ JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, uint32_t* out_
     if (it == packets_.end()) {
         // If newer packets have already been buffered long enough, consider
         // the expected packet lost and let the caller conceal.
-        if (!packets_.empty() && packets_.begin()->first > next_seq_) {
-            int64_t oldest_hold = now_ms() - packets_.begin()->second.arrival_time_ms;
-            if (oldest_hold >= target_delay_ms_ ||
-                static_cast<int>(packets_.size()) >= JITTER_MAX_PACKETS/3) {
-                underruns_++;
-                next_seq_++;
-                return JitterPopResult::Missing;
-            }
+        if (packets_.begin()->first <= next_seq_) {
+            return JitterPopResult::None;
         }
-        return JitterPopResult::None;
+        int64_t oldest_hold = now_ms() - packets_.begin()->second.arrival_time_ms;
+        if (oldest_hold < target_delay_ms_ &&
+            static_cast<int>(packets_.size()) < JITTER_MAX_PACKETS / 3) {
+            return JitterPopResult::None;
+        }
+        // Lost packets in this gap: the ones still ahead of the playout point
+        // plus the ones already reported Missing.
+        const int64_t gap = (packets_.begin()->first - next_seq_) + missing_run_;
+        const bool resync = gap > JITTER_RESYNC_GAP_PACKETS &&
+                            (playout_starved || missing_run_ >= JITTER_RESYNC_CONCEAL_FRAMES);
+        if (!resync) {
+            underruns_++;
+            missing_run_++;
+            if (out_sequence) {
+                *out_sequence = next_seq_;
+            }
+            next_seq_++;
+            return JitterPopResult::Missing;
+        }
+        // A long gap (an outage): the bounded concealment run is done, or the
+        // starved playout already filled the gap. Jump to the first buffered
+        // packet and continue from fresh audio.
+        resyncs_++;
+        missing_run_ = 0;
+        it = packets_.begin();
+        next_seq_ = it->first;
     }
 
     // Enforce playout delay: don't release a packet until it has been
@@ -133,8 +187,19 @@ JitterPopResult JitterBuffer::pop(std::vector<uint8_t>& out_data, uint32_t* out_
     out_data = std::move(it->second.data);
     packets_.erase(it);
     next_seq_++;
+    missing_run_ = 0;
     last_pop_time_ = now_ms();
     return JitterPopResult::Packet;
+}
+
+bool JitterBuffer::peek(int64_t sequence, std::vector<uint8_t>& out_data) const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = packets_.find(sequence);
+    if (it == packets_.end()) {
+        return false;
+    }
+    out_data = it->second.data;
+    return true;
 }
 
 int JitterBuffer::buffered_count() const {

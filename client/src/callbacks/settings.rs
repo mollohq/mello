@@ -58,6 +58,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_agc(settings.agc);
                 app.set_settings_ptt_mode(settings.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(settings.vad_threshold);
+                app.set_settings_vad_auto(settings.vad_auto);
                 app.set_settings_hud_enabled(settings.hud_enabled);
                 app.set_settings_hud_overlay_opacity(settings.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(settings.hud_show_clip_toasts);
@@ -346,10 +347,22 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_setting_changed_vad_threshold(move |v| {
             let mut settings = s.borrow_mut();
             settings.vad_threshold = v;
             settings.save();
+            let _ = cmd.send(settings.input_sensitivity_command());
+        });
+    }
+    {
+        let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_setting_changed_vad_auto(move |v| {
+            let mut settings = s.borrow_mut();
+            settings.vad_auto = v;
+            settings.save();
+            let _ = cmd.send(settings.input_sensitivity_command());
         });
     }
     {
@@ -416,6 +429,7 @@ pub fn wire(ctx: &AppContext) {
             let _ = cmd.send(Command::SetAgc {
                 enabled: defaults.agc,
             });
+            let _ = cmd.send(defaults.input_sensitivity_command());
             let _ = cmd.send(Command::SetPushToTalk {
                 enabled: defaults.input_mode == "push_to_talk",
             });
@@ -447,6 +461,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_agc(defaults.agc);
                 app.set_settings_ptt_mode(defaults.input_mode == "push_to_talk");
                 app.set_settings_vad_threshold(defaults.vad_threshold);
+                app.set_settings_vad_auto(defaults.vad_auto);
                 app.set_settings_ptt_key_label("Unassigned".into());
                 app.set_settings_hud_enabled(defaults.hud_enabled);
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);

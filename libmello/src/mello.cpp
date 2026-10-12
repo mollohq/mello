@@ -337,6 +337,18 @@ void mello_voice_set_output_volume(MelloContext* ctx, float volume) {
     } catch (...) {}
 }
 
+void mello_voice_set_input_sensitivity(MelloContext* ctx, float db) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_input_sensitivity(db);
+    } catch (...) {}
+}
+
+void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled) {
+    try {
+        if (ctx) ctx_cast(ctx)->audio().set_input_sensitivity_auto(enabled);
+    } catch (...) {}
+}
+
 float mello_voice_get_input_level(MelloContext* ctx) {
     if (!ctx) return 0.0f;
     try {
@@ -355,6 +367,20 @@ int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size) 
     if (!ctx || !buffer || buffer_size <= 0) return 0;
     try {
         return ctx_cast(ctx)->audio().get_packet(buffer, buffer_size);
+    } catch (...) {
+        return 0;
+    }
+}
+
+int mello_voice_get_packet_with_timestamp(
+    MelloContext* ctx,
+    uint8_t* buffer,
+    int buffer_size,
+    uint32_t* timestamp
+) {
+    if (!ctx || !buffer || buffer_size <= 0) return 0;
+    try {
+        return ctx_cast(ctx)->audio().get_packet(buffer, buffer_size, timestamp);
     } catch (...) {
         return 0;
     }
@@ -685,6 +711,22 @@ MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data
     }
 }
 
+MelloResult mello_peer_send_audio_frame(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint32_t timestamp
+) {
+    if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->send_audio_frame(data, size, timestamp) ? MELLO_OK
+                                                           : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
 const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp) {
     if (!peer || !offer_sdp) return nullptr;
     try {
@@ -957,6 +999,10 @@ void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out) {
         out->rx_jitter_buffered_packets = rx.jitter_buffered_packets;
         out->rx_jitter_target_delay_ms  = rx.jitter_target_delay_ms;
         out->rx_playout_buffer_ms       = rx.playout_buffer_ms;
+        out->rx_late_underruns          = rx.late_underruns;
+        out->input_sensitivity_auto     = audio.input_sensitivity_auto();
+        out->input_sensitivity_db       = audio.input_sensitivity_db();
+        out->input_gate_dbfs            = audio.input_gate_dbfs();
     } catch (...) {
         memset(out, 0, sizeof(MelloDebugStats));
     }

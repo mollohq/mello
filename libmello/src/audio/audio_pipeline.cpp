@@ -1,6 +1,7 @@
 #include "audio_pipeline.hpp"
 #include "audio_backend_test.hpp"
 #include "../util/log.hpp"
+#include "../util/test_clock.hpp"
 #include <cstring>
 #include <algorithm>
 #include <cmath>
@@ -463,6 +464,22 @@ void AudioPipeline::reset_speech_gate_state() {
     vad_.force_silence();
 }
 
+void AudioPipeline::set_input_sensitivity(float db) {
+    if (!std::isfinite(db)) return;
+    db = (std::min)(0.0f, (std::max)(-100.0f, db));
+    sensitivity_db_.store(db, std::memory_order_relaxed);
+    MELLO_LOG_INFO("pipeline", "input sensitivity set to %.1f dBFS", db);
+}
+
+void AudioPipeline::set_input_sensitivity_auto(bool enabled) {
+    sensitivity_auto_.store(enabled, std::memory_order_relaxed);
+    MELLO_LOG_INFO("pipeline", "input sensitivity %s", enabled ? "auto" : "manual");
+}
+
+float AudioPipeline::input_gate_dbfs() const {
+    return 20.0f * std::log10((std::max)(gate_threshold_rms_.load(std::memory_order_relaxed), 1e-10f));
+}
+
 void AudioPipeline::set_push_to_talk(bool enabled) {
     push_to_talk_mode_.store(enabled, std::memory_order_relaxed);
     if (enabled) {
@@ -472,7 +489,7 @@ void AudioPipeline::set_push_to_talk(bool enabled) {
     MELLO_LOG_INFO("pipeline", "push_to_talk mode %s", enabled ? "enabled" : "disabled");
 }
 
-void AudioPipeline::process_and_encode_frame(int16_t* frame) {
+void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp) {
     if (ns_mode() == NsMode::Rnnoise) {
         noise_suppressor_.process(frame, FRAME_SIZE);
     }
@@ -485,6 +502,7 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame) {
         EncodedPacket pkt;
         pkt.data.assign(raw_pkt, raw_pkt + encoded);
         pkt.sequence = sequence_++;
+        pkt.timestamp = timestamp;
         outgoing_.push(std::move(pkt));
 
         if ((pkt.sequence % 250) == 0 || pkt.sequence < 5) {
@@ -508,6 +526,10 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
 
     while (capture_accum_.size() >= FRAME_SIZE) {
+        // Media time of this frame, counted whether it is encoded or not.
+        const uint32_t frame_ts = capture_timestamp_;
+        capture_timestamp_ += FRAME_SIZE;
+
         float rms = 0.0f;
         {
             double sum = 0.0;
@@ -568,11 +590,19 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
-                process_and_encode_frame(capture_accum_.data());
+                process_and_encode_frame(capture_accum_.data(), frame_ts);
             } else {
+                // Auto: track the ambient floor. Manual: the user's level,
+                // in dBFS of the raw frame RMS (the input meter's scale).
                 const float speech_threshold =
-                    (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT);
+                    sensitivity_auto_.load(std::memory_order_relaxed)
+                        ? (std::max)(MIN_SPEECH_RMS, noise_floor_rms_ * NOISE_FLOOR_GATE_MULT)
+                        : std::pow(10.0f, sensitivity_db_.load(std::memory_order_relaxed) / 20.0f);
+                gate_threshold_rms_.store(speech_threshold, std::memory_order_relaxed);
                 bool candidate_speech = gate_rms >= speech_threshold;
+                if (candidate_speech) {
+                    gate_candidate_frames_.fetch_add(1, std::memory_order_relaxed);
+                }
 
                 if (candidate_speech) {
                     candidate_hangover_frames_ = CANDIDATE_HANGOVER_FRAMES;
@@ -616,11 +646,11 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 if (should_encode) {
                     if (!speech_gate_active_) {
                         for (auto& frame : speech_pre_roll_) {
-                            process_and_encode_frame(frame.data());
+                            process_and_encode_frame(frame.pcm.data(), frame.timestamp);
                         }
                         speech_pre_roll_.clear();
                     }
-                    process_and_encode_frame(capture_accum_.data());
+                    process_and_encode_frame(capture_accum_.data(), frame_ts);
                     speech_gate_active_ = true;
                 } else {
                     if (speech_gate_active_) {
@@ -628,8 +658,9 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                     }
                     speech_gate_active_ = false;
 
-                    std::array<int16_t, FRAME_SIZE> frame{};
-                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.data());
+                    PreRollFrame frame{};
+                    frame.timestamp = frame_ts;
+                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
                     speech_pre_roll_.push_back(frame);
                     while (speech_pre_roll_.size() > SPEECH_PRE_ROLL_FRAMES) {
                         speech_pre_roll_.pop_front();
@@ -646,7 +677,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
     }
 }
 
-int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
+int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size, uint32_t* out_timestamp) {
     std::lock_guard<std::mutex> lock(outgoing_mutex_);
     if (outgoing_.empty()) return 0;
 
@@ -665,6 +696,9 @@ int AudioPipeline::get_packet(uint8_t* buffer, int buffer_size) {
     buffer[2] = static_cast<uint8_t>(seq >> 16);
     buffer[3] = static_cast<uint8_t>(seq >> 24);
     std::memcpy(buffer + 4, pkt.data.data(), payload_size);
+    if (out_timestamp) {
+        *out_timestamp = pkt.timestamp;
+    }
     outgoing_.pop();
 
     get_pkt_ctr_++;
@@ -728,7 +762,6 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
 
     // Drain jitter buffers into ring buffers. Cap per-peer drain work per
     // callback so a backlog on one stream doesn't monopolize the audio lock.
-    constexpr uint32_t kMaxConcealFramesPerPacket = 3;
     constexpr int kMaxDrainPacketsPerPeer = 6;
     int total_popped = 0;
     int total_decoded = 0;
@@ -736,16 +769,21 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     int concealment_fec = 0;
     int concealment_plc = 0;
     // Split of concealment_plc for the receive counters (debug stats only).
-    int missing_plc = 0;  // jitter buffer reported Missing
-    int gap_plc = 0;      // sequence gap seen at the next decoded packet
+    int missing_plc = 0;  // jitter buffer reported Missing, no FEC available
+    int gap_plc = 0;      // a popped packet failed to decode
     int fill_plc = 0;     // playout ring ran short inside this callback
     int decoded_ok = 0;
     for (auto& [pid, jb] : jitter_buffers_) {
         std::vector<uint8_t> pkt_data;
-        uint32_t pkt_seq = 0;
+        int64_t pkt_seq = 0;
         int drained = 0;
         while (drained < kMaxDrainPacketsPerPeer) {
-            auto pop_result = jb.pop(pkt_data, &pkt_seq);
+            // Starved: the decoder is primed and its playout ring is empty,
+            // so the fill below has been covering the time with PLC.
+            auto ring_it = peer_buffers_.find(pid);
+            const bool starved = decoder_primed_[pid] && ring_it != peer_buffers_.end() &&
+                                 ring_it->second->available() == 0;
+            auto pop_result = jb.pop(pkt_data, &pkt_seq, starved);
             if (pop_result == JitterPopResult::None) {
                 break;
             }
@@ -756,55 +794,49 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             if (bit == peer_buffers_.end()) continue;
 
             if (pop_result == JitterPopResult::Missing) {
+                // One concealment per lost frame. The playout timeline has
+                // reached the lost packet pkt_seq. Conceal it here, once: from
+                // the in-band FEC of the next packet when that packet is
+                // already buffered, else with PLC. Then mark the lost packet
+                // as played, so the next packet sees no gap and does not
+                // conceal the same frame again.
                 if (decoder_primed_[pid]) {
-                    int16_t plc_pcm[FRAME_SIZE];
-                    int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
-                    if (plc_samples > 0) {
-                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
-                        concealment_plc++;
-                        missing_plc++;
+                    int16_t conceal_pcm[FRAME_SIZE];
+                    int conceal_samples = 0;
+                    std::vector<uint8_t> next_pkt;
+                    if (jb.peek(pkt_seq + 1, next_pkt)) {
+                        conceal_samples = dit->second.decode_fec(
+                            next_pkt.data(), static_cast<int>(next_pkt.size()),
+                            conceal_pcm, FRAME_SIZE);
+                        if (conceal_samples > 0) {
+                            concealment_fec++;
+                        }
+                    }
+                    if (conceal_samples <= 0) {
+                        conceal_samples = dit->second.decode_plc(conceal_pcm, FRAME_SIZE);
+                        if (conceal_samples > 0) {
+                            concealment_plc++;
+                            missing_plc++;
+                        }
+                    }
+                    if (conceal_samples > 0) {
+                        bit->second->write(conceal_pcm, static_cast<size_t>(conceal_samples));
                         total_decoded++;
                     }
+                    last_decoded_seq_[pid] = pkt_seq;
                 }
                 continue;
             }
 
             total_popped++;
-            bool primed = decoder_primed_[pid];
+            // Every loss reaches this loop as a Missing event first, so a gap
+            // here means the jitter buffer moved its timeline (a reset on a
+            // sequence jump). There is nothing left to conceal.
             auto last_it = last_decoded_seq_.find(pid);
-            uint32_t missing_frames = 0;
             if (last_it != last_decoded_seq_.end() && pkt_seq > last_it->second + 1) {
-                missing_frames = pkt_seq - last_it->second - 1;
-            }
-
-            if (primed && missing_frames > 0) {
-                bool used_fec = false;
-                // With one-frame loss, try in-band FEC from the current packet first.
-                if (missing_frames == 1) {
-                    int16_t fec_pcm[FRAME_SIZE];
-                    int fec_samples = dit->second.decode_fec(
-                        pkt_data.data(), static_cast<int>(pkt_data.size()), fec_pcm, FRAME_SIZE);
-                    if (fec_samples > 0) {
-                        bit->second->write(fec_pcm, static_cast<size_t>(fec_samples));
-                        concealment_fec++;
-                        total_decoded++;
-                        used_fec = true;
-                    }
-                }
-
-                if (!used_fec) {
-                    uint32_t plc_frames =
-                        std::min<uint32_t>(missing_frames, kMaxConcealFramesPerPacket);
-                    for (uint32_t i = 0; i < plc_frames; ++i) {
-                        int16_t plc_pcm[FRAME_SIZE];
-                        int plc_samples = dit->second.decode_plc(plc_pcm, FRAME_SIZE);
-                        if (plc_samples <= 0) break;
-                        bit->second->write(plc_pcm, static_cast<size_t>(plc_samples));
-                        concealment_plc++;
-                        gap_plc++;
-                        total_decoded++;
-                    }
-                }
+                MELLO_LOG_DEBUG("pipeline", "peer '%s': timeline jump of %lld packets",
+                                pid.c_str(),
+                                static_cast<long long>(pkt_seq - last_it->second - 1));
             }
 
             int16_t pcm[FRAME_SIZE];
@@ -819,6 +851,17 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
                 last_decoded_seq_[pid] = pkt_seq;
             } else {
                 decode_errors++;
+                // An undecodable packet is a lost frame: conceal it once.
+                if (decoder_primed_[pid]) {
+                    int plc_samples = dit->second.decode_plc(pcm, FRAME_SIZE);
+                    if (plc_samples > 0) {
+                        bit->second->write(pcm, static_cast<size_t>(plc_samples));
+                        concealment_plc++;
+                        gap_plc++;
+                        total_decoded++;
+                    }
+                    last_decoded_seq_[pid] = pkt_seq;
+                }
             }
         }
     }
@@ -833,11 +876,20 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
     rx_conceal_gap_fec_.fetch_add(static_cast<uint32_t>(concealment_fec), std::memory_order_relaxed);
     rx_conceal_gap_plc_.fetch_add(static_cast<uint32_t>(gap_plc), std::memory_order_relaxed);
 
+    // Late playout: a primed stream ran short while its jitter buffer held
+    // packets for it. The fill below conceals it, so the mixer still returns
+    // audio and the no-audio underrun count above never sees it. A talk
+    // pause leaves the jitter buffer empty and does not count.
+    bool late_playout = false;
     if (!peer_buffers_.empty()) {
         std::vector<int16_t> temp(count);
         for (auto& [pid, buf] : peer_buffers_) {
             size_t got = buf->read(temp.data(), count);
             if (got < count && decoder_primed_[pid]) {
+                auto jit = jitter_buffers_.find(pid);
+                if (jit != jitter_buffers_.end() && jit->second.buffered_count() > 0) {
+                    late_playout = true;
+                }
                 auto dit = decoders_.find(pid);
                 if (dit != decoders_.end()) {
                     size_t write_pos = got;
@@ -867,6 +919,29 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
         }
     }
     rx_conceal_fill_plc_.fetch_add(static_cast<uint32_t>(fill_plc), std::memory_order_relaxed);
+    if (late_playout) {
+        rx_late_underruns_.fetch_add(1, std::memory_order_relaxed);
+        // Windowed late-playout rate: warn when late audio is *currently*
+        // sustained, not from the ever-growing lifetime counter.
+        const int64_t now_ms = util::steady_now_ms();
+        constexpr int64_t kUnderrunWindowMs = 5000;
+        if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
+        ++underrun_window_count_;
+        const int64_t elapsed = now_ms - underrun_window_start_ms_;
+        if (elapsed >= kUnderrunWindowMs) {
+            // ~5 late callbacks/sec sustained over the window => audibly degraded.
+            if (underrun_window_count_ >= 25 &&
+                now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
+                MELLO_LOG_WARN("pipeline",
+                               "sustained late playout: %d underruns in last %lldms (%.1f/s) -- output likely degraded",
+                               underrun_window_count_, (long long)elapsed,
+                               underrun_window_count_ * 1000.0 / elapsed);
+                last_underrun_warn_ms_ = now_ms;
+            }
+            underrun_window_start_ms_ = now_ms;
+            underrun_window_count_ = 0;
+        }
+    }
 
     if (any_remote) {
         static uint32_t mix_log_ctr = 0;
@@ -899,31 +974,6 @@ size_t AudioPipeline::mix_output(int16_t* out, size_t count) {
             for (auto& [pid, buf] : peer_buffers_) total_rb += static_cast<int>(buf->available());
             MELLO_LOG_INFO("pipeline", "mix_output UNDERRUN #%u: peers=%zu jb_pkts=%d rb_samples=%d popped=%d decoded=%d fec=%d plc=%d errs=%d",
                            ur, peer_buffers_.size(), total_jb, total_rb, total_popped, total_decoded, concealment_fec, concealment_plc, decode_errors);
-        }
-        // Windowed underrun rate: warn when underruns are *currently* sustained
-        // rather than relying on the ever-growing lifetime counter, which looks
-        // alarming on long sessions even when audio is presently fine.
-        if (!peer_buffers_.empty()) {
-            int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
-                                 std::chrono::steady_clock::now().time_since_epoch())
-                                 .count();
-            constexpr int64_t kUnderrunWindowMs = 5000;
-            if (underrun_window_start_ms_ == 0) underrun_window_start_ms_ = now_ms;
-            ++underrun_window_count_;
-            int64_t elapsed = now_ms - underrun_window_start_ms_;
-            if (elapsed >= kUnderrunWindowMs) {
-                // ~5 underruns/sec sustained over the window => audibly degraded.
-                if (underrun_window_count_ >= 25 &&
-                    now_ms - last_underrun_warn_ms_ >= kUnderrunWindowMs) {
-                    MELLO_LOG_WARN("pipeline",
-                                   "sustained audio underruns: %d in last %lldms (%.1f/s) -- output likely degraded",
-                                   underrun_window_count_, (long long)elapsed,
-                                   underrun_window_count_ * 1000.0 / elapsed);
-                    last_underrun_warn_ms_ = now_ms;
-                }
-                underrun_window_start_ms_ = now_ms;
-                underrun_window_count_ = 0;
-            }
         }
     }
 
@@ -997,6 +1047,7 @@ ReceiveStats AudioPipeline::receive_stats() const {
     s.conceal_gap_fec = rx_conceal_gap_fec_.load(std::memory_order_relaxed);
     s.conceal_gap_plc = rx_conceal_gap_plc_.load(std::memory_order_relaxed);
     s.conceal_fill_plc = rx_conceal_fill_plc_.load(std::memory_order_relaxed);
+    s.late_underruns = rx_late_underruns_.load(std::memory_order_relaxed);
 
     std::lock_guard<std::mutex> lock(peer_buffers_mutex_);
     float target_sum = 0.0f;

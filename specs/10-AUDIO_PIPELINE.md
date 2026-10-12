@@ -142,6 +142,19 @@ The capture path keeps a short pre-roll buffer (currently about `100ms`) and two
 The gate closes on sustained non-speech. Closing the gate forces the VAD callback to emit `speaking=false`
 and prevents stale speaking indicators when Silero is no longer being fed.
 
+Input sensitivity sets the RMS gate threshold (the "Activation Sensitivity" control in Settings):
+
+| Mode | Gate threshold | Set by |
+|---|---|---|
+| Auto (default) | `max(MIN_SPEECH_RMS, 2.5 x noise floor)`: at least -54 dBFS, tracks the ambient floor | `mello_voice_set_input_sensitivity_auto(ctx, true)` |
+| Manual | The slider level in dBFS (-100..0) of raw frame RMS, the scale of the input level meter | `mello_voice_set_input_sensitivity(ctx, db)` and auto off |
+
+- Silero VAD confirms speech at `VAD_THRESHOLD` (0.35) in both modes.
+- The noise floor is tracked in both modes, so a change back to auto applies at once.
+- Push-to-talk bypasses the gate, so the setting has no effect there.
+- `MelloDebugStats` reports `input_sensitivity_auto`, `input_sensitivity_db` and `input_gate_dbfs` (the threshold of the last frame).
+- The client sends `Command::SetInputSensitivity { auto, db }` at startup, on each change of the slider or the toggle, and on reset. A settings file without `vad_auto` loads with auto on.
+
 This design was validated with:
 
 - continuous speech: RNNoise runs and quality is preserved
@@ -157,7 +170,22 @@ For endpoint packet API (`mello_voice_get_packet` / `mello_voice_feed_packet`), 
 [seq0 seq1 seq2 seq3][opus_payload...]
 ```
 
-In SFU RTP mode, `mello-core` strips this 4-byte sequence before `mello_peer_send_audio()` because RTP sequence/timestamp are handled by transport.
+RTP timestamp (media time):
+
+- The capture thread keeps a 48 kHz sample counter. It counts every captured 20 ms frame, encoded or not. A frame that the speech gate or mute holds back still advances it, so a gap looks like DTX and not like a stall.
+- Each encoded packet carries the counter value of its first sample. Pre-roll frames keep the value of the time they were captured.
+- `mello_voice_get_packet_with_timestamp()` returns the packet and this value. Consecutive frames differ by 960. A 1 s gate gap adds 48000.
+- In SFU RTP mode, `mello-core` strips the 4-byte sequence and calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)`. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
+- `mello_peer_send_audio()` does not advance the RTP timestamp (libdatachannel takes it only from a `FrameInfo`). No caller in the repo uses it.
+- Stream game audio uses the same packetizer. Its capture clock counts every 20 ms frame (`ts_us`); mello-core converts it to 48 kHz samples for `mello_peer_send_audio_frame`.
+- The P2P data-channel path keeps the 4-byte header only. The receiver does not use the RTP timestamp yet.
+
+Receive side:
+
+- The SFU path writes the 16-bit RTP sequence into the 4-byte header, with the high bytes zero (`peer_connection.cpp`).
+- The P2P path carries the 32-bit sender counter.
+- The jitter buffer reads only the low 16 bits and extends them to a running 64-bit sequence (`SequenceUnwrapper`). Each value goes to the extended position nearest to the previous value.
+- All timeline comparisons use the extended sequence. The RTP wrap from 65535 to 0 is one ordinary step: no late drop, no reset.
 
 ### 4.3 Push-to-Talk Mode
 
@@ -202,15 +230,29 @@ Current adaptive bounds:
 - min/max delay guardrails `20ms..200ms`
 - bounded per-callback drain to avoid lock monopolization
 
+The target delay follows the interarrival jitter on the media clock (RFC 3550 §6.4.1): arrival spacing against 20 ms per sequence step. Lost packets and an outage add no jitter.
+
+A packet older than the playout point is a late drop, also when the buffer is empty. On an empty buffer, a packet more than `JITTER_MAX_PACKETS` (1 s) behind the playout point, or more than 1000 ahead, starts a new stream (reset): a sender restart or a track re-wire.
+
+Long gap (outage): a gap of more lost packets than the jitter buffer holds (`JITTER_RESYNC_GAP_PACKETS` = `JITTER_MAX_PACKETS`, 1 s) is not concealed frame by frame.
+
+- When the caller's playout is starved (decoded buffer empty, PLC fill running), the fill already covered the gap. The buffer jumps to the first buffered packet at once.
+- Otherwise the buffer reports at most `JITTER_RESYNC_CONCEAL_FRAMES` (3) `Missing` events, then jumps.
+- `resyncs()` counts the jumps. Playout continues from fresh audio, so the delay returns to its value before the outage.
+
 ### 5.1 Concealment Policy
 
-When timeline indicates loss:
+Rule: one concealment frame per lost frame. A lost 20 ms frame produces 20 ms of concealed audio, never 40.
 
-- single-frame gap: attempt Opus in-band `decode_fec` from the next packet
-- otherwise: `decode_plc` for bounded concealment frames
-- explicit `Missing` events also trigger PLC when decoder is primed
+Every loss reaches the playout loop as one `Missing` event from the jitter buffer. `pop()` reports the extended sequence of the lost packet. On `Missing`, when the decoder is primed:
 
-This keeps continuity under jitter/loss while preventing unbounded latency growth.
+1. If the jitter buffer holds the next packet (`peek(seq + 1)`), conceal the frame with Opus in-band `decode_fec` from that packet.
+2. Else conceal it with `decode_plc`.
+3. Record the lost sequence as played (`last_decoded_seq_`).
+
+The next packet then decodes with no gap and conceals nothing. A gap at decode means the jitter buffer moved its timeline (a reset on a sequence jump). The playout loop conceals nothing for it. A packet that fails to decode gets one PLC frame.
+
+Counters (`MelloDebugStats`): `rx_conceal_gap_fec` (FEC for a lost packet), `rx_conceal_missing_plc` (PLC for a lost packet), `rx_conceal_gap_plc` (PLC for an undecodable packet).
 
 ### 5.2 Mix and Render
 
@@ -266,6 +308,8 @@ Voice transport has two modes:
 
 Server flow is serialized via per-peer renegotiation mutex to avoid offer/answer races.
 
+A busy session sends other signaling while a join waits for `joined` (step 2) or `answer` (step 3): `member_joined`, `member_left`, `ice_candidate`, a server `offer`. The client reads until the wanted type or `error` (`read_signal_until`). It keeps every other message in arrival order (at most 256) and does not fail the join on it. The signaling listener handles the kept messages first, then reads the socket. So no membership event and no server ICE candidate is lost.
+
 ### 7.2 Leave/Close Semantics
 
 Leave must use a proper websocket close handshake:
@@ -294,7 +338,10 @@ void mello_voice_set_noise_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_ns_mode(MelloContext* ctx, MelloNsMode mode);
 void mello_voice_set_transient_suppression(MelloContext* ctx, bool enabled);
 void mello_voice_set_high_pass_filter(MelloContext* ctx, bool enabled);
+void mello_voice_set_input_sensitivity(MelloContext* ctx, float db);
+void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled);
 int  mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
+int  mello_voice_get_packet_with_timestamp(MelloContext* ctx, uint8_t* buffer, int buffer_size, uint32_t* timestamp);
 MelloResult mello_voice_feed_packet(MelloContext* ctx, const char* peer_id, const uint8_t* data, int size);
 ```
 
@@ -380,5 +427,6 @@ Audio pipeline work for this milestone is complete when:
 Two changes keep audio health decisions accurate over long-running sessions:
 
 - **Windowed underrun rate.** The pipeline keeps the raw lifetime `underrun_count` (monotonic, shown in the debug panel for reference) **and** a rolling ~5s windowed underrun count used for health decisions and the `audio_stats` log line. The lifetime counter climbs forever and is useless for "is audio bad *right now*"; the windowed value reflects current playback health.
+- **Late playout is the health signal.** `underrun_count` counts only playback callbacks with no remote audio at all. Once a stream is primed, the mixer fills a short buffer with PLC and always returns audio, so that counter stops. `rx_late_underruns` counts callbacks in which a primed stream ran short while its jitter buffer held packets for it (a stall burst, a loss waiting for `Missing`, a talk-start hold). A talk pause with an empty jitter buffer does not count. The mello-core windowed health and the libmello sustained-underrun warning read `rx_late_underruns`. Limit: without receive timestamps the hold at a talk start also counts (about 130 callbacks in the 93 s clean gate profile).
 - **Renegotiation-tolerant track reads (SFU side).** The SFU's consecutive-EOF track cutoff is raised/paused during active renegotiation so transient read errors don't tear down a healthy inbound audio track. See [SFU-INTEGRATION.md](./features/SFU-INTEGRATION.md).
 

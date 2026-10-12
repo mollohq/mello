@@ -182,7 +182,7 @@ impl PacketSink for P2PFanoutSink {
         Ok(())
     }
 
-    async fn send_audio(&self, opus: &[u8]) -> Result<(), StreamError> {
+    async fn send_audio(&self, opus: &[u8], timestamp: u32) -> Result<(), StreamError> {
         if opus.is_empty() {
             return Ok(());
         }
@@ -199,7 +199,7 @@ impl PacketSink for P2PFanoutSink {
             let Some(peer) = NonNull::new(vp.peer) else {
                 continue;
             };
-            if let Err(e) = send_audio(peer, opus) {
+            if let Err(e) = send_audio(peer, opus, timestamp) {
                 log::warn!("P2P sink: audio send failed for viewer: {}", e);
                 last_err = Some(StreamError::SendFailed(e.to_string()));
             }
@@ -351,7 +351,7 @@ mod tests {
             .build()
             .expect("runtime");
         rt.block_on(async {
-            sink.send_audio(&[0xAB, 0xCD])
+            sink.send_audio(&[0xAB, 0xCD], 0)
                 .await
                 .expect("empty fanout ok");
         });

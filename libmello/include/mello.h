@@ -139,8 +139,33 @@ MELLO_API void mello_voice_set_output_volume(MelloContext* ctx, float volume);
 /** Get current input audio level (0.0 = silence, 1.0 = peak). Updated per frame. */
 MELLO_API float mello_voice_get_input_level(MelloContext* ctx);
 
+/** Manual input sensitivity in dBFS (-100..0, clamped). With auto off, the
+ *  speech gate opens when the raw microphone frame RMS reaches `db` dBFS
+ *  (the scale of the input level meter). Silero VAD then confirms speech at
+ *  its fixed threshold. Stored also while auto is on. Default -40.
+ *  No effect in push-to-talk mode, which bypasses the gate. */
+MELLO_API void mello_voice_set_input_sensitivity(MelloContext* ctx, float db);
+
+/** Auto input sensitivity (default on): the speech gate tracks the ambient
+ *  noise floor (2.5 x the floor, at least -54 dBFS). Off: the gate uses the
+ *  level from mello_voice_set_input_sensitivity. */
+MELLO_API void mello_voice_set_input_sensitivity_auto(MelloContext* ctx, bool enabled);
+
 /** Get next encoded audio packet to send to peers. Returns packet size, or 0 if none. */
 MELLO_API int mello_voice_get_packet(MelloContext* ctx, uint8_t* buffer, int buffer_size);
+
+/** As mello_voice_get_packet, and writes the packet's media timestamp to
+ *  `timestamp` (may be NULL): the 48 kHz capture sample index of the frame's
+ *  first sample. It counts every captured 20 ms frame, encoded or not, so a
+ *  gap from the speech gate or mute advances it like DTX. Two consecutive
+ *  frames differ by 960. Pass it to mello_peer_send_audio_frame. The packet
+ *  bytes are the same as mello_voice_get_packet returns. */
+MELLO_API int mello_voice_get_packet_with_timestamp(
+    MelloContext* ctx,
+    uint8_t* buffer,
+    int buffer_size,
+    uint32_t* timestamp
+);
 
 /** Feed an encoded audio packet received from a peer. */
 MELLO_API MelloResult mello_voice_feed_packet(
@@ -429,8 +454,21 @@ MELLO_API bool mello_peer_is_connected(MelloPeerConnection* peer);
 MELLO_API bool mello_peer_is_unreliable_open(MelloPeerConnection* peer);
 MELLO_API bool mello_peer_is_reliable_open(MelloPeerConnection* peer);
 
-/** Send raw Opus frame via the RTP audio track. Packetization is automatic. */
+/** Send raw Opus frame via the RTP audio track. Packetization is automatic.
+ *  The RTP timestamp does not advance with this call: every packet carries
+ *  the track's start timestamp. Use mello_peer_send_audio_frame. */
 MELLO_API MelloResult mello_peer_send_audio(MelloPeerConnection* peer, const uint8_t* data, int size);
+
+/** Send one Opus frame via the RTP audio track. `timestamp` is the frame's
+ *  media time in 48 kHz samples from any origin (for voice:
+ *  mello_voice_get_packet_with_timestamp). The RTP timestamp of the packet is
+ *  the track's random start timestamp plus `timestamp`, modulo 2^32. */
+MELLO_API MelloResult mello_peer_send_audio_frame(
+    MelloPeerConnection* peer,
+    const uint8_t* data,
+    int size,
+    uint32_t timestamp
+);
 
 /** Handle a server-initiated SDP renegotiation offer. Returns answer SDP. */
 MELLO_API const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp);
@@ -861,9 +899,9 @@ typedef struct MelloDebugStats {
      * context started. Jitter fields cover the current remote peers. */
     uint32_t rx_frames_decoded;          /* packets decoded normally */
     uint32_t rx_decode_errors;           /* Opus decode failures */
-    uint32_t rx_conceal_missing_plc;     /* PLC frames for a jitter "Missing" event */
-    uint32_t rx_conceal_gap_fec;         /* FEC frames for a sequence gap at decode */
-    uint32_t rx_conceal_gap_plc;         /* PLC frames for a sequence gap at decode */
+    uint32_t rx_conceal_missing_plc;     /* PLC frames for a lost packet ("Missing"), no FEC */
+    uint32_t rx_conceal_gap_fec;         /* FEC frames for a lost packet, from the next packet */
+    uint32_t rx_conceal_gap_plc;         /* PLC frames for a packet that failed to decode */
     uint32_t rx_conceal_fill_plc;        /* PLC frames that fill a short playout buffer */
     uint32_t rx_jitter_missing;          /* packets the jitter buffer declared lost */
     uint32_t rx_jitter_dropped_late;     /* packets dropped: older than the playout point */
@@ -872,6 +910,17 @@ typedef struct MelloDebugStats {
     int32_t  rx_jitter_buffered_packets; /* packets in the jitter buffers now */
     float    rx_jitter_target_delay_ms;  /* mean jitter target delay now */
     float    rx_playout_buffer_ms;       /* mean decoded audio queued for playout now */
+    /* Late playout: playback callbacks in which a remote stream's decoded
+     * audio ran short while its jitter buffer held packets for it. A talk
+     * pause (nothing received) does not count. underrun_count above counts
+     * only callbacks with no remote audio at all, so it stops once a stream
+     * conceals with PLC. The windowed voice health reads this counter. */
+    uint32_t rx_late_underruns;
+    /* Input sensitivity (mello_voice_set_input_sensitivity*): the mode, the
+     * manual level, and the gate threshold the last frame was compared with. */
+    bool     input_sensitivity_auto;
+    float    input_sensitivity_db;
+    float    input_gate_dbfs;
 } MelloDebugStats;
 
 MELLO_API void mello_get_debug_stats(MelloContext* ctx, MelloDebugStats* out);
