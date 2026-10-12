@@ -692,9 +692,10 @@ MELLO_API void mello_peer_set_control_text_callback(
  *  MELLO_ERROR_TRANSPORT_FAILED when the channel is not open. */
 MELLO_API MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
 
-/** Set or clear (NULL) the send feedback callback. Any thread. A call that
- *  runs now can still use the old `user_data`; the caller keeps it valid
- *  until mello_peer_destroy. */
+/** Set or clear (NULL) the send feedback callback. Any thread. This call
+ *  waits for a callback that runs now: when it returns, the old callback
+ *  has returned and libmello does not use the old `user_data` again, so the
+ *  caller can free it. Do not call it from the callback. */
 MELLO_API void mello_peer_set_send_feedback_callback(
     MelloPeerConnection* peer,
     MelloSendFeedbackCallback callback,

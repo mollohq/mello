@@ -223,6 +223,12 @@ private:
     void* control_text_ud_ = nullptr;
     // Receiver reports about the audio send track. The tracker lives as
     // long as the peer: a new send track (renegotiation) keeps counting.
+    // send_feedback_cb_mutex_ guards the callback and its user data, and
+    // deliver_send_feedback() holds it for the whole call, so a clear
+    // waits for a running call. Lock order: send_feedback_cb_mutex_ first,
+    // then the locks that the callback takes (in mello-core: the voice
+    // sink read lock, then AudioPipeline::adapt_mutex_).
+    std::mutex send_feedback_cb_mutex_;
     MelloSendFeedbackCallback send_feedback_cb_ = nullptr;
     void* send_feedback_ud_ = nullptr;
     std::shared_ptr<SendFeedbackTracker> send_feedback_ =

@@ -1,9 +1,11 @@
 // Receiver reports about the voice send track (spec 10 section 7.5).
 //
-// The parser and the tracker get crafted RTCP. The wire test sends voice
+// The parser and the tracker get crafted RTCP. The wire tests send voice
 // frames from a libmello voice peer to a plain libdatachannel peer that
 // answers each of our sender reports with a crafted receiver report, as the
-// SFU's Pion receiver interceptor does once per second.
+// SFU's Pion receiver interceptor does once per second. They check the
+// reports that reach the callback, and that a clear of the callback waits
+// for a call that runs.
 
 #include <gtest/gtest.h>
 
@@ -14,6 +16,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstring>
 #include <memory>
@@ -444,6 +447,229 @@ TEST(VoiceSendFeedbackWire, ReceiverReportsReachTheVoicePeer) {
         tracks.clear();
     }
     remote.reset();
+}
+
+// The link of ReceiverReportsReachTheVoicePeer as one object, so that the
+// threads of the test below can share it: a libmello voice peer connected
+// to a plain libdatachannel peer that answers each sender report with
+// CraftedReceiverReports.
+class ReportingLink {
+public:
+    ReportingLink() = default;
+    ReportingLink(const ReportingLink&) = delete;
+    ReportingLink& operator=(const ReportingLink&) = delete;
+    ~ReportingLink() { close(); }
+
+    // Creates the voice peer and sets the feedback callback. No offer yet.
+    MelloPeerConnection* create(MelloSendFeedbackCallback callback, void* user_data) {
+        voice_ = mello_peer_create(nullptr, "voice-peer");
+        if (!voice_) return nullptr;
+        mello_peer_set_ice_servers(voice_, nullptr, 0);
+        mello_peer_set_ice_callback(voice_, on_voice_candidate, &candidates_);
+        mello_peer_set_send_feedback_callback(voice_, callback, user_data);
+        return voice_;
+    }
+
+    // Offer, answer and ICE until both ends are connected, then a first
+    // frame. False on a failure or a timeout.
+    bool connect() {
+        const char* offer_ptr = mello_peer_create_offer(voice_);
+        if (!offer_ptr) return false;
+        const std::string offer(offer_ptr);
+
+        remote_ = std::make_shared<rtc::PeerConnection>(rtc::Configuration{});
+        remote_->onLocalDescription([this](rtc::Description description) {
+            std::lock_guard<std::mutex> lock(answer_mutex_);
+            answer_ = std::string(description);
+        });
+        MelloPeerConnection* voice = voice_;
+        remote_->onLocalCandidate([voice](rtc::Candidate candidate) {
+            const std::string text = candidate.candidate();
+            const std::string mid = candidate.mid();
+            MelloIceCandidate c{};
+            c.candidate = text.c_str();
+            c.sdp_mid = mid.c_str();
+            c.sdp_mline_index = 0;
+            mello_peer_add_ice_candidate(voice, &c);
+        });
+        remote_->onTrack([this](std::shared_ptr<rtc::Track> track) {
+            if (track->description().type() != "audio") return;
+            track->setMediaHandler(std::make_shared<CraftedReceiverReports>());
+            track->onMessage([](rtc::binary) {}, [](rtc::string) {});
+            std::lock_guard<std::mutex> lock(tracks_mutex_);
+            tracks_.push_back(std::move(track));
+        });
+
+        remote_->setRemoteDescription(rtc::Description(offer, rtc::Description::Type::Offer));
+        if (!wait_until(
+                [&]() {
+                    std::lock_guard<std::mutex> lock(answer_mutex_);
+                    return !answer_.empty();
+                },
+                5s)) {
+            return false;
+        }
+        {
+            std::lock_guard<std::mutex> lock(answer_mutex_);
+            if (mello_peer_set_remote_description(voice_, answer_.c_str(), false) != MELLO_OK) {
+                return false;
+            }
+        }
+        if (!wait_until(
+                [&]() {
+                    std::vector<std::pair<std::string, std::string>> pending;
+                    {
+                        std::lock_guard<std::mutex> lock(candidates_.mutex);
+                        pending.swap(candidates_.items);
+                    }
+                    for (const auto& [candidate, mid] : pending) {
+                        remote_->addRemoteCandidate(rtc::Candidate(candidate, mid));
+                    }
+                    return mello_peer_is_connected(voice_) &&
+                           remote_->state() == rtc::PeerConnection::State::Connected;
+                },
+                10s)) {
+            return false;
+        }
+
+        const uint8_t probe[2] = {0xFF, 0};
+        return wait_until(
+            [&]() { return mello_peer_send_audio_frame(voice_, probe, 2, 0) == MELLO_OK; }, 5s);
+    }
+
+    // Voice frame `index` (1 and up): 2 bytes, RTP timestamp index * 960.
+    void send_frame(uint32_t index) {
+        const uint8_t frame[2] = {static_cast<uint8_t>(index), 0};
+        mello_peer_send_audio_frame(voice_, frame, 2, index * 960);
+    }
+
+    // The report count of the voice peer: 0 before the first report.
+    uint32_t reports() const {
+        MelloSendFeedback latest{};
+        return mello_peer_get_send_feedback(voice_, &latest) ? latest.reports : 0u;
+    }
+
+    // Clears the callback, destroys the voice peer, closes the remote peer.
+    void close() {
+        if (voice_) {
+            mello_peer_set_send_feedback_callback(voice_, nullptr, nullptr);
+            mello_peer_destroy(voice_);
+            voice_ = nullptr;
+        }
+        if (remote_) {
+            remote_->close();
+            {
+                std::lock_guard<std::mutex> lock(tracks_mutex_);
+                tracks_.clear();
+            }
+            remote_.reset();
+        }
+    }
+
+private:
+    CandidateQueue candidates_;
+    MelloPeerConnection* voice_ = nullptr;
+    std::shared_ptr<rtc::PeerConnection> remote_;
+    std::mutex answer_mutex_;
+    std::string answer_;
+    std::mutex tracks_mutex_;
+    std::vector<std::shared_ptr<rtc::Track>> tracks_;
+};
+
+// The first call blocks until the test opens the latch. Later calls only
+// count.
+struct BlockingFeedback {
+    std::mutex mutex;
+    std::condition_variable cv;
+    int calls = 0;
+    bool entered = false;   // the first call runs
+    bool open = false;      // the first call can return
+    bool returned = false;  // the first call returned
+};
+
+void on_blocking_feedback(void* user_data, const MelloSendFeedback* /*feedback*/) {
+    auto* b = static_cast<BlockingFeedback*>(user_data);
+    std::unique_lock<std::mutex> lock(b->mutex);
+    if (++b->calls > 1) return;
+    b->entered = true;
+    b->cv.notify_all();
+    b->cv.wait(lock, [b]() { return b->open; });
+    b->returned = true;
+}
+
+// mello-core frees the user data of the callback when the clear returns
+// (the sfu_connection.rs teardown). So a clear must wait for a call that
+// runs on the libdatachannel thread, and no call may follow the clear.
+TEST(VoiceSendFeedbackWire, AClearWaitsForARunningCallback) {
+    BlockingFeedback blocking;
+    ReportingLink link;
+    MelloPeerConnection* voice = link.create(on_blocking_feedback, &blocking);
+    ASSERT_NE(voice, nullptr);
+    ASSERT_TRUE(link.connect());
+
+    // Frames come from a second thread: a send could wait for the blocked
+    // libdatachannel thread. No ASSERT until the latch is open and the
+    // threads are joined, so a failure cannot leave a thread blocked.
+    std::atomic<bool> sending{true};
+    std::thread sender([&]() {
+        for (uint32_t i = 1; i <= 500 && sending.load(); ++i) {
+            link.send_frame(i);
+            std::this_thread::sleep_for(20ms);
+        }
+    });
+
+    bool entered = false;
+    {
+        std::unique_lock<std::mutex> lock(blocking.mutex);
+        entered = blocking.cv.wait_for(lock, 10s, [&]() { return blocking.entered; });
+    }
+    EXPECT_TRUE(entered) << "no receiver report reached the callback";
+
+    std::atomic<bool> cleared{false};
+    bool returned_before_clear = false;
+    std::thread clearer;
+    if (entered) {
+        clearer = std::thread([&]() {
+            mello_peer_set_send_feedback_callback(voice, nullptr, nullptr);
+            {
+                std::lock_guard<std::mutex> lock(blocking.mutex);
+                returned_before_clear = blocking.returned;
+            }
+            cleared.store(true);
+        });
+        // The callback is blocked: the clear must not return.
+        std::this_thread::sleep_for(300ms);
+        EXPECT_FALSE(cleared.load()) << "the clear returned while the callback ran";
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(blocking.mutex);
+        blocking.open = true;
+    }
+    blocking.cv.notify_all();
+    if (clearer.joinable()) clearer.join();
+    sending.store(false);
+    sender.join();
+    ASSERT_TRUE(entered);
+    EXPECT_TRUE(cleared.load());
+    EXPECT_TRUE(returned_before_clear) << "the clear returned before the callback";
+
+    // More reports arrive, and none reaches the cleared callback.
+    int calls_at_clear = 0;
+    {
+        std::lock_guard<std::mutex> lock(blocking.mutex);
+        calls_at_clear = blocking.calls;
+    }
+    const uint32_t reports_at_clear = link.reports();
+    uint32_t index = 1000;
+    EXPECT_TRUE(wait_until(
+        [&]() {
+            link.send_frame(++index);
+            return link.reports() > reports_at_clear;
+        },
+        5s));
+    std::lock_guard<std::mutex> lock(blocking.mutex);
+    EXPECT_EQ(blocking.calls, calls_at_clear);
 }
 
 }  // namespace

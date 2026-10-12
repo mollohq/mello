@@ -1767,7 +1767,9 @@ void PeerConnectionImpl::set_send_feedback_callback(
     MelloSendFeedbackCallback cb,
     void* user_data
 ) {
-    std::lock_guard<std::mutex> lock(mutex_);
+    // Waits for a running callback (deliver_send_feedback holds the lock
+    // for the whole call): after a clear, the old user data is not used.
+    std::lock_guard<std::mutex> lock(send_feedback_cb_mutex_);
     send_feedback_cb_ = cb;
     send_feedback_ud_ = user_data;
 }
@@ -1777,13 +1779,6 @@ bool PeerConnectionImpl::get_send_feedback(MelloSendFeedback* out) const {
 }
 
 void PeerConnectionImpl::deliver_send_feedback(const MelloSendFeedback& feedback) {
-    MelloSendFeedbackCallback callback = nullptr;
-    void* user_data = nullptr;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        callback = send_feedback_cb_;
-        user_data = send_feedback_ud_;
-    }
     if (feedback.reports == 1 || (feedback.reports % 60) == 0) {
         MELLO_LOG_DEBUG("peer",
                         "send feedback #%u: lost %.1f %% (%u of %u), cumulative %d, "
@@ -1792,8 +1787,11 @@ void PeerConnectionImpl::deliver_send_feedback(const MelloSendFeedback& feedback
                         feedback.interval_lost, feedback.interval_expected,
                         feedback.cumulative_lost, feedback.jitter_ms, feedback.rtt_ms);
     }
-    if (callback) {
-        callback(user_data, &feedback);
+    // Hold the lock for the whole call: a clear that runs now waits until
+    // the callback returns, so the caller can then free the user data.
+    std::lock_guard<std::mutex> lock(send_feedback_cb_mutex_);
+    if (send_feedback_cb_) {
+        send_feedback_cb_(send_feedback_ud_, &feedback);
     }
 }
 
