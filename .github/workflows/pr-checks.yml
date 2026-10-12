@@ -3,6 +3,12 @@ name: PR Checks
 on:
   pull_request:
     branches: [main]
+    # `edited` is not a default type. A stacked PR is retargeted to main
+    # when the PR below it merges, and that is an `edited` event; without
+    # it the required checks stay "Expected" until someone pushes or
+    # reopens. Title and body edits also fire it; the concurrency group
+    # cancels the duplicate run.
+    types: [opened, synchronize, reopened, edited]
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
