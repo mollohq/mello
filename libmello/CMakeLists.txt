@@ -1,6 +1,13 @@
 cmake_minimum_required(VERSION 3.20)
 project(mello VERSION 0.1.0 LANGUAGES C CXX)
 
+if(MSVC)
+    # One cl.exe per source file by default: webrtc-audio-processing alone took
+    # 2m22s on one core in CI. /MP applies to every target defined below,
+    # including the add_subdirectory overlays.
+    add_compile_options(/MP)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)

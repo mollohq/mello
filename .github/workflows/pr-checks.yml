@@ -172,7 +172,7 @@ jobs:
             -DMELLO_BUILD_TESTS=ON `
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
-          cmake --build libmello/build-ci --config Release
+          cmake --build libmello/build-ci --config Release --parallel $env:NUMBER_OF_PROCESSORS
 
       - name: Run C++ tests
         run: ctest --test-dir libmello/build-ci -C Release --output-on-failure
@@ -246,7 +246,8 @@ jobs:
             -DCMAKE_OSX_ARCHITECTURES=arm64 \
             -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0 \
             -DCMAKE_BUILD_TYPE=Release
-          cmake --build libmello/build-ci
+          # A bare --parallel passes a bare -j to make: unlimited jobs.
+          cmake --build libmello/build-ci --parallel "$(sysctl -n hw.ncpu)"
 
       - name: Run C++ tests
         run: ctest --test-dir libmello/build-ci --output-on-failure
