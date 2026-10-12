@@ -270,7 +270,7 @@ Code: `libmello/src/audio/voice_playout.{hpp,cpp}` (NetEQ, controller, mixer), `
 
 | Path | Input | Call | Thread |
 |---|---|---|---|
-| SFU voice | The whole RTP packet from the track (`mello_peer_set_audio_rtp_callback`) | `mello_voice_feed_rtp(ctx, sender, rtp, size, -1)` | libdatachannel track thread |
+| SFU voice | The whole RTP packet from the track (`mello_peer_set_audio_rtp_callback`). The sender is the member that the SFU's slot map names for the track's mid (section 7.1), not an SDP attribute | `mello_voice_feed_rtp(ctx, sender, rtp, size, -1)` | libdatachannel track thread |
 | SFU voice, fallback | `SfuEvent::AudioRtp` from the event queue, only while the direct sink is not set | `mello_voice_feed_rtp` | Command loop |
 | P2P mesh | The voice frame from the data channel (section 4.2) | `mello_voice_feed_packet` | Command loop |
 | Mic test | The voice frame of the local encoder | `mello_voice_feed_packet` as peer `loopback` | Command loop, or the capture thread in an SFU call |
@@ -285,7 +285,8 @@ Code: `libmello/src/audio/voice_playout.{hpp,cpp}` (NetEQ, controller, mixer), `
 
 - A peer's NetEQ is created on its first packet: 48 kHz, `enable_muted_state` on, payload 111 = `opus/48000/2` with `stereo=0` (mono decode), payload 13 = `CN/48000`. The decoder factory has Opus only.
 - One `webrtc::Environment` per pipeline carries the clock and a mello `FieldTrialsView`. It answers one key, `WebRTC-Audio-NetEqDelayManagerConfig`, with `VoicePlayout::default_delay_manager_config()` (the tuning in section 5.5).
-- A new SSRC for the same peer rebuilds its NetEQ (the SFU reassigns SSRCs per receiver slot). A timestamp more than 2 s behind the newest one also rebuilds it (a sender restart; P2P keeps SSRC 0). `rx_stream_resets` counts both.
+- A new SSRC for the same peer rebuilds its NetEQ (a member that moves to another receive slot or m-line). A timestamp more than 2 s behind the newest one also rebuilds it (a sender restart; P2P keeps SSRC 0). `rx_stream_resets` counts both.
+- A receive slot keeps its SSRC when the SFU gives it to another member. NetEQ is keyed by member, so the new member gets a new NetEQ; the old member's NetEQ is destroyed when the slot message releases its last mid (section 7.1). No state carries over between members on one SSRC.
 - Insert runs on the inserting thread. `NetEqImpl` locks itself, so an insert and the device thread's `GetAudio` may overlap. The peer map has its own mutex, which the device thread never takes. Thread and lock rules: spec 03 section 7.
 - Lifetime: `clear_remote_streams` (voice leave, `mello_voice_stop_capture`) destroys every NetEQ. `mello_voice_remove_peer` destroys one (mello-core calls it when a member leaves). Removal takes the source out of the mixer first and waits for a running mix. Lifetime counters of destroyed instances stay in the totals.
 
@@ -383,6 +384,22 @@ Voice transport has two modes:
 
 Server flow is serialized via per-peer renegotiation mutex to avoid offer/answer races.
 
+**Receive slots** (mello-sfu `01-SFU.md` sections 5.4, 5.5, 6.2). The SFU voice offer carries the sendrecv mic m-line (mid `audio`, with `a=ssrc`) and `MELLO_VOICE_RECV_SLOTS` (16) recvonly audio m-lines with mids `s0` to `s15` (`mello_peer_set_voice_recv_slots`, set by `SfuConnection::create_peer`; P2P peers offer none). The SFU forwards one member on each slot and changes members with `ReplaceTrack`: a join or a leave within 16 members sends no `offer`. Past 16, the SFU adds an own m-line per extra member and renegotiates, as before.
+
+The SFU names the member on each mid in JSON text on the control DataChannel:
+
+| Message | Client action (thread: libdatachannel) |
+|---|---|
+| `{"type":"slot","mid":"s3","user":"<id>"}` | `mello_peer_set_audio_mid_sender(peer, "s3", id)`: RTP on `s3` is from `id` from now on |
+| `{"type":"slot","mid":"s3","user":null}` | The mid is freed: its packets drop. A member that holds no mid any more loses its NetEQ (`mello_voice_remove_peer`) |
+| `{"type":"speaking","user":"<id>","on":true}` | `Event::VoiceActivity { member_id: id, speaking: true }` (section 7.4) |
+
+- The SFU sends the whole map (and who speaks now) when the control channel opens.
+- libmello keeps the map in `VoiceSlotMap` and resolves the sender per packet; a packet on a mid with no member drops. RTP and the control channel are separate transports, so the first packets of a new member can drop before its slot message arrives (soak: under 0.1 %).
+- mello-core parses the messages (`handle_control_text` in `transport/sfu_connection.rs`) on the libdatachannel thread, so no slot change and no speaking ring waits on the command loop. Without the direct voice sink, a release goes to the voice tick as `SfuEvent::SlotReleased`.
+- The SDP attribute `msid` names nothing for voice any more. A stream viewer still checks the stream audio track's msid (`is_stream_audio_sender`).
+- Each mid map belongs to one PeerConnection: a new offer starts empty.
+
 A busy session sends other signaling while a join waits for `joined` (step 2) or `answer` (step 3): `member_joined`, `member_left`, `ice_candidate`, a server `offer`. The client reads until the wanted type or `error` (`read_signal_until`). It keeps every other message in arrival order (at most 256) and does not fail the join on it. The signaling listener handles the kept messages first, then reads the socket. So no membership event and no server ICE candidate is lost.
 
 ### 7.2 Leave/Close Semantics
@@ -414,9 +431,37 @@ Send path objects (`mello-core/src/voice/send_sink.rs`, `transport/sfu_connectio
 
 Lock order on the capture thread: libmello capture lock, libmello sink lock, the target's read lock, the peer `mutex_`. The command loop takes the sink lock (clear) and the target's write lock (drop) one at a time, never one inside the other. `send_audio_frame` holds the peer `mutex_` only to copy the track pointer. It never takes `negotiation_mutex_`. A renegotiation (`handle_remote_offer` on the signaling task) holds `negotiation_mutex_` and takes `mutex_` only for short copies, so it cannot wait on the capture thread, and the capture thread cannot wait on it.
 
-What stays on the voice tick in SFU mode: the liveness ping and check (every 2 s), debug and capture stats, and the SFU event poll (membership, disconnect, and received audio only when the direct voice sink is not set). When the packet sink cannot be set, the tick sends the queued frames as before and logs an error.
+What stays on the voice tick in SFU mode: the liveness ping and check (every 2 s), debug and capture stats, the SFU event poll (membership, disconnect, and received audio only when the direct voice sink is not set), and a speaking change that waited for its 100 ms interval (section 7.4). When the packet sink cannot be set, the tick sends the queued frames as before and logs an error.
 
 Watchdog: a voice tick in SFU mode longer than 5 ms (`VOICE_TICK_BUDGET`) is logged at warn level with its slowest step (`mic_level`, `sfu_liveness`, `debug_stats`, `packet_send`, `sfu_events`, `sfu_reconnect`, `signal_send`). At most one line per 10 s, with the count of long ticks in between.
+
+### 7.4 Speaking State
+
+In an SFU call the speaking ring travels in-band, one SFU hop:
+
+| Step | Path | Thread |
+|---|---|---|
+| Local VAD opens or closes | `vad_cb` -> `InbandSpeaking::on_vad` -> `AudioSendTarget::send_control_text` -> `{"type":"speaking","on":true}` | Capture thread |
+| SFU | Records the state per peer (for `rtp_blackout`) and sends `{"type":"speaking","user":"<id>","on":true}` to every other member on a change | SFU |
+| Remote client | `handle_control_text` -> `Event::VoiceActivity` on the client event channel | libdatachannel thread |
+
+- Rate limit: at most one change per 100 ms (`INBAND_MIN_CHANGE_INTERVAL`). A change inside the interval waits; the voice tick sends it when the interval ends. A flap back to the state already sent cancels the wait. The last state always goes out.
+- Push-to-talk: the key sets the state (`Command::VoiceSpeaking` -> `VoiceManager::on_push_to_talk_speaking`), not the VAD.
+- Mute sends `on:false`: a muted microphone stops the VAD where it is.
+- A member that leaves gets `VoiceActivity { speaking: false }` from the `member_left` handler; the SFU sends no `on:false` for it.
+- The SFU sends the members that speak now when the control channel opens. `SfuConnection` keeps them until voice attaches (`set_activity_sink`), so a ring that started before the join completed is not lost.
+- The `voice_speaking` Nakama RPC stays for crew members outside the channel (spec 13 section 4.4). In an SFU call it goes at most once per second (`PRESENCE_MIN_CHANGE_INTERVAL`); in P2P at once. Only the local member's own state goes to it.
+- The UI keeps the call's speaking states (`AppContext::call_speaking`). In an SFU call they win over the backend's `voice_update` for the members of the joined channel, which lags and can carry a state that already changed.
+
+Measured 2026-10-07 on localhost (control-channel RTT 0 to 1.6 ms), a member joining a channel of 7 talking members on a real SFU (`slots_live_join_and_speaking_latency`, 10 runs):
+
+| Measurement | Result | Plan gate (30 ms RTT) |
+|---|---|---|
+| SFU `joined` to the first packet the joiner hears, per member | 104 to 134 ms (one run 23 to 35 ms) | under 300 ms |
+| SFU `joined` to the first packet a member hears from the joiner | 147 to 170 ms (one run 85 ms) | under 300 ms |
+| VAD open to the remote `VoiceActivity` | 0.2 to 2 ms | under 100 ms |
+
+Most of the join time is ICE, DTLS and the DataChannel open. The joiner's microphone starts only after `wait_for_datachannel_open`, which polls every 50 ms.
 
 ---
 
@@ -449,6 +494,12 @@ void  mello_voice_set_peer_pan(MelloContext* ctx, const char* peer_id, float pan
 float mello_voice_get_peer_volume(MelloContext* ctx, const char* peer_id);
 float mello_voice_get_peer_pan(MelloContext* ctx, const char* peer_id);
 void  mello_peer_set_audio_rtp_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data);
+// SFU receive slots and the voice control channel (section 7.1)
+#define MELLO_VOICE_RECV_SLOTS 16
+void  mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count);
+MelloResult mello_peer_set_audio_mid_sender(MelloPeerConnection* peer, const char* mid, const char* sender_id);
+void  mello_peer_set_control_text_callback(MelloPeerConnection* peer, MelloControlTextCallback callback, void* user_data);
+MelloResult mello_peer_send_control_text(MelloPeerConnection* peer, const char* text);
 ```
 
 Controls added with the NetEQ playout (section 5.3):
@@ -457,7 +508,7 @@ Controls added with the NetEQ playout (section 5.3):
 |---|---|---|---|
 | Per-member volume | `mello_voice_set_peer_volume` | `Command::SetPeerVolume { peer_id, volume }` -> `VoiceManager::set_peer_volume` | Not exposed yet (member context menu, follow-up) |
 | Per-member pan | `mello_voice_set_peer_pan` | none (centre) | none |
-| Peer left | `mello_voice_remove_peer` | `VoiceManager::on_member_left`, SFU `MemberLeft` | - |
+| Peer left | `mello_voice_remove_peer` | `VoiceManager::on_member_left`, SFU `MemberLeft`, SFU slot release (`handle_control_text`) | - |
 
 All user-facing voice toggles in `client` and `mello-core` must map to these runtime controls (no dead settings).
 

@@ -557,6 +557,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         rt: rt.handle().clone(),
         snapshot_loader,
         active_voice_channel: Rc::new(RefCell::new(String::new())),
+        call_speaking: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        in_sfu_call: Rc::new(std::cell::Cell::new(false)),
         new_crew_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         crew_settings_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         invited_users: Rc::new(RefCell::new(Vec::new())),

@@ -2,6 +2,7 @@
 
 #include "mello.h"
 #include "transport/incoming_audio_sender.hpp"
+#include "transport/voice_slot_map.hpp"
 
 #include <atomic>
 #include <chrono>
@@ -400,6 +401,90 @@ TEST_F(PeerRtpRolesTest, VoiceOfferDeclaresAudioSSRC) {
     EXPECT_NE(audio_section.find("cname:"), std::string::npos) << offer;
 
     mello_peer_destroy(peer);
+}
+
+size_t count_of(const std::string& text, const std::string& needle) {
+    size_t n = 0;
+    for (auto pos = text.find(needle); pos != std::string::npos;
+         pos = text.find(needle, pos + needle.size())) {
+        ++n;
+    }
+    return n;
+}
+
+// An SFU voice offer carries one recvonly m-line per receive slot after the
+// mic m-line, so a member join or leave needs no renegotiation (mello-sfu
+// 01-SFU.md section 6.2).
+TEST_F(PeerRtpRolesTest, VoiceOfferCarriesRecvSlots) {
+    auto* peer = mello_peer_create(nullptr, "voice-peer");
+    ASSERT_NE(peer, nullptr);
+    mello_peer_set_ice_servers(peer, nullptr, 0);
+    mello_peer_set_voice_recv_slots(peer, MELLO_VOICE_RECV_SLOTS);
+
+    const char* offer_ptr = mello_peer_create_offer(peer);
+    ASSERT_NE(offer_ptr, nullptr);
+    const std::string offer(offer_ptr);
+
+    EXPECT_EQ(count_of(offer, "m=audio"), 1u + MELLO_VOICE_RECV_SLOTS) << offer;
+    EXPECT_EQ(count_of(offer, "a=recvonly"), static_cast<size_t>(MELLO_VOICE_RECV_SLOTS))
+        << offer;
+    // The mic and the data channel m-lines.
+    EXPECT_EQ(count_of(offer, "a=sendrecv"), 2u) << offer;
+    EXPECT_NE(offer.find("a=mid:s0"), std::string::npos) << offer;
+    EXPECT_NE(offer.find("a=mid:s15"), std::string::npos) << offer;
+    // The mic m-line comes first and keeps its declared SSRC.
+    const auto first_audio = offer.find("m=audio");
+    const auto first_slot = offer.find("a=mid:s0");
+    EXPECT_LT(offer.find("a=ssrc:", first_audio), first_slot) << offer;
+
+    // No sender is mapped until the SFU names one.
+    EXPECT_EQ(mello_peer_recv_track_count(peer), 0);
+    EXPECT_EQ(mello_peer_set_audio_mid_sender(peer, "s3", "user-a"), MELLO_OK);
+    EXPECT_EQ(mello_peer_recv_track_count(peer), 1);
+    EXPECT_EQ(mello_peer_set_audio_mid_sender(peer, "s3", nullptr), MELLO_OK);
+    EXPECT_EQ(mello_peer_recv_track_count(peer), 0);
+    EXPECT_EQ(mello_peer_set_audio_mid_sender(peer, "", "user-a"), MELLO_ERROR_INVALID_PARAM);
+
+    mello_peer_destroy(peer);
+}
+
+// P2P voice peers keep the default: no receive slots.
+TEST_F(PeerRtpRolesTest, VoiceOfferWithoutSlotsHasOneAudioLine) {
+    auto* peer = mello_peer_create(nullptr, "voice-peer");
+    ASSERT_NE(peer, nullptr);
+    mello_peer_set_ice_servers(peer, nullptr, 0);
+
+    const char* offer_ptr = mello_peer_create_offer(peer);
+    ASSERT_NE(offer_ptr, nullptr);
+    const std::string offer(offer_ptr);
+    EXPECT_EQ(count_of(offer, "m=audio"), 1u) << offer;
+    EXPECT_EQ(count_of(offer, "a=recvonly"), 0u) << offer;
+
+    mello_peer_destroy(peer);
+}
+
+// A voice offer answered by a native answerer still connects: the answerer
+// rejects or accepts the slot m-lines and the mic m-line stays usable.
+TEST_F(PeerRtpRolesTest, VoiceOfferWithSlotsIsAnswerable) {
+    auto* offerer = mello_peer_create(nullptr, "voice-a");
+    auto* answerer = mello_peer_create(nullptr, "voice-b");
+    ASSERT_NE(offerer, nullptr);
+    ASSERT_NE(answerer, nullptr);
+    mello_peer_set_ice_servers(offerer, nullptr, 0);
+    mello_peer_set_ice_servers(answerer, nullptr, 0);
+    mello_peer_set_voice_recv_slots(offerer, 4);
+
+    const char* offer = mello_peer_create_offer(offerer);
+    ASSERT_NE(offer, nullptr);
+    const char* answer = mello_peer_create_answer(answerer, offer);
+    ASSERT_NE(answer, nullptr) << offer;
+    EXPECT_EQ(
+        mello_peer_set_remote_description(offerer, answer, false),
+        MELLO_OK
+    ) << answer;
+
+    mello_peer_destroy(answerer);
+    mello_peer_destroy(offerer);
 }
 
 TEST_F(PeerRtpRolesTest, StreamHostOfferContainsSendonlyH264) {
@@ -1037,31 +1122,36 @@ TEST_F(PeerRtpRolesTest, DestroyAfterConnectedStreamIsSafe) {
     );
 }
 
-TEST(IncomingAudioSenderTest, AcceptsVoiceUuidAndStreamSessionMsid) {
-    using mello::transport::is_valid_incoming_audio_sender;
+TEST(IncomingAudioSenderTest, StreamViewerAcceptsOnlyStreamSessionMsid) {
+    using mello::transport::is_stream_audio_sender;
 
-    EXPECT_TRUE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_VOICE,
-        "0890cdb5-7897-414a-bad2-2309c9ee4a83"));
-    EXPECT_FALSE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_VOICE,
-        "stream_0890cdb5_1786101128579"));
-    EXPECT_FALSE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_VOICE,
-        "1234567890"));
+    EXPECT_TRUE(is_stream_audio_sender("stream_0890cdb5_1786101128579"));
+    EXPECT_FALSE(is_stream_audio_sender("0890cdb5-7897-414a-bad2-2309c9ee4a83"));
+    EXPECT_FALSE(is_stream_audio_sender("unknown"));
+    EXPECT_FALSE(is_stream_audio_sender("1234567890"));
+}
 
-    EXPECT_TRUE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
-        "stream_0890cdb5_1786101128579"));
-    EXPECT_FALSE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
-        "0890cdb5-7897-414a-bad2-2309c9ee4a83"));
-    EXPECT_FALSE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
-        "unknown"));
-    EXPECT_FALSE(is_valid_incoming_audio_sender(
-        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
-        "1234567890"));
+TEST(VoiceSlotMapTest, SlotMessageRebindsAMidAndReportsTheOldOwner) {
+    mello::transport::VoiceSlotMap slots;
+
+    EXPECT_EQ(slots.lookup("s0"), "");
+    EXPECT_EQ(slots.set("s0", "alice"), "");
+    EXPECT_EQ(slots.lookup("s0"), "alice");
+    EXPECT_EQ(slots.assigned(), 1);
+
+    // Reassignment without a release in between still names the old owner,
+    // so the caller can drop her receive state.
+    EXPECT_EQ(slots.set("s0", "bob"), "alice");
+    EXPECT_EQ(slots.lookup("s0"), "bob");
+    EXPECT_EQ(slots.assigned(), 1);
+
+    EXPECT_EQ(slots.set("s0", ""), "bob");
+    EXPECT_EQ(slots.lookup("s0"), "");
+    EXPECT_EQ(slots.assigned(), 0);
+
+    slots.set("s1", "carol");
+    slots.clear();
+    EXPECT_EQ(slots.lookup("s1"), "");
 }
 
 } // namespace

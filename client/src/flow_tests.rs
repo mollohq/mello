@@ -743,6 +743,151 @@ fn a_crew_update_before_the_call_starts_keeps_the_joined_channel_active() {
     assert_eq!(active_voice_channels(&h), vec!["ch-squad"]);
 }
 
+/// Whether `member` shows the speaking ring in the `Squad` channel.
+fn squad_member_speaking(h: &Harness, member: &str) -> bool {
+    let channels = h.app().get_voice_channels();
+    (0..channels.row_count())
+        .filter_map(|i| channels.row_data(i))
+        .filter(|ch| ch.id == "ch-squad")
+        .flat_map(|ch| {
+            (0..ch.members.row_count())
+                .filter_map(|j| ch.members.row_data(j))
+                .collect::<Vec<_>>()
+        })
+        .find(|m| m.id == member)
+        .unwrap_or_else(|| panic!("no {member:?} in Squad"))
+        .speaking
+}
+
+fn speaking_rpcs(h: &mut Harness) -> Vec<bool> {
+    h.commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::VoiceSpeaking { speaking } => Some(speaking),
+            _ => None,
+        })
+        .collect()
+}
+
+/// `voice_update` for Squad with `u-me` and `u-bob`, bob speaking per the
+/// backend.
+fn squad_update_with_bob_speaking(bob_speaking: bool) -> Event {
+    use mello_core::crew_state::VoiceMember;
+    Event::VoiceUpdated {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        members: vec![
+            VoiceMember {
+                user_id: "u-me".into(),
+                username: "me".into(),
+                speaking: Some(false),
+                ..Default::default()
+            },
+            VoiceMember {
+                user_id: "u-bob".into(),
+                username: "bob".into(),
+                speaking: Some(bob_speaking),
+                ..Default::default()
+            },
+        ],
+    }
+}
+
+/// In Squad with bob over `transport`.
+fn in_squad_with_bob(h: &mut Harness, transport: VoiceMode) {
+    join_squad_before_the_call_starts(h);
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob"]),
+    });
+    h.emit(Event::VoiceStateChanged {
+        in_call: true,
+        transport,
+    });
+    h.commands();
+}
+
+/// ★ Stage 4: in an SFU call a remote member's ring comes from the SFU's
+/// in-band speaking message. It must not go back to the backend as this
+/// user's speaking presence; only the local member's own state does.
+#[test]
+fn a_remote_speaking_ring_from_the_sfu_sends_no_presence_rpc() {
+    let mut h = Harness::new();
+    in_squad_with_bob(&mut h, VoiceMode::SFU);
+
+    h.emit(Event::VoiceActivity {
+        member_id: "u-bob".into(),
+        speaking: true,
+    });
+    assert!(squad_member_speaking(&h, "u-bob"), "bob's ring shows");
+    assert_eq!(speaking_rpcs(&mut h), Vec::<bool>::new());
+
+    h.emit(Event::VoiceActivity {
+        member_id: "u-me".into(),
+        speaking: true,
+    });
+    assert!(squad_member_speaking(&h, "u-me"));
+    assert_eq!(
+        speaking_rpcs(&mut h),
+        vec![true],
+        "the local state is presence"
+    );
+}
+
+/// ★ Stage 4: the backend's `voice_update` lags the SFU. In an SFU call a
+/// stale `speaking: true` must not turn a ring back on that the SFU already
+/// turned off.
+#[test]
+fn a_stale_backend_update_does_not_flicker_the_sfu_speaking_ring() {
+    let mut h = Harness::new();
+    in_squad_with_bob(&mut h, VoiceMode::SFU);
+
+    h.emit(Event::VoiceActivity {
+        member_id: "u-bob".into(),
+        speaking: true,
+    });
+    h.emit(Event::VoiceActivity {
+        member_id: "u-bob".into(),
+        speaking: false,
+    });
+    h.emit(squad_update_with_bob_speaking(true));
+    assert!(
+        !squad_member_speaking(&h, "u-bob"),
+        "the stale backend state must not override the SFU"
+    );
+
+    // And the other way: the SFU says bob talks, the backend says not yet.
+    h.emit(Event::VoiceActivity {
+        member_id: "u-bob".into(),
+        speaking: true,
+    });
+    h.emit(squad_update_with_bob_speaking(false));
+    assert!(squad_member_speaking(&h, "u-bob"));
+
+    h.emit(Event::CrewStateLoaded {
+        state: crew_state_with_channels(&["u-me", "u-bob"]),
+    });
+    h.emit(Event::VoiceChannelsUpdated {
+        crew_id: "crew-1".into(),
+        channels: crew_state_with_channels(&["u-me", "u-bob"]).voice_channels,
+    });
+    assert!(
+        squad_member_speaking(&h, "u-bob"),
+        "a channel rebuild keeps it"
+    );
+}
+
+/// Outside an SFU call (P2P) the backend stays the source of remote rings.
+#[test]
+fn in_p2p_the_backend_speaking_state_applies() {
+    let mut h = Harness::new();
+    in_squad_with_bob(&mut h, VoiceMode::P2P);
+
+    h.emit(squad_update_with_bob_speaking(true));
+    assert!(squad_member_speaking(&h, "u-bob"));
+    h.emit(squad_update_with_bob_speaking(false));
+    assert!(!squad_member_speaking(&h, "u-bob"));
+}
+
 /// ★ A join that fails after `VoiceJoined` ends with
 /// `VoiceStateChanged { in_call: false }`. The active mark goes, and a later
 /// crew update does not put it back on a channel the user is not in.

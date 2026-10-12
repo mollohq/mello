@@ -5,6 +5,20 @@ use crate::voice::{SignalEnvelope, SignalPurpose};
 use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 
 impl super::Client {
+    /// The `voice_speaking` presence RPC. Crew members outside the channel
+    /// read it from the backend's `voice_update` push. In an SFU call the
+    /// caller rate-limits it to one change per second.
+    pub(super) async fn send_speaking_presence(&self, speaking: bool) {
+        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+            log::debug!("voice_speaking RPC: crew={} speaking={}", crew_id, speaking);
+            if let Err(e) = self.nakama.voice_speaking(&crew_id, speaking).await {
+                log::warn!("voice_speaking RPC failed: {}", e);
+            }
+        } else {
+            log::debug!("voice_speaking: no active crew");
+        }
+    }
+
     pub(super) async fn voice_tick(&mut self) {
         let sfu_mode = self.voice.voice_mode() == crate::voice::VoiceMode::SFU;
         let mut steps = super::loop_watchdog::TickSteps::start();

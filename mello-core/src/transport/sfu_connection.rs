@@ -1,8 +1,10 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::ffi::{CStr, CString};
-use std::sync::atomic::{AtomicI32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
+use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -14,6 +16,7 @@ use tokio_tungstenite::tungstenite::{
 
 use std::ptr::NonNull;
 
+use crate::events::Event;
 use crate::stream::rtp_peer::{self, ReceivedAccessUnit, RtpPeerError};
 use crate::stream::StreamError;
 
@@ -135,6 +138,11 @@ pub enum SfuEvent {
         sender_id: String,
         rtp: Vec<u8>,
     },
+    /// The SFU released the last receive slot of `user_id` while the direct
+    /// voice sink was not set. Voice drops the member's receive state.
+    SlotReleased {
+        user_id: String,
+    },
     Disconnected {
         reason: String,
     },
@@ -217,6 +225,77 @@ struct AudioTrackCallbackData {
     /// stream connections and until voice attaches. See
     /// `SfuConnection::set_direct_voice_sink`.
     voice_sink: std::sync::RwLock<Option<VoiceSinkCtx>>,
+    /// Voice control channel: slot map and remote speaking state.
+    control: VoiceControl,
+    /// When the SFU's `joined` arrived, for the first-packet log.
+    joined_at: Instant,
+    first_rx_logged: AtomicBool,
+    /// First packet per sender, for the join latency measurement.
+    #[cfg(test)]
+    first_rx: Mutex<HashMap<String, Instant>>,
+}
+
+/// Voice control-channel state of one connection (mello-sfu 01-SFU.md
+/// section 5.4): the SFU's slot map and the remote speaking states.
+struct VoiceControl {
+    /// The peer that routes incoming RTP by mid. The control callback is
+    /// cleared before the peer is destroyed.
+    peer: SendPeer,
+    /// mid -> sender user id, as the SFU announced it.
+    slots: Mutex<HashMap<String, String>>,
+    /// user id -> latest in-band speaking state.
+    speaking: Mutex<HashMap<String, bool>>,
+    /// Receives remote speaking changes as `Event::VoiceActivity` while
+    /// voice is attached (`SfuConnection::set_activity_sink`).
+    activity: std::sync::RwLock<Option<std_mpsc::Sender<Event>>>,
+}
+
+impl VoiceControl {
+    fn new(peer: *mut mello_sys::MelloPeerConnection) -> Self {
+        Self {
+            peer: SendPeer(peer),
+            slots: Mutex::new(HashMap::new()),
+            speaking: Mutex::new(HashMap::new()),
+            activity: std::sync::RwLock::new(None),
+        }
+    }
+
+    /// Send remote speaking changes to `tx` from now on. Members that speak
+    /// now (the SFU's snapshot can arrive before voice attaches) go at once.
+    fn set_activity(&self, tx: std_mpsc::Sender<Event>) {
+        let speaking_now: Vec<String> = self
+            .speaking
+            .lock()
+            .map(|s| {
+                s.iter()
+                    .filter(|(_, on)| **on)
+                    .map(|(user, _)| user.clone())
+                    .collect()
+            })
+            .unwrap_or_default();
+        for member_id in speaking_now {
+            let _ = tx.send(Event::VoiceActivity {
+                member_id,
+                speaking: true,
+            });
+        }
+        if let Ok(mut activity) = self.activity.write() {
+            *activity = Some(tx);
+        }
+    }
+}
+
+/// One message from the SFU on the voice control channel.
+#[derive(Debug, Deserialize)]
+struct ControlMessage {
+    #[serde(rename = "type")]
+    msg_type: String,
+    #[serde(default)]
+    mid: Option<String>,
+    #[serde(default)]
+    user: Option<String>,
+    #[serde(default)]
+    on: Option<bool>,
 }
 
 /// libmello context pointer used from the native audio track callback thread.
@@ -314,6 +393,24 @@ impl AudioSendTarget {
             Err(AudioSendSkip::TrackNotOpen)
         }
     }
+
+    /// Send one text message on the control DataChannel (the in-band
+    /// speaking state). Any thread. False when there is no peer or the
+    /// channel is not open.
+    pub fn send_control_text(&self, text: &str) -> bool {
+        let Ok(peer) = self.peer.read() else {
+            return false;
+        };
+        let Some(SendPeer(peer)) = *peer else {
+            return false;
+        };
+        let Ok(text) = CString::new(text) else {
+            return false;
+        };
+        // SAFETY: the read guard keeps the peer alive for this call.
+        let result = unsafe { mello_sys::mello_peer_send_control_text(peer, text.as_ptr()) };
+        result == mello_sys::MelloResult_MELLO_OK
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -351,6 +448,14 @@ impl SfuConnection {
                 "failed to create PeerConnection".into(),
             ));
         }
+        // One recvonly m-line per remote member: a join or leave within the
+        // slots needs no renegotiation (mello-sfu 01-SFU.md section 5.5).
+        unsafe {
+            mello_sys::mello_peer_set_voice_recv_slots(
+                peer,
+                mello_sys::MELLO_VOICE_RECV_SLOTS as i32,
+            )
+        };
         Ok(PeerHandle {
             peer,
             peer_id_c,
@@ -954,6 +1059,7 @@ impl SfuConnection {
         // it is kept for the listener (read_signal_until).
         let mut deferred: Vec<SignalingMessage> = Vec::new();
         let joined = read_signal_until(&mut ws_rx, "joined", &mut deferred).await?;
+        let joined_at = Instant::now();
         if joined.msg_type == "error" {
             let err_msg = joined
                 .data
@@ -1084,6 +1190,18 @@ impl SfuConnection {
                 static DROP_COUNT: AtomicU64 = AtomicU64::new(0);
                 let n = CB_COUNT.fetch_add(1, AtOrd::Relaxed) + 1;
                 let cb_data = &*(user_data as *const AudioTrackCallbackData);
+                if !cb_data.first_rx_logged.swap(true, AtOrd::Relaxed) {
+                    log::info!(
+                        "SFU: first voice packet {} ms after joined (sender {})",
+                        cb_data.joined_at.elapsed().as_millis(),
+                        CStr::from_ptr(sender_id).to_string_lossy()
+                    );
+                }
+                #[cfg(test)]
+                if let Ok(mut first) = cb_data.first_rx.lock() {
+                    let sender = CStr::from_ptr(sender_id).to_string_lossy().into_owned();
+                    first.entry(sender).or_insert_with(Instant::now);
+                }
 
                 // Voice: feed the decoder here, on the native callback thread.
                 // Before, packets went through an mpsc that only the core
@@ -1133,6 +1251,11 @@ impl SfuConnection {
             let audio_cb = Box::into_raw(Box::new(AudioTrackCallbackData {
                 event_tx: self.event_tx.clone(),
                 voice_sink: std::sync::RwLock::new(None),
+                control: VoiceControl::new(peer),
+                joined_at,
+                first_rx_logged: AtomicBool::new(false),
+                #[cfg(test)]
+                first_rx: Mutex::new(HashMap::new()),
             }));
             unsafe {
                 mello_sys::mello_peer_set_audio_rtp_callback(
@@ -1140,6 +1263,17 @@ impl SfuConnection {
                     Some(audio_track_callback),
                     audio_cb as *mut std::ffi::c_void,
                 );
+            }
+            if media_role == PeerMediaRole::Voice {
+                // Slot map and speaking messages, handled on the
+                // libdatachannel thread (handle_control_text).
+                unsafe {
+                    mello_sys::mello_peer_set_control_text_callback(
+                        peer,
+                        Some(control_text_callback),
+                        audio_cb as *mut std::ffi::c_void,
+                    );
+                }
             }
 
             let offer_ptr = unsafe { mello_sys::mello_peer_create_offer(peer) };
@@ -1305,8 +1439,9 @@ impl SfuConnection {
         }
     }
 
-    /// Stop feeding the voice decoder directly. Waits for a callback that is
-    /// feeding right now, so the context may be released after this returns.
+    /// Stop feeding the voice decoder directly, and stop remote speaking
+    /// events (`set_activity_sink`). Waits for a callback that is feeding
+    /// right now, so the context may be released after this returns.
     pub fn clear_direct_voice_sink(&self) {
         if self.audio_cb_data.is_null() {
             return;
@@ -1317,6 +1452,33 @@ impl SfuConnection {
                 log::info!("SFU: direct voice sink cleared");
             }
         }
+        if let Ok(mut activity) = cb.control.activity.write() {
+            activity.take();
+        }
+    }
+
+    /// Raise `Event::VoiceActivity` on `tx` for each remote speaking change
+    /// from the SFU's control channel, from the libdatachannel thread. The
+    /// members that speak now are sent at once. Cleared by
+    /// `clear_direct_voice_sink`.
+    pub fn set_activity_sink(&self, tx: std_mpsc::Sender<Event>) {
+        if self.audio_cb_data.is_null() {
+            return;
+        }
+        let cb = unsafe { &*self.audio_cb_data };
+        cb.control.set_activity(tx);
+    }
+
+    /// When the SFU's `joined` arrived, and when the first packet of
+    /// `sender` arrived (join latency, stage 4 gate).
+    #[cfg(test)]
+    pub(crate) fn first_audio_from(&self, sender: &str) -> Option<(Instant, Instant)> {
+        if self.audio_cb_data.is_null() {
+            return None;
+        }
+        let cb = unsafe { &*self.audio_cb_data };
+        let first = cb.first_rx.lock().ok()?.get(sender).copied()?;
+        Some((cb.joined_at, first))
     }
 
     /// The peer as a send target for the voice packet sink. Sends go to this
@@ -1407,6 +1569,11 @@ impl Drop for SfuConnection {
                         std::ptr::null_mut(),
                     );
                     mello_sys::mello_peer_set_audio_rtp_callback(
+                        peer.get(),
+                        None,
+                        std::ptr::null_mut(),
+                    );
+                    mello_sys::mello_peer_set_control_text_callback(
                         peer.get(),
                         None,
                         std::ptr::null_mut(),
@@ -1567,6 +1734,139 @@ impl SignalListener {
     }
 }
 
+/// Control-channel text from libmello (mello_peer_set_control_text_callback).
+///
+/// # Safety
+/// `user_data` is the connection's `AudioTrackCallbackData`, alive until
+/// the teardown clears this callback.
+unsafe extern "C" fn control_text_callback(
+    user_data: *mut std::ffi::c_void,
+    text: *const std::ffi::c_char,
+    size: i32,
+) {
+    if user_data.is_null() || text.is_null() || size <= 0 {
+        return;
+    }
+    let cb = &*(user_data as *const AudioTrackCallbackData);
+    let bytes = std::slice::from_raw_parts(text as *const u8, size as usize);
+    if let Ok(text) = std::str::from_utf8(bytes) {
+        handle_control_text(cb, text);
+    }
+}
+
+/// Handle one message from the SFU's voice control channel (01-SFU.md
+/// section 5.4). Runs on the libdatachannel thread, so neither a slot change
+/// nor a speaking ring waits on the command loop.
+///
+/// - `slot`: libmello routes RTP on the mid to the named member from now on.
+///   A member that no longer holds any mid loses its receive state (its
+///   NetEQ), so state never carries over between members on one SSRC.
+/// - `speaking`: raises `Event::VoiceActivity` for the remote member.
+fn handle_control_text(cb: &AudioTrackCallbackData, text: &str) {
+    let msg: ControlMessage = match serde_json::from_str(text) {
+        Ok(msg) => msg,
+        Err(e) => {
+            log::debug!("SFU control: unreadable message ({}): {}", e, text);
+            return;
+        }
+    };
+    match msg.msg_type.as_str() {
+        "slot" => {
+            let Some(mid) = msg.mid.filter(|m| !m.is_empty()) else {
+                return;
+            };
+            apply_slot(cb, &mid, msg.user.filter(|u| !u.is_empty()));
+        }
+        "speaking" => {
+            let (Some(user), Some(on)) = (msg.user.filter(|u| !u.is_empty()), msg.on) else {
+                return;
+            };
+            if let Ok(mut speaking) = cb.control.speaking.lock() {
+                speaking.insert(user.clone(), on);
+            }
+            if let Ok(activity) = cb.control.activity.read() {
+                if let Some(tx) = activity.as_ref() {
+                    let _ = tx.send(Event::VoiceActivity {
+                        member_id: user,
+                        speaking: on,
+                    });
+                }
+            }
+        }
+        other => log::debug!("SFU control: unhandled message type {}", other),
+    }
+}
+
+fn apply_slot(cb: &AudioTrackCallbackData, mid: &str, user: Option<String>) {
+    let (previous, still_held) = {
+        let Ok(mut slots) = cb.control.slots.lock() else {
+            return;
+        };
+        let previous = match &user {
+            Some(u) => slots.insert(mid.to_string(), u.clone()),
+            None => slots.remove(mid),
+        };
+        let still_held = previous
+            .as_ref()
+            .is_some_and(|p| slots.values().any(|u| u == p));
+        (previous, still_held)
+    };
+
+    // Route first: from here on, packets on `mid` belong to `user`.
+    let (Ok(mid_c), Ok(user_c)) = (
+        CString::new(mid),
+        CString::new(user.clone().unwrap_or_default()),
+    ) else {
+        return;
+    };
+    let SendPeer(peer) = cb.control.peer;
+    if !peer.is_null() {
+        // SAFETY: the peer outlives this callback (see VoiceControl::peer).
+        unsafe {
+            mello_sys::mello_peer_set_audio_mid_sender(
+                peer,
+                mid_c.as_ptr(),
+                if user.is_some() {
+                    user_c.as_ptr()
+                } else {
+                    std::ptr::null()
+                },
+            )
+        };
+    }
+    log::info!(
+        "SFU slot {}: {} -> {}",
+        mid,
+        previous.as_deref().unwrap_or("-"),
+        user.as_deref().unwrap_or("-")
+    );
+
+    if let Some(prev) = previous {
+        if !still_held && user.as_deref() != Some(prev.as_str()) {
+            release_receive_state(cb, &prev);
+        }
+    }
+}
+
+/// Drop `user`'s receive state (its NetEQ): directly when the voice sink is
+/// set, else through the event queue for the voice tick.
+fn release_receive_state(cb: &AudioTrackCallbackData, user: &str) {
+    if let Ok(sink) = cb.voice_sink.read() {
+        if let Some(VoiceSinkCtx(ctx)) = *sink {
+            if let Ok(id) = CString::new(user) {
+                // SAFETY: the sink's context is valid while it is set; the
+                // read guard holds it (see VoiceSinkCtx).
+                unsafe { mello_sys::mello_voice_remove_peer(ctx, id.as_ptr()) };
+            }
+            log::info!("SFU: receive state of {} released with its slot", user);
+            return;
+        }
+    }
+    let _ = cb.event_tx.try_send(SfuEvent::SlotReleased {
+        user_id: user.to_string(),
+    });
+}
+
 /// Most signaling messages kept while a join waits for one reply. A server
 /// that sends more is broken; the join fails instead of buffering forever.
 const MAX_DEFERRED_SIGNALS: usize = 256;
@@ -1706,6 +2006,152 @@ unsafe fn collect_client_stats(ctx_addr: usize, peer_addr: usize) -> serde_json:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Callback data for a native voice peer, as `join_and_negotiate` builds
+    /// it, with `ctx` as the direct voice sink.
+    fn control_fixture(
+        peer: *mut mello_sys::MelloPeerConnection,
+        ctx: Option<*mut mello_sys::MelloContext>,
+    ) -> (AudioTrackCallbackData, mpsc::Receiver<SfuEvent>) {
+        let (event_tx, event_rx) = mpsc::channel(16);
+        let data = AudioTrackCallbackData {
+            event_tx,
+            voice_sink: std::sync::RwLock::new(ctx.map(VoiceSinkCtx)),
+            control: VoiceControl::new(peer),
+            joined_at: Instant::now(),
+            first_rx_logged: AtomicBool::new(false),
+            first_rx: Mutex::new(HashMap::new()),
+        };
+        (data, event_rx)
+    }
+
+    /// One Opus RTP packet (the 3-byte Opus silence frame).
+    fn opus_rtp(seq: u16, ssrc: u32) -> Vec<u8> {
+        let mut pkt = vec![0x80, 111];
+        pkt.extend_from_slice(&seq.to_be_bytes());
+        pkt.extend_from_slice(&(u32::from(seq) * 960).to_be_bytes());
+        pkt.extend_from_slice(&ssrc.to_be_bytes());
+        pkt.extend_from_slice(&[0xF8, 0xFF, 0xFE]);
+        pkt
+    }
+
+    fn receive_peers(ctx: *mut mello_sys::MelloContext) -> i32 {
+        let mut stats: mello_sys::MelloDebugStats = unsafe { std::mem::zeroed() };
+        unsafe { mello_sys::mello_get_debug_stats(ctx, &mut stats) };
+        stats.incoming_streams
+    }
+
+    fn feed(ctx: *mut mello_sys::MelloContext, sender: &str, seq: u16) {
+        let id = CString::new(sender).expect("sender id");
+        let pkt = opus_rtp(seq, 0x5107);
+        let result = unsafe {
+            mello_sys::mello_voice_feed_rtp(ctx, id.as_ptr(), pkt.as_ptr(), pkt.len() as i32, -1)
+        };
+        assert_eq!(result, mello_sys::MelloResult_MELLO_OK);
+    }
+
+    /// A `slot` message routes the mid to the new member, and the old owner
+    /// of the slot loses its NetEQ: two members on one slot SSRC never share
+    /// receive state (stage 4).
+    #[test]
+    fn a_slot_message_rebinds_the_mid_and_removes_the_old_receive_peer() {
+        let (tx, _rx) = std::sync::mpsc::channel();
+        let voice = crate::voice::VoiceManager::with_test_audio_backend(tx);
+        let ctx = voice.mello_ctx();
+        let id = CString::new("slot-test").expect("static id");
+        // SAFETY: libmello ignores the context argument of mello_peer_create.
+        let peer = unsafe { mello_sys::mello_peer_create(std::ptr::null_mut(), id.as_ptr()) };
+        assert!(!peer.is_null());
+        let (cb, mut events) = control_fixture(peer, Some(ctx));
+
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s0","user":"alice"}"#);
+        assert_eq!(unsafe { mello_sys::mello_peer_recv_track_count(peer) }, 1);
+        feed(ctx, "alice", 1);
+        assert_eq!(receive_peers(ctx), 1, "alice's NetEQ exists");
+
+        // The SFU gives alice's slot to bob (she left; release and assign).
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s0","user":null}"#);
+        assert_eq!(receive_peers(ctx), 0, "the release removed alice's NetEQ");
+        assert_eq!(unsafe { mello_sys::mello_peer_recv_track_count(peer) }, 0);
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s0","user":"bob"}"#);
+        assert_eq!(unsafe { mello_sys::mello_peer_recv_track_count(peer) }, 1);
+
+        // A reassignment without a release in between removes the old owner too.
+        feed(ctx, "bob", 1);
+        assert_eq!(receive_peers(ctx), 1);
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s0","user":"carol"}"#);
+        assert_eq!(receive_peers(ctx), 0, "bob's NetEQ went with his slot");
+
+        // A member that still holds another mid keeps its receive state.
+        handle_control_text(&cb, r#"{"type":"slot","mid":"7","user":"carol"}"#);
+        feed(ctx, "carol", 1);
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s0","user":null}"#);
+        assert_eq!(receive_peers(ctx), 1, "carol is still on mid 7");
+
+        // A repeat of the current map (the snapshot on channel open) changes nothing.
+        handle_control_text(&cb, r#"{"type":"slot","mid":"7","user":"carol"}"#);
+        assert_eq!(receive_peers(ctx), 1);
+        assert!(events.try_recv().is_err(), "the direct sink needs no event");
+
+        unsafe { mello_sys::mello_peer_destroy(peer) };
+    }
+
+    /// Without the direct voice sink the release goes to the voice tick.
+    #[test]
+    fn a_slot_release_without_the_direct_sink_raises_an_event() {
+        let (cb, mut events) = control_fixture(std::ptr::null_mut(), None);
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s1","user":"alice"}"#);
+        handle_control_text(&cb, r#"{"type":"slot","mid":"s1","user":null}"#);
+        match events.try_recv() {
+            Ok(SfuEvent::SlotReleased { user_id }) => assert_eq!(user_id, "alice"),
+            other => panic!("expected SlotReleased, got {other:?}"),
+        }
+    }
+
+    /// A `speaking` message raises VoiceActivity for the remote member, and
+    /// a member that speaks before voice attaches is not lost.
+    #[test]
+    fn a_speaking_message_raises_voice_activity_for_the_remote_member() {
+        let (cb, _events) = control_fixture(std::ptr::null_mut(), None);
+
+        // The SFU's snapshot arrives while the join still waits.
+        handle_control_text(&cb, r#"{"type":"speaking","user":"alice","on":true}"#);
+        handle_control_text(&cb, r#"{"type":"speaking","user":"dave","on":false}"#);
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        cb.control.set_activity(tx);
+        match rx.try_recv() {
+            Ok(Event::VoiceActivity {
+                member_id,
+                speaking,
+            }) => {
+                assert_eq!(member_id, "alice");
+                assert!(speaking);
+            }
+            other => panic!("expected alice speaking, got {other:?}"),
+        }
+        assert!(rx.try_recv().is_err(), "a silent member raises nothing");
+
+        handle_control_text(&cb, r#"{"type":"speaking","user":"bob","on":true}"#);
+        handle_control_text(&cb, r#"{"type":"speaking","user":"bob","on":false}"#);
+        let got: Vec<(String, bool)> = rx
+            .try_iter()
+            .map(|ev| match ev {
+                Event::VoiceActivity {
+                    member_id,
+                    speaking,
+                } => (member_id, speaking),
+                other => panic!("unexpected event {other:?}"),
+            })
+            .collect();
+        assert_eq!(got, [("bob".to_string(), true), ("bob".to_string(), false)]);
+
+        // Malformed and unknown messages are ignored.
+        handle_control_text(&cb, r#"{"type":"speaking","on":true}"#);
+        handle_control_text(&cb, r#"{"type":"future_thing","x":1}"#);
+        handle_control_text(&cb, "not json");
+        assert!(rx.try_recv().is_err());
+    }
 
     fn voice_peer() -> PeerHandle {
         PeerHandle {
