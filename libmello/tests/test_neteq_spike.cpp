@@ -772,9 +772,16 @@ private:
 }  // namespace
 
 namespace {
+// `ceiling` counts output samples at the int16 ceiling. The limiter puts a
+// sample there by design: for input at or above +1 dBFS its gain is
+// 32768 / input (InterpolatedGainCurve::LookUpGainToApply), so the float
+// output is exactly 32768 and the int16 conversion lands on 32767 or -32768.
+// Which samples reach +1 dBFS depends on the Opus float path of the platform
+// (x86 and arm64 differ in the last bits). Clipping is a flat top: two or
+// more consecutive samples at the ceiling. `flat_tops` counts those runs.
 struct MixResult {
     int peak_a = 0, peak_b = 0, peak = 0;
-    int64_t clipped = 0, naive_clipped = 0, samples = 0;
+    int64_t ceiling = 0, flat_tops = 0, naive_clipped = 0, samples = 0;
     double mix_us = 0.0;
 };
 
@@ -800,6 +807,7 @@ MixResult run_mix(const std::vector<std::vector<uint8_t>>& corpus_a,
         EXPECT_TRUE(mixer->AddSource(&src_b));
         AudioFrame mixed;
         int64_t mix_ns = 0;
+        int run = 0;  // consecutive samples at the ceiling, across frames
         for (int64_t i = 1; i <= ticks; ++i) {
             sim.deliver_until(i * kTickUs);
             const auto t0 = std::chrono::steady_clock::now();
@@ -811,7 +819,12 @@ MixResult run_mix(const std::vector<std::vector<uint8_t>>& corpus_a,
             for (size_t k = 0; k < mixed.samples_per_channel_; ++k) {
                 const int v = std::abs(int{d[k]});
                 m.peak = std::max(m.peak, v);
-                if (v >= 32767) ++m.clipped;
+                if (v >= 32767) {
+                    ++m.ceiling;
+                    if (++run == 2) ++m.flat_tops;
+                } else {
+                    run = 0;
+                }
                 ++m.samples;
             }
         }
@@ -842,9 +855,9 @@ MixResult run_mix(const std::vector<std::vector<uint8_t>>& corpus_a,
 }
 
 void print_mix(const char* label, const MixResult& m) {
-    std::printf("[neteq-spike] mixer %s: source peaks %d/%d; mixed peak=%d (%.2f dBFS); clipped samples at the int16 ceiling: limiter=%lld plain sum=%lld of %lld; Mix()=%.1f us per 10 ms (includes 2 GetAudio)\n",
+    std::printf("[neteq-spike] mixer %s: source peaks %d/%d; mixed peak=%d (%.2f dBFS); samples at the int16 ceiling: limiter=%lld (flat tops=%lld) plain sum=%lld of %lld; Mix()=%.1f us per 10 ms (includes 2 GetAudio)\n",
                 label, m.peak_a, m.peak_b, m.peak, 20.0 * std::log10(std::max(m.peak, 1) / 32768.0),
-                (long long)m.clipped, (long long)m.naive_clipped, (long long)m.samples, m.mix_us);
+                (long long)m.ceiling, (long long)m.flat_tops, (long long)m.naive_clipped, (long long)m.samples, m.mix_us);
 }
 }  // namespace
 
@@ -869,12 +882,14 @@ TEST(NetEqSpike, MixerLimiterTwoFullScaleSources) {
         EXPECT_GE(m->peak_b, 30000) << "source is not near full scale";
     }
     EXPECT_GT(two.naive_clipped, 0) << "the plain sum of two talkers does not clip";
-    EXPECT_EQ(two.clipped, 0) << "the mixer output clips with two talkers";
+    // Two talkers: isolated samples at the ceiling are the limiter at its
+    // design maximum (see MixResult). A flat top is clipping.
+    EXPECT_EQ(two.flat_tops, 0) << "the mixer output clips with two talkers";
     // In phase the sum reaches +6 dBFS. The AGC2 limiter maps input above
     // +1 dBFS to 0 dBFS and clamps there, so a few samples sit at the int16
     // ceiling by design. The plain sum clips with up to 6 dB of overshoot.
     EXPECT_GT(same.naive_clipped, 1000) << "the plain sum does not clip, so the test proves nothing";
-    EXPECT_LT(same.clipped * 20, same.naive_clipped) << "the limiter does not hold the in-phase sum";
+    EXPECT_LT(same.ceiling * 20, same.naive_clipped) << "the limiter does not hold the in-phase sum";
 }
 
 // ---------------------------------------------------------------------------
