@@ -4,7 +4,8 @@
     "Profiles added after baseline 2.9 (plans/voice-quality.md stage 5). Read by tools/voice-gate after profiles.json.",
     "Not in the baseline: profiles.json and its inputs fingerprint do not change, so baseline-2.9 stays valid. This file has its own fingerprint (results.json added_inputs_fingerprint).",
     "The corpus, receiver and analysis settings come from profiles.json.",
-    "compare_no_adapt: the profile also runs as <name>-no-adapt, without the send-leg feedback, for the gates with min_ref."
+    "compare_no_adapt: the profile also runs as <name>-no-adapt, without the send-leg feedback, for the gates with min_ref.",
+    "extra_seeds (stage 3b): the profile, and its no-adapt twin, also run with each extra seed as <name>@<seed>. The gate on bottleneck_delay_mean_ms_median reads the median over the seed and the extra seeds: which packets the tail-drop queue drops, and so NetEQ's target, depends on the jitter draws."
   ],
   "profiles": [
     {
@@ -19,10 +20,11 @@
         "bottleneck": { "start_s": 10, "dur_s": 20, "rate_kbps": 56, "queue_ms": 300, "overhead_bytes": 38 }
       },
       "compare_no_adapt": true,
+      "extra_seeds": [910, 911],
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "bitrate_reaction_s", "max": 2, "enforced": true, "note": "stage 5 gate: the send bitrate steps down within 2 s after the network first loses more than 10 % of 2 s of packets" },
-        { "metric": "bottleneck_delay_mean_ms", "max_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": -100 }, "enforced": true, "note": "stage 5 gate: the ladder drains the queue (mean delay in the bottleneck window at least 100 ms lower than without it)" },
+        { "metric": "bottleneck_delay_mean_ms_median", "max_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": -100 }, "enforced": true, "note": "stage 5 gate, median over seeds 909, 910, 911 since stage 3b: the ladder drains the queue (mean delay in the bottleneck window at least 100 ms lower than without it)" },
         { "metric": "mos", "min_ref": { "source": "run", "profile": "congestion-no-adapt", "offset": -0.2 }, "enforced": true, "note": "stage 5 gate: the ladder costs at most 0.2 MOS. In-band FEC repairs the isolated tail-drop losses of a single flow, so without the ladder the bottleneck costs only delay, which PESQ does not score; the ladder trades at most 0.2 MOS of NetEQ time stretch (the queue drains) for the delay gain gated above" }
       ]
     }

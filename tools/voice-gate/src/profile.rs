@@ -166,6 +166,10 @@ pub struct Profile {
     /// Added after the baseline (profiles-congestion.json): no baseline
     /// values, its own inputs fingerprint.
     pub added: bool,
+    /// The profile whose seeds this run belongs to: its own name, or for a
+    /// run of an `extra_seeds` entry the name of the profile it repeats.
+    /// Gates read the median over a group (`<metric>_median`).
+    pub group: String,
     pub description: String,
     pub duration_s: f64,
     pub seed: u64,
@@ -389,7 +393,11 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
 /// `profiles`). The baseline's fingerprint does not cover them; they get
 /// their own. A profile with `"compare_no_adapt": true` also runs as
 /// `<name>-no-adapt`, without the send-leg feedback and without gates, so a
-/// gate can compare the two with `min_ref`.
+/// gate can compare the two with `min_ref`. A profile with
+/// `"extra_seeds": [..]` also runs once per extra seed as `<name>@<seed>`
+/// (and `<name>-no-adapt@<seed>`), without gates; the harness adds the
+/// median over the seeds of [`SEED_MEDIAN_METRICS`] to the profile as
+/// `<metric>_median`.
 pub fn load_added(gf: &mut GateFile, path: &Path) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let root: Value =
@@ -422,6 +430,18 @@ fn parse_profiles(root: &Value, added: bool) -> Result<Vec<Profile>, String> {
             .get("compare_no_adapt")
             .and_then(Value::as_bool)
             .unwrap_or(false);
+        let extra_seeds: Vec<u64> = match p.get("extra_seeds") {
+            None => Vec::new(),
+            Some(v) => v
+                .as_array()
+                .ok_or_else(|| ctx("extra_seeds must be an array".into()))?
+                .iter()
+                .map(|x| {
+                    x.as_u64()
+                        .ok_or_else(|| ctx("extra seed is not an integer".into()))
+                })
+                .collect::<Result<_, _>>()?,
+        };
         profiles.push(Profile {
             name: name.clone(),
             adapt: true,
@@ -449,17 +469,42 @@ fn parse_profiles(root: &Value, added: bool) -> Result<Vec<Profile>, String> {
             )
             .map_err(ctx)?,
             gates: parse_gates(p.get("gates").unwrap_or(&Value::Null)).map_err(ctx)?,
+            group: name.clone(),
         });
+        let base = profiles.last().cloned().ok_or("no profile")?;
         if compare_no_adapt {
-            let mut twin = profiles.last().cloned().ok_or("no profile")?;
-            twin.name = format!("{name}-no-adapt");
-            twin.description = format!("{name} without the send-leg feedback (comparison)");
-            twin.adapt = false;
-            twin.gates = Vec::new();
-            profiles.push(twin);
+            profiles.push(no_adapt_twin(&base));
+        }
+        for &seed in &extra_seeds {
+            let mut rep = base.clone();
+            rep.name = format!("{name}@{seed}");
+            rep.description = format!("{name} with seed {seed}");
+            rep.seed = seed;
+            rep.gates = Vec::new();
+            profiles.push(rep.clone());
+            if compare_no_adapt {
+                let mut twin = no_adapt_twin(&base);
+                twin.name = format!("{}@{seed}", twin.name);
+                twin.seed = seed;
+                profiles.push(twin);
+            }
         }
     }
     Ok(profiles)
+}
+
+/// Metrics of a profile with `extra_seeds` whose median over the seeds the
+/// harness adds as `<metric>_median`.
+pub const SEED_MEDIAN_METRICS: &[&str] = &["bottleneck_delay_mean_ms", "mos"];
+
+fn no_adapt_twin(base: &Profile) -> Profile {
+    let mut twin = base.clone();
+    twin.name = format!("{}-no-adapt", base.name);
+    twin.group = twin.name.clone();
+    twin.description = format!("{} without the send-leg feedback (comparison)", base.name);
+    twin.adapt = false;
+    twin.gates = Vec::new();
+    twin
 }
 
 /// Fingerprint of the frozen inputs. Gates may change between stages;

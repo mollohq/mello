@@ -30,8 +30,26 @@ public:
     bool initialize(const std::string& model_path);
     void shutdown();
 
-    void feed(const int16_t* samples, int count);
+    /// Returns the number of 32 ms chunks that ran.
+    int feed(const int16_t* samples, int count);
     void force_silence();
+    /// Start a new run of chunks after the caller stopped feeding for a
+    /// while (spec 10 section 4.1). Drops the 16 kHz samples left from the
+    /// last run: they are old audio. `history` is the 48 kHz audio right
+    /// before the next feed(). Its last `chunk_lead` 16 kHz samples start the
+    /// next chunk and the VAD_CONTEXT_SIZE samples before them become the
+    /// model context, so the first chunk ends `VAD_CHUNK_SIZE - chunk_lead`
+    /// samples into the next feed. The model state stays. `count` must be a
+    /// multiple of 3 and hold at least 3 * (chunk_lead + VAD_CONTEXT_SIZE)
+    /// samples; otherwise the call only drops the old samples.
+    void restart(const int16_t* history, int count, int chunk_lead);
+    /// Decide on the latest 32 ms now, between two chunks: run the model on
+    /// the last VAD_CHUNK_SIZE samples fed, from the state of the last
+    /// chunk, and keep neither the new state nor the context. The result
+    /// sets probability() and is_speaking() like a chunk. The pipeline calls
+    /// it at the end of a frame in which no chunk completed, while the gate
+    /// waits for speech, so the decision is not one frame late.
+    void peek();
 
     bool is_speaking() const { return speaking_; }
     float probability() const { return probability_; }
@@ -41,6 +59,10 @@ public:
 
 private:
     void run_inference();
+    // Run the model on VAD_CONTEXT_SIZE + VAD_CHUNK_SIZE samples with
+    // `state` (VAD_STATE_SIZE, updated in place). False on an error.
+    bool infer(float* input, float* state, float* prob);
+    void apply(float prob);
     void downsample_48_to_16(const int16_t* in, int count);
 
 #ifndef MELLO_IOS_NO_VAD
@@ -54,6 +76,8 @@ private:
     int64_t sample_rate_ = VAD_SAMPLE_RATE;
 
     std::vector<float> accum_buf_;         // accumulates downsampled 16kHz floats
+    std::vector<float> recent_;            // last context + chunk samples fed, for peek()
+    std::vector<float> peek_state_;
     std::atomic<bool> speaking_{false};
     float probability_ = 0.0f;
     bool was_speaking_ = false;

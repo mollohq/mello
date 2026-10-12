@@ -2,8 +2,8 @@
 //
 // The controller gets a trace of receiver reports, one per second as the SFU
 // sends them, and the tests assert the rung sequence it takes. Loss alone
-// moves only the loss perc; the ladder needs loss with a rising round trip
-// or a rising jitter.
+// moves only the loss perc; the ladder needs loss with a rising round trip,
+// a rising jitter, or no fresh round trip for two reports.
 
 #include <gtest/gtest.h>
 
@@ -87,6 +87,12 @@ TEST(SendAdaptation, StepsDownOnCongestionAndUpOneRungAfterTenCleanSeconds) {
     repeat(trace, 20, {0, 0, 40.0f});      // t 46..65: the speech gate is closed
     repeat(trace, 2, {50, 25, 40.0f, 30.0f});  // t 66..67: 50 % loss, jitter 6 x
     repeat(trace, 16, {50, 0, 40.0f});     // t 68..83: clean
+    repeat(trace, 2, {50, 7, 40.0f});      // t 84..85: 14 % loss
+    trace.push_back({50, 7, -1.0f});       // t 86: one report without a round trip
+    repeat(trace, 2, {50, 7, 40.0f});      // t 87..88
+    repeat(trace, 2, {50, 7, -1.0f});      // t 89..90: two in a row: the queue
+                                           // drops our sender reports
+    repeat(trace, 4, {50, 0, 40.0f});      // t 91..94: clean
 
     const auto changes = run_trace(c, trace);
     const Changes want = {
@@ -97,6 +103,8 @@ TEST(SendAdaptation, StepsDownOnCongestionAndUpOneRungAfterTenCleanSeconds) {
                       // 14 % random loss with a flat round trip: no step
         {67000, 48},  // loss with the jitter median above 2 x its 30 s median
         {77000, 64},  // the step lowered the loss; 10 s clean since the step
+                      // one report without a round trip: no step
+        {90000, 48},  // loss and no fresh round trip for two reports
     };
     EXPECT_EQ(changes, want);
     EXPECT_EQ(c.rung_changes(), want.size());
@@ -118,6 +126,62 @@ TEST(SendAdaptation, RandomLossWithAFlatRoundTripAndFlatJitterDoesNotStepDown) {
     EXPECT_EQ(c.bitrate_kbps(), 64);
     // The loss goes to the in-band FEC instead.
     EXPECT_EQ(c.loss_perc(), 13);
+}
+
+// The voice gate's congestion profile, stage 3b: the tail-drop queue that
+// drops 11 % of the packets also drops our sender reports, so the receiver
+// reports carry no fresh round trip, and the jitter stays flat. The
+// round-trip test cannot see the queue; two reports in a row without a
+// round trip and the loss are the evidence.
+TEST(SendAdaptation, LossWithoutAFreshRoundTripForTwoReportsStepsDown) {
+    SendAdaptation c;
+    std::vector<Step> trace;
+    repeat(trace, 10, {50, 0, 42.0f, 3.0f});   // t 1..10: clean
+    trace.push_back({48, 7, -1.0f, 6.0f});     // t 11: 15 % loss, report dropped
+    trace.push_back({50, 4, -1.0f, 6.5f});     // t 12: 8 %, dropped again
+    repeat(trace, 6, {50, 0, 45.0f, 3.0f});    // t 13..18: clean
+    const auto changes = run_trace(c, trace);
+    // 11 of 98 over the two reports: 11.2 %. The jitter is 2 x 3 ms, under
+    // the 10 ms floor; no round trip is inflated.
+    EXPECT_EQ(changes, (Changes{{12000, 48}}));
+
+    // At the start of a session, before any round trip: the same.
+    SendAdaptation start;
+    std::vector<Step> first;
+    repeat(first, 2, {50, 8, -1.0f, 3.0f});
+    EXPECT_EQ(run_trace(start, first), (Changes{{2000, 48}}));
+}
+
+// The voice gate's congestion profile, stage 3b, second case: our sender
+// reports and the SFU's receiver reports both run on 1 s, so every other
+// receiver report carries no fresh round trip, also on a clean link. The
+// full queue drops one sender report: the 3 s window holds one fresh,
+// inflated round trip, where the median rule needs two samples, and only one
+// report in a row is stale. One fresh sample at 3 x the 30 s median counts.
+std::vector<Step> one_fresh_sample_trace(float inflated_rtt_ms) {
+    std::vector<Step> trace;
+    for (int i = 1; i <= 10; ++i) {  // t 1..10: clean; odd t fresh, even t stale
+        trace.push_back({50, 0, (i % 2 == 1) ? 42.0f : -1.0f, 3.0f});
+    }
+    trace.push_back({50, 7, inflated_rtt_ms, 3.5f});  // t 11: 14 %, fresh, inflated
+    trace.push_back({50, 5, -1.0f, 3.5f});            // t 12: 10 %, stale
+    repeat(trace, 6, {50, 0, 45.0f, 3.0f});           // t 13..18: clean
+    return trace;
+}
+
+TEST(SendAdaptation, OneFreshRoundTripAtThreeTimesTheBaseStepsDown) {
+    // 160 ms against max(42 ms median, 50 ms floor): 3.2 x. Loss over the
+    // two reports: 12 of 100.
+    SendAdaptation c;
+    EXPECT_EQ(run_trace(c, one_fresh_sample_trace(160.0f)), (Changes{{12000, 48}}));
+}
+
+TEST(SendAdaptation, OneFreshRoundTripUnderThreeTimesTheBaseDoesNotStepDown) {
+    // 125 ms: 2.5 x the base. Over the two-sample factor, but one sample
+    // needs 3 x.
+    SendAdaptation c;
+    EXPECT_TRUE(run_trace(c, one_fresh_sample_trace(125.0f)).empty());
+    EXPECT_EQ(c.bitrate_kbps(), 64);
 }
 
 TEST(SendAdaptation, AStepThatDoesNotLowerTheLossGoesBackAndHoldsTheLadder) {

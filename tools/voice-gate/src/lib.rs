@@ -18,7 +18,7 @@ pub mod score;
 pub mod shim;
 pub mod wav;
 
-use analysis::LagPoint;
+use analysis::{LagPoint, LevelPoint};
 use profile::{AnalysisSpec, Profile};
 use report::Metrics;
 use run::{RunResult, SAMPLE_RATE};
@@ -28,6 +28,8 @@ use serde_json::{json, Value};
 pub struct Measured {
     pub metrics: Metrics,
     pub points: Vec<LagPoint>,
+    /// The NetEQ buffer level per analysis hop (burst recovery).
+    pub buffer_curve: Vec<LevelPoint>,
     pub extra: Value,
 }
 
@@ -60,6 +62,13 @@ pub fn measure(
     let points = analysis::lag_curve(&run.reference, &run.output, run.clock_ratio, a);
     let delay = analysis::summarize(&points, &run.clips, clips_per_loop);
     let drops = analysis::dropouts(&run.reference, &run.output, &points, a);
+    let onsets = analysis::onsets(
+        &run.reference,
+        &run.output,
+        &points,
+        drops.level_offset_db,
+        a,
+    );
 
     // The event whose recovery the gate checks: the first jitter episode,
     // else the outage.
@@ -69,7 +78,13 @@ pub fn measure(
         .first()
         .map(|e| (e.start_s, e.start_s + e.dur_s))
         .or(profile.network.outage.map(|(s, d)| (s, s + d)));
+    // Enforced since stage 3b: recovery on the NetEQ buffer level, the
+    // delay that accelerate drains (analysis::buffer_curve). The end-to-end
+    // variant stays as an informational metric.
+    let buffer_curve = analysis::buffer_curve(&run.buffer, run.clock_ratio, a);
     let rec = event.map(|(s, e)| analysis::recovery(&points, s, e, a));
+    let buffer_rec = event.map(|(s, e)| analysis::buffer_recovery(&buffer_curve, s, e, a));
+    let target_rec = event.map(|(s, e)| analysis::target_recovery(&buffer_curve, s, e, a));
 
     let rx = &run.rx;
     // Concealment for losses, NetEQ era. NetEQ conceals by time: also while
@@ -89,9 +104,13 @@ pub fn measure(
         (neteq_conceal_frames(rx) - neteq_conceal_frames(&l.rx)).max(0.0)
     });
     // Lost frames that need concealment: network loss and receiver drops,
-    // without lost Opus DTX frames (2 bytes or less). Through those NetEQ
-    // keeps playing comfort noise, so there is nothing to conceal.
-    let lost = run.shim.lost() - run.shim.lost_dtx + rx.rx_packets_discarded;
+    // without lost Opus DTX frames (2 bytes or less): through those NetEQ
+    // keeps playing comfort noise, so there is nothing to conceal. Also
+    // without the lost packets at the head of a talk spurt, before any
+    // packet of the spurt was delivered: NetEQ has played nothing of the
+    // spurt and starts it with the next packet (shim::SpurtLosses).
+    let lost =
+        run.shim.lost() - run.shim.lost_dtx - run.shim.lost_spurt_head + rx.rx_packets_discarded;
 
     let buf: Vec<f64> = run
         .stats
@@ -120,10 +139,18 @@ pub fn measure(
     m.insert("latency_growth_ms".into(), delay.growth);
     m.insert("latency_clip_growth_ms".into(), delay.clip_growth);
     m.insert("latency_max_ms".into(), delay.max);
+    if let Some(r) = &buffer_rec {
+        m.insert("buffer_before_ms".into(), r.before_ms);
+        m.insert("buffer_peak_ms".into(), r.peak_ms);
+        m.insert("recovery_s".into(), r.recovery_s);
+    }
+    if let Some(r) = &target_rec {
+        m.insert("recovery_target_s".into(), r.recovery_s);
+    }
     if let Some(r) = &rec {
         m.insert("event_before_ms".into(), r.before_ms);
         m.insert("event_peak_ms".into(), r.peak_ms);
-        m.insert("recovery_s".into(), r.recovery_s);
+        m.insert("recovery_e2e_s".into(), r.recovery_s);
     }
     m.insert(
         "conceal_per_lost".into(),
@@ -136,6 +163,7 @@ pub fn measure(
     m.insert("lost_frames".into(), n(lost));
     m.insert("shim_lost".into(), n(run.shim.lost()));
     m.insert("lost_dtx_frames".into(), n(run.shim.lost_dtx));
+    m.insert("lost_spurt_head_frames".into(), n(run.shim.lost_spurt_head));
     m.insert(
         "conceal_frames".into(),
         lossless.is_some().then_some(conceal_frames),
@@ -180,6 +208,9 @@ pub fn measure(
         n(rx.rx_stream_resets + rx.rx_buffer_flushes),
     );
     m.insert("dropout_ms".into(), Some(drops.total_ms()));
+    m.insert("onset_loss_db_mean".into(), onsets.mean());
+    m.insert("onset_loss_db_p95".into(), onsets.p95());
+    m.insert("onset_spurts".into(), n(onsets.losses_db.len() as u64));
     if run.wrap_sender_sample.is_some() {
         m.insert("wrap_dropout_ms".into(), wrap_dropout);
     }
@@ -224,6 +255,11 @@ pub fn measure(
     let extra = json!({
         "delay_points": delay.points,
         "output_level_offset_db": drops.level_offset_db,
+        "onsets_unmatched": onsets.unmatched,
+        "onsets": onsets.starts.iter().zip(&onsets.losses_db).map(|(&k, &l)| json!({
+            "t_s": (k as f64 / SAMPLE_RATE as f64 * 1000.0).round() / 1000.0,
+            "loss_db": (l * 100.0).round() / 100.0,
+        })).collect::<Vec<_>>(),
         "wrap_at_s": run.wrap_sender_sample.map(|w| w as f64 / SAMPLE_RATE as f64),
         "event_s": event.map(|(s, e)| json!([s, e])),
         "shim": {
@@ -254,11 +290,21 @@ pub fn measure(
             "interruption_duration_ms": run.rx.rx_interruption_duration_ms,
         },
         "adaptation": adaptation,
+        "lossless_twin_neteq": lossless.map(|l| json!({
+            "concealed_samples": l.rx.rx_concealed_samples,
+            "silent_concealed_samples": l.rx.rx_silent_concealed_samples,
+            "concealment_events": l.rx.rx_concealment_events,
+            "fec_packets_received": l.rx.rx_fec_packets_received,
+            "fec_packets_discarded": l.rx.rx_fec_packets_discarded,
+            "conceal_frames": neteq_conceal_frames(&l.rx),
+        })),
+        "conceal_frames_run": neteq_conceal_frames(rx),
         "wall_s": (run.wall_s * 10.0).round() / 10.0,
     });
     Measured {
         metrics: m,
         points,
+        buffer_curve,
         extra,
     }
 }

@@ -34,6 +34,14 @@ Definitions:
   end minus start, so it compares the same speech.
 - In-clip growth is the median over clips of the delay change from the first
   to the last third of the clip.
+- Recovery (since stage 3b) is on the receiver's NetEQ buffer: packet
+  buffer, sync buffer and output ring at every 10 ms pull, the mean per
+  250 ms over the pulls that played decoded audio. It is the time from the
+  event end until that level is within the tolerance of its median over the
+  10 s before the event, and stays there for the hold time. The baseline
+  value of recovery_s is the earlier definition, on the mouth-to-ear delay;
+  that one is now recovery_e2e_s. recovery_target_s is the same test on
+  NetEQ's target delay.
 - Concealment per lost frame counts concealment frames for losses (network
   loss plus receiver drops). The target is 1. Since NetEQ: the run's
   concealed samples (in 20 ms frames) plus frames repaired from in-band FEC,
@@ -41,6 +49,10 @@ Definitions:
   lost Opus DTX frame is not counted as lost: comfort noise plays through it.
 - A dropout is a 20 ms speech frame that comes out 20 dB too quiet, or does
   not match the input (concealment or wrong audio).
+- A talk spurt starts at the first 10 ms reference frame at the active level
+  after at least 500 ms below it. Onset loss is the level of the output's
+  first 200 ms of the spurt against the reference's, at the spurt's measured
+  delay, less the run's overall level offset. Positive is quieter.
 ";
 
 struct Args {
@@ -194,7 +206,7 @@ fn real_main() -> Result<bool, String> {
         .filter(|p| {
             args.only
                 .as_ref()
-                .is_none_or(|o| o.iter().any(|n| n == &p.name))
+                .is_none_or(|o| o.iter().any(|n| n == &p.name || n == &p.group))
         })
         .collect();
     if selected.is_empty() {
@@ -317,6 +329,13 @@ fn real_main() -> Result<bool, String> {
             }),
         )?;
         write_csv(
+            &pdir.join("buffer.csv"),
+            "t_s,neteq_buffer_ms,neteq_target_ms",
+            m.buffer_curve
+                .iter()
+                .map(|q| format!("{:.3},{:.1},{:.1}", q.t_s, q.level_ms, q.target_ms)),
+        )?;
+        write_csv(
             &pdir.join("receiver.csv"),
             "t_ms,pipeline_delay_ms,neteq_target_ms,playout_buffer_ms,neteq_filtered_delay_ms,spurt_hold_ms",
             r.stats.iter().map(|s| {
@@ -341,10 +360,10 @@ fn real_main() -> Result<bool, String> {
             )?;
             write_csv(
                 &pdir.join("reports.csv"),
-                "sent_ms,arrive_ms,fraction_lost,cumulative_lost,expected,lost,jitter_ms,rtt_ms,bitrate_kbps,loss_perc",
+                "sent_ms,arrive_ms,fraction_lost,cumulative_lost,expected,lost,jitter_ms,rtt_ms,rtt_fresh,bitrate_kbps,loss_perc",
                 a.reports.iter().map(|x| {
                     format!(
-                        "{},{},{:.4},{},{},{},{:.1},{:.1},{},{}",
+                        "{},{},{:.4},{},{},{},{:.1},{:.1},{},{},{}",
                         x.sent_ms,
                         x.arrive_ms,
                         x.feedback.fraction_lost,
@@ -353,6 +372,7 @@ fn real_main() -> Result<bool, String> {
                         x.feedback.interval_lost,
                         x.feedback.jitter_ms,
                         x.feedback.rtt_ms,
+                        u8::from(x.feedback.rtt_fresh),
                         x.bitrate_kbps,
                         x.loss_perc
                     )
@@ -423,6 +443,47 @@ fn real_main() -> Result<bool, String> {
                 );
                 m.insert("mos_min".into(), vals.iter().cloned().reduce(f64::min));
             }
+        }
+    }
+
+    // Profiles that run on several seeds: the median over the seeds.
+    let groups: BTreeMap<&str, Vec<&str>> = selected.iter().fold(BTreeMap::new(), |mut g, p| {
+        g.entry(p.group.as_str())
+            .or_insert_with(Vec::new)
+            .push(p.name.as_str());
+        g
+    });
+    let mut seed_values = serde_json::Map::new();
+    for (group, names) in groups.iter().filter(|(_, n)| n.len() > 1) {
+        let mut per_metric = serde_json::Map::new();
+        for metric in profile::SEED_MEDIAN_METRICS {
+            let vals: Vec<Option<f64>> = names
+                .iter()
+                .map(|n| {
+                    results
+                        .get(*n)
+                        .and_then(|m| m.get(*metric).cloned().flatten())
+                })
+                .collect();
+            per_metric.insert((*metric).to_owned(), json!(vals));
+            let median = if vals.iter().all(Option::is_some) {
+                voice_gate::dsp::percentile(
+                    &vals.iter().flatten().cloned().collect::<Vec<_>>(),
+                    50.0,
+                )
+            } else {
+                None
+            };
+            if let Some(m) = results.get_mut(*group) {
+                m.insert(format!("{metric}_median"), median);
+            }
+        }
+        per_metric.insert("profiles".into(), json!(names));
+        seed_values.insert((*group).to_owned(), Value::Object(per_metric));
+    }
+    for (group, v) in &seed_values {
+        if let Some(e) = extras.get_mut(group).and_then(Value::as_object_mut) {
+            e.insert("seeds".into(), v.clone());
         }
     }
 

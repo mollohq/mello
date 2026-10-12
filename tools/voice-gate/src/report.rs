@@ -29,9 +29,29 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         -1,
     ),
     ("latency_max_ms", "Delay max (ms)", -1),
+    ("buffer_before_ms", "NetEQ buffer before the event (ms)", -1),
+    (
+        "buffer_peak_ms",
+        "NetEQ buffer peak from the event on (ms)",
+        -1,
+    ),
+    (
+        "recovery_s",
+        "Back to the pre-event NetEQ buffer after (s)",
+        -1,
+    ),
+    (
+        "recovery_target_s",
+        "Back to the pre-event NetEQ target after (s)",
+        -1,
+    ),
     ("event_before_ms", "Delay before the event (ms)", -1),
     ("event_peak_ms", "Delay peak from the event on (ms)", -1),
-    ("recovery_s", "Back to the pre-event delay after (s)", -1),
+    (
+        "recovery_e2e_s",
+        "Back to the pre-event delay after (s)",
+        -1,
+    ),
     ("conceal_per_lost", "Concealment frames per lost frame", 0),
     (
         "lost_frames",
@@ -42,6 +62,11 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     (
         "lost_dtx_frames",
         "  of them DTX frames (not counted as lost)",
+        0,
+    ),
+    (
+        "lost_spurt_head_frames",
+        "  of them at a talk spurt head (not counted as lost)",
         0,
     ),
     ("conceal_frames", "Concealment frames for losses (NetEQ)", 0),
@@ -81,6 +106,17 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ),
     ("rx_jitter_resets", "Jitter buffer resets", -1),
     ("dropout_ms", "Speech dropout (ms)", -1),
+    (
+        "onset_loss_db_mean",
+        "Talk-spurt onset loss, first 200 ms, mean (dB)",
+        -1,
+    ),
+    (
+        "onset_loss_db_p95",
+        "Talk-spurt onset loss, first 200 ms, p95 (dB)",
+        -1,
+    ),
+    ("onset_spurts", "Talk spurts in the reference (onsets)", 0),
     (
         "wrap_dropout_ms",
         "Speech dropout around the RTP wrap (ms)",
@@ -140,6 +176,12 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "Delay max over the bottleneck window (ms)",
         -1,
     ),
+    (
+        "bottleneck_delay_mean_ms_median",
+        "Delay mean over the bottleneck window, median over seeds (ms)",
+        -1,
+    ),
+    ("mos_median", "MOS-LQO, median over seeds", 1),
     (
         "bottleneck_lost",
         "Packets the bottleneck queue dropped",
@@ -368,6 +410,7 @@ const SUMMARY: &[(&str, &str)] = &[
     ("latency_growth_ms", "growth"),
     ("latency_clip_growth_ms", "in-clip growth"),
     ("recovery_s", "recover s"),
+    ("recovery_e2e_s", "recover e2e s"),
     ("conceal_per_lost", "conceal/lost"),
     ("fill_plc_frames", "fill PLC"),
     ("underruns", "underruns"),
@@ -377,6 +420,8 @@ const SUMMARY: &[(&str, &str)] = &[
     ("rx_dropped_late", "rx late"),
     ("rx_jitter_resets", "resets"),
     ("dropout_ms", "dropout ms"),
+    ("onset_loss_db_mean", "onset dB"),
+    ("onset_loss_db_p95", "onset p95 dB"),
     ("bitrate_min_kbps", "kbps min"),
     ("bitrate_mean_kbps", "kbps mean"),
     ("loss_perc_max", "loss perc max"),

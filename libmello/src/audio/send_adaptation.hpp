@@ -60,8 +60,22 @@ public:
     /// samples). Medians, because one stalled sender report doubles a
     /// single sample. The 30 s median counts as at least kRttBaseMinMs: a
     /// 2 ms LAN round trip that becomes 5 ms is no queue.
+    ///
+    /// One fresh sample: when the last 3 s hold exactly one round-trip
+    /// sample, it counts as inflated at kSingleSampleFactor x the same base
+    /// (3 x, not 2 x: one stalled sender report can double a sample). A full
+    /// tail-drop queue drops our sender reports, so the 3 s window holds
+    /// one fresh sample where the median rule needs two. The stale-report
+    /// rule (kStaleRttReports) does not catch that case: our sender reports
+    /// and the SFU's receiver reports both run on 1 s, so every other
+    /// receiver report carries no fresh round trip also on a clean link,
+    /// and a queue that drops one sender report gives one stale report in a
+    /// row, not two. The round-trip rule applies only to round trips; the
+    /// jitter test keeps the two-sample rule (a jitter sample comes with
+    /// every report that carries packets).
     static constexpr int64_t kShortWindowMs = 3000;
     static constexpr int kShortMinSamples = 2;
+    static constexpr float kSingleSampleFactor = 3.0f;
     static constexpr int64_t kBaseWindowMs = 30000;
     static constexpr int kBaseMinSamples = 5;
     static constexpr float kRttBaseMinMs = 50.0f;
@@ -69,6 +83,14 @@ public:
     /// that carry packets. The 30 s median counts as at least
     /// kJitterBaseMinMs.
     static constexpr float kJitterBaseMinMs = 10.0f;
+    /// Lost round trip: this many reports in a row brought no fresh
+    /// round-trip sample. A full tail-drop queue drops our sender reports
+    /// too, so the queue that causes the loss also hides the round-trip
+    /// inflation. With the loss over kDownLoss it is congestion evidence,
+    /// like an inflated round trip. Random loss rarely takes the sender
+    /// report of two reports in a row; the ineffective-step rule catches it
+    /// when it does.
+    static constexpr int kStaleRttReports = 2;
     /// Ineffective step: the loss over the kEffectiveWindowMs of reports
     /// after a step down must fall to kDownLoss or to kEffectiveFactor x the
     /// loss that caused the step. If not, the step goes back up one rung and
@@ -130,9 +152,11 @@ private:
     void restart_clean_time(int64_t now_ms);
     /// Loss over the reports after `from_ms`: expected and lost.
     void loss_after(int64_t from_ms, uint64_t& expected, uint64_t& lost) const;
-    /// The short median exceeds 2 x max(the base median, `base_min`).
+    /// The short median exceeds 2 x max(the base median, `base_min`). With
+    /// `single_sample`, a short window of exactly one sample counts when
+    /// that sample exceeds kSingleSampleFactor x the same base.
     static bool inflated(const std::deque<Sample>& samples, int64_t now_ms, float base_min,
-                         float* short_out, float* base_out);
+                         bool single_sample, float* short_out, float* base_out);
 
     std::vector<int> rungs_;
     int rung_ = 0;
@@ -143,6 +167,8 @@ private:
     int64_t last_down_ms_ = std::numeric_limits<int64_t>::min();
     // Reports since the last step down.
     int reports_since_down_ = 0;
+    // Reports in a row without a fresh round-trip sample.
+    int stale_rtt_reports_ = 0;
     // The last step down while its effect is checked: time and the loss
     // that caused it. check_step_ms_ = min: nothing to check.
     int64_t check_step_ms_ = std::numeric_limits<int64_t>::min();

@@ -37,7 +37,9 @@ static bool wants_vpio_duplex(bool aec_enabled) {
 }
 #endif
 
-static constexpr int SPEECH_PRE_ROLL_FRAMES = 5;       // 100ms at 20ms/frame.
+// Default speech gate pre-roll, chosen with the voice gate (TESTING.md,
+// talk-spurt gate).
+static constexpr int DEFAULT_SPEECH_PRE_ROLL_FRAMES = 5;
 static constexpr int CANDIDATE_HANGOVER_FRAMES = 10;   // Keep Silero warm across brief dips.
 static constexpr int SPEECH_ENCODE_HANGOVER_FRAMES = 8;
 static constexpr float MIN_SPEECH_RMS = 0.002f;        // ~-54 dBFS, before adaptive floor.
@@ -115,30 +117,41 @@ static std::string find_model_file(const char* filename) {
 }
 
 // NetEQ configuration. The voice quality gate may override the delay
-// manager tuning through the environment, with the test backend only, so a
-// tuning sweep needs no rebuild. Production always uses the default.
+// manager tuning (MELLO_NETEQ_DELAY_MANAGER_CONFIG), turn the talk-spurt
+// hold off (MELLO_NETEQ_SPURT_HOLD=0) or fast accelerate off
+// (MELLO_NETEQ_FAST_ACCELERATE=0), and set the hold floor
+// (MELLO_NETEQ_SPURT_HOLD_FLOOR_MS) and the preemptive-expand window after a
+// target jump (MELLO_NETEQ_JUMP_NO_EXPAND_MS) through the environment, with
+// the test backend only, so a sweep needs no rebuild. Production always uses
+// the defaults.
 static VoicePlayout::Config playout_config() {
     VoicePlayout::Config c;
     c.delay_manager_config = VoicePlayout::default_delay_manager_config();
     if (test_audio_backend_requested()) {
         const std::string dm = test_backend_env("MELLO_NETEQ_DELAY_MANAGER_CONFIG");
         if (!dm.empty()) c.delay_manager_config = dm == "default" ? std::string() : dm;
+        c.talk_spurt_hold = test_backend_env("MELLO_NETEQ_SPURT_HOLD") != "0";
+        if (test_backend_env("MELLO_NETEQ_FAST_ACCELERATE") == "0") c.enable_fast_accelerate = false;
+        const std::string floor = test_backend_env("MELLO_NETEQ_SPURT_HOLD_FLOOR_MS");
+        if (!floor.empty()) c.spurt_hold_floor_ms = std::atoi(floor.c_str());
+        const std::string window = test_backend_env("MELLO_NETEQ_JUMP_NO_EXPAND_MS");
+        if (!window.empty()) c.jump_no_expand_ms = std::atoi(window.c_str());
     }
     return c;
 }
 
 // Pre-roll length in frames. The voice quality gate may change it through the
-// environment, with the test backend only, to measure what the pre-roll
-// costs in delay. Production always uses SPEECH_PRE_ROLL_FRAMES.
+// environment, with the test backend only, to sweep the delay against the
+// onset loss. Production always starts with DEFAULT_SPEECH_PRE_ROLL_FRAMES.
 static int pre_roll_frames_config() {
     if (test_audio_backend_requested()) {
         const std::string v = test_backend_env("MELLO_VOICE_PRE_ROLL_FRAMES");
         if (!v.empty()) {
             const int n = std::atoi(v.c_str());
-            if (n >= 0 && n <= 50) return n;
+            if (n >= 0 && n <= AudioPipeline::kMaxPreRollFrames) return n;
         }
     }
-    return SPEECH_PRE_ROLL_FRAMES;
+    return DEFAULT_SPEECH_PRE_ROLL_FRAMES;
 }
 
 AudioPipeline::AudioPipeline()
@@ -511,8 +524,25 @@ void AudioPipeline::reset_speech_gate_state() {
     candidate_hangover_frames_ = 0;
     speech_hangover_frames_ = 0;
     speech_gate_active_ = false;
+    vad_fed_last_frame_ = false;
+    prev_frame_.fill(0);
     speech_expander_.reset();
     vad_.force_silence();
+}
+
+void AudioPipeline::set_speech_pre_roll_frames(int frames) {
+    frames = (std::min)(kMaxPreRollFrames, (std::max)(0, frames));
+    std::lock_guard<std::mutex> lock(accum_mutex_);
+    pre_roll_frames_.store(frames, std::memory_order_relaxed);
+    while (speech_pre_roll_.size() > static_cast<size_t>(frames)) {
+        speech_pre_roll_.pop_front();
+    }
+    MELLO_LOG_INFO("pipeline", "speech pre-roll %d frames", frames);
+}
+
+void AudioPipeline::set_encode_tap(EncodeTap tap) {
+    std::lock_guard<std::mutex> lock(accum_mutex_);
+    encode_tap_ = std::move(tap);
 }
 
 void AudioPipeline::set_input_sensitivity(float db) {
@@ -600,6 +630,8 @@ void AudioPipeline::process_and_encode_frame(int16_t* frame, uint32_t timestamp)
         noise_suppressor_.process(frame, FRAME_SIZE);
     }
 
+    if (encode_tap_) encode_tap_(frame, FRAME_SIZE, timestamp);
+
     apply_send_adaptation();
     uint8_t raw_pkt[MAX_PACKET_SIZE];
     int encoded = encoder_.encode(frame, FRAME_SIZE, raw_pkt, MAX_PACKET_SIZE);
@@ -664,7 +696,8 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             input_level_.store(level, std::memory_order_relaxed);
         }
 
-        if (!muted_) {
+        const bool muted = muted_.load(std::memory_order_relaxed);
+        if (!muted) {
             float ig = input_gain_.load(std::memory_order_relaxed);
             if (ig != 1.0f) {
                 for (int i = 0; i < FRAME_SIZE; ++i) {
@@ -709,6 +742,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
             }
 
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
+                vad_fed_last_frame_ = false;
                 process_and_encode_frame(capture_accum_.data(), frame_ts);
             } else {
                 // Auto: track the ambient floor. Manual: the user's level,
@@ -733,8 +767,25 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                                       speech_hangover_frames_ > 0;
 
                 if (should_run_vad) {
-                    vad_.feed(capture_accum_.data(), FRAME_SIZE);
+                    // Silero decides per 32 ms chunk (spec 10 section 4.1).
+                    // When it starts again after the RMS gate kept it idle,
+                    // its first chunk is the end of the previous frame and
+                    // this frame, so it ends with this frame. The samples
+                    // left from the last run are old audio and are dropped.
+                    // While the gate waits for speech, a frame in which no
+                    // chunk completed gets a decision on its last 32 ms
+                    // (peek), so the gate does not open one frame late.
+                    if (!vad_fed_last_frame_) {
+                        vad_.restart(prev_frame_.data(), FRAME_SIZE,
+                                     VAD_CHUNK_SIZE - FRAME_SIZE / 3);
+                    }
+                    const int chunks = vad_.feed(capture_accum_.data(), FRAME_SIZE);
+                    if (chunks == 0 && candidate_speech && !vad_.is_speaking()) {
+                        vad_.peek();
+                    }
                 }
+                vad_fed_last_frame_ = should_run_vad;
+                std::copy_n(capture_accum_.data(), FRAME_SIZE, prev_frame_.data());
 
                 if (vad_.is_speaking()) {
                     speech_hangover_frames_ = SPEECH_ENCODE_HANGOVER_FRAMES;
@@ -743,13 +794,31 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 }
 
                 bool should_encode = vad_.is_speaking() || speech_hangover_frames_ > 0;
+                const bool gate_opens = should_encode && !speech_gate_active_;
+
+                // Pre-roll (spec 10 section 4.1): keep the frame as captured,
+                // before the expander. These frames were captured while
+                // Silero said "no speech"; when the gate opens they are the
+                // start of the word and leave at their captured level.
+                if (!should_encode) {
+                    PreRollFrame frame{};
+                    frame.timestamp = frame_ts;
+                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
+                    speech_pre_roll_.push_back(frame);
+                    const size_t keep = static_cast<size_t>(
+                        pre_roll_frames_.load(std::memory_order_relaxed));
+                    while (speech_pre_roll_.size() > keep) {
+                        speech_pre_roll_.pop_front();
+                    }
+                }
 
                 // Downward expander (post-AGC): attenuate the frame toward its
                 // floor when the VAD says no speech, so AGC gain ramped for a
                 // quiet talker cannot pump the noise floor in gaps. Smoothed
                 // release keeps word tails; the gate decision above is
-                // unchanged (it read capture_accum_ before this point). Applied
-                // to the current frame and to stored pre-roll frames alike.
+                // unchanged (it read capture_accum_ before this point). It
+                // acts on live frames only: the pre-roll copy above is taken
+                // before it.
                 //
                 // Keyed off the RAW VAD probability, not is_speaking(): the
                 // latter latches true through an 8-frame holdover, so it stays
@@ -757,13 +826,21 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 // (observed in ostkatt's log: prob 0.04 but is_speaking still
                 // true). The raw probability drops in those gaps and closes the
                 // expander there.
+                //
+                // When the gate opens, the expander starts at unity: the
+                // pre-roll in front of this frame leaves at unity, and an
+                // attack from the floor would put a dip of about 4 dB right
+                // after the start of the word.
+                if (gate_opens) {
+                    speech_expander_.reset();
+                }
                 const bool expander_speech =
                     vad_.probability() >= VAD_THRESHOLD;
                 speech_expander_.process(capture_accum_.data(), FRAME_SIZE,
                                          expander_speech);
 
                 if (should_encode) {
-                    if (!speech_gate_active_) {
+                    if (gate_opens) {
                         for (auto& frame : speech_pre_roll_) {
                             process_and_encode_frame(frame.pcm.data(), frame.timestamp);
                         }
@@ -777,19 +854,14 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                     }
                     speech_gate_active_ = false;
 
-                    PreRollFrame frame{};
-                    frame.timestamp = frame_ts;
-                    std::copy_n(capture_accum_.data(), FRAME_SIZE, frame.pcm.data());
-                    speech_pre_roll_.push_back(frame);
-                    while (speech_pre_roll_.size() > static_cast<size_t>(pre_roll_frames_)) {
-                        speech_pre_roll_.pop_front();
-                    }
-
                     // Track ambient floor only while closed so the speech threshold adapts
                     // without chasing active speech.
                     noise_floor_rms_ = 0.98f * noise_floor_rms_ + 0.02f * gate_rms;
                 }
             }
+        }
+        if (muted) {
+            vad_fed_last_frame_ = false;
         }
         capture_accum_.erase(capture_accum_.begin(),
                              capture_accum_.begin() + FRAME_SIZE);
