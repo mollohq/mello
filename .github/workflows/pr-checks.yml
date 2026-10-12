@@ -139,7 +139,9 @@ jobs:
           Get-PSDrive C | Select-Object Used,Free
           $vcpkgCache = Join-Path $env:LOCALAPPDATA "vcpkg\archives"
           if (Test-Path $vcpkgCache) {
-            Remove-Item -Recurse -Force $vcpkgCache -ErrorAction SilentlyContinue
+            Get-ChildItem $vcpkgCache -Recurse -File |
+              Where-Object { $_.LastWriteTime -lt (Get-Date).AddDays(-30) } |
+              Remove-Item -Force -ErrorAction SilentlyContinue
           }
           $free = (Get-PSDrive C).Free
           if ($free -lt 15GB) {
@@ -202,14 +204,16 @@ jobs:
 
       # Self-hosted runners live forever, and their caches grow until a build
       # dies at the link step with errno 28 — exactly how PR #55's first run
-      # failed. The vcpkg binary cache grows with every dependency hash change
-      # and is safe to purge (only costs re-fetching cached packages).
-      # target/ is kept for incremental builds unless free space is critically
-      # low, in which case a full rebuild beats a guaranteed link failure.
+      # failed. The vcpkg binary cache is content-hashed and small (about
+      # 150 MB), but a purge costs about 8 min of port rebuilds on Windows, so
+      # only entries not written for 30 days are pruned. `cargo clean` runs
+      # here only when free space is critically low (a full rebuild beats a
+      # guaranteed link failure); the Cleanup step runs it at the end of
+      # every run.
       - name: Reclaim disk space
         run: |
           df -h /
-          rm -rf "$HOME/.cache/vcpkg/archives"
+          find "$HOME/.cache/vcpkg/archives" -type f -mtime +30 -delete 2>/dev/null || true
           avail_kb=$(df -k / | awk 'NR==2 {print $4}')
           min_kb=$((15 * 1024 * 1024))
           if [ "$avail_kb" -lt "$min_kb" ]; then
