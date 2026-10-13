@@ -1,0 +1,549 @@
+diff --git a/tools/voice-gate/src/main.rs b/tools/voice-gate/src/main.rs
+index 13924db..d0d4944 100644
+--- a/tools/voice-gate/src/main.rs
++++ b/tools/voice-gate/src/main.rs
+@@ -16,7 +16,38 @@ use std::time::Instant;
+ use voice_gate::report::{self, Metrics};
+ use voice_gate::{measure, profile, run, score, wav};
+ 
+-const BASELINE_NAME: &str = "2.9";
++/// The baseline this run writes and compares with: "2.9-slot" on
++/// Windows x86-64, the platform of baseline 2.9, else
++/// "2.9-slot-<os>-<arch>" (scripts/voice-gate.sh on fix/voice-gate-slot-shim
++/// selects the file by platform).
++fn baseline_name() -> String {
++    match (std::env::consts::OS, std::env::consts::ARCH) {
++        ("windows", "x86_64") => "2.9-slot".into(),
++        (os, arch) => format!("2.9-slot-{os}-{arch}"),
++    }
++}
++
++/// Written into the baseline as `_comment`, and into its Markdown file.
++fn baseline_comment() -> Vec<String> {
++    let os = match std::env::consts::OS {
++        "windows" => "Windows",
++        "macos" => "macOS",
++        "linux" => "Linux",
++        other => other,
++    };
++    let arch = match std::env::consts::ARCH {
++        "x86_64" => "x86-64",
++        "aarch64" => "arm64",
++        other => other,
++    };
++    vec![
++        format!("Baseline {}: the 2.9 audio state (commit af8c7f0, the tree of baseline 2.9) measured with shim version 2 and the extra seeds of home-wifi, mobile and bad.", baseline_name()),
++        "Shim version 2 draws the impairments (loss, burst, jitter, reorder) per 20 ms send slot, keyed to the packet's media time, not per packet. baseline-2.9.json is the same audio state with shim version 1 and stays as the record.".into(),
++        "Tree: af8c7f0 with its own harness (tools/voice-gate as of af8c7f0) plus benchmarks/baselines/voice/baseline-2.9-slot-harness.patch: the slot shim, extra_seeds and the seed medians, the 2.9-slot output. The harness of fix/voice-gate-slot-shim needs libmello hooks (packet sink, mello_voice_feed_rtp, send feedback) that af8c7f0 does not have, so the af8c7f0 harness takes the baseline, as it took baseline 2.9. profiles.json is the one of fix/voice-gate-slot-shim. git.dirty is true because of the patch.".into(),
++        "This libmello has no packet timestamp: the harness gives each packet the media time of its frame (frame c / 2 - 1 after chunk c, the pre-roll frames before it). The same rule gives every packet's RTP timestamp on the fix/voice-gate-slot-shim tree.".into(),
++        format!("Platform: {os} {arch}. The gate enforces its numbers only on the platform of the baseline; elsewhere it reports only."),
++    ]
++}
+ 
+ const DEFINITIONS: &str = "
+ Definitions:
+@@ -113,7 +144,8 @@ fn real_main() -> Result<bool, String> {
+             .to_owned(),
+     );
+     let base_dir = root.join("benchmarks/baselines/voice");
+-    let baseline_path = base_dir.join(format!("baseline-{BASELINE_NAME}.json"));
++    let baseline_name = baseline_name();
++    let baseline_path = base_dir.join(format!("baseline-{baseline_name}.json"));
+     let out_dir = args
+         .out
+         .clone()
+@@ -170,7 +202,7 @@ fn real_main() -> Result<bool, String> {
+         .filter(|p| {
+             args.only
+                 .as_ref()
+-                .is_none_or(|o| o.iter().any(|n| n == &p.name))
++                .is_none_or(|o| o.iter().any(|n| n == &p.name || n == &p.group))
+         })
+         .collect();
+     if selected.is_empty() {
+@@ -316,6 +348,43 @@ fn real_main() -> Result<bool, String> {
+         }
+     }
+ 
++    // Profiles that run on several seeds: the median over the seeds.
++    let groups: BTreeMap<&str, Vec<&str>> = selected.iter().fold(BTreeMap::new(), |mut g, p| {
++        g.entry(p.group.as_str())
++            .or_insert_with(Vec::new)
++            .push(p.name.as_str());
++        g
++    });
++    for (group, names) in groups.iter().filter(|(_, n)| n.len() > 1) {
++        let mut per_metric = serde_json::Map::new();
++        for metric in profile::SEED_MEDIAN_METRICS {
++            let vals: Vec<Option<f64>> = names
++                .iter()
++                .map(|n| {
++                    results
++                        .get(*n)
++                        .and_then(|m| m.get(*metric).cloned().flatten())
++                })
++                .collect();
++            per_metric.insert((*metric).to_owned(), json!(vals));
++            let median = if vals.iter().all(Option::is_some) {
++                voice_gate::dsp::percentile(
++                    &vals.iter().flatten().cloned().collect::<Vec<_>>(),
++                    50.0,
++                )
++            } else {
++                None
++            };
++            if let Some(m) = results.get_mut(*group) {
++                m.insert(format!("{metric}_median"), median);
++            }
++        }
++        per_metric.insert("profiles".into(), json!(names));
++        if let Some(e) = extras.get_mut(*group).and_then(Value::as_object_mut) {
++            e.insert("seeds".into(), Value::Object(per_metric));
++        }
++    }
++
+     let (gates, notes) = report::evaluate(
+         &gf,
+         &results,
+@@ -359,6 +428,7 @@ fn real_main() -> Result<bool, String> {
+             "backend": "MELLO_AUDIO_BACKEND=test (no device, no device thread)",
+             "sender": "one encode per sender setup, 10 ms capture chunks; profiles replay a prefix of the packet trace",
+             "send_tick": "packets leave on a 20 ms tick at sender time 20k+10 ms, like VoiceManager::tick",
++            "shim": "version 2: impairment draws per 20 ms send slot (media time of the packet's frame), every stream advanced through every slot; profiles with extra_seeds also run with each extra seed",
+             "clock": "virtual: mello_test_set_clock_ms, 1 ms steps; receiver pulls 10 ms per step of 10 ms",
+             "delay": "windowed cross-correlation at 4 kHz, reference vs output; latency = playout time - capture time",
+         },
+@@ -385,7 +455,7 @@ fn real_main() -> Result<bool, String> {
+     println!();
+     match &baseline {
+         Some(b) => println!(
+-            "Voice quality gate. Delta against baseline {BASELINE_NAME} ({}).",
++            "Voice quality gate. Delta against baseline {baseline_name} ({}).",
+             b.get("git")
+                 .and_then(|g| g.get("commit"))
+                 .and_then(Value::as_str)
+@@ -414,7 +484,8 @@ fn real_main() -> Result<bool, String> {
+         let mut b = result.clone();
+         if let Some(m) = b.as_object_mut() {
+             m.insert("kind".into(), json!("voice-gate-baseline"));
+-            m.insert("baseline".into(), json!(BASELINE_NAME));
++            m.insert("baseline".into(), json!(baseline_name));
++            m.insert("_comment".into(), json!(baseline_comment()));
+         }
+         std::fs::write(
+             &baseline_path,
+@@ -422,7 +493,7 @@ fn real_main() -> Result<bool, String> {
+         )
+         .map_err(|e| format!("{}: {e}", baseline_path.display()))?;
+         let md = baseline_markdown(&order, &results, &result, &gates);
+-        let md_path = base_dir.join(format!("baseline-{BASELINE_NAME}.md"));
++        let md_path = base_dir.join(format!("baseline-{baseline_name}.md"));
+         std::fs::write(&md_path, md).map_err(|e| format!("{}: {e}", md_path.display()))?;
+         println!(
+             "Baseline written: {} and {}",
+@@ -452,17 +523,22 @@ fn baseline_markdown(
+     let commit = result["git"]["commit"].as_str().unwrap_or("unknown");
+     let dirty = result["git"]["dirty"].as_bool().unwrap_or(true);
+     let mut s = String::new();
+-    let _ = writeln!(s, "# Voice quality baseline {BASELINE_NAME}\n");
++    let name = baseline_name();
++    let _ = writeln!(s, "# Voice quality baseline {name}\n");
+     let _ = writeln!(
+         s,
+         "> Taken {} on {}/{} from commit `{commit}`{}. This file and \
+-         `baseline-{BASELINE_NAME}.json` are never edited. Every later run of \
++         `baseline-{name}.json` are never edited. Every later run of \
+          `scripts/voice-gate.sh` prints its delta against them.\n",
+         result["taken_at_utc"].as_str().unwrap_or(""),
+         result["platform"]["os"].as_str().unwrap_or(""),
+         result["platform"]["arch"].as_str().unwrap_or(""),
+         if dirty { " (dirty tree)" } else { "" }
+     );
++    for line in baseline_comment() {
++        let _ = writeln!(s, "- {line}");
++    }
++    s.push('\n');
+     let _ = writeln!(s, "| Item | Value |\n|---|---|");
+     let _ = writeln!(
+         s,
+diff --git a/tools/voice-gate/src/profile.rs b/tools/voice-gate/src/profile.rs
+index 850ea50..bd1efb2 100644
+--- a/tools/voice-gate/src/profile.rs
++++ b/tools/voice-gate/src/profile.rs
+@@ -105,8 +105,15 @@ pub struct Profile {
+     pub sender: SenderSpec,
+     pub network: Network,
+     pub gates: Vec<Gate>,
++    /// The profile whose seeds this run belongs to: its own name, or for a
++    /// run of an `extra_seeds` entry the name of the profile it repeats.
++    pub group: String,
+ }
+ 
++/// Metrics of a profile with `extra_seeds` whose median over the seeds the
++/// harness adds as `<metric>_median`.
++pub const SEED_MEDIAN_METRICS: &[&str] = &["latency_clip_growth_ms", "mos"];
++
+ #[derive(Clone, Debug)]
+ pub struct CorpusSpec {
+     pub dir: String,
+@@ -235,6 +242,14 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
+     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
+     let root: Value =
+         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
++    let shim = root.get("shim").and_then(Value::as_u64).unwrap_or(1);
++    if shim != crate::shim::SHIM_VERSION {
++        return Err(format!(
++            "{}: written for shim version {shim}, this harness implements version {}",
++            path.display(),
++            crate::shim::SHIM_VERSION
++        ));
++    }
+     let c = root.get("corpus").ok_or("missing 'corpus'")?;
+     let corpus = CorpusSpec {
+         dir: s(c, "dir")?,
+@@ -280,6 +295,18 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
+         if !(0.0..=65535.0).contains(&seq) {
+             return Err(ctx("rtp_seq_start out of range".into()));
+         }
++        let extra_seeds: Vec<u64> = match p.get("extra_seeds") {
++            None => Vec::new(),
++            Some(v) => v
++                .as_array()
++                .ok_or_else(|| ctx("extra_seeds must be an array".into()))?
++                .iter()
++                .map(|x| {
++                    x.as_u64()
++                        .ok_or_else(|| ctx("extra seed is not an integer".into()))
++                })
++                .collect::<Result<_, _>>()?,
++        };
+         profiles.push(Profile {
+             name: name.clone(),
+             description: s(p, "description").map_err(ctx)?,
+@@ -305,7 +332,17 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
+             )
+             .map_err(ctx)?,
+             gates: parse_gates(p.get("gates").unwrap_or(&Value::Null)).map_err(ctx)?,
++            group: name.clone(),
+         });
++        let base = profiles.last().cloned().ok_or("no profile")?;
++        for &seed in &extra_seeds {
++            let mut rep = base.clone();
++            rep.name = format!("{name}@{seed}");
++            rep.description = format!("{name} with seed {seed}");
++            rep.seed = seed;
++            rep.gates = Vec::new();
++            profiles.push(rep);
++        }
+     }
+     Ok(GateFile {
+         corpus,
+diff --git a/tools/voice-gate/src/report.rs b/tools/voice-gate/src/report.rs
+index 9cf9986..5d79cb4 100644
+--- a/tools/voice-gate/src/report.rs
++++ b/tools/voice-gate/src/report.rs
+@@ -28,6 +28,12 @@ pub const METRICS: &[(&str, &str, i8)] = &[
+         "Delay growth inside a clip, median (ms)",
+         -1,
+     ),
++    (
++        "latency_clip_growth_ms_median",
++        "Delay growth inside a clip, median over seeds (ms)",
++        -1,
++    ),
++    ("mos_median", "MOS-LQO, median over seeds", 1),
+     ("latency_max_ms", "Delay max (ms)", -1),
+     ("event_before_ms", "Delay before the event (ms)", -1),
+     ("event_peak_ms", "Delay peak from the event on (ms)", -1),
+@@ -214,6 +220,7 @@ const SUMMARY: &[(&str, &str)] = &[
+     ("latency_end_ms", "end"),
+     ("latency_growth_ms", "growth"),
+     ("latency_clip_growth_ms", "in-clip growth"),
++    ("latency_clip_growth_ms_median", "in-clip seeds"),
+     ("recovery_s", "recover s"),
+     ("conceal_per_lost", "conceal/lost"),
+     ("fill_plc_frames", "fill PLC"),
+diff --git a/tools/voice-gate/src/run.rs b/tools/voice-gate/src/run.rs
+index 392cb43..d0d8079 100644
+--- a/tools/voice-gate/src/run.rs
++++ b/tools/voice-gate/src/run.rs
+@@ -147,6 +147,8 @@ pub struct StatSample {
+ pub struct SenderTrace {
+     /// (chunks injected when the packet left the encoder, packet bytes).
+     pub packets: Vec<(usize, Vec<u8>)>,
++    /// Send slot of each packet (shim.rs): its media time in 20 ms frames.
++    pub slots: Vec<usize>,
+     pub packets_encoded: u32,
+     pub wall_s: f64,
+ }
+@@ -232,8 +234,10 @@ pub fn encode(reference: &[i16], sender: &SenderSpec) -> Result<SenderTrace, Str
+         return Err(format!("start_capture_inject failed: {r}"));
+     }
+     let mut packets = Vec::new();
++    let mut slots = Vec::new();
+     let mut pkt = vec![0u8; 4000];
+     for (i, chunk) in reference.chunks_exact(CHUNK).enumerate() {
++        let before = packets.len();
+         // SAFETY: chunk outlives the call; libmello copies the samples.
+         unsafe { mello_sys::mello_voice_inject_capture(tx.0, chunk.as_ptr(), CHUNK as i32) };
+         loop {
+@@ -246,12 +250,32 @@ pub fn encode(reference: &[i16], sender: &SenderSpec) -> Result<SenderTrace, Str
+             }
+             packets.push((i + 1, pkt[..n as usize].to_vec()));
+         }
++        // Media time of the packets of this chunk. A frame is 2 chunks, so a
++        // packet leaves after an even chunk count c, as frame c / 2 - 1. The
++        // pre-roll at a gate opening leaves in the same call: the frames
++        // just before it, in order. The same rule gives every packet's RTP
++        // timestamp / 960 on the fix/voice-gate-slot-shim tree.
++        let k = packets.len() - before;
++        if k > 0 {
++            let c = i + 1;
++            if c % 2 != 0 || c / 2 < k {
++                return Err(format!("packet after chunk {c}: no frame boundary"));
++            }
++            for j in 0..k {
++                slots.push(c / 2 - 1 - (k - 1 - j));
++            }
++        }
++    }
++    // Each frame leaves once: the reconstructed slots rise strictly.
++    if slots.windows(2).any(|w| w[1] <= w[0]) {
++        return Err("packet media times do not rise: the slot rule does not hold".into());
+     }
+     let packets_encoded = tx.stats().packets_encoded;
+     // SAFETY: tx.0 is a live context.
+     unsafe { mello_sys::mello_voice_stop_capture_inject(tx.0) };
+     Ok(SenderTrace {
+         packets,
++        slots,
+         packets_encoded,
+         wall_s: started.elapsed().as_secs_f64(),
+     })
+@@ -287,10 +311,12 @@ pub fn run_receiver(
+     let clock_ratio = 1.0 / (1.0 + profile.drift_ppm * 1e-6);
+     let n_chunks = reference.len() / CHUNK;
+     let end_ms = (reference.len() as f64 / 48.0 * clock_ratio).ceil() as i64 + i64::from(tail_ms);
+-    let packets: Vec<&(usize, Vec<u8>)> = trace
++    let packets: Vec<(usize, usize, &Vec<u8>)> = trace
+         .packets
+         .iter()
+-        .filter(|(c, _)| *c <= n_chunks)
++        .zip(&trace.slots)
++        .filter(|((c, _), _)| *c <= n_chunks)
++        .map(|((c, b), s)| (*c, *s, b))
+         .collect();
+ 
+     let mut shim = Shim::new(profile);
+@@ -305,8 +331,8 @@ pub fn run_receiver(
+ 
+         // 1. Sender send tick.
+         while next < packets.len() && send_time_ms(packets[next].0, clock_ratio) <= now {
+-            let (chunks, bytes) = packets[next];
+-            shim.send(bytes, now, chunks * CHUNK);
++            let (chunks, slot, bytes) = packets[next];
++            shim.send(bytes, now, chunks * CHUNK, slot);
+             next += 1;
+         }
+ 
+diff --git a/tools/voice-gate/src/shim.rs b/tools/voice-gate/src/shim.rs
+index 183eac9..67ad539 100644
+--- a/tools/voice-gate/src/shim.rs
++++ b/tools/voice-gate/src/shim.rs
+@@ -8,6 +8,15 @@
+ //! RTP sequence: low two bytes = the 16-bit sequence, high two bytes = 0
+ //! (libmello/src/transport/peer_connection.cpp, incoming audio track). The
+ //! shim does the same: RTP sequence = (start + sender sequence) mod 65536.
++//!
++//! Random draws per send slot (shim version [`SHIM_VERSION`] = 2, ported
++//! from fix/voice-gate-slot-shim for baseline 2.9-slot). Each random stream
++//! (loss, burst state and drop, jitter, reorder) gives one set of draws per
++//! 20 ms send slot. The slot of a packet is its media time in 20 ms frames
++//! from the first captured sample (run.rs, `encode`, reconstructs it: this
++//! libmello has no packet timestamp). To reach the slot of a packet, each
++//! stream advances through every slot up to and including that slot, so a
++//! slot without a packet consumes its draws.
+ 
+ use crate::profile::{Network, Profile};
+ use crate::rng::Rng;
+@@ -54,14 +63,79 @@ impl Ord for InFlight {
+     }
+ }
+ 
+-pub struct Shim {
+-    net: Network,
+-    rtp_seq_start: u16,
++/// The shim's rule for random draws (see fix/voice-gate-slot-shim).
++pub const SHIM_VERSION: u64 = 2;
++
++/// The random draws of one 20 ms send slot.
++#[derive(Clone, Copy, Debug, PartialEq)]
++pub struct SlotDraws {
++    pub u_loss: f64,
++    pub burst_bad: bool,
++    pub u_burst_drop: f64,
++    pub gaussian: f64,
++    pub u_reorder: f64,
++}
++
++/// The random streams of the shim, drawn slot by slot.
++pub struct SlotDrawer {
++    burst: Option<crate::profile::Gilbert>,
+     rng_loss: Rng,
+     rng_burst: Rng,
+     rng_delay: Rng,
+     rng_reorder: Rng,
+     gilbert_bad: bool,
++    slots: Vec<SlotDraws>,
++}
++
++impl SlotDrawer {
++    pub fn new(seed: u64, net: &Network) -> Self {
++        Self {
++            burst: net.burst.clone(),
++            rng_loss: Rng::stream(seed, "loss"),
++            rng_burst: Rng::stream(seed, "burst"),
++            rng_delay: Rng::stream(seed, "delay"),
++            rng_reorder: Rng::stream(seed, "reorder"),
++            gilbert_bad: false,
++            slots: Vec::new(),
++        }
++    }
++
++    /// The draws of `slot`. Every stream advances through every slot up to
++    /// and including `slot`, also through slots without a packet.
++    pub fn draws(&mut self, slot: usize) -> SlotDraws {
++        while self.slots.len() <= slot {
++            let u_loss = self.rng_loss.uniform();
++            let (burst_bad, u_burst_drop) = match &self.burst {
++                Some(g) => {
++                    let u_state = self.rng_burst.uniform();
++                    let u_drop = self.rng_burst.uniform();
++                    self.gilbert_bad = if self.gilbert_bad {
++                        u_state >= g.p_exit
++                    } else {
++                        u_state < g.p_enter
++                    };
++                    (self.gilbert_bad, u_drop)
++                }
++                None => (false, 1.0),
++            };
++            let gaussian = self.rng_delay.gaussian();
++            let u_reorder = self.rng_reorder.uniform();
++            self.slots.push(SlotDraws {
++                u_loss,
++                burst_bad,
++                u_burst_drop,
++                gaussian,
++                u_reorder,
++            });
++        }
++        self.slots[slot]
++    }
++}
++
++pub struct Shim {
++    net: Network,
++    rtp_seq_start: u16,
++    drawer: SlotDrawer,
+     /// Stall windows in ms of run time: random spikes and episode stalls.
+     stalls: Vec<(f64, f64)>,
+     last_fifo_ms: f64,
+@@ -95,11 +169,7 @@ impl Shim {
+         }
+         Self {
+             rtp_seq_start: profile.rtp_seq_start,
+-            rng_loss: Rng::stream(profile.seed, "loss"),
+-            rng_burst: Rng::stream(profile.seed, "burst"),
+-            rng_delay: Rng::stream(profile.seed, "delay"),
+-            rng_reorder: Rng::stream(profile.seed, "reorder"),
+-            gilbert_bad: false,
++            drawer: SlotDrawer::new(profile.seed, &net),
+             stalls,
+             last_fifo_ms: 0.0,
+             in_flight: BinaryHeap::new(),
+@@ -123,7 +193,8 @@ impl Shim {
+ 
+     /// Take one packet from `mello_voice_get_packet` sent at run time
+     /// `now_ms`. `sender_sample` is the sender capture position at that time.
+-    pub fn send(&mut self, packet: &[u8], now_ms: i64, sender_sample: usize) {
++    /// `slot` is the packet's media time in 20 ms frames.
++    pub fn send(&mut self, packet: &[u8], now_ms: i64, sender_sample: usize, slot: usize) {
+         if packet.len() < 4 {
+             return;
+         }
+@@ -143,24 +214,15 @@ impl Shim {
+         let t = now_ms as f64;
+         let (sigma, loss_random) = self.conditions(t);
+ 
+-        // Every random stream advances once per packet, lost or not, so the
+-        // pattern of one impairment does not depend on another.
+-        let u_loss = self.rng_loss.uniform();
++        // The draws of the packet's send slot (module notes).
++        let d = self.drawer.draws(slot);
++        let u_loss = d.u_loss;
+         let burst_lost = match &self.net.burst {
+-            Some(g) => {
+-                let u_state = self.rng_burst.uniform();
+-                let u_drop = self.rng_burst.uniform();
+-                self.gilbert_bad = if self.gilbert_bad {
+-                    u_state >= g.p_exit
+-                } else {
+-                    u_state < g.p_enter
+-                };
+-                self.gilbert_bad && u_drop < g.loss_in_bad
+-            }
++            Some(g) => d.burst_bad && d.u_burst_drop < g.loss_in_bad,
+             None => false,
+         };
+-        let jitter = self.rng_delay.gaussian() * sigma;
+-        let u_reorder = self.rng_reorder.uniform();
++        let jitter = d.gaussian * sigma;
++        let u_reorder = d.u_reorder;
+ 
+         let in_outage = self
+             .net
+@@ -236,6 +298,7 @@ mod tests {
+             sender: Default::default(),
+             network: net,
+             gates: Vec::new(),
++            group: "t".into(),
+         }
+     }
+ 
+@@ -253,7 +316,7 @@ mod tests {
+         };
+         let mut shim = Shim::new(&profile(net, 65534));
+         for s in 0..4u32 {
+-            shim.send(&pkt(s), i64::from(s) * 20, s as usize * 960);
++            shim.send(&pkt(s), i64::from(s) * 20, s as usize * 960, s as usize);
+         }
+         let got = shim.due(1000);
+         let seqs: Vec<(u8, u8, u8, u8)> = got.iter().map(|p| (p[0], p[1], p[2], p[3])).collect();
+@@ -278,7 +341,7 @@ mod tests {
+         };
+         let mut shim = Shim::new(&profile(net, 0));
+         for s in 0..200u32 {
+-            shim.send(&pkt(s), i64::from(s) * 20, 0);
++            shim.send(&pkt(s), i64::from(s) * 20, 0, s as usize);
+         }
+         let got = shim.due(1_000_000);
+         let seqs: Vec<u16> = got
+@@ -305,7 +368,7 @@ mod tests {
+         let mut shim = Shim::new(&profile(net, 0));
+         let n = 50_000u32;
+         for s in 0..n {
+-            shim.send(&pkt(s), i64::from(s) * 20, 0);
++            shim.send(&pkt(s), i64::from(s) * 20, 0, s as usize);
+         }
+         let random = shim.counters.lost_random as f64 / f64::from(n);
+         let burst = shim.counters.lost_burst as f64 / f64::from(n);
+@@ -327,7 +390,7 @@ mod tests {
+         };
+         let mut shim = Shim::new(&profile(net, 0));
+         for s in 0..250u32 {
+-            shim.send(&pkt(s), i64::from(s) * 20, 0);
++            shim.send(&pkt(s), i64::from(s) * 20, 0, s as usize);
+         }
+         assert_eq!(shim.counters.lost_outage, 100);
+     }
