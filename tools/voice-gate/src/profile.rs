@@ -108,7 +108,8 @@ pub struct Gate {
 /// Where a relative bound comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefSource {
-    /// The frozen baseline (baseline-2.9.json).
+    /// The frozen baseline (baseline-2.9-slot.json, or the one given with
+    /// `--baseline`).
     Baseline,
     /// This run.
     Run,
