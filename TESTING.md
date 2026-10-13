@@ -320,16 +320,19 @@ device and no backend. Every change to the audio path runs it
 (plans/voice-quality.md stage 7).
 
 ```bash
-./scripts/voice-gate.sh                    # all profiles, about 3.5 minutes
-./scripts/voice-gate.sh --only clean,wrap  # some profiles
+./scripts/voice-gate.sh                    # all profiles, about 7.5 minutes
+./scripts/voice-gate.sh --only clean,wrap  # some profiles (a name also selects its extra seeds)
 ./scripts/voice-gate.sh --no-score         # structural metrics only
 ./scripts/voice-gate.sh --send-tick        # old sender timing, for comparison
 ./scripts/voice-gate.sh --no-adapt         # no send-leg feedback (before stage 5)
+./scripts/voice-gate.sh --report-only      # print every gate, enforce none
 ```
 
 The table shows each metric with its delta against
-`benchmarks/baselines/voice/baseline-2.9.json`. The exit code is 1 when MOS
-drops by more than 0.1 on any profile or an enforced gate fails.
+`benchmarks/baselines/voice/baseline-2.9-slot.json`. The exit code is 1 when
+MOS drops by more than 0.1 on any profile or an enforced gate fails. The
+gate enforces on Windows x86-64 only, the platform of the baseline. On
+another platform it reports only (seeds, baselines and platforms, below).
 
 | Part | Where | What it does |
 |---|---|---|
@@ -337,7 +340,7 @@ drops by more than 0.1 on any profile or an enforced gate fails.
 | Profiles and gates | `benchmarks/baselines/voice/profiles.json` | `clean`, `home-wifi`, `mobile`, `bad`, `burst`, `drift`, `outage`, `wrap`: loss, bursts, jitter, stalls, reorder, outage, clock drift, RTP wrap, seeds. |
 | Added profiles | `benchmarks/baselines/voice/profiles-congestion.json` | Profiles added after the baseline, with their own seeds and fingerprint (`added_inputs_fingerprint`). `congestion`: a rate-limited bottleneck with a tail-drop queue; `"compare_no_adapt": true` also runs it as `congestion-no-adapt` without feedback. No baseline values. |
 | Sender | `mello_voice_inject_capture`, `mello_voice_set_packet_sink` | Real capture DSP and Opus encode on a context with the test backend. Each packet leaves at its encode time, as on the SFU path. `--send-tick` replays the 20 ms voice tick of the command loop instead (the send timing before stage 2). |
-| Shim | `tools/voice-gate/src/shim.rs` | Builds the RTP packet as the SFU forwards it: payload type 111, the 16-bit sequence from `rtp_seq_start`, the timestamp (a seeded start + media time), a seeded SSRC. Then applies the profile. Seeded. |
+| Shim | `tools/voice-gate/src/shim.rs` | Builds the RTP packet as the SFU forwards it: payload type 111, the 16-bit sequence from `rtp_seq_start`, the timestamp (a seeded start + media time), a seeded SSRC. Then applies the profile. Seeded, one set of draws per 20 ms send slot (shim version 2, below). |
 | Feedback | `tools/voice-gate/src/rtcp.rs` | The SFU's receiver reports (a port of Pion's receiver stream, one report per second) from the delivered packets, and the sender reports that give the round trip. Each report reaches the sender's encoder adaptation (`mello_voice_report_send_feedback`) at its arrival time. A run replays the shared sender trace with a probe context until the controller changes a setting, then encodes live with the reports applied. The lossless twin replays the packets that the live sender sent. Jitter draws from the seed stream `rtcp`. |
 | Receiver | `mello_voice_feed_rtp`, `mello_voice_test_pull_output` | Real NetEQ per peer (decode, FEC, concealment, time stretch), the mixer and the output ring, pulled 10 ms at a time like the device thread. |
 | Scorer | `scripts/voice-gate-score.py` | PESQ wideband (ITU-T P.862.2), `pesq==0.0.4`, MOS-LQO per clip. Optional. |
@@ -361,8 +364,9 @@ Test hooks in `mello.h` (not for production use):
 
 Rules:
 
-- **Frozen inputs.** The corpus, the profile parameters, the seeds, the
-  analysis settings and the scorer version are fixed. The harness refuses to
+- **Frozen inputs.** The corpus, the shim version (`"shim"`), the profile
+  parameters, the seeds, the analysis settings and the scorer version are
+  fixed. The harness refuses to
   compare when they differ from the baseline. To change one, re-take the
   baseline on the commit the old baseline came from.
 - **Gates may change.** A gate with `"enforced": false` prints but does not
@@ -378,8 +382,9 @@ Rules:
   was delivered (NetEQ has played nothing of the spurt and starts it with
   the next packet). `lost_spurt_head_frames` counts the second kind.
   Since stage 3b the gate is informational (talk-spurt gate, below).
-- **Seeds.** A profile in `profiles-congestion.json` with `extra_seeds` also
-  runs as `<name>@<seed>`; the gate reads `<metric>_median` over the seeds.
+- **Seeds.** A profile with `extra_seeds` (in either file) also runs as
+  `<name>@<seed>`, without gates; the gate reads `<metric>_median` over the
+  seeds.
 - **MOS from different scorers is never compared.** Without the scorer the
   gate prints structural metrics only and says so.
 - `cargo test --workspace` runs a 14 s smoke test of the same path, so
@@ -390,6 +395,143 @@ Output (WAV of reference and output, delay curve CSV, receiver stats CSV,
 profile also gets `sender.csv` (the bitrate and loss perc every 100 ms) and
 `reports.csv` (each receiver report and the setting after it), and
 `results.json` carries both under `info.adaptation`.
+
+### Seeds, baselines and platforms
+
+**Shim version 2: draws per send slot.** Each random stream of the shim
+(loss, burst state and drop, jitter, reorder) gives one set of draws per
+20 ms send slot. The slot of a packet is its RTP timestamp offset (48 kHz
+media time from the first captured sample) divided by 960. To reach the
+slot of a packet, each stream advances through every slot up to that slot.
+A slot without a packet (DTX, a closed gate) consumes its draws, and the
+Gilbert-Elliott state takes one step per slot. A sender that sends one
+packet more or less therefore meets the same network in every later slot.
+Version 1 (baseline 2.9) drew once per packet: `ed4e817` sends one packet
+less on `mobile`, and every later draw moved. A sender without gaps (the
+push-to-talk `drift` profile) gets the same draws under both versions.
+`profiles.json` and `profiles-congestion.json` carry `"shim": 2`; the
+harness refuses a file for another version.
+
+**In-clip growth over three seeds.** `latency_clip_growth_ms` is one seed's
+median over the clips. Where a stall lands against a clip boundary decides
+it, so it spreads over seeds by more than its 20 ms limit. `home-wifi`,
+`mobile` and `bad` run with `extra_seeds` (seed + 1, seed + 2). Their
+enforced gate is `latency_clip_growth_ms_median`, at most 20 ms; the
+single-seed value stays as an informational gate. Each extra seed is one
+more 93 s profile (about 27 s of run time with the live sender, and 8 more
+clips to score): on the Windows machine the full gate went from 279 s
+to 454 s.
+
+**Baselines.**
+
+| File | Audio state | Shim | Seeds | Platform | Use |
+|---|---|---|---|---|---|
+| `baseline-2.9.json` | af8c7f0 | 1, per packet | one per profile | Windows x86-64 | Record of 2.9. Not read. Never edited. |
+| `baseline-2.9-slot.json` | af8c7f0 | 2, per slot | with the extra seeds | Windows x86-64 | The gate compares with it. |
+
+The harness on `main` needs libmello hooks that af8c7f0 does not have
+(packet sink, `mello_voice_feed_rtp`, send feedback). So the af8c7f0
+harness takes the baseline, as it took baseline 2.9, with
+`benchmarks/baselines/voice/baseline-2.9-slot-harness.patch`: the slot
+shim, `extra_seeds`, the seed medians and the 2.9-slot output. That
+libmello has no packet timestamp. The patch gives each packet the media
+time of its frame: frame c / 2 - 1 after capture chunk c, and the pre-roll
+frames of a gate opening just before it. On the current tree this rule
+gives the RTP timestamp of all 3987 packets. Without the patch the af8c7f0
+tree reproduces baseline 2.9 exactly.
+
+Baseline 2.9 against 2.9-slot (same audio, other draws):
+
+| Profile | MOS 2.9 | MOS 2.9-slot | In-clip growth 2.9 | 2.9-slot | Note |
+|---|---:|---:|---:|---:|---|
+| clean | 3.28 | 3.27 | -5.0 | -5.0 | |
+| home-wifi | 2.58 | 2.47 | 60.1 | 69.9 (median 90.1) | Seeds 203, 204: 2.55, 2.55. |
+| mobile | 1.84 | 1.92 | 184.9 | 170.1 (median 170.1) | Seeds 304, 305: 1.93, 1.99. |
+| bad | 1.43 | 1.42 | 402.6 | 358.1 (median 358.1) | Seeds 405, 406: 1.44, 1.38. |
+| burst | 3.19 | 3.05 | 0 | 0 | Worst clip 2.26 to 1.58: the burst's losses fall in other speech. |
+| drift | 4.26 | 4.26 | 0.67 | 0.67 | Identical: no gaps in the stream. |
+| outage | 2.96 | 2.96 | 0 | 0 | |
+| wrap | 3.55 | 3.78 | -16.9 | 0 | The old buffer's wrap defect (2 late drops, 80 ms dropout) does not fire with the new jitter draws. |
+
+The 2.9 receiver concealed every loss twice and let the delay grow, so
+where a loss falls moves its MOS: over three seeds the same profile spreads
+by 0.06 to 0.08. The shifts are of that size, except `burst` and `wrap`,
+whose one event lands differently.
+
+**Does `ed4e817` move delay growth?** `ed4e817` (the Silero decision at the
+end of each frame at an onset) sends one packet less on `mobile`. With shim
+version 1 that moved every later draw, and seed 303 went from 3.25 to
+29.6 ms. The same question with the network held fixed (shim version 2):
+`mobile`, 16 seeds, `--only mobile --no-score`, on `8a29f53` (the commit
+before) and on `ed4e817`, each with this harness. Windows x86-64,
+2026-10-13. In-clip growth in ms; packets: the encoded trace, then the
+packets fed to the receiver.
+
+| Seed | 8a29f53 | Packets | ed4e817 | Packets | Change |
+|---:|---:|---:|---:|---:|---:|
+| 303 | 28.81 | 3988 / 3772 | 8.38 | 3987 / 3770 | -20.44 |
+| 304 | -17.12 | 3988 / 3768 | -6.00 | 3987 / 3766 | +11.12 |
+| 305 | -11.50 | 3988 / 3755 | -22.38 | 3987 / 3755 | -10.88 |
+| 306 | 13.25 | 3988 / 3786 | 9.38 | 3987 / 3786 | -3.88 |
+| 307 | -2.00 | 3988 / 3801 | -4.75 | 3987 / 3799 | -2.75 |
+| 308 | -5.75 | 3988 / 3806 | 5.38 | 3987 / 3805 | +11.12 |
+| 309 | 89.00 | 3988 / 3785 | 92.50 | 3987 / 3782 | +3.50 |
+| 310 | -5.00 | 3988 / 3793 | -5.56 | 3987 / 3794 | -0.56 |
+| 311 | 7.00 | 3988 / 3820 | 10.25 | 3987 / 3823 | +3.25 |
+| 312 | -1.38 | 3988 / 3791 | -2.38 | 3987 / 3789 | -1.00 |
+| 313 | -9.25 | 3988 / 3786 | -4.56 | 3987 / 3784 | +4.69 |
+| 314 | 23.62 | 3988 / 3810 | 16.38 | 3987 / 3810 | -7.25 |
+| 315 | 8.19 | 3988 / 3777 | 20.00 | 3987 / 3776 | +11.81 |
+| 316 | 0.12 | 3988 / 3790 | -0.38 | 3987 / 3787 | -0.50 |
+| 317 | -5.94 | 3988 / 3796 | -6.94 | 3987 / 3793 | -1.00 |
+| 318 | -7.25 | 3988 / 3794 | -6.50 | 3987 / 3793 | +0.75 |
+| Median | -1.69 | | -1.38 | | -0.53 |
+| Mean | 6.55 | | 6.43 | | -0.13 |
+| Over 20 ms | 3 of 16 | | 1 of 16 | | 7 up, 9 down |
+
+The median moves 0.3 ms and the mean 0.1 ms, against the 5 ms that would
+call for a look at the commit. The per-seed change has a spread of 8 ms
+both ways. `ed4e817` does not move delay growth; the 26 ms on seed 303 with
+shim version 1 was the reshuffled network. One seed (309) reads 89 to
+93 ms on both commits: one seed alone is not fit to gate, which is why the
+gate reads the median over three. The three gate seeds (303 to 305) give a
+median of -11.50 ms before and -6.00 ms after.
+
+**Platforms.** The enforced numbers and the baselines are Windows x86-64
+numbers. On macOS arm64 the receiver's float path (Opus, NetEQ, ONNX)
+gives other values for the same packets (mobile in-clip growth 29.6 ms
+against 16.4 ms with shim version 1). `scripts/voice-gate.sh` therefore:
+
+1. takes `baseline-2.9-slot-<os>-<arch>.json` when it exists for the host,
+   else `baseline-2.9-slot.json` (`<os>`, `<arch>`: Rust's names, for
+   example `macos`, `aarch64`);
+2. reads `"platform"` from that file;
+3. passes `--report-only` when the host is another platform.
+
+`--report-only` prints every metric and every gate with its result and a
+banner: "report only: the enforced numbers and the baseline are Windows
+x86-64; this platform is macOS arm64". It exits 1 only for decode errors or
+a scorer that ran and gave no MOS for a clip; a run or setup error exits 2.
+`VOICE_GATE_PLATFORM=darwin/arm64` replaces the host platform, to test the
+rule on Windows.
+
+To enforce on another platform, take a baseline there. The procedure is
+the one of `baseline-2.9-slot.json`:
+
+```bash
+git worktree add --detach ../mello-bl af8c7f0
+cd ../mello-bl
+git submodule update --init
+git apply ../mello/benchmarks/baselines/voice/baseline-2.9-slot-harness.patch
+cp ../mello/benchmarks/baselines/voice/profiles.json benchmarks/baselines/voice/
+CI=true ./scripts/voice-gate.sh --write-baseline
+```
+
+On a host other than Windows x86-64 the patched harness writes
+`baseline-2.9-slot-<os>-<arch>.json` and `.md`. Copy both next to
+`baseline-2.9-slot.json` and commit them; from then on the script enforces
+on that platform with its own numbers. Use the same Silero model file as
+the other platform (`libmello/models/silero_vad.onnx`).
 
 ### Send-leg adaptation (stage 5)
 
@@ -1176,7 +1318,7 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
 - **Stream relay quality:** `stream-soak` RTP profiles / 1080 gate; client probes for visual + `host_probe_tick` / `viewer_probe_native_rtp` logs.
 - **Audio DSP quality (A/B, NS modes, MOS):** `voice-test-client` GUI.
 - **Any change to the voice audio path (libmello audio, jitter, codec, mix):**
-  `./scripts/voice-gate.sh`, and report its delta against baseline 2.9.
+  `./scripts/voice-gate.sh`, and report its delta against baseline 2.9-slot.
 - **Client CPU/RSS regression (after perf-sensitive changes):** `perf-harness` /
   `./scripts/perf/run.sh`.
 - **Interactive browser repro / live stats:** `sfu-test.html`.
