@@ -28,6 +28,11 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "Delay growth inside a clip, median (ms)",
         -1,
     ),
+    (
+        "latency_clip_growth_ms_median",
+        "Delay growth inside a clip, median over seeds (ms)",
+        -1,
+    ),
     ("latency_max_ms", "Delay max (ms)", -1),
     ("buffer_before_ms", "NetEQ buffer before the event (ms)", -1),
     (
@@ -409,6 +414,7 @@ const SUMMARY: &[(&str, &str)] = &[
     ("latency_end_ms", "end"),
     ("latency_growth_ms", "growth"),
     ("latency_clip_growth_ms", "in-clip growth"),
+    ("latency_clip_growth_ms_median", "in-clip seeds"),
     ("recovery_s", "recover s"),
     ("recovery_e2e_s", "recover e2e s"),
     ("conceal_per_lost", "conceal/lost"),
