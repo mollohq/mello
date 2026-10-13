@@ -696,28 +696,8 @@ fn real_main() -> Result<bool, String> {
 
     let failed: Vec<&report::GateResult> = gates.iter().filter(|g| g.enforced && !g.pass).collect();
     if let Some(b) = &banner {
-        // Only what is broken on every platform fails a report-only run.
-        let decode_errors: Vec<&str> = order
-            .iter()
-            .filter(|n| {
-                results[*n]
-                    .get("decode_errors")
-                    .cloned()
-                    .flatten()
-                    .is_some_and(|v| v > 0.0)
-            })
-            .map(String::as_str)
-            .collect();
-        let unscored: Vec<&str> = if scores.available {
-            clip_mos
-                .values()
-                .flatten()
-                .filter(|c| c.get("mos").and_then(Value::as_f64).is_none())
-                .filter_map(|c| c.get("clip").and_then(Value::as_str))
-                .collect()
-        } else {
-            Vec::new()
-        };
+        let (decode_errors, unscored) =
+            report_only_failures(&order, &results, &clip_mos, scores.available);
         println!("Voice gate: {b}.");
         println!(
             "Voice gate: REPORT ONLY, {} enforced gate(s) outside their limits on this platform, not enforced.",
@@ -745,6 +725,38 @@ fn real_main() -> Result<bool, String> {
         println!("Voice gate: FAIL ({} enforced gate(s))", failed.len());
         Ok(false)
     }
+}
+
+/// What fails a `--report-only` run: what is broken on every platform, not
+/// a number outside a limit. Returns the profiles with decode errors, and
+/// the clips the scorer ran on but gave no MOS (only when it ran).
+fn report_only_failures<'a>(
+    order: &'a [String],
+    results: &BTreeMap<String, Metrics>,
+    clip_mos: &'a BTreeMap<String, Vec<Value>>,
+    scored: bool,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let decode_errors = order
+        .iter()
+        .filter(|n| {
+            results
+                .get(*n)
+                .and_then(|m| m.get("decode_errors").cloned().flatten())
+                .is_some_and(|v| v > 0.0)
+        })
+        .map(String::as_str)
+        .collect();
+    let unscored = if scored {
+        clip_mos
+            .values()
+            .flatten()
+            .filter(|c| c.get("mos").and_then(Value::as_f64).is_none())
+            .filter_map(|c| c.get("clip").and_then(Value::as_str))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (decode_errors, unscored)
 }
 
 fn baseline_markdown(
@@ -835,5 +847,57 @@ fn main() -> ExitCode {
             eprintln!("voice-gate: error: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metrics(decode_errors: f64, clip_growth: f64) -> Metrics {
+        let mut m = Metrics::new();
+        m.insert("decode_errors".into(), Some(decode_errors));
+        m.insert("latency_clip_growth_ms".into(), Some(clip_growth));
+        m
+    }
+
+    #[test]
+    fn report_only_fails_on_decode_errors_and_scorer_failures_only() {
+        let order = vec!["clean".to_owned(), "mobile".to_owned()];
+        // mobile is far outside its in-clip growth limit: not a failure here.
+        let mut results = BTreeMap::new();
+        results.insert("clean".to_owned(), metrics(0.0, 0.0));
+        results.insert("mobile".to_owned(), metrics(0.0, 80.0));
+        let mut clip_mos = BTreeMap::new();
+        clip_mos.insert(
+            "clean".to_owned(),
+            vec![json!({ "clip": "clean-000-m1", "mos": 3.4 })],
+        );
+        let (dec, unscored) = report_only_failures(&order, &results, &clip_mos, true);
+        assert!(dec.is_empty() && unscored.is_empty());
+
+        results.insert("mobile".to_owned(), metrics(2.0, 0.0));
+        clip_mos.insert(
+            "mobile".to_owned(),
+            vec![json!({ "clip": "mobile-001-f1", "mos": null })],
+        );
+        let (dec, unscored) = report_only_failures(&order, &results, &clip_mos, true);
+        assert_eq!(dec, ["mobile"]);
+        assert_eq!(unscored, ["mobile-001-f1"]);
+        // No scorer at all (no Python): a warning, as in an enforced run.
+        let (_, unscored) = report_only_failures(&order, &results, &clip_mos, false);
+        assert!(unscored.is_empty());
+    }
+
+    #[test]
+    fn the_banner_names_both_platforms() {
+        let b = json!({ "platform": { "os": "windows", "arch": "x86_64" } });
+        let text = report_only_banner(Some(&b));
+        assert!(
+            text.starts_with("report only: the enforced numbers and the baseline are Windows x86-64; this platform is "),
+            "{text}"
+        );
+        assert_eq!(platform_words("macos", "aarch64"), "macOS arm64");
+        assert_eq!(platform_words("darwin", "arm64"), "macOS arm64");
     }
 }
