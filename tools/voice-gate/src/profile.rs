@@ -4,7 +4,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-/// Gilbert-Elliott burst loss. One state step per packet.
+/// Gilbert-Elliott burst loss. One state step per 20 ms send slot (shim.rs).
 #[derive(Clone, Debug)]
 pub struct Gilbert {
     /// Probability to go from the good to the bad state.
@@ -74,8 +74,8 @@ impl Network {
     }
 
     /// The same network without loss: delay, jitter, stalls and reorder stay.
-    /// The shim draws every random stream once per packet, lost or not, so
-    /// every packet keeps its delay.
+    /// The shim draws every random stream once per send slot, lost or not,
+    /// so every packet keeps its delay.
     pub fn without_loss(&self) -> Network {
         let mut n = self.clone();
         n.loss_random = 0.0;
@@ -339,11 +339,34 @@ fn parse_gates(v: &Value) -> Result<Vec<Gate>, String> {
     Ok(out)
 }
 
+/// The shim version a gate file is written for: its `"shim"` field, 1 when
+/// absent. It must be the one this harness implements
+/// ([`crate::shim::SHIM_VERSION`]). The field is a frozen input, so a new
+/// shim rule changes `inputs_fingerprint` on purpose.
+fn check_shim_version(root: &Value, path: &Path) -> Result<(), String> {
+    let want = crate::shim::SHIM_VERSION;
+    let got = match root.get("shim") {
+        None => 1,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| format!("{}: 'shim' must be an integer", path.display()))?,
+    };
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: written for shim version {got}, this harness implements version {want}",
+            path.display()
+        ))
+    }
+}
+
 /// Read and validate the gate definition.
 pub fn load(path: &Path) -> Result<GateFile, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let root: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_shim_version(&root, path)?;
     let c = root.get("corpus").ok_or("missing 'corpus'")?;
     let corpus = CorpusSpec {
         dir: s(c, "dir")?,
@@ -402,6 +425,7 @@ pub fn load_added(gf: &mut GateFile, path: &Path) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let root: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_shim_version(&root, path)?;
     let added = parse_profiles(&root, true)?;
     for p in &added {
         if gf.profiles.iter().any(|q| q.name == p.name) {

@@ -1,9 +1,11 @@
 {
   "schema": 1,
+  "shim": 2,
   "_comment": [
     "Profiles added after baseline 2.9 (plans/voice-quality.md stage 5). Read by tools/voice-gate after profiles.json.",
     "Not in the baseline: profiles.json and its inputs fingerprint do not change, so baseline-2.9 stays valid. This file has its own fingerprint (results.json added_inputs_fingerprint).",
     "The corpus, receiver and analysis settings come from profiles.json.",
+    "shim: the draw rule of the impairment shim, the same version as profiles.json (2: per 20 ms send slot, see its _comment). It is a frozen input of this file too.",
     "compare_no_adapt: the profile also runs as <name>-no-adapt, without the send-leg feedback, for the gates with min_ref.",
     "extra_seeds (stage 3b): the profile, and its no-adapt twin, also run with each extra seed as <name>@<seed>. The gate on bottleneck_delay_mean_ms_median reads the median over the seed and the extra seeds: which packets the tail-drop queue drops, and so NetEQ's target, depends on the jitter draws."
   ],

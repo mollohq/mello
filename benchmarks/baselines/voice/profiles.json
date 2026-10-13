@@ -1,8 +1,10 @@
 {
   "schema": 1,
+  "shim": 2,
   "_comment": [
     "Voice quality gate definition (plans/voice-quality.md stage 7). Read by tools/voice-gate.",
-    "Frozen inputs: corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
+    "Frozen inputs: 'shim', corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
+    "shim (version 2, since baseline 2.9-slot): the impairment shim draws its random streams (loss, burst state and drop, jitter, reorder) once per 20 ms send slot, not once per packet. The slot of a packet is its RTP timestamp offset (48 kHz media time from the first captured sample) divided by 960. Each stream advances through every slot up to the packet's slot, so a slot without a packet (DTX, a closed gate) consumes its draws, and a sender that sends one packet more or less meets the same network in every later slot. The streams stay independent of each other. Version 1 (baseline 2.9) drew per packet. tools/voice-gate/src/shim.rs.",
     "A change to a frozen input changes inputs_fingerprint; the harness then refuses to compare with the baseline.",
     "Gates may change. 'enforced': false prints a failing gate but does not fail the run.",
     "Times are seconds of sender audio from the run start. Delays and stalls are ms.",
