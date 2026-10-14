@@ -3,7 +3,7 @@
 //! Pushes a speech corpus through the real libmello voice path (capture
 //! inject, DSP, Opus encode, an impairment shim that behaves like the SFU
 //! network, NetEQ, mix) and measures the result. `scripts/voice-gate.sh` runs every profile and prints the delta
-//! against `benchmarks/baselines/voice/baseline-2.9.json`.
+//! against `benchmarks/baselines/voice/baseline-2.9-slot.json`.
 //!
 //! See the "Voice quality gate" section of `TESTING.md` for the method.
 

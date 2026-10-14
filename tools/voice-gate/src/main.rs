@@ -1,8 +1,19 @@
 //! voice-gate: run the voice quality gate. Use scripts/voice-gate.sh.
 //!
 //! ```text
-//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--send-tick] [--no-adapt] [--write-baseline]
+//! voice-gate [--only clean,wrap] [--out DIR] [--no-score] [--send-tick] [--no-adapt]
+//!            [--baseline FILE] [--report-only] [--write-baseline]
 //! ```
+//!
+//! `--baseline FILE` compares with FILE instead of
+//! `benchmarks/baselines/voice/baseline-2.9-slot.json`. A bare file name is
+//! looked up in that directory. With `--write-baseline` the run writes FILE
+//! and the Markdown file next to it.
+//!
+//! `--report-only` prints every metric and every gate with its result, but
+//! a failing gate does not fail the run: for a platform that has no baseline
+//! of its own. `scripts/voice-gate.sh` sets it when the host is not the
+//! platform of the baseline.
 //!
 //! `--send-tick` replays the sender on the 20 ms voice tick of the command
 //! loop, as before the stage 2 packet sink, for comparison. The default sends
@@ -12,7 +23,8 @@
 //! receiver report reaches the sender, as before stage 5, for comparison.
 //!
 //! Exit codes: 0 = every enforced gate passed, 1 = an enforced gate failed,
-//! 2 = setup error.
+//! 2 = setup or run error. With `--report-only`: 1 only for decode errors or
+//! a scorer that ran and gave no MOS for a clip.
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -23,7 +35,11 @@ use std::time::Instant;
 use voice_gate::report::{self, Metrics};
 use voice_gate::{measure, profile, run, score, wav};
 
-const BASELINE_NAME: &str = "2.9";
+/// The baseline that `scripts/voice-gate.sh` compares with: the 2.9 audio
+/// state (af8c7f0), measured with shim version 2 and the extra seeds, on
+/// Windows x86-64. `baseline-2.9.json` is the same audio state with shim
+/// version 1; it stays as the record.
+const DEFAULT_BASELINE: &str = "baseline-2.9-slot.json";
 
 const DEFINITIONS: &str = "
 Definitions:
@@ -62,6 +78,8 @@ struct Args {
     send_model: run::SendModel,
     write_baseline: bool,
     no_adapt: bool,
+    baseline: Option<PathBuf>,
+    report_only: bool,
 }
 
 fn parse_args() -> Result<Args, String> {
@@ -72,6 +90,8 @@ fn parse_args() -> Result<Args, String> {
         send_model: run::SendModel::Direct,
         write_baseline: false,
         no_adapt: false,
+        baseline: None,
+        report_only: false,
     };
     let mut it = std::env::args().skip(1);
     while let Some(arg) = it.next() {
@@ -85,9 +105,13 @@ fn parse_args() -> Result<Args, String> {
             "--send-tick" => a.send_model = run::SendModel::Tick,
             "--write-baseline" => a.write_baseline = true,
             "--no-adapt" => a.no_adapt = true,
+            "--baseline" => {
+                a.baseline = Some(PathBuf::from(it.next().ok_or("--baseline needs a file")?));
+            }
+            "--report-only" => a.report_only = true,
             "-h" | "--help" => {
                 println!(
-                    "voice-gate [--only a,b] [--out DIR] [--no-score] [--send-tick] [--no-adapt] [--write-baseline]"
+                    "voice-gate [--only a,b] [--out DIR] [--no-score] [--send-tick] [--no-adapt] [--baseline FILE] [--report-only] [--write-baseline]"
                 );
                 std::process::exit(0);
             }
@@ -128,6 +152,50 @@ fn corpus_fingerprint(root: &Path, spec: &profile::CorpusSpec) -> Result<String,
     Ok(profile::fnv1a_hex(&all))
 }
 
+/// "os/arch" in the words people use: "Windows x86-64", "macOS arm64".
+fn platform_words(os: &str, arch: &str) -> String {
+    let os = match os {
+        "windows" => "Windows",
+        "macos" | "darwin" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    let arch = match arch {
+        "x86_64" => "x86-64",
+        "aarch64" => "arm64",
+        other => other,
+    };
+    format!("{os} {arch}")
+}
+
+/// The banner of `--report-only`.
+fn report_only_banner(baseline: Option<&Value>) -> String {
+    let theirs = baseline
+        .and_then(|b| b.get("platform"))
+        .map(|p| {
+            platform_words(
+                p.get("os").and_then(Value::as_str).unwrap_or("?"),
+                p.get("arch").and_then(Value::as_str).unwrap_or("?"),
+            )
+        })
+        .unwrap_or_else(|| "from another platform".into());
+    // VOICE_GATE_PLATFORM ("os/arch", uname words allowed) simulates another
+    // host; scripts/voice-gate.sh reads it too.
+    let ours = match std::env::var("VOICE_GATE_PLATFORM") {
+        Ok(p) if !p.is_empty() => {
+            let (os, arch) = p.split_once('/').unwrap_or((p.as_str(), "?"));
+            format!(
+                "{} (VOICE_GATE_PLATFORM)",
+                platform_words(&os.to_ascii_lowercase(), arch)
+            )
+        }
+        _ => platform_words(std::env::consts::OS, std::env::consts::ARCH),
+    };
+    format!(
+        "report only: the enforced numbers and the baseline are {theirs}; this platform is {ours}"
+    )
+}
+
 fn real_main() -> Result<bool, String> {
     let args = parse_args()?;
     let started = Instant::now();
@@ -143,7 +211,17 @@ fn real_main() -> Result<bool, String> {
             .to_owned(),
     );
     let base_dir = root.join("benchmarks/baselines/voice");
-    let baseline_path = base_dir.join(format!("baseline-{BASELINE_NAME}.json"));
+    let baseline_path = match &args.baseline {
+        Some(p) if p.components().count() == 1 => base_dir.join(p),
+        Some(p) => p.clone(),
+        None => base_dir.join(DEFAULT_BASELINE),
+    };
+    // "baseline-2.9-slot.json" is baseline "2.9-slot".
+    let stem = baseline_path
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_default();
+    let baseline_name = stem.strip_prefix("baseline-").unwrap_or(&stem).to_owned();
     let out_dir = args
         .out
         .clone()
@@ -199,6 +277,12 @@ fn real_main() -> Result<bool, String> {
         }
         Some(b)
     };
+    let banner = args
+        .report_only
+        .then(|| report_only_banner(baseline.as_ref()));
+    if let Some(b) = &banner {
+        eprintln!("voice-gate: {b}");
+    }
 
     let selected: Vec<&profile::Profile> = gf
         .profiles
@@ -562,7 +646,7 @@ fn real_main() -> Result<bool, String> {
     println!();
     match &baseline {
         Some(b) => println!(
-            "Voice quality gate. Delta against baseline {BASELINE_NAME} ({}).",
+            "Voice quality gate. Delta against baseline {baseline_name} ({}).",
             b.get("git")
                 .and_then(|g| g.get("commit"))
                 .and_then(Value::as_str)
@@ -591,15 +675,15 @@ fn real_main() -> Result<bool, String> {
         let mut b = result.clone();
         if let Some(m) = b.as_object_mut() {
             m.insert("kind".into(), json!("voice-gate-baseline"));
-            m.insert("baseline".into(), json!(BASELINE_NAME));
+            m.insert("baseline".into(), json!(baseline_name));
         }
         std::fs::write(
             &baseline_path,
             serde_json::to_string_pretty(&b).map_err(|e| e.to_string())? + "\n",
         )
         .map_err(|e| format!("{}: {e}", baseline_path.display()))?;
-        let md = baseline_markdown(&order, &results, &result, &gates);
-        let md_path = base_dir.join(format!("baseline-{BASELINE_NAME}.md"));
+        let md = baseline_markdown(&baseline_name, &order, &results, &result, &gates);
+        let md_path = baseline_path.with_extension("md");
         std::fs::write(&md_path, md).map_err(|e| format!("{}: {e}", md_path.display()))?;
         println!(
             "Baseline written: {} and {}",
@@ -611,6 +695,29 @@ fn real_main() -> Result<bool, String> {
     }
 
     let failed: Vec<&report::GateResult> = gates.iter().filter(|g| g.enforced && !g.pass).collect();
+    if let Some(b) = &banner {
+        let (decode_errors, unscored) =
+            report_only_failures(&order, &results, &clip_mos, scores.available);
+        println!("Voice gate: {b}.");
+        println!(
+            "Voice gate: REPORT ONLY, {} enforced gate(s) outside their limits on this platform, not enforced.",
+            failed.len()
+        );
+        if !decode_errors.is_empty() {
+            println!(
+                "Voice gate: FAIL, decode errors in {}",
+                decode_errors.join(", ")
+            );
+        }
+        if !unscored.is_empty() {
+            println!(
+                "Voice gate: FAIL, the scorer gave no MOS for {} clip(s): {}",
+                unscored.len(),
+                unscored.join(", ")
+            );
+        }
+        return Ok(decode_errors.is_empty() && unscored.is_empty());
+    }
     if failed.is_empty() {
         println!("Voice gate: PASS");
         Ok(true)
@@ -620,7 +727,40 @@ fn real_main() -> Result<bool, String> {
     }
 }
 
+/// What fails a `--report-only` run: what is broken on every platform, not
+/// a number outside a limit. Returns the profiles with decode errors, and
+/// the clips the scorer ran on but gave no MOS (only when it ran).
+fn report_only_failures<'a>(
+    order: &'a [String],
+    results: &BTreeMap<String, Metrics>,
+    clip_mos: &'a BTreeMap<String, Vec<Value>>,
+    scored: bool,
+) -> (Vec<&'a str>, Vec<&'a str>) {
+    let decode_errors = order
+        .iter()
+        .filter(|n| {
+            results
+                .get(*n)
+                .and_then(|m| m.get("decode_errors").cloned().flatten())
+                .is_some_and(|v| v > 0.0)
+        })
+        .map(String::as_str)
+        .collect();
+    let unscored = if scored {
+        clip_mos
+            .values()
+            .flatten()
+            .filter(|c| c.get("mos").and_then(Value::as_f64).is_none())
+            .filter_map(|c| c.get("clip").and_then(Value::as_str))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    (decode_errors, unscored)
+}
+
 fn baseline_markdown(
+    name: &str,
     order: &[String],
     results: &BTreeMap<String, Metrics>,
     result: &Value,
@@ -629,11 +769,11 @@ fn baseline_markdown(
     let commit = result["git"]["commit"].as_str().unwrap_or("unknown");
     let dirty = result["git"]["dirty"].as_bool().unwrap_or(true);
     let mut s = String::new();
-    let _ = writeln!(s, "# Voice quality baseline {BASELINE_NAME}\n");
+    let _ = writeln!(s, "# Voice quality baseline {name}\n");
     let _ = writeln!(
         s,
         "> Taken {} on {}/{} from commit `{commit}`{}. This file and \
-         `baseline-{BASELINE_NAME}.json` are never edited. Every later run of \
+         `baseline-{name}.json` are never edited. Every later run of \
          `scripts/voice-gate.sh` prints its delta against them.\n",
         result["taken_at_utc"].as_str().unwrap_or(""),
         result["platform"]["os"].as_str().unwrap_or(""),
@@ -707,5 +847,57 @@ fn main() -> ExitCode {
             eprintln!("voice-gate: error: {e}");
             ExitCode::from(2)
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn metrics(decode_errors: f64, clip_growth: f64) -> Metrics {
+        let mut m = Metrics::new();
+        m.insert("decode_errors".into(), Some(decode_errors));
+        m.insert("latency_clip_growth_ms".into(), Some(clip_growth));
+        m
+    }
+
+    #[test]
+    fn report_only_fails_on_decode_errors_and_scorer_failures_only() {
+        let order = vec!["clean".to_owned(), "mobile".to_owned()];
+        // mobile is far outside its in-clip growth limit: not a failure here.
+        let mut results = BTreeMap::new();
+        results.insert("clean".to_owned(), metrics(0.0, 0.0));
+        results.insert("mobile".to_owned(), metrics(0.0, 80.0));
+        let mut clip_mos = BTreeMap::new();
+        clip_mos.insert(
+            "clean".to_owned(),
+            vec![json!({ "clip": "clean-000-m1", "mos": 3.4 })],
+        );
+        let (dec, unscored) = report_only_failures(&order, &results, &clip_mos, true);
+        assert!(dec.is_empty() && unscored.is_empty());
+
+        results.insert("mobile".to_owned(), metrics(2.0, 0.0));
+        clip_mos.insert(
+            "mobile".to_owned(),
+            vec![json!({ "clip": "mobile-001-f1", "mos": null })],
+        );
+        let (dec, unscored) = report_only_failures(&order, &results, &clip_mos, true);
+        assert_eq!(dec, ["mobile"]);
+        assert_eq!(unscored, ["mobile-001-f1"]);
+        // No scorer at all (no Python): a warning, as in an enforced run.
+        let (_, unscored) = report_only_failures(&order, &results, &clip_mos, false);
+        assert!(unscored.is_empty());
+    }
+
+    #[test]
+    fn the_banner_names_both_platforms() {
+        let b = json!({ "platform": { "os": "windows", "arch": "x86_64" } });
+        let text = report_only_banner(Some(&b));
+        assert!(
+            text.starts_with("report only: the enforced numbers and the baseline are Windows x86-64; this platform is "),
+            "{text}"
+        );
+        assert_eq!(platform_words("macos", "aarch64"), "macOS arm64");
+        assert_eq!(platform_words("darwin", "arm64"), "macOS arm64");
     }
 }

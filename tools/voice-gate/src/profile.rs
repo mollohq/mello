@@ -4,7 +4,7 @@
 use serde_json::Value;
 use std::path::Path;
 
-/// Gilbert-Elliott burst loss. One state step per packet.
+/// Gilbert-Elliott burst loss. One state step per 20 ms send slot (shim.rs).
 #[derive(Clone, Debug)]
 pub struct Gilbert {
     /// Probability to go from the good to the bad state.
@@ -74,8 +74,8 @@ impl Network {
     }
 
     /// The same network without loss: delay, jitter, stalls and reorder stay.
-    /// The shim draws every random stream once per packet, lost or not, so
-    /// every packet keeps its delay.
+    /// The shim draws every random stream once per send slot, lost or not,
+    /// so every packet keeps its delay.
     pub fn without_loss(&self) -> Network {
         let mut n = self.clone();
         n.loss_random = 0.0;
@@ -108,7 +108,8 @@ pub struct Gate {
 /// Where a relative bound comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RefSource {
-    /// The frozen baseline (baseline-2.9.json).
+    /// The frozen baseline (baseline-2.9-slot.json, or the one given with
+    /// `--baseline`).
     Baseline,
     /// This run.
     Run,
@@ -339,11 +340,34 @@ fn parse_gates(v: &Value) -> Result<Vec<Gate>, String> {
     Ok(out)
 }
 
+/// The shim version a gate file is written for: its `"shim"` field, 1 when
+/// absent. It must be the one this harness implements
+/// ([`crate::shim::SHIM_VERSION`]). The field is a frozen input, so a new
+/// shim rule changes `inputs_fingerprint` on purpose.
+fn check_shim_version(root: &Value, path: &Path) -> Result<(), String> {
+    let want = crate::shim::SHIM_VERSION;
+    let got = match root.get("shim") {
+        None => 1,
+        Some(v) => v
+            .as_u64()
+            .ok_or_else(|| format!("{}: 'shim' must be an integer", path.display()))?,
+    };
+    if got == want {
+        Ok(())
+    } else {
+        Err(format!(
+            "{}: written for shim version {got}, this harness implements version {want}",
+            path.display()
+        ))
+    }
+}
+
 /// Read and validate the gate definition.
 pub fn load(path: &Path) -> Result<GateFile, String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let root: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_shim_version(&root, path)?;
     let c = root.get("corpus").ok_or("missing 'corpus'")?;
     let corpus = CorpusSpec {
         dir: s(c, "dir")?,
@@ -393,15 +417,13 @@ pub fn load(path: &Path) -> Result<GateFile, String> {
 /// `profiles`). The baseline's fingerprint does not cover them; they get
 /// their own. A profile with `"compare_no_adapt": true` also runs as
 /// `<name>-no-adapt`, without the send-leg feedback and without gates, so a
-/// gate can compare the two with `min_ref`. A profile with
-/// `"extra_seeds": [..]` also runs once per extra seed as `<name>@<seed>`
-/// (and `<name>-no-adapt@<seed>`), without gates; the harness adds the
-/// median over the seeds of [`SEED_MEDIAN_METRICS`] to the profile as
-/// `<metric>_median`.
+/// gate can compare the two with `min_ref`. `"extra_seeds"` works in both
+/// files: see [`parse_profiles`].
 pub fn load_added(gf: &mut GateFile, path: &Path) -> Result<(), String> {
     let bytes = std::fs::read(path).map_err(|e| format!("{}: {e}", path.display()))?;
     let root: Value =
         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
+    check_shim_version(&root, path)?;
     let added = parse_profiles(&root, true)?;
     for p in &added {
         if gf.profiles.iter().any(|q| q.name == p.name) {
@@ -413,6 +435,11 @@ pub fn load_added(gf: &mut GateFile, path: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// The profiles of a gate file. A profile with `"extra_seeds": [..]` (in
+/// `profiles.json` or in an added file) also runs once per extra seed as
+/// `<name>@<seed>` (and `<name>-no-adapt@<seed>`), without gates; the
+/// harness adds the median over the seeds of [`SEED_MEDIAN_METRICS`] to the
+/// profile as `<metric>_median`.
 fn parse_profiles(root: &Value, added: bool) -> Result<Vec<Profile>, String> {
     let mut profiles = Vec::new();
     for p in root
@@ -495,7 +522,8 @@ fn parse_profiles(root: &Value, added: bool) -> Result<Vec<Profile>, String> {
 
 /// Metrics of a profile with `extra_seeds` whose median over the seeds the
 /// harness adds as `<metric>_median`.
-pub const SEED_MEDIAN_METRICS: &[&str] = &["bottleneck_delay_mean_ms", "mos"];
+pub const SEED_MEDIAN_METRICS: &[&str] =
+    &["bottleneck_delay_mean_ms", "latency_clip_growth_ms", "mos"];
 
 fn no_adapt_twin(base: &Profile) -> Profile {
     let mut twin = base.clone();
@@ -550,5 +578,57 @@ fn canonical(v: &Value, out: &mut String) {
             out.push(']');
         }
         other => out.push_str(&other.to_string()),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The gate files of the repository.
+    fn gate_dir() -> std::path::PathBuf {
+        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../benchmarks/baselines/voice")
+    }
+
+    #[test]
+    fn extra_seeds_work_in_profiles_json() {
+        let gf = load(&gate_dir().join("profiles.json")).expect("profiles.json");
+        for (name, seed) in [("home-wifi", 202), ("mobile", 303), ("bad", 404)] {
+            let group: Vec<(&str, u64, usize)> = gf
+                .profiles
+                .iter()
+                .filter(|p| p.group == name)
+                .map(|p| (p.name.as_str(), p.seed, p.gates.len()))
+                .collect();
+            let rep1 = format!("{name}@{}", seed + 1);
+            let rep2 = format!("{name}@{}", seed + 2);
+            assert_eq!(group.len(), 3, "{name}: {group:?}");
+            assert_eq!((group[0].0, group[0].1), (name, seed));
+            assert!(group[0].2 > 0, "{name} keeps its gates");
+            assert_eq!(group[1], (rep1.as_str(), seed + 1, 0));
+            assert_eq!(group[2], (rep2.as_str(), seed + 2, 0));
+            let base = &gf.profiles[gf.profiles.iter().position(|p| p.name == name).unwrap()];
+            assert!(base
+                .gates
+                .iter()
+                .any(|g| g.metric == "latency_clip_growth_ms_median" && g.enforced));
+        }
+        assert!(SEED_MEDIAN_METRICS.contains(&"latency_clip_growth_ms"));
+    }
+
+    #[test]
+    fn a_gate_file_for_another_shim_version_is_refused() {
+        let p = Path::new("profiles.json");
+        assert!(check_shim_version(&serde_json::json!({ "shim": 2 }), p).is_ok());
+        let old = check_shim_version(&serde_json::json!({}), p).unwrap_err();
+        assert!(old.contains("shim version 1"), "{old}");
+        assert!(check_shim_version(&serde_json::json!({ "shim": 3 }), p).is_err());
+    }
+
+    #[test]
+    fn the_shim_version_is_a_frozen_input() {
+        let a = serde_json::json!({ "shim": 2, "profiles": [] });
+        let b = serde_json::json!({ "shim": 1, "profiles": [] });
+        assert_ne!(inputs_fingerprint(&a), inputs_fingerprint(&b));
     }
 }

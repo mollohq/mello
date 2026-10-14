@@ -754,7 +754,9 @@ Endpoint voice quality gate (`scripts/voice-gate.sh`, `tools/voice-gate`):
   onset loss (the output's first 200 ms of each spurt against the reference,
   §4.1), concealment frames per lost frame, receiver drops and dropouts, the send bitrate and
   loss perc over time, with the delta against
-  `benchmarks/baselines/voice/baseline-2.9.json`. See `TESTING.md`.
+  `benchmarks/baselines/voice/baseline-2.9-slot.json`. The gate enforces
+  its numbers on the baseline's platform (Windows x86-64) and reports only
+  on other platforms. See `TESTING.md`.
 
 ---
 

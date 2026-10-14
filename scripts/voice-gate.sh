@@ -3,8 +3,18 @@
 #
 # Pushes the speech corpus through the real libmello voice path for every
 # impairment profile in benchmarks/baselines/voice/profiles.json, device-free,
-# and prints the table with the delta against
-# benchmarks/baselines/voice/baseline-2.9.json per profile and per metric.
+# and prints the table with the delta against the baseline per profile and
+# per metric.
+#
+# Baseline and platform. The baseline is
+# benchmarks/baselines/voice/baseline-2.9-slot-<os>-<arch>.json when it
+# exists for this host, else baseline-2.9-slot.json. <os> and <arch> are
+# Rust's names (windows, macos, linux; x86_64, aarch64). The gate enforces
+# its numbers only on the platform the baseline file names in "platform".
+# On another host it runs with --report-only: every metric and gate is
+# printed, and only decode errors or a scorer failure fail the run.
+# VOICE_GATE_PLATFORM=<os>/<arch> (uname words allowed, for example
+# darwin/arm64) replaces the host platform, to test this rule.
 #
 # Exit code: 0 = pass, 1 = an enforced gate failed (a MOS drop of more than
 # 0.1 on any profile, or an enforced structural gate), 2 = setup error.
@@ -19,6 +29,7 @@
 #   ./scripts/voice-gate.sh                 # all profiles
 #   ./scripts/voice-gate.sh --only clean,wrap
 #   ./scripts/voice-gate.sh --no-score      # structural metrics only
+#   ./scripts/voice-gate.sh --report-only   # print every gate, enforce none
 # Audio, delay curves and results.json land in target/voice-gate/.
 set -eu
 
@@ -67,4 +78,59 @@ if [ -z "${VOICE_GATE_PYTHON:-}" ]; then
     fi
 fi
 
-exec cargo run --quiet -p voice-gate -- "$@"
+# Rust's names for a platform: windows, macos, linux; x86_64, aarch64.
+norm_os() {
+    case "$1" in
+        MINGW* | MSYS* | CYGWIN* | Windows* | windows) printf 'windows\n' ;;
+        Darwin | darwin | macos) printf 'macos\n' ;;
+        Linux | linux) printf 'linux\n' ;;
+        *) printf '%s\n' "$1" | tr 'A-Z' 'a-z' ;;
+    esac
+}
+norm_arch() {
+    case "$1" in
+        x86_64 | amd64 | AMD64 | x86-64) printf 'x86_64\n' ;;
+        arm64 | aarch64 | ARM64) printf 'aarch64\n' ;;
+        *) printf '%s\n' "$1" ;;
+    esac
+}
+
+if [ -n "${VOICE_GATE_PLATFORM:-}" ]; then
+    HOST_OS="$(norm_os "${VOICE_GATE_PLATFORM%%/*}")"
+    HOST_ARCH="$(norm_arch "${VOICE_GATE_PLATFORM#*/}")"
+else
+    HOST_OS="$(norm_os "$(uname -s)")"
+    HOST_ARCH="$(norm_arch "$(uname -m)")"
+fi
+
+BASE_DIR="benchmarks/baselines/voice"
+BASELINE="$BASE_DIR/baseline-2.9-slot-$HOST_OS-$HOST_ARCH.json"
+if [ ! -f "$BASELINE" ]; then
+    BASELINE="$BASE_DIR/baseline-2.9-slot.json"
+fi
+
+# The platform the baseline was taken on: its "platform" object, which the
+# harness writes as "arch" and "os" lines (serde_json, sorted keys).
+baseline_platform_field() {
+    awk -v key="\"$2\":" '
+        /"platform": \{/ { inside = 1; next }
+        inside && /\}/ { exit }
+        inside && index($0, key) {
+            sub(/^[^:]*: *"/, ""); sub(/".*$/, ""); print; exit
+        }' "$1"
+}
+
+REPORT_ONLY=""
+if [ -f "$BASELINE" ]; then
+    BASE_OS="$(baseline_platform_field "$BASELINE" os)"
+    BASE_ARCH="$(baseline_platform_field "$BASELINE" arch)"
+    if [ "$BASE_OS/$BASE_ARCH" != "$HOST_OS/$HOST_ARCH" ]; then
+        printf 'voice-gate: %s is from %s/%s, this host is %s/%s: report only\n' \
+            "$BASELINE" "$BASE_OS" "$BASE_ARCH" "$HOST_OS" "$HOST_ARCH" >&2
+        REPORT_ONLY="--report-only"
+    fi
+fi
+
+# $REPORT_ONLY is empty or one word: unquoted on purpose.
+# shellcheck disable=SC2086
+exec cargo run --quiet -p voice-gate -- --baseline "$(basename "$BASELINE")" $REPORT_ONLY "$@"

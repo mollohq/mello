@@ -10,6 +10,22 @@
 //! 65536, the timestamp is the start plus the media time mod 2^32, and the
 //! SSRC is fixed. The timestamp start and the SSRC come from the profile seed
 //! (stream "rtp"), so the frozen profile inputs do not change.
+//!
+//! Random draws per send slot (shim version [`SHIM_VERSION`] = 2). The
+//! network is a function of time, not of the packet count. Each random
+//! stream (loss, burst state and drop, jitter, reorder) gives one set of
+//! draws per 20 ms send slot. The slot of a packet is its media time: the
+//! sender's RTP timestamp offset (`SentPacket::timestamp`, 48 kHz samples
+//! from the first captured sample of the run) divided by 960, the samples of
+//! one 20 ms frame. To reach the slot of a packet, each stream advances
+//! through every slot up to and including that slot. A slot without a
+//! packet (a DTX gap or a closed gate of N frames) consumes its draws all the
+//! same, and the Gilbert-Elliott burst state takes one step per slot. So a
+//! sender that sends one packet more or less meets the same network in every
+//! later slot. The streams stay independent: each has its own generator
+//! (`Rng::stream`), and a draw of one never moves another. Two packets with
+//! the same slot get the same draws. Shim version 1 (baseline 2.9) advanced
+//! every stream once per packet instead.
 
 use crate::profile::{Network, Profile};
 use crate::rng::Rng;
@@ -132,16 +148,100 @@ pub fn rtp_packet(sequence: u16, timestamp: u32, ssrc: u32, payload: &[u8]) -> V
     p
 }
 
-pub struct Shim {
-    net: Network,
-    rtp_seq_start: u16,
-    rtp_ts_start: u32,
-    ssrc: u32,
+/// The shim's rule for random draws. `profiles.json` and
+/// `profiles-congestion.json` carry it as `"shim"`, so a change of the rule
+/// changes `inputs_fingerprint`. 1: one draw per packet (baseline 2.9).
+/// 2: one draw per 20 ms send slot (see the module notes).
+pub const SHIM_VERSION: u64 = 2;
+
+/// Samples of one 20 ms frame at 48 kHz: the width of one send slot in RTP
+/// timestamp units.
+pub const SLOT_SAMPLES: u32 = 960;
+
+/// The send slot of a packet: its media time in 20 ms frames.
+pub fn slot_of(timestamp: u32) -> usize {
+    (timestamp / SLOT_SAMPLES) as usize
+}
+
+/// The random draws of one 20 ms send slot.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct SlotDraws {
+    /// Uniform for the random loss.
+    pub u_loss: f64,
+    /// Gilbert-Elliott state after this slot's step (false without burst
+    /// loss).
+    pub burst_bad: bool,
+    /// Uniform for the drop in the bad state.
+    pub u_burst_drop: f64,
+    /// Standard normal for the jitter, scaled by the sigma at send time.
+    pub gaussian: f64,
+    /// Uniform for the reorder.
+    pub u_reorder: f64,
+}
+
+/// The random streams of the shim, drawn slot by slot.
+pub struct SlotDrawer {
+    burst: Option<crate::profile::Gilbert>,
     rng_loss: Rng,
     rng_burst: Rng,
     rng_delay: Rng,
     rng_reorder: Rng,
     gilbert_bad: bool,
+    /// Draws of every slot from 0 up to the highest slot asked for.
+    slots: Vec<SlotDraws>,
+}
+
+impl SlotDrawer {
+    pub fn new(seed: u64, net: &Network) -> Self {
+        Self {
+            burst: net.burst.clone(),
+            rng_loss: Rng::stream(seed, "loss"),
+            rng_burst: Rng::stream(seed, "burst"),
+            rng_delay: Rng::stream(seed, "delay"),
+            rng_reorder: Rng::stream(seed, "reorder"),
+            gilbert_bad: false,
+            slots: Vec::new(),
+        }
+    }
+
+    /// The draws of `slot`. Every stream advances through every slot up to
+    /// and including `slot`, also through slots without a packet.
+    pub fn draws(&mut self, slot: usize) -> SlotDraws {
+        while self.slots.len() <= slot {
+            let u_loss = self.rng_loss.uniform();
+            let (burst_bad, u_burst_drop) = match &self.burst {
+                Some(g) => {
+                    let u_state = self.rng_burst.uniform();
+                    let u_drop = self.rng_burst.uniform();
+                    self.gilbert_bad = if self.gilbert_bad {
+                        u_state >= g.p_exit
+                    } else {
+                        u_state < g.p_enter
+                    };
+                    (self.gilbert_bad, u_drop)
+                }
+                None => (false, 1.0),
+            };
+            let gaussian = self.rng_delay.gaussian();
+            let u_reorder = self.rng_reorder.uniform();
+            self.slots.push(SlotDraws {
+                u_loss,
+                burst_bad,
+                u_burst_drop,
+                gaussian,
+                u_reorder,
+            });
+        }
+        self.slots[slot]
+    }
+}
+
+pub struct Shim {
+    net: Network,
+    rtp_seq_start: u16,
+    rtp_ts_start: u32,
+    ssrc: u32,
+    drawer: SlotDrawer,
     /// Stall windows in ms of run time: random spikes and episode stalls.
     stalls: Vec<(f64, f64)>,
     last_fifo_ms: f64,
@@ -153,6 +253,9 @@ pub struct Shim {
     /// Sender sample position when the first packet with a wrapped RTP
     /// sequence was sent (None when the run does not wrap).
     pub wrap_sender_sample: Option<usize>,
+    /// Slot and draws of every sent packet, for the tests.
+    #[cfg(test)]
+    used: Vec<(usize, SlotDraws)>,
 }
 
 impl Shim {
@@ -182,11 +285,7 @@ impl Shim {
             rtp_seq_start: profile.rtp_seq_start,
             rtp_ts_start,
             ssrc,
-            rng_loss: Rng::stream(profile.seed, "loss"),
-            rng_burst: Rng::stream(profile.seed, "burst"),
-            rng_delay: Rng::stream(profile.seed, "delay"),
-            rng_reorder: Rng::stream(profile.seed, "reorder"),
-            gilbert_bad: false,
+            drawer: SlotDrawer::new(profile.seed, &net),
             stalls,
             last_fifo_ms: 0.0,
             link_free_ms: 0.0,
@@ -194,6 +293,8 @@ impl Shim {
             order: 0,
             counters: ShimCounters::default(),
             wrap_sender_sample: None,
+            #[cfg(test)]
+            used: Vec::new(),
             net,
         }
     }
@@ -261,24 +362,19 @@ impl Shim {
         let t = now_ms as f64;
         let (sigma, loss_random) = self.conditions(t);
 
-        // Every random stream advances once per packet, lost or not, so the
-        // pattern of one impairment does not depend on another.
-        let u_loss = self.rng_loss.uniform();
+        // The draws of the packet's send slot (module notes): the same for
+        // this slot whatever the sender sent before it.
+        let slot = slot_of(packet.timestamp);
+        let d = self.drawer.draws(slot);
+        #[cfg(test)]
+        self.used.push((slot, d));
+        let u_loss = d.u_loss;
         let burst_lost = match &self.net.burst {
-            Some(g) => {
-                let u_state = self.rng_burst.uniform();
-                let u_drop = self.rng_burst.uniform();
-                self.gilbert_bad = if self.gilbert_bad {
-                    u_state >= g.p_exit
-                } else {
-                    u_state < g.p_enter
-                };
-                self.gilbert_bad && u_drop < g.loss_in_bad
-            }
+            Some(g) => d.burst_bad && d.u_burst_drop < g.loss_in_bad,
             None => false,
         };
-        let jitter = self.rng_delay.gaussian() * sigma;
-        let u_reorder = self.rng_reorder.uniform();
+        let jitter = d.gaussian * sigma;
+        let u_reorder = d.u_reorder;
 
         let in_outage = self
             .net
@@ -432,6 +528,114 @@ mod tests {
 
     fn rtp_ts(p: &[u8]) -> u32 {
         u32::from_be_bytes([p[4], p[5], p[6], p[7]])
+    }
+
+    /// A mobile-like network: every random stream in use.
+    fn noisy() -> Network {
+        Network {
+            base_delay_ms: 50.0,
+            jitter_sigma_ms: 15.0,
+            loss_random: 0.03,
+            burst: Some(Gilbert {
+                p_enter: 0.008,
+                p_exit: 0.35,
+                loss_in_bad: 1.0,
+            }),
+            reorder_prob: 0.005,
+            reorder_extra_ms: 40.0,
+            ..Default::default()
+        }
+    }
+
+    /// Send one packet per slot in `slots`, at the slot's send time, with
+    /// the sender's sequence counting the sent packets.
+    fn send_slots(net: Network, slots: &[u32]) -> Shim {
+        let mut shim = Shim::new(&profile(net, 0));
+        for (seq, &slot) in slots.iter().enumerate() {
+            let p = SentPacket {
+                chunks: 0,
+                sequence: seq as u32,
+                timestamp: slot * SLOT_SAMPLES,
+                payload: vec![0xAA; 20],
+            };
+            shim.send(&p, i64::from(slot) * 20, 0);
+        }
+        shim
+    }
+
+    #[test]
+    fn one_packet_less_meets_the_same_network() {
+        // Sender A sends every slot of 0..400. Sender B is the same sender
+        // with the packet of slot 100 not sent: its later packets have a
+        // sequence one lower. Shim version 1 shifted every later draw by one
+        // packet; now every later slot gets the same draws and the same
+        // loss decision.
+        let all: Vec<u32> = (0..400).collect();
+        let fewer: Vec<u32> = all.iter().copied().filter(|&s| s != 100).collect();
+        let a = send_slots(noisy(), &all);
+        let b = send_slots(noisy(), &fewer);
+        assert_eq!(b.used.len() + 1, a.used.len());
+        let a_by_slot: std::collections::BTreeMap<usize, (SlotDraws, bool)> = a
+            .used
+            .iter()
+            .zip(&a.counters.sent_log)
+            .map(|(&(slot, d), &(_, lost))| (slot, (d, lost)))
+            .collect();
+        let mut later = 0;
+        for (&(slot, d), &(_, lost)) in b.used.iter().zip(&b.counters.sent_log) {
+            assert_eq!(a_by_slot[&slot], (d, lost), "slot {slot}");
+            later += usize::from(slot > 100);
+        }
+        assert_eq!(later, 299);
+        // The network has losses, so the test can see a shift.
+        assert!(a.counters.lost() > 10, "lost {}", a.counters.lost());
+    }
+
+    #[test]
+    fn a_slot_has_the_same_draws_after_skipped_slots() {
+        let net = noisy();
+        let mut every = SlotDrawer::new(303, &net);
+        let reference: Vec<SlotDraws> = (0..=300).map(|s| every.draws(s)).collect();
+        // A sender with a gate gap: slots 0..20, then nothing up to 120, a
+        // DTX-like gap of single frames, then a long gap to 300.
+        let mut gappy = SlotDrawer::new(303, &net);
+        let asked: Vec<usize> = (0..20)
+            .chain(120..140)
+            .chain((140..200).step_by(3))
+            .chain([300])
+            .collect();
+        for &s in &asked {
+            assert_eq!(gappy.draws(s), reference[s], "slot {s}");
+        }
+        // A slot asked again, or out of order, keeps its draws.
+        assert_eq!(gappy.draws(130), reference[130]);
+        assert_eq!(gappy.draws(50), reference[50]);
+        // The first packet late in the run: every earlier slot still draws.
+        let mut late = SlotDrawer::new(303, &net);
+        assert_eq!(late.draws(250), reference[250]);
+        // The burst state is part of the draws: the chain stepped in the
+        // skipped slots, so the bad periods are the same.
+        assert!(reference.iter().any(|d| d.burst_bad));
+    }
+
+    #[test]
+    fn a_sender_without_gaps_keeps_the_per_packet_draws() {
+        // One packet in every slot (push-to-talk, the drift profile): the
+        // draws are the ones of shim version 1, one per packet.
+        let net = noisy();
+        let mut slots = SlotDrawer::new(606, &net);
+        let mut loss = Rng::stream(606, "loss");
+        let mut burst = Rng::stream(606, "burst");
+        let mut delay = Rng::stream(606, "delay");
+        let mut reorder = Rng::stream(606, "reorder");
+        for s in 0..500 {
+            let d = slots.draws(s);
+            assert_eq!(d.u_loss, loss.uniform());
+            let _state = burst.uniform();
+            assert_eq!(d.u_burst_drop, burst.uniform());
+            assert_eq!(d.gaussian, delay.gaussian());
+            assert_eq!(d.u_reorder, reorder.uniform());
+        }
     }
 
     #[test]

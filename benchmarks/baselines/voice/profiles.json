@@ -1,8 +1,11 @@
 {
   "schema": 1,
+  "shim": 2,
   "_comment": [
     "Voice quality gate definition (plans/voice-quality.md stage 7). Read by tools/voice-gate.",
-    "Frozen inputs: corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
+    "Frozen inputs: 'shim', corpus, receiver, analysis, and every profile field except 'gates' and 'description'.",
+    "shim (version 2, since baseline 2.9-slot): the impairment shim draws its random streams (loss, burst state and drop, jitter, reorder) once per 20 ms send slot, not once per packet. The slot of a packet is its RTP timestamp offset (48 kHz media time from the first captured sample) divided by 960. Each stream advances through every slot up to the packet's slot, so a slot without a packet (DTX, a closed gate) consumes its draws, and a sender that sends one packet more or less meets the same network in every later slot. The streams stay independent of each other. Version 1 (baseline 2.9) drew per packet. tools/voice-gate/src/shim.rs.",
+    "extra_seeds: the profile also runs with each extra seed as <name>@<seed>, without gates. The harness adds the median over the seed and the extra seeds of latency_clip_growth_ms, mos and bottleneck_delay_mean_ms as <metric>_median. home-wifi, mobile and bad gate in-clip growth on latency_clip_growth_ms_median: one seed's value spreads over more than the limit (TESTING.md, voice quality gate, seeds).",
     "A change to a frozen input changes inputs_fingerprint; the harness then refuses to compare with the baseline.",
     "Gates may change. 'enforced': false prints a failing gate but does not fail the run.",
     "Times are seconds of sender audio from the run start. Delays and stalls are ms.",
@@ -61,6 +64,7 @@
       "description": "Home Wi-Fi: 15 ms, 6 ms jitter, 2 % random loss, short bursts, 2 stalls of 120 ms per minute, rare reorder.",
       "duration_s": 93,
       "seed": 202,
+      "extra_seeds": [203, 204],
       "rtp_seq_start": 20000,
       "network": {
         "base_delay_ms": 15,
@@ -75,7 +79,8 @@
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1: one concealment per lost frame; concealable losses only since stage 3b. Informational since stage 3b: NetEQ merges a short expand into the next frame, so the ratio is under 1 with the same total concealment; delay growth, its harm, is enforced by latency_clip_growth_ms and the drift gate" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss" },
+        { "metric": "latency_clip_growth_ms_median", "max": 20, "enforced": true, "note": "stage 1 gate: flat delay at 2 % loss; median over seeds 202, 203, 204 since the slot shim: one seed's value spreads over more than the limit, because where a stall lands against a clip boundary decides it" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "seed 202 alone, informational: the enforced gate is the median over seeds above" },
         { "metric": "mos", "min": 3.1466, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (3.25)" }
       ]
     },
@@ -84,6 +89,7 @@
       "description": "Mobile hotspot: 50 ms, 15 ms jitter, 3 % random loss, bursts, 4 stalls of 250 ms per minute, reorder.",
       "duration_s": 93,
       "seed": 303,
+      "extra_seeds": [304, 305],
       "rtp_seq_start": 40000,
       "network": {
         "base_delay_ms": 50,
@@ -98,7 +104,8 @@
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1; concealable losses only since stage 3b. Informational since stage 3b: NetEQ merges a short expand into the next frame, so the ratio is under 1 with the same total concealment; delay growth, its harm, is enforced by latency_clip_growth_ms and the drift gate" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
+        { "metric": "latency_clip_growth_ms_median", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment; median over seeds 303, 304, 305 since the slot shim: one seed's value spreads over more than the limit, because where a stall lands against a clip boundary decides it" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "seed 303 alone, informational: the enforced gate is the median over seeds above" },
         { "metric": "mos", "min": 2.7046, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.80)" }
       ]
     },
@@ -107,6 +114,7 @@
       "description": "Bad link: 80 ms, 35 ms jitter, 7 % random loss, long bursts, 6 stalls of 400 ms per minute, reorder.",
       "duration_s": 93,
       "seed": 404,
+      "extra_seeds": [405, 406],
       "rtp_seq_start": 50000,
       "network": {
         "base_delay_ms": 80,
@@ -121,7 +129,8 @@
       "gates": [
         { "metric": "decode_errors", "max": 0, "enforced": true },
         { "metric": "conceal_per_lost", "min": 0.95, "max": 1.05, "enforced": false, "note": "stage 1.1; concealable losses only since stage 3b. Informational since stage 3b: NetEQ merges a short expand into the next frame, so the ratio is under 1 with the same total concealment; delay growth, its harm, is enforced by latency_clip_growth_ms and the drift gate" },
-        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment" },
+        { "metric": "latency_clip_growth_ms_median", "max": 20, "enforced": true, "note": "stage 1.1: no delay build-up from double concealment; median over seeds 404, 405, 406 since the slot shim: one seed's value spreads over more than the limit, because where a stall lands against a clip boundary decides it" },
+        { "metric": "latency_clip_growth_ms", "max": 20, "enforced": false, "note": "seed 404 alone, informational: the enforced gate is the median over seeds above" },
         { "metric": "mos", "min": 2.1232, "enforced": true, "note": "stage 5: MOS drops at most 0.1 against stage 4 (2.22)" }
       ]
     },
