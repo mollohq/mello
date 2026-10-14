@@ -30,7 +30,7 @@ flows:
     priority: P0
     users: 1
     harness: [entering_step_2_by_choosing_a_crew_loads_its_data, onboarding_with_crews_shows_cards_and_one_create_card, the_card_leaves_a_card_for_each_crew_that_step_one_shows]
-    journeys: []
+    journeys: [qa/journeys/onboarding-join-public-crew.ts]
     protocol: []
     issues: []
 
@@ -112,7 +112,7 @@ flows:
     priority: P0
     users: 1
     harness: [logout_returns_to_a_visible_screen, email_login_carries_credentials_and_sets_loading, real_login_failure_surfaces_an_error_and_stays_put, successful_login_clears_the_spinner_and_panel]
-    journeys: []
+    journeys: [qa/journeys/signin-email.ts]
     protocol: []
     issues: []
 
@@ -194,7 +194,7 @@ flows:
     priority: P1
     users: 2
     harness: [joining_from_discover_uses_the_crew_id_and_invite_code_paths, the_discover_code_field_accepts_a_link, the_discover_code_field_refuses_what_is_no_invite]
-    journeys: []
+    journeys: [qa/journeys/invite-discover-code.ts]
     protocol: []
     issues: []
 
