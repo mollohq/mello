@@ -6,4 +6,8 @@
 # (PR #62's backend job died exactly this way). Rust is unaffected
 # (cargo fmt normalizes) and stays under the default text handling.
 *.go text eol=lf
+# The Go tools always write go.mod and go.sum with LF. With core.autocrlf=true
+# a CRLF checkout of these files showed as modified forever, with no content change.
+go.mod text eol=lf
+go.sum text eol=lf
 *.sh text eol=lf

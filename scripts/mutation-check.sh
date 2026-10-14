@@ -29,10 +29,18 @@ mut() {
     desc="$1"; file="$2"; pat="$3"; rep="$4"
 
     cp "$file" "$BAK"
-    # perl with \Q..\E rather than sed: these patterns are real Rust source and
-    # routinely contain regex metacharacters and the | used in match arms,
-    # which silently corrupt a sed s|..|..| expression.
-    MUT_PAT="$pat" MUT_REP="$rep" perl -0pi -e 's/\Q$ENV{MUT_PAT}\E/$ENV{MUT_REP}/' "$file"
+    # perl with quotemeta rather than sed: these patterns are real Rust source
+    # and routinely contain regex metacharacters and the | used in match arms,
+    # which silently corrupt a sed s|..|..| expression. Each line of the
+    # pattern is quoted on its own and the lines are joined with \r?\n, because
+    # a Windows checkout (core.autocrlf=true) has CRLF source files while this
+    # script is LF. The replacement gets the file's own newline.
+    MUT_PAT="$pat" MUT_REP="$rep" perl -0pi -e '
+        my $nl = /\A[^\n]*\r\n/ ? "\r\n" : "\n";
+        my $p = join q{\r?\n}, map { quotemeta } split /\n/, $ENV{MUT_PAT}, -1;
+        (my $r = $ENV{MUT_REP}) =~ s/\n/$nl/g;
+        s/$p/$r/;
+    ' "$file"
 
     if diff -q "$file" "$BAK" >/dev/null 2>&1; then
         printf '  \033[33m[STALE]\033[0m   %s\n' "$desc"
