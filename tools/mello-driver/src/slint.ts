@@ -25,11 +25,24 @@ export type Control = {
   label: string;
   value: string;
   checked: boolean;
+  /**
+   * False when the control declares `accessible-enabled: false`. Slint MCP
+   * leaves a false value out of its answer, so a control from SlintMcp is
+   * always true here. App.controls and App.find correct it from the state
+   * port (`GET /disabled`).
+   */
+  enabled: boolean;
   x: number;
   y: number;
   width: number;
   height: number;
 };
+
+/** A text on screen with its place: a Text element, or any element with the role Text. */
+export type TextElement = { text: string; x: number; y: number; width: number; height: number };
+
+/** A position in the window, in logical pixels. */
+export type Point = { x: number; y: number };
 
 /** Roles that the a11y lint requires a label on (client/src/a11y_lint.rs). */
 export const CONTROL_ROLES = ["Button", "Switch", "Tab", "Slider", "Combobox", "TextInput"];
@@ -183,6 +196,7 @@ export class SlintMcp {
         label: p.accessibleLabel ?? "",
         value: p.accessibleValue ?? "",
         checked: p.accessibleChecked ?? false,
+        enabled: true,
         x: p.absolutePosition?.x ?? 0,
         y: p.absolutePosition?.y ?? 0,
         width: p.size?.width ?? 0,
@@ -209,8 +223,38 @@ export class SlintMcp {
       .filter((t) => t !== "");
   }
 
+  /** Texts with their places, for finding the row a control is in. */
+  textElements(): Promise<TextElement[]> {
+    return this.hold(async () => {
+      const handles = await this.query(await this.root(), { matchElementAccessibleRole: "Text" });
+      const props = await this.props(handles);
+      const out: TextElement[] = [];
+      for (const p of props) {
+        if (!p?.accessibleLabel) continue;
+        out.push({
+          text: p.accessibleLabel,
+          x: p.absolutePosition?.x ?? 0,
+          y: p.absolutePosition?.y ?? 0,
+          width: p.size?.width ?? 0,
+          height: p.size?.height ?? 0,
+        });
+      }
+      return out;
+    });
+  }
+
   async click(handle: Handle): Promise<void> {
     await this.call("click_element", { elementHandle: handle });
+  }
+
+  /** Move the pointer to the element's center and press nothing. */
+  async hover(handle: Handle): Promise<void> {
+    await this.call("hover_element", { elementHandle: handle });
+  }
+
+  /** Press at the element's center, move to `target` in steps, release there. */
+  async drag(handle: Handle, target: Point): Promise<void> {
+    await this.call("drag_element", { elementHandle: handle, target });
   }
 
   /** The control's default accessibility action, as a screen reader sends it. */

@@ -45,11 +45,26 @@ export type Journey = {
    * checkSfu), and each join fails on a P2P call (voice.ts, expectSfuVoice).
    */
   voice?: boolean;
+  /**
+   * Parts of the local stack that the journey uses, besides Nakama. `run`
+   * checks each one once before the first journey starts:
+   * - "sfu": the local SFU answers (the same as `voice: true`).
+   * - "lounge": the local lounge answers and reads the local Nakama
+   *   (guard.ts, checkLounge).
+   */
+  needs?: Need[];
   run(ctx: JourneyContext): Promise<void>;
 };
 
+export type Need = "sfu" | "lounge";
+
 export function journey(j: Journey): Journey {
   return j;
+}
+
+/** The parts of the local stack that a journey needs. */
+export function journeyNeeds(j: Journey): Need[] {
+  return [...new Set<Need>([...(j.voice ? (["sfu"] as Need[]) : []), ...(j.needs ?? [])])];
 }
 
 export type RunOptions = {

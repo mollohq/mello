@@ -6,7 +6,8 @@ import { appendFileSync, mkdirSync, openSync, renameSync, writeFileSync, readFil
 import { dirname, join } from "node:path";
 import { setTimeout as sleep } from "node:timers/promises";
 
-import { SlintMcp, type Control } from "./slint.ts";
+import { nakamaTarget } from "./guard.ts";
+import { SlintMcp, type Control, type Point, type TextElement } from "./slint.ts";
 
 /** The state port snapshot (client/src/e2e_state.rs). */
 export type AppState = {
@@ -58,7 +59,7 @@ export type AppState = {
   /** Open modals by name: settings, crew_settings, new_crew, join_crew, invite_share, … */
   open_modals: string[];
   /** The last 20 chat messages in the active crew, oldest first. */
-  messages: { sender: string; text: string }[];
+  messages: ChatMessage[];
   voice_channels: {
     name: string;
     active: boolean;
@@ -70,8 +71,125 @@ export type AppState = {
    * value until the new call starts: see voice.ts, expectSfuVoice.
    */
   voice_transport: "sfu" | "p2p" | null;
+  /**
+   * The other members of the watched SFU stream: the host and the other
+   * viewers, in join order. Empty when not watching.
+   */
+  stream_members: { user_id: string; role: "host" | "viewer" }[];
+  /** Onboarding step 1: why the crew list did not load. Empty when it loaded. */
+  discover_error: string;
+  /** Onboarding step 1: the crew cards, in screen order, at most 20. */
+  onboarding_crews: CrewCard[];
+  /** The Discover panel: the crew cards, in screen order, at most 20. */
+  discover_crews: CrewCard[];
+  /** The Discover panel: the number of crews in its list. Can be more than discover_crews holds. */
+  discover_crews_count: number;
+  /** The banner text when the connection to the backend is lost. Empty when connected. */
+  connection_warning: string;
+  /** The crew settings modal: the values in its fields. */
+  crew_settings: {
+    name: string;
+    description: string;
+    /** The crew shows in Discover and anyone can join. */
+    open: boolean;
+    invite_policy: "everyone" | "admins";
+    my_role: CrewRole;
+    /** The "saved" confirmation shows. */
+    saved: boolean;
+  };
+  /** The member list of the active crew, in screen order, at most 20. `members` has every name. */
+  crew_members: {
+    id: string;
+    name: string;
+    role: CrewRole;
+    online: boolean;
+    /** A fingerprint of the avatar image on screen: equal images, equal keys. "" when the member shows initials. */
+    avatar_key: string;
+  }[];
+  stream: {
+    /** This user streams. */
+    hosting: boolean;
+    /** This user watches a stream. */
+    watching: boolean;
+    /** The size of the watched stream. 0 when unknown. */
+    width: number;
+    height: number;
+    viewer_count: number;
+    /** The quality pill: 0 Ultra, 1 High, 2 Medium, 3 Low, 4 Potato. */
+    preset: number;
+    /** Frames the core gave the viewer since the watch started. The core reports it once a second. */
+    frames_presented: number;
+    /** The live stream cards of the active crew, in screen order. */
+    cards: { host_id: string; streamer_name: string; viewer_count: number; width: number; height: number; can_watch: boolean }[];
+  };
+  /** The feed of the active crew, in screen order (newest first), at most 20. */
+  feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string }[];
+  /** The clip that plays in the feed. `path` is "" when none plays. */
+  clip: { path: string; paused: boolean; progress: number; duration_ms: number };
+  /** The audio page of the settings. */
+  audio: { capture_device: string; playback_device: string; push_to_talk: boolean; push_to_talk_key: string };
+  riot: { linked: boolean; id: string };
+  /** The in-app update toast shows a new version. */
+  update_available: boolean;
+  /** The version the settings show, for example "v0.0.0-DEV". */
+  app_version: string;
   last_event_seq: number;
 };
+
+/** A chat message on the state port: the last 20 in the active crew, oldest first. */
+export type ChatMessage = {
+  sender: string;
+  text: string;
+  id: string;
+  /** The message this one replies to. "" when it is not a reply. */
+  reply_to_name: string;
+  reply_preview: string;
+  edited: boolean;
+  deleted: boolean;
+  gif: boolean;
+  /** The message mentions this user (the row is marked). */
+  mentions_me: boolean;
+};
+
+/** A crew card on onboarding step 1 or in Discover. Full when max_members > 0 and member_count >= max_members. */
+export type CrewCard = {
+  id: string;
+  name: string;
+  member_count: number;
+  max_members: number;
+  /** Only in Discover: anyone can join without an invite. */
+  open?: boolean;
+};
+
+export type CrewRole = "owner" | "admin" | "member" | "join_request" | "unknown";
+
+/** A control that declares accessible-enabled: false (state port `GET /disabled`). */
+export type DisabledControl = { role: string; label: string; x: number; y: number; width: number; height: number };
+
+/** True when a disabled-control record and a Slint MCP control are the same element. */
+export function sameControl(d: DisabledControl, c: Control): boolean {
+  const near = (a: number, b: number) => Math.abs(a - b) < 0.5;
+  return d.role === c.role && d.label === c.label && near(d.x, c.x) && near(d.y, c.y) && near(d.width, c.width) && near(d.height, c.height);
+}
+
+/** How far above its text a row's control can start: a reply quote sits between them. */
+export const ROW_REACH = 40;
+
+/**
+ * The control with this label in the row of `row`. A chat row has its
+ * controls (Reply, More actions) in a gutter at the top of the row, and its
+ * text below them when the message quotes a reply. So the control starts
+ * above the text's bottom and ends at most ROW_REACH above the text's top.
+ * Of those, the lowest one is in the row of the text; the rows above have
+ * theirs higher up. Null when no control fits.
+ */
+export function controlInRow(controls: Control[], row: TextElement): Control | null {
+  const fits = controls.filter(
+    (c) => c.width > 0 && c.height > 0 && c.y <= row.y + row.height && c.y + c.height >= row.y - ROW_REACH,
+  );
+  fits.sort((a, b) => b.y - a.y || Math.abs(a.x - row.x) - Math.abs(b.x - row.x));
+  return fits[0] ?? null;
+}
 
 /** The names in a voice channel, or [] when the channel is not listed. */
 export function voiceMembers(s: AppState, channel: string): string[] {
@@ -86,6 +204,10 @@ export type AppEvent = {
   message?: string;
   /** Only on VoiceStateChanged: the transport the call started on, or "disconnected". */
   transport?: "sfu" | "p2p" | "disconnected";
+  /** Only on ConnectionStateChanged: the realtime socket is up. */
+  connected?: boolean;
+  /** Only on ConnectionStateChanged: a reconnect attempt is in flight. */
+  reconnecting?: boolean;
 };
 
 /**
@@ -295,7 +417,17 @@ export class App {
       // The e2e-mic seam (mello-core/src/client/mic_permission.rs). Last, so
       // the user's option decides, not the developer's shell or the run.
       MELLO_E2E_MIC_PERMISSION: this.opts.micPermission ?? DEFAULT_MIC_PERMISSION,
+      // The Nakama that the production guard checked (guard.ts). Last, so a
+      // build with the production defaults goes there too, and nothing in the
+      // run's environment sends the app elsewhere.
+      ...this.nakamaEnv(),
     };
+  }
+
+  /** NAKAMA_HOST, NAKAMA_PORT and NAKAMA_SSL of the checked local Nakama. */
+  private nakamaEnv(): Record<string, string> {
+    const t = nakamaTarget();
+    return { NAKAMA_HOST: t.host, NAKAMA_PORT: t.port, NAKAMA_SSL: "false" };
   }
 
   /**
@@ -375,6 +507,19 @@ export class App {
     return (await r.json()) as AppEvent[];
   }
 
+  /** The controls on screen that declare accessible-enabled: false. */
+  async disabledControls(): Promise<DisabledControl[]> {
+    const r = await fetch(`http://127.0.0.1:${this.statePort}/disabled`);
+    if (!r.ok) throw new DriverError(`${this.name}: the state port has no disabled controls (HTTP ${r.status}); rebuild the app`);
+    return (await r.json()) as DisabledControl[];
+  }
+
+  /** Set `enabled` on each control from the state port: Slint MCP leaves out a false value. */
+  private async withEnabled(controls: Control[]): Promise<Control[]> {
+    const off = await this.disabledControls();
+    return controls.map((c) => ({ ...c, enabled: !off.some((d) => sameControl(d, c)) }));
+  }
+
   /**
    * Wait until `predicate` holds for the state. Never a fixed sleep: TESTING.md
    * requires waiting on the state that the assertion reads.
@@ -417,17 +562,19 @@ export class App {
 
   // ── UI ────────────────────────────────────────────────────────
 
+  /** Every labelled control on screen, with `enabled` from the state port. */
   async controls(): Promise<Control[]> {
-    return this.ui.controls();
+    return this.withEnabled(await this.ui.controls());
   }
 
   /**
    * Find the Nth control with this exact label, retrying while the screen
    * settles. A control appears when the UI thread has rendered it, which can
-   * trail the state port by a frame.
+   * trail the state port by a frame. `enabled` comes from the state port.
    */
-  find(label: string, n = 0, timeoutMs = 5_000): Promise<Control> {
-    return this.ui.hold(() => this.findNow(label, n, timeoutMs));
+  async find(label: string, n = 0, timeoutMs = 5_000): Promise<Control> {
+    const [c] = await this.withEnabled([await this.ui.hold(() => this.findNow(label, n, timeoutMs))]);
+    return c;
   }
 
   private async findNow(label: string, n: number, timeoutMs: number): Promise<Control> {
@@ -458,7 +605,7 @@ export class App {
   private async onControlNow(label: string, n: number, act: (c: Control) => Promise<void>, timeoutMs: number): Promise<void> {
     const deadline = Date.now() + timeoutMs;
     for (;;) {
-      const c = await this.find(label, n, Math.max(500, deadline - Date.now()));
+      const c = await this.findNow(label, n, Math.max(500, deadline - Date.now()));
       try {
         await act(c);
         return;
@@ -487,6 +634,86 @@ export class App {
       }
       this.trace("click", label, c);
       await this.ui.click(c.handle);
+    });
+  }
+
+  /**
+   * Move the pointer onto the control and press nothing, for hover states
+   * such as the action bar of a chat message. The pointer stays there.
+   */
+  async hover(label: string, n = 0): Promise<void> {
+    await this.onControl(label, n, async (c) => {
+      this.trace("hover", label, c);
+      await this.ui.hover(c.handle);
+    });
+  }
+
+  /**
+   * Drag the control like a user: press at its center, move in small steps,
+   * release. `to` is a window position, or a distance from the center.
+   */
+  async drag(label: string, to: Point | { dx?: number; dy?: number }, n = 0): Promise<void> {
+    await this.onControl(label, n, async (c) => {
+      const target =
+        "x" in to && "y" in to
+          ? to
+          : { x: c.x + c.width / 2 + (to.dx ?? 0), y: c.y + c.height / 2 + (to.dy ?? 0) };
+      this.trace(`drag to (${target.x.toFixed(0)},${target.y.toFixed(0)})`, label, c);
+      await this.ui.drag(c.handle, target);
+    });
+  }
+
+  /**
+   * Set a slider like a user: drag its thumb to a place on the track.
+   * `value` is that place, from 0 (the left end) to 1 (the right end). The
+   * app's sliders take no value through accessibility, so this uses the
+   * pointer, as a user does.
+   */
+  async setValue(label: string, value: number, n = 0): Promise<void> {
+    if (!(value >= 0 && value <= 1)) throw new DriverError(`${this.name}: setValue("${label}") takes 0 to 1, not ${value}`);
+    await this.onControl(label, n, async (c) => {
+      if (c.role !== "Slider") throw new DriverError(`${this.name}: "${label}" is a ${c.role}, not a slider`);
+      // Stay one pixel inside the track: a release on its edge is outside it.
+      const x = Math.min(Math.max(c.x + value * c.width, c.x + 1), c.x + c.width - 1);
+      const target = { x, y: c.y + c.height / 2 };
+      this.trace(`set value ${value} at (${x.toFixed(0)},${target.y.toFixed(0)})`, label, c);
+      await this.ui.drag(c.handle, target);
+    });
+  }
+
+  /**
+   * Click the control with this label in the row that shows `rowText`, for
+   * labels that every row has ("Reply", "More actions"). `n` picks among
+   * rows that show the text, from the top. See controlInRow.
+   */
+  async clickInRow(label: string, rowText: string, n = 0, timeoutMs = 5_000): Promise<void> {
+    await this.ui.hold(async () => {
+      const deadline = Date.now() + timeoutMs;
+      let rows: TextElement[] = [];
+      let candidates: Control[] = [];
+      for (;;) {
+        rows = (await this.ui.textElements()).filter((t) => t.text.includes(rowText)).sort((a, b) => a.y - b.y);
+        candidates = (await this.ui.controls()).filter((c) => c.label === label);
+        const row = rows[n];
+        const c = row ? controlInRow(candidates, row) : null;
+        if (c) {
+          try {
+            this.trace(`click in row "${rowText}"`, label, c);
+            await this.ui.click(c.handle);
+            return;
+          } catch (e) {
+            if (!/destroyed|Invalid handle/i.test(String(e)) || Date.now() > deadline) throw e;
+            continue;
+          }
+        }
+        if (Date.now() > deadline) break;
+        await sleep(150);
+      }
+      const at = (r: { x: number; y: number }) => `(${r.x.toFixed(0)},${r.y.toFixed(0)})`;
+      throw new DriverError(
+        `${this.name}: no control labelled "${label}" in row #${n} of "${rowText}". ` +
+          `Rows: ${rows.map(at).join(" ") || "none"}. "${label}" controls: ${candidates.map(at).join(" ") || "none"}`,
+      );
     });
   }
 

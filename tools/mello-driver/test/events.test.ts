@@ -20,6 +20,7 @@ import { runJourney, type RunOptions } from "../src/journey.ts";
 import { startLiveShots, type ShotTarget } from "../src/live.ts";
 import { SlintMcp } from "../src/slint.ts";
 import { failing, passing } from "./fixtures/events/journeys.ts";
+import { fakeNakama } from "./fixtures/stack.ts";
 
 const here = import.meta.dirname;
 const root = resolve(here, "../../..");
@@ -450,10 +451,9 @@ test("parseRunArgs: options, values and errors", () => {
   assert.match(String(parseRunArgs(["--repeat", "2"])), /no journey/);
 });
 
+/** A local Nakama that answers the preflight and its production guard. */
 async function healthServer(): Promise<{ server: Server; port: number }> {
-  const server = createServer((_req, res) => res.end("{}"));
-  await new Promise<void>((ok) => server.listen(0, "127.0.0.1", ok));
-  return { server, port: (server.address() as any).port };
+  return fakeNakama();
 }
 
 test("cli: --events with --repeat writes the events of each run to the file", async () => {
