@@ -2081,44 +2081,12 @@ export component Onboarding inherits Rectangle {
                             }
 
                             // Link account → primary CTA
-                            Rectangle {
+                            AccentButton {
                                 horizontal-stretch: 1;
-                                height: 52px;
-                                border-radius: Theme.r-inner;
-                                background: root.link-email-value != "" && root.link-password-value != "" ? Theme.confirm : Theme.graphic-med;
-
-                                link-touch := TouchArea {
-                                    accessible-role: button;
-                                    accessible-label: "Link account";
-                                    clicked => {
-                                        if root.link-email-value != "" && root.link-password-value != "" {
-                                            root.link-email(root.link-email-value, root.link-password-value);
-                                        }
-                                    }
-                                }
-
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: 12px;
-
-                                    Text {
-                                        letter-spacing: Theme.track-label;
-                                        text: "Link account";
-                                        font-family: Theme.font-label;
-                                        font-size: 14px;
-                                        font-weight: 600;
-                                        color: Theme.on-action;
-                                        vertical-alignment: center;
-                                    }
-
-                                    Image {
-                                        source: @image-url("../icons/arrow-right.svg");
-                                        width: 14px;
-                                        height: 14px;
-                                        colorize: Theme.text-secondary;
-                                        transform-rotation: 0deg;
-                                        y: (parent.height - self.height) / 2;
-                                    }
+                                label: "Link account";
+                                enabled: root.link-email-value != "" && root.link-password-value != "";
+                                clicked => {
+                                    root.link-email(root.link-email-value, root.link-password-value);
                                 }
                             }
                         }
