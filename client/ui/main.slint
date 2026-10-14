@@ -1520,7 +1520,9 @@ export component MainWindow inherits Window {
     // ===================== INVITE SHARE MODAL =====================
     if invite-share-open: InviteShareModal {
         invite-url: root.invite-share-url;
-        copied: root.invite-share-copied;
+        // Two-way: the modal's revert writes `copied`, and a one-way binding
+        // would drop there, so a second copy would show nothing.
+        copied <=> root.invite-share-copied;
         copy-link => {
             root.invite-copy-link();
         }
