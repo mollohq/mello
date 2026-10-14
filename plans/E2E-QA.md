@@ -471,7 +471,7 @@ Harness tests use synthetic core events. No P0 flow except onboarding and invite
 | Journey runner | `node tools/mello-driver/src/cli.ts run <file>[#export] [--repeat N]` | Writes screenshots, state, log tails and `report.md` for each failure. |
 | Journey list | `node tools/mello-driver/src/cli.ts list [--json] [file ...]` | Lists the journeys without running them. `--json` prints one array of `{id, file, export, selector, flows, knownIssues}`; `selector` is the argument for `run`. |
 | Live events | `node tools/mello-driver/src/cli.ts run <file> --events <file> [--live-screenshot-ms N]` | Appends one JSON object per line: journey, user, step, action, screenshot and end events. Takes a screenshot of each app every N ms (default 2000) and skips it while an action runs. `take_screenshot` blocks the app UI thread, so the `dev` profile in `Cargo.toml` optimizes the PNG crates: 0.9 s became 0.09 s. |
-| MCP server for agents | `node tools/mello-driver/src/cli.ts mcp` | 14 tools: launch, restart, kill, open_link, controls, click, type, key, screenshot, state, events, wait_for, read_text, log_tail. No MCP SDK. |
+| MCP server for agents | `node tools/mello-driver/src/cli.ts mcp` | 15 tools: launch, restart, kill, open_link, controls, click, hover, type, key, screenshot, state, events, wait_for, read_text, log_tail. No MCP SDK. |
 | State port additions | `client/src/e2e_state.rs` | Chat messages, voice channels and members, mic and deafen, open modals, link error, sign-in spinner. |
 | Fake OAuth provider | `tools/fake-oauth/`, `backend/docker-compose.e2e.yml` | Go, standard library only. Discord, Twitch, Steam, Google on their real paths. Scripted outcomes. 11 unit tests. |
 | Client OAuth seams | `mello-core/src/oauth.rs`, feature `e2e-oauth` | Provider base URL, browser handoff file, short callback wait. |
@@ -669,3 +669,56 @@ Each crash was `Error: setTypeOfService EINVAL` from the `fetch` in Node 24.15.0
 It is a Node bug: undici 7 calls `setTypeOfService` with no `try` when the peer resets the connection (nodejs/undici#5544, fixed in undici 8.8.0, Node 26.5.1).
 The crash ends the driver, not a journey step, and it leaves the app of the running journey alive.
 No fix in this change.
+
+## 16.8 State Reads, Driver Actions and Production Guards (2026-10-14)
+
+### 16.8.1 State port
+
+All new fields read UI state that the app already has. Lists hold at most 20 rows.
+
+| Field | What it reads | For |
+|---|---|---|
+| `discover_error` | The step 1 error text | ONB-05 |
+| `onboarding_crews`, `discover_crews`, `discover_crews_count` | Step 1 and Discover crew cards: id, name, member count, max members (Discover also `open`) | ONB-02, ONB-06, CREW-02, CREW-04 |
+| `connection_warning` | The connection banner text | VOICE-05 |
+| `crew_settings` | Name, description, open, invite policy, my role, saved | CREW-04 |
+| `crew_members` | id, name, role, online, `avatar_key` (a fingerprint of the avatar image) | CREW-06, SET-01 |
+| `messages[]` | Adds id, reply-to name and preview, edited, deleted, gif, mentions me | CHAT-02, CHAT-03 |
+| `stream` | Hosting, watching, size, viewer count, quality preset, frames presented, stream cards | STREAM-01..03 |
+| `feed_cards`, `clip` | Feed cards; clip path, paused, progress, duration | FEED-01 |
+| `audio` | Device names, push to talk, its key | SET-02 |
+| `riot`, `update_available`, `app_version` | The settings and the update toast | SET-03, UPD-01 |
+| `/events` | `connected` and `reconnecting` on `ConnectionStateChanged` | VOICE-05 |
+| `GET /disabled` | The controls that declare `accessible-enabled: false` | `Control.enabled` |
+
+Slint MCP leaves a false `accessibleEnabled` out of its answer. A disabled control and a control with no `accessible-enabled` look the same.
+`GET /disabled` tells them apart. The a11y lint now requires `accessible-enabled` on every `TouchArea` that binds `enabled`.
+The chat message body (a `StyledText`) now has `accessible-role: text` and the message as its label, so a screen reader and the driver can read it.
+
+### 16.8.2 Driver
+
+| API | What it does |
+|---|---|
+| `Control.enabled` | False when the control declares `accessible-enabled: false` |
+| `app.hover(label)` | Moves the pointer onto the control. MCP tool `hover`. |
+| `app.drag(label, {x, y} or {dx, dy})` | Press, move in steps, release |
+| `app.setValue(label, 0..1)` | Drags a slider to a place on its track. The app's sliders take no value through accessibility. |
+| `app.clickInRow(label, rowText, n)` | Clicks the control in the row that shows the text: the lowest one that starts above the text's bottom and ends at most 40 px above its top |
+| `needs: ["lounge"]` | `run` checks the lounge once before the first journey |
+
+Items in a `PopupWindow` (the message menu's "Edit", "Delete") still need `app.activate`.
+
+### 16.8.3 Production guards
+
+`run` and the MCP server refuse to start when an app would reach a host that is not loopback or a private LAN address.
+The guards read no configuration file. They resolve each host and check every address.
+
+| Check | How |
+|---|---|
+| Nakama | `NAKAMA_HOST` must resolve to local addresses. Every app gets `NAKAMA_HOST`, `NAKAMA_PORT` and `NAKAMA_SSL=false` last in its environment, so a build with production defaults goes to the local Nakama too. |
+| SFU regions | The guard signs in a test device on the local Nakama and calls `get_sfu_regions`. A region on a public address refuses the run. A region whose host does not resolve gives a warning: the app cannot reach it. |
+| SFU health | `MELLO_E2E_SFU_HEALTH` must be local (voice journeys). |
+| Lounge | `MELLO_E2E_LOUNGE_URL` must be local. The guard makes an invite of its own test crew on the local Nakama and opens it in the lounge. A 404 means that the lounge reads another Nakama. The Nakama address in the page's `lounge-boot` data must be local. |
+
+On 2026-10-14 the shared stack hands out `us-east` on `sfu-us.m3llo.app`, the built-in default in `sfu_routing.go`, because `SFU_ENDPOINT_US` is not set.
+That name does not resolve, so the run continues with a warning. When it resolves, every run stops until the local stack sets `SFU_ENDPOINT_US`.
