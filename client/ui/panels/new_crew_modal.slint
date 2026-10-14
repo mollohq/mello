@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutButton, CutMask } from "../components/cut.slint";
 import { SearchUserData } from "../types.slint";
 
 export component NewCrewModal inherits Rectangle {
@@ -169,17 +169,22 @@ export component NewCrewModal inherits Rectangle {
                     }
                 }
 
-                Rectangle {
+                // Copying is an action, not a commit, so it is white. Once
+                // copied, the button turns to its outline: a white keyline on
+                // the panel, the reverse of the white fill.
+                CutButton {
                     height: 40px;
-                    border-radius: Theme.r-inner;
-                    background: link-copied ? Theme.voice-active : (copy-touch.has-hover ? Theme.action-press : Theme.accent);
+                    fill-color: copy-touch.has-hover ? Theme.action-press : Theme.action;
+                    outlined: link-copied;
+                    line-color: Theme.action-line;
+                    surface-color: Theme.surface;
 
                     Text {
-                        text: link-copied ? "Copied!" : "Copy link";
+                        text: link-copied ? "Copied" : "Copy link";
                         font-family: Theme.font-sans;
                         font-size: 13px;
                         font-weight: Theme.weight-display;
-                        color: Theme.on-action;
+                        color: link-copied ? Theme.text-primary : Theme.on-action;
                         horizontal-alignment: center;
                         vertical-alignment: center;
                     }

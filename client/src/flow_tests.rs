@@ -4969,3 +4969,85 @@ fn input_sensitivity_controls_send_the_setting_to_core() {
     assert!(!saved.borrow().vad_auto);
     assert_eq!(saved.borrow().vad_threshold, -30.0);
 }
+
+// ---------------------------------------------------------------------------
+// Invite share modal
+// ---------------------------------------------------------------------------
+
+/// Do what the event loop does between two frames, with no time passing:
+/// create new conditional elements and run the `changed` handlers.
+fn next_frame() {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::ZERO);
+}
+
+/// Open the invite share modal the way production does: core reports a new
+/// invite code. The modal is a conditional element, so it exists only after
+/// the next frame.
+fn open_invite_share_modal(h: &mut Harness) {
+    logged_in_app(h);
+    h.emit(Event::InviteCodeCreated {
+        code: "ALPHA-992-K".into(),
+    });
+    assert!(h.app().get_invite_share_open());
+    next_frame();
+}
+
+fn press_escape(h: &mut Harness) {
+    let esc: slint::SharedString = slint::platform::Key::Escape.into();
+    let window = h.app().window();
+    window.dispatch_event(slint::platform::WindowEvent::KeyPressed { text: esc.clone() });
+    window.dispatch_event(slint::platform::WindowEvent::KeyReleased { text: esc });
+    h.pump();
+}
+
+/// Whether the copy button shows its copied state.
+fn invite_shows_copied(h: &Harness) -> bool {
+    ElementHandle::find_by_accessible_label(h.app(), "Copied")
+        .next()
+        .is_some()
+}
+
+/// Issue #86: Escape closes the invite modal.
+#[test]
+fn escape_closes_the_invite_share_modal() {
+    let mut h = Harness::new();
+    open_invite_share_modal(&mut h);
+
+    press_escape(&mut h);
+
+    assert!(!h.app().get_invite_share_open());
+}
+
+/// Issue #86: Escape also closes the invite modal after a click in the link
+/// field moves the focus there.
+#[test]
+fn escape_closes_the_invite_share_modal_from_the_link_field() {
+    let mut h = Harness::new();
+    open_invite_share_modal(&mut h);
+    h.click_label("Invite link");
+
+    press_escape(&mut h);
+
+    assert!(!h.app().get_invite_share_open());
+}
+
+/// The copied state reverts after 3 s, and a second copy in the same open
+/// modal shows it again.
+#[test]
+fn a_second_invite_link_copy_shows_copied_again() {
+    let mut h = Harness::new();
+    open_invite_share_modal(&mut h);
+
+    // Stand-in for `invite-copy-link`, which sets this after a clipboard
+    // write. The test does not write the developer's real clipboard.
+    h.app().set_invite_share_copied(true);
+    next_frame();
+    assert!(invite_shows_copied(&h), "the first copy shows Copied");
+
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(3100));
+    assert!(!invite_shows_copied(&h), "Copied reverts after 3 s");
+
+    h.app().set_invite_share_copied(true);
+    next_frame();
+    assert!(invite_shows_copied(&h), "the second copy shows Copied");
+}

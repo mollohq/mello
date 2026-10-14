@@ -1,5 +1,5 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { CutShape, CutButton } from "../components/cut.slint";
 
 export component InviteShareModal inherits Rectangle {
     in property <string> invite-url: "";
@@ -21,114 +21,134 @@ export component InviteShareModal inherits Rectangle {
         }
     }
 
-    bg-touch := TouchArea {
-        // a11y: none (backdrop: a click outside the dialog closes it)
-        clicked => { close-requested(); }
+    // The revert follows the state, not the click: the host sets `copied`
+    // only after the clipboard write succeeds.
+    changed copied => {
+        revert-timer.running = false;
+        revert-timer.running = copied;
     }
 
-    Rectangle {
-        x: (parent.width - self.width) / 2;
-        y: (parent.height - self.height) / 2;
-        width: 380px;
-        height: inner.preferred-height + 40px;
-        background: transparent;
+    init => {
+        key-scope.focus();
+    }
 
-        // A modal panel is a card, so it carries the cut and a keyline.
-        CutShape {
-            width: parent.width;
-            height: parent.height;
-            n: Theme.notch;
-            fill: Theme.graphic-light;
-        }
-        CutShape {
-            width: parent.width;
-            height: parent.height;
-            n: Theme.notch;
-            inset: Theme.keyline;
-            fill: Theme.surface;
+    // Escape closes the modal (#86). The scope takes focus when the modal
+    // opens and wraps the card, so Escape also arrives from the link field.
+    key-scope := FocusScope {
+        width: 100%;
+        height: 100%;
+
+        key-pressed(event) => {
+            if event.text == Key.Escape {
+                root.close-requested();
+                accept
+            } else {
+                reject
+            }
         }
 
-        card-touch := TouchArea {
-            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        bg-touch := TouchArea {
+            // a11y: none (backdrop: a click outside the dialog closes it)
+            clicked => { close-requested(); }
         }
 
-        inner := VerticalLayout {
-            padding: 24px;
-            spacing: 14px;
+        Rectangle {
+            x: (parent.width - self.width) / 2;
+            y: (parent.height - self.height) / 2;
+            width: 380px;
+            height: inner.preferred-height + 40px;
+            background: transparent;
 
-            Text {
-                font-family: Theme.font-display;
-                text: "Invite people";
-                font-size: Theme.font-xl;
-                font-weight: Theme.weight-display-bold;
-                color: Theme.text-primary;
-                horizontal-alignment: center;
+            // A modal panel is a card, so it carries the cut and a keyline.
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch;
+                fill: Theme.graphic-light;
+            }
+            CutShape {
+                width: parent.width;
+                height: parent.height;
+                n: Theme.notch;
+                inset: Theme.keyline;
+                fill: Theme.surface;
             }
 
-            Text {
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: "Share this link to invite anyone to your crew:";
-                font-size: Theme.font-sm;
-                color: Theme.text-secondary;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+            card-touch := TouchArea {
+                // a11y: none (input blocker: stops clicks reaching the backdrop)
             }
 
-            Rectangle {
-                height: 40px;
-                background: Theme.bg-app;
+            inner := VerticalLayout {
+                padding: 24px;
+                spacing: 14px;
 
-                MelloTextInput {
-                    accessible-label: "Invite link";
-                    text: invite-url;
-                    font-family: Theme.font-mono;
-                    font-size: 12px;
+                Text {
+                    font-family: Theme.font-display;
+                    text: "Invite people";
+                    font-size: Theme.font-xl;
+                    font-weight: Theme.weight-display-bold;
                     color: Theme.text-primary;
                     horizontal-alignment: center;
-                    vertical-alignment: center;
-                    read-only: true;
-                    single-line: true;
                 }
-            }
 
-            Rectangle {
-                height: 40px;
+                Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: "Share this link to invite anyone to your crew:";
+                    font-size: Theme.font-sm;
+                    color: Theme.text-secondary;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
 
                 Rectangle {
-                    width: 140px;
                     height: 40px;
-                    x: (parent.width - self.width) / 2;
-                    background: transparent;
+                    background: Theme.bg-app;
 
-                    // Copying is an action, not a commit: it changes nothing
-                    // on the server, so it stays white.
-                    CutButtonShape {
-                        width: parent.width;
-                        height: parent.height;
-                        n: Theme.cut;
-                        fill: copied ? Theme.accent-green
-                            : (copy-touch.has-hover ? Theme.action-press : Theme.action);
-                    }
-
-                    Text {
-                        font-family: Theme.font-display;
-                        text: copied ? "Copied!" : "Copy link";
-                        font-size: Theme.font-md;
-                        font-weight: Theme.weight-display;
-                        color: Theme.on-action;
+                    MelloTextInput {
+                        accessible-label: "Invite link";
+                        text: invite-url;
+                        font-family: Theme.font-mono;
+                        font-size: 12px;
+                        color: Theme.text-primary;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                        read-only: true;
+                        single-line: true;
                     }
+                }
 
-                    copy-touch := TouchArea {
-                        accessible-role: button;
-                        accessible-label: "Copy link";
-                        mouse-cursor: pointer;
-                        clicked => {
-                            copy-link();
-                            revert-timer.running = false;
-                            revert-timer.running = true;
+                Rectangle {
+                    height: 40px;
+
+                    // Copying is an action, not a commit: it changes nothing
+                    // on the server, so it stays white. Once copied, the
+                    // button turns to its outline: a white keyline on the
+                    // surface, the reverse of the white fill.
+                    CutButton {
+                        width: 140px;
+                        height: 40px;
+                        x: (parent.width - self.width) / 2;
+                        fill-color: copy-touch.has-hover ? Theme.action-press : Theme.action;
+                        outlined: copied;
+                        line-color: Theme.action-line;
+                        surface-color: Theme.surface;
+
+                        Text {
+                            font-family: Theme.font-display;
+                            text: copied ? "Copied" : "Copy link";
+                            font-size: Theme.font-md;
+                            font-weight: Theme.weight-display;
+                            color: copied ? Theme.text-primary : Theme.on-action;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        copy-touch := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Copy link";
+                            mouse-cursor: pointer;
+                            clicked => { copy-link(); }
                         }
                     }
                 }
