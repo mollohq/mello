@@ -81,7 +81,8 @@ All UI components live in `client/ui/panels/`:
 
 | File | Description |
 |------|-------------|
-| `crew_panel.slint` | Left sidebar: crew list (active/idle sections), member avatars, online counts |
+| `crew_panel.slint` | Left sidebar: crew list (active/idle sections), member avatars, online counts, voice member rows |
+| `member_volume_popover.slint` | Popover: the volume and the local mute of one voice member (section 4.1) |
 | `chat_panel.slint` | Right sidebar: message list, chat input |
 | `control_bar.slint` | Bottom bar: user info, go-live (broadcast), mic/deafen toggles, clip, settings, game states |
 | `stream_view.slint` | Center: video frame rendering, stream host info, viewer controls |
@@ -97,6 +98,59 @@ All UI components live in `client/ui/panels/`:
 ### Root wiring
 
 `client/ui/main.slint` is the root component. It declares all top-level properties, conditional panel visibility (`if logged-in`, `if onboarding-step < 4`, `if show-discover`), and wires callbacks from child components to root-level callbacks that `main.rs` binds to.
+
+### 4.1 Member Volume
+
+The local user sets the playback volume of each other voice member, and can mute a member for themselves. Only this user hears the change. The mockup and the design decisions are in `mello-backlog/mockups/voice-member-volume/`.
+
+**Open and close.**
+
+| Action | Result |
+|---|---|
+| Pointer on the row of another member | The row gets the raised ground and a speaker glyph at the right end. The slot of the glyph is always on the row, so the name does not move. |
+| Click the speaker glyph, or Tab to it and push Enter or Space (`accessible-label` "Volume for <name>") | The popover opens. |
+| Right-click the row | The popover opens. |
+| Your own row | No glyph and no right-click action. |
+| Escape, a click outside the popover, or the member leaves the channel | The popover closes. |
+
+The popover (`MemberVolumePopover`) opens to the right of the 240 px sidebar, over the feed, with its top 12 px above the row. Near the bottom of the window it moves up. While it is open, the row keeps the raised ground and a `graphic-med` keyline.
+
+**The popover.** Avatar and name, "Only you hear this change.", USER VOLUME with a value chip, a slider, a line above 100 %, a Mute switch, RESET TO 100%.
+
+| Control | Behaviour |
+|---|---|
+| Slider | 0 to 200 %, default 100 %. A pointer value within 4 % of 100 % snaps to 100 %. Keys: arrows 5 %, Shift+arrows 1 %, PgUp/PgDn 25 %, Home 0 %, End 200 %. A key step across 100 % stops on 100 %. The scroll wheel steps 5 %. |
+| Above 100 % | "Above 100% a loud voice can distort." libmello applies the gain before the limiter. |
+| Mute | Gain 0.0 for that member. The volume does not change. The chip shows MUTED and the slider is dim and takes no input. |
+| RESET TO 100% | Sets 100 %. Dim at 100 %. It does not change the mute. |
+
+The popover is controlled: it sends `member-volume-changed(user-id, percent)` and `member-local-mute-changed(user-id, muted)`. Rust stores the value and gives it back in `volume-member`.
+
+**Row glyphs.** Grey is the member's own equipment. Red is your speaker: a state you set and can undo in the popover. All three glyphs can show together.
+
+| State | Glyph | Colour | Tooltip |
+|---|---|---|---|
+| They muted their mic | `mic-off.svg` | `graphic-med` | "Muted" |
+| They deafened themselves (a deafen also mutes, so the mic glyph shows too) | `headphone-off.svg`, next to the mic glyph | `graphic-med` | "Deafened" |
+| You muted them | `volume-x.svg` | `Theme.live` | "Muted for you" |
+
+Only your local mute dims the row (avatar and name). The green name of a member who speaks stays. A volume that is not 100 % shows a `NN%` badge; the local-mute glyph replaces it.
+
+**State.** `client/src/member_audio.rs`, `MemberAudioTable` in `AppContext.member_audio`:
+
+| Rule | Value |
+|---|---|
+| Key | The user id. The value follows the person into every channel and crew. |
+| Value | `{ volume_percent: u16 (default 100, max 200), muted_locally: bool }`. A member at the default has no entry. |
+| Lifetime | In memory for the life of the app. Leaving a channel keeps it. A restart clears it. Nothing goes to the settings file or to the server. |
+| Apply | `Command::SetPeerVolume { peer_id: user_id, volume }`, `volume = 0.0` when muted, else `percent / 100`. |
+| Apply again | `handlers::voice::sync_member_audio` runs after each event that changes the voice channel models. It sends the stored value for each member who appears in the joined channel: a join, a rejoin, a reconnect. |
+
+libmello names the receive state of a member after the user id, for P2P and for SFU (the SFU slot maps a mid to the user id). libmello keeps the gain of a peer for the life of its context, also across `remove_peer` and a slot release. The client sends the value again so that it does not depend on that.
+
+Stream audio has its own volume. This slider does not change it.
+
+The e2e state port reports `id`, `volume` and `local_muted` for each voice member.
 
 ---
 
