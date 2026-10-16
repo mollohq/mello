@@ -641,6 +641,7 @@ component SensitivitySlider inherits Rectangle {
             sens-ta := TouchArea {
                 accessible-role: slider;
                 accessible-label: "Sensitivity";
+                accessible-enabled: !root.auto;
                 enabled: !root.auto;
                 moved => {
                     if self.pressed {
@@ -2015,6 +2016,7 @@ component GamesTab inherits VerticalLayout {
                             accessible-role: button;
                             accessible-label: riot-linked ? "DISCONNECT" : "CONNECT";
                             mouse-cursor: pointer;
+                            accessible-enabled: riot-available || riot-linked;
                             enabled: riot-available || riot-linked;
                             clicked => {
                                 if riot-linked {

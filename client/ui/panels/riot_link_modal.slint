@@ -226,6 +226,7 @@ export component RiotLinkModal inherits Rectangle {
                         accessible-role: button;
                         accessible-label: busy ? "Connecting…" : "Connect";
                         mouse-cursor: pointer;
+                        accessible-enabled: !busy;
                         enabled: !busy;
                         clicked => {
                             if riot-id-input.text != "" {

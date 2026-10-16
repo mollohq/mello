@@ -14,6 +14,11 @@
 //! Text fields follow the same idea: a `TextInput` or `MelloTextInput` instance
 //! declares `accessible-label`, and a `MelloInputField` instance sets `label`.
 //! The label is the field's visible caption, or its placeholder when it has none.
+//!
+//! A `TouchArea` that binds `enabled` also declares `accessible-enabled` with
+//! the same condition, on itself or on the parent that carries its role.
+//! Without it, a disabled control reports itself as enabled, to a screen
+//! reader and to the e2e driver (`Control.enabled`).
 
 use std::path::{Path, PathBuf};
 
@@ -175,10 +180,15 @@ fn check_source(file: &str, src: &str) -> Vec<Violation> {
             Kind::InputField => declares(&own(), "label"),
             Kind::TouchArea => {
                 let own = own();
+                let parent = b.parent.map(|p| own_text(&masked, &all, p));
+                let enabled_declared = !declares(&own, "enabled")
+                    || declares(&own, "accessible-enabled")
+                    || parent
+                        .as_deref()
+                        .is_some_and(|p| declares(p, "accessible-enabled"));
                 own.contains("a11y: none")
-                    || labelled(&own)
-                    || b.parent
-                        .is_some_and(|p| labelled(&own_text(&masked, &all, p)))
+                    || (enabled_declared
+                        && (labelled(&own) || parent.as_deref().is_some_and(labelled)))
             }
         };
         if ok {
@@ -229,9 +239,10 @@ fn every_touch_area_has_a_role_and_a_label() {
         violations.is_empty(),
         "{} control(s) have no label. A TouchArea needs accessible-role + \
          accessible-label on itself or its parent (or `// a11y: none (<reason>)` \
-         when it is not a control). A TextInput needs accessible-label; a \
-         MelloInputField needs label. The label is the text the user reads. \
-         See plans/E2E-QA.md §4.\n{}",
+         when it is not a control). A TouchArea that binds `enabled` also needs \
+         `accessible-enabled` with the same condition. A TextInput needs \
+         accessible-label; a MelloInputField needs label. The label is the text \
+         the user reads. See plans/E2E-QA.md §4.\n{}",
         violations.len(),
         violations
             .iter()
@@ -444,6 +455,16 @@ mod tests {
     fn a_text_input_definition_is_not_an_instance() {
         let src = "export component MelloTextInput inherits TextInput {\n    selection-foreground-color: red;\n}\n";
         assert!(lines(src).is_empty());
+    }
+
+    #[test]
+    fn a_touch_area_that_binds_enabled_needs_accessible_enabled() {
+        let src = "t := TouchArea {\n    accessible-role: button;\n    accessible-label: \"Join\";\n    enabled: !busy;\n}\n";
+        assert_eq!(lines(src), vec![1]);
+        let src = "t := TouchArea {\n    accessible-role: button;\n    accessible-label: \"Join\";\n    accessible-enabled: !busy;\n    enabled: !busy;\n}\n";
+        assert!(lines(src).is_empty());
+        let src = "Rectangle {\n    accessible-role: button;\n    accessible-label: \"x\";\n    accessible-enabled: !busy;\n    TouchArea { enabled: !busy; }\n}\n";
+        assert!(lines(src).is_empty(), "on the parent that carries the role");
     }
 
     #[test]

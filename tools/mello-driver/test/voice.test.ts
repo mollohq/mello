@@ -15,6 +15,7 @@ import { test } from "node:test";
 import type { AppEvent } from "../src/app.ts";
 import { runJourney, type RunOptions } from "../src/journey.ts";
 import { lastJoinTransport } from "../src/voice.ts";
+import { fakeNakama } from "./fixtures/stack.ts";
 import { inVoice } from "./fixtures/voice/journeys.ts";
 
 const here = import.meta.dirname;
@@ -112,7 +113,7 @@ test("a voice call that did not start fails the journey", async () => {
 
 /** Run the CLI with a fake Nakama that answers, and the SFU health at `sfuHealth`. */
 async function cliRun(selector: string, sfuHealth: string): Promise<{ status: number | null; out: string; artifacts: string }> {
-  const nakama = await server((_req, res) => res.end("{}"));
+  const nakama = await fakeNakama();
   try {
     const artifacts = join(tmp(), "artifacts");
     // Async spawn: the fake servers live in this process, so they must keep answering.

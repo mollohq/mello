@@ -258,6 +258,7 @@ export component JoinCrewModal inherits Rectangle {
                     join-touch := TouchArea {
                         accessible-role: button;
                         accessible-label: "Join crew";
+                        accessible-enabled: !joining;
                         enabled: !joining;
                         mouse-cursor: joining ? default : pointer;
                         clicked => { join-requested(); }

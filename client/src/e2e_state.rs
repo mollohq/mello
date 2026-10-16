@@ -7,6 +7,14 @@
 //!
 //! - `GET /state`  — a snapshot read on the UI thread.
 //! - `GET /events` — the last [`EVENT_TAIL`] core events, oldest first.
+//! - `GET /disabled` — the controls on screen that declare
+//!   `accessible-enabled: false`. Slint MCP drops a `false` value from its
+//!   answer, so the driver cannot tell a disabled control from one that does
+//!   not declare the property. This list tells it.
+//!
+//! Everything here only reads what the UI already shows. Lists hold at most
+//! [`LIST_LIMIT`] rows: the newest for messages, the first on screen for the
+//! rest.
 
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
@@ -14,6 +22,7 @@ use std::net::{TcpListener, TcpStream};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use i_slint_backend_testing::{AccessibleRole, ElementQuery};
 use mello_core::events::StreamMember;
 use mello_core::{Event, VoiceMode};
 use serde::Serialize;
@@ -23,6 +32,17 @@ use crate::MainWindow;
 
 pub const PORT_ENV: &str = "MELLO_E2E_STATE_PORT";
 const EVENT_TAIL: usize = 200;
+/// The most rows in one list of the snapshot.
+const LIST_LIMIT: usize = 20;
+/// The roles that the driver treats as controls (tools/mello-driver/src/slint.ts).
+const CONTROL_ROLES: [AccessibleRole; 6] = [
+    AccessibleRole::Button,
+    AccessibleRole::Switch,
+    AccessibleRole::Tab,
+    AccessibleRole::Slider,
+    AccessibleRole::Combobox,
+    AccessibleRole::TextInput,
+];
 
 static EVENTS: Mutex<VecDeque<EventRecord>> = Mutex::new(VecDeque::new());
 static EVENT_SEQ: Mutex<u64> = Mutex::new(0);
@@ -43,6 +63,12 @@ struct EventRecord {
     /// Only for `VoiceStateChanged`: `"sfu"`, `"p2p"` or `"disconnected"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     transport: Option<&'static str>,
+    /// Only for `ConnectionStateChanged`: the realtime socket is up.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    connected: Option<bool>,
+    /// Only for `ConnectionStateChanged`: a reconnect attempt is in flight.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reconnecting: Option<bool>,
 }
 
 #[derive(Serialize)]
@@ -106,7 +132,154 @@ struct Snapshot {
     /// viewers, in join order. Empty when not watching, and in P2P mode.
     /// See [`stream_members_after`].
     stream_members: Vec<StreamMemberSnap>,
+    /// Onboarding step 1: why the crew list did not load. Empty when it loaded.
+    discover_error: String,
+    /// Onboarding step 1: the crew cards, in screen order.
+    onboarding_crews: Vec<CrewCardSnap>,
+    /// The Discover panel: the crew cards, in screen order.
+    discover_crews: Vec<CrewCardSnap>,
+    /// The Discover panel: the number of crews in its list. It can be more
+    /// than `discover_crews` holds.
+    discover_crews_count: usize,
+    /// The banner text when the connection to the backend is lost. Empty
+    /// when connected.
+    connection_warning: String,
+    /// The crew settings modal: the values in its fields.
+    crew_settings: CrewSettingsSnap,
+    /// The member list of the active crew, in screen order.
+    crew_members: Vec<MemberSnap>,
+    stream: StreamSnap,
+    /// The feed of the active crew, in screen order (newest first).
+    feed_cards: Vec<FeedCardSnap>,
+    /// The clip that plays in the feed.
+    clip: ClipSnap,
+    /// The audio page of the settings.
+    audio: AudioSnap,
+    riot: RiotSnap,
+    /// The in-app update toast shows a new version.
+    update_available: bool,
+    /// The version the settings show, for example `"v0.0.0-DEV"`.
+    app_version: String,
     last_event_seq: u64,
+}
+
+/// A crew card on onboarding step 1 or in the Discover panel.
+#[derive(Serialize)]
+struct CrewCardSnap {
+    id: String,
+    name: String,
+    member_count: i32,
+    /// 0 when the crew has no limit. The card is full when
+    /// `member_count >= max_members` and `max_members > 0`.
+    max_members: i32,
+    /// Only in the Discover panel: anyone can join without an invite.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    open: Option<bool>,
+}
+
+#[derive(Serialize)]
+struct CrewSettingsSnap {
+    name: String,
+    description: String,
+    /// The crew shows in Discover and anyone can join.
+    open: bool,
+    /// `"everyone"` or `"admins"`: who can make an invite code.
+    invite_policy: String,
+    /// `"owner"`, `"admin"` or `"member"`. See [`role_name`].
+    my_role: &'static str,
+    /// The "saved" confirmation shows.
+    saved: bool,
+}
+
+#[derive(Serialize)]
+struct MemberSnap {
+    id: String,
+    name: String,
+    /// `"owner"`, `"admin"` or `"member"`. See [`role_name`].
+    role: &'static str,
+    online: bool,
+    /// A fingerprint of the avatar image on screen. The same image gives the
+    /// same key. Empty when the member shows initials. See [`image_key`].
+    avatar_key: String,
+}
+
+#[derive(Serialize)]
+struct StreamSnap {
+    /// This user streams.
+    hosting: bool,
+    /// This user watches a stream.
+    watching: bool,
+    /// The size of the watched stream, from the stream metadata. 0 when unknown.
+    width: i32,
+    height: i32,
+    viewer_count: i32,
+    /// The quality pill: 0 Ultra, 1 High, 2 Medium, 3 Low, 4 Potato.
+    preset: i32,
+    /// The frames that the core gave to the viewer since the watch started.
+    /// The core reports it once a second.
+    frames_presented: i32,
+    /// The live stream cards of the active crew, in screen order.
+    cards: Vec<StreamCardSnap>,
+}
+
+#[derive(Serialize)]
+struct StreamCardSnap {
+    host_id: String,
+    streamer_name: String,
+    viewer_count: i32,
+    width: i32,
+    height: i32,
+    can_watch: bool,
+}
+
+#[derive(Serialize)]
+struct FeedCardSnap {
+    id: String,
+    card_type: String,
+    title: String,
+    actor_name: String,
+    /// The local file of a clip card. Empty for other cards.
+    clip_path: String,
+}
+
+#[derive(Serialize)]
+struct ClipSnap {
+    /// The file that plays. Empty when no clip plays.
+    path: String,
+    paused: bool,
+    /// From 0.0 to 1.0.
+    progress: f32,
+    duration_ms: i32,
+}
+
+#[derive(Serialize)]
+struct AudioSnap {
+    /// The device names that the settings show.
+    capture_device: String,
+    playback_device: String,
+    /// Push to talk is on (voice activity is off).
+    push_to_talk: bool,
+    /// The key that the settings show for push to talk.
+    push_to_talk_key: String,
+}
+
+#[derive(Serialize)]
+struct RiotSnap {
+    linked: bool,
+    /// The Riot ID that the settings show. Empty when not linked.
+    id: String,
+}
+
+/// A control that declares `accessible-enabled: false` (`GET /disabled`).
+/// The driver matches it to a Slint MCP control by role, label and place.
+#[derive(Serialize, Debug, PartialEq)]
+struct DisabledControl {
+    role: String,
+    label: String,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
 }
 
 #[derive(Serialize)]
@@ -120,6 +293,15 @@ struct StreamMemberSnap {
 struct MessageSnap {
     sender: String,
     text: String,
+    id: String,
+    /// The message this one replies to. Empty when it is not a reply.
+    reply_to_name: String,
+    reply_preview: String,
+    edited: bool,
+    deleted: bool,
+    gif: bool,
+    /// The message mentions this user (the row is marked).
+    mentions_me: bool,
 }
 
 #[derive(Serialize)]
@@ -147,6 +329,44 @@ fn mic_permission_name(granted: bool, denied: bool) -> &'static str {
     } else {
         "undetermined"
     }
+}
+
+/// The name of a crew role, as the crew settings show it. Nakama group
+/// states: 0 superadmin (the owner), 1 admin, 2 member, 3 join request.
+fn role_name(role: i32) -> &'static str {
+    match role {
+        0 => "owner",
+        1 => "admin",
+        2 => "member",
+        3 => "join_request",
+        _ => "unknown",
+    }
+}
+
+/// A fingerprint of an image: its size and an FNV-1a hash of its pixels.
+/// Empty for an image with no pixels (the default image).
+fn image_key(img: &slint::Image) -> String {
+    let size = img.size();
+    if size.width == 0 || size.height == 0 {
+        return String::new();
+    }
+    let Some(buf) = img.to_rgba8() else {
+        return img
+            .path()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| format!("{}x{}", size.width, size.height));
+    };
+    let mut hash: u64 = 0xcbf2_9ce4_8422_2325;
+    for byte in buf.as_bytes() {
+        hash ^= u64::from(*byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    format!("{}x{}-{hash:016x}", size.width, size.height)
+}
+
+/// The first [`LIST_LIMIT`] rows of a model, converted.
+fn first_rows<T: Clone + 'static, U>(model: &slint::ModelRc<T>, f: impl Fn(&T) -> U) -> Vec<U> {
+    model.iter().take(LIST_LIMIT).map(|r| f(&r)).collect()
 }
 
 /// The name of a transport, as the state port reports it.
@@ -190,14 +410,6 @@ fn stream_members_after(prev: Vec<StreamMember>, ev: &Event) -> Vec<StreamMember
 
 /// Record a core event before the UI handles it. Called from the poll loop.
 pub fn record_event(ev: &Event) {
-    let message = match ev {
-        Event::Error { message } => Some(message.clone()),
-        _ => None,
-    };
-    let transport = match ev {
-        Event::VoiceStateChanged { transport, .. } => Some(transport_name(*transport)),
-        _ => None,
-    };
     {
         let mut t = VOICE_TRANSPORT.lock().expect("voice transport lock");
         *t = transport_after(*t, ev);
@@ -211,21 +423,44 @@ pub fn record_event(ev: &Event) {
         *s += 1;
         *s
     };
-    let rec = EventRecord {
-        seq,
-        ts_ms: SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_millis())
-            .unwrap_or_default(),
-        kind: perf_scenarios::event_type(ev).to_string(),
-        message,
-        transport,
-    };
+    let ts_ms = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_millis())
+        .unwrap_or_default();
+    let rec = event_record(ev, seq, ts_ms);
     let mut q = EVENTS.lock().expect("event tail lock");
     if q.len() == EVENT_TAIL {
         q.pop_front();
     }
     q.push_back(rec);
+}
+
+/// The record of one core event in the `/events` tail.
+fn event_record(ev: &Event, seq: u64, ts_ms: u128) -> EventRecord {
+    let message = match ev {
+        Event::Error { message } => Some(message.clone()),
+        _ => None,
+    };
+    let transport = match ev {
+        Event::VoiceStateChanged { transport, .. } => Some(transport_name(*transport)),
+        _ => None,
+    };
+    let (connected, reconnecting) = match ev {
+        Event::ConnectionStateChanged {
+            connected,
+            reconnecting,
+        } => (Some(*connected), Some(*reconnecting)),
+        _ => (None, None),
+    };
+    EventRecord {
+        seq,
+        ts_ms,
+        kind: perf_scenarios::event_type(ev).to_string(),
+        message,
+        transport,
+        connected,
+        reconnecting,
+    }
 }
 
 /// Start the port when `MELLO_E2E_STATE_PORT` is set. A no-op otherwise.
@@ -271,6 +506,15 @@ fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
             let all: Vec<EventRecord> = q.iter().cloned().collect();
             ("200 OK", serde_json::to_string(&all).unwrap_or_default())
         }
+        "/disabled" => match on_ui_thread(weak, |app| {
+            serde_json::to_string(&disabled_controls(app)).unwrap_or_default()
+        }) {
+            Some(json) => ("200 OK", json),
+            None => (
+                "503 Service Unavailable",
+                r#"{"error":"ui thread busy"}"#.into(),
+            ),
+        },
         _ => ("404 Not Found", r#"{"error":"not found"}"#.into()),
     };
     let _ = write!(
@@ -282,15 +526,51 @@ fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
 
 /// Read the snapshot on the UI thread: Slint components are not `Send`.
 fn snapshot(weak: &slint::Weak<MainWindow>) -> Option<String> {
+    on_ui_thread(weak, |app| {
+        serde_json::to_string(&read(app)).unwrap_or_default()
+    })
+}
+
+/// Run `f` on the UI thread and wait at most 2 s for its answer.
+fn on_ui_thread(
+    weak: &slint::Weak<MainWindow>,
+    f: impl FnOnce(&MainWindow) -> String + Send + 'static,
+) -> Option<String> {
     let (tx, rx) = mpsc::channel();
     let weak = weak.clone();
     slint::invoke_from_event_loop(move || {
         if let Some(app) = weak.upgrade() {
-            let _ = tx.send(serde_json::to_string(&read(&app)).unwrap_or_default());
+            let _ = tx.send(f(&app));
         }
     })
     .ok()?;
     rx.recv_timeout(Duration::from_secs(2)).ok()
+}
+
+/// The controls on screen that declare `accessible-enabled: false`.
+fn disabled_controls(app: &MainWindow) -> Vec<DisabledControl> {
+    ElementQuery::from_root(app)
+        .match_descendants()
+        .match_predicate(|e| e.accessible_enabled() == Some(false))
+        .find_all()
+        .into_iter()
+        .filter_map(|e| {
+            let role = e.accessible_role()?;
+            if !CONTROL_ROLES.contains(&role) {
+                return None;
+            }
+            let pos = e.absolute_position();
+            let size = e.size();
+            Some(DisabledControl {
+                role: format!("{role:?}"),
+                label: e.accessible_label().unwrap_or_default().to_string(),
+                x: pos.x,
+                y: pos.y,
+                width: size.width,
+                height: size.height,
+            })
+        })
+        .collect()
 }
 
 fn read(app: &MainWindow) -> Snapshot {
@@ -379,9 +659,16 @@ fn read(app: &MainWindow) -> Snapshot {
                 .map(|m| MessageSnap {
                     sender: m.sender_name.to_string(),
                     text: m.text.to_string(),
+                    id: m.message_id.to_string(),
+                    reply_to_name: m.reply_to_name.to_string(),
+                    reply_preview: m.reply_preview_text.to_string(),
+                    edited: m.is_edited,
+                    deleted: m.is_deleted,
+                    gif: m.is_gif,
+                    mentions_me: m.mentions_self,
                 })
                 .collect();
-            let skip = all.len().saturating_sub(20);
+            let skip = all.len().saturating_sub(LIST_LIMIT);
             all.into_iter().skip(skip).collect()
         },
         voice_channels: app
@@ -412,13 +699,369 @@ fn read(app: &MainWindow) -> Snapshot {
                 role: m.role.clone(),
             })
             .collect(),
+        discover_error: app.get_discover_error().into(),
+        onboarding_crews: first_rows(&app.get_discover_crews(), |c| CrewCardSnap {
+            id: c.id.to_string(),
+            name: c.name.to_string(),
+            member_count: c.member_count,
+            max_members: c.max_members,
+            open: None,
+        }),
+        discover_crews: first_rows(&app.get_discover_crews_list(), |c| CrewCardSnap {
+            id: c.id.to_string(),
+            name: c.name.to_string(),
+            member_count: c.member_count,
+            max_members: c.max_members,
+            open: Some(c.open),
+        }),
+        discover_crews_count: app.get_discover_crews_list().row_count(),
+        connection_warning: app.get_connection_warning().into(),
+        crew_settings: CrewSettingsSnap {
+            name: app.get_crew_settings_name().into(),
+            description: app.get_crew_settings_description().into(),
+            open: app.get_crew_settings_is_open(),
+            invite_policy: app.get_crew_settings_invite_policy().into(),
+            my_role: role_name(app.get_crew_settings_my_role()),
+            saved: app.get_crew_settings_show_saved(),
+        },
+        crew_members: first_rows(&members, |m| MemberSnap {
+            id: m.id.to_string(),
+            name: m.name.to_string(),
+            role: role_name(m.role),
+            online: m.online,
+            avatar_key: if m.has_avatar {
+                image_key(&m.avatar)
+            } else {
+                String::new()
+            },
+        }),
+        stream: StreamSnap {
+            hosting: app.get_is_hosting(),
+            watching: app.get_is_watching(),
+            width: app.get_active_stream_width(),
+            height: app.get_active_stream_height(),
+            viewer_count: app.get_active_stream_viewer_count(),
+            preset: app.get_stream_preset(),
+            frames_presented: app.get_dbg_stream_frames(),
+            cards: first_rows(&app.get_active_stream_cards(), |c| StreamCardSnap {
+                host_id: c.host_id.to_string(),
+                streamer_name: c.streamer_name.to_string(),
+                viewer_count: c.viewer_count,
+                width: c.stream_width,
+                height: c.stream_height,
+                can_watch: c.can_watch,
+            }),
+        },
+        feed_cards: first_rows(&app.get_feed_cards(), |c| FeedCardSnap {
+            id: c.id.to_string(),
+            card_type: c.card_type.to_string(),
+            title: c.title.to_string(),
+            actor_name: c.actor_name.to_string(),
+            clip_path: c.clip_path.to_string(),
+        }),
+        clip: ClipSnap {
+            path: app.get_clip_playing_path().into(),
+            paused: app.get_clip_paused(),
+            progress: app.get_clip_progress(),
+            duration_ms: app.get_clip_duration_ms(),
+        },
+        audio: AudioSnap {
+            capture_device: app.get_selected_capture_name().into(),
+            playback_device: app.get_selected_playback_name().into(),
+            push_to_talk: app.get_settings_ptt_mode(),
+            push_to_talk_key: app.get_settings_ptt_key_label().into(),
+        },
+        riot: RiotSnap {
+            linked: app.get_riot_linked(),
+            id: app.get_riot_id().into(),
+        },
+        update_available: app.get_update_available(),
+        app_version: app.get_settings_build_version().into(),
         last_event_seq: *EVENT_SEQ.lock().expect("event seq lock"),
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use std::rc::Rc;
+
+    use serde_json::{json, Value};
+
     use super::*;
+    use crate::testkit::Harness;
+
+    fn model<T: Clone + 'static>(rows: Vec<T>) -> slint::ModelRc<T> {
+        Rc::new(slint::VecModel::from(rows)).into()
+    }
+
+    fn snapshot_json(app: &MainWindow) -> Value {
+        serde_json::to_value(read(app)).expect("snapshot serializes")
+    }
+
+    fn pixels(rgba: [u8; 4]) -> slint::Image {
+        let mut buf = slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(2, 2);
+        for p in buf.make_mut_slice() {
+            *p = slint::Rgba8Pixel::new(rgba[0], rgba[1], rgba[2], rgba[3]);
+        }
+        slint::Image::from_rgba8(buf)
+    }
+
+    #[test]
+    fn the_snapshot_reads_discover_crew_settings_and_members() {
+        let h = Harness::new();
+        let app = h.app();
+        app.set_discover_error("Could not load crews".into());
+        app.set_discover_crews(model(vec![crate::CrewData {
+            id: "c1".into(),
+            name: "Night Owls".into(),
+            member_count: 10,
+            max_members: 10,
+            ..Default::default()
+        }]));
+        app.set_discover_crews_list(model(vec![crate::DiscoverCrewData {
+            id: "c2".into(),
+            name: "Early Birds".into(),
+            member_count: 3,
+            max_members: 50,
+            open: true,
+            ..Default::default()
+        }]));
+        app.set_connection_warning("Connection lost. Reconnecting…".into());
+        app.set_crew_settings_name("Night Owls".into());
+        app.set_crew_settings_description("We play late".into());
+        app.set_crew_settings_is_open(false);
+        app.set_crew_settings_invite_policy("admins".into());
+        app.set_crew_settings_my_role(1);
+        app.set_crew_settings_show_saved(true);
+        app.set_members(model(vec![
+            crate::MemberData {
+                id: "u1".into(),
+                name: "alice".into(),
+                role: 0,
+                online: true,
+                has_avatar: true,
+                avatar: pixels([1, 2, 3, 255]),
+                ..Default::default()
+            },
+            crate::MemberData {
+                id: "u2".into(),
+                name: "bob".into(),
+                role: 2,
+                ..Default::default()
+            },
+        ]));
+
+        let s = snapshot_json(app);
+        assert_eq!(s["discover_error"], "Could not load crews");
+        assert_eq!(
+            s["onboarding_crews"],
+            json!([{"id": "c1", "name": "Night Owls", "member_count": 10, "max_members": 10}])
+        );
+        assert_eq!(
+            s["discover_crews"],
+            json!([{"id": "c2", "name": "Early Birds", "member_count": 3, "max_members": 50, "open": true}])
+        );
+        assert_eq!(s["discover_crews_count"], 1);
+        assert_eq!(s["connection_warning"], "Connection lost. Reconnecting…");
+        assert_eq!(
+            s["crew_settings"],
+            json!({"name": "Night Owls", "description": "We play late", "open": false,
+                   "invite_policy": "admins", "my_role": "admin", "saved": true})
+        );
+        let members = s["crew_members"].as_array().expect("crew_members");
+        assert_eq!(members[0]["name"], "alice");
+        assert_eq!(members[0]["role"], "owner");
+        assert_eq!(members[0]["online"], true);
+        assert_eq!(
+            members[0]["avatar_key"],
+            Value::String(image_key(&pixels([1, 2, 3, 255])))
+        );
+        assert_eq!(members[1]["role"], "member");
+        assert_eq!(members[1]["avatar_key"], "", "initials, no image");
+        assert_eq!(s["members"], json!(["alice", "bob"]), "the old field stays");
+    }
+
+    #[test]
+    fn the_snapshot_reads_messages_streams_feed_and_settings() {
+        let h = Harness::new();
+        let app = h.app();
+        app.set_messages(model(vec![crate::ChatMessageData {
+            message_id: "m1".into(),
+            sender_name: "bob".into(),
+            text: "@alice yes".into(),
+            reply_to_id: "m0".into(),
+            reply_to_name: "alice".into(),
+            reply_preview_text: "ready?".into(),
+            is_edited: true,
+            is_gif: true,
+            mentions_self: true,
+            ..Default::default()
+        }]));
+        app.set_is_hosting(true);
+        app.set_is_watching(false);
+        app.set_active_stream_width(1280);
+        app.set_active_stream_height(720);
+        app.set_active_stream_viewer_count(1);
+        app.set_stream_preset(3);
+        app.set_dbg_stream_frames(42);
+        app.set_active_stream_cards(model(vec![crate::StreamCardData {
+            host_id: "u1".into(),
+            streamer_name: "alice".into(),
+            viewer_count: 1,
+            stream_width: 1280,
+            stream_height: 720,
+            can_watch: true,
+            ..Default::default()
+        }]));
+        app.set_feed_cards(model(vec![crate::FeedCardData {
+            id: "f1".into(),
+            card_type: "clip".into(),
+            title: "Clutch".into(),
+            actor_name: "alice".into(),
+            clip_path: "/clips/a.mp4".into(),
+            ..Default::default()
+        }]));
+        app.set_clip_playing_path("/clips/a.mp4".into());
+        app.set_clip_paused(true);
+        app.set_clip_progress(0.5);
+        app.set_clip_duration_ms(30_000);
+        app.set_selected_capture_name("USB Mic".into());
+        app.set_selected_playback_name("Speakers".into());
+        app.set_settings_ptt_mode(true);
+        app.set_settings_ptt_key_label("F13".into());
+        app.set_riot_linked(true);
+        app.set_riot_id("alice#EUW".into());
+        app.set_update_available(true);
+        app.set_settings_build_version("v1.2.3".into());
+
+        let s = snapshot_json(app);
+        assert_eq!(
+            s["messages"],
+            json!([{"sender": "bob", "text": "@alice yes", "id": "m1",
+                    "reply_to_name": "alice", "reply_preview": "ready?",
+                    "edited": true, "deleted": false, "gif": true, "mentions_me": true}])
+        );
+        assert_eq!(
+            s["stream"],
+            json!({"hosting": true, "watching": false, "width": 1280, "height": 720,
+                   "viewer_count": 1, "preset": 3, "frames_presented": 42,
+                   "cards": [{"host_id": "u1", "streamer_name": "alice", "viewer_count": 1,
+                              "width": 1280, "height": 720, "can_watch": true}]})
+        );
+        assert_eq!(
+            s["feed_cards"],
+            json!([{"id": "f1", "card_type": "clip", "title": "Clutch",
+                    "actor_name": "alice", "clip_path": "/clips/a.mp4"}])
+        );
+        assert_eq!(
+            s["clip"],
+            json!({"path": "/clips/a.mp4", "paused": true, "progress": 0.5, "duration_ms": 30000})
+        );
+        assert_eq!(
+            s["audio"],
+            json!({"capture_device": "USB Mic", "playback_device": "Speakers",
+                   "push_to_talk": true, "push_to_talk_key": "F13"})
+        );
+        assert_eq!(s["riot"], json!({"linked": true, "id": "alice#EUW"}));
+        assert_eq!(s["update_available"], true);
+        assert_eq!(s["app_version"], "v1.2.3");
+    }
+
+    #[test]
+    fn lists_keep_the_newest_messages_and_the_first_crews() {
+        let h = Harness::new();
+        let app = h.app();
+        let n = LIST_LIMIT + 5;
+        app.set_messages(model(
+            (0..n)
+                .map(|i| crate::ChatMessageData {
+                    message_id: format!("m{i}").into(),
+                    text: format!("text {i}").into(),
+                    ..Default::default()
+                })
+                .collect(),
+        ));
+        app.set_discover_crews_list(model(
+            (0..n)
+                .map(|i| crate::DiscoverCrewData {
+                    name: format!("crew {i}").into(),
+                    ..Default::default()
+                })
+                .collect(),
+        ));
+        let s = snapshot_json(app);
+        let ids: Vec<&str> = s["messages"]
+            .as_array()
+            .expect("messages")
+            .iter()
+            .map(|m| m["id"].as_str().expect("id"))
+            .collect();
+        assert_eq!(ids.len(), LIST_LIMIT);
+        assert_eq!(ids[0], "m5", "the newest, oldest first");
+        assert_eq!(ids[LIST_LIMIT - 1], format!("m{}", n - 1));
+        let crews = s["discover_crews"].as_array().expect("discover_crews");
+        assert_eq!(crews.len(), LIST_LIMIT);
+        assert_eq!(crews[0]["name"], "crew 0", "the first on screen");
+        assert_eq!(s["discover_crews_count"], n);
+    }
+
+    #[test]
+    fn the_avatar_key_is_the_same_for_the_same_pixels_only() {
+        let a = image_key(&pixels([1, 2, 3, 255]));
+        assert_eq!(a, image_key(&pixels([1, 2, 3, 255])));
+        assert_ne!(a, image_key(&pixels([1, 2, 4, 255])));
+        assert!(a.starts_with("2x2-"), "{a}");
+        assert_eq!(image_key(&slint::Image::default()), "");
+    }
+
+    #[test]
+    fn a_full_crew_card_is_reported_as_disabled() {
+        let mut h = Harness::new();
+        let crew = |name: &str, members: i32| mello_core::crew::Crew {
+            id: name.into(),
+            name: name.into(),
+            description: String::new(),
+            member_count: members,
+            max_members: 10,
+            open: true,
+            avatar_url: None,
+        };
+        h.emit(Event::DiscoverCrewsLoaded {
+            crews: vec![crew("Full House", 10), crew("Room Left", 3)],
+            cursor: None,
+        });
+        let disabled = disabled_controls(h.app());
+        let labels: Vec<&str> = disabled.iter().map(|d| d.label.as_str()).collect();
+        assert!(labels.contains(&"Full House"), "{disabled:?}");
+        assert!(!labels.contains(&"Room Left"), "{disabled:?}");
+        let full = disabled
+            .iter()
+            .find(|d| d.label == "Full House")
+            .expect("the full card");
+        assert_eq!(full.role, "Button");
+        assert!(full.width > 0.0 && full.height > 0.0, "{full:?}");
+    }
+
+    #[test]
+    fn a_connection_event_records_its_state() {
+        let rec = event_record(
+            &Event::ConnectionStateChanged {
+                connected: false,
+                reconnecting: true,
+            },
+            7,
+            1,
+        );
+        let v = serde_json::to_value(&rec).expect("record serializes");
+        assert_eq!(
+            v,
+            json!({"seq": 7, "ts_ms": 1, "type": "ConnectionStateChanged",
+                   "connected": false, "reconnecting": true})
+        );
+        let other = serde_json::to_value(event_record(&Event::MicLevel { level: 0.5 }, 8, 1))
+            .expect("record serializes");
+        assert!(other.get("connected").is_none(), "{other}");
+    }
 
     fn state_changed(in_call: bool, transport: VoiceMode) -> Event {
         Event::VoiceStateChanged { in_call, transport }
