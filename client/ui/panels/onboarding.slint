@@ -46,6 +46,7 @@ component CrewCard inherits Rectangle {
     card-touch := TouchArea {
         accessible-role: button;
         accessible-label: root.crew-name;
+        accessible-enabled: !root.is-full;
         enabled: !root.is-full;
         mouse-cursor: root.is-full ? MouseCursor.not-allowed : MouseCursor.pointer;
         clicked => {
@@ -331,6 +332,7 @@ component InviteCodeCard inherits Rectangle {
             open-touch := TouchArea {
                 accessible-role: button;
                 accessible-label: root.checking ? "Checking…" : "Open invite";
+                accessible-enabled: !root.checking;
                 enabled: !root.checking;
                 mouse-cursor: root.checking ? MouseCursor.default : MouseCursor.pointer;
                 clicked => {
@@ -499,6 +501,7 @@ component AccentButton inherits Rectangle {
     btn-touch := TouchArea {
         accessible-role: button;
         accessible-label: root.label;
+        accessible-enabled: root.enabled;
         clicked => {
             if root.enabled {
                 root.clicked();
@@ -1738,6 +1741,7 @@ export component Onboarding inherits Rectangle {
             back-touch := TouchArea {
                 accessible-role: button;
                 accessible-label: "Back";
+                accessible-enabled: !root.busy;
                 enabled: !root.busy;
                 mouse-cursor: root.busy ? MouseCursor.default : MouseCursor.pointer;
                 clicked => {

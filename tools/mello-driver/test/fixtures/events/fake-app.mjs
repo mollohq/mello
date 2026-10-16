@@ -10,9 +10,45 @@
 //
 // The state port reports MELLO_E2E_MIC_PERMISSION as `mic_permission`, as the
 // real app does with the e2e-mic feature.
+//
+// FAKE_APP_SCENE (JSON) replaces the "Go" button with a screen:
+// { controls: [{ role, label, x, y, width, height, enabled? }],
+//   texts: [{ text, x, y, width, height }] }. As in Slint MCP, a control's
+// `accessibleEnabled` is in the answer only when it is true. The state port's
+// `/disabled` lists the controls with `enabled: false`, as the real app does.
+// FAKE_APP_ACTIONS is a file that gets one JSON line per pointer action
+// (click, hover, drag): { tool, label, args }.
 
 import { appendFileSync } from "node:fs";
 import { createServer } from "node:http";
+
+const scene = process.env.FAKE_APP_SCENE
+  ? JSON.parse(process.env.FAKE_APP_SCENE)
+  : { controls: [{ role: "Button", label: "Go", x: 10, y: 10, width: 40, height: 20 }], texts: [] };
+const controls = scene.controls ?? [];
+const texts = scene.texts ?? [];
+// Handles: controls are 3.., texts are 1000..
+const element = (index) => {
+  const i = Number(index);
+  if (i >= 1000) {
+    const t = texts[i - 1000];
+    return t && { accessibleLabel: t.text, accessibleRole: "Text", size: { width: t.width, height: t.height }, absolutePosition: { x: t.x, y: t.y } };
+  }
+  const c = controls[i - 3];
+  return (
+    c && {
+      accessibleLabel: c.label,
+      accessibleRole: c.role,
+      ...(c.enabled === true ? { accessibleEnabled: true } : {}),
+      size: { width: c.width, height: c.height },
+      absolutePosition: { x: c.x, y: c.y },
+    }
+  );
+};
+const actions = process.env.FAKE_APP_ACTIONS;
+const act = (tool, args) => {
+  if (actions) appendFileSync(actions, `${JSON.stringify({ tool, label: element(args.elementHandle?.index)?.accessibleLabel, args })}\n`);
+};
 
 const PNG = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGP4z8DwHwAFAAH/q842iQAAAABJRU5ErkJggg==", "base64");
 const log = process.env.FAKE_APP_LOG;
@@ -26,17 +62,21 @@ function tool(name, args) {
     case "get_window_properties":
       return text({ rootElementHandle: { index: "2", generation: "1" } });
     case "query_element_descendants": {
-      const button = JSON.stringify(args.queryStack).includes('"Button"');
-      return text({ elementHandles: button ? [{ index: "3", generation: "1" }] : [] });
+      const q = args.queryStack.at(-1) ?? {};
+      const role = q.matchElementAccessibleRole;
+      const handles = [];
+      if (role === "Text" || q.matchElementTypeName === "Text") texts.forEach((_, i) => handles.push(String(1000 + i)));
+      else controls.forEach((c, i) => c.role === role && handles.push(String(3 + i)));
+      return text({ elementHandles: handles.map((index) => ({ index, generation: "1" })) });
     }
-    case "get_element_properties":
-      return text({
-        accessibleLabel: "Go",
-        accessibleRole: "Button",
-        size: { width: 40, height: 20 },
-        absolutePosition: { x: 10, y: 10 },
-      });
+    case "get_element_properties": {
+      const p = element(args.elementHandle?.index);
+      return p ? text(p) : { isError: true, content: [{ type: "text", text: "element destroyed" }] };
+    }
     case "click_element":
+    case "hover_element":
+    case "drag_element":
+      act(name, args);
       return text({});
     case "take_screenshot":
       if (process.env.FAKE_APP_FAIL_SHOT) return { isError: true, content: [{ type: "text", text: "window closed" }] };
@@ -81,5 +121,8 @@ if (transport) {
 
 createServer((req, res) => {
   res.setHeader("Content-Type", "application/json");
-  res.end(JSON.stringify(req.url === "/events" ? events : state));
+  const disabled = controls
+    .filter((c) => c.enabled === false)
+    .map(({ role, label, x, y, width, height }) => ({ role, label, x, y, width, height }));
+  res.end(JSON.stringify(req.url === "/events" ? events : req.url === "/disabled" ? disabled : state));
 }).listen(Number(process.env.MELLO_E2E_STATE_PORT), "127.0.0.1");

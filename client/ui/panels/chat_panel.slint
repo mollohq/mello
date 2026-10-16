@@ -926,6 +926,11 @@ export component ChatPanel inherits Rectangle {
                                     spacing: 6px;
 
                                     StyledText {
+                                        // A StyledText gets no accessible text of its own, as a
+                                        // Text does. Without these, a screen reader and the e2e
+                                        // driver cannot read the message.
+                                        accessible-role: text;
+                                        accessible-label: msg.text;
                                         text: msg.display-styled;
                                         default-color: Theme.text-secondary;
                                         default-font-size: Theme.font-md;

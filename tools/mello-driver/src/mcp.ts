@@ -54,12 +54,22 @@ const TOOLS: { name: string; description: string; inputSchema: object }[] = [
   {
     name: "controls",
     description:
-      "List the controls on the user's screen: role, label (the text the user reads), value, checked. Use a label with click or type.",
+      "List the controls on the user's screen: role, label (the text the user reads), value, checked, enabled. Use a label with click or type.",
     inputSchema: { type: "object", properties: USER, required: ["user"] },
   },
   {
     name: "click",
     description: "Real pointer click on the control with this exact label. n picks among equal labels (0 = first).",
+    inputSchema: {
+      type: "object",
+      properties: { ...USER, label: { type: "string" }, n: { type: "number" } },
+      required: ["user", "label"],
+    },
+  },
+  {
+    name: "hover",
+    description:
+      "Move the pointer onto the control with this exact label and press nothing, for hover states (for example the action bar of a chat message). n picks among equal labels.",
     inputSchema: {
       type: "object",
       properties: { ...USER, label: { type: "string" }, n: { type: "number" } },
@@ -173,11 +183,14 @@ export function serveMcp(opts: RunOptions): void {
         return text(`opened ${a.url}`);
       case "controls":
         return text(
-          (await user(a.user).controls()).map(({ role, label, value, checked }) => ({ role, label, value, checked })),
+          (await user(a.user).controls()).map(({ role, label, value, checked, enabled }) => ({ role, label, value, checked, enabled })),
         );
       case "click":
         await user(a.user).click(a.label, a.n ?? 0);
         return text(`clicked "${a.label}"`);
+      case "hover":
+        await user(a.user).hover(a.label, a.n ?? 0);
+        return text(`hovered "${a.label}"`);
       case "type":
         await user(a.user).type(a.label, a.text);
         return text(`typed into "${a.label}"`);

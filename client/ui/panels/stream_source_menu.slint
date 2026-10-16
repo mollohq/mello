@@ -74,6 +74,7 @@ component MenuRow inherits Rectangle {
     row-ta := TouchArea {
         accessible-role: button;
         accessible-label: root.title;
+        accessible-enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => {
             if (root.enabled) {
