@@ -17,7 +17,7 @@ import (
 // owned by the system user holds an ordered featured list and a hidden list,
 // so crew owners cannot change it. Both admin RPCs are server-to-server only,
 // the same as the capture policy: the mello-admin Worker calls them with the
-// http_key and writes the audit log. See plans/DISCOVER-CURATION.md.
+// http_key and writes the audit log. See specs/features/DISCOVER-CURATION.md.
 
 const (
 	DiscoverCurationCollection = "discover"
