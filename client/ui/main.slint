@@ -1841,8 +1841,9 @@ export component MainWindow inherits Window {
 
     // ===================== MEMBER VOLUME POPOVER =====================
     // To the right of the 240 px sidebar, over the feed, with its top 12 px
-    // above the row. Near the bottom of the window it moves up.
-    if root.volume-member-id != "": Rectangle {
+    // above the row. Near the bottom of the window it moves up. Only over
+    // the app: a sign-in screen after a lost session does not show it.
+    if root.logged-in && root.volume-member-id != "": Rectangle {
         x: 0px;
         y: 0px;
         width: root.width;
