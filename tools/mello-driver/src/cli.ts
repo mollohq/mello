@@ -115,26 +115,35 @@ async function list(args: string[]): Promise<number> {
   return 0;
 }
 
+/**
+ * End the process with `code` when the event loop is empty. Do not call
+ * process.exit() here. On Windows, process.exit() in the first ~100 ms after
+ * the preflight's fetch calls races the V8 background tasks that compile
+ * undici's llhttp WebAssembly, and Node aborts with "Assertion failed:
+ * !(handle->flags & UV_HANDLE_CLOSING), file src\win\async.c, line 76"
+ * (exit code 0xC0000409) in place of `code`. A natural exit waits for these
+ * tasks. Idle fetch sockets are unref'd, so they do not keep the loop alive.
+ * The unref'd 1 s timer is a backstop for a handle that a failed run leaves
+ * open; it does not delay a clean exit, and after 1 s no compile is in flight.
+ */
+function finish(code: number): void {
+  process.exitCode = code;
+  setTimeout(() => process.exit(code), 1_000).unref();
+}
+
+function fail(e: unknown): void {
+  console.error(`✗ ${e instanceof Error ? e.message : e}`);
+  finish(2);
+}
+
 const [cmd, ...rest] = process.argv.slice(2);
 if (cmd === "run") {
-  run(rest).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`✗ ${e instanceof Error ? e.message : e}`);
-      process.exit(2);
-    },
-  );
+  run(rest).then(finish, fail);
 } else if (cmd === "list") {
-  list(rest).then(
-    (code) => process.exit(code),
-    (e) => {
-      console.error(`✗ ${e instanceof Error ? e.message : e}`);
-      process.exit(2);
-    },
-  );
+  list(rest).then(finish, fail);
 } else if (cmd === "mcp") {
   serveMcp(defaultOptions());
 } else {
   console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp");
-  process.exit(2);
+  process.exitCode = 2;
 }
