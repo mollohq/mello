@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape, CutMask, OctShape, OctMask } from "../components/cut.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
+import { MemberVolumePopover } from "member_volume_popover.slint";
 
 // A state glyph on a member row. On hover it shows its tooltip above it.
 // Grey is about the member's own equipment. Red is a state that the local
@@ -73,11 +74,13 @@ component VcMemberRow inherits Rectangle {
     in property <bool> local-muted: false;
     // The volume popover of this row is open.
     in property <bool> active: false;
+    // MemberVolumePreview only: the hover state without a pointer.
+    in property <bool> preview-hover: false;
     // A right-click on the row, or a click on the speaker glyph.
     callback volume-requested();
 
     property <bool> adjustable: !root.is-self;
-    property <bool> hovered: row-ta.has-hover;
+    property <bool> hovered: row-ta.has-hover || root.preview-hover;
 
     height: (game-line != "" || reconnecting) ? 40px : 30px;
     border-radius: 6px;
@@ -1396,3 +1399,97 @@ export component ReconnectingPreview inherits Preview {
     local-user-id: "m1";
 }
 
+// The member volume states, and the popover open on b0bben.
+//   slint-viewer --screenshot out.png --component MemberVolumePreview //     client/ui/panels/crew_panel.slint
+// Rows, from the top: the local user (no control), the hover glyph, the
+// 70 % badge (the popover is open), their mic muted, their mic muted and
+// deafened, muted for you (red, dim).
+export component MemberVolumePreview inherits Window {
+    width: 540px;
+    height: 400px;
+    background: Theme.bg-app;
+
+    Rectangle {
+        x: 0px;
+        y: 0px;
+        width: 240px;
+        height: parent.height;
+        background: Theme.surface;
+        border-width: 1px;
+        border-color: Theme.graphic-light;
+
+        Rectangle {
+            x: 8px;
+            y: 8px;
+            width: parent.width - 16px;
+            height: rows.preferred-height;
+            background: Theme.card-bg;
+
+            rows := VerticalLayout {
+                padding: 7px;
+                spacing: 2px;
+
+                Rectangle {
+                    height: 22px;
+                    border-radius: 5px;
+                    background: Theme.action-dim;
+
+                    Text {
+                        x: 7px;
+                        height: parent.height;
+                        text: "General";
+                        font-family: Theme.font-display;
+                        font-size: 12px;
+                        font-weight: Theme.weight-display;
+                        color: Theme.action;
+                        vertical-alignment: center;
+                    }
+                }
+
+                VcMemberRow {
+                    name: "Bob";
+                    initials: "Bo";
+                    is-self: true;
+                }
+                VcMemberRow {
+                    name: "ostkatt";
+                    initials: "os";
+                    speaking: true;
+                    game-line: "Valorant · 1h 23m";
+                    preview-hover: true;
+                }
+                b0b := VcMemberRow {
+                    name: "b0bben";
+                    initials: "b0";
+                    volume-percent: 70;
+                    active: true;
+                }
+                VcMemberRow {
+                    name: "FaiL";
+                    initials: "Fa";
+                    muted: true;
+                }
+                VcMemberRow {
+                    name: "titovicka";
+                    initials: "ti";
+                    muted: true;
+                    deafened: true;
+                }
+                VcMemberRow {
+                    name: "win_dev_1";
+                    initials: "wi";
+                    local-muted: true;
+                    volume-percent: 135;
+                }
+            }
+        }
+    }
+
+    MemberVolumePopover {
+        x: 240px + Theme.gap;
+        y: b0b.absolute-position.y - 12px;
+        name: "b0bben";
+        initials: "b0";
+        volume: 70;
+    }
+}
