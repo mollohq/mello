@@ -98,6 +98,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
 | `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |
 | `admin_capture_policy.go` | `AdminCapturePolicyGetRPC`, `AdminCapturePolicySetRPC` — server-to-server read and conditional write of the game capture hook policy (§4.2). Powers the admin Hook policy page. |
+| `discover_curation.go` | `AdminDiscoverCurationGetRPC`, `AdminDiscoverCurationSetRPC`: server-to-server read and conditional write of the Discover curation (§4.3). `readDiscoverCuration` is also read by `DiscoverCrewsRPC`. Powers the admin Discover page. |
 | `dev_seed.go` | Development seed data |
 
 ---
@@ -107,7 +108,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | RPC name | Auth | Description |
 |----------|------|-------------|
 | `create_crew` | Yes | Creates a Nakama group, stores avatar in storage, generates invite code, sends Nakama notifications to invited users. Returns crew ID + invite code. |
-| `discover_crews` | No (`http_key`) | Paginated list of public (open) crews. Accepts `cursor`, returns `crews` + `nextCursor`. Used during onboarding without auth. |
+| `discover_crews` | No (`http_key`) | Paginated list of public (open) crews, with the admin curation applied (§4.3). Accepts `cursor`, returns `crews` + `cursor`. Used during onboarding without auth. With a session, it leaves out the caller's crews. |
 | `get_crew_avatar` | No (`http_key`) | Reads crew avatar base64 from storage by crew ID. Returns `{"data":"<base64>"}`. Works without auth for onboarding. |
 | `search_users` | Yes | Searches users by display name prefix. Returns friends first (via `nk.FriendsList`), then non-friends matching the query (via SQL `LIKE` on `users` table). Limit 100 friends, 20 results. |
 | `join_by_invite_code` | Yes | Looks up invite code in storage, joins the associated crew. Returns crew ID + name. |
@@ -129,6 +130,8 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
 | `admin_capture_policy_get` | No (`http_key`, server-to-server only) | Returns the stored hook policy and its storage version (see §4.2). Rejects client sessions. |
 | `admin_capture_policy_set` | No (`http_key`, server-to-server only) | Replaces the stored hook policy, only if the storage version still matches (see §4.2). Rejects client sessions. |
+| `admin_discover_curation_get` | No (`http_key`, server-to-server only) | Returns the featured and hidden lists, a summary of each crew, and the storage version (see §4.3). Rejects client sessions. |
+| `admin_discover_curation_set` | No (`http_key`, server-to-server only) | Replaces both lists, only if the storage version still matches (see §4.3). Rejects client sessions. |
 
 Every RPC validates its input and returns typed Nakama errors (`UNAUTHENTICATED`, `INVALID_ARGUMENT`, `NOT_FOUND`, `PERMISSION_DENIED`, `INTERNAL`).
 
@@ -214,6 +217,68 @@ stored).
 `regen_hook_policy_seed.py` from `mello-backlog` `games.csv`, with the switch
 off. Tests read it. Nothing writes it to storage.
 
+### 4.3 Discover curation
+
+The admin sets which crews `discover_crews` features and which it hides. The
+decisions are in [features/DISCOVER-CURATION.md](./features/DISCOVER-CURATION.md). The
+curation is one storage object, `discover/curation`, owned by the system user,
+read 0 and write 0 (server only). Crew owners cannot change it.
+
+```json
+{"featured": ["<crew id>", "<crew id>"], "hidden": ["<crew id>"],
+ "updated_by": "bob", "updated_at": "2026-10-16T21:09:30Z"}
+```
+
+| Field | Meaning |
+|---|---|
+| `featured` | Crews shown first, in this order. At most 8. |
+| `hidden` | Crews that `discover_crews` never returns. Sorted. |
+| `updated_by` | The admin console user of the last write. |
+| `updated_at` | The time of the last write, RFC 3339. |
+
+A crew on neither list is "listed": it shows in the normal order.
+
+**`discover_crews`** reads the object on every call.
+
+1. If the read fails, or the stored value does not parse, the RPC fails with
+   `INTERNAL`. A hidden crew must never show.
+2. On the first page (no `cursor`), the featured crews come first, in list
+   order. A featured crew does not show if it is invite only, deleted, hidden,
+   or the caller is a member.
+3. On every page, the `GroupsList` result leaves out the caller's crews, the
+   hidden crews, and the featured crews (page 1 already carries them).
+4. The response shape does not change. Page 1 holds at most 8 + 50 crews.
+
+Hidden is not a ban. Invite codes and invite links to a hidden crew still work.
+
+**`admin_discover_curation_get`**: request empty. Response:
+`{"featured": [summary], "hidden": [summary], "version", "updated_by", "updated_at"}`.
+A summary is `{"id", "name", "open", "member_count", "exists"}`. `exists` is
+false for a crew deleted after it was curated. With nothing stored: empty lists
+and `version: ""`.
+
+**`admin_discover_curation_set`**: request
+`{"featured", "hidden", "version", "actor"}`. Both lists are the full new
+lists. `version` is the storage version from the last read, `""` when nothing
+was stored. Response: `{"featured", "hidden", "version", "diff"}`, where `diff`
+holds the ids added to and removed from each list and `order_changed`, for the
+audit log.
+
+| Rule | Error |
+|---|---|
+| `actor` missing | `INVALID_ARGUMENT` |
+| A list missing | `INVALID_ARGUMENT` |
+| An id that is not a lowercase UUID after trim and lowercase | `INVALID_ARGUMENT` |
+| More than 8 featured, or more than 2,000 hidden | `INVALID_ARGUMENT` |
+| One crew on both lists | `INVALID_ARGUMENT` |
+| A featured crew that does not exist | `INVALID_ARGUMENT` |
+| `version` is not the stored version, or a write wins the race between read and write | `ABORTED`: "curation changed since read" |
+
+Duplicates are dropped. The featured list keeps the first position of each id.
+A hidden id is not checked against the groups: a deleted crew on the list does
+no harm. The write is conditional on the storage version (`"*"`, create only,
+when nothing was stored).
+
 ---
 
 ## 5. Data Models
@@ -266,6 +331,7 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_clips`, `crew_feed`, `clip_upload_complete` |
 | `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_recaps`, `crew_feed` |
 | `crew_stream_sessions` | `{crew_id}` | System user (`""`) | Durable capped list of stream replays (outside ledger trim) | `stop_stream`, snapshot backfill, `crew_feed` |
+| `discover` | `curation` | System user | Featured and hidden crew lists (§4.3). Read 0, write 0. | `discover_crews`, `admin_discover_curation_get`, `admin_discover_curation_set` |
 
 **Cloud object storage (S3/R2):** Clip media files (MP4/AAC) are stored in an S3-compatible bucket (`mello-clips`). Clients upload directly via presigned PUT URLs — no data passes through Nakama. See [CLIPS.md §6](./features/CLIPS.md) for the full flow.
 
@@ -487,7 +553,7 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/rpc/delete_crew` | Yes | Delete crew (owner only) |
 | POST | `/v2/rpc/change_crew_role` | Yes | Promote/demote crew member (owner only) |
 | POST | `/v2/rpc/kick_crew_member` | Yes | Kick member from crew |
-| POST | `/v2/rpc/discover_crews` | No (`http_key`) | Paginated public crew list |
+| POST | `/v2/rpc/discover_crews` | No (`http_key`) | Paginated public crew list, curated (§4.3) |
 | POST | `/v2/rpc/get_crew_avatar` | No (`http_key`) | Fetch crew avatar base64 |
 | POST | `/v2/rpc/search_users` | Yes | Search users by display name |
 | POST | `/v2/rpc/join_by_invite_code` | Yes | Join crew via invite code |

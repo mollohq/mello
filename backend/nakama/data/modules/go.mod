@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.17.48
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.72.0
 	github.com/heroiclabs/nakama-common v1.31.0
+	google.golang.org/protobuf v1.31.0
 )
 
 require (
@@ -19,5 +20,4 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/internal/presigned-url v1.12.7 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/s3shared v1.18.7 // indirect
 	github.com/aws/smithy-go v1.22.1 // indirect
-	google.golang.org/protobuf v1.31.0 // indirect
 )
