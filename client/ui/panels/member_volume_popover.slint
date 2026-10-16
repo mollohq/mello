@@ -1,0 +1,435 @@
+import { Theme } from "../theme.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { CutShape } from "../components/cut.slint";
+import { SmallToggle } from "../components/small_toggle.slint";
+
+// ============================================================
+//  Volume of one voice member, for the local user only.
+//
+//  Opens from a member row in the crew panel (the speaker glyph, or a
+//  right-click), to the right of the sidebar over the feed. The sidebar
+//  is too narrow for a 0 to 200 % slider with a detent at 100 %.
+//
+//  Built like the STREAM menu (stream_source_menu.slint): one cut corner,
+//  graphite keyline, surface fill, a kicker in the label face.
+//
+//  The popover is controlled. It never writes the volume or the mute: it
+//  sends `volume-changed` and `local-mute-changed`, Rust stores the value
+//  and gives it back. Thus the Rust table is the only source of truth.
+// ============================================================
+
+// ─── The slider: 0..200 %, detent at 100 % ─────────────────────────────────
+export component MemberVolumeSlider inherits Rectangle {
+    in property <int> value: 100;
+    in property <bool> enabled: true;
+    in property <string> label;
+    callback changed(int);
+
+    // A pointer value this near 100 % snaps to 100 %.
+    property <float> snap-range: 4.0;
+    property <length> thumb-w: 8px;
+    property <length> track-w: root.width - root.thumb-w;
+    property <float> norm: root.value / 200.0;
+
+    height: 24px;
+    opacity: root.enabled ? 1.0 : 0.4;
+
+    function set-from-pointer(px: length) {
+        let raw = clamp((px - root.thumb-w / 2) / root.track-w * 200.0, 0.0, 200.0);
+        let snapped = abs(raw - 100.0) <= root.snap-range ? 100.0 : raw;
+        if (Math.round(snapped) != root.value) {
+            root.changed(Math.round(snapped));
+        }
+    }
+
+    // A key step that goes across 100 % stops on 100 %.
+    function step(delta: int) {
+        let next = clamp(root.value + delta, 0, 200);
+        let crossed = (root.value < 100 && next > 100) || (root.value > 100 && next < 100);
+        root.changed(crossed ? 100 : next);
+    }
+
+    // Track
+    Rectangle {
+        x: root.thumb-w / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.track-w;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.graphic-light;
+    }
+
+    // The 100 % detent. It is taller than the track, so it shows where the
+    // fill covers its middle.
+    Rectangle {
+        x: root.thumb-w / 2 + root.track-w * 0.5 - 1px;
+        y: (parent.height - self.height) / 2;
+        width: 2px;
+        height: 12px;
+        border-radius: 1px;
+        background: Theme.text-tertiary;
+    }
+
+    // Fill
+    Rectangle {
+        x: root.thumb-w / 2;
+        y: (parent.height - self.height) / 2;
+        width: root.track-w * root.norm;
+        height: 4px;
+        border-radius: 2px;
+        background: Theme.action;
+    }
+
+    // Thumb: the same as the VolumeSlider thumb in settings_modal.slint.
+    Rectangle {
+        x: root.track-w * root.norm;
+        y: (parent.height - self.height) / 2;
+        width: root.thumb-w;
+        height: 16px;
+        border-radius: 2px;
+        background: Theme.text-primary;
+        drop-shadow-blur: 2px;
+        drop-shadow-color: Theme.shadow-modal;
+    }
+
+    // Focus ring on the thumb, for the keyboard.
+    if fs.has-focus: Rectangle {
+        x: root.track-w * root.norm - 3px;
+        y: (parent.height - self.height) / 2;
+        width: root.thumb-w + 6px;
+        height: 22px;
+        border-radius: 4px;
+        border-width: 1px;
+        border-color: Theme.action-line;
+    }
+
+    fs := FocusScope {
+        enabled: root.enabled;
+        accessible-role: slider;
+        accessible-label: root.label;
+        accessible-enabled: root.enabled;
+        accessible-value: root.value + "%";
+        accessible-value-minimum: 0;
+        accessible-value-maximum: 200;
+        accessible-value-step: 5;
+        accessible-action-increment => { root.step(5); }
+        accessible-action-decrement => { root.step(-5); }
+        accessible-action-set-value(v) => {
+            if (v.is-float()) {
+                root.changed(clamp(Math.round(v.to-float()), 0, 200));
+            }
+        }
+
+        key-pressed(e) => {
+            if (e.text == Key.LeftArrow || e.text == Key.DownArrow) {
+                root.step(e.modifiers.shift ? -1 : -5);
+                return accept;
+            }
+            if (e.text == Key.RightArrow || e.text == Key.UpArrow) {
+                root.step(e.modifiers.shift ? 1 : 5);
+                return accept;
+            }
+            if (e.text == Key.PageDown) {
+                root.step(-25);
+                return accept;
+            }
+            if (e.text == Key.PageUp) {
+                root.step(25);
+                return accept;
+            }
+            if (e.text == Key.Home) {
+                root.changed(0);
+                return accept;
+            }
+            if (e.text == Key.End) {
+                root.changed(200);
+                return accept;
+            }
+            reject
+        }
+
+        TouchArea {
+            enabled: root.enabled;
+            mouse-cursor: pointer;
+            pointer-event(e) => {
+                if (e.kind == PointerEventKind.down) {
+                    fs.focus();
+                    root.set-from-pointer(self.mouse-x);
+                }
+            }
+            moved => {
+                if (self.pressed) {
+                    root.set-from-pointer(self.mouse-x);
+                }
+            }
+            scroll-event(e) => {
+                root.step(e.delta-y > 0 ? 5 : -5);
+                accept
+            }
+        }
+    }
+}
+
+// ─── The popover ───────────────────────────────────────────────────────────
+export component MemberVolumePopover inherits Rectangle {
+    in property <string> name;
+    in property <string> initials;
+    in property <image> avatar;
+    in property <bool> has-avatar: false;
+    in property <int> volume: 100;
+    in property <bool> local-muted: false;
+    callback volume-changed(int);
+    callback local-mute-changed(bool);
+    // Escape. The owner also closes the popover on a click outside it.
+    callback close-requested();
+
+    property <bool> boosted: root.volume > 100 && !root.local-muted;
+
+    width: 232px;
+    height: body.preferred-height;
+    background: transparent;
+
+    // Take the focus, so that Escape closes the popover at once.
+    init => {
+        keys.focus();
+    }
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        fill: Theme.graphic-med;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch-sm;
+        inset: Theme.keyline;
+        fill: Theme.surface;
+    }
+
+    // Swallow clicks so the backdrop does not close the popover.
+    TouchArea {
+        // a11y: none (input blocker: stops clicks reaching the backdrop)
+    }
+
+    // The slider rejects Escape, so the key comes up to this scope.
+    keys := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                root.close-requested();
+                return accept;
+            }
+            reject
+        }
+
+        body := VerticalLayout {
+            spacing: 0px;
+
+            // Who.
+            HorizontalLayout {
+                padding: 12px;
+                padding-right: 18px;
+                spacing: 10px;
+
+                UserAvatar {
+                    initials: root.initials;
+                    avatar: root.avatar;
+                    has-avatar: root.has-avatar;
+                    muted: true;
+                    size: 28px;
+                    bg-color: Theme.surface;
+                }
+
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+
+                    Text {
+                        text: root.name;
+                        font-family: Theme.font-display;
+                        font-size: 13px;
+                        font-weight: Theme.weight-display;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+
+                    Text {
+                        text: "Only you hear this change.";
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        font-size: 11px;
+                        color: Theme.text-secondary;
+                        overflow: elide;
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            // How loud.
+            VerticalLayout {
+                padding-left: 14px;
+                padding-right: 14px;
+                padding-top: 12px;
+                padding-bottom: 10px;
+                spacing: 6px;
+
+                HorizontalLayout {
+                    Text {
+                        text: "USER VOLUME";
+                        font-family: Theme.font-label;
+                        font-size: 9.5px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-kicker;
+                        color: Theme.text-tertiary;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    // The value, live while you drag. Same chip as VolumeSlider.
+                    Rectangle {
+                        width: pct-text.preferred-width + 12px;
+                        height: 20px;
+                        background: root.local-muted ? transparent : Theme.accent-bg;
+
+                        pct-text := Text {
+                            text: root.local-muted ? "MUTED" : root.volume + "%";
+                            font-family: Theme.font-label;
+                            font-size: 11px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            color: root.local-muted ? Theme.text-tertiary : Theme.accent;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
+                }
+
+                MemberVolumeSlider {
+                    label: "Volume for " + root.name;
+                    value: root.volume;
+                    enabled: !root.local-muted;
+                    changed(v) => { root.volume-changed(v); }
+                }
+
+                // Scale. 100 % is under the detent.
+                Rectangle {
+                    height: 12px;
+
+                    Text {
+                        x: 0px;
+                        text: "0%";
+                        font-family: Theme.font-label;
+                        font-size: 9px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.text-tertiary;
+                    }
+                    Text {
+                        x: (parent.width - self.width) / 2;
+                        text: "100%";
+                        font-family: Theme.font-label;
+                        font-size: 9px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: root.volume == 100 ? Theme.text-secondary : Theme.text-tertiary;
+                    }
+                    Text {
+                        x: parent.width - self.width;
+                        text: "200%";
+                        font-family: Theme.font-label;
+                        font-size: 9px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.text-tertiary;
+                    }
+                }
+
+                // libmello applies the gain before the limiter, so a loud
+                // voice above 100 % can clip.
+                if root.boosted: Text {
+                    text: "Above 100% a loud voice can distort.";
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 11px;
+                    color: Theme.text-secondary;
+                    wrap: word-wrap;
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            // Mute for you.
+            Rectangle {
+                height: 40px;
+                background: mute-ta.has-hover ? Theme.surface-hover : transparent;
+
+                mute-ta := TouchArea {
+                    // a11y: none (a larger click target; the switch is the control)
+                    clicked => { root.local-mute-changed(!root.local-muted); }
+                }
+
+                HorizontalLayout {
+                    padding-left: 14px;
+                    padding-right: 14px;
+                    cross-axis-alignment: center;
+
+                    Text {
+                        text: "Mute";
+                        font-family: Theme.font-display;
+                        font-size: 13px;
+                        font-weight: Theme.weight-display;
+                        color: Theme.text-primary;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    SmallToggle {
+                        label: "Mute " + root.name + " for you";
+                        checked: root.local-muted;
+                        self-toggle: false;
+                        toggled(v) => { root.local-mute-changed(v); }
+                    }
+                }
+            }
+
+            Rectangle { height: 1px; background: Theme.graphic-light; }
+
+            // Reset. It is dim when the volume is 100 %. It does not change
+            // the mute.
+            reset-row := Rectangle {
+                property <bool> can-reset: root.volume != 100;
+                height: 30px;
+                background: (self.can-reset && reset-ta.has-hover) ? Theme.surface-hover : transparent;
+
+                Text {
+                    x: 14px;
+                    height: parent.height;
+                    text: "RESET TO 100%";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: !reset-row.can-reset ? Theme.text-tertiary
+                        : reset-ta.has-hover ? Theme.text-primary
+                        : Theme.text-secondary;
+                    vertical-alignment: center;
+                }
+
+                reset-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Reset volume to 100%";
+                    enabled: reset-row.can-reset;
+                    accessible-enabled: reset-row.can-reset;
+                    mouse-cursor: reset-row.can-reset ? pointer : default;
+                    clicked => { root.volume-changed(100); }
+                }
+            }
+        }
+    }
+}

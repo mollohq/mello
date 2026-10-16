@@ -5,6 +5,10 @@ export component SmallToggle inherits Rectangle {
     in-out property <bool> checked: false;
     /// Accessible label: what the switch controls, for screen readers and the e2e driver.
     in property <string> label;
+    /// True: a click flips `checked`, then sends `toggled`. False: a click
+    /// only sends `toggled`, and the owner sets `checked` (a controlled
+    /// switch, as in the member volume popover).
+    in property <bool> self-toggle: true;
     callback toggled(bool);
 
     width: 40px;
@@ -33,8 +37,12 @@ export component SmallToggle inherits Rectangle {
         accessible-role: switch;
         accessible-label: root.label;
         clicked => {
-            checked = !checked;
-            toggled(checked);
+            if (root.self-toggle) {
+                checked = !checked;
+                toggled(checked);
+            } else {
+                toggled(!checked);
+            }
         }
     }
 }
