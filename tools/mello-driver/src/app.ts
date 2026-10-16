@@ -63,7 +63,19 @@ export type AppState = {
   voice_channels: {
     name: string;
     active: boolean;
-    members: { name: string; speaking: boolean; muted: boolean; deafened: boolean }[];
+    members: {
+      /** The user id. */
+      id: string;
+      name: string;
+      speaking: boolean;
+      /** The member muted their own mic. */
+      muted: boolean;
+      deafened: boolean;
+      /** The playback volume of this member for this user, 0 to 200 (%). */
+      volume: number;
+      /** This user muted the member for themselves only. */
+      local_muted: boolean;
+    }[];
   }[];
   /**
    * The transport of the current voice call: "sfu", or "p2p" after an SFU
