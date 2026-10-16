@@ -37,6 +37,10 @@ type CreateCrewResponse struct {
 // DiscoverCrewsRPC lists open crews. Callable without auth via http_key (guest
 // onboarding) or with a session; when authenticated it excludes crews the caller
 // is already in. Accepts optional {"cursor":"..."} for pagination.
+//
+// The admin curation (discover_curation.go) applies to every call. Featured
+// crews come first, on the first page only, in the admin's order. Hidden crews
+// never show.
 func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	var req struct {
 		Cursor string `json:"cursor"`
@@ -58,8 +62,45 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		}
 	}
 
+	// Fail closed: without the curation a hidden crew would show.
+	curation, _, err := readDiscoverCuration(ctx, nk)
+	if err != nil {
+		logger.Error("discover_crews: curation read failed: %v", err)
+		return "", runtime.NewError("failed to list crews", 13)
+	}
+	hidden := make(map[string]bool, len(curation.Hidden))
+	for _, id := range curation.Hidden {
+		hidden[id] = true
+	}
+	featured := make(map[string]bool, len(curation.Featured))
+	for _, id := range curation.Featured {
+		featured[id] = true
+	}
+
+	// Non-nil so an empty result marshals to [] (not null), which clients expect.
+	result := make([]discoverCrewEntry, 0)
+
+	// Featured crews lead the first page. A featured crew that is now invite
+	// only, deleted, or already joined does not show: featured never overrides
+	// the owner's choice or the membership filter.
+	if req.Cursor == "" && len(curation.Featured) > 0 {
+		groups, err := groupsByID(ctx, nk, curation.Featured)
+		if err != nil {
+			logger.Error("discover_crews: GroupsGetId failed: %v", err)
+			return "", runtime.NewError("failed to list crews", 13)
+		}
+		for _, id := range curation.Featured {
+			g, ok := groups[id]
+			if !ok || !g.GetOpen().GetValue() || joined[id] || hidden[id] {
+				continue
+			}
+			result = append(result, newDiscoverCrewEntry(g))
+		}
+	}
+
 	// Filter to open crews at the DB level so closed crews don't consume page
-	// slots (one indexed query per page; the only post-filter is membership).
+	// slots (one indexed query per page). The post-filters are membership,
+	// hidden crews, and featured crews, which page 1 already carries.
 	limit := 50
 	openOnly := true
 	groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, &openOnly, limit, req.Cursor)
@@ -67,32 +108,12 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		logger.Error("discover_crews: GroupsList failed: %v", err)
 		return "", runtime.NewError("failed to list crews", 13)
 	}
-
-	type crewEntry struct {
-		ID          string `json:"id"`
-		Name        string `json:"name"`
-		Description string `json:"description"`
-		MemberCount int32  `json:"member_count"`
-		MaxMembers  int32  `json:"max_members"`
-		Open        bool   `json:"open"`
-		AvatarURL   string `json:"avatar_url,omitempty"`
-	}
-
-	// Non-nil so an empty result marshals to [] (not null), which clients expect.
-	result := make([]crewEntry, 0, len(groups))
 	for _, g := range groups {
-		if joined[g.GetId()] {
+		id := g.GetId()
+		if joined[id] || hidden[id] || featured[id] {
 			continue
 		}
-		result = append(result, crewEntry{
-			ID:          g.GetId(),
-			Name:        g.GetName(),
-			Description: g.GetDescription(),
-			MemberCount: g.GetEdgeCount(),
-			MaxMembers:  g.GetMaxCount(),
-			Open:        true,
-			AvatarURL:   g.GetAvatarUrl(),
-		})
+		result = append(result, newDiscoverCrewEntry(g))
 	}
 
 	respMap := map[string]interface{}{"crews": result}
