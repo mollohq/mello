@@ -447,6 +447,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
                     game_lines: &game_lines,
+                    member_audio: &ctx.member_audio.borrow(),
                 };
                 let vc_data = channels_to_ui(&state.voice_channels, &avc_id, &vctx);
                 ctx.app

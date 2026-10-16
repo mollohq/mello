@@ -326,6 +326,8 @@ pub struct VoiceUiCtx<'a> {
     pub local_muted: bool,
     pub local_deafened: bool,
     pub game_lines: &'a std::collections::HashMap<String, String>,
+    /// Volume and local mute of each member, for this user only.
+    pub member_audio: &'a crate::member_audio::MemberAudioTable,
 }
 
 pub fn current_time_ms() -> i64 {
@@ -402,6 +404,12 @@ pub fn voice_members_to_ui(
         .map(|m| {
             let secs = m.joined_at.unwrap_or(0) / 1000 - EPOCH_2024;
             let is_self = m.user_id == ctx.local_user_id;
+            // The local user has no volume of their own.
+            let audio = if is_self {
+                crate::member_audio::MemberAudio::default()
+            } else {
+                ctx.member_audio.get(&m.user_id)
+            };
             let (av, has_av) = if is_self && ctx.has_user_avatar {
                 (ctx.user_avatar.clone(), true)
             } else if let Some(img) = ctx.cache.get(&m.user_id) {
@@ -433,6 +441,8 @@ pub fn voice_members_to_ui(
                     .cloned()
                     .unwrap_or_default()
                     .into(),
+                volume: i32::from(audio.volume_percent),
+                local_muted: audio.muted_locally,
             }
         })
         .collect();
@@ -593,6 +603,33 @@ pub fn set_voice_member_speaking(app: &MainWindow, member_id: &str, speaking: bo
         }
     }
     false
+}
+
+/// Show the volume and the local mute of one member in every voice channel,
+/// without a rebuild of the channel models.
+pub fn set_voice_member_audio(
+    app: &MainWindow,
+    member_id: &str,
+    audio: crate::member_audio::MemberAudio,
+) {
+    let volume = i32::from(audio.volume_percent);
+    let channels = app.get_voice_channels();
+    for i in 0..channels.row_count() {
+        let Some(ch) = channels.row_data(i) else {
+            continue;
+        };
+        let ch_members = ch.members;
+        for j in 0..ch_members.row_count() {
+            if let Some(mut m) = ch_members.row_data(j) {
+                if m.id == member_id && (m.volume != volume || m.local_muted != audio.muted_locally)
+                {
+                    m.volume = volume;
+                    m.local_muted = audio.muted_locally;
+                    ch_members.set_row_data(j, m);
+                }
+            }
+        }
+    }
 }
 
 /// Update one voice-channel member's game line without rebuilding every channel model.

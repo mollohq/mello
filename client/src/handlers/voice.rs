@@ -29,6 +29,52 @@ pub(crate) fn apply_joined_channel_bitrate(
     }
 }
 
+/// Run after a change of the voice channel models.
+///
+/// - Send the stored volume of each member who is in the joined channel
+///   again: a join, a rejoin and a reconnect. libmello keeps the gain of a
+///   peer for the life of its context, also across a peer removal, so the
+///   client does not depend on that.
+/// - Keep the volume popover on its member, or close it when the member is
+///   no longer in the channel of the popover.
+pub(crate) fn sync_member_audio(ctx: &AppContext) {
+    let joined = ctx.active_voice_channel.borrow().clone();
+    let my_id = ctx.app.get_user_id();
+    let popover_id = ctx.app.get_volume_member_id();
+    let popover_channel = ctx.app.get_volume_member_channel_id();
+    let mut present: Vec<String> = Vec::new();
+    let mut popover_member = None;
+    for ch in ctx.app.get_voice_channels().iter() {
+        for m in ch.members.iter() {
+            if !joined.is_empty() && ch.id == joined.as_str() && m.id != my_id {
+                present.push(m.id.to_string());
+            }
+            if !popover_id.is_empty() && ch.id == popover_channel && m.id == popover_id {
+                popover_member = Some(m);
+            }
+        }
+    }
+    let commands = ctx
+        .member_audio
+        .borrow_mut()
+        .sync_present(present.iter().map(String::as_str));
+    for command in commands {
+        let _ = ctx.cmd_tx.send(command);
+    }
+    if !popover_id.is_empty() {
+        match popover_member {
+            Some(m) => ctx.app.set_volume_member(m),
+            None => {
+                log::info!(
+                    "UI: {} left the channel, the volume popover closes",
+                    popover_id
+                );
+                ctx.app.set_volume_member_id(slint::SharedString::new());
+            }
+        }
+    }
+}
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::VoiceStateChanged { in_call, transport } => {
@@ -268,6 +314,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 local_muted: ctx.app.get_mic_muted(),
                                 local_deafened: ctx.app.get_deafened(),
                                 game_lines: &game_lines,
+                                member_audio: &ctx.member_audio.borrow(),
                             };
                             let ch_members = voice_members_to_ui(&voice_members, &vctx);
                             ch.member_count = ch_members.len() as i32;
@@ -341,6 +388,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                                 local_muted: ctx.app.get_mic_muted(),
                                 local_deafened: ctx.app.get_deafened(),
                                 game_lines: &game_lines,
+                                member_audio: &ctx.member_audio.borrow(),
                             };
                             let ch_members = voice_members_to_ui(&voice_members, &vctx);
                             ch.member_count = ch_members.len() as i32;
@@ -374,6 +422,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
                     game_lines: &game_lines,
+                    member_audio: &ctx.member_audio.borrow(),
                 };
                 let vc_data = channels_to_ui(&channels, &avc_id, &vctx);
                 ctx.app
@@ -405,6 +454,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     local_muted: ctx.app.get_mic_muted(),
                     local_deafened: ctx.app.get_deafened(),
                     game_lines: &game_lines,
+                    member_audio: &ctx.member_audio.borrow(),
                 };
                 channels.push(channel_to_ui(
                     &channel,

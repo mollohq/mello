@@ -3,6 +3,57 @@ import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape, CutMask, OctShape, OctMask } from "../components/cut.slint";
 import { CrewData, VoiceChannelData, VoiceChannelMember } from "../types.slint";
 
+// A state glyph on a member row. On hover it shows its tooltip above it.
+// Grey is about the member's own equipment. Red is a state that the local
+// user set and can undo in the volume popover.
+component StateGlyph inherits Rectangle {
+    in property <image> icon;
+    in property <color> tint;
+    in property <string> tip;
+    // A right-click on the glyph. The row opens the volume popover.
+    callback secondary-clicked();
+
+    width: 12px;
+    height: 12px;
+
+    Image {
+        source: root.icon;
+        width: 12px;
+        height: 12px;
+        colorize: root.tint;
+    }
+
+    tip-ta := TouchArea {
+        // a11y: none (hover detector for the tooltip; the e2e state report has the row state)
+        pointer-event(e) => {
+            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.secondary-clicked();
+            }
+        }
+    }
+
+    // Above the glyph, so it covers the row above and not this row.
+    if tip-ta.has-hover: Rectangle {
+        x: root.width + 4px - self.width;
+        y: -self.height - 4px;
+        width: tip-text.preferred-width + 12px;
+        height: 20px;
+        background: Theme.raised-hover;
+        border-width: 1px;
+        border-color: Theme.graphic-med;
+
+        tip-text := Text {
+            text: root.tip;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 11px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 component VcMemberRow inherits Rectangle {
     in property <string> name;
     in property <string> initials;
@@ -14,81 +65,205 @@ component VcMemberRow inherits Rectangle {
     in property <string> game-line: "";
     // The local member's SFU voice link dropped and the client reconnects.
     in property <bool> reconnecting: false;
+    // The local user. Their own row has no volume control.
+    in property <bool> is-self: false;
+    // 0..200 (%). 100 is the default and shows no badge.
+    in property <int> volume-percent: 100;
+    // Muted for the local user only.
+    in property <bool> local-muted: false;
+    // The volume popover of this row is open.
+    in property <bool> active: false;
+    // A right-click on the row, or a click on the speaker glyph.
+    callback volume-requested();
+
+    property <bool> adjustable: !root.is-self;
+    property <bool> hovered: row-ta.has-hover;
 
     height: (game-line != "" || reconnecting) ? 40px : 30px;
     border-radius: 6px;
-    background: transparent;
-    border-width: 0px;
-    border-color: transparent;
+    // The same raised ground as a hovered channel header. The row whose
+    // popover is open keeps it, with a keyline, so you see who the popover
+    // is for.
+    background: (root.active || (root.adjustable && root.hovered)) ? Theme.raised : transparent;
+    border-width: root.active ? 1px : 0px;
+    border-color: Theme.graphic-med;
 
-    HorizontalLayout {
-        spacing: 7px;
-        padding-left: 8px;
-        padding-right: 8px;
-        cross-axis-alignment: center;
-
-        UserAvatar {
-            initials: root.initials;
-            avatar: root.avatar;
-            has-avatar: root.has-avatar;
-            muted: true;
-            size: 22px;
-            bg-color: Theme.card-bg;
-        }
-
-        VerticalLayout {
-            horizontal-stretch: 1;
-            spacing: 1px;
-
-            Text {
-                text: name;
-                font-family: Theme.font-display;
-                font-size: 12px;
-                // The only green in the product: this person is talking
-                // right now. It goes on the name and nowhere else — the
-                // avatar keeps its shape, the row keeps its ground.
-                color: speaking ? Theme.speaking : Theme.text-dim;
-                font-weight: speaking ? Theme.weight-display : 400;
-                overflow: elide;
-            }
-
-            // Red is state: the link is down right now.
-            if reconnecting: Text {
-                text: "Reconnecting";
-                font-family: Theme.font-label;
-                font-weight: Theme.weight-label;
-                letter-spacing: Theme.track-label;
-                font-size: 10px;
-                color: Theme.live;
-                overflow: elide;
-            }
-
-            if game-line != "" && !reconnecting: Text {
-                text: game-line;
-                font-family: Theme.font-body;
-                font-weight: Theme.weight-sentence;
-                font-size: 10px;
-                color: Theme.text-sub;
-                overflow: elide;
+    // The layout is inside the TouchArea, so the row stays hovered while
+    // the pointer is on a glyph.
+    row-ta := TouchArea {
+        // a11y: none (right-click shortcut and hover detector; the speaker glyph is the control)
+        pointer-event(e) => {
+            if (root.adjustable && e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                root.volume-requested();
             }
         }
 
-        Rectangle {
-            width: (muted || deafened) ? 12px : 0px;
-            height: 12px;
+        HorizontalLayout {
+            spacing: 7px;
+            padding-left: 8px;
+            padding-right: root.adjustable ? 5px : 8px;
+            cross-axis-alignment: center;
 
-            if deafened: Image {
-                source: @image-url("../icons/headphone-off.svg");
-                width: 12px;
-                height: 12px;
-                colorize: Theme.graphic-med;
+            UserAvatar {
+                initials: root.initials;
+                avatar: root.avatar;
+                has-avatar: root.has-avatar;
+                muted: true;
+                size: 22px;
+                bg-color: Theme.card-bg;
+                opacity: root.local-muted ? 0.5 : 1.0;
             }
 
-            if muted && !deafened: Image {
-                source: @image-url("../icons/mic-off.svg");
-                width: 12px;
-                height: 12px;
-                colorize: Theme.graphic-med;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 1px;
+
+                Text {
+                    text: name;
+                    font-family: Theme.font-display;
+                    font-size: 12px;
+                    // The only green in the product: this person is talking
+                    // right now. It goes on the name and nowhere else — the
+                    // avatar keeps its shape, the row keeps its ground. A
+                    // local mute dims the name. The green stays, because
+                    // the member talks; the red glyph tells you why you do
+                    // not hear them.
+                    color: speaking ? Theme.speaking
+                        : root.local-muted ? Theme.text-tertiary
+                        : Theme.text-dim;
+                    font-weight: speaking ? Theme.weight-display : 400;
+                    overflow: elide;
+                }
+
+                // Red is state: the link is down right now.
+                if reconnecting: Text {
+                    text: "Reconnecting";
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    font-size: 10px;
+                    color: Theme.live;
+                    overflow: elide;
+                }
+
+                if game-line != "" && !reconnecting: Text {
+                    text: game-line;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 10px;
+                    color: Theme.text-sub;
+                    overflow: elide;
+                }
+            }
+
+            // Their mic. A deafen also mutes, so it shows the mic glyph too.
+            if root.muted || root.deafened: StateGlyph {
+                icon: @image-url("../icons/mic-off.svg");
+                tint: Theme.graphic-med;
+                tip: "Muted";
+                secondary-clicked => {
+                    if (root.adjustable) {
+                        root.volume-requested();
+                    }
+                }
+            }
+
+            // Their headphones.
+            if root.deafened: StateGlyph {
+                icon: @image-url("../icons/headphone-off.svg");
+                tint: Theme.graphic-med;
+                tip: "Deafened";
+                secondary-clicked => {
+                    if (root.adjustable) {
+                        root.volume-requested();
+                    }
+                }
+            }
+
+            // Your speaker: you muted this member. Red, because you did it
+            // and you can undo it in the popover.
+            if root.local-muted: StateGlyph {
+                icon: @image-url("../icons/volume-x.svg");
+                tint: Theme.live;
+                tip: "Muted for you";
+                secondary-clicked => {
+                    root.volume-requested();
+                }
+            }
+
+            // A volume that is not 100 %. Same chip as the voice count on a
+            // compact crew card: inset ground, keyline, mono figures. The
+            // mute glyph replaces it.
+            if !root.local-muted && root.volume-percent != 100: Rectangle {
+                border-radius: 4px;
+                border-width: 1px;
+                border-color: Theme.card-border;
+                background: Theme.card-bg-inset;
+                height: 16px;
+                width: badge-text.preferred-width + 10px;
+
+                badge-text := Text {
+                    text: root.volume-percent + "%";
+                    font-family: Theme.font-mono;
+                    font-size: 9px;
+                    font-weight: 700;
+                    color: Theme.text-sub;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
+
+            // The speaker glyph. The slot is always on the rows of other
+            // members, so the name does not move when the glyph shows.
+            if root.adjustable: Rectangle {
+                width: 20px;
+                height: 20px;
+
+                if root.hovered || root.active || glyph-fs.has-focus: Rectangle {
+                    width: 20px;
+                    height: 20px;
+                    border-radius: 5px;
+                    background: (glyph-ta.has-hover || root.active) ? Theme.raised-hover : transparent;
+                    border-width: glyph-fs.has-focus ? 1px : 0px;
+                    border-color: Theme.action-line;
+
+                    Image {
+                        source: @image-url("../icons/speaker.svg");
+                        width: 11px;
+                        height: 11px;
+                        colorize: (glyph-ta.has-hover || root.active) ? Theme.text-primary : Theme.text-sub;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                // Tab reaches the glyph; Enter or Space opens the popover.
+                glyph-fs := FocusScope {
+                    accessible-role: button;
+                    accessible-label: "Volume for " + root.name;
+                    accessible-action-default => {
+                        root.volume-requested();
+                    }
+                    key-pressed(e) => {
+                        if (e.text == Key.Return || e.text == " ") {
+                            root.volume-requested();
+                            return accept;
+                        }
+                        reject
+                    }
+
+                    glyph-ta := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.volume-requested();
+                        }
+                        pointer-event(e) => {
+                            if (e.button == PointerEventButton.right && e.kind == PointerEventKind.up) {
+                                root.volume-requested();
+                            }
+                        }
+                    }
+                }
             }
         }
     }
@@ -498,7 +673,12 @@ component ActiveCrewCard inherits Rectangle {
     // client reconnects. The header and the local member's row show it.
     in property <bool> voice-reconnecting: false;
     in property <string> local-user-id: "";
+    // The member whose volume popover is open. Empty when it is closed.
+    in property <string> volume-member-id: "";
     callback join-voice(string);
+    // A member row asks for the volume popover: the member, the id of
+    // its channel, and the window y of the row.
+    callback member-volume-requested(VoiceChannelMember, string, length);
     callback invite-clicked();
     callback crew-edit-requested();
     callback crew-leave-requested();
@@ -967,6 +1147,13 @@ component ActiveCrewCard inherits Rectangle {
                                 game-line: member.game-line;
                                 reconnecting: ch.active && root.voice-reconnecting
                                     && member.id == root.local-user-id;
+                                is-self: member.id == root.local-user-id;
+                                volume-percent: member.volume;
+                                local-muted: member.local-muted;
+                                active: root.volume-member-id != "" && member.id == root.volume-member-id;
+                                volume-requested => {
+                                    root.member-volume-requested(member, ch.id, self.absolute-position.y);
+                                }
                             }
                         }
 
@@ -1022,8 +1209,12 @@ export component CrewPanel inherits Rectangle {
     in property <bool> can-manage: false;
     in property <bool> voice-reconnecting: false;
     in property <string> local-user-id: "";
+    // The member whose volume popover is open. Empty when it is closed.
+    in property <string> volume-member-id: "";
 
     callback crew-selected(string);
+    // See ActiveCrewCard.member-volume-requested.
+    callback member-volume-requested(VoiceChannelMember, string, length);
     callback crew-create-requested();
     callback browse-crews-requested();
     callback join-voice-channel(string);
@@ -1069,6 +1260,10 @@ export component CrewPanel inherits Rectangle {
                             can-manage: root.can-manage;
                             voice-reconnecting: root.voice-reconnecting;
                             local-user-id: root.local-user-id;
+                            volume-member-id: root.volume-member-id;
+                            member-volume-requested(m, ch, y) => {
+                                root.member-volume-requested(m, ch, y);
+                            }
                             join-voice(id) => {
                                 join-voice-channel(id);
                             }
@@ -1179,13 +1374,13 @@ export component Preview inherits CrewPanel {
     ];
     voice-channels: [
         { id: "vc1", name: "General", member-count: 3, active: true, members: [
-            { id: "m1", name: "ostkatt", initials: "os", speaking: true, muted: false, deafened: false, game-line: "Valorant · 1h 23m" },
-            { name: "FaiL", initials: "Fa", speaking: false, muted: false, deafened: false },
-            { name: "b0bben", initials: "b0", speaking: false, muted: false, deafened: false },
+            { id: "m1", name: "ostkatt", initials: "os", speaking: true, muted: false, deafened: false, game-line: "Valorant · 1h 23m", volume: 100 },
+            { name: "FaiL", initials: "Fa", speaking: false, muted: false, deafened: false, volume: 100 },
+            { name: "b0bben", initials: "b0", speaking: false, muted: false, deafened: false, volume: 100 },
         ]},
         { id: "vc2", name: "Ranked grind", member-count: 2, active: false, members: [
-            { name: "win_dev_1", initials: "wi", speaking: true, muted: false, deafened: false },
-            { name: "titovicka", initials: "ti", speaking: false, muted: false, deafened: false },
+            { name: "win_dev_1", initials: "wi", speaking: true, muted: false, deafened: false, volume: 100 },
+            { name: "titovicka", initials: "ti", speaking: false, muted: false, deafened: false, volume: 100 },
         ]},
         { id: "vc3", name: "Chill", member-count: 0, active: false },
         { id: "vc4", name: "Movie night", member-count: 0, active: false },

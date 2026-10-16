@@ -4,6 +4,7 @@ use mello_core::Command;
 use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
+use crate::member_audio::MemberAudio;
 use crate::{MainWindow, VoiceChannelData, VoiceChannelMember};
 
 fn update_local_vc_mute_state(app: &MainWindow) {
@@ -31,7 +32,63 @@ fn update_local_vc_mute_state(app: &MainWindow) {
     app.set_voice_channels(Rc::new(slint::VecModel::from(updated)).into());
 }
 
+/// Show the stored settings of `user_id` on its rows, and in the volume
+/// popover when it is open for that member.
+fn show_member_audio(app: &MainWindow, user_id: &str, audio: MemberAudio) {
+    crate::converters::set_voice_member_audio(app, user_id, audio);
+    if app.get_volume_member_id() == user_id {
+        let mut m = app.get_volume_member();
+        m.volume = i32::from(audio.volume_percent);
+        m.local_muted = audio.muted_locally;
+        app.set_volume_member(m);
+    }
+}
+
+/// The local user has no volume of their own, and an empty id is no member.
+fn is_other_member(app: &MainWindow, user_id: &str) -> bool {
+    if user_id.is_empty() || user_id == app.get_user_id().as_str() {
+        log::warn!("UI: member volume ignored for {:?}", user_id);
+        return false;
+    }
+    true
+}
+
 pub fn wire(ctx: &AppContext) {
+    // --- Member volume popover: volume and local mute, for this user only ---
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        let table = ctx.member_audio.clone();
+        ctx.app.on_member_volume_changed(move |user_id, percent| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            if !is_other_member(&app, &user_id) {
+                return;
+            }
+            let command = table.borrow_mut().set_volume(&user_id, percent);
+            let _ = cmd.send(command);
+            show_member_audio(&app, &user_id, table.borrow().get(&user_id));
+        });
+    }
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        let table = ctx.member_audio.clone();
+        ctx.app.on_member_local_mute_changed(move |user_id, muted| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            if !is_other_member(&app, &user_id) {
+                return;
+            }
+            log::info!("UI: member {} muted for you = {}", user_id, muted);
+            let command = table.borrow_mut().set_muted_locally(&user_id, muted);
+            let _ = cmd.send(command);
+            show_member_audio(&app, &user_id, table.borrow().get(&user_id));
+        });
+    }
+
     // --- Voice toggle (leave) ---
     {
         let cmd = ctx.cmd_tx.clone();

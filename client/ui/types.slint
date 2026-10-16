@@ -284,6 +284,13 @@ export struct VoiceChannelMember {
     deafened: bool,
     joined_at: int,
     game-line: string,
+    // Playback volume of this member for the local user, 0 to 200 (%).
+    // Rust sets 100 for a member with no entry; a struct literal must set
+    // it too, because the default of an int is 0.
+    volume: int,
+    // The local user muted this member for themselves only. It is not the
+    // member's own mic mute (`muted`).
+    local-muted: bool,
 }
 
 export struct VoiceChannelData {

@@ -17,6 +17,26 @@ pub(crate) use crew::{invite_join_error_message, invite_resolve_error_message, I
 use crate::app_context::AppContext;
 
 pub fn handle_event(ctx: &AppContext, event: Event) {
+    // These events change the voice channel models. See
+    // voice::sync_member_audio.
+    let voice_models_change = matches!(
+        event,
+        Event::VoiceStateChanged { .. }
+            | Event::VoiceJoined { .. }
+            | Event::VoiceUpdated { .. }
+            | Event::VoiceChannelsUpdated { .. }
+            | Event::VoiceChannelCreated { .. }
+            | Event::VoiceChannelDeleted { .. }
+            | Event::CrewStateLoaded { .. }
+            | Event::CrewJoined { .. }
+    );
+    dispatch(ctx, event);
+    if voice_models_change {
+        voice::sync_member_audio(ctx);
+    }
+}
+
+fn dispatch(ctx: &AppContext, event: Event) {
     match event {
         // Auth
         Event::Restoring
