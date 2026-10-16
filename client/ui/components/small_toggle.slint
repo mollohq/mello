@@ -1,0 +1,40 @@
+import { Theme } from "../theme.slint";
+
+// ─── Small Toggle (for cards and popovers) ─────────────────────────────────
+export component SmallToggle inherits Rectangle {
+    in-out property <bool> checked: false;
+    /// Accessible label: what the switch controls, for screen readers and the e2e driver.
+    in property <string> label;
+    callback toggled(bool);
+
+    width: 40px;
+    height: 20px;
+    border-radius: 10px;
+    background: checked ? Theme.accent : Theme.surface;
+    border-width: 1px;
+    border-color: checked ? Theme.accent : Theme.graphic-light;
+
+    animate background { duration: 150ms; easing: ease-in-out; }
+    animate border-color { duration: 150ms; easing: ease-in-out; }
+
+    Rectangle {
+        x: checked ? parent.width - self.width - 2px : 2px;
+        y: (parent.height - self.height) / 2;
+        width: 16px;
+        height: 16px;
+        border-radius: 8px;
+        background: checked ? Theme.on-action : Theme.text-secondary;
+
+        animate x { duration: 150ms; easing: ease-in-out; }
+        animate background { duration: 150ms; easing: ease-in-out; }
+    }
+
+    TouchArea {
+        accessible-role: switch;
+        accessible-label: root.label;
+        clicked => {
+            checked = !checked;
+            toggled(checked);
+        }
+    }
+}
