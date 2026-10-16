@@ -138,7 +138,7 @@ slint-build = { version = "1.18", default-features = false, features = ["compat-
 - On macOS, Skia renders on the GPU through wgpu (Metal). When the GPU surface fails, Skia falls back to its CPU rasterizer.
 - On macOS, `--software-rendering` forces the CPU rasterizer. It is a debug switch.
 - Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.
-- Known issue (Slint 1.18.1, Windows): after a minimize and restore, the parts of the window that did not change show as transparent until they repaint. Slint fixes this in [slint#13568](https://github.com/slint-ui/slint/pull/13568), which is not in a release yet. Upgrade to the first release that has it (expected 1.18.2), then remove this line.
+- Backport (Slint 1.18.1, Windows): after a minimize and restore, Slint 1.18.1 repaints only the parts of the window that changed, and the rest shows as transparent ([slint#13537](https://github.com/slint-ui/slint/issues/13537)). The fix is [slint#13568](https://github.com/slint-ui/slint/pull/13568), which is not in a release yet. `third_party/i-slint-backend-winit` is `i-slint-backend-winit` 1.18.1 with that fix applied, and the root `Cargo.toml` patches it in. When a release has the fix (expected 1.18.2), upgrade and remove the backport and this line ([mollohq/mello#159](https://github.com/mollohq/mello/issues/159)).
 - Do not add `renderer-software` or `renderer-femtovg`. They add binary size and never run.
 
 ### 3.2 Opaque windows on macOS

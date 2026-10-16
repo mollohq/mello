@@ -18,6 +18,8 @@ members = [
     "tools/e2e",
     "tools/voice-gate",
 ]
+# Vendored upstream code. It is not ours to lint or format.
+exclude = ["third_party/i-slint-backend-winit"]
 default-members = [
     "build-stamp",
     "client",
@@ -39,6 +41,13 @@ serde_json = "1"
 log = "0.4"
 thiserror = "1"
 reqwest = { version = "0.12", features = ["json"] }
+
+# Slint 1.18.1 on Windows leaves the window transparent after a minimize and
+# restore (slint-ui/slint#13537). This is i-slint-backend-winit 1.18.1 with the
+# upstream fix (slint-ui/slint#13568) applied. Remove it when Slint 1.18.2 ships
+# with the fix: mollohq/mello#159.
+[patch.crates-io]
+i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }
 
 [profile.release]
 lto = "thin"
