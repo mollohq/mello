@@ -953,6 +953,17 @@ as with a pulled cable. `MELLO_TEST_ICE` (comma-separated URLs) gives the
 client's voice peer ICE servers; the log line `ICE selected pair` shows the
 pair that carries the call. The measured table is in spec 10 section 7.6.
 
+### Member volume
+
+Unit tests run in `cargo test --workspace`:
+
+| What | Where |
+|---|---|
+| Percent to gain, the local mute (gain 0.0, the volume stays), the 0..200 % clamp, no entry at the default, the value sent again when a member appears again, the table survives a leave | `client/src/member_audio.rs` |
+| The popover: 70 %, mute, unmute back at 70 %, reset to 100 %, Escape; your own row has no control; the popover closes when its member leaves; the value goes to libmello again when the member comes back and after a rejoin | `client/src/flow_tests.rs` |
+| The e2e state port reports `volume` and `local_muted` for each voice member | `client/src/e2e_state.rs` (`e2e` feature) |
+| libmello stores and clamps the gain | `mello-core/src/client/voice.rs` (`peer_volume_command_reaches_libmello`) |
+
 ### Stream membership and ICE-TCP (stage 6b)
 
 Unit tests run in `cargo test --workspace` and in libmello `ctest`:

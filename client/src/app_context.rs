@@ -40,6 +40,9 @@ pub struct AppContext {
     pub call_speaking: Rc<RefCell<HashMap<String, bool>>>,
     /// True while in a voice call over the SFU.
     pub in_sfu_call: Rc<Cell<bool>>,
+    /// Volume and local mute of each voice member, for this user only. In
+    /// memory for the life of the app; a restart clears it.
+    pub member_audio: Rc<RefCell<crate::member_audio::MemberAudioTable>>,
     pub new_crew_avatar_b64: Arc<Mutex<Option<String>>>,
     pub crew_settings_avatar_b64: Arc<Mutex<Option<String>>>,
     pub invited_users: Rc<RefCell<InvitedUserList>>,
@@ -152,6 +155,7 @@ impl AppContext {
             active_voice_channel: Rc::new(RefCell::new(String::new())),
             call_speaking: Rc::new(RefCell::new(HashMap::new())),
             in_sfu_call: Rc::new(Cell::new(false)),
+            member_audio: Rc::new(RefCell::new(Default::default())),
             new_crew_avatar_b64: Arc::new(Mutex::new(None)),
             crew_settings_avatar_b64: Arc::new(Mutex::new(None)),
             invited_users: Rc::new(RefCell::new(Vec::new())),
@@ -212,6 +216,7 @@ impl Clone for AppContext {
             active_voice_channel: self.active_voice_channel.clone(),
             call_speaking: self.call_speaking.clone(),
             in_sfu_call: self.in_sfu_call.clone(),
+            member_audio: self.member_audio.clone(),
             new_crew_avatar_b64: self.new_crew_avatar_b64.clone(),
             crew_settings_avatar_b64: self.crew_settings_avatar_b64.clone(),
             invited_users: self.invited_users.clone(),

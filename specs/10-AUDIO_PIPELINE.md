@@ -695,7 +695,7 @@ Controls added with the NetEQ playout (section 5.3):
 
 | Control | C API | mello-core | Client |
 |---|---|---|---|
-| Per-member volume | `mello_voice_set_peer_volume` | `Command::SetPeerVolume { peer_id, volume }` -> `VoiceManager::set_peer_volume` | Not exposed yet (member context menu, follow-up) |
+| Per-member volume | `mello_voice_set_peer_volume` | `Command::SetPeerVolume { peer_id, volume }` -> `VoiceManager::set_peer_volume` | The member volume popover in the crew panel (spec 01 section 4.1). `peer_id` is the user id. A local mute sends 0.0. |
 | Per-member pan | `mello_voice_set_peer_pan` | none (centre) | none |
 | Peer left | `mello_voice_remove_peer` | `VoiceManager::on_member_left`, SFU `MemberLeft`, SFU slot release (`handle_control_text`) | - |
 

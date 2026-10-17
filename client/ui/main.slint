@@ -26,6 +26,7 @@ import {
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { StreamSourceMenu } from "panels/stream_source_menu.slint";
+import { MemberVolumePopover } from "panels/member_volume_popover.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
@@ -211,6 +212,14 @@ export component MainWindow inherits Window {
     in property <bool> voice-link-stalled: false;
     in property <string> voice-channel-name: "";
     in property <[VoiceChannelData]> voice-channels: [];
+    // The volume popover of one voice member. `volume-member-id` is empty
+    // when it is closed. The row sets the four values when it opens the
+    // popover. Rust keeps `volume-member` up to date and closes the
+    // popover when the member leaves `volume-member-channel-id`.
+    in-out property <string> volume-member-id: "";
+    in-out property <string> volume-member-channel-id: "";
+    in-out property <VoiceChannelMember> volume-member;
+    in-out property <length> volume-member-anchor-y: 0px;
     in-out property <bool> mic-permission-granted: true;
     in-out property <bool> mic-permission-denied: false;
     in property <bool> can-manage-channels: false;
@@ -617,6 +626,10 @@ export component MainWindow inherits Window {
     // Voice channel callbacks
     callback join-voice-channel(string);
     callback toggle-voice-channel(string);
+    // The volume popover: user id and percent (0..200), user id and the
+    // local mute. Rust stores the value and sends SetPeerVolume.
+    callback member-volume-changed(string, int);
+    callback member-local-mute-changed(string, bool);
     callback create-voice-channel(/* name */ string);
     callback request-mic-permission();
     callback open-mic-settings();
@@ -903,6 +916,13 @@ export component MainWindow inherits Window {
                 can-manage: root.can-manage-channels;
                 voice-reconnecting: root.voice-reconnecting || root.voice-link-stalled;
                 local-user-id: root.user-id;
+                volume-member-id: root.volume-member-id;
+                member-volume-requested(m, ch, y) => {
+                    root.volume-member = m;
+                    root.volume-member-channel-id = ch;
+                    root.volume-member-anchor-y = y;
+                    root.volume-member-id = m.id;
+                }
                 crew-selected(id) => {
                     root.show-discover = false;
                     root.select-crew(id);
@@ -1816,6 +1836,44 @@ export component MainWindow inherits Window {
         }
         kick-member(id) => {
             root.crew-settings-kick-member(id);
+        }
+    }
+
+    // ===================== MEMBER VOLUME POPOVER =====================
+    // To the right of the 240 px sidebar, over the feed, with its top 12 px
+    // above the row. Near the bottom of the window it moves up. Only over
+    // the app: a sign-in screen after a lost session does not show it.
+    if root.logged-in && root.volume-member-id != "": Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the popover closes it)
+            clicked => {
+                root.volume-member-id = "";
+            }
+        }
+
+        MemberVolumePopover {
+            x: 240px + Theme.gap;
+            y: max(8px, min(root.volume-member-anchor-y - 12px, root.height - self.height - 8px));
+            name: root.volume-member.name;
+            initials: root.volume-member.initials;
+            avatar: root.volume-member.avatar;
+            has-avatar: root.volume-member.has-avatar;
+            volume: root.volume-member.volume;
+            local-muted: root.volume-member.local-muted;
+            volume-changed(v) => {
+                root.member-volume-changed(root.volume-member-id, v);
+            }
+            local-mute-changed(m) => {
+                root.member-local-mute-changed(root.volume-member-id, m);
+            }
+            close-requested => {
+                root.volume-member-id = "";
+            }
         }
     }
 

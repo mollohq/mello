@@ -31,6 +31,7 @@ mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
+mod member_audio;
 mod notifications;
 mod onboarding;
 mod onboarding_invite;
@@ -559,6 +560,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         active_voice_channel: Rc::new(RefCell::new(String::new())),
         call_speaking: Rc::new(RefCell::new(std::collections::HashMap::new())),
         in_sfu_call: Rc::new(std::cell::Cell::new(false)),
+        member_audio: Rc::new(RefCell::new(Default::default())),
         new_crew_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         crew_settings_avatar_b64: std::sync::Arc::new(std::sync::Mutex::new(None)),
         invited_users: Rc::new(RefCell::new(Vec::new())),

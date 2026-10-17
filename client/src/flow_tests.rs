@@ -5051,3 +5051,223 @@ fn a_second_invite_link_copy_shows_copied_again() {
     next_frame();
     assert!(invite_shows_copied(&h), "the second copy shows Copied");
 }
+
+// ---------------------------------------------------------------------------
+// Member volume (crew panel popover, for this user only)
+// ---------------------------------------------------------------------------
+
+/// In an SFU call in Squad with bob, the crew panel on screen.
+fn in_squad_with_bob_on_screen(h: &mut Harness) {
+    use crate::CrewData;
+
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app()
+        .set_crews(slint::ModelRc::new(slint::VecModel::from(vec![CrewData {
+            id: "crew-1".into(),
+            name: "Crew".into(),
+            ..Default::default()
+        }])));
+    in_squad_with_bob(h, VoiceMode::SFU);
+    next_frame();
+}
+
+/// The gains of the `SetPeerVolume` commands, as (peer, gain).
+fn peer_volumes(h: &mut Harness) -> Vec<(String, f32)> {
+    h.commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::SetPeerVolume { peer_id, volume } => Some((peer_id, volume)),
+            _ => None,
+        })
+        .collect()
+}
+
+/// The volume and the local mute of `member` on its row in Squad.
+fn squad_member_audio(h: &Harness, member: &str) -> (i32, bool) {
+    let m = h
+        .app()
+        .get_voice_channels()
+        .iter()
+        .filter(|ch| ch.id == "ch-squad")
+        .flat_map(|ch| ch.members.iter().collect::<Vec<_>>())
+        .find(|m| m.id == member)
+        .unwrap_or_else(|| panic!("no {member:?} in Squad"));
+    (m.volume, m.local_muted)
+}
+
+/// Open the volume popover for `member` with its speaker glyph.
+fn open_volume_popover(h: &mut Harness, member: &str) {
+    h.click_label(&format!("Volume for {member}"));
+    next_frame();
+    assert_eq!(
+        h.app().get_volume_member_id(),
+        member,
+        "the popover is open"
+    );
+}
+
+fn volume_slider(h: &Harness, member: &str) -> ElementHandle {
+    h.controls_labelled(&format!("Volume for {member}"))
+        .into_iter()
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Slider))
+        .expect("the volume slider of the popover")
+}
+
+/// ★ The popover journey: 70 %, mute, unmute back at 70 %, reset to 100 %.
+/// Each step sends the gain for bob's user id and shows on his row.
+#[test]
+fn the_member_volume_popover_sets_mutes_unmutes_and_resets() {
+    let mut h = Harness::new();
+    in_squad_with_bob_on_screen(&mut h);
+    assert_eq!(squad_member_audio(&h, "u-bob"), (100, false));
+
+    open_volume_popover(&mut h, "u-bob");
+    assert!(
+        !h.controls_labelled("Mute u-bob for you").is_empty(),
+        "the mute switch is in the popover"
+    );
+
+    volume_slider(&h, "u-bob").set_accessible_value("70");
+    h.pump();
+    assert_eq!(peer_volumes(&mut h), vec![("u-bob".to_string(), 0.7)]);
+    assert_eq!(squad_member_audio(&h, "u-bob"), (70, false));
+    assert_eq!(
+        h.app().get_volume_member().volume,
+        70,
+        "the popover shows it"
+    );
+
+    h.click_label("Mute u-bob for you");
+    assert_eq!(peer_volumes(&mut h), vec![("u-bob".to_string(), 0.0)]);
+    assert_eq!(
+        squad_member_audio(&h, "u-bob"),
+        (70, true),
+        "the volume stays"
+    );
+    assert!(h.app().get_volume_member().local_muted);
+
+    h.click_label("Mute u-bob for you");
+    assert_eq!(
+        peer_volumes(&mut h),
+        vec![("u-bob".to_string(), 0.7)],
+        "unmute returns to 70 %"
+    );
+    assert_eq!(squad_member_audio(&h, "u-bob"), (70, false));
+
+    h.click_label("Reset volume to 100%");
+    assert_eq!(peer_volumes(&mut h), vec![("u-bob".to_string(), 1.0)]);
+    assert_eq!(squad_member_audio(&h, "u-bob"), (100, false));
+
+    press_escape(&mut h);
+    assert_eq!(h.app().get_volume_member_id(), "", "Escape closes it");
+}
+
+/// Your own row has no volume control, and a request for your own id
+/// sends nothing.
+#[test]
+fn your_own_row_has_no_volume_control() {
+    let mut h = Harness::new();
+    in_squad_with_bob_on_screen(&mut h);
+
+    assert!(
+        !h.controls_labelled("Volume for u-bob").is_empty(),
+        "another member has the control"
+    );
+    assert!(
+        h.controls_labelled("Volume for u-me").is_empty(),
+        "the local user has none"
+    );
+
+    h.app().invoke_member_volume_changed("u-me".into(), 50);
+    h.app()
+        .invoke_member_local_mute_changed("u-me".into(), true);
+    assert!(peer_volumes(&mut h).is_empty());
+    assert_eq!(squad_member_audio(&h, "u-me"), (100, false));
+}
+
+/// The popover closes when its member leaves the channel.
+#[test]
+fn the_volume_popover_closes_when_the_member_leaves() {
+    use mello_core::crew_state::VoiceMember;
+
+    let mut h = Harness::new();
+    in_squad_with_bob_on_screen(&mut h);
+    open_volume_popover(&mut h, "u-bob");
+
+    h.emit(Event::VoiceUpdated {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        members: vec![VoiceMember {
+            user_id: "u-me".into(),
+            username: "me".into(),
+            ..Default::default()
+        }],
+    });
+    assert_eq!(h.app().get_volume_member_id(), "");
+}
+
+/// ★ The stored value goes to libmello again when bob's peer appears
+/// again: he leaves and comes back, and you leave and join again. The table
+/// survives your leave.
+#[test]
+fn a_stored_member_volume_is_sent_again_when_the_member_comes_back() {
+    let mut h = Harness::new();
+    in_squad_with_bob_on_screen(&mut h);
+    h.app().invoke_member_volume_changed("u-bob".into(), 70);
+    assert_eq!(peer_volumes(&mut h), vec![("u-bob".to_string(), 0.7)]);
+
+    h.emit(squad_update_with_bob_speaking(false));
+    assert!(
+        peer_volumes(&mut h).is_empty(),
+        "bob stays: nothing to send"
+    );
+
+    // bob leaves and comes back.
+    h.emit(Event::VoiceUpdated {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        members: vec![mello_core::crew_state::VoiceMember {
+            user_id: "u-me".into(),
+            username: "me".into(),
+            ..Default::default()
+        }],
+    });
+    h.emit(squad_update_with_bob_speaking(false));
+    assert_eq!(peer_volumes(&mut h), vec![("u-bob".to_string(), 0.7)]);
+    assert_eq!(squad_member_audio(&h, "u-bob"), (70, false));
+
+    // You leave the channel and join it again.
+    h.emit(Event::VoiceStateChanged {
+        in_call: false,
+        transport: VoiceMode::Disconnected,
+    });
+    assert!(peer_volumes(&mut h).is_empty());
+    h.emit(Event::VoiceJoined {
+        crew_id: "crew-1".into(),
+        channel_id: "ch-squad".into(),
+        members: vec![
+            mello_core::crew_state::VoiceMember {
+                user_id: "u-me".into(),
+                username: "me".into(),
+                ..Default::default()
+            },
+            mello_core::crew_state::VoiceMember {
+                user_id: "u-bob".into(),
+                username: "bob".into(),
+                ..Default::default()
+            },
+        ],
+    });
+    assert_eq!(
+        peer_volumes(&mut h),
+        vec![("u-bob".to_string(), 0.7)],
+        "the rejoin sends the stored value"
+    );
+    assert_eq!(
+        squad_member_audio(&h, "u-bob"),
+        (70, false),
+        "the leave kept it"
+    );
+}

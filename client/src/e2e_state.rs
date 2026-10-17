@@ -313,10 +313,17 @@ struct VoiceChannelSnap {
 
 #[derive(Serialize)]
 struct VoiceMemberSnap {
+    /// The user id. The member volume popover is keyed by it.
+    id: String,
     name: String,
     speaking: bool,
+    /// The member muted their own mic (server state).
     muted: bool,
     deafened: bool,
+    /// The playback volume of this member for this user, 0 to 200 (%).
+    volume: i32,
+    /// This user muted the member for themselves only.
+    local_muted: bool,
 }
 
 /// The microphone permission, as the state port reports it, from the two UI
@@ -681,10 +688,13 @@ fn read(app: &MainWindow) -> Snapshot {
                     .members
                     .iter()
                     .map(|m| VoiceMemberSnap {
+                        id: m.id.to_string(),
                         name: m.name.to_string(),
                         speaking: m.speaking,
                         muted: m.muted,
                         deafened: m.deafened,
+                        volume: m.volume,
+                        local_muted: m.local_muted,
                     })
                     .collect(),
             })
@@ -965,6 +975,47 @@ mod tests {
         assert_eq!(s["riot"], json!({"linked": true, "id": "alice#EUW"}));
         assert_eq!(s["update_available"], true);
         assert_eq!(s["app_version"], "v1.2.3");
+    }
+
+    /// The QA harness asserts the member volume and the local mute.
+    #[test]
+    fn the_snapshot_reads_the_member_volume_and_local_mute() {
+        let h = Harness::new();
+        let app = h.app();
+        app.set_voice_channels(model(vec![crate::VoiceChannelData {
+            id: "ch-1".into(),
+            name: "General".into(),
+            active: true,
+            members: model(vec![
+                crate::VoiceChannelMember {
+                    id: "u-bob".into(),
+                    name: "bob".into(),
+                    muted: true,
+                    deafened: true,
+                    volume: 70,
+                    ..Default::default()
+                },
+                crate::VoiceChannelMember {
+                    id: "u-eve".into(),
+                    name: "eve".into(),
+                    volume: 100,
+                    local_muted: true,
+                    ..Default::default()
+                },
+            ]),
+            ..Default::default()
+        }]));
+
+        let s = snapshot_json(app);
+        assert_eq!(
+            s["voice_channels"][0]["members"],
+            json!([
+                {"id": "u-bob", "name": "bob", "speaking": false, "muted": true,
+                 "deafened": true, "volume": 70, "local_muted": false},
+                {"id": "u-eve", "name": "eve", "speaking": false, "muted": false,
+                 "deafened": false, "volume": 100, "local_muted": true},
+            ])
+        );
     }
 
     #[test]
