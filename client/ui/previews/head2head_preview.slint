@@ -1,0 +1,240 @@
+// Design-time preview for the head2head feed cards. Static demo data.
+// Matches mello-backlog mockups/cold-start-full-flow.html frames 4 and 5.
+//
+//   slint-viewer --screenshot out.png --component PreviewDayOneAlone \
+//     client/ui/previews/head2head_preview.slint
+//   slint-viewer --screenshot out.png --component PreviewDayOnePlaying \
+//     client/ui/previews/head2head_preview.slint
+
+import { Theme } from "../theme.slint";
+import { CutShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { GameBadge } from "../components/game_badge.slint";
+import { Head2headCardWide, Head2headCell } from "../components/head2head.slint";
+
+// Same frame as CrewFeed: 20px side padding, 16px top, 12px gaps, 232px rows.
+component FeedLabel inherits Text {
+    font-family: Theme.font-label;
+    font-size: 10px;
+    font-weight: Theme.weight-label;
+    letter-spacing: Theme.track-label;
+    color: Theme.text-dim;
+}
+
+component FeedCard inherits Rectangle {
+    in property <string> corner: "tr";
+    in property <color> fill-color: Theme.card-bg;
+    background: transparent;
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: root.corner; fill: Theme.card-border; }
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: root.corner; inset: Theme.keyline; fill: root.fill-color; }
+    @children
+}
+
+component JoinedRow inherits Rectangle {
+    height: 32px;
+    HorizontalLayout {
+        padding-left: 2px; padding-right: 2px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+        UserAvatar { initials: "B"; size: 20px; color-index: 0; bg-color: Theme.bg-app; }
+        Text { text: "b0bben"; font-family: Theme.font-body; font-size: 13px; font-weight: Theme.weight-sentence; color: Theme.text-primary; }
+        Text { text: "joined"; font-family: Theme.font-body; font-size: 13px; font-weight: Theme.weight-sentence; color: Theme.text-dim; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: "TODAY 20:45"; font-family: Theme.font-label; font-size: 9.5px; font-weight: Theme.weight-label; letter-spacing: Theme.track-kicker; color: Theme.text-tertiary; }
+    }
+}
+
+component GameRow inherits Rectangle {
+    in property <string> mono;
+    in property <string> name;
+    in property <string> detail;
+    in property <color> hue;
+    height: 36px;
+    HorizontalLayout {
+        spacing: 12px;
+        cross-axis-alignment: center;
+        GameBadge { short-name: root.mono; bg-color: root.hue; size: 36px; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.name; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+            Text { text: root.detail; font-family: Theme.font-label; font-size: 9px; font-weight: Theme.weight-label; letter-spacing: Theme.track-label; color: Theme.text-dim; }
+        }
+        Text { text: "TRACKED"; font-family: Theme.font-label; font-size: 8.5px; font-weight: Theme.weight-label; letter-spacing: 1.4px; color: Theme.text-primary; }
+    }
+}
+
+component RecentGamesCard inherits FeedCard {
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 12px;
+        alignment: start;
+        HorizontalLayout {
+            FeedLabel { text: "RECENT GAMES"; }
+            Rectangle { horizontal-stretch: 1; }
+            FeedLabel { text: "FROM THIS PC"; color: Theme.text-tertiary; }
+        }
+        GameRow { mono: "CS"; name: "Counter-Strike 2"; detail: "4,167 H"; hue: Theme.id-blue; }
+        GameRow { mono: "NS"; name: "Night Stones"; detail: "12.6 H"; hue: Theme.id-teal; }
+        GameRow { mono: "RL"; name: "Rocket League"; detail: "EPIC"; hue: Theme.id-purple; }
+    }
+}
+
+component NowPlayingCard inherits FeedCard {
+    corner: "br";
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            Rectangle { width: 6px; height: 6px; border-radius: 3px; background: Theme.live; }
+            FeedLabel { text: "NOW PLAYING"; color: Theme.live; }
+        }
+        Rectangle {
+            height: 96px;
+            Rectangle { background: Theme.id-blue.darker(0.45); }
+            Text {
+                text: "CS";
+                font-family: Theme.font-display;
+                font-size: 30px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.id-blue;
+            }
+        }
+        Text { text: "Counter-Strike 2"; font-family: Theme.font-display; font-size: 14px; font-weight: Theme.weight-display; color: Theme.text-value; }
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            UserAvatar { initials: "B"; size: 20px; color-index: 0; }
+            Text { text: "b0bben · 12 min"; font-family: Theme.font-body; font-size: 12px; font-weight: Theme.weight-sentence; color: Theme.text-body; }
+        }
+        Rectangle { vertical-stretch: 1; }
+        FeedLabel { text: "LIVE"; color: Theme.text-tertiary; }
+    }
+}
+
+component SteamHistoryCard inherits FeedCard {
+    corner: "br";
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 10px;
+        HorizontalLayout {
+            FeedLabel { text: "STEAM HISTORY"; }
+            Rectangle { horizontal-stretch: 1; }
+            FeedLabel { text: "FROM THIS PC"; color: Theme.text-tertiary; }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            cross-axis-alignment: center;
+            GameBadge { short-name: "CS"; bg-color: Theme.id-blue; size: 36px; }
+            VerticalLayout {
+                Text { text: "Counter-Strike 2"; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-value; }
+                Text { text: "4.6 h"; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; }
+            }
+        }
+        Text { text: "In the last two weeks"; font-family: Theme.font-body; font-size: 11px; font-weight: Theme.weight-sentence; color: Theme.text-dim; }
+        Rectangle { vertical-stretch: 1; }
+        FeedLabel { text: "BEFORE YOU JOINED"; color: Theme.text-tertiary; }
+    }
+}
+
+component VoiceClipSkeleton inherits Rectangle {
+    background: transparent;
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: "bl"; fill: Theme.card-border; }
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: "bl"; inset: Theme.keyline; fill: Theme.card-bg-skel; }
+    VerticalLayout {
+        alignment: center;
+        spacing: 6px;
+        HorizontalLayout {
+            alignment: center;
+            spacing: 3px;
+            height: 40px;
+            for h in [0.2, 0.5, 0.8, 0.6, 1.0, 0.4, 0.7, 0.3, 0.85, 0.55, 0.25, 0.65, 1.0, 0.45, 0.7, 0.35, 0.6, 0.8, 0.4, 0.5]: Rectangle {
+                width: 3px;
+                Rectangle {
+                    width: parent.width;
+                    height: 40px * h;
+                    y: (parent.height - self.height) / 2;
+                    background: Theme.skel-element;
+                }
+            }
+        }
+        Text { text: "Voice clips land here"; font-family: Theme.font-body; font-size: 12px; font-weight: 500; color: Theme.skel-text; horizontal-alignment: center; }
+        Text { text: "Funny moment in voice? Clip it."; font-family: Theme.font-body; font-size: 11px; font-weight: Theme.weight-sentence; color: Theme.skel-hint; horizontal-alignment: center; }
+    }
+}
+
+/// Day one, 20:45, alone. The wide slot holds Head2head.
+export component PreviewDayOneAlone inherits Window {
+    width: 960px;
+    height: 520px;
+    background: Theme.bg-app;
+    // Three equal columns, 12px gap, 20px side padding, as in CrewFeed.
+    property <length> cw: (self.width - 40px - 24px) / 3;
+
+    VerticalLayout {
+        padding-top: 16px; padding-bottom: 20px;
+        padding-left: 20px; padding-right: 20px;
+        spacing: 12px;
+        alignment: start;
+
+        JoinedRow { }
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            Head2headCardWide {
+                width: root.cw * 2 + 12px;
+                member-name: "b0bben";
+                member-initials: "B";
+                hue: Theme.id-blue;
+                hue-index: 0;
+                carry-value: "4,167"; carry-unit: "h";
+                owl-value: "03:14";
+                guard-value: "2003";
+                locked-value: "4.6"; locked-unit: "h";
+            }
+            RecentGamesCard { width: root.cw; }
+        }
+        VoiceClipSkeleton { height: 150px; }
+    }
+}
+
+/// Day one, 21:30, alone and playing. Head2head has shrunk to a cell.
+export component PreviewDayOnePlaying inherits Window {
+    width: 960px;
+    height: 560px;
+    background: Theme.bg-app;
+    // Three equal columns, 12px gap, 20px side padding, as in CrewFeed.
+    property <length> cw: (self.width - 40px - 24px) / 3;
+
+    VerticalLayout {
+        padding-top: 16px; padding-bottom: 20px;
+        padding-left: 20px; padding-right: 20px;
+        spacing: 12px;
+        alignment: start;
+
+        JoinedRow { }
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            NowPlayingCard { width: root.cw; }
+            Head2headCell {
+                width: root.cw;
+                hue: Theme.id-blue;
+                carry-value: "4,167"; carry-unit: "h";
+                owl-value: "03:14";
+                guard-value: "2003";
+                locked-value: "4.6"; locked-unit: "h";
+            }
+            SteamHistoryCard { width: root.cw; }
+        }
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            RecentGamesCard { width: root.cw; }
+            VoiceClipSkeleton { width: root.cw * 2 + 12px; }
+        }
+    }
+}
