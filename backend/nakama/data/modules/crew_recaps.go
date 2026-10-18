@@ -108,10 +108,20 @@ type RecapAward struct {
 }
 
 type WeeklyRecapData struct {
-	CrewID            string        `json:"crew_id"`
-	WeekStart         int64         `json:"week_start"`
-	WeekEnd           int64         `json:"week_end"`
-	TotalHangoutMin   int           `json:"total_hangout_min"`
+	CrewID    string `json:"crew_id"`
+	WeekStart int64  `json:"week_start"`
+	WeekEnd   int64  `json:"week_end"`
+	// Voice plus stream minutes only (CLIPS.md 10.1). Game time is separate.
+	TotalHangoutMin int `json:"total_hangout_min"`
+	// Game session minutes, counted by reportableMinutes so the recap agrees
+	// with the Crew play card.
+	TotalGameMin int `json:"total_game_min"`
+	// TotalMin is TotalHangoutMin + TotalGameMin: the figure the card leads with.
+	// Recaps stored before this field existed have 0 here; fall back to
+	// TotalHangoutMin.
+	TotalMin int `json:"total_min"`
+	// Voice, stream and game sessions in the week.
+	SessionCount      int           `json:"session_count"`
 	TopGame           string        `json:"top_game"`
 	LongestSession    string        `json:"longest_session"`
 	LongestSessionMin int           `json:"longest_session_min"`
@@ -128,6 +138,14 @@ type WeeklyRecapData struct {
 	GeneratedAt    int64             `json:"generated_at"`
 }
 
+// isEmptyRecap reports whether a recap has nothing to show: no hangout or game
+// minutes, no sessions and no clips. The weekly job skips these, and the feed
+// hides any already stored.
+func isEmptyRecap(r WeeklyRecapData) bool {
+	return r.TotalHangoutMin == 0 && r.TotalGameMin == 0 && r.TotalMin == 0 &&
+		r.SessionCount == 0 && r.ClipCount == 0
+}
+
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
 	ledger, _ := readLedger(ctx, nk, crewID)
 
@@ -136,6 +154,8 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	startMs := weekStart.UnixMilli()
 
 	var totalHangoutMin int
+	var totalGameMin int
+	sessionCount := 0
 	gameDurations := make(map[string]int)
 	actorActivity := make(map[string]int)
 	actorClips := make(map[string]int)
@@ -166,6 +186,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		case "voice_session":
 			var d VoiceSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
 			totalHangoutMin += d.DurationMin
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
@@ -175,6 +196,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		case "stream_session":
 			var d StreamSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
 			totalHangoutMin += d.DurationMin
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
@@ -184,6 +206,8 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		case "game_session":
 			var d GameSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
+			totalGameMin += reportableMinutes(d.DurationMin, d.ActiveMin)
 			gameDurations[d.GameName] += d.DurationMin
 			matches := d.Wins + d.Losses + d.Draws
 			if matches > 0 {
@@ -235,6 +259,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		WeekStart:         startMs,
 		WeekEnd:           weekEnd.UnixMilli(),
 		TotalHangoutMin:   totalHangoutMin,
+		TotalGameMin:      totalGameMin,
+		TotalMin:          totalHangoutMin + totalGameMin,
+		SessionCount:      sessionCount,
 		TopGame:           topGame,
 		LongestSession:    longestSessionDesc,
 		LongestSessionMin: longestSessionMin,
@@ -248,6 +275,11 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		BestStreak:        bestStreak,
 		BestStreakName:    bestStreakName,
 		GeneratedAt:       time.Now().UnixMilli(),
+	}
+
+	if isEmptyRecap(recap) {
+		logger.Debug("Weekly recap skipped for crew %s: no activity", crewID)
+		return
 	}
 
 	if err := AppendRecap(ctx, nk, crewID, recap); err != nil {

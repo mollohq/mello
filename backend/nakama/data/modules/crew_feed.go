@@ -633,6 +633,21 @@ func freshClipHeroIndex(cards []feedCard, nowMs int64) int {
 	return best
 }
 
+// dropEmptyRecapCards removes recap cards whose recap has no activity, so an
+// empty week is never offered as a hero or recap slot.
+func dropEmptyRecapCards(cards []feedCard) []feedCard {
+	out := make([]feedCard, 0, len(cards))
+	for _, c := range cards {
+		if c.feedType == "recap" {
+			if r, ok := c.data.(WeeklyRecapData); ok && isEmptyRecap(r) {
+				continue
+			}
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 // buildThisWeek curates the recent feed: hero (fresh clip premiere, else best
 // session-preview), the latest recap, then diversity+priority fillers capped
 // at feedFillerSlots with the wide-slot promotion. Pure given its inputs.
@@ -646,6 +661,8 @@ func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 	if rollup, ok := buildGameRollup(pruned); ok {
 		cards = append(cards, rollup)
 	}
+
+	cards = dropEmptyRecapCards(cards)
 
 	used := make([]bool, len(cards))
 	entries := make([]FeedEntry, 0, feedFillerSlots+2)
@@ -746,7 +763,7 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
 	for _, r := range recapsDoc.Recaps {
-		if r.WeekStart == shownRecapWeekStart {
+		if r.WeekStart == shownRecapWeekStart || isEmptyRecap(r) {
 			continue
 		}
 		entries = append(entries, FeedEntry{
