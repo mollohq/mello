@@ -40,15 +40,15 @@ export component TitleChip inherits Rectangle {
 
     // Full size: icon on the left, title over number.
     if !root.compact: HorizontalLayout {
-        padding-left: 12px; padding-right: 14px;
-        spacing: 10px;
+        padding-left: 9px; padding-right: 6px;
+        spacing: 7px;
         cross-axis-alignment: center;
 
         Image {
             source: root.icon;
             colorize: root.hue;
-            width: 22px;
-            height: 22px;
+            width: 20px;
+            height: 20px;
         }
         VerticalLayout {
             alignment: center;
@@ -56,11 +56,11 @@ export component TitleChip inherits Rectangle {
             Text {
                 text: root.title.to-uppercase();
                 font-family: Theme.font-label;
-                font-size: 9px;
+                font-size: 8.5px;
                 font-weight: Theme.weight-label;
-                letter-spacing: 1.4px;
+                letter-spacing: 0.8px;
                 color: Theme.text-body;
-                overflow: clip;
+                overflow: elide;
             }
             HorizontalLayout {
                 alignment: start;
@@ -172,8 +172,8 @@ component InviteButton inherits Rectangle {
     accessible-role: button;
     accessible-label: "Invite your crew";
 
-    height: wrap ? 40px : compact ? 30px : 34px;
-    min-width: wrap ? 0px : label.preferred-width + (compact ? 20px : 28px);
+    height: wrap ? 34px : compact ? 30px : 34px;
+    min-width: wrap ? 0px : label.preferred-width + (compact ? 16px : 24px);
 
     CutButton {
         width: parent.width; height: parent.height;
@@ -184,7 +184,7 @@ component InviteButton inherits Rectangle {
         font-family: Theme.font-label;
         font-size: root.compact ? 9px : 10px;
         font-weight: Theme.weight-label;
-        letter-spacing: Theme.track-label;
+        letter-spacing: root.compact ? 1px : Theme.track-label;
         color: Theme.on-confirm;
         width: parent.width; height: parent.height;
         horizontal-alignment: center;
@@ -214,112 +214,7 @@ export component Head2headCardWide inherits Rectangle {
     in property <int> hue-index: 0;
     in property <string> carry-value; in property <string> carry-unit;
     in property <string> owl-value; in property <string> owl-unit;
-    in property <string> guard-value; in property <string> guard-unit;
-    in property <string> locked-value; in property <string> locked-unit;
-
-    background: transparent;
-
-    CutShape {
-        width: parent.width; height: parent.height;
-        n: Theme.notch; corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width; height: parent.height;
-        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
-        fill: Theme.card-bg;
-    }
-
-    VerticalLayout {
-        padding-top: 14px; padding-bottom: 14px;
-        padding-left: 16px; padding-right: 16px;
-        spacing: 10px;
-
-        CardLabel { text: "HEAD2HEAD"; }
-
-        HorizontalLayout {
-            spacing: 20px;
-            vertical-stretch: 1;
-
-            VerticalLayout {
-                width: 80px;
-                alignment: center;
-                spacing: 8px;
-
-                Rectangle {
-                    height: 64px;
-                    UserAvatar {
-                        x: (parent.width - self.width) / 2;
-                        initials: root.member-initials;
-                        color-index: root.hue-index;
-                        size: 64px;
-                    }
-                }
-                Text {
-                    text: root.member-name;
-                    font-family: Theme.font-display;
-                    font-size: 16px;
-                    font-weight: Theme.weight-display-bold;
-                    color: Theme.text-value;
-                    horizontal-alignment: center;
-                    overflow: elide;
-                }
-            }
-
-            VerticalLayout {
-                horizontal-stretch: 1;
-                alignment: center;
-                spacing: 8px;
-
-                HorizontalLayout {
-                    spacing: 8px;
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-old-guard.svg"); title: "Old Guard"; value: root.guard-value; unit: root.guard-unit; }
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
-                }
-            }
-
-            Rectangle { width: Theme.keyline; background: Theme.card-border; }
-
-            VerticalLayout {
-                width: 156px;
-                alignment: center;
-                spacing: 10px;
-
-                Text {
-                    text: "NOBODY TO COMPARE WITH YET";
-                    font-family: Theme.font-label;
-                    font-size: 9.5px;
-                    font-weight: Theme.weight-label;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-primary;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: 10px;
-                    alignment: start;
-                    OpenSeat { size: 40px; }
-                    OpenSeat { size: 40px; }
-                    OpenSeat { size: 40px; }
-                }
-                InviteButton { clicked => { root.invite-clicked(); } }
-            }
-        }
-    }
-}
-
-/// Standard cell (one column). Left: the four titles, two by two, small.
-/// Right: the open seats, with the invite button under them.
-export component Head2headCell inherits Rectangle {
-    callback invite-clicked();
-    in property <color> hue: Theme.id-blue;
-    in property <string> carry-value; in property <string> carry-unit;
-    in property <string> owl-value; in property <string> owl-unit;
-    in property <string> guard-value; in property <string> guard-unit;
+    in property <string> collector-value; in property <string> collector-unit;
     in property <string> locked-value; in property <string> locked-unit;
 
     background: transparent;
@@ -347,42 +242,141 @@ export component Head2headCell inherits Rectangle {
             vertical-stretch: 1;
 
             VerticalLayout {
-                horizontal-stretch: 1;
+                width: 56px;
                 alignment: center;
-                spacing: 6px;
+                spacing: 8px;
 
-                HorizontalLayout {
-                    spacing: 6px;
-                    TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
-                    TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
+                Rectangle {
+                    height: 48px;
+                    UserAvatar {
+                        x: (parent.width - self.width) / 2;
+                        initials: root.member-initials;
+                        color-index: root.hue-index;
+                        size: 48px;
+                    }
                 }
-                HorizontalLayout {
-                    spacing: 6px;
-                    TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-old-guard.svg"); title: "Old Guard"; value: root.guard-value; unit: root.guard-unit; }
-                    TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
+                Text {
+                    text: root.member-name;
+                    font-family: Theme.font-display;
+                    font-size: 14px;
+                    font-weight: Theme.weight-display-bold;
+                    color: Theme.text-value;
+                    horizontal-alignment: center;
+                    overflow: elide;
                 }
             }
 
             VerticalLayout {
-                width: 80px;
+                horizontal-stretch: 1;
                 alignment: center;
                 spacing: 8px;
 
                 HorizontalLayout {
-                    spacing: 6px;
-                    alignment: start;
-                    for i in [0, 1, 2]: OpenSeat { size: 24px; show-label: false; }
+                    spacing: 8px;
+                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
+                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
                 }
+                HorizontalLayout {
+                    spacing: 8px;
+                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-collector.svg"); title: "The Collector"; value: root.collector-value; unit: root.collector-unit; }
+                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
+                }
+            }
+
+            Rectangle { width: Theme.keyline; background: Theme.card-border; }
+
+            VerticalLayout {
+                width: 112px;
+                alignment: center;
+                spacing: 10px;
+
                 Text {
-                    text: "OPEN";
+                    text: "NOBODY TO COMPARE WITH YET";
                     font-family: Theme.font-label;
-                    font-size: 9px;
+                    font-size: 9.5px;
                     font-weight: Theme.weight-label;
                     letter-spacing: Theme.track-label;
-                    color: Theme.text-dim;
+                    color: Theme.text-primary;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    spacing: 8px;
+                    alignment: start;
+                    OpenSeat { size: 30px; }
+                    OpenSeat { size: 30px; }
+                    OpenSeat { size: 30px; }
                 }
                 InviteButton { compact: true; wrap: true; clicked => { root.invite-clicked(); } }
             }
+        }
+    }
+}
+
+/// Standard cell (one column, 232px at the 760px feed). Title row, the
+/// four titles two by two, then one row: open seats left, invite button
+/// right. Three seats and the button do not fit one line at this width,
+/// so two seats and a "+1" stand for the three.
+export component Head2headCell inherits Rectangle {
+    callback invite-clicked();
+    in property <color> hue: Theme.id-blue;
+    in property <string> carry-value; in property <string> carry-unit;
+    in property <string> owl-value; in property <string> owl-unit;
+    in property <string> collector-value; in property <string> collector-unit;
+    in property <string> locked-value; in property <string> locked-unit;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 10px;
+
+        CardLabel { text: "HEAD2HEAD"; }
+
+        VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 6px;
+
+            HorizontalLayout {
+                spacing: 6px;
+                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
+                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
+            }
+            HorizontalLayout {
+                spacing: 6px;
+                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-collector.svg"); title: "The Collector"; value: root.collector-value; unit: root.collector-unit; }
+                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 6px;
+            cross-axis-alignment: center;
+
+            OpenSeat { size: 24px; show-label: false; }
+            OpenSeat { size: 24px; show-label: false; }
+            Text {
+                text: "+1";
+                font-family: Theme.font-label;
+                font-size: 10px;
+                font-weight: Theme.weight-label;
+                letter-spacing: 1px;
+                color: Theme.text-dim;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            InviteButton { compact: true; clicked => { root.invite-clicked(); } }
         }
     }
 }

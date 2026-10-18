@@ -59,9 +59,8 @@ component GameRow inherits Rectangle {
             alignment: center;
             spacing: 2px;
             Text { text: root.name; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
-            Text { text: root.detail; font-family: Theme.font-label; font-size: 9px; font-weight: Theme.weight-label; letter-spacing: Theme.track-label; color: Theme.text-dim; }
+            Text { text: root.detail + " · TRACKED"; font-family: Theme.font-label; font-size: 9px; font-weight: Theme.weight-label; letter-spacing: Theme.track-label; color: Theme.text-dim; }
         }
-        Text { text: "TRACKED"; font-family: Theme.font-label; font-size: 8.5px; font-weight: Theme.weight-label; letter-spacing: 1.4px; color: Theme.text-primary; }
     }
 }
 
@@ -115,13 +114,13 @@ component NowPlayingCard inherits FeedCard {
     }
 }
 
-component SteamHistoryCard inherits FeedCard {
+component LastPlayedCard inherits FeedCard {
     corner: "br";
     VerticalLayout {
         padding: 14px; padding-left: 16px; padding-right: 16px;
         spacing: 10px;
         HorizontalLayout {
-            FeedLabel { text: "STEAM HISTORY"; }
+            FeedLabel { text: "LAST PLAYED"; }
             Rectangle { horizontal-stretch: 1; }
             FeedLabel { text: "FROM THIS PC"; color: Theme.text-tertiary; }
         }
@@ -168,7 +167,7 @@ component VoiceClipSkeleton inherits Rectangle {
 
 /// Day one, 20:45, alone. The wide slot holds Head2head.
 export component PreviewDayOneAlone inherits Window {
-    width: 960px;
+    width: 760px;
     height: 520px;
     background: Theme.bg-app;
     // Three equal columns, 12px gap, 20px side padding, as in CrewFeed.
@@ -192,7 +191,7 @@ export component PreviewDayOneAlone inherits Window {
                 hue-index: 0;
                 carry-value: "4,167"; carry-unit: "h";
                 owl-value: "03:14";
-                guard-value: "2003";
+                collector-value: "5"; collector-unit: "installed";
                 locked-value: "4.6"; locked-unit: "h";
             }
             RecentGamesCard { width: root.cw; }
@@ -203,7 +202,7 @@ export component PreviewDayOneAlone inherits Window {
 
 /// Day one, 21:30, alone and playing. Head2head has shrunk to a cell.
 export component PreviewDayOnePlaying inherits Window {
-    width: 960px;
+    width: 760px;
     height: 560px;
     background: Theme.bg-app;
     // Three equal columns, 12px gap, 20px side padding, as in CrewFeed.
@@ -225,10 +224,10 @@ export component PreviewDayOnePlaying inherits Window {
                 hue: Theme.id-blue;
                 carry-value: "4,167"; carry-unit: "h";
                 owl-value: "03:14";
-                guard-value: "2003";
+                collector-value: "5"; collector-unit: "installed";
                 locked-value: "4.6"; locked-unit: "h";
             }
-            SteamHistoryCard { width: root.cw; }
+            LastPlayedCard { width: root.cw; }
         }
         HorizontalLayout {
             height: Theme.feed-row;
