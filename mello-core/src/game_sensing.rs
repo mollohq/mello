@@ -174,14 +174,13 @@ impl GameSensor {
     }
 }
 
-/// Tell the client what a library scan found. Fails when the receiver is gone.
-fn announce_library(
-    library: &LibraryIndex,
-    tx: &Sender<GameEvent>,
-) -> Result<(), std::sync::mpsc::SendError<GameEvent>> {
+/// Tell the client what a library scan found. Returns false when the receiver
+/// is gone, which ends the scan loop.
+fn announce_library(library: &LibraryIndex, tx: &Sender<GameEvent>) -> bool {
     tx.send(GameEvent::LibraryScanned {
         entries: library.iter().cloned().collect(),
     })
+    .is_ok()
 }
 
 fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
@@ -191,7 +190,7 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     let mut active: HashMap<u32, ActiveGame> = HashMap::new();
     let mut primary: Option<u32> = None;
     let mut library = LibraryIndex::scan();
-    if announce_library(&library, tx).is_err() {
+    if !announce_library(&library, tx) {
         return;
     }
     let mut scans_since_library_refresh = 0u32;
@@ -353,7 +352,7 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         if scans_since_library_refresh >= LIBRARY_RESCAN_SCANS {
             scans_since_library_refresh = 0;
             library = LibraryIndex::scan();
-            if announce_library(&library, tx).is_err() {
+            if !announce_library(&library, tx) {
                 return;
             }
         }
