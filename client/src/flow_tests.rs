@@ -5321,6 +5321,20 @@ fn recap_card_leads_with_total_min() {
     assert_eq!(recap_titles(&h), vec!["45m".to_string()]);
 }
 
+/// A clips-only week leads with the clip count, never "0m", and keeps the card.
+#[test]
+fn clips_only_recap_leads_with_clip_count() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: recap_feed(serde_json::json!({
+            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
+            "session_count": 0, "clip_count": 3,
+        })),
+    });
+    assert_eq!(recap_titles(&h), vec!["3 clips".to_string()]);
+}
+
 /// An empty recap that reaches the client renders no recap card.
 #[test]
 fn empty_recap_renders_no_recap_card() {

@@ -175,6 +175,11 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
         }
         "weekly_recap" => {
             let hangout = recap_lead_minutes(data);
+            // Clips-only week: lead with the clip count, not "0m".
+            let clips = data.get("clip_count").and_then(|v| v.as_i64()).unwrap_or(0);
+            if hangout <= 0.0 && clips > 0 {
+                return format!("{} {}", clips, if clips == 1 { "clip" } else { "clips" });
+            }
             let hours = hangout / 60.0;
             if hours >= 1.0 {
                 format!("{:.1}h", hours)
@@ -226,9 +231,10 @@ fn is_empty_recap_entry(entry_type: &str, raw_data: &serde_json::Value) -> bool 
 fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
     match backend_type {
         "weekly_recap" => {
-            // Empty when no clips, so the recap card hides the "Clips" row.
+            // Empty when no clips, so the recap card hides the "Clips" row. Also
+            // empty on a clips-only week, where the title already is the count.
             let clips = data.get("clip_count").and_then(|v| v.as_i64()).unwrap_or(0);
-            if clips > 0 {
+            if clips > 0 && recap_lead_minutes(data) > 0.0 {
                 clips.to_string()
             } else {
                 String::new()
