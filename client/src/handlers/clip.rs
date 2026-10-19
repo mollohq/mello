@@ -211,7 +211,8 @@ fn recap_lead_minutes(data: &serde_json::Value) -> f64 {
     }
 }
 
-/// True for a recap entry with no minutes, sessions or clips. The server drops
+/// True for a recap entry with no minutes and no clips (sessions with zero
+/// minutes do not count, matching the server `isEmptyRecap`). The server drops
 /// these; the client hides any that still arrive.
 fn is_empty_recap_entry(entry_type: &str, raw_data: &serde_json::Value) -> bool {
     if entry_type != "recap" {
@@ -219,7 +220,7 @@ fn is_empty_recap_entry(entry_type: &str, raw_data: &serde_json::Value) -> bool 
     }
     let data = normalized_entry_data(raw_data);
     let count = |k: &str| data.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
-    recap_lead_minutes(&data) <= 0.0 && count("session_count") <= 0.0 && count("clip_count") <= 0.0
+    recap_lead_minutes(&data) <= 0.0 && count("clip_count") <= 0.0
 }
 
 fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
