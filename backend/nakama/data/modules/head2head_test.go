@@ -548,6 +548,54 @@ func TestSessionTriggerDebounce(t *testing.T) {
 	}
 }
 
+func TestSkippedSessionTriggerRecomputesOnTheNextDirtyTick(t *testing.T) {
+	nk := h2hFixture()
+	ctx := context.Background()
+	lg := testLogger()
+	takeHead2headDirty() // other tests leave marks
+	if recomputeHead2head(ctx, lg, nk, "crew", head2headTriggerLibrary, h2hNow) == nil {
+		t.Fatal("first compute must write")
+	}
+	before, _ := readHead2headDoc(ctx, nk, "crew")
+	if titleOf(t, before, titleTheCarry).HolderUserID != "u1" {
+		t.Fatal("u1 plays more, u1 holds the carry")
+	}
+	// The last session of a burst: u2 now has far more hours, but the
+	// trigger is inside the debounce.
+	nk.put(UserLibraryCollection, UserLibraryKey, "u2", hdoc(hgame("steam-1", 90000)))
+	if recomputeHead2head(ctx, lg, nk, "crew", head2headTriggerSession, h2hNow+10_000) != nil {
+		t.Fatal("inside the debounce, must skip")
+	}
+	if got, _ := readHead2headDoc(ctx, nk, "crew"); titleOf(t, got, titleTheCarry).HolderUserID != "u1" {
+		t.Fatal("a skipped trigger leaves the doc alone")
+	}
+	// A tick still inside the debounce skips again and keeps the mark.
+	flushHead2headDirty(ctx, lg, nk, h2hNow+30_000)
+	if got, _ := readHead2headDoc(ctx, nk, "crew"); titleOf(t, got, titleTheCarry).HolderUserID != "u1" {
+		t.Fatal("still inside the debounce")
+	}
+	// The next tick is past it: the trailing recompute writes the new state.
+	flushHead2headDirty(ctx, lg, nk, h2hNow+61_000)
+	got, _ := readHead2headDoc(ctx, nk, "crew")
+	if titleOf(t, got, titleTheCarry).HolderUserID != "u2" {
+		t.Fatalf("the trailing recompute must show the last session: %+v", got.Titles)
+	}
+	// Written once: nothing stays dirty.
+	if left := takeHead2headDirty(); len(left) != 0 {
+		t.Fatalf("still dirty: %v", left)
+	}
+}
+
+func TestCleanCrewIsNotRecomputedByTheDirtyTick(t *testing.T) {
+	nk := h2hFixture()
+	ctx := context.Background()
+	takeHead2headDirty()
+	flushHead2headDirty(ctx, testLogger(), nk, h2hNow)
+	if doc, _ := readHead2headDoc(ctx, nk, "crew"); doc != nil {
+		t.Fatal("nothing was marked, nothing is written")
+	}
+}
+
 func TestLibraryReportRecomputesTheDoc(t *testing.T) {
 	nk := newFakeGuestNk()
 	nk.addMember("crew", "u1", "a")

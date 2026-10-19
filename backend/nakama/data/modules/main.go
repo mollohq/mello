@@ -378,6 +378,7 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	go StartStreamGC(ctx, nk, logger, 60*time.Second)
 	go StartSnapshotBackfillJob(ctx, nk, logger)
 	go StartWeeklyRecapJob(ctx, nk, logger)
+	go StartHead2headDirtyLoop(ctx, nk, logger, head2headDirtyInterval)
 
 	logger.Info("Mello backend initialized successfully")
 	return nil

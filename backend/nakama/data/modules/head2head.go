@@ -18,6 +18,7 @@ import (
 	"fmt"
 	"math"
 	"sort"
+	"sync"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -703,6 +704,10 @@ func recomputeHead2head(ctx context.Context, logger runtime.Logger, nk runtime.N
 	for attempt := 0; attempt < 3; attempt++ {
 		prev, version := readHead2headDoc(ctx, nk, crewID)
 		if trigger == head2headTriggerSession && prev != nil && nowMs-prev.UpdatedAt < head2headSessionDebounceMs {
+			// The stats behind this trigger are newer than the doc. Mark the
+			// crew so the dirty loop recomputes it once the debounce has run
+			// out, or the last session of a burst would never show.
+			markHead2headDirty(crewID)
 			return nil
 		}
 		doc := computeHead2head(h2hInput{CrewID: crewID, MemberCount: len(ids), Members: members, Prev: prev, NowMs: nowMs})
@@ -710,10 +715,81 @@ func recomputeHead2head(ctx context.Context, logger runtime.Logger, nk runtime.N
 			logger.Debug("head2head: write retry for crew %s: %v", crewID, err)
 			continue
 		}
+		clearHead2headDirty(crewID)
 		return doc
 	}
 	logger.Warn("head2head: write failed for crew %s after 3 tries", crewID)
 	return nil
+}
+
+// ---------------------------------------------------------------------------
+// Trailing recompute
+// ---------------------------------------------------------------------------
+
+// head2headDirtyInterval is how often the dirty loop looks for crews whose
+// session trigger the debounce skipped. It equals the debounce, so a skipped
+// crew waits one more tick at most.
+const head2headDirtyInterval = 60 * time.Second
+
+var head2headDirty = struct {
+	mu    sync.Mutex
+	crews map[string]bool
+}{crews: map[string]bool{}}
+
+func markHead2headDirty(crewID string) {
+	head2headDirty.mu.Lock()
+	head2headDirty.crews[crewID] = true
+	head2headDirty.mu.Unlock()
+}
+
+func clearHead2headDirty(crewID string) {
+	head2headDirty.mu.Lock()
+	delete(head2headDirty.crews, crewID)
+	head2headDirty.mu.Unlock()
+}
+
+// takeHead2headDirty returns the dirty crews and empties the set.
+func takeHead2headDirty() []string {
+	head2headDirty.mu.Lock()
+	defer head2headDirty.mu.Unlock()
+	out := make([]string, 0, len(head2headDirty.crews))
+	for id := range head2headDirty.crews {
+		out = append(out, id)
+	}
+	head2headDirty.crews = map[string]bool{}
+	return out
+}
+
+// flushHead2headDirty recomputes each dirty crew as a session trigger. A crew
+// still inside the debounce marks itself again and waits for the next tick.
+// The set lives in memory: after a restart the next trigger or feed read of
+// the crew recomputes it.
+func flushHead2headDirty(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, nowMs int64) {
+	for _, crewID := range takeHead2headDirty() {
+		recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerSession, nowMs)
+	}
+}
+
+// StartHead2headDirtyLoop runs flushHead2headDirty on its own ticker. The only
+// other ticker on the recap path runs hourly, which is too slow for a feed.
+func StartHead2headDirtyLoop(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case t := <-ticker.C:
+			func() {
+				defer func() {
+					if r := recover(); r != nil {
+						logger.Error("head2head: dirty loop panic: %v", r)
+					}
+				}()
+				flushHead2headDirty(ctx, logger, nk, t.UnixMilli())
+			}()
+		}
+	}
 }
 
 // recomputeHead2headForUser recomputes the doc of every crew the user is in.
