@@ -847,8 +847,8 @@ func fillerRole(c feedCard) string {
 //  1. a live stream. The feed builder cannot see live streams: they are client
 //     state from crew_state. The client shows a live stream above this_week, so
 //     this list starts at the next item.
-//  2. a stream preview (session-preview) from the last 24 h
-//  3. a belt that moved in the last 24 h (not available yet, see beltMovedHeroIndex)
+//  2. a belt that moved in the last 24 h (the head2head card, see beltMovedHeroIndex)
+//  3. a stream preview (session-preview) from the last 24 h
 //  4. a real recap, on Monday
 //  5. the best session
 //
@@ -869,10 +869,18 @@ func freshPreviewHeroIndex(cards []feedCard, nowMs int64) int {
 	return best
 }
 
-// beltMovedHeroIndex is the slot for "a belt moved in the last 24 h". Belts
-// need the per-user stats doc (plan phase 5), so no card carries one yet. It
-// returns -1 until then; the hero order already calls it in the right place.
+// beltMovedHeroIndex is the slot for "a belt moved in the last 24 h". The
+// head2head card joins the list only when a title moved in that time, so the
+// first head2head card in the list is the one. It returns -1 when none moved.
 func beltMovedHeroIndex(cards []feedCard, nowMs int64) int {
+	for i, c := range cards {
+		if c.feedType != head2headFeedID {
+			continue
+		}
+		if d, ok := c.data.(*Head2headFeedData); ok && d.BeltMovedRecent != nil && nowMs-d.BeltMovedRecent.MovedAtMs <= feedHeroFreshMs {
+			return i
+		}
+	}
 	return -1
 }
 
@@ -903,10 +911,10 @@ func bestSessionHeroIndex(cards []feedCard) int {
 
 // heroIndex applies the hero priority above. Pure, so the order is testable.
 func heroIndex(cards []feedCard, nowMs int64) int {
-	if i := freshPreviewHeroIndex(cards, nowMs); i >= 0 {
+	if i := beltMovedHeroIndex(cards, nowMs); i >= 0 {
 		return i
 	}
-	if i := beltMovedHeroIndex(cards, nowMs); i >= 0 {
+	if i := freshPreviewHeroIndex(cards, nowMs); i >= 0 {
 		return i
 	}
 	if i := mondayRecapHeroIndex(cards, nowMs); i >= 0 {
@@ -929,6 +937,14 @@ func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 // buildThisWeekWithLibraries is buildThisWeek with the crew members' library
 // documents (by user id) feeding the recent games card.
 func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc) []FeedEntry {
+	return buildThisWeekFull(cards, nowMs, libs, nil)
+}
+
+// buildThisWeekFull adds the head2head entry. A nil h2h means no entry. The
+// entry is not a ledger card. It is the hero when a title moved in the last
+// 24 h and nothing ranks above it. Otherwise it follows the hero and the
+// recap, and it never takes a filler slot.
+func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData) []FeedEntry {
 	// Empty-card rule first, so an empty card never takes a slot or a count.
 	cards = dropEmptyCards(cards)
 
@@ -943,8 +959,18 @@ func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*
 		cards = append(cards, recent)
 	}
 
+	h2hCard := -1
+	if h2h != nil {
+		h2hCard = len(cards)
+		ts := h2h.UpdatedAt
+		if h2h.BeltMovedRecent != nil {
+			ts = h2h.BeltMovedRecent.MovedAtMs
+		}
+		cards = append(cards, feedCard{id: head2headFeedID, feedType: head2headFeedID, ts: ts, data: h2h})
+	}
+
 	used := make([]bool, len(cards))
-	entries := make([]FeedEntry, 0, feedFillerSlots+2)
+	entries := make([]FeedEntry, 0, feedFillerSlots+3)
 
 	if hi := heroIndex(cards, nowMs); hi >= 0 {
 		used[hi] = true
@@ -954,6 +980,11 @@ func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*
 	if ri := feedFirstIndexOfType(cards, used, "recap"); ri >= 0 {
 		used[ri] = true
 		entries = append(entries, feedEntryFromCard(cards[ri], "recap", "md"))
+	}
+
+	if h2hCard >= 0 && !used[h2hCard] {
+		used[h2hCard] = true
+		entries = append(entries, feedEntryFromCard(cards[h2hCard], "standard", "lg"))
 	}
 
 	fillers := pickFillerIndices(cards, used)
@@ -996,7 +1027,9 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 
 	// this_week: curated recent feed.
 	cards := mergedToCards(buildMergedTimeline(ctx, nk, req.CrewID))
-	thisWeek := buildThisWeekWithLibraries(cards, time.Now().UnixMilli(), crewLibraryDocs(ctx, nk, req.CrewID))
+	nowMs := time.Now().UnixMilli()
+	h2h := crewHead2headForViewer(ctx, logger, nk, req.CrewID, userID, nowMs)
+	thisWeek := buildThisWeekFull(cards, nowMs, crewLibraryDocs(ctx, nk, req.CrewID), h2h)
 
 	// Items shown in this_week are excluded from the memory spine.
 	shownClipIDs := map[string]bool{}

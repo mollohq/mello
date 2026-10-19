@@ -620,3 +620,82 @@ func validTzOffset(v *int) *int {
 	}
 	return v
 }
+
+// ---------------------------------------------------------------------------
+// Feed payload
+// ---------------------------------------------------------------------------
+
+// head2headFeedID is the id and type of the head2head entry in this_week.
+const head2headFeedID = "head2head"
+
+// Head2headFeedData is the data of the head2head entry in this_week. The feed
+// builds it for every crew. It is not a ledger event. The client renders it.
+//
+//   - Titles: every contested title, so the client can draw the belt row.
+//   - Pairs: only the pairs that include the viewer, with the viewer as A.
+//     The counts follow the swap.
+//   - MemberCount and OpenSeats come from the live crew size, not the doc.
+//   - BeltMovedRecent: the title with the newest MovedAtMs, when that is less
+//     than 24 h old. Nil otherwise. The same title also sits in Titles.
+//   - UpdatedAt: when the doc was computed. Zero when no doc exists yet.
+type Head2headFeedData struct {
+	CrewID          string           `json:"crew_id"`
+	MemberCount     int              `json:"member_count"`
+	OpenSeats       int              `json:"open_seats"`
+	Titles          []Head2headTitle `json:"titles"`
+	Pairs           []Head2headPair  `json:"pairs"`
+	BeltMovedRecent *Head2headTitle  `json:"belt_moved_recent,omitempty"`
+	UpdatedAt       int64            `json:"updated_at"`
+}
+
+// trimHead2headForViewer builds the feed payload from the doc. doc may be nil.
+func trimHead2headForViewer(doc *Head2headDoc, crewID, viewerID string, memberCount int, nowMs int64) *Head2headFeedData {
+	out := &Head2headFeedData{
+		CrewID:      crewID,
+		MemberCount: memberCount,
+		OpenSeats:   head2headOpenSeats(memberCount),
+		Titles:      []Head2headTitle{},
+		Pairs:       []Head2headPair{},
+	}
+	if doc == nil {
+		return out
+	}
+	out.UpdatedAt = doc.UpdatedAt
+	out.Titles = append(out.Titles, doc.Titles...)
+	for _, p := range doc.Pairs {
+		switch viewerID {
+		case p.A:
+			out.Pairs = append(out.Pairs, p)
+		case p.B:
+			out.Pairs = append(out.Pairs, Head2headPair{A: p.B, B: p.A, ACount: p.BCount, BCount: p.ACount})
+		}
+	}
+	var newest *Head2headTitle
+	for i := range out.Titles {
+		t := &out.Titles[i]
+		if t.MovedAtMs > 0 && nowMs-t.MovedAtMs <= feedHeroFreshMs && (newest == nil || t.MovedAtMs > newest.MovedAtMs) {
+			newest = t
+		}
+	}
+	if newest != nil {
+		c := *newest
+		out.BeltMovedRecent = &c
+	}
+	return out
+}
+
+// crewHead2headForViewer reads or, for a crew with no doc yet, computes the
+// holders doc and trims it for the viewer. It returns nil only when the member
+// list cannot be read.
+func crewHead2headForViewer(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, viewerID string, nowMs int64) *Head2headFeedData {
+	ids, err := crewMemberIDs(ctx, nk, crewID)
+	if err != nil {
+		return nil
+	}
+	doc, _ := readHead2headDoc(ctx, nk, crewID)
+	if doc == nil {
+		// A crew that existed before head2head shipped. Build the doc once.
+		doc = recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerLibrary, nowMs)
+	}
+	return trimHead2headForViewer(doc, crewID, viewerID, len(ids), nowMs)
+}
