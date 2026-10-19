@@ -90,6 +90,8 @@ export struct TitleHeld {
     hue-index: int,
     holder-id: string,
     held-days: int,
+    /// "held 9 days", "held 1 day", or "" under one day. Built in Rust.
+    held-label: string,
     moved-recent: bool,
 }
 

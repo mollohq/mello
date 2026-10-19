@@ -494,6 +494,16 @@ fn icon_of(id: &str) -> slint::Image {
         .unwrap_or_default()
 }
 
+/// The small label under a chip: "held 9 days", "held 1 day", and nothing
+/// under one day.
+pub fn held_label(days: i32) -> String {
+    match days {
+        d if d < 1 => String::new(),
+        1 => "held 1 day".to_string(),
+        d => format!("held {d} days"),
+    }
+}
+
 fn title_held(c: &Chip) -> TitleHeld {
     TitleHeld {
         id: c.id.as_str().into(),
@@ -504,6 +514,7 @@ fn title_held(c: &Chip) -> TitleHeld {
         hue_index: c.holder_hue,
         holder_id: c.holder_id.as_str().into(),
         held_days: c.held_days,
+        held_label: held_label(c.held_days).as_str().into(),
         moved_recent: c.moved_recent,
     }
 }
@@ -637,6 +648,14 @@ mod tests {
                 t.id
             );
         }
+    }
+
+    #[test]
+    fn the_held_label_reads_like_the_mockup() {
+        assert_eq!(held_label(0), "");
+        assert_eq!(held_label(-3), "");
+        assert_eq!(held_label(1), "held 1 day");
+        assert_eq!(held_label(9), "held 9 days");
     }
 
     #[test]

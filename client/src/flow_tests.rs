@@ -4835,6 +4835,115 @@ fn the_deciding_chip_is_the_title_with_the_largest_gap() {
     assert_eq!(count_of(&h, "TitleChip"), 1, "one chip on the one row");
 }
 
+/// The text of every `Text` the window draws.
+fn drawn_texts(h: &Harness) -> Vec<String> {
+    ElementHandle::find_by_element_type_name(h.app(), "Text")
+        .filter_map(|e| e.accessible_label())
+        .map(|s| s.to_string())
+        .collect()
+}
+
+fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .expect("clock after the epoch")
+        .as_millis() as i64
+}
+
+/// A title the holder took `days` whole days ago, plus an hour of margin so a
+/// slow test run cannot cross the day line.
+fn h2h_title_held(
+    id: &str,
+    holder: &str,
+    value: serde_json::Value,
+    unit: &str,
+    days: i64,
+) -> serde_json::Value {
+    serde_json::json!({
+        "title_id": id, "holder_user_id": holder, "value": value, "unit": unit,
+        "since_ms": now_ms() - days * 86_400_000 - 3_600_000,
+    })
+}
+
+/// The held label under each chip reads "held 9 days", "held 1 day", and is
+/// absent under one day. Checked in the data and in what the card draws.
+#[test]
+fn held_days_label_sits_under_the_chip_in_the_wide_card() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User")]);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            1,
+            vec![
+                h2h_title_held("the_carry", "user-1", serde_json::json!(4167.0), "h", 9),
+                h2h_title_held("night_owl", "user-1", serde_json::json!("03:14"), "", 1),
+                h2h_title_held(
+                    "the_collector",
+                    "user-1",
+                    serde_json::json!(5),
+                    "installed",
+                    0,
+                ),
+            ],
+            vec![],
+            None,
+        )]),
+    });
+
+    let chips = first_card(&h).head2head.chips;
+    let labels: Vec<String> = (0..chips.row_count())
+        .map(|i| chips.row_data(i).unwrap().held_label.to_string())
+        .collect();
+    assert_eq!(labels, ["held 9 days", "held 1 day", ""]);
+    assert_eq!(count_of(&h, "HeldChip"), 3);
+    let drawn = drawn_texts(&h);
+    assert!(drawn.iter().any(|t| t == "held 9 days"), "{drawn:?}");
+    assert!(drawn.iter().any(|t| t == "held 1 day"), "{drawn:?}");
+    assert_eq!(
+        drawn.iter().filter(|t| t.starts_with("held ")).count(),
+        2,
+        "nothing under one day: {drawn:?}"
+    );
+}
+
+/// The same label sits under the chip of a pair row in the cell.
+#[test]
+fn held_days_label_sits_under_the_chip_in_a_pair_row() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title_held(
+                "the_carry",
+                "u2",
+                serde_json::json!(4171.0),
+                "h",
+                9,
+            )],
+            vec![h2h_pair_values(
+                "u2",
+                0,
+                1,
+                vec![(
+                    "the_carry",
+                    serde_json::json!(4.6),
+                    serde_json::json!(4171.0),
+                )],
+            )],
+            None,
+        )]),
+    });
+
+    let row = first_card(&h).head2head.pairs.row_data(0).unwrap();
+    assert_eq!(row.chip.held_label.as_str(), "held 9 days");
+    assert!(drawn_texts(&h).iter().any(|t| t == "held 9 days"));
+}
+
 /// ★ Regression: discover had no way back. `back-requested` was declared on
 /// DiscoverPanel and wired in main.slint, but nothing emitted it, and the
 /// panel had no header to put a control in.

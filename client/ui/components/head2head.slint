@@ -144,6 +144,37 @@ export component TitleChip inherits Rectangle {
     }
 }
 
+/// A TitleChip with how long the holder has held the title under it. The
+/// label is empty under one day, and then the chip stands alone.
+export component HeldChip inherits Rectangle {
+    in property <TitleHeld> t;
+    in property <bool> compact: false;
+
+    background: transparent;
+    height: chip.height + (root.t.held-label != "" ? 16px : 0px);
+
+    // No layout here: a layout would give the chip a preferred width and
+    // skew the equal columns of the grid it sits in.
+    chip := TitleChip {
+        x: 0px; y: 0px;
+        width: parent.width;
+        compact: root.compact;
+        hue: H2hHue.of(root.t.hue-index);
+        icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
+    }
+    if root.t.held-label != "": Text {
+        x: 2px;
+        y: chip.height + 3px;
+        width: parent.width - 2px;
+        text: root.t.held-label;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        color: Theme.text-dim;
+        overflow: elide;
+    }
+}
+
 /// A seat nobody has taken. Dashed octagon, same silhouette and size as
 /// the member avatar, with the label "Open" under it.
 export component OpenSeat inherits Rectangle {
@@ -291,11 +322,10 @@ export component Head2headCardWide inherits Rectangle {
 
                 GridLayout {
                     spacing: 8px;
-                    for t[i] in root.titles: TitleChip {
+                    for ch[i] in root.titles: HeldChip {
                         row: floor(i / 2);
                         col: mod(i, 2);
-                        hue: H2hHue.of(t.hue-index);
-                        icon: t.icon; title: t.title; value: t.value; unit: t.unit;
+                        t: ch;
                     }
                 }
             }
@@ -342,7 +372,7 @@ export component Head2headCardWide inherits Rectangle {
 /// the title that decides the pair.
 component PairRow inherits Rectangle {
     in property <H2hPairRow> pair;
-    height: 46px;
+    height: root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
     background: transparent;
 
     HorizontalLayout {
@@ -376,14 +406,10 @@ component PairRow inherits Rectangle {
                 UserAvatar { initials: root.pair.initials; color-index: root.pair.hue-index; size: 20px; }
             }
         }
-        if root.pair.has-chip: TitleChip {
+        if root.pair.has-chip: HeldChip {
             compact: true;
             width: 108px;
-            hue: H2hHue.of(root.pair.chip.hue-index);
-            icon: root.pair.chip.icon;
-            title: root.pair.chip.title;
-            value: root.pair.chip.value;
-            unit: root.pair.chip.unit;
+            t: root.pair.chip;
         }
     }
 }
@@ -524,10 +550,9 @@ export component VersusHero inherits Rectangle {
 
         HorizontalLayout {
             spacing: 8px;
-            for t in root.titles: TitleChip {
+            for ch in root.titles: HeldChip {
                 horizontal-stretch: 1;
-                icon: t.icon; title: t.title; value: t.value; unit: t.unit;
-                hue: H2hHue.of(t.hue-index);
+                t: ch;
             }
         }
 
