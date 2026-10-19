@@ -65,10 +65,16 @@ export struct RecapAwardRow {
     detail: string,
 }
 
-// Per-actor row on the crew play rollup card (GAME-SURFACING B1).
-export struct GameRollupLine {
-    player-name: string,
+// One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
+// game id. The icon is the runtime icon when one is cached, else the monogram.
+export struct RecentGameTile {
+    game-id: string,
     game-name: string,
+    short-name: string,
+    game-color: color,
+    has-color: bool,
+    game-icon: image,
+    has-icon: bool,
     duration-human: string,
 }
 
@@ -149,8 +155,8 @@ export struct FeedCardData {
     // (Riot match-v5/TFT) rather than client-reported telemetry.
     game-verified: bool,
 
-    // Crew play rollup (GAME-SURFACING B1).
-    rollup-lines: [GameRollupLine],
+    // Recent games card: the tiles. The header line is `subtitle`.
+    recent-games: [RecentGameTile],
 }
 
 // One per-game card in the personal stats profile (spec 19 A2).

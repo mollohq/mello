@@ -426,7 +426,7 @@ flows:
     title: Game session and weekly cards render from real sessions
     priority: P2
     users: 2
-    harness: [zero_telemetry_game_session_renders_compact_card_without_record, game_rollup_renders_card_with_lines]
+    harness: [zero_telemetry_game_session_renders_compact_card_without_record, recent_games_card_carries_header_and_tiles]
     journeys: []
     protocol: []
     issues: []

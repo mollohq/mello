@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { FeedCardData, StreamCardData, YouStripData } from "../types.slint";
+import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { YouStrip } from "./you_strip.slint";
@@ -1489,23 +1489,55 @@ component GameSessionCard inherits Rectangle {
     }
 }
 
-// Crew play rollup — routine sessions collapsed for loud crews (GAME-SURFACING B1).
-component GameRollupLineRow inherits Rectangle {
-    in property <string> line-text: "";
+// Recent games card. The header line carries the week's session count and
+// total time, which the Crew play rollup used to carry. Up to six tiles in two
+// columns, keyed by game id.
+component RecentGameTileCell inherits Rectangle {
+    in property <RecentGameTile> tile;
 
-    height: 18px;
+    height: 38px;
+    background: transparent;
 
-    Text {
-        font-weight: Theme.weight-sentence;
-        font-family: Theme.font-body;
-        text: line-text;
-        font-size: 12px;
-        color: Theme.text-value;
-        overflow: elide;
+    HorizontalLayout {
+        spacing: 8px;
+        cross-axis-alignment: center;
+
+        GameIcon {
+            game-id: tile.game-id;
+            short-name: tile.short-name != "" ? tile.short-name :
+                        tile.game-name != "" ? tile.game-name : "GG";
+            badge-color: tile.has-color ? tile.game-color : Theme.raised;
+            runtime-icon: tile.game-icon;
+            has-runtime-icon: tile.has-icon;
+            size: 32px;
+        }
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+
+            Text {
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display;
+                text: tile.game-name;
+                font-size: 12px;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+            Text {
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                text: tile.duration-human;
+                font-size: 11px;
+                color: Theme.text-sub;
+                overflow: elide;
+            }
+        }
     }
 }
 
-component GameRollupCard inherits Rectangle {
+component RecentGamesCard inherits Rectangle {
     in property <FeedCardData> card;
 
     background: transparent;
@@ -1527,35 +1559,41 @@ component GameRollupCard inherits Rectangle {
         fill: Theme.card-bg;
     }
 
-
     VerticalLayout {
         padding: 14px;
-        spacing: 8px;
+        spacing: 10px;
         alignment: start;
 
-        Text {
-            font-family: Theme.font-label;
-            text: "CREW PLAY";
-            font-size: 10px;
-            font-weight: Theme.weight-label;
-            color: Theme.accent;
-            letter-spacing: Theme.track-label;
-        }
-
-        Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: card.subtitle;
-            font-size: 11px;
-            color: Theme.text-sub;
+        VerticalLayout {
+            spacing: 3px;
+            Text {
+                font-family: Theme.font-label;
+                text: "RECENT GAMES";
+                font-size: 10px;
+                font-weight: Theme.weight-label;
+                color: Theme.text-sub;
+                letter-spacing: Theme.track-label;
+            }
+            Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
+                text: card.subtitle;
+                font-size: 12px;
+                color: Theme.text-value;
+                overflow: elide;
+            }
         }
 
         Rectangle { height: 1px; background: Theme.card-border; }
 
-        VerticalLayout {
-            spacing: 6px;
-            for line in card.rollup-lines: GameRollupLineRow {
-                line-text: line.player-name + " · " + line.game-name + " · " + line.duration-human;
+        for row in Math.ceil(card.recent-games.length / 2.0): HorizontalLayout {
+            spacing: 10px;
+            height: 38px;
+            for col in 2: RecentGameTileCell {
+                property <int> idx: row * 2 + col;
+                horizontal-stretch: 1;
+                visible: idx < card.recent-games.length;
+                tile: idx < card.recent-games.length ? card.recent-games[idx] : {};
             }
         }
     }
@@ -2506,7 +2544,7 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "game-session": GameSessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
-    if card.card-type == "rollup": GameRollupCard {
+    if card.card-type == "recent-games": RecentGamesCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "catchup": CatchupCard {

@@ -207,66 +207,98 @@ func feedCardsContain(cards []feedCard, id string) bool {
 	return false
 }
 
-func gsCardNamed(id, game string, durationMin int, playerID, playerName string, ts int64) feedCard {
+func gsCardID(id, gameID, game string, durationMin int, ts int64) feedCard {
 	return feedCard{
-		id:          id,
-		feedType:    "session",
-		backendType: "game_session",
-		ts:          ts,
-		data: GameSessionData{
-			GameName:    game,
-			DurationMin: durationMin,
-			PlayerIDs:   []string{playerID},
-			PlayerNames: []string{playerName},
-		},
+		id: id, feedType: "session", backendType: "game_session", ts: ts,
+		data: GameSessionData{GameID: gameID, GameName: game, DurationMin: durationMin},
 	}
 }
 
-func TestBuildGameRollup_TooFewPruned(t *testing.T) {
-	pruned := []feedCard{
-		gsCardT0("a", 60, []string{"u1"}, 0, 0, 0, 0),
-		gsCardT0("b", 60, []string{"u2"}, 0, 0, 0, 0),
+func TestBuildRecentGames_Aggregation(t *testing.T) {
+	cards := []feedCard{
+		gsCardID("s1", "valorant", "Valorant", 100, 10),
+		gsCardID("s2", "counter-strike-2", "Counter-Strike 2", 50, 20),
+		gsCardID("s3", "minecraft", "Minecraft", 200, 30),
+		gsCardID("s4", "valorant", "Valorant", 30, 40),
+		clipCard("not-a-session", 99),
 	}
-	if _, ok := buildGameRollup(pruned); ok {
-		t.Fatal("expected no rollup for <3 pruned sessions")
-	}
-}
-
-func TestBuildGameRollup_Aggregation(t *testing.T) {
-	pruned := []feedCard{
-		gsCardNamed("s1", "Valorant", 100, "u1", "ostkatt", 10),
-		gsCardNamed("s2", "Counter-Strike 2", 50, "u1", "ostkatt", 20),
-		gsCardNamed("s3", "Minecraft", 200, "u2", "bob", 30),
-		gsCardNamed("s4", "Valorant", 30, "u3", "kim", 40),
-	}
-	card, ok := buildGameRollup(pruned)
+	card, ok := buildRecentGames(cards)
 	if !ok {
-		t.Fatal("expected rollup for 4 pruned sessions")
+		t.Fatal("expected a recent games card")
 	}
-	if card.feedType != "rollup" || card.backendType != "game_rollup" || card.id != "game_rollup" {
-		t.Fatalf("rollup card meta: type=%q backend=%q id=%q", card.feedType, card.backendType, card.id)
+	if card.feedType != "recent-games" || card.backendType != "recent_games" || card.id != "recent_games" {
+		t.Fatalf("meta: type=%q backend=%q id=%q", card.feedType, card.backendType, card.id)
 	}
 	if card.ts != 40 {
-		t.Fatalf("rollup ts = %d, want max pruned ts 40", card.ts)
+		t.Fatalf("ts = %d, want newest session ts 40", card.ts)
 	}
-	data, ok := card.data.(GameRollupData)
+	data, ok := card.data.(RecentGamesData)
 	if !ok {
-		t.Fatalf("rollup data type %T", card.data)
+		t.Fatalf("data type %T", card.data)
 	}
 	if data.SessionCount != 4 || data.TotalMin != 380 {
-		t.Fatalf("rollup totals: sessions=%d min=%d, want 4 / 380", data.SessionCount, data.TotalMin)
+		t.Fatalf("header: sessions=%d min=%d, want 4 / 380", data.SessionCount, data.TotalMin)
 	}
-	if len(data.Lines) != 3 {
-		t.Fatalf("rollup lines: got %d want 3", len(data.Lines))
+	want := []RecentGameTile{
+		{GameID: "minecraft", GameName: "Minecraft", Minutes: 200},
+		{GameID: "valorant", GameName: "Valorant", Minutes: 130},
+		{GameID: "counter-strike-2", GameName: "Counter-Strike 2", Minutes: 50},
 	}
-	if data.Lines[0].PlayerName != "bob" || data.Lines[0].GameName != "Minecraft" || data.Lines[0].TotalMin != 200 {
-		t.Fatalf("top line: %+v, want bob/Minecraft/200", data.Lines[0])
+	if len(data.Games) != len(want) {
+		t.Fatalf("tiles: got %d want %d (%+v)", len(data.Games), len(want), data.Games)
 	}
-	if data.Lines[1].PlayerName != "ostkatt" || data.Lines[1].GameName != "Valorant" || data.Lines[1].TotalMin != 150 || data.Lines[1].Sessions != 2 {
-		t.Fatalf("second line: %+v, want ostkatt/Valorant/150/2 sessions", data.Lines[1])
+	for i, w := range want {
+		if data.Games[i] != w {
+			t.Errorf("tile %d: got %+v want %+v", i, data.Games[i], w)
+		}
 	}
-	if data.Lines[2].PlayerName != "kim" {
-		t.Fatalf("third line: %+v, want kim", data.Lines[2])
+}
+
+// Legacy events carry no game id: the name keys the tile, and the same game
+// under a different case is one tile.
+func TestBuildRecentGames_LegacyNameKey(t *testing.T) {
+	cards := []feedCard{
+		gsCardID("a", "", "Valorant", 30, 1),
+		gsCardID("b", "", "valorant", 30, 2),
+	}
+	card, ok := buildRecentGames(cards)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	data := card.data.(RecentGamesData)
+	if len(data.Games) != 1 || data.Games[0].Minutes != 60 || data.Games[0].GameID != "valorant" {
+		t.Fatalf("tiles: %+v, want one valorant tile of 60 min", data.Games)
+	}
+}
+
+func TestBuildRecentGames_NothingWithoutMinutes(t *testing.T) {
+	if _, ok := buildRecentGames(nil); ok {
+		t.Fatal("no sessions must give no card")
+	}
+	if _, ok := buildRecentGames([]feedCard{gsCardID("z", "valorant", "Valorant", 0, 1)}); ok {
+		t.Fatal("a zero-minute session must give no card")
+	}
+}
+
+func TestBuildRecentGames_CapsTilesAtSixButCountsAllSessions(t *testing.T) {
+	cards := make([]feedCard, 0, 9)
+	for i := 0; i < 9; i++ {
+		id := "game" + string(rune('a'+i))
+		cards = append(cards, gsCardID("s"+id, id, id, 10*(i+1), int64(i+1)))
+	}
+	card, ok := buildRecentGames(cards)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	data := card.data.(RecentGamesData)
+	if len(data.Games) != feedRecentGamesMaxTiles {
+		t.Fatalf("tiles: got %d want %d", len(data.Games), feedRecentGamesMaxTiles)
+	}
+	if data.SessionCount != 9 {
+		t.Fatalf("header counts %d sessions, want all 9", data.SessionCount)
+	}
+	if data.Games[0].Minutes != 90 {
+		t.Fatalf("top tile = %d min, want 90", data.Games[0].Minutes)
 	}
 }
 
@@ -289,58 +321,35 @@ func TestReportableMinutes_OvernightGuard(t *testing.T) {
 	}
 }
 
-// A session left running overnight must not inflate the rollup it appears in.
-// The session's own card already shows the active figure, so a rollup summing
+// A session left running overnight must not inflate the recent games header.
+// The session's own card already shows the active figure, so a total summing
 // wall time would contradict the cards directly below it.
-func TestBuildGameRollup_OvernightSessionDoesNotInflateTotals(t *testing.T) {
-	overnight := gsCardNamed("s1", "Valorant", 600, "u1", "ostkatt", 10)
-	data := overnight.data.(GameSessionData)
-	data.ActiveMin = 40
-	overnight.data = data
+func TestBuildRecentGames_OvernightSessionDoesNotInflateTotals(t *testing.T) {
+	overnight := gsCardID("s1", "valorant", "Valorant", 600, 10)
+	d := overnight.data.(GameSessionData)
+	d.ActiveMin = 40
+	overnight.data = d
 
-	pruned := []feedCard{
+	card, ok := buildRecentGames([]feedCard{
 		overnight,
-		gsCardNamed("s2", "Valorant", 60, "u2", "bob", 20),
-		gsCardNamed("s3", "Valorant", 30, "u3", "kim", 30),
-	}
-	card, ok := buildGameRollup(pruned)
+		gsCardID("s2", "valorant", "Valorant", 60, 20),
+		gsCardID("s3", "valorant", "Valorant", 30, 30),
+	})
 	if !ok {
-		t.Fatal("expected rollup for 3 pruned sessions")
+		t.Fatal("expected a card")
 	}
-	rollup := card.data.(GameRollupData)
-	if rollup.TotalMin != 130 {
-		t.Fatalf("crew total = %d, want 130 (40 active + 60 + 30), not the 690 wall-time sum", rollup.TotalMin)
+	data := card.data.(RecentGamesData)
+	if data.TotalMin != 130 {
+		t.Fatalf("total = %d, want 130 (40 active + 60 + 30), not the 690 wall-time sum", data.TotalMin)
 	}
-	for _, line := range rollup.Lines {
-		if line.PlayerName == "ostkatt" && line.TotalMin != 40 {
-			t.Fatalf("ostkatt line = %dm, want the 40m active figure, not 600m wall", line.TotalMin)
-		}
+	if data.Games[0].Minutes != 130 {
+		t.Fatalf("tile = %d min, want 130", data.Games[0].Minutes)
 	}
 }
 
-func TestBuildGameRollup_CapsLinesAtFive(t *testing.T) {
-	pruned := make([]feedCard, 0, 8)
-	for i := 0; i < 8; i++ {
-		pruned = append(pruned, gsCardNamed(
-			"p"+string(rune('a'+i)),
-			"Game",
-			10*(i+1),
-			"u"+string(rune('a'+i)),
-			"player"+string(rune('a'+i)),
-			int64(i+1),
-		))
-	}
-	card, ok := buildGameRollup(pruned)
-	if !ok {
-		t.Fatal("expected rollup")
-	}
-	data := card.data.(GameRollupData)
-	if len(data.Lines) != 5 {
-		t.Fatalf("rollup lines capped at 5, got %d", len(data.Lines))
-	}
-}
-
-func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
+// The Crew play rollup is gone. A loud week yields one recent games card that
+// counts the pruned routine sessions, and no entry of type rollup.
+func TestBuildThisWeek_LoudWeekHasRecentGamesNotRollup(t *testing.T) {
 	cards := make([]feedCard, 0, 20)
 	for i := 0; i < 16; i++ {
 		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
@@ -349,29 +358,35 @@ func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
 		cards = append(cards, gsCardT0("routine"+string(rune('a'+i)), 30, []string{"solo"}, 0, 0, 0, 0))
 	}
 	entries := buildThisWeek(cards, time.Now().UnixMilli())
-	var rollup *FeedEntry
+	var recent *FeedEntry
 	for i := range entries {
 		if entries[i].Type == "rollup" {
-			rollup = &entries[i]
-			break
+			t.Fatal("the Crew play rollup must not be emitted")
+		}
+		if entries[i].Type == "recent-games" {
+			recent = &entries[i]
 		}
 	}
-	if rollup == nil {
-		t.Fatal("expected a rollup entry in a loud week with 4+ pruned routine sessions")
+	if recent == nil {
+		t.Fatal("expected a recent games entry")
 	}
-	if rollup.ID != "game_rollup" || rollup.Role != "standard" {
-		t.Fatalf("rollup entry meta: id=%q role=%q", rollup.ID, rollup.Role)
+	if recent.ID != "recent_games" || recent.Role != "standard" {
+		t.Fatalf("meta: id=%q role=%q", recent.ID, recent.Role)
+	}
+	data := recent.Data.(RecentGamesData)
+	if data.SessionCount != 20 {
+		t.Fatalf("header counts %d sessions, want all 20", data.SessionCount)
 	}
 }
 
-func TestFillerPriority_RollupBeatsWeakSession(t *testing.T) {
-	rollup := feedCard{feedType: "rollup", backendType: "game_rollup"}
+func TestFillerPriority_RecentGamesBeatsWeakSession(t *testing.T) {
+	recent := feedCard{feedType: "recent-games", backendType: "recent_games"}
 	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
 	strong := gsCard("strong", 5, 0, 0, 5)
-	if fillerPriority(rollup) <= fillerPriority(weak) {
-		t.Fatalf("rollup priority %d should beat weak session %d", fillerPriority(rollup), fillerPriority(weak))
+	if fillerPriority(recent) <= fillerPriority(weak) {
+		t.Fatalf("recent games priority %d should beat weak session %d", fillerPriority(recent), fillerPriority(weak))
 	}
-	if fillerPriority(strong) <= fillerPriority(rollup) {
-		t.Fatalf("strong session priority %d should beat rollup %d", fillerPriority(strong), fillerPriority(rollup))
+	if fillerPriority(strong) <= fillerPriority(recent) {
+		t.Fatalf("strong session priority %d should beat recent games %d", fillerPriority(strong), fillerPriority(recent))
 	}
 }

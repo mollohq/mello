@@ -6,7 +6,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
 use crate::converters::make_initials;
-use crate::{FeedCardData, GameRollupLine, RecapAwardRow, RecapLbRow};
+use crate::{FeedCardData, RecapAwardRow, RecapLbRow, RecentGameTile};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -54,7 +54,7 @@ fn derive_backend_type(feed_type: &str, data: &serde_json::Value) -> &'static st
                 "member_joined"
             }
         }
-        "rollup" => "game_rollup",
+        "recent-games" => "recent_games",
         _ => "",
     }
 }
@@ -434,19 +434,53 @@ fn humanize_duration_min(mins: i64) -> String {
     }
 }
 
-fn extract_rollup_lines(data: &serde_json::Value) -> Vec<GameRollupLine> {
-    data.get("lines")
+/// Header line of the recent games card: "14 sessions, 31 h this week".
+/// Under an hour the total reads in minutes. One session reads "1 session".
+fn recent_games_header(session_count: i64, total_min: i64) -> String {
+    let sessions = if session_count == 1 {
+        "1 session".to_string()
+    } else {
+        format!("{session_count} sessions")
+    };
+    let total = if total_min < 60 {
+        format!("{} min", total_min.max(1))
+    } else {
+        // Round to the nearest hour: the line is a gist, the tiles carry detail.
+        format!("{} h", (total_min + 30) / 60)
+    };
+    format!("{sessions}, {total} this week")
+}
+
+/// Tiles for the recent games card, keyed by game id, from the server's
+/// `games` array. The art is the runtime game icon when cached, else the
+/// monogram. The capsule art source is a later task.
+fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecentGameTile> {
+    data.get("games")
         .and_then(|v| v.as_array())
         .map(|rows| {
             rows.iter()
                 .filter_map(|row| {
-                    let player_name = row.get("player_name")?.as_str()?;
                     let game_name = row.get("game_name")?.as_str()?;
-                    let total_min = row.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
-                    Some(GameRollupLine {
-                        player_name: player_name.into(),
+                    let wire_id = row.get("game_id").and_then(|v| v.as_str()).unwrap_or("");
+                    let minutes = row.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
+                    let (game_id, short_name, color_hex) =
+                        resolve_game_meta(ctx, wire_id, game_name);
+                    let (game_icon, has_icon) =
+                        match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
+                            Some(img) => (img, true),
+                            None => (slint::Image::default(), false),
+                        };
+                    Some(RecentGameTile {
+                        game_id: game_id.into(),
                         game_name: game_name.into(),
-                        duration_human: humanize_duration_min(total_min).into(),
+                        short_name: short_name.into(),
+                        game_color: slint::Color::from_argb_encoded(super::game::parse_hex_color(
+                            color_hex.as_deref().unwrap_or("#2a2a30"),
+                        )),
+                        has_color: color_hex.is_some(),
+                        game_icon,
+                        has_icon,
+                        duration_human: humanize_duration_min(minutes).into(),
                     })
                 })
                 .collect()
@@ -674,33 +708,27 @@ fn build_feed_card(
     // Rich game-session card fields (spec 19 B2). Retype game sessions so the
     // feed dispatches them to the rich GameSessionCard instead of SessionCard.
     let is_game_session = backend_type == "game_session";
-    let is_rollup = feed_type == "rollup";
-    let card_type = if is_rollup {
-        "rollup"
-    } else if is_game_session {
+    let is_recent_games = feed_type == "recent-games";
+    let card_type = if is_game_session {
         "game-session"
     } else {
         feed_type
     };
-    let (title, subtitle) = if is_rollup {
+    let (title, subtitle) = if is_recent_games {
         let session_count = data
             .get("session_count")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
         (
-            "CREW PLAY".to_string(),
-            format!(
-                "{} sessions · {}",
-                session_count,
-                humanize_duration_min(total_min)
-            ),
+            "RECENT GAMES".to_string(),
+            recent_games_header(session_count, total_min),
         )
     } else {
         (title, subtitle)
     };
-    let rollup_lines = if is_rollup {
-        extract_rollup_lines(&data)
+    let recent_games = if is_recent_games {
+        extract_recent_game_tiles(ctx, &data)
     } else {
         Vec::new()
     };
@@ -958,7 +986,7 @@ fn build_feed_card(
         game_winrate: game_winrate.into(),
         game_matches,
         game_verified,
-        rollup_lines: ModelRc::new(VecModel::from(rollup_lines)),
+        recent_games: ModelRc::new(VecModel::from(recent_games)),
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,
@@ -1232,6 +1260,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn recent_games_header_wording() {
+        assert_eq!(recent_games_header(1, 45), "1 session, 45 min this week");
+        assert_eq!(recent_games_header(2, 240), "2 sessions, 4 h this week");
+        assert_eq!(recent_games_header(14, 1860), "14 sessions, 31 h this week");
+    }
 
     #[test]
     fn game_session_duration_uses_wall_time_by_default() {

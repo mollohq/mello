@@ -4286,7 +4286,7 @@ fn zero_telemetry_game_session_renders_compact_card_without_record() {
     );
 }
 
-fn game_rollup_feed() -> mello_core::crew_events::FeedResponse {
+fn recent_games_feed() -> mello_core::crew_events::FeedResponse {
     let ts = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
@@ -4296,33 +4296,18 @@ fn game_rollup_feed() -> mello_core::crew_events::FeedResponse {
         sections: vec![mello_core::crew_events::FeedSection {
             id: "this_week".into(),
             entries: vec![mello_core::crew_events::FeedEntry {
-                id: "game_rollup".into(),
-                entry_type: "rollup".into(),
+                id: "recent_games".into(),
+                entry_type: "recent-games".into(),
                 role: "standard".into(),
                 size: "md".into(),
                 ts,
                 data: serde_json::json!({
-                    "session_count": 5,
-                    "total_min": 720,
-                    "lines": [
-                        {
-                            "player_name": "ostkatt",
-                            "game_name": "Valorant",
-                            "total_min": 300,
-                            "sessions": 2
-                        },
-                        {
-                            "player_name": "bob",
-                            "game_name": "Minecraft",
-                            "total_min": 240,
-                            "sessions": 1
-                        },
-                        {
-                            "player_name": "kim",
-                            "game_name": "Counter-Strike 2",
-                            "total_min": 180,
-                            "sessions": 1
-                        }
+                    "session_count": 14,
+                    "total_min": 1860,
+                    "games": [
+                        { "game_id": "valorant", "game_name": "Valorant", "minutes": 600 },
+                        { "game_id": "minecraft", "game_name": "Minecraft", "minutes": 240 },
+                        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 180 }
                     ]
                 }),
             }],
@@ -4330,30 +4315,34 @@ fn game_rollup_feed() -> mello_core::crew_events::FeedResponse {
     }
 }
 
-/// Pruned routine play renders as a crew play rollup card with per-actor lines.
+/// The Crew play rollup is gone. Its session count and total time are the
+/// header of the recent games card, which lists the games as tiles.
 #[test]
-fn game_rollup_renders_card_with_lines() {
+fn recent_games_card_carries_header_and_tiles() {
     let mut h = Harness::new();
     logged_in_app(&mut h);
 
     h.emit(Event::FeedLoaded {
-        response: game_rollup_feed(),
+        response: recent_games_feed(),
     });
 
     let cards: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "GameRollupCard").collect();
+        ElementHandle::find_by_element_type_name(h.app(), "RecentGamesCard").collect();
+    assert!(!cards.is_empty(), "expected a RecentGamesCard in the feed");
     assert!(
-        !cards.is_empty(),
-        "expected a GameRollupCard in the feed for a rollup entry"
+        ElementHandle::find_by_element_type_name(h.app(), "GameRollupCard")
+            .next()
+            .is_none(),
+        "the Crew play card must not exist"
     );
 
-    let lines: Vec<_> =
-        ElementHandle::find_by_element_type_name(h.app(), "GameRollupLineRow").collect();
-    assert_eq!(
-        lines.len(),
-        3,
-        "rollup card should render one line row per actor"
-    );
+    let tiles: Vec<_> =
+        ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell").collect();
+    assert_eq!(tiles.len(), 3, "one tile per game");
+
+    let card = h.app().get_feed_cards().row_data(0).expect("feed card");
+    assert_eq!(card.card_type.as_str(), "recent-games");
+    assert_eq!(card.subtitle.as_str(), "14 sessions, 31 h this week");
 }
 
 /// ★ Regression: discover had no way back. `back-requested` was declared on
