@@ -373,6 +373,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_feed_clip_count(0);
             ctx.app.set_feed_has_more(false);
             crate::converters::set_active_crew(&ctx.app, crew_id.as_str());
+            super::clip::refresh_feed_skeletons(ctx);
             let empty_channels: Vec<VoiceChannelData> = vec![];
             ctx.app
                 .set_voice_channels(Rc::new(slint::VecModel::from(empty_channels)).into());

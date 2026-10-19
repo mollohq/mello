@@ -99,15 +99,21 @@ export component SkeletonCell inherits Rectangle {
     }
 }
 
-/// The three cells in a row, as the empty feed shows them.
+/// The three cells in a row, as the empty feed shows them. Each cell has a
+/// switch: the feed turns one off when its real card exists. The cells that
+/// remain share the row.
 export component SkeletonTrio inherits Rectangle {
+    in property <bool> show-stream: true;
+    in property <bool> show-voice-clip: true;
+    in property <bool> show-recap: true;
+
     background: transparent;
     height: 150px;
 
     HorizontalLayout {
         spacing: 12px;
-        SkeletonCell { icon: @image-url("../icons/skel-stream.svg"); line: "Your streams land here"; corner: "tr"; }
-        SkeletonCell { icon: @image-url("../icons/skel-voice.svg"); line: "Voice clips land here"; corner: "br"; }
-        SkeletonCell { icon: @image-url("../icons/skel-week.svg"); line: "Your week, every Monday"; corner: "bl"; }
+        if root.show-stream: SkeletonCell { icon: @image-url("../icons/skel-stream.svg"); line: "Your streams land here"; corner: "tr"; }
+        if root.show-voice-clip: SkeletonCell { icon: @image-url("../icons/skel-voice.svg"); line: "Voice clips land here"; corner: "br"; }
+        if root.show-recap: SkeletonCell { icon: @image-url("../icons/skel-week.svg"); line: "Your week, every Monday"; corner: "bl"; }
     }
 }

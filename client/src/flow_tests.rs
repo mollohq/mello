@@ -4345,6 +4345,175 @@ fn recent_games_card_carries_header_and_tiles() {
     assert_eq!(card.subtitle.as_str(), "14 sessions, 31 h this week");
 }
 
+/// App with one crew of `members` people, as the crew list reports it.
+fn app_with_crew_of(h: &mut Harness, members: i32) {
+    // The default test window is 800 px wide, which leaves the feed too narrow
+    // to lay three skeleton cells in view. Elements outside the feed's clip
+    // are absent from queries.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    let mut crews = sample_crews(1);
+    crews[0].member_count = members;
+    h.emit(Event::CrewsLoaded { crews });
+    crate::converters::set_active_crew(h.app(), "crew-0");
+    assert_eq!(visible_screens(h), vec![Screen::App]);
+}
+
+fn feed_of(entries: Vec<FeedEntry>) -> FeedResponse {
+    FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![FeedSection {
+            id: "this_week".into(),
+            entries,
+        }],
+    }
+}
+
+fn feed_entry(id: &str, entry_type: &str, data: serde_json::Value) -> FeedEntry {
+    FeedEntry {
+        id: id.into(),
+        entry_type: entry_type.into(),
+        role: "standard".into(),
+        size: "md".into(),
+        ts: std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_millis() as i64)
+            .unwrap_or(0),
+        data,
+    }
+}
+
+fn skeleton_cells(h: &Harness) -> usize {
+    ElementHandle::find_by_element_type_name(h.app(), "SkeletonCell").count()
+}
+
+/// A new empty crew shows exactly three skeletons (stream, voice clip, Monday
+/// recap) and no card of any kind: no empty recap, no empty session.
+#[test]
+fn new_empty_crew_shows_three_skeletons_and_no_cards() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 3, "stream, voice clip, recap");
+    assert!(h.app().get_feed_skeleton_stream());
+    assert!(h.app().get_feed_skeleton_voice_clip());
+    assert!(h.app().get_feed_skeleton_recap());
+    assert_eq!(
+        h.app().get_feed_cards().row_count(),
+        0,
+        "skeletons are not cards: nothing may reach the hero slot"
+    );
+    assert!(
+        h.app().get_feed_invite_line(),
+        "the invite line sits under the trio"
+    );
+    for card in ["RecapCard", "SessionCard", "SessionPreviewCard", "ClipCard"] {
+        assert!(
+            ElementHandle::find_by_element_type_name(h.app(), card)
+                .next()
+                .is_none(),
+            "an empty crew must not render {card}"
+        );
+    }
+}
+
+/// A stream preview is the real stream card: its skeleton goes, two remain.
+#[test]
+fn stream_preview_removes_the_stream_skeleton() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![feed_entry(
+            "evt-stream-1",
+            "session-preview",
+            serde_json::json!({
+                "streamer_name": "ostkatt",
+                "title": "Ranked",
+                "duration_min": 30,
+                "snapshot_urls": ["https://example.invalid/a.jpg"]
+            }),
+        )]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 2, "voice clip and recap remain");
+    assert!(!h.app().get_feed_skeleton_stream());
+    assert!(h.app().get_feed_skeleton_voice_clip());
+    assert!(h.app().get_feed_skeleton_recap());
+}
+
+/// Two or more members and one real card of any kind retire the whole trio.
+#[test]
+fn two_members_and_a_real_card_hide_every_skeleton() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![feed_entry(
+            "evt-join-1",
+            "catchup",
+            serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+        )]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 0);
+    assert!(!h.app().get_feed_invite_line());
+}
+
+/// Members alone do not retire the trio: with no real card it all stays.
+#[test]
+fn three_members_with_an_empty_feed_still_show_the_trio() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 3);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 3);
+}
+
+/// A solo crew with one real card keeps the skeletons of the types it lacks.
+#[test]
+fn solo_crew_keeps_skeletons_for_missing_card_types() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![feed_entry(
+            "evt-join-1",
+            "catchup",
+            serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+        )]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 3);
+}
+
+/// Hiding the invite takes the line away and leaves the trio.
+#[test]
+fn hiding_the_invite_removes_the_line_not_the_trio() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![]),
+    });
+    assert!(h.app().get_feed_invite_line());
+
+    h.app().invoke_hide_invite_card();
+
+    assert!(!h.app().get_feed_invite_line());
+    assert_eq!(skeleton_cells(&h), 3);
+}
+
 /// ★ Regression: discover had no way back. `back-requested` was declared on
 /// DiscoverPanel and wired in main.slint, but nothing emitted it, and the
 /// panel had no header to put a control in.

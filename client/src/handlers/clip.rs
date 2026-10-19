@@ -238,40 +238,87 @@ fn waveform_from_data(data: &serde_json::Value) -> ModelRc<f32> {
     ModelRc::new(slint::VecModel::from(peaks))
 }
 
-fn skeleton_card(card_type: &str) -> FeedCardData {
-    FeedCardData {
-        id: Default::default(),
-        card_type: card_type.into(),
-        role: Default::default(),
-        size: Default::default(),
-        title: Default::default(),
-        subtitle: Default::default(),
-        timestamp: Default::default(),
-        duration: Default::default(),
-        duration_min: 0,
-        actor_name: Default::default(),
-        actor_initials: Default::default(),
-        game_name: Default::default(),
-        participant_count: 0,
-        clip_count: 0,
-        clip_path: Default::default(),
-        is_hero: false,
-        is_skeleton: true,
-        snapshot_urls: Default::default(),
-        mvp_count: 0,
-        mvp0_name: Default::default(),
-        mvp0_initials: Default::default(),
-        mvp0_stat: Default::default(),
-        mvp1_name: Default::default(),
-        mvp1_initials: Default::default(),
-        mvp1_stat: Default::default(),
-        mvp2_name: Default::default(),
-        mvp2_initials: Default::default(),
-        mvp2_stat: Default::default(),
-        is_new: false,
-        was_seen: false,
-        ..Default::default()
+/// Which cells of the skeleton trio show (CLIPS 8). Pure, so the rule is
+/// testable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkeletonTrio {
+    pub stream: bool,
+    pub voice_clip: bool,
+    pub recap: bool,
+}
+
+impl SkeletonTrio {
+    pub fn any(self) -> bool {
+        self.stream || self.voice_clip || self.recap
     }
+}
+
+/// Decide the trio from the card types in the feed. A cell hides when its real
+/// card type exists: a stream preview or a live stream, a clip, a recap. All
+/// three hide when the crew has two or more members and at least one real card
+/// of any kind. `locked` is the m3llo+ upsell, not a real card.
+pub(crate) fn skeleton_trio_for<'a>(
+    card_types: impl IntoIterator<Item = &'a str>,
+    live_streams: usize,
+    member_count: i32,
+) -> SkeletonTrio {
+    let (mut stream, mut voice_clip, mut recap) = (live_streams == 0, true, true);
+    let mut any_real = live_streams > 0;
+    for t in card_types {
+        if t.is_empty() || t == "locked" {
+            continue;
+        }
+        any_real = true;
+        match t {
+            "session-preview" => stream = false,
+            "clip" => voice_clip = false,
+            "recap" => recap = false,
+            _ => {}
+        }
+    }
+    if member_count >= 2 && any_real {
+        return SkeletonTrio {
+            stream: false,
+            voice_clip: false,
+            recap: false,
+        };
+    }
+    SkeletonTrio {
+        stream,
+        voice_clip,
+        recap,
+    }
+}
+
+/// Recompute the skeleton trio and the invite line from the models on screen.
+/// Call after anything that changes the feed cards, the live streams or the
+/// active crew. The cells never enter the card model, so they cannot take the
+/// hero slot or a grid cell.
+pub(super) fn refresh_feed_skeletons(ctx: &AppContext) {
+    let app = &ctx.app;
+    let types: Vec<String> = [app.get_feed_cards(), app.get_memory_cards()]
+        .iter()
+        .flat_map(|m| (0..m.row_count()).filter_map(|i| m.row_data(i)))
+        .map(|c| c.card_type.to_string())
+        .collect();
+    let active = app.get_active_crew_id().to_string();
+    let crews = app.get_crews();
+    let members = (0..crews.row_count())
+        .filter_map(|i| crews.row_data(i))
+        .find(|c| c.id.as_str() == active)
+        .map(|c| c.member_count)
+        .unwrap_or(0);
+    let live = app.get_active_stream_cards().row_count();
+    let trio = skeleton_trio_for(types.iter().map(String::as_str), live, members);
+    let invite_hidden = ctx
+        .settings
+        .borrow()
+        .hidden_invite_crew_ids
+        .contains(&active);
+    app.set_feed_skeleton_stream(trio.stream);
+    app.set_feed_skeleton_voice_clip(trio.voice_clip);
+    app.set_feed_skeleton_recap(trio.recap);
+    app.set_feed_invite_line(trio.any() && !invite_hidden && !active.is_empty());
 }
 
 type MvpSlot = (String, String, String, String); // (name, initials, stat, user_id)
@@ -1064,6 +1111,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             cards.insert(insert_pos.min(cards.len()), new_card);
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+            refresh_feed_skeletons(ctx);
 
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
@@ -1148,45 +1196,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
 
-            // Fill with skeletons only for a true cold start. Once the server
-            // returns real feed or memory content, the client must not invent
-            // onboarding cards that compete with crew memory.
-            let mut ordered = this_week;
+            // The feed shows real cards only. The skeleton trio is separate
+            // state, set below, so it never takes a card slot or the hero.
             let has_real_memory = memory.iter().any(|c| c.card_type != "locked");
-            let is_cold = ordered.is_empty() && !has_real_memory;
-            if is_cold {
-                ordered.push(skeleton_card("skeleton-hero"));
-                ordered.push(skeleton_card("skeleton-recap"));
-                ordered.push(skeleton_card("skeleton-session"));
-                ordered.push(skeleton_card("skeleton-clip"));
-                ordered.push(skeleton_card("skeleton-catchup"));
-                ordered.push(skeleton_card("skeleton-now-playing"));
-                ordered.push(skeleton_card("skeleton-stream-clips"));
-                ordered.push(skeleton_card("skeleton-recent-games"));
-
-                // Inject invite card unless hidden for this crew.
-                let active_crew = ctx.app.get_active_crew_id().to_string();
-                let invite_hidden = ctx
-                    .settings
-                    .borrow()
-                    .hidden_invite_crew_ids
-                    .contains(&active_crew);
-                if !invite_hidden && !active_crew.is_empty() {
-                    let mut invite = skeleton_card("invite");
-                    invite.is_skeleton = false;
-                    invite.id = "invite".into();
-                    let insert_pos = 2.min(ordered.len());
-                    ordered.insert(insert_pos, invite);
-                }
-            }
-
-            let cards = ordered;
+            let is_cold = this_week.is_empty() && !has_real_memory;
+            let cards = this_week;
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(memory)).into());
             ctx.app.set_feed_cold_start(is_cold);
+            refresh_feed_skeletons(ctx);
             ctx.app.set_feed_clip_count(clip_count);
             ctx.app.set_feed_has_more(false);
 
@@ -1260,6 +1281,23 @@ pub fn handle(ctx: &AppContext, event: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skeleton_trio_rule() {
+        let all = |t| (t, t, t);
+        let s = |t: SkeletonTrio| (t.stream, t.voice_clip, t.recap);
+        assert_eq!(s(skeleton_trio_for([], 0, 1)), all(true));
+        assert_eq!(
+            s(skeleton_trio_for(["session-preview"], 0, 1)),
+            (false, true, true)
+        );
+        assert_eq!(s(skeleton_trio_for(["clip"], 0, 1)), (true, false, true));
+        assert_eq!(s(skeleton_trio_for(["recap"], 0, 1)), (true, true, false));
+        assert_eq!(s(skeleton_trio_for([], 1, 1)), (false, true, true));
+        assert_eq!(s(skeleton_trio_for(["locked"], 0, 5)), all(true));
+        assert_eq!(s(skeleton_trio_for(["catchup"], 0, 2)), all(false));
+        assert_eq!(s(skeleton_trio_for([], 0, 9)), all(true));
+    }
 
     #[test]
     fn recent_games_header_wording() {

@@ -1,9 +1,10 @@
 import { Theme } from "../theme.slint";
-import { CutShape, CutMask, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
+import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
 import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
+import { SkeletonTrio } from "../components/skeleton_trio.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
@@ -1656,760 +1657,72 @@ component CatchupCard inherits Rectangle {
     }
 }
 
-// Generic skeleton card
-component SkeletonCard inherits Rectangle {
-    in property <FeedCardData> card;
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 10px;
-        padding: 24px;
-        padding-left: 16px;
-        padding-right: 16px;
-
-        Image {
-            source: @image-url("../icons/scissors.svg");
-            colorize: Theme.skel-text;
-            width: 28px;
-            height: 28px;
-            opacity: 0.3;
-            x: (parent.width - self.width) / 2;
-        }
-
-        Text {
-            font-family: Theme.font-display;
-            text: card.title != "" ? card.title : "Your crew's clips show up here";
-            font-size: 13px;
-            font-weight: Theme.weight-display;
-            color: Theme.skel-text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: card.subtitle != "" ? card.subtitle : "Tap the scissors during a voice call to save the last 30 seconds";
-            font-size: 11px;
-            color: Theme.skel-hint;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-}
-
-// Hero clip skeleton (2x, dashed play button)
-component SkeletonHeroCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-    clip: true;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        Rectangle {
-            vertical-stretch: 3;
-            min-height: 200px;
-            background: Theme.card-bg-inset;
-
-            Rectangle {
-                x: 12px; y: 12px;
-                width: badge-t.preferred-width + 20px;
-                height: 22px;
-                border-radius: 5px;
-                border-width: 1px;
-                border-color: Theme.skel-ghost;
-                background: transparent;
-
-                badge-t := Text {
-                    font-family: Theme.font-label;
-                    text: "CLIP";
-                    font-size: 10px;
-                    font-weight: Theme.weight-label;
-                    color: Theme.skel-ghost;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    letter-spacing: Theme.track-label;
-                }
-            }
-
-            Rectangle {
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                width: 48px;
-                height: 48px;
-                border-radius: 24px;
-                border-width: 1.5px;
-                border-color: Theme.skel-ghost;
-                background: transparent;
-
-                Image {
-                    source: @image-url("../icons/play.svg");
-                    width: 16px;
-                    height: 16px;
-                    colorize: Theme.skel-ghost;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                }
-            }
-
-            Rectangle {
-                x: parent.width - self.width - 10px;
-                y: parent.height - self.height - 10px;
-                width: dur-sk.preferred-width + 16px;
-                height: 22px;
-                border-radius: 4px;
-                border-width: 1px;
-                border-color: Theme.skel-ghost;
-                background: transparent;
-
-                dur-sk := Text {
-                    font-weight: Theme.weight-sentence;
-                    font-family: Theme.font-body;
-                    text: "0:30";
-                    font-size: 11px;
-                    color: Theme.skel-ghost;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
-        VerticalLayout {
-            padding: 12px;
-            padding-left: 14px;
-            spacing: 5px;
-            vertical-stretch: 0;
-
-            Text {
-                font-family: Theme.font-display;
-                text: "Your first clip goes here";
-                font-size: 14px;
-                font-weight: Theme.weight-display;
-                color: Theme.skel-text;
-            }
-
-            Text {
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: "Tap the clip button during a voice call to save the last 30 seconds. Your crew's best clips show up right here.";
-                font-size: 11px;
-                color: Theme.skel-hint;
-                wrap: word-wrap;
-            }
-        }
-    }
-}
-
-// Recap skeleton (fake stat bars)
-component SkeletonRecapCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "bl";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "bl";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 8px;
-        padding: 16px;
-
-        Rectangle {
-            width: 40px; height: 40px;
-            border-radius: 10px;
-            background: Theme.skel-element;
-            x: (parent.width - self.width) / 2;
-
-            Image {
-                source: @image-url("../icons/star.svg");
-                colorize: Theme.skel-ghost;
-                width: 18px; height: 18px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                opacity: 0.25;
-            }
-        }
-
-        Text {
-            font-family: Theme.font-display;
-            text: "Weekly recap";
-            font-size: 13px;
-            font-weight: Theme.weight-display;
-            color: Theme.skel-text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: "Your crew's stats will appear after your first week together";
-            font-size: 11px;
-            color: Theme.skel-hint;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-
-        Rectangle { height: 4px; }
-
-        VerticalLayout {
-            spacing: 7px;
-
-            for w in [55, 70, 40, 60]: HorizontalLayout {
-                Rectangle { height: 7px; border-radius: 3px; background: Theme.skel-element; horizontal-stretch: 1; max-width: 1px * w; }
-                Rectangle { horizontal-stretch: 1; }
-                Rectangle { height: 7px; width: 30px; border-radius: 3px; background: Theme.skel-element; }
-            }
-        }
-    }
-}
-
-// Voice clip skeleton (faint waveform)
-component SkeletonClipCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-    clip: true;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "bl";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "bl";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        Rectangle {
-            min-height: 72px;
-            vertical-stretch: 1;
-            background: Theme.card-bg-inset;
-
-            HorizontalLayout {
-                alignment: center;
-                spacing: 3px;
-                padding-left: 20px;
-                padding-right: 20px;
-
-                for h in [0.35, 0.7, 1.0, 0.5, 0.9, 0.4, 0.8, 0.25, 0.65, 1.0, 0.45, 0.75, 0.3, 0.85, 0.55, 0.95, 0.35, 0.7]: Rectangle {
-                    width: 3px;
-
-                    Rectangle {
-                        width: parent.width;
-                        height: 40px * h;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: 2px;
-                        background: Theme.clip-amber;
-                        opacity: 0.06;
-                    }
-                }
-            }
-        }
-
-        VerticalLayout {
-            padding: 10px;
-            padding-left: 12px;
-            spacing: 4px;
-            vertical-stretch: 0;
-
-            Text {
-                font-family: Theme.font-display;
-                text: "VOICE CLIP · 0:30";
-                font-size: 10px;
-                font-weight: Theme.weight-display-bold;
-                color: Theme.skel-ghost;
-            }
-
-            Text {
-                font-family: Theme.font-body;
-                text: "Voice clips land here";
-                font-size: 12px;
-                font-weight: 500;
-                color: Theme.skel-text;
-            }
-
-            Text {
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: "Funny moment in voice? Clip it.";
-                font-size: 11px;
-                color: Theme.skel-hint;
-            }
-        }
-    }
-}
-
-// Session skeleton
-component SkeletonSessionCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        padding: 16px;
-        spacing: 0px;
-        alignment: start;
-
-        Text {
-            font-family: Theme.font-label;
-            text: "SESSION";
-            font-size: 10px;
-            font-weight: Theme.weight-label;
-            color: Theme.skel-ghost;
-            letter-spacing: Theme.track-label;
-        }
-
-        Rectangle { height: 12px; }
-
-        HorizontalLayout {
-            spacing: 8px;
-            height: 30px;
-
-            Rectangle {
-                width: 26px; height: 26px;
-                border-radius: 6px;
-                background: Theme.skel-element;
-            }
-
-            VerticalLayout {
-                alignment: center;
-                spacing: 5px;
-
-                Rectangle { height: 9px; width: 80px; border-radius: 3px; background: Theme.skel-element; }
-                Rectangle { height: 7px; width: 40px; border-radius: 3px; background: Theme.skel-element; }
-            }
-        }
-
-        Rectangle { height: 8px; }
-
-        HorizontalLayout {
-            spacing: 4px;
-            height: 18px;
-
-            for c in [0, 1, 2]: Rectangle {
-                width: 18px; height: 18px;
-                border-radius: 4px;
-                background: Theme.skel-element;
-                border-width: 2px;
-                border-color: Theme.card-bg-skel;
-            }
-        }
-
-        Rectangle { height: 10px; }
-
-        Rectangle { height: 6px; width: 100px; border-radius: 3px; background: Theme.skel-element; }
-    }
-}
-
-// Catch-up skeleton
-component SkeletonCatchupCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "br";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        padding: 16px;
-        spacing: 0px;
-        alignment: start;
-
-        Text {
-            font-family: Theme.font-label;
-            text: "CATCH-UP";
-            font-size: 10px;
-            font-weight: Theme.weight-label;
-            color: Theme.dark ? Theme.live-bg : Theme.action-dim;
-            letter-spacing: Theme.track-label;
-        }
-
-        Rectangle { height: 10px; }
-
-        Rectangle { height: 8px; border-radius: 4px; background: Theme.skel-element; }
-        Rectangle { height: 6px; }
-        Rectangle { height: 8px; width: 75%; border-radius: 4px; background: Theme.skel-element; }
-        Rectangle { height: 10px; }
-        Rectangle { height: 6px; width: 60px; border-radius: 3px; background: Theme.skel-element; }
-    }
-}
-
-// Now Playing skeleton
-component SkeletonNowPlayingCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 8px;
-        padding: 16px;
-
-        Rectangle {
-            width: 40px; height: 40px;
-            border-radius: 10px;
-            background: Theme.skel-element;
-            x: (parent.width - self.width) / 2;
-
-            Image {
-                source: @image-url("../icons/monitor.svg");
-                colorize: Theme.skel-ghost;
-                width: 18px; height: 18px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                opacity: 0.25;
-            }
-        }
-
-        Text {
-            font-family: Theme.font-display;
-            text: "Now playing";
-            font-size: 13px;
-            font-weight: Theme.weight-display;
-            color: Theme.skel-text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: "Games your crew is playing show up here automatically";
-            font-size: 11px;
-            color: Theme.skel-hint;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-}
-
-// Stream clips skeleton
-component SkeletonStreamClipsCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 8px;
-        padding: 16px;
-
-        Rectangle {
-            width: 36px; height: 36px;
-            border-radius: 9px;
-            background: Theme.skel-element;
-            x: (parent.width - self.width) / 2;
-
-            Image {
-                source: @image-url("../icons/monitor.svg");
-                colorize: Theme.skel-ghost;
-                width: 15px; height: 15px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                opacity: 0.25;
-            }
-        }
-
-        Text {
-            font-family: Theme.font-body;
-            text: "Stream clips";
-            font-size: 12px;
-            font-weight: 500;
-            color: Theme.skel-text;
-            horizontal-alignment: center;
-        }
-
-        Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: "Clip highlights while watching a crewmate's stream";
-            font-size: 10px;
-            color: Theme.skel-hint;
-            horizontal-alignment: center;
-            wrap: word-wrap;
-        }
-    }
-}
-
-// Recent games skeleton
-component SkeletonRecentGamesCard inherits Rectangle {
-
-    background: transparent;
-    border-width: 0px;
-
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        inset: Theme.keyline;
-        fill: Theme.card-bg-skel;
-    }
-
-    VerticalLayout {
-        padding: 16px;
-        spacing: 0px;
-        alignment: start;
-
-        Text {
-            font-family: Theme.font-label;
-            text: "RECENT GAMES";
-            font-size: 10px;
-            font-weight: Theme.weight-label;
-            color: Theme.skel-ghost;
-            letter-spacing: Theme.track-label;
-        }
-
-        Rectangle { height: 12px; }
-
-        for row-idx in [0, 1]: VerticalLayout {
-            spacing: 0px;
-
-            HorizontalLayout {
-                spacing: 8px;
-                height: 30px;
-
-                Rectangle {
-                    width: 26px; height: 26px;
-                    border-radius: 6px;
-                    background: Theme.skel-element;
-                }
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: 5px;
-
-                    Rectangle { height: 8px; width: 90px; border-radius: 3px; background: Theme.skel-element; }
-                    Rectangle { height: 6px; width: 55px; border-radius: 3px; background: Theme.skel-element; }
-                }
-            }
-
-            if row-idx == 0: Rectangle { height: 10px; }
-        }
-    }
-}
-
-// Invite CTA card
-component InviteCard inherits Rectangle {
+// The invite line under the skeleton trio (CLIPS 8). One line of copy and the
+// one filled button, red because it commits.
+component FeedInviteLine inherits Rectangle {
     callback invite-clicked();
     callback hide-clicked();
 
+    height: 40px;
     background: transparent;
-    border-width: 0px;
 
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        fill: Theme.card-border;
-    }
-    CutShape {
-        width: parent.width;
-        height: parent.height;
-        n: Theme.notch;
-        corner: "tr";
-        inset: Theme.keyline;
-        fill: Theme.card-bg;
-    }
-
-
-    VerticalLayout {
-        alignment: center;
-        spacing: 10px;
-        padding: 20px;
+    HorizontalLayout {
+        spacing: 14px;
+        cross-axis-alignment: center;
 
         Text {
-            font-family: Theme.font-display;
-            text: "Invite friends";
-            font-size: 14px;
-            font-weight: Theme.weight-display;
-            color: Theme.text-primary;
-            horizontal-alignment: center;
-        }
-
-        Text {
+            horizontal-stretch: 1;
             font-weight: Theme.weight-sentence;
             font-family: Theme.font-body;
-            text: "The feed comes alive when your crew is here.";
-            font-size: 11px;
+            text: "Invite your crew. Everything here comes alive when your friends join.";
+            font-size: 13px;
             color: Theme.text-sub;
-            horizontal-alignment: center;
-            wrap: word-wrap;
+            overflow: elide;
+            vertical-alignment: center;
         }
 
-        // Primary CTA button — wrapped so VerticalLayout doesn't override x
-        Rectangle {
+        CutButton {
+            horizontal-stretch: 0;
+            width: 150px;
             height: 36px;
+            fill-color: invite-touch.has-hover ? Theme.confirm-press : Theme.live;
 
-            Rectangle {
-                width: 140px;
-                height: 36px;
-                x: (parent.width - self.width) / 2;
-                border-radius: Theme.r-inner;
-                background: invite-btn-touch.has-hover ? Theme.action-press : Theme.action;
+            Text {
+                font-family: Theme.font-display;
+                text: "Share invite link";
+                font-size: 12px;
+                font-weight: Theme.weight-display;
+                color: Theme.on-live;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
 
-                Text {
-                    font-family: Theme.font-display;
-                    text: "Share invite link";
-                    font-size: 12px;
-                    font-weight: Theme.weight-display;
-                    color: Theme.on-action;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-
-                invite-btn-touch := TouchArea {
-                    accessible-role: button;
-                    accessible-label: "Share invite link";
-                    mouse-cursor: pointer;
-                    clicked => { invite-clicked(); }
-                }
+            invite-touch := TouchArea {
+                accessible-role: button;
+                accessible-label: "Share invite link";
+                mouse-cursor: pointer;
+                clicked => { root.invite-clicked(); }
             }
         }
 
-        // Hide link — wrapped so VerticalLayout doesn't override x
         Rectangle {
-            height: 16px;
+            horizontal-stretch: 0;
+            width: hide-text.preferred-width + 8px;
 
-            Text {
+            hide-text := Text {
                 font-weight: Theme.weight-sentence;
                 font-family: Theme.font-body;
                 text: "Hide";
                 font-size: 11px;
                 color: Theme.text-tertiary;
-                horizontal-alignment: center;
-                width: parent.width;
-                y: (parent.height - self.height) / 2;
+                vertical-alignment: center;
+            }
 
-                hide-touch := TouchArea {
-                    accessible-role: button;
-                    accessible-label: "Hide";
-                    mouse-cursor: pointer;
-                    clicked => { hide-clicked(); }
-                }
+            TouchArea {
+                accessible-role: button;
+                accessible-label: "Hide invite";
+                mouse-cursor: pointer;
+                clicked => { root.hide-clicked(); }
             }
         }
     }
@@ -2481,8 +1794,6 @@ component FeedSlot inherits Rectangle {
     in property <int> clip-duration-ms: 0;
     callback play-clicked(string);
     callback seek-clip-ms(int);
-    callback invite-clicked();
-    callback hide-invite-clicked();
     callback session-seen(string);
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
 
@@ -2550,41 +1861,7 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "catchup": CatchupCard {
         width: parent.width; height: parent.height; card: root.card;
     }
-    if card.card-type == "invite": InviteCard {
-        width: parent.width; height: parent.height;
-        invite-clicked => { root.invite-clicked(); }
-        hide-clicked => { root.hide-invite-clicked(); }
-    }
     if card.card-type == "locked": LockedCard {
-        width: parent.width; height: parent.height;
-    }
-
-    // Skeleton variants
-    if card.card-type == "skeleton": SkeletonCard {
-        width: parent.width; height: parent.height; card: root.card;
-    }
-    if card.card-type == "skeleton-hero": SkeletonHeroCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-recap": SkeletonRecapCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-clip": SkeletonClipCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-session": SkeletonSessionCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-catchup": SkeletonCatchupCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-now-playing": SkeletonNowPlayingCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-stream-clips": SkeletonStreamClipsCard {
-        width: parent.width; height: parent.height;
-    }
-    if card.card-type == "skeleton-recent-games": SkeletonRecentGamesCard {
         width: parent.width; height: parent.height;
     }
 }
@@ -2595,6 +1872,13 @@ export component CrewFeed inherits Rectangle {
     in property <[StreamCardData]> stream-cards: [];
     in property <YouStripData> you-strip;
     in property <bool> is-cold-start: true;
+    /// Skeleton trio switches (CLIPS 8). The client turns a cell off when its
+    /// real card exists, so the cells never sit in a card slot or the hero.
+    in property <bool> skeleton-stream: false;
+    in property <bool> skeleton-voice-clip: false;
+    in property <bool> skeleton-recap: false;
+    /// The invite line under the trio.
+    in property <bool> invite-line: false;
     in property <bool> feed-has-more: false;
     in property <string> crew-name: "";
     in property <int> clip-count: 0;
@@ -2771,8 +2055,6 @@ export component CrewFeed inherits Rectangle {
                             clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                            invite-clicked => { root.invite-clicked(); }
-                            hide-invite-clicked => { root.hide-invite-clicked(); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
@@ -2789,8 +2071,6 @@ export component CrewFeed inherits Rectangle {
                             clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                            invite-clicked => { root.invite-clicked(); }
-                            hide-invite-clicked => { root.hide-invite-clicked(); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
@@ -2858,8 +2138,6 @@ export component CrewFeed inherits Rectangle {
                     clip-duration-ms: root.clip-duration-ms;
                     play-clicked(id) => { root.card-clicked(id); }
                     seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                    invite-clicked => { root.invite-clicked(); }
-                    hide-invite-clicked => { root.hide-invite-clicked(); }
                     session-seen(id) => { root.session-seen(id); }
                     session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                 }
@@ -2880,8 +2158,6 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
@@ -2904,8 +2180,6 @@ export component CrewFeed inherits Rectangle {
                             clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                            invite-clicked => { root.invite-clicked(); }
-                            hide-invite-clicked => { root.hide-invite-clicked(); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
@@ -2922,8 +2196,6 @@ export component CrewFeed inherits Rectangle {
                             clip-duration-ms: root.clip-duration-ms;
                             play-clicked(id) => { root.card-clicked(id); }
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                            invite-clicked => { root.invite-clicked(); }
-                            hide-invite-clicked => { root.hide-invite-clicked(); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                         }
@@ -2949,8 +2221,6 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
@@ -2973,8 +2243,6 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
@@ -2991,8 +2259,6 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
@@ -3017,11 +2283,21 @@ export component CrewFeed inherits Rectangle {
                         clip-duration-ms: root.clip-duration-ms;
                         play-clicked(id) => { root.card-clicked(id); }
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
-                        invite-clicked => { root.invite-clicked(); }
-                        hide-invite-clicked => { root.hide-invite-clicked(); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                     }
+                }
+
+                // Skeleton trio: after the real cards, never in the hero slot.
+                if root.skeleton-stream || root.skeleton-voice-clip || root.skeleton-recap: SkeletonTrio {
+                    show-stream: root.skeleton-stream;
+                    show-voice-clip: root.skeleton-voice-clip;
+                    show-recap: root.skeleton-recap;
+                }
+
+                if root.invite-line && (root.skeleton-stream || root.skeleton-voice-clip || root.skeleton-recap): FeedInviteLine {
+                    invite-clicked => { root.invite-clicked(); }
+                    hide-clicked => { root.hide-invite-clicked(); }
                 }
 
                 // Memory band: the durable spine (recaps + clips, then the

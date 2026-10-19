@@ -449,6 +449,11 @@ export component MainWindow inherits Window {
     // Fired on open so the client can refresh user_game_stats.
     callback stats-profile-opened();
     in property <bool> feed-cold-start: true;
+    // Skeleton trio (CLIPS 8): which of the three dashed cells show.
+    in property <bool> feed-skeleton-stream: false;
+    in property <bool> feed-skeleton-voice-clip: false;
+    in property <bool> feed-skeleton-recap: false;
+    in-out property <bool> feed-invite-line: false;
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
     callback feed-show-more-clicked();
@@ -1009,6 +1014,10 @@ export component MainWindow inherits Window {
                             stream-paused: root.stream-paused;
                             stream-paused-reason: root.stream-paused-reason;
                             is-cold-start: root.feed-cold-start;
+                            skeleton-stream: root.feed-skeleton-stream;
+                            skeleton-voice-clip: root.feed-skeleton-voice-clip;
+                            skeleton-recap: root.feed-skeleton-recap;
+                            invite-line: root.feed-invite-line;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
                             feed-show-more-clicked => {
