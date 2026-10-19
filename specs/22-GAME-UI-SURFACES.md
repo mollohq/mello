@@ -2,7 +2,7 @@
 
 > **Component:** Control Bar Game States, Crew Sidebar Game List, Member Playing Line, Game Feed Cards, Game Icons
 > **Version:** 0.1
-> **Status:** Implemented. Section 3.4 (`recent_games`) and section 7.1 (HUD overlay) are not built.
+> **Status:** Implemented. Section 7.1 (HUD overlay) is not built. Section 3.4 is built as a feed card, with a different data path.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [17-GAME-SENSING.md](./17-GAME-SENSING.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -146,14 +146,20 @@ the presence heartbeat. No dedicated timer is needed.
 The line is empty when the member does not play a game, or when the member
 disabled activity sharing. See section 5.
 
-### 3.4 Recent games data — NOT BUILT
+### 3.4 Recent games data
 
-Two designs existed. The first added a `recent_games` array to the
-`crew_catchup` response. The second added a `crew_recent_games` RPC. Both
-aggregate `game_session` events over 7 days.
+The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
 
-Neither is built. No `recent_games` field and no such RPC exist. The sidebar
-list uses live presence only.
+```json
+{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "minutes": 600 } ],
+  "session_count": 14, "total_min": 1860 }
+```
+
+- Source: `game_session` events of the week. Builder: `buildRecentGames` in `crew_feed.go`. Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3.3 has the rules.
+- Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
+- Art: the runtime game icon when cached, else the monogram tile. Capsule art is a later task.
+- Client: `RecentGamesCard` in `crew_feed.slint`. The header line is `subtitle`.
+- The sidebar list still uses live presence only.
 
 ---
 
@@ -203,11 +209,11 @@ Three implementations apply this rule. Keep them in step.
 |---|---|---|
 | One session | `game_session_duration_display` | `client/src/handlers/clip.rs` |
 | One week | `weekly_time_text` | `client/src/handlers/stats.rs` |
-| Rollup total | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
+| Recent games total | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
 
 The rollup implementation was added last. Before it, a 10-hour overnight session
 showed 40 minutes on its own card and added 10 hours to the `CREW PLAY` card
-above it.
+above it. The recent games card replaced that card and keeps the same rule.
 
 ### 4.4 Co-play copy
 
@@ -269,8 +275,8 @@ badge on the game colour when extraction fails.
 | `GameSessionCard` | `crew_feed.slint` | Session card shell |
 | `GameSessionRecordPanel` | `crew_feed.slint` | W/L body |
 | `GameSessionCompactBody` | `crew_feed.slint` | Body without telemetry |
-| `GameRollupCard` | `crew_feed.slint` | `CREW PLAY` daily rollup |
-| `GameRollupLineRow` | `crew_feed.slint` | One member line in the rollup |
+| `RecentGamesCard` | `crew_feed.slint` | Recent games: header line and tiles |
+| `RecentGameTileCell` | `crew_feed.slint` | One game tile |
 | `PlayingBadge` | `crew_feed.slint` | Live playing marker |
 
 `client/ui/types.slint` declares the types. Both member row structs carry
@@ -306,4 +312,4 @@ No surface in this spec has run against a live backend with real crew traffic.
 - Deep profile view. See spec 19 section 2.4.
 - Per-game activity hiding. Only the global toggle in section 5 exists.
 - Rich telemetry session card beyond the W/L panel in section 4.1.
-- `recent_games` (section 3.4) and the HUD overlay (section 7.1).
+- The HUD overlay (section 7.1).

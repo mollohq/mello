@@ -2,7 +2,7 @@
 
 > **Component:** Crew Memory, Clips, Crew Feed  
 > **Version:** 1.0  
-> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim; dot-matrix waveform clip cards + fresh-clip premiere landed)  
+> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim; dot-matrix waveform clip cards landed; next-generation feed phase 2 landed: hero priority, empty-card rule, skeleton trio)  
 > **Depends on:** CREW-EVENT-LEDGER.md, 13-VOICE-CHANNELS.md  
 > **Mockups:** m3llo-crew-feed-mockup-v4.html (populated), m3llo-crew-feed-cold-start-full.html (empty)
 
@@ -231,15 +231,30 @@ Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newes
 
 Card types in the bento grid:
 
-- **Hero clip card** — full-width row with the remaining grid stacked in side columns beneath it. The freshest clip premieres here (see §11.4); otherwise the best session-preview leads. Dot-matrix waveform with play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp.
-- **Clip card (standard)** — single cell. Dot-matrix waveform, play ring, clip badge, metadata. Tap the wave to play from that point; drag to scrub.
+- **Clip card** — single cell, always the standard size. Dot-matrix waveform, play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp. Tap the wave to play from that point; drag to scrub. A voice clip is never the hero and never takes the wide cell.
+- **Stream preview card** — a finished stream with snapshots. Feed type `session-preview`, drawn by `SessionPreviewCard`: poster, frames, streamer, game, duration, participants. See [STREAM-SNAPSHOTS-CLIENT.md](./STREAM-SNAPSHOTS-CLIENT.md) sections 3.1 and 4. It leads the feed for 24 hours (see hero priority).
+- **Live stream card** — one person streaming now, drawn by `StreamCard`. A live stream is client state (`crew_state`), not a feed entry. The client shows it above the `this_week` cards, so it is always first.
 - **Session card** — "Your crew played Valorant for 3 hours." Game icon, participant avatars, duration, clip count. From event ledger.
 - **Catch-up card** — "ostkatt and FaiL hung out in General for 45m while you were away." Green label. Promoted from sidebar to center stage.
 - **Now playing card** — real-time game sensing. Game icon, who's playing, duration. Live data.
-- **Recent games card** — list of games played recently across the crew.
+- **Recent games card** — the games the crew played this week, as three to six tiles keyed by game id. The header carries the session count and the total time: "14 sessions, 31 h this week". It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4).
 - **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
-- **Skeleton cards** — placeholder cards for cold start (see section 8).
-- **Invite card** — CTA card in brand red tint (see section 8).
+- **Skeleton trio** — three dashed placeholders for an empty crew (see section 8).
+- **Invite line** — one line and one red button under the skeleton trio (see section 8).
+
+A card with no content is never emitted. One rule in `crew_feed.go` (`cardHasContent`) applies to `this_week` and `memory`: a session with no reportable minutes, a recap with nothing in it, a stream preview with no snapshots and a recent games card with no game minutes do not appear.
+
+#### Hero priority
+
+The server picks the hero of `this_week` in this order. The first item that exists wins.
+
+1. A live stream. The client shows it above the feed. The server order starts at the next item.
+2. A stream preview from the last 24 hours. The best one by quality score.
+3. A belt that moved in the last 24 hours. Not built. `beltMovedHeroIndex` is the empty hook.
+4. A real recap, on Monday (UTC), while the recap is under 24 hours old.
+5. The best session: the best stream preview of any age.
+
+If no item exists, the feed has no hero. The latest recap then takes its own pinned slot as before.
 
 Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
 
@@ -288,34 +303,40 @@ Future: ambient slow upward drift when at top and idle (screensaver mode). Pause
 
 ## 8. Cold Start
 
-A brand new crew with zero activity sees a full grid of skeleton cards.
+A new crew with no activity sees three skeleton cells, the skeleton trio, and one invite line.
 
-### 8.1 Skeleton Card Types
+### 8.1 Skeleton Trio
 
-Each skeleton is a ghost version of its real counterpart: dashed borders, placeholder shapes, brief text explaining what will appear.
+Exactly three cells, in this order. Each is a dashed outline with an icon and one line.
 
-- **Hero clip skeleton** — dashed clip badge, ghost play button, ghost duration badge. "Your first clip goes here. Tap ✂ during a voice call to save the last 30 seconds."
-- **Voice clip skeleton** — barely-visible waveform bars at low opacity. "Voice clips land here. Funny moment in voice? Clip it."
-- **Weekly recap skeleton** — gray placeholder bars where stats would be. "Your crew's stats will appear here after your first week together."
-- **Now playing skeleton** — "Games your crew is playing show up here automatically."
-- **Session skeleton** — ghost game icon and placeholder bars.
-- **Catch-up skeleton** — ghost text bars in catch-up layout.
-- **Recent games skeleton** — ghost game icon rows.
-- **Stream clip skeleton** — "Stream clips coming soon. Clip highlights while watching a crewmate's stream."
-- **Invite card** — the only non-skeleton card. Subtle CTA in brand red. "Invite your crew. Everything here comes alive when your friends join. Get them in here."
+| Cell | Line | Real card that replaces it |
+|---|---|---|
+| Stream | "Your streams land here" | A stream preview or a live stream |
+| Voice clip | "Voice clips land here" | A clip |
+| Weekly recap | "Your week, every Monday" | A weekly recap |
 
-### 8.2 Progressive Replacement
+Rules:
 
-As the crew uses m3llo, skeleton cards get replaced by real content:
+- The trio comes after the real cards. It never takes the hero slot or a card cell.
+- A cell hides when its real card type exists in the feed.
+- All three cells hide when the crew has two or more members and at least one real card of any kind.
+- The `locked` upsell is not a real card.
+- The trio is client state. It is not in the card model. Component: `SkeletonTrio` in `client/ui/components/skeleton_trio.slint`. Rule: `skeleton_trio_for` in `client/src/handlers/clip.rs`.
 
-1. First voice session → session card and catch-up card replace their skeletons
-2. First game detected → now playing and recent games replace their skeletons
-3. First clip captured → hero clip and voice clip skeletons replaced
-4. First week complete → weekly recap skeleton replaced
+### 8.2 Invite Line
 
-### 8.3 Visual Treatment
+One line under the trio: "Invite your crew. Everything here comes alive when your friends join." A red "Share invite link" button follows it. A "Hide" link removes the line for that crew. The line shows only while at least one skeleton cell shows.
 
-Skeleton cards use: dashed borders (#262629), slightly darker background (#1b1b1f), all text and icons at very low opacity (#333 to #444), no animation or pulsing. They are empty slots waiting to be filled, not loading indicators.
+### 8.3 Progressive Replacement
+
+1. First stream that ends with snapshots, or first live stream → the stream cell goes.
+2. First clip captured → the voice clip cell goes.
+3. First week complete → the recap cell goes.
+4. Second member joins and one real card exists → the remaining cells and the invite line go.
+
+### 8.4 Visual Treatment
+
+Dashed outline, one cut corner, a dark ground, icon and text at low contrast. No animation or pulsing. A cell is an empty slot, not a loading indicator.
 
 ---
 
@@ -388,9 +409,9 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 ### 11.4 Retrieval
 
 - `crew_feed` RPC is the curated primary feed. Curation lives server-side: the server decides which items appear, their order, and each item's role and size. It returns two sections:
-  - `this_week`: the curated recent feed (replaces the client-side bento ordering). Hero precedence: the newest clip premieres while it is younger than 24h and has not been buried by 4+ newer cards (`freshClipHeroIndex` in `crew_feed.go`); otherwise the best session-preview leads (the live-stream hero is deferred to a separate multi-stream PR). The latest recap is pinned, then diversity/priority fillers capped at 7 slots with one wide/lg promotion.
+  - `this_week`: the curated recent feed (replaces the client-side bento ordering). Hero precedence is in section 7.1 (`heroIndex` in `crew_feed.go`). A clip is never the hero and never gets the wide size. The latest recap is pinned, then diversity/priority fillers capped at 7 slots with one wide/lg promotion. Empty cards are dropped first (`cardHasContent`).
   - `memory`: the durable spine of older recaps, clips, and stream replays not already shown this week, returned as a bounded first page (currently 60 entries), with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
-  - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | session-preview | session | catchup); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
+  - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | session-preview | session | catchup | recent-games); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
 - `crew_timeline` RPC is the raw paginated source (merged 7-day ledger + recent clips + latest recap, newest-first, cursor-based). Used for deep scroll.
 - `crew_catchup` RPC merges recent clips (newer than `last_seen`) into its candidate set, ranked higher than passive events.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first) for the deeper memory surfaces.
@@ -419,9 +440,8 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 - Background upload to S3
 - Clip card in chat with waveform and inline playback
 - Crew feed center view with bento grid layout
-- All card types: hero clip, clip, session, catch-up, now playing, recent games, weekly recap
-- Cold-start skeleton cards for all types
-- Invite CTA card
+- All card types: clip, stream preview, session, catch-up, now playing, recent games, weekly recap
+- Cold-start skeleton trio and invite line
 - Contextual center view (feed vs active stream)
 
 **Backend:**

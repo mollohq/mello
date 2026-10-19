@@ -23,7 +23,7 @@ This spec does not define how a card looks. See
 │ "my win/loss streaks"      │     │ the curated crew feed              │
 │                            │     │                                    │
 │  • You strip (glance)      │     │  • session clears the bar → card   │
-│  • Profile (NOT BUILT)     │     │  • the rest → CREW PLAY rollup     │
+│  • Profile (NOT BUILT)     │     │  • the rest → RECENT GAMES header    │
 │                            │     │  • bar rises with crew volume      │
 │  always on · no curation   │     │  • same for every member           │
 │  backed by user_game_stats │     │  built on crew_feed.go             │
@@ -47,7 +47,7 @@ Telemetry bonuses add to that score when they exist.
 | Personal surface | A You strip and a deeper profile | The survey request is served without the feed |
 | Feed personalization | Identical for every member | The feed filters on notability only |
 | Volume handling | Adaptive notability threshold | One control scales low and high volume crews |
-| Routine sessions in feed | A `CREW PLAY` rollup card | Replaces the version 0.2 choice. See section 3.3 |
+| Routine sessions in feed | The recent games card header and tiles | Replaces the `CREW PLAY` rollup. See section 3.3 |
 | Sessions without telemetry | Earn cards from duration and company | Most play stays visible |
 
 ### Effect of an identical feed
@@ -193,28 +193,24 @@ session earns a card.
 A crew override, from "show everything" to "highlights only", is a future
 option.
 
-### 3.3 Routine play — the `CREW PLAY` rollup
+### 3.3 Routine play: the recent games card
 
-`pruneGameSessions` returns the removed sessions separately. `buildGameRollup`
-builds one card per crew per day from them.
+Status: the `CREW PLAY` rollup card is removed. `buildGameRollup` no longer exists.
+
+`buildRecentGames` in `crew_feed.go` reads every `game_session` in the week, before pruning. It builds one `recent-games` card.
 
 | Element | Content |
 |---|---|
-| Member line | `ostkatt · Valorant · 4h` |
-| Footer | Session count and total crew hours |
+| Header line | Session count and total crew time: "14 sessions, 31 h this week" |
+| Tiles | Three to six games, keyed by game id, with name and minutes. Most minutes first |
 
-Fewer than three removed sessions produce no rollup card.
+- A session with no reportable minutes is not counted.
+- No game with minutes means no card.
+- The card uses no extra read. It comes from the same `game_session` events as the session cards.
 
-Version 0.2 stated that routine play gets no card of its own, and that the crew
-aggregate belongs in the weekly recap. The weekly recap is a premium surface.
-That design hid the ordinary play of non-paying crews, which contradicts the
-T0 decision in section 1. The recap enrichment in section 3.5 is still wanted,
-but it does not hold routine play.
+Pruned sessions still get no card of their own. Their time is in the header and the tiles.
 
-Rollup minutes use the overnight guard. See
-[22](./22-GAME-UI-SURFACES.md) section 4.3. `reportableMinutes` in
-`crew_feed.go` applies it. Raw wall time made the rollup contradict the session
-cards below it.
+Minutes use the overnight guard. See [22](./22-GAME-UI-SURFACES.md) section 4.3. `reportableMinutes` in `crew_feed.go` applies it. Raw wall time made the card contradict the session cards below it.
 
 ### 3.4 Curation budget
 
@@ -222,9 +218,9 @@ cards below it.
 
 - Cards that are not game sessions pass through unchanged and in order.
 - `game_session` cards above the floor survive, to the cap in section 3.2.
-- Removed sessions go to the rollup in section 3.3.
-- `mapCardType`, `fillerPriority` and `fillerRole` register both `game_session`
-  and `game_rollup`.
+- Removed sessions count in the recent games card in section 3.3.
+- `mapCardType` registers `game_session`. `fillerPriority` and `fillerRole`
+  register `recent-games`.
 
 Curation runs server-side. Only `order`, `role`, `size` and `type` cross to the
 client. A threshold change needs no client release.

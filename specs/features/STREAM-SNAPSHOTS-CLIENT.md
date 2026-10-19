@@ -136,10 +136,10 @@ Curation moved off the client into `backend/nakama/data/modules/crew_feed.go`. T
 
 ### 5.1 Goals (now enforced server-side)
 
-- **Hero:** best `session-preview` by quality score (visual priority over clips).
+- **Hero:** a `session-preview` from the last 24 hours leads, best by quality score. An older one leads only when nothing ranks above it. Order: [CLIPS.md](./CLIPS.md) §7.1. A clip is never the hero.
 - **Deprioritize** short streams (≤2 min, ≤4 snapshots) for hero/wide slots.
 - **Mix:** at least one of each present type: `clip`, `session`, `session-preview`, `catchup`, plus pinned `recap`.
-- **Priority fill:** clips → strong previews → generic sessions → catchups.
+- **Priority fill:** clips (standard size only) → strong previews → generic sessions → catchups.
 - **Wide slot:** strongest visual among fillers (preview or clip) gets `size: lg`.
 
 ### 5.2 Quality score (session-preview)
