@@ -4548,6 +4548,20 @@ fn h2h_pair(opponent: &str, you: i32, them: i32) -> serde_json::Value {
     serde_json::json!({"a": "user-1", "b": opponent, "a_count": you, "b_count": them})
 }
 
+/// A pair with the values both members hold, as the backend sends them.
+fn h2h_pair_values(
+    opponent: &str,
+    you: i32,
+    them: i32,
+    values: Vec<(&str, serde_json::Value, serde_json::Value)>,
+) -> serde_json::Value {
+    let values: Vec<_> = values
+        .into_iter()
+        .map(|(id, a, b)| serde_json::json!({"title_id": id, "a_value": a, "b_value": b}))
+        .collect();
+    serde_json::json!({"a": "user-1", "b": opponent, "a_count": you, "b_count": them, "values": values})
+}
+
 fn h2h_entry(
     members: i32,
     titles: Vec<serde_json::Value>,
@@ -4792,7 +4806,19 @@ fn the_deciding_chip_is_the_title_with_the_largest_gap() {
                 h2h_title("locked_in", "user-1", serde_json::json!(4.6), "h"),
                 h2h_title("the_carry", "u2", serde_json::json!(4171.0), "h"),
             ],
-            vec![h2h_pair("u2", 1, 1)],
+            vec![h2h_pair_values(
+                "u2",
+                1,
+                1,
+                vec![
+                    ("locked_in", serde_json::json!(4.6), serde_json::json!(4.4)),
+                    (
+                        "the_carry",
+                        serde_json::json!(4.6),
+                        serde_json::json!(4171.0),
+                    ),
+                ],
+            )],
             None,
         )]),
     });

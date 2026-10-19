@@ -100,6 +100,17 @@ struct WireTitle {
     previous_holder_user_id: String,
 }
 
+/// What the two members of a pair hold in one title they both contend for.
+#[derive(Debug, Clone, Deserialize)]
+struct WirePairValue {
+    #[serde(default)]
+    title_id: String,
+    #[serde(default)]
+    a_value: Value,
+    #[serde(default)]
+    b_value: Value,
+}
+
 #[derive(Debug, Clone, Deserialize)]
 struct WirePair {
     #[serde(default)]
@@ -110,6 +121,9 @@ struct WirePair {
     a_count: i32,
     #[serde(default)]
     b_count: i32,
+    // Absent from a backend that predates pair values.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    values: Vec<WirePairValue>,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -267,8 +281,8 @@ fn value_text(value: &Value, unit: &str) -> (String, String) {
 
 /// Numeric size of a held value, for ranking. night_owl "HH:MM" counts
 /// minutes after 18:00, the backend's day start for that title.
-fn magnitude(t: &WireTitle) -> f64 {
-    match &t.value {
+fn magnitude(v: &Value) -> f64 {
+    match v {
         Value::Number(n) => n.as_f64().unwrap_or(0.0),
         Value::String(s) => {
             let mut it = s.split(':');
@@ -300,43 +314,70 @@ fn chip_of(t: &WireTitle, roster: &dyn Fn(&str) -> Person, now_ms: i64, moved: b
     }
 }
 
-/// The contested title that decides a pair: of the titles held by the two,
-/// the one with the largest gap.
-///
-/// The payload carries the holder's value only, not the other member's. Until
-/// it does, the gap is the held value measured against the largest held value
-/// of the same unit among all titles, so "4,167 h" outranks "4.6 h". Ties go
-/// to the title that comes first in the display order.
-fn deciding_title<'a>(
-    titles: &'a [WireTitle],
+/// Whether the higher value holds the title. Only has_a_life goes to the
+/// fewest hours.
+fn higher_wins(id: &str) -> bool {
+    id != "has_a_life"
+}
+
+/// The contested title that decides a pair: the one with the largest relative
+/// gap, `abs(a - b) / max(a, b)`, over the titles in the pair's values. Ties
+/// go to the title that comes first in the display order. The chip carries
+/// the value of the member who would hold the title in the pair, and the
+/// held days of the crew holder when that is the same member.
+fn deciding_chip(
+    pair: &WirePair,
+    titles: &[&WireTitle],
     viewer: &str,
-    opponent: &str,
-) -> Option<&'a WireTitle> {
-    let scale = |unit: &str| {
-        titles
-            .iter()
-            .filter(|t| t.unit == unit)
-            .map(magnitude)
-            .fold(0.0_f64, f64::max)
-    };
-    titles
-        .iter()
-        .filter(|t| t.holder_user_id == viewer || t.holder_user_id == opponent)
-        .filter(|t| look(&t.title_id).is_some())
-        .map(|t| {
-            let s = scale(&t.unit);
-            (if s > 0.0 { magnitude(t) / s } else { 0.0 }, t)
-        })
-        .fold(None, |best: Option<(f64, &WireTitle)>, (g, t)| match best {
-            Some((bg, bt))
-                if bg > g
-                    || (bg == g && display_rank(&bt.title_id) <= display_rank(&t.title_id)) =>
-            {
-                Some((bg, bt))
+    roster: &dyn Fn(&str) -> Person,
+    now_ms: i64,
+    moved_id: Option<&str>,
+) -> Option<Chip> {
+    let mut best: Option<(f64, &WirePairValue, &WireTitle)> = None;
+    for v in &pair.values {
+        let Some(crew) = titles.iter().find(|t| t.title_id == v.title_id) else {
+            continue;
+        };
+        let (a, b) = (magnitude(&v.a_value), magnitude(&v.b_value));
+        let top = a.max(b);
+        let gap = if top > 0.0 { (a - b).abs() / top } else { 0.0 };
+        let better = match best {
+            None => true,
+            Some((bg, bv, _)) => {
+                gap > bg || (gap == bg && display_rank(&v.title_id) < display_rank(&bv.title_id))
             }
-            _ => Some((g, t)),
-        })
-        .map(|(_, t)| t)
+        };
+        if better {
+            best = Some((gap, v, crew));
+        }
+    }
+    let (_, v, crew) = best?;
+    let (a, b) = (magnitude(&v.a_value), magnitude(&v.b_value));
+    let a_holds = if higher_wins(&v.title_id) {
+        a >= b
+    } else {
+        a <= b
+    };
+    let (holder, value) = if a_holds {
+        (viewer, &v.a_value)
+    } else {
+        (pair.b.as_str(), &v.b_value)
+    };
+    let mut chip = chip_of(
+        &WireTitle {
+            value: value.clone(),
+            holder_user_id: holder.to_string(),
+            ..(*crew).clone()
+        },
+        roster,
+        now_ms,
+        moved_id == Some(crew.title_id.as_str()),
+    );
+    if crew.holder_user_id != holder {
+        chip.held_days = 0;
+        chip.moved_recent = false;
+    }
+    Some(chip)
 }
 
 /// Build the model from the entry data. `None` when the data does not parse.
@@ -361,7 +402,6 @@ pub fn build(
         .collect();
 
     // The viewer is A in every pair. Rows keep the payload order.
-    let known_owned: Vec<WireTitle> = known.iter().map(|t| (*t).clone()).collect();
     let mut pairs: Vec<PairRow> = wire
         .pairs
         .iter()
@@ -370,8 +410,7 @@ pub fn build(
             opponent: roster(&p.b),
             you_count: p.a_count,
             them_count: p.b_count,
-            deciding: deciding_title(&known_owned, &viewer.id, &p.b)
-                .map(|t| chip_of(t, roster, now_ms, moved_id.as_deref() == Some(&t.title_id))),
+            deciding: deciding_chip(p, &known, &viewer.id, roster, now_ms, moved_id.as_deref()),
         })
         .collect();
 
@@ -717,38 +756,159 @@ mod tests {
         assert_eq!(m.pairs.len(), ROWS_FULL);
     }
 
+    fn pair_v(b: &str, a: i32, bc: i32, values: Vec<Value>) -> Value {
+        json!({"a": "me", "b": b, "a_count": a, "b_count": bc, "values": values})
+    }
+
+    fn pv(id: &str, a: Value, b: Value) -> Value {
+        json!({"title_id": id, "a_value": a, "b_value": b})
+    }
+
     #[test]
-    fn the_deciding_chip_is_the_title_with_the_largest_gap() {
+    fn the_deciding_chip_is_the_title_with_the_largest_real_gap() {
+        // The crew holder of the_carry is u3, not in the pair. The pair gap is
+        // 4171 against 4.6 hours: the widest. locked_in is 4.6 against 4.4.
         let data = feed(
-            2,
+            3,
             vec![
                 title("locked_in", "me", json!(4.6), "h"),
-                title("the_carry", "u2", json!(4171.0), "h"),
-                title("sampler", "u3", json!(9), "games"),
+                title("the_carry", "u3", json!(9000.0), "h"),
+                title("sampler", "u2", json!(9), "games"),
             ],
-            vec![pair("u2", 1, 1)],
+            vec![pair_v(
+                "u2",
+                1,
+                2,
+                vec![
+                    pv("locked_in", json!(4.6), json!(4.4)),
+                    pv("the_carry", json!(4.6), json!(4171.0)),
+                    pv("sampler", json!(3), json!(9)),
+                ],
+            )],
             None,
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
         let chip = m.pairs[0].deciding.as_ref().unwrap();
-        assert_eq!(chip.id, "the_carry", "4,171 h against 4.6 h is the widest");
-        assert_eq!(chip.holder_id, "u2");
+        assert_eq!(chip.id, "the_carry");
+        assert_eq!(chip.holder_id, "u2", "u2 holds it in the pair");
         assert_eq!(chip.value, "4,171");
+        assert_eq!(chip.held_days, 0, "the crew holder is u3, so no held days");
     }
 
     #[test]
-    fn a_title_held_by_a_third_member_does_not_decide_the_pair() {
+    fn the_gap_is_relative_not_absolute() {
+        // 40 games against 20 is a 50% gap. 9.0 h against 3.0 h is 67%.
         let data = feed(
-            3,
+            2,
             vec![
-                title("the_carry", "u3", json!(9000.0), "h"),
-                title("the_collector", "u2", json!(3), "installed"),
+                title("the_collector", "me", json!(40), "installed"),
+                title("locked_in", "u2", json!(9.0), "h"),
             ],
-            vec![pair("u2", 0, 1)],
+            vec![pair_v(
+                "u2",
+                1,
+                1,
+                vec![
+                    pv("the_collector", json!(40), json!(20)),
+                    pv("locked_in", json!(3.0), json!(9.0)),
+                ],
+            )],
             None,
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.pairs[0].deciding.as_ref().unwrap().id, "locked_in");
+    }
+
+    #[test]
+    fn equal_gaps_go_to_the_title_first_in_display_order() {
+        let data = feed(
+            2,
+            vec![
+                title("locked_in", "me", json!(8.0), "h"),
+                title("the_collector", "me", json!(10), "installed"),
+            ],
+            vec![pair_v(
+                "u2",
+                2,
+                0,
+                vec![
+                    pv("locked_in", json!(8.0), json!(4.0)),
+                    pv("the_collector", json!(10), json!(5)),
+                ],
+            )],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        // the_collector comes before locked_in in the table.
         assert_eq!(m.pairs[0].deciding.as_ref().unwrap().id, "the_collector");
+    }
+
+    #[test]
+    fn has_a_life_goes_to_the_fewer_hours_and_keeps_held_days_for_the_holder() {
+        let data = feed(
+            2,
+            vec![title("has_a_life", "me", json!(2.0), "h")],
+            vec![pair_v(
+                "u2",
+                1,
+                0,
+                vec![pv("has_a_life", json!(2.0), json!(30.0))],
+            )],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let chip = m.pairs[0].deciding.as_ref().unwrap();
+        assert_eq!(
+            (chip.holder_id.as_str(), chip.value.as_str()),
+            ("me", "2.0")
+        );
+        assert_eq!(chip.held_days, 3);
+    }
+
+    #[test]
+    fn night_owl_gap_counts_minutes_after_six_pm() {
+        // 01:00 is 420 min after 18:00, 23:00 is 300: a 29% gap. A plain
+        // clock compare would call 01:00 the smaller value.
+        let data = feed(
+            2,
+            vec![
+                title("night_owl", "u2", json!("01:00"), ""),
+                title("the_collector", "me", json!(10), "installed"),
+            ],
+            vec![pair_v(
+                "u2",
+                1,
+                1,
+                vec![
+                    pv("night_owl", json!("23:00"), json!("01:00")),
+                    pv("the_collector", json!(10), json!(9)),
+                ],
+            )],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let chip = m.pairs[0].deciding.as_ref().unwrap();
+        assert_eq!(
+            (chip.id.as_str(), chip.holder_id.as_str()),
+            ("night_owl", "u2")
+        );
+        assert_eq!(chip.value, "01:00");
+    }
+
+    #[test]
+    fn a_pair_without_values_has_no_chip() {
+        let data = feed(
+            3,
+            vec![title("the_carry", "u3", json!(9000.0), "h")],
+            vec![pair("u2", 0, 0)],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert!(m.pairs[0].deciding.is_none());
+        let data = json!({"member_count": 2, "open_seats": 3, "titles": [],
+            "pairs": [{"a": "me", "b": "u2", "a_count": 0, "b_count": 0, "values": null}]});
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert!(m.pairs[0].deciding.is_none());
     }
 
     #[test]

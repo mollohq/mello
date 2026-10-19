@@ -575,7 +575,7 @@ func h2hDocForFeed() *Head2headDoc {
 			{TitleID: titleOneTrick, HolderUserID: "u1", Value: 80, Unit: "%", SinceMs: 4, PreviousHolderUserID: "u2", MovedAtMs: h2hNow - 48*3_600_000},
 		},
 		Pairs: []Head2headPair{
-			{A: "u1", B: "u2", ACount: 3, BCount: 1},
+			{A: "u1", B: "u2", ACount: 3, BCount: 1, Values: []Head2headPairValue{{TitleID: titleTheCarry, AValue: 5.0, BValue: 2.0}}},
 			{A: "u1", B: "u3", ACount: 2, BCount: 2},
 			{A: "u2", B: "u3", ACount: 1, BCount: 3},
 		},
@@ -598,6 +598,14 @@ func TestFeedPayloadTrimsPairsForViewer(t *testing.T) {
 	// u1/u2 was 3-1 with u1 as A. For the viewer u2 it is 1-3.
 	if f.Pairs[0].B != "u1" || f.Pairs[0].ACount != 1 || f.Pairs[0].BCount != 3 {
 		t.Fatalf("swap: %+v", f.Pairs[0])
+	}
+	// The values swap with the pair: u1 held 5.0, u2 held 2.0.
+	if v := f.Pairs[0].Values; len(v) != 1 || v[0].AValue != 2.0 || v[0].BValue != 5.0 {
+		t.Fatalf("values must follow the swap: %+v", v)
+	}
+	// A pair with no stored values still sends a list, never null.
+	if f.Pairs[1].Values == nil {
+		t.Fatalf("values must not be nil: %+v", f.Pairs[1])
 	}
 	if len(f.Titles) != 4 {
 		t.Fatalf("full titles list: %d", len(f.Titles))
@@ -720,5 +728,33 @@ func TestFeedRPCIncludesHead2head(t *testing.T) {
 	f := crewHead2headForViewer(ctx, testLogger(), nk, "crew", "u1", h2hNow)
 	if f == nil || f.MemberCount != 2 || f.OpenSeats != 3 || len(f.Pairs) != 1 || f.Pairs[0].A != "u1" {
 		t.Fatalf("payload: %+v", f)
+	}
+}
+
+func TestPairValuesCarryBothMembersValues(t *testing.T) {
+	ms := []h2hMemberData{
+		member("u1", hdoc(hgame("steam-1", 3000), hgame("steam-2", 10)), played("steam-1", 1, 60)),
+		member("u2", hdoc(hgame("steam-1", 1200)), played("steam-1", 1, 400)),
+	}
+	d := compute(nil, h2hNow, 2, ms...)
+	if len(d.Pairs) != 1 {
+		t.Fatalf("pairs: %+v", d.Pairs)
+	}
+	p := d.Pairs[0]
+	if len(p.Values) != p.ACount+p.BCount {
+		t.Fatalf("one value per counted title: %+v", p)
+	}
+	var carry *Head2headPairValue
+	for i := range p.Values {
+		if p.Values[i].TitleID == titleTheCarry {
+			carry = &p.Values[i]
+		}
+	}
+	if carry == nil || carry.AValue != 50.0 || carry.BValue != 20.0 {
+		t.Fatalf("the_carry values in hours, A then B: %+v", p.Values)
+	}
+	raw, _ := json.Marshal(p)
+	if !strings.Contains(string(raw), `"a_value":50`) {
+		t.Fatalf("wire shape: %s", raw)
 	}
 }

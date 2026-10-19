@@ -71,6 +71,8 @@ A pair entry is `{a, b, a_count, b_count}` with `a` before `b` in id order. The 
 
 A title counts for a pair only when both members contend for it. The same tie rule applies.
 
+A pair entry also has `values`: one `{title_id, a_value, b_value}` for each title that counts for the pair. `a_value` and `b_value` use the encoding of the title `value`. The list length equals `a_count + b_count`. The list is empty, never null, for a pair with no shared title.
+
 ---
 
 ## 4. Recompute
@@ -102,7 +104,7 @@ The `this_week` section has one entry for every crew: `type` `head2head`, `id` `
 | `member_count` | Live crew size |
 | `open_seats` | `max(0, 5 - member_count)`, live |
 | `titles` | Every contested title |
-| `pairs` | Only the pairs with the viewer. The viewer is `a`. The counts follow the swap |
+| `pairs` | Only the pairs with the viewer. The viewer is `a`. The counts and the `values` follow the swap |
 | `belt_moved_recent` | The title with the newest `moved_at_ms`, when under 24 hours old. Absent otherwise |
 | `updated_at` | Doc time. Zero when no doc exists |
 
@@ -112,6 +114,15 @@ Role and size:
 - Otherwise the entry is `standard`, `lg`. It follows the hero and the recap. It never takes a filler slot.
 
 The client decides if a card renders. A card with no titles and no open seats has no data.
+
+### Deciding chip
+
+Each pair row in the cell shows one chip: the title that decides the pair. The client picks it from `values`.
+
+- The gap of a title is `abs(a_value - b_value) / max(a_value, b_value)`. For `night_owl` the values are minutes after 18:00.
+- The title with the largest gap wins. A tie goes to the title that comes first in the display order.
+- The chip shows the value of the member who would hold the title in the pair. Held days come from the crew holder, only when the crew holder is that member.
+- A pair with no `values` shows no chip.
 
 ---
 

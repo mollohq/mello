@@ -79,14 +79,26 @@ type Head2headTitle struct {
 	MovedAtMs            int64       `json:"moved_at_ms,omitempty"`
 }
 
+// Head2headPairValue is what the two members of a pair hold in one title that
+// both contend for. AValue and BValue use the same encoding as
+// Head2headTitle.Value, so the client can compute the gap and draw the
+// numbers. TitleID is in the order of the computation, not the display order.
+type Head2headPairValue struct {
+	TitleID string      `json:"title_id"`
+	AValue  interface{} `json:"a_value"`
+	BValue  interface{} `json:"b_value"`
+}
+
 // Head2headPair is the tally of two members, A before B in id order. A count
 // is the number of contested titles that member would hold if only the two
-// of them played.
+// of them played. Values lists, for each of those titles, what each member
+// holds. Its length is ACount + BCount. It is never null.
 type Head2headPair struct {
-	A      string `json:"a"`
-	B      string `json:"b"`
-	ACount int    `json:"a_count"`
-	BCount int    `json:"b_count"`
+	A      string               `json:"a"`
+	B      string               `json:"b"`
+	ACount int                  `json:"a_count"`
+	BCount int                  `json:"b_count"`
+	Values []Head2headPairValue `json:"values"`
 }
 
 // Head2headDoc is the per-crew holders doc. UpdatedAt is Unix milliseconds.
@@ -453,13 +465,18 @@ func computeHead2head(in h2hInput) *Head2headDoc {
 	pairs := make([]Head2headPair, 0, len(ids)*(len(ids)-1)/2)
 	for i := 0; i < len(ids); i++ {
 		for j := i + 1; j < len(ids); j++ {
-			p := Head2headPair{A: ids[i], B: ids[j]}
+			p := Head2headPair{A: ids[i], B: ids[j], Values: []Head2headPairValue{}}
 			for _, r := range contested {
-				_, aIn := r.scores[p.A]
-				_, bIn := r.scores[p.B]
+				aScore, aIn := r.scores[p.A]
+				bScore, bIn := r.scores[p.B]
 				if !aIn || !bIn {
 					continue
 				}
+				p.Values = append(p.Values, Head2headPairValue{
+					TitleID: r.titleID,
+					AValue:  r.value(aScore),
+					BValue:  r.value(bScore),
+				})
 				if pickWinner(r.scores, []string{p.A, p.B}, r.higherWins, prevByTitle[r.titleID].HolderUserID) == p.A {
 					p.ACount++
 				} else {
@@ -633,7 +650,8 @@ const head2headFeedID = "head2head"
 //
 //   - Titles: every contested title, so the client can draw the belt row.
 //   - Pairs: only the pairs that include the viewer, with the viewer as A.
-//     The counts follow the swap.
+//     The counts and the values follow the swap. Values lists the contested
+//     titles of the pair with both members' values, for the deciding chip.
 //   - MemberCount and OpenSeats come from the live crew size, not the doc.
 //   - BeltMovedRecent: the title with the newest MovedAtMs, when that is less
 //     than 24 h old. Nil otherwise. The same title also sits in Titles.
@@ -665,9 +683,16 @@ func trimHead2headForViewer(doc *Head2headDoc, crewID, viewerID string, memberCo
 	for _, p := range doc.Pairs {
 		switch viewerID {
 		case p.A:
+			if p.Values == nil {
+				p.Values = []Head2headPairValue{} // doc written before values existed
+			}
 			out.Pairs = append(out.Pairs, p)
 		case p.B:
-			out.Pairs = append(out.Pairs, Head2headPair{A: p.B, B: p.A, ACount: p.BCount, BCount: p.ACount})
+			swapped := Head2headPair{A: p.B, B: p.A, ACount: p.BCount, BCount: p.ACount, Values: make([]Head2headPairValue, 0, len(p.Values))}
+			for _, v := range p.Values {
+				swapped.Values = append(swapped.Values, Head2headPairValue{TitleID: v.TitleID, AValue: v.BValue, BValue: v.AValue})
+			}
+			out.Pairs = append(out.Pairs, swapped)
 		}
 	}
 	var newest *Head2headTitle
