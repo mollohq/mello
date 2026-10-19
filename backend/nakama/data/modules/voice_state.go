@@ -697,6 +697,7 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	if crewID != "" && !isGuest && hadCrewSession {
 		if mins := voiceMemberMinutes(joinedAtMs, leftAt); mins > 0 {
 			recordVoiceActivity(ctx, logger, nk, userID, mins, leftAt)
+			recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerSession, time.Now().UnixMilli())
 		}
 	}
 

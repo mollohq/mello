@@ -50,6 +50,15 @@ const (
 	titleTheCollect = "the_collector"
 	titleSampler    = "sampler"
 	titleOneTrick   = "one_trick"
+
+	// Session titles. They read the per-user activity doc
+	// (user_activity_stats.go).
+	titleMouth     = "mouth"
+	titleMarathon  = "marathon"
+	titleLastOneUp = "last_one_up"
+	titleClipper   = "clipper"
+	titleRageQuit  = "rage_quit"
+	titleWinner    = "winner"
 )
 
 // head2headNightHr is the local hour where the night_owl day starts. 02:00
@@ -64,9 +73,10 @@ const (
 
 // Head2headTitle is one contested title.
 //
-// Value is a JSON number for every title except night_owl, where it is the
-// string "HH:MM" (local clock). Unit is "h", "installed", "games", "%", or ""
-// for night_owl. SinceMs is when the current holder took the title. When the
+// Value is a JSON number for every title except night_owl and last_one_up,
+// where it is the string "HH:MM" (local clock). Unit is "h", "installed",
+// "games", "%", "min", "clips", "sessions", "wins", or "" for the two clock
+// titles. SinceMs is when the current holder took the title. When the
 // title changed hands, PreviousHolderUserID and MovedAtMs say from whom and
 // when. Both are absent for a title that never changed hands.
 type Head2headTitle struct {
@@ -131,10 +141,12 @@ type h2hMemberData struct {
 	UserID  string
 	Library *LibraryDoc     // nil when the member does not share a library
 	Stats   []UserGameStats // all per-game stats docs of the member
+	// Activity is the per-user activity doc, nil when the member has none.
+	Activity *UserActivityStats
 }
 
 func (m h2hMemberData) hasData() bool {
-	return (m.Library != nil && len(m.Library.Games) > 0) || len(m.Stats) > 0
+	return (m.Library != nil && len(m.Library.Games) > 0) || len(m.Stats) > 0 || m.Activity != nil
 }
 
 // h2hInput is the whole input of the pure computation.
@@ -198,7 +210,7 @@ func (r h2hResult) value(score int64) interface{} {
 		return math.Round(float64(score)/60*10) / 10 // minutes to hours, one decimal
 	case titleOneTrick:
 		return int(math.Round(float64(score) / 100)) // basis points to percent
-	case titleNightOwl:
+	case titleNightOwl, titleLastOneUp:
 		m := (int(score) + head2headNightHr*60) % 1440
 		return fmt.Sprintf("%02d:%02d", m/60, m%60)
 	}
@@ -400,6 +412,74 @@ func computeNightOwl(members []h2hMemberData, nowMs int64) h2hResult {
 	return r
 }
 
+// activityWindow returns the day buckets inside the last `days` UTC days.
+func activityWindow(a *UserActivityStats, nowMs int64, days int) []ActivityDay {
+	if a == nil {
+		return nil
+	}
+	cut := cutoffDate(nowMs, days)
+	var out []ActivityDay
+	for _, d := range a.Days {
+		if d.Date >= cut {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// computeActivityTitles computes the six session titles from the activity
+// docs. A member contends for a title only with a score above zero (for
+// last_one_up, with a session end that carried a time zone offset).
+func computeActivityTitles(members []h2hMemberData, nowMs int64) []h2hResult {
+	mk := func(id, unit string) h2hResult {
+		return h2hResult{titleID: id, unit: unit, higherWins: true, scores: map[string]int64{}}
+	}
+	mouth := mk(titleMouth, "min")
+	marathon := mk(titleMarathon, "min")
+	lastUp := mk(titleLastOneUp, "")
+	clipper := mk(titleClipper, "clips")
+	rage := mk(titleRageQuit, "sessions")
+	winner := mk(titleWinner, "wins")
+
+	for _, m := range members {
+		a := m.Activity
+		if a == nil {
+			continue
+		}
+		voice, short, wins := 0, 0, 0
+		bestNight, hasEnd := 0, false
+		for _, d := range activityWindow(a, nowMs, 14) {
+			voice += d.VoiceMin
+			short += d.ShortSessions
+			wins += d.WinMoments
+			if d.LatestEndLocalMin != nil {
+				if k := activityNightKey(*d.LatestEndLocalMin); !hasEnd || k > bestNight {
+					bestNight, hasEnd = k, true
+				}
+			}
+		}
+		if voice > 0 {
+			mouth.scores[m.UserID] = int64(voice)
+		}
+		if a.LongestSessionMin > 0 {
+			marathon.scores[m.UserID] = int64(a.LongestSessionMin)
+		}
+		if hasEnd {
+			lastUp.scores[m.UserID] = int64(bestNight)
+		}
+		if a.Clips > 0 {
+			clipper.scores[m.UserID] = int64(a.Clips)
+		}
+		if short > 0 {
+			rage.scores[m.UserID] = int64(short)
+		}
+		if wins > 0 {
+			winner.scores[m.UserID] = int64(wins)
+		}
+	}
+	return []h2hResult{mouth, marathon, lastUp, clipper, rage, winner}
+}
+
 // computeHead2head is the pure computation: results to titles, holder
 // bookkeeping against the previous doc, and pair tallies.
 func computeHead2head(in h2hInput) *Head2headDoc {
@@ -425,6 +505,7 @@ func computeHead2head(in h2hInput) *Head2headDoc {
 		computeSampler(members, in.NowMs),
 		computeOneTrick(members),
 	}
+	results = append(results, computeActivityTitles(members, in.NowMs)...)
 
 	prevByTitle := map[string]Head2headTitle{}
 	if in.Prev != nil {
@@ -577,6 +658,30 @@ func readAllUserGameStats(ctx context.Context, nk runtime.NakamaModule, userIDs 
 	return out
 }
 
+// readAllUserActivityStats reads the activity doc of each given user as the
+// system. A user with no doc is absent from the result.
+func readAllUserActivityStats(ctx context.Context, nk runtime.NakamaModule, userIDs []string) map[string]*UserActivityStats {
+	out := make(map[string]*UserActivityStats, len(userIDs))
+	if len(userIDs) == 0 {
+		return out
+	}
+	reads := make([]*runtime.StorageRead, 0, len(userIDs))
+	for _, uid := range userIDs {
+		reads = append(reads, &runtime.StorageRead{Collection: UserActivityStatsCollection, Key: userActivityStatsKey, UserID: uid})
+	}
+	objects, err := nk.StorageRead(ctx, reads)
+	if err != nil {
+		return out
+	}
+	for _, o := range objects {
+		var a UserActivityStats
+		if json.Unmarshal([]byte(o.GetValue()), &a) == nil {
+			out[o.GetUserId()] = &a
+		}
+	}
+	return out
+}
+
 // recomputeHead2head recomputes and stores the holders doc of one crew. A
 // session trigger skips when the doc is under head2headSessionDebounceMs old.
 // A library trigger never skips. It returns the doc written, or nil when it
@@ -589,9 +694,10 @@ func recomputeHead2head(ctx context.Context, logger runtime.Logger, nk runtime.N
 	}
 	libs := readLibraryDocs(ctx, nk, ids)
 	stats := readAllUserGameStats(ctx, nk, ids)
+	activity := readAllUserActivityStats(ctx, nk, ids)
 	members := make([]h2hMemberData, 0, len(ids))
 	for _, id := range ids {
-		members = append(members, h2hMemberData{UserID: id, Library: libs[id], Stats: stats[id]})
+		members = append(members, h2hMemberData{UserID: id, Library: libs[id], Stats: stats[id], Activity: activity[id]})
 	}
 
 	for attempt := 0; attempt < 3; attempt++ {

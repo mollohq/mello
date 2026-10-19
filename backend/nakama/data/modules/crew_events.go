@@ -698,6 +698,7 @@ func PostMomentRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	logger.Info("User %s posted moment in crew %s: sentiment=%s", userID, req.CrewID, req.Sentiment)
 	if req.Sentiment == "win" {
 		recordWinMomentActivity(ctx, logger, nk, userID)
+		recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
 	}
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "event_id": eventID})
 	return string(resp), nil
@@ -927,9 +928,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	recordGameSessionActivity(ctx, logger, nk, userID, req.DurationMin, time.Now().UnixMilli(), validTzOffset(req.TzOffsetMin))
 	// Stats changed for every crew the user is in. The debounce keeps a burst
 	// of session ends to one recompute per crew per minute.
-	if req.GameID != "" {
-		recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
-	}
+	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter})
 	return string(resp), nil
 }

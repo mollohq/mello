@@ -227,3 +227,23 @@ func TestVoiceMemberMinutes(t *testing.T) {
 		}
 	}
 }
+
+func TestVoiceLeaveRecomputesTheCrewHolders(t *testing.T) {
+	nk := newFakeGuestNk()
+	nk.addMember("crew", "a", "a")
+	nk.addMember("crew", "b", "b")
+	// a already has voice time from an earlier call, so mouth is contested
+	// as soon as b leaves.
+	nk.put(UserActivityStatsCollection, userActivityStatsKey, "a", UserActivityStats{
+		Days: []ActivityDay{{Date: time.Now().UTC().Format("2006-01-02"), VoiceMin: 30}},
+	})
+	seatVoice("crew", "ch", map[string]int{"a": 80, "b": 60})
+	voiceLeaveInternal(context.Background(), testLogger(), nk, "b")
+	doc, _ := readHead2headDoc(context.Background(), nk, "crew")
+	if doc == nil {
+		t.Fatal("a voice leave must recompute the crew doc")
+	}
+	if m := titleOf(t, doc, titleMouth); m.HolderUserID != "b" || m.Value != float64(60) { // JSON number
+		t.Fatalf("mouth: %+v", m)
+	}
+}
