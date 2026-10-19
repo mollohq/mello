@@ -718,6 +718,9 @@ type GameSessionEndRequest struct {
 	// the same id; duplicates are acknowledged without re-applying stats or
 	// appending a second ledger event. Empty for older clients (no dedup).
 	SessionID string `json:"session_id"`
+	// UTC offset of the user's clock in minutes, east positive. Optional.
+	// Head2head night_owl reads it. A value outside -840..840 is ignored.
+	TzOffsetMin *int `json:"tz_offset_min,omitempty"`
 }
 
 // The server can't verify client-reported outcomes, but it can bound them:
@@ -879,7 +882,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	// this public event.
 	streakAfter := 0
 	if req.GameID != "" {
-		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws)
+		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws, validTzOffset(req.TzOffsetMin))
 		if err != nil {
 			// Non-fatal: still record the session, just without stats enrichment.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
