@@ -696,6 +696,9 @@ func PostMomentRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	}
 
 	logger.Info("User %s posted moment in crew %s: sentiment=%s", userID, req.CrewID, req.Sentiment)
+	if req.Sentiment == "win" {
+		recordWinMomentActivity(ctx, logger, nk, userID)
+	}
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "event_id": eventID})
 	return string(resp), nil
 }
@@ -919,6 +922,9 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	logger.Info("User %s game session end in crew %s: game=%s duration=%dm %dW-%dL streak=%d",
 		userID, req.CrewID, req.GameName, req.DurationMin, req.Wins, req.Losses, streakAfter)
+	// The per-user activity doc backs the session titles. It does not need a
+	// game id, so it counts every session.
+	recordGameSessionActivity(ctx, logger, nk, userID, req.DurationMin, time.Now().UnixMilli(), validTzOffset(req.TzOffsetMin))
 	// Stats changed for every crew the user is in. The debounce keeps a burst
 	// of session ends to one recompute per crew per minute.
 	if req.GameID != "" {
