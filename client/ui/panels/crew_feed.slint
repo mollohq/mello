@@ -2920,3 +2920,160 @@ export component PreviewSemiCold inherits Rectangle {
         ];
     }
 }
+
+// ═══════════════════════════════════════════════════════════════
+// Head2head previews: the real feed placement, mock data. Acceptance
+// renders for mockups/next-gen-feed.html frames A, B2 and D.
+//
+//   slint-viewer --screenshot out.png --component PreviewFeedNewCrew \
+//     client/ui/panels/crew_feed.slint
+// ═══════════════════════════════════════════════════════════════
+
+// Frame A: a crew of one. Head2head takes the wide slot with four open
+// seats and the red invite inside it. The trio stays below. The invite line
+// gives way, because the card already carries the one red button.
+export component PreviewFeedNewCrew inherits Rectangle {
+    width: 760px;
+    height: 520px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        skeleton-stream: true;
+        skeleton-voice-clip: true;
+        skeleton-recap: true;
+        invite-line: false;
+        cards: [
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "wide", member-count: 1, open-seats: 4,
+                    left-name: "b0bben", left-initials: "B0", left-hue-index: 0,
+                    chips: [
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                    ],
+                },
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "",
+                recent-games: [
+                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "4,167 h" },
+                    { game-id: "ns", game-name: "Night Stones", short-name: "NS", duration-human: "12.6 h" },
+                    { game-id: "rl", game-name: "Rocket League", short-name: "RL", duration-human: "" },
+                ],
+            },
+        ];
+    }
+}
+
+// Frame B2: the first friend joined, and a title moved a minute ago. The
+// versus card takes the hero slot. The trio stays.
+export component PreviewFeedFirstFriend inherits Rectangle {
+    width: 760px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        skeleton-stream: true;
+        skeleton-voice-clip: true;
+        skeleton-recap: true;
+        invite-line: false;
+        cards: [
+            {
+                id: "h2h", card-type: "head2head", role: "hero", size: "lg",
+                head2head: {
+                    variant: "versus", member-count: 2, open-seats: 3, belt-moved-recent: true,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    right-name: "Jonas", right-initials: "J", right-hue-index: 1,
+                    left-score: 4, right-score: 3,
+                    chips: [
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1, moved-recent: true },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                    ],
+                },
+            },
+            {
+                id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-has-color: true, game-color: #5B7FA8,
+                game-record: "1W–2L", game-wins: 1, game-losses: 2,
+                game-streak-text: "L2", game-streak-positive: false,
+                game-winrate: "33%", game-matches: 3,
+                duration-human: "1h 25m", timestamp: "Earlier tonight",
+                actor-name: "Bob", actor-initials: "B",
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "1 session, 1 h this week",
+                recent-games: [
+                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "1h 25m" },
+                ],
+            },
+        ];
+    }
+}
+
+// Frame D: five members. The cell has no seats and no button. The invite
+// card sits beside it and carries the one red button.
+export component PreviewFeedFiveMembers inherits Rectangle {
+    width: 760px;
+    height: 560px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "cell-full", member-count: 5, open-seats: 0,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1 } },
+                        { name: "Sara", initials: "S", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 2 } },
+                        { name: "Max", initials: "M", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 3 } },
+                    ],
+                },
+            },
+            {
+                id: "invite", card-type: "invite", role: "standard", size: "md",
+                head2head: {
+                    variant: "invite", member-count: 5,
+                    members: [
+                        { name: "Bob", initials: "B", hue-index: 0 },
+                        { name: "Jonas", initials: "J", hue-index: 1 },
+                        { name: "Sara", initials: "S", hue-index: 2 },
+                        { name: "Max", initials: "M", hue-index: 3 },
+                        { name: "Leo", initials: "L", hue-index: 4 },
+                    ],
+                },
+            },
+            {
+                id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-has-color: true, game-color: #5B7FA8,
+                game-record: "2W–3L", game-wins: 2, game-losses: 3,
+                game-streak-text: "L2", game-streak-positive: false,
+                game-winrate: "40%", game-matches: 5,
+                duration-human: "2h 05m", timestamp: "5h ago",
+                actor-name: "Bob", actor-initials: "B",
+            },
+        ];
+    }
+}
