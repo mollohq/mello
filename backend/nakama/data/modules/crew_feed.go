@@ -74,10 +74,17 @@ type FeedEntry struct {
 
 // RecentGameTile is one game on the recent games card, keyed by game id.
 // GameID falls back to the lower-cased name for legacy events without an id.
+//
+// Minutes is the lifetime playtime from the members' library documents when
+// one has it, else the minutes of the sessions in the window. LastPlayed is Unix
+// milliseconds. MemberIDs are the members who have the game installed or
+// played it in the window.
 type RecentGameTile struct {
-	GameID   string `json:"game_id"`
-	GameName string `json:"game_name"`
-	Minutes  int    `json:"minutes"`
+	GameID     string   `json:"game_id"`
+	GameName   string   `json:"game_name"`
+	Minutes    int      `json:"minutes"`
+	LastPlayed int64    `json:"last_played,omitempty"`
+	MemberIDs  []string `json:"member_ids,omitempty"`
 }
 
 // RecentGamesData is the payload of the recent games card. SessionCount and
@@ -355,19 +362,53 @@ func reportableMinutes(durationMin, activeMin int) int {
 	return durationMin
 }
 
+// feedRecentGamesMaxPips caps the member ids on one tile.
+const feedRecentGamesMaxPips = 12
+
+// recentGameAgg collects what the sessions and the library documents say
+// about one game.
+type recentGameAgg struct {
+	id, name       string
+	sessionMin     int
+	sessionTs      int64
+	libraryMin     int
+	libraryTs      int64 // Unix milliseconds
+	libraryName    string
+	libraryID      string
+	members        map[string]bool
+	hasLibraryMins bool
+}
+
 // buildRecentGames builds the recent games card from the game sessions in the
-// window. It replaces the Crew play rollup: the session count and total time
-// become the card header, and the games become tiles keyed by game id. Sessions
-// with no reportable minutes are not counted. Returns false when no game has
-// minutes, so the card never emits empty.
-func buildRecentGames(cards []feedCard) (feedCard, bool) {
-	type agg struct {
-		id, name string
-		minutes  int
-	}
-	games := make(map[string]*agg)
+// window and the library documents of the crew members (libs, keyed by user
+// id; nil is fine). It replaces the Crew play rollup: the session count and
+// total time stay the card header and come from sessions only. The tiles are
+// the union of both sources, keyed by game id. A library game whose id matches
+// no session falls back to a match on the lower-cased name, because sessions
+// carry catalogue ids and the library carries launcher ids (spec 17 section
+// 3.3).
+//
+//   - name: the library name when present, else the session name;
+//   - minutes: the members' summed playtime when present, else session minutes;
+//   - last played: the newer of the two sources;
+//   - members: who has the game installed or played it.
+//
+// Sessions with no reportable minutes are not counted. Returns false when
+// there is nothing to show, so the card never emits empty.
+func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, bool) {
+	games := make(map[string]*recentGameAgg)
+	byName := make(map[string]string) // lower-cased name -> games key
 	var maxTs int64
 	sessions, totalMin := 0, 0
+
+	register := func(key, name string, g *recentGameAgg) {
+		games[key] = g
+		if n := strings.ToLower(strings.TrimSpace(name)); n != "" {
+			if _, taken := byName[n]; !taken {
+				byName[n] = key
+			}
+		}
+	}
 
 	for _, c := range cards {
 		if c.backendType != "game_session" {
@@ -395,13 +436,71 @@ func buildRecentGames(cards []feedCard) (feedCard, bool) {
 		totalMin += mins
 		g, exists := games[key]
 		if !exists {
-			g = &agg{id: d.GameID, name: d.GameName}
-			games[key] = g
+			g = &recentGameAgg{id: d.GameID, name: d.GameName, members: map[string]bool{}}
+			register(key, d.GameName, g)
 		}
 		if g.name == "" {
 			g.name = d.GameName
 		}
-		g.minutes += mins
+		g.sessionMin += mins
+		if c.ts > g.sessionTs {
+			g.sessionTs = c.ts
+		}
+		for _, id := range d.PlayerIDs {
+			if id != "" {
+				g.members[id] = true
+			}
+		}
+	}
+
+	// Library documents, in user id order so the result does not depend on
+	// map iteration.
+	userIDs := make([]string, 0, len(libs))
+	for id := range libs {
+		userIDs = append(userIDs, id)
+	}
+	sort.Strings(userIDs)
+	var maxLibraryUpdate int64
+	for _, userID := range userIDs {
+		doc := libs[userID]
+		if doc == nil {
+			continue
+		}
+		if doc.UpdatedAt > maxLibraryUpdate {
+			maxLibraryUpdate = doc.UpdatedAt
+		}
+		for _, lg := range doc.Games {
+			if lg.GameID == "" {
+				continue
+			}
+			key := lg.GameID
+			g, exists := games[key]
+			if !exists {
+				if k, ok := byName[strings.ToLower(strings.TrimSpace(lg.Name))]; ok {
+					key, g, exists = k, games[k], true
+				}
+			}
+			if !exists {
+				g = &recentGameAgg{id: lg.GameID, name: lg.Name, members: map[string]bool{}}
+				register(key, lg.Name, g)
+			}
+			if g.libraryName == "" {
+				g.libraryName = lg.Name
+			}
+			if g.libraryID == "" {
+				g.libraryID = lg.GameID
+			}
+			g.members[userID] = true
+			if lg.PlaytimeMin != nil && *lg.PlaytimeMin > 0 {
+				g.libraryMin += *lg.PlaytimeMin
+				g.hasLibraryMins = true
+			}
+			if lg.LastPlayedUnix != nil && *lg.LastPlayedUnix > 0 {
+				if ms := *lg.LastPlayedUnix * 1000; ms > g.libraryTs {
+					g.libraryTs = ms
+				}
+			}
+		}
 	}
 	if len(games) == 0 {
 		return feedCard{}, false
@@ -411,11 +510,40 @@ func buildRecentGames(cards []feedCard) (feedCard, bool) {
 	for key, g := range games {
 		id := g.id
 		if id == "" {
+			id = g.libraryID
+		}
+		if id == "" {
 			id = key
 		}
-		tiles = append(tiles, RecentGameTile{GameID: id, GameName: g.name, Minutes: g.minutes})
+		name := g.libraryName
+		if name == "" {
+			name = g.name
+		}
+		minutes := g.sessionMin
+		if g.hasLibraryMins {
+			minutes = g.libraryMin
+		}
+		lastPlayed := g.sessionTs
+		if g.libraryTs > lastPlayed {
+			lastPlayed = g.libraryTs
+		}
+		members := make([]string, 0, len(g.members))
+		for m := range g.members {
+			members = append(members, m)
+		}
+		sort.Strings(members)
+		if len(members) > feedRecentGamesMaxPips {
+			members = members[:feedRecentGamesMaxPips]
+		}
+		tiles = append(tiles, RecentGameTile{
+			GameID: id, GameName: name, Minutes: minutes,
+			LastPlayed: lastPlayed, MemberIDs: members,
+		})
 	}
 	sort.Slice(tiles, func(i, j int) bool {
+		if tiles[i].LastPlayed != tiles[j].LastPlayed {
+			return tiles[i].LastPlayed > tiles[j].LastPlayed
+		}
 		if tiles[i].Minutes != tiles[j].Minutes {
 			return tiles[i].Minutes > tiles[j].Minutes
 		}
@@ -425,11 +553,20 @@ func buildRecentGames(cards []feedCard) (feedCard, bool) {
 		tiles = tiles[:feedRecentGamesMaxTiles]
 	}
 
+	ts := maxTs
+	for _, t := range tiles {
+		if t.LastPlayed > ts {
+			ts = t.LastPlayed
+		}
+	}
+	if ts == 0 {
+		ts = maxLibraryUpdate
+	}
 	return feedCard{
 		id:          "recent_games",
 		feedType:    "recent-games",
 		backendType: "recent_games",
-		ts:          maxTs,
+		ts:          ts,
 		data:        RecentGamesData{Games: tiles, SessionCount: sessions, TotalMin: totalMin},
 	}, true
 }
@@ -608,7 +745,7 @@ func recapHasContent(r WeeklyRecapData) bool {
 //   - recap: needs content (recapHasContent).
 //   - session: needs reportable minutes. Zero-minute sessions never emit.
 //   - session-preview: needs at least one snapshot.
-//   - recent-games: needs a game with minutes.
+//   - recent-games: needs a tile with minutes or with a member who has it.
 //
 // Every other type is its own content (a clip, a join, a lock). A payload that
 // is absent or cannot be decoded cannot be judged, so the card is kept.
@@ -630,7 +767,15 @@ func cardHasContent(feedType, backendType string, data interface{}) bool {
 		return false
 	case "recent-games":
 		d, ok := decodeCardData[RecentGamesData](data)
-		return !ok || (len(d.Games) > 0 && d.TotalMin > 0)
+		if !ok {
+			return true
+		}
+		for _, g := range d.Games {
+			if g.Minutes > 0 || len(g.MemberIDs) > 0 {
+				return true
+			}
+		}
+		return false
 	case "session":
 		switch backendType {
 		case "game_session":
@@ -778,12 +923,18 @@ func heroIndex(cards []feedCard, nowMs int64) int {
 // Live streams are not surfaced here. They are client state (crew_state), so
 // the client shows them first and this list starts at the next hero choice.
 func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
+	return buildThisWeekWithLibraries(cards, nowMs, nil)
+}
+
+// buildThisWeekWithLibraries is buildThisWeek with the crew members' library
+// documents (by user id) feeding the recent games card.
+func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc) []FeedEntry {
 	// Empty-card rule first, so an empty card never takes a slot or a count.
 	cards = dropEmptyCards(cards)
 
 	// The recent games card counts every game session in the window, before
 	// pruning, so its header matches the week and not only the pruned part.
-	recent, hasRecent := buildRecentGames(cards)
+	recent, hasRecent := buildRecentGames(cards, libs)
 
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	// Pruned sessions are not carded; the recent games card carries their time.
@@ -845,7 +996,7 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 
 	// this_week: curated recent feed.
 	cards := mergedToCards(buildMergedTimeline(ctx, nk, req.CrewID))
-	thisWeek := buildThisWeek(cards, time.Now().UnixMilli())
+	thisWeek := buildThisWeekWithLibraries(cards, time.Now().UnixMilli(), crewLibraryDocs(ctx, nk, req.CrewID))
 
 	// Items shown in this_week are excluded from the memory spine.
 	shownClipIDs := map[string]bool{}
@@ -878,6 +1029,23 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	}
 	data, _ := json.Marshal(resp)
 	return string(data), nil
+}
+
+// crewLibraryDocs reads the library documents of the crew members as the
+// system. The crew list is capped at 100 members, as in isCrewMember. A
+// failure gives no documents, and the card falls back to sessions.
+func crewLibraryDocs(ctx context.Context, nk runtime.NakamaModule, crewID string) map[string]*LibraryDoc {
+	members, _, err := nk.GroupUsersList(ctx, crewID, 100, nil, "")
+	if err != nil {
+		return nil
+	}
+	ids := make([]string, 0, len(members))
+	for _, m := range members {
+		if id := m.GetUser().GetId(); id != "" {
+			ids = append(ids, id)
+		}
+	}
+	return readLibraryDocs(ctx, nk, ids)
 }
 
 // buildMemorySection assembles the durable spine: recaps (newest first),

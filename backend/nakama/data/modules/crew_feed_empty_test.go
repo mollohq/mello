@@ -28,6 +28,7 @@ func TestCardHasContent(t *testing.T) {
 		{"recent games with no tiles", "recent-games", "recent_games", RecentGamesData{TotalMin: 10}, false},
 		{"recent games with no minutes", "recent-games", "recent_games", RecentGamesData{Games: []RecentGameTile{{GameID: "g"}}}, false},
 		{"recent games with a tile", "recent-games", "recent_games", RecentGamesData{TotalMin: 10, Games: []RecentGameTile{{GameID: "g", Minutes: 10}}}, true},
+		{"recent games, installed only", "recent-games", "recent_games", RecentGamesData{Games: []RecentGameTile{{GameID: "g", MemberIDs: []string{"u1"}}}}, true},
 		{"clip", "clip", "clip", nil, true},
 		{"catch-up", "catchup", "member_joined", nil, true},
 		{"payload absent is kept", "session", "voice_session", nil, true},

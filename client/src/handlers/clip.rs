@@ -483,7 +483,11 @@ fn humanize_duration_min(mins: i64) -> String {
 
 /// Header line of the recent games card: "14 sessions, 31 h this week".
 /// Under an hour the total reads in minutes. One session reads "1 session".
+/// No sessions (a card built from the installed library only) gives no line.
 fn recent_games_header(session_count: i64, total_min: i64) -> String {
+    if session_count <= 0 {
+        return String::new();
+    }
     let sessions = if session_count == 1 {
         "1 session".to_string()
     } else {
@@ -1304,6 +1308,7 @@ mod tests {
         assert_eq!(recent_games_header(1, 45), "1 session, 45 min this week");
         assert_eq!(recent_games_header(2, 240), "2 sessions, 4 h this week");
         assert_eq!(recent_games_header(14, 1860), "14 sessions, 31 h this week");
+        assert_eq!(recent_games_header(0, 0), "", "installed games only");
     }
 
     #[test]
