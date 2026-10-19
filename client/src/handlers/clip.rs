@@ -174,10 +174,7 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
             }
         }
         "weekly_recap" => {
-            let hangout = data
-                .get("total_hangout_min")
-                .and_then(|v| v.as_f64())
-                .unwrap_or(0.0);
+            let hangout = recap_lead_minutes(data);
             let hours = hangout / 60.0;
             if hours >= 1.0 {
                 format!("{:.1}h", hours)
@@ -200,6 +197,29 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
         "member_joined" => format!("{} joined the crew", actor),
         _ => String::new(),
     }
+}
+
+/// Minutes the recap card leads with: `total_min` (voice, stream and game), or
+/// `total_hangout_min` for recaps stored before `total_min` existed.
+fn recap_lead_minutes(data: &serde_json::Value) -> f64 {
+    let num = |k: &str| data.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    let total = num("total_min");
+    if total > 0.0 {
+        total
+    } else {
+        num("total_hangout_min")
+    }
+}
+
+/// True for a recap entry with no minutes, sessions or clips. The server drops
+/// these; the client hides any that still arrive.
+fn is_empty_recap_entry(entry_type: &str, raw_data: &serde_json::Value) -> bool {
+    if entry_type != "recap" {
+        return false;
+    }
+    let data = normalized_entry_data(raw_data);
+    let count = |k: &str| data.get(k).and_then(|v| v.as_f64()).unwrap_or(0.0);
+    recap_lead_minutes(&data) <= 0.0 && count("session_count") <= 0.0 && count("clip_count") <= 0.0
 }
 
 fn extract_subtitle(data: &serde_json::Value, backend_type: &str) -> String {
@@ -1084,6 +1104,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         this_week = section
                             .entries
                             .iter()
+                            .filter(|e| !is_empty_recap_entry(&e.entry_type, &e.data))
                             .map(|e| {
                                 build_feed_card(
                                     ctx,
@@ -1101,6 +1122,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                         memory = section
                             .entries
                             .iter()
+                            .filter(|e| !is_empty_recap_entry(&e.entry_type, &e.data))
                             .map(|e| {
                                 build_feed_card(
                                     ctx,
