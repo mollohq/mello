@@ -81,10 +81,9 @@ func TestGenerateWeeklyRecap_EmptyWeekWritesNothing(t *testing.T) {
 
 func TestIsEmptyRecap(t *testing.T) {
 	cases := map[string]WeeklyRecapData{
-		"hangout":  {TotalHangoutMin: 1},
-		"game":     {TotalGameMin: 1},
-		"sessions": {SessionCount: 1},
-		"clips":    {ClipCount: 1},
+		"hangout": {TotalHangoutMin: 1},
+		"game":    {TotalGameMin: 1},
+		"clips":   {ClipCount: 1}, // clips alone show a clip count
 	}
 	for name, r := range cases {
 		if isEmptyRecap(r) {
@@ -93,6 +92,33 @@ func TestIsEmptyRecap(t *testing.T) {
 	}
 	if !isEmptyRecap(WeeklyRecapData{CrewID: "c1", WeekStart: 5}) {
 		t.Error("recap with no activity reported non-empty")
+	}
+}
+
+func TestIsEmptyRecap_ZeroMinuteSessionIsEmpty(t *testing.T) {
+	if !isEmptyRecap(WeeklyRecapData{SessionCount: 1}) {
+		t.Error("a session with zero minutes must not keep a recap alive")
+	}
+}
+
+func TestGenerateWeeklyRecap_NoMinutesWritesNothing(t *testing.T) {
+	cases := map[string][]CrewEvent{
+		"member join only": {{Type: "member_joined", ActorID: "u1", Timestamp: time.Now().UnixMilli()}},
+		"chat only":        {{Type: "chat_activity", ActorID: "u1", Timestamp: time.Now().UnixMilli()}},
+		"zero-minute stream": {{Type: "stream_session", ActorID: "u1", Timestamp: time.Now().UnixMilli(),
+			Data: StreamSessionData{}}},
+	}
+	for name, evs := range cases {
+		nk := newFakeGuestNk()
+		nk.addMember("c1", "u1", "ann")
+		putLedger(nk, "c1", evs...)
+
+		generateWeeklyRecap(context.Background(), nk, testLogger(), "c1")
+
+		doc, _ := readRecapsDoc(context.Background(), nk, "c1")
+		if len(doc.Recaps) != 0 {
+			t.Errorf("%s: recaps = %d, want 0", name, len(doc.Recaps))
+		}
 	}
 }
 

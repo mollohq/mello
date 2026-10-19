@@ -139,11 +139,21 @@ type WeeklyRecapData struct {
 }
 
 // isEmptyRecap reports whether a recap has nothing to show: no hangout or game
-// minutes, no sessions and no clips. The weekly job skips these, and the feed
-// hides any already stored.
+// minutes and no clips. The weekly job skips these, and the feed hides any
+// already stored.
+//
+// SessionCount is not checked. A session with zero minutes would render the
+// "0m" hero this guard exists to prevent. A week with only joins or chat adds
+// no minutes and no clips, so it is empty too. A week with clips and no
+// minutes is not empty: the card shows the clip count.
+//
+// Old recaps: recaps stored before TotalGameMin and TotalMin existed hold 0
+// there. One with game play only has TotalHangoutMin 0 and no clips, so it is
+// now hidden. This is accepted: it was the "0m" card, and its game time was
+// never stored, so it cannot be rebuilt.
 func isEmptyRecap(r WeeklyRecapData) bool {
 	return r.TotalHangoutMin == 0 && r.TotalGameMin == 0 && r.TotalMin == 0 &&
-		r.SessionCount == 0 && r.ClipCount == 0
+		r.ClipCount == 0
 }
 
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
