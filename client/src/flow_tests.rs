@@ -4665,6 +4665,12 @@ fn crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats() {
     assert_eq!(card.head2head.open_seats, 3);
     // Three seats do not fit one line: two show and a "+1" stands for the third.
     assert_eq!(count_of(&h, "OpenSeat"), 2);
+    assert_eq!(count_of(&h, "OpenSeatStrip"), 1);
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "+1"),
+        "{:?}",
+        drawn_texts(&h)
+    );
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
@@ -4705,6 +4711,9 @@ fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
     assert_eq!(hero.card_type.as_str(), "head2head", "first in the feed");
     assert_eq!(hero.head2head.variant.as_str(), "versus");
     assert_eq!(hero.head2head.right_name.as_str(), "Jonas");
+    // The hero has room for every open seat: three for a crew of two.
+    assert_eq!(count_of(&h, "OpenSeat"), 3);
+    assert!(!drawn_texts(&h).iter().any(|t| t.starts_with('+')));
     assert_eq!(
         hero.head2head.chips.row_data(0).unwrap().id.as_str(),
         "the_collector",

@@ -207,6 +207,39 @@ export component OpenSeat inherits Rectangle {
     }
 }
 
+/// A row of open seats at the compact size. It lays out up to `max-shown`
+/// seats and stands for the rest with "+N". The wide card and the versus hero
+/// have room for four. The cell has room for two, beside the invite button.
+export component OpenSeatStrip inherits Rectangle {
+    in property <int> seats: 0;
+    in property <int> max-shown: 4;
+    in property <length> size: 24px;
+    in property <length> gap: 6px;
+    in property <bool> show-labels: false;
+
+    background: transparent;
+    width: row.preferred-width;
+    height: row.preferred-height;
+
+    row := HorizontalLayout {
+        spacing: root.gap;
+        alignment: start;
+        cross-axis-alignment: center;
+        for i in min(root.seats, root.max-shown): OpenSeat {
+            size: root.size;
+            show-label: root.show-labels;
+        }
+        if root.seats > root.max-shown: Text {
+            text: "+" + (root.seats - root.max-shown);
+            font-family: Theme.font-label;
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 1px;
+            color: Theme.text-dim;
+        }
+    }
+}
+
 /// The commit button of the card: the design-system CutButton filled with
 /// `Theme.confirm`, white label. No labelled commit button exists in
 /// client/ui yet (each panel inlines its own), so this one wraps CutButton.
@@ -346,13 +379,12 @@ export component Head2headCardWide inherits Rectangle {
                     color: Theme.text-primary;
                     wrap: word-wrap;
                 }
-                HorizontalLayout {
-                    spacing: root.open-seats > 3 ? 4px : 8px;
-                    alignment: start;
-                    for i in root.open-seats: OpenSeat {
-                        size: root.open-seats > 3 ? 24px : 30px;
-                        show-label: root.open-seats <= 3;
-                    }
+                OpenSeatStrip {
+                    seats: root.open-seats;
+                    max-shown: 4;
+                    size: root.open-seats > 3 ? 24px : 30px;
+                    gap: root.open-seats > 3 ? 4px : 8px;
+                    show-labels: root.open-seats <= 3;
                 }
                 if root.open-seats > 3: Text {
                     text: "OPEN";
@@ -417,7 +449,7 @@ component PairRow inherits Rectangle {
 /// Standard cell (one column, 232px at the 760px feed). Title row, then one
 /// row for each pair the viewer is in (frame C). Below that, with seats:
 /// open seats left, invite button right. Three seats and the button do not
-/// fit one line at this width, so two seats and a "+1" stand for the three.
+/// fit one line at this width, so the strip shows two and a "+N".
 /// With no seats (five members or more) the bottom row is gone, and the
 /// Invite card carries the invite.
 export component Head2headCell inherits Rectangle {
@@ -463,15 +495,7 @@ export component Head2headCell inherits Rectangle {
             spacing: 6px;
             cross-axis-alignment: center;
 
-            for i in min(root.open-seats, 2): OpenSeat { size: 24px; show-label: false; }
-            if root.open-seats > 2: Text {
-                text: "+" + (root.open-seats - 2);
-                font-family: Theme.font-label;
-                font-size: 10px;
-                font-weight: Theme.weight-label;
-                letter-spacing: 1px;
-                color: Theme.text-dim;
-            }
+            OpenSeatStrip { seats: root.open-seats; max-shown: 2; }
             Rectangle { horizontal-stretch: 1; }
             InviteButton { compact: true; clicked => { root.invite-clicked(); } }
         }
@@ -559,7 +583,7 @@ export component VersusHero inherits Rectangle {
         if root.open-seats > 0: HorizontalLayout {
             spacing: 8px;
             cross-axis-alignment: center;
-            for i in root.open-seats: OpenSeat { size: 24px; show-label: false; }
+            OpenSeatStrip { seats: root.open-seats; max-shown: 4; gap: 8px; }
             Text {
                 text: "OPEN";
                 font-family: Theme.font-label;
