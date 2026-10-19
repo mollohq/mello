@@ -65,7 +65,7 @@ type FeedRequest struct {
 
 type FeedEntry struct {
 	ID   string      `json:"id"`
-	Type string      `json:"type"` // clip | recap | session-preview | session | catchup | recent-games
+	Type string      `json:"type"` // clip | recap | session-preview | session | catchup | recent-games | head2head
 	Role string      `json:"role"` // hero | standard | quiet | recap | locked
 	Size string      `json:"size"` // sm | md | lg
 	Ts   int64       `json:"ts"`
