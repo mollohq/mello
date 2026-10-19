@@ -24,6 +24,7 @@ mod foreground_monitor;
 mod game_icons;
 mod gif_animator;
 mod handlers;
+mod head2head;
 mod http;
 pub mod hud_manager;
 #[cfg(target_os = "windows")]

@@ -5,7 +5,8 @@ use mello_core::{decode_clip_waveform, Command, Event};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
-use crate::converters::make_initials;
+use crate::converters::{avatar_color_index, make_initials};
+use crate::head2head::{self, Person, Placement};
 use crate::{FeedCardData, RecapAwardRow, RecapLbRow, RecentGameTile};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
@@ -265,7 +266,9 @@ pub(crate) fn skeleton_trio_for<'a>(
     let (mut stream, mut voice_clip, mut recap) = (live_streams == 0, true, true);
     let mut any_real = live_streams > 0;
     for t in card_types {
-        if t.is_empty() || t == "locked" {
+        // Head2head and its invite card are not real cards: frame B2 keeps the
+        // trio next to a versus hero.
+        if t.is_empty() || t == "locked" || t == "head2head" || t == "invite" {
             continue;
         }
         any_real = true;
@@ -318,7 +321,116 @@ pub(super) fn refresh_feed_skeletons(ctx: &AppContext) {
     app.set_feed_skeleton_stream(trio.stream);
     app.set_feed_skeleton_voice_clip(trio.voice_clip);
     app.set_feed_skeleton_recap(trio.recap);
-    app.set_feed_invite_line(trio.any() && !invite_hidden && !active.is_empty());
+    // Head2head and the invite card carry their own red invite button. The
+    // surface has one red button, so the line gives way.
+    let has_h2h_invite = types.iter().any(|t| t == "head2head" || t == "invite");
+    app.set_feed_invite_line(trio.any() && !invite_hidden && !active.is_empty() && !has_h2h_invite);
+}
+
+/// The viewer and the roster of the active crew, for naming the user ids of
+/// the head2head entry.
+fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
+    let viewer = Person::new(
+        ctx.app.get_user_id().as_str(),
+        ctx.app.get_user_name().as_str(),
+    );
+    let model = ctx.app.get_members();
+    let members: Vec<Person> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .map(|m| Person {
+            hue: avatar_color_index(m.id.as_str()),
+            id: m.id.to_string(),
+            name: m.name.to_string(),
+            initials: m.initials.to_string(),
+        })
+        .collect();
+    (viewer, members)
+}
+
+/// Turn the `head2head` entry into its feed cards: the head2head card, and
+/// the invite card from five members on. The placement says whether the card
+/// leads the feed (wide and versus do) or keeps the server's position.
+fn head2head_cards(
+    ctx: &AppContext,
+    e: &mello_core::crew_events::FeedEntry,
+) -> Option<(Placement, Vec<FeedCardData>)> {
+    let data = normalized_entry_data(&e.data);
+    let (viewer, members) = h2h_roster(ctx);
+    let roster = |id: &str| -> Person {
+        if id == viewer.id {
+            return viewer.clone();
+        }
+        members
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+            .unwrap_or_else(|| Person::unknown(id))
+    };
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0);
+    let model = head2head::build(&data, &viewer, &roster, now_ms)?;
+    let mut cards = vec![FeedCardData {
+        id: e.id.as_str().into(),
+        card_type: "head2head".into(),
+        role: e.role.as_str().into(),
+        size: e.size.as_str().into(),
+        head2head: head2head::to_slint(&model),
+        ..Default::default()
+    }];
+    // From five members the cell loses its seats and button. The invite card
+    // takes over, with the viewer first and then the crew.
+    if model.member_count >= head2head::SEATS {
+        let mut shown = vec![viewer.clone()];
+        shown.extend(members.iter().filter(|m| m.id != viewer.id).cloned());
+        cards.push(FeedCardData {
+            id: "invite".into(),
+            card_type: "invite".into(),
+            role: "standard".into(),
+            size: "md".into(),
+            head2head: head2head::invite_card_data(&shown, model.member_count),
+            ..Default::default()
+        });
+    }
+    // A crew of five or more with nothing to compare has no cell. The invite
+    // card stays.
+    if model.placement == Placement::CellFull && model.pairs.is_empty() {
+        cards.remove(0);
+    }
+    Some((model.placement, cards))
+}
+
+/// The cards of the `this_week` section. Wide and versus lead the feed (the
+/// wide slot and the hero slot); a cell keeps the server's position.
+fn build_this_week(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Vec<FeedCardData> {
+    let mut lead: Vec<FeedCardData> = Vec::new();
+    let mut cards: Vec<FeedCardData> = Vec::new();
+    for e in entries {
+        if e.entry_type == "head2head" {
+            if let Some((placement, group)) = head2head_cards(ctx, e) {
+                match placement {
+                    Placement::Wide | Placement::Versus => lead = group,
+                    Placement::Cell | Placement::CellFull => cards.extend(group),
+                }
+            }
+            continue;
+        }
+        cards.push(build_feed_card(
+            ctx,
+            &e.id,
+            &e.entry_type,
+            &e.role,
+            &e.size,
+            &e.data,
+            e.ts,
+        ));
+    }
+    lead.extend(cards);
+    lead
 }
 
 type MvpSlot = (String, String, String, String); // (name, initials, stat, user_id)
@@ -1161,21 +1273,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             for section in &response.sections {
                 match section.id.as_str() {
                     "this_week" => {
-                        this_week = section
-                            .entries
-                            .iter()
-                            .map(|e| {
-                                build_feed_card(
-                                    ctx,
-                                    &e.id,
-                                    &e.entry_type,
-                                    &e.role,
-                                    &e.size,
-                                    &e.data,
-                                    e.ts,
-                                )
-                            })
-                            .collect();
+                        this_week = build_this_week(ctx, &section.entries);
                     }
                     "memory" => {
                         memory = section
@@ -1203,7 +1301,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // The feed shows real cards only. The skeleton trio is separate
             // state, set below, so it never takes a card slot or the hero.
             let has_real_memory = memory.iter().any(|c| c.card_type != "locked");
-            let is_cold = this_week.is_empty() && !has_real_memory;
+            // Head2head and the invite card are there from day one, so they do
+            // not end the cold start.
+            let is_cold = this_week
+                .iter()
+                .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
+                && !has_real_memory;
             let cards = this_week;
 
             ctx.app

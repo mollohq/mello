@@ -78,6 +78,65 @@ export struct RecentGameTile {
     duration-human: string,
 }
 
+// One head2head title and who holds it. Display strings are pre-formatted in
+// Rust (src/head2head.rs). `hue-index` is the holder's identity colour, the
+// same index `UserAvatar` takes.
+export struct TitleHeld {
+    id: string,
+    icon: image,
+    title: string,
+    value: string,
+    unit: string,
+    hue-index: int,
+    holder-id: string,
+    held-days: int,
+    moved-recent: bool,
+}
+
+// One row of the head2head cell: the viewer against one member.
+export struct H2hPairRow {
+    name: string,
+    initials: string,
+    hue-index: int,
+    you-initials: string,
+    you-hue-index: int,
+    you-count: int,
+    them-count: int,
+    has-chip: bool,
+    chip: TitleHeld,
+}
+
+// A crew member shown as an octagon (the invite card).
+export struct H2hPerson {
+    name: string,
+    initials: string,
+    hue-index: int,
+}
+
+// The head2head feed entry as the UI draws it. `variant` is the placement:
+// "wide" (crew of one), "versus" (a belt moved), "cell" (two to four
+// members, with seats) or "cell-full" (five or more, no seats).
+export struct Head2headData {
+    variant: string,
+    member-count: int,
+    open-seats: int,
+    belt-moved-recent: bool,
+    // Every contested title.
+    titles: [TitleHeld],
+    // The titles drawn as chips: the viewer's (wide) or four led by the
+    // moved title (versus).
+    chips: [TitleHeld],
+    pairs: [H2hPairRow],
+    // Wide: the viewer is `left`. Versus: `left` is the viewer, `right` the
+    // other member.
+    left-name: string, left-initials: string, left-hue-index: int,
+    right-name: string, right-initials: string, right-hue-index: int,
+    left-score: int, right-score: int,
+    // Invite card: the first members, and how many more there are.
+    members: [H2hPerson],
+    more-members: int,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -157,6 +216,9 @@ export struct FeedCardData {
 
     // Recent games card: the tiles. The header line is `subtitle`.
     recent-games: [RecentGameTile],
+
+    // Head2head card and invite card (card-type "head2head" / "invite").
+    head2head: Head2headData,
 }
 
 // One per-game card in the personal stats profile (spec 19 A2).
