@@ -90,7 +90,7 @@ impl Default for Settings {
             pending_invite_crew_name: None,
             pending_invite: None,
             onboarding_via_invite: false,
-            start_on_boot: false,
+            start_on_boot: true,
             ptt_key: None,
             start_minimized: false,
             close_to_tray: true,

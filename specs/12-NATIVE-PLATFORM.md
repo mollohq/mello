@@ -750,15 +750,22 @@ This is surfaced as a toggle in Settings. Default: off.
 Clicking the window close button hides to tray rather than quitting. This is the expected behaviour for a persistent communication app.
 
 ```rust
-// src/main.rs / src/app.rs
+// client/src/lib.rs
 
-window.on_close_requested(move || {
-    window_ref.hide().ok();
-    slint::CloseRequestResponse::KeepWindowHidden
+app.window().on_close_requested(move || {
+    if settings.borrow().close_to_tray {
+        window_ref.hide().ok();
+        slint::CloseRequestResponse::KeepWindowShown
+    } else {
+        slint::quit_event_loop().ok();
+        slint::CloseRequestResponse::KeepWindowShown
+    }
 });
 ```
 
-A "Quit Mello" option in the tray context menu performs a real exit. The close-to-tray behaviour can be made configurable in a later version.
+Slint 1.18 has two `CloseRequestResponse` values: `HideWindow` and `KeepWindowShown`. There is no `KeepWindowHidden`. The handler hides the window itself and returns `KeepWindowShown`, so Slint does not run its own hide. The `close_to_tray` setting (default on) selects hide or quit.
+
+A "Quit Mello" option in the tray context menu performs a real exit.
 
 ---
 

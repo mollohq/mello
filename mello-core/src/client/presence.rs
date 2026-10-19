@@ -101,7 +101,7 @@ impl super::Client {
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_game_session_end(
         &self,
-        crew_id: &str,
+        crew_id: Option<&str>,
         game_name: &str,
         game_id: &str,
         duration_min: u32,
@@ -110,9 +110,11 @@ impl super::Client {
         wins: u32,
         losses: u32,
         draws: u32,
+        start_ms: i64,
+        end_ms: i64,
     ) {
         let req = crate::crew_events::GameSessionEndRequest {
-            crew_id: crew_id.to_string(),
+            crew_id: crew_id.unwrap_or_default().to_string(),
             game_name: game_name.to_string(),
             game_id: game_id.to_string(),
             duration_min,
@@ -122,7 +124,15 @@ impl super::Client {
             losses,
             draws,
             session_id: generate_session_id(),
+            start_ms,
+            end_ms,
+            tz_offset_min: crate::crew_events::local_tz_offset_min(end_ms),
         };
+        if crew_id.is_none() {
+            log::info!("game_session_end: no active crew, queued for later");
+            self.queue_session_end(req).await;
+            return;
+        }
         match self.nakama.game_session_end(&req).await {
             Ok(resp) => {
                 // Surface a summary whenever the session had any recorded result
@@ -140,8 +150,47 @@ impl super::Client {
                     });
                 }
             }
-            Err(e) => log::warn!("game_session_end failed: {}", e),
+            Err(e) => {
+                log::warn!("game_session_end failed, queued for retry: {}", e);
+                self.queue_session_end(req).await;
+            }
         }
+    }
+
+    /// Keep a report that could not be sent. The queue refuses it when
+    /// sharing is off.
+    async fn queue_session_end(&self, req: crate::crew_events::GameSessionEndRequest) {
+        self.pending_session_ends.lock().await.push_unsent(
+            self.share_game_activity,
+            req,
+            crate::pending_session_ends::now_ms(),
+        );
+    }
+
+    /// Send the queued reports, oldest first. Called when a crew becomes the
+    /// active crew: first login, a crew switch and a realtime reconnect.
+    pub(super) async fn flush_pending_session_ends(&self) {
+        let Some(active) = self.nakama.active_crew_id().map(String::from) else {
+            return;
+        };
+        if !self.share_game_activity {
+            return;
+        }
+        let mut queue = self.pending_session_ends.lock().await;
+        if queue.is_empty() {
+            return;
+        }
+        let queued = queue.len();
+        let sent = queue
+            .flush(&active, |req| async move {
+                self.nakama
+                    .game_session_end(&req)
+                    .await
+                    .map(|_| ())
+                    .map_err(|e| e.to_string())
+            })
+            .await;
+        log::info!("[pending-session-ends] flushed {sent} of {queued}");
     }
 
     /// Emit the current Riot link state. Quiet on failure (not signed in yet,

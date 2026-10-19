@@ -180,6 +180,9 @@ pub struct Client {
     disabled_integrations: std::collections::HashSet<String>,
     /// When false, sensed play stays local — no crew presence or session-end RPCs.
     share_game_activity: bool,
+    /// `game_session_end` reports that could not be sent, kept across restarts.
+    /// Flushed when a crew becomes active (`flush_pending_session_ends`).
+    pending_session_ends: tokio::sync::Mutex<crate::pending_session_ends::PendingQueue>,
     enable_game_sensor: bool,
     emit_process_stats: bool,
     game_event_rx:
@@ -353,6 +356,15 @@ impl Client {
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
             share_game_activity: true,
+            // Unit tests must not read or write the developer's config dir.
+            pending_session_ends: tokio::sync::Mutex::new(if cfg!(test) {
+                crate::pending_session_ends::PendingQueue::open(
+                    None,
+                    crate::pending_session_ends::now_ms(),
+                )
+            } else {
+                crate::pending_session_ends::PendingQueue::open_default()
+            }),
             enable_game_sensor,
             emit_process_stats,
             game_event_rx: std::sync::Mutex::new(None),
@@ -455,20 +467,21 @@ impl Client {
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
                     if game_services::should_emit_game_session_end(self.share_game_activity) {
-                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                            self.handle_game_session_end(
-                                &crew_id,
-                                &summary.game_name,
-                                &summary.game_id,
-                                summary.duration_min,
-                                summary.active_min,
-                                summary.igdb_id,
-                                summary.wins,
-                                summary.losses,
-                                summary.draws,
-                            )
-                            .await;
-                        }
+                        let crew_id = self.nakama.active_crew_id().map(String::from);
+                        self.handle_game_session_end(
+                            crew_id.as_deref(),
+                            &summary.game_name,
+                            &summary.game_id,
+                            summary.duration_min,
+                            summary.active_min,
+                            summary.igdb_id,
+                            summary.wins,
+                            summary.losses,
+                            summary.draws,
+                            summary.start_ms,
+                            summary.end_ms,
+                        )
+                        .await;
                     }
                 }
             }
@@ -1180,8 +1193,11 @@ impl Client {
                 draws,
             } => {
                 if game_services::should_emit_game_session_end(self.share_game_activity) {
+                    // The post-game card reports a session that just ended.
+                    let end_ms = crate::pending_session_ends::now_ms();
+                    let start_ms = end_ms - i64::from(duration_min) * 60_000;
                     self.handle_game_session_end(
-                        &crew_id,
+                        Some(&crew_id),
                         &game_name,
                         &game_id,
                         duration_min,
@@ -1192,6 +1208,8 @@ impl Client {
                         wins,
                         losses,
                         draws,
+                        start_ms,
+                        end_ms,
                     )
                     .await;
                 }
@@ -1275,6 +1293,10 @@ impl Client {
                 let changed = self.share_game_activity != enabled;
                 self.share_game_activity = enabled;
                 log::info!("[game-sharing] share_game_activity = {enabled}");
+                if !enabled {
+                    // Sharing off means nothing waits to be sent later.
+                    self.pending_session_ends.lock().await.clear();
+                }
                 if changed {
                     self.sync_game_presence().await;
                 }

@@ -341,6 +341,7 @@ impl super::Client {
         match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
                 let _ = self.event_tx.send(Event::CrewStateLoaded { state });
+                self.flush_pending_session_ends().await;
             }
             Err(e) => {
                 log::warn!("set_active_crew RPC failed: {}", e);
@@ -464,6 +465,8 @@ impl super::Client {
         match self.nakama.set_active_crew(crew_id).await {
             Ok(state) => {
                 let _ = self.event_tx.send(Event::CrewStateLoaded { state });
+                // Also the reconnect path: resync_after_reconnect calls this.
+                self.flush_pending_session_ends().await;
             }
             Err(e) => {
                 log::error!("set_active_crew failed: {}", e);

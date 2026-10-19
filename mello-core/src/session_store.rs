@@ -53,7 +53,8 @@ pub fn resume_matches(persisted: &PersistedSession, live_pid: u32, live_started_
         && persisted.started_at_ms == live_started_at
 }
 
-fn store_path() -> Option<PathBuf> {
+/// Directory that holds the client's small persisted state files.
+pub(crate) fn store_dir() -> Option<PathBuf> {
     let base = if cfg!(windows) {
         std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
     } else {
@@ -61,7 +62,11 @@ fn store_path() -> Option<PathBuf> {
             .map(PathBuf::from)
             .or_else(|| std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".config")))
     }?;
-    Some(base.join("mello").join("active_sessions.json"))
+    Some(base.join("mello"))
+}
+
+fn store_path() -> Option<PathBuf> {
+    Some(store_dir()?.join("active_sessions.json"))
 }
 
 /// Overwrite the store with the currently open sessions. Best-effort: a failed
