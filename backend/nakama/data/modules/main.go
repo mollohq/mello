@@ -99,6 +99,13 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	}
 
 	// -----------------------------------------------------------------------
+	// RPCs — installed library (spec 16 section 3.5)
+	// -----------------------------------------------------------------------
+	if err := initializer.RegisterRpc("library_report", LibraryReportRPC); err != nil {
+		return err
+	}
+
+	// -----------------------------------------------------------------------
 	// RPCs — auth
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("auth/providers", AuthProvidersRPC); err != nil {
