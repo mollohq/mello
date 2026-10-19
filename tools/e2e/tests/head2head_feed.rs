@@ -482,12 +482,36 @@ fn session_titles_and_recap_belts_follow_the_activity_stats() {
         )
         .await;
 
-        // Voice. The harness cannot run media through the SFU here, so this
-        // drives the server voice state with voice_join and voice_leave (P2P
-        // mode, no media), and backdates the joins with dev_fault: A joined
-        // 80 minutes ago and B 60 minutes ago, so A stays 20 minutes longer.
-        rpc_json(&a, "voice_join", json!({"crew_id": cid})).await;
-        rpc_json(&b, "voice_join", json!({"crew_id": cid})).await;
+        // Voice. The call must take the SFU path, as the voice journeys in qa/
+        // do: a P2P join counts as a failure, because P2P is being removed.
+        // This test has no client, so no media runs. It drives the server voice
+        // state with voice_join and voice_leave, and checks the join answers in
+        // SFU mode. A is the crew admin and switches the crew to the SFU first.
+        // The own stack of scripts/e2e-head2head.sh holds a throwaway signing
+        // key, which SFU mode needs.
+        //
+        // TODO(e2e-sfu-media): no media goes through the SFU here. The media
+        // path is covered by the voice journeys (qa/journeys/voice-two-users.ts),
+        // which drive real clients against the local SFU. Move this to the
+        // harness when it can read the holders doc.
+        let enable = a.rpc("dev_enable_sfu_crew", &json!({"crew_id": cid})).await;
+        if let Err(e) = enable {
+            panic!(
+                "dev_enable_sfu_crew failed ({e}). The stack needs SFU_JWT_PRIVATE_KEY. \
+                 scripts/e2e-head2head.sh sets a throwaway key on its own stack"
+            );
+        }
+        for (name, client) in [("A", &a), ("B", &b)] {
+            let join = rpc_json(client, "voice_join", json!({"crew_id": cid})).await;
+            assert_eq!(
+                join["mode"], "sfu",
+                "{name}: the voice join must use the SFU, not P2P: {join}"
+            );
+            assert!(
+                join["sfu_token"].as_str().is_some_and(|t| !t.is_empty()),
+                "{name}: an SFU join carries a token: {join}"
+            );
+        }
         for (client, user, min) in [(&a, &ida, 80), (&b, &idb, 60)] {
             let raw = client
                 .rpc(

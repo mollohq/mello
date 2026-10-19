@@ -8,6 +8,10 @@
 # belts. About 70 seconds, because the holders doc debounces the session
 # trigger for 60 seconds. The two tests run in parallel.
 #
+# Voice in the second test takes the SFU path: the crew is switched to the SFU
+# and the join must answer in SFU mode. The own stack gets a throwaway signing
+# key (SFU_JWT_PRIVATE_KEY) and the local SFU address. No media runs.
+#
 # The Nakama module must be the one in THIS checkout. The stack that other
 # worktrees leave on port 7350 may mount a different checkout, so the default
 # is an own stack on port 17350 that mounts this tree and is torn down after.
@@ -19,8 +23,9 @@
 #                                         # (default 127.0.0.1:7350)
 #
 # Local only. It never reads a remote URL, and --existing refuses a host that
-# is not loopback. The second test needs MELLO_ENABLE_DEV_FAULT=1 on the
-# stack. The own stack sets it. With --existing, set it yourself.
+# is not loopback. The second test needs MELLO_ENABLE_DEV_FAULT=1 and
+# SFU_JWT_PRIVATE_KEY on the stack. The own stack sets both. With --existing,
+# set them yourself.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -52,6 +57,14 @@ else
     PORT="${H2H_NAKAMA_PORT:-17350}"
     TMP="$(mktemp -d)"
     PROJECT=mello-h2h
+    # Voice joins in the test must take the SFU path (P2P is being removed).
+    # SFU mode needs a signing key on Nakama. A throwaway key is enough: the
+    # test makes no media connection. The endpoint is the local SFU, never the
+    # production one that the compose file defaults to.
+    command -v openssl >/dev/null 2>&1 || { echo "openssl is needed for the throwaway SFU key" >&2; exit 1; }
+    SFU_JWT_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)"
+    export SFU_JWT_PRIVATE_KEY
+    export SFU_ENDPOINT_EU="ws://127.0.0.1:8080/ws"
     # Distinct container names and ports, so it lives next to the main stack.
     cat >"$TMP/override.yml" <<YML
 services:
