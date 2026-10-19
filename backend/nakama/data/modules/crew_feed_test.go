@@ -423,8 +423,8 @@ func TestHeroFreshPreviewPicksBestQuality(t *testing.T) {
 	}
 }
 
-// The belt hook is a named no-op until belts exist.
-func TestBeltMovedHeroHookIsNoOp(t *testing.T) {
+// The belt hook finds nothing when no head2head card is in the list.
+func TestBeltMovedHeroHookNeedsAHead2headCard(t *testing.T) {
 	if got := beltMovedHeroIndex([]feedCard{clipCard("c", 1)}, feedTestNowMs); got != -1 {
 		t.Fatalf("belt hook: got %d want -1", got)
 	}
