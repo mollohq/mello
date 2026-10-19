@@ -2,7 +2,7 @@
 
 > **Component:** Personal Stats Surface, Crew Feed Curation for Game Sessions
 > **Version:** 0.3
-> **Status:** Implemented. The deep profile view (section 2.4), the weekly recap game section (section 3.5) and the rich telemetry session card (section 3.6) are not built.
+> **Status:** Implemented. The deep profile view (section 2.4) and the rich telemetry session card (section 3.6) are not built. The weekly recap belts (section 3.5) are built on feat/next-gen-feed.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [17-GAME-SENSING.md](./17-GAME-SENSING.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -226,21 +226,27 @@ Minutes use the overnight guard. See [22](./22-GAME-UI-SURFACES.md) section 4.3.
 Curation runs server-side. Only `order`, `role`, `size` and `type` cross to the
 client. A threshold change needs no client release.
 
-### 3.5 Weekly recap enrichment — NOT BUILT
+### 3.5 Weekly recap enrichment
 
 The recap carries `GameRecords` and `BestStreak` from spec 18. See
-[crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go). The extension
-below is designed but not built.
+[crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go).
 
-```go
-GamesPlayed   []GameTally       `json:"games_played"`
-Leaderboard   []RecapGameRecord `json:"leaderboard"`
-Awards        []RecapAward      `json:"awards"`
-```
+The recap also carries the head2head belts. See
+[HEAD2HEAD.md](./features/HEAD2HEAD.md) section 6.
 
-Candidate awards: most matches played, longest win streak, longest loss streak,
-largest win-rate change, clutch counts where the adapter supplies them,
-head-to-head record, and longest loss streak ended.
+| Field | Content |
+|---|---|
+| `belts_moved` | Titles whose holder changed in the recap week, with the holder, the previous holder and the value |
+| `belts_held` | The number of titles each member holds when the recap is generated |
+| `awards` | The existing game awards, then one `belt` award for each moved belt |
+| `leaderboard` | The same entries as `belts_held` |
+
+- The job reads the belts from the holders doc at generation time.
+- A recap with no activity has no belts.
+- `GamesPlayed` is built.
+
+Awards not built: largest win-rate change, clutch counts where the adapter
+supplies them, head-to-head record, and longest loss streak ended.
 
 ### 3.6 Per-game data degradation
 
@@ -271,7 +277,7 @@ OCR. Spec 18 tracks that source.
 | `gameSessionT0Score`, `gameSessionQuality`, floor and cap | `crew_feed.go` | Implemented |
 | `pruneGameSessions`, `buildGameRollup`, `reportableMinutes` | `crew_feed.go` | Implemented |
 | You strip | `client/src/handlers/stats.rs`, `client/ui/panels/*` | Implemented |
-| Weekly recap game section | `crew_recaps.go` | Not built. Section 3.5 |
+| Weekly recap belts | `crew_recaps.go` | Implemented on feat/next-gen-feed. Section 3.5 |
 | Deep profile view | Client | Not built. Section 2.4 |
 | Rich telemetry session card | Client | Not built. Section 3.6 |
 

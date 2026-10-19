@@ -1,9 +1,9 @@
 # HEAD2HEAD
 
 > **Component:** Crew Feed, Crew Memory
-> **Version:** 1.0
+> **Version:** 1.1
 > **Status:** shipping with feat/next-gen-feed (backend only; client rendering is the next task)
-> **Depends on:** 16-CREW-EVENT-LEDGER.md (section 3.6, library documents), 19 (per-game stats), CLIPS.md (feed hero order)
+> **Depends on:** 16-CREW-EVENT-LEDGER.md (section 3.6, library documents), 19 (per-game stats and recap), CLIPS.md (feed hero order)
 
 ---
 
@@ -30,6 +30,12 @@ On a tie, the previous holder keeps the title. With no previous holder, the lowe
 | `the_collector` | Installed games | Most | `user_library` games | count, `installed` |
 | `sampler` | Distinct games played, 14 days | Most | `user_game_stats` `recent_days` | count, `games` |
 | `one_trick` | Share of lifetime minutes in one game | Highest | `user_library` and `user_game_stats` minutes | percent, `%` |
+| `mouth` | Voice minutes, 14 days | Most | `user_activity_stats` `voice_min` | minutes, `min` |
+| `marathon` | Longest single game session | Longest, lifetime | `user_activity_stats` `longest_session_min` | minutes, `min` |
+| `last_one_up` | Latest local clock time of a session end, 14 days | Latest | `user_activity_stats` `latest_end_local_min` | `"HH:MM"`, no unit |
+| `clipper` | Clips posted | Most, lifetime | `user_activity_stats` `clips` | count, `clips` |
+| `rage_quit` | Game sessions of 2 to 10 minutes, 14 days | Most | `user_activity_stats` `short_sessions` | count, `sessions` |
+| `winner` | Win moments posted, 14 days | Most | `user_activity_stats` `win_moments` | count, `wins` |
 
 Rules per title:
 
@@ -39,7 +45,15 @@ Rules per title:
 - `tz_offset_min` is an optional field on `game_session_end`. It is the UTC offset of the clock in minutes, east positive. The server ignores a value outside -840 to 840. The stats doc keeps the last value per game.
 - `recentDaysCap` is 14, so `recent_days` holds 14 days.
 
-Titles later: `mouth`, `marathon`, `last_one_up`, `clipper`, `rage_quit`, `winner`. They need the per-user stats doc of plan phase 5.
+Rules for the session titles. They read the activity doc of each crew member (section 3.1).
+
+- A member contends for a title only with a figure above zero. A member with no figure does not count.
+- The counters in the activity doc are per user, not per crew. A member has the same figures in every crew.
+- `last_one_up` ranks the clock from 18:00 local, like `night_owl`. It reads the session ends of the last 14 days. A session end without `tz_offset_min` has no clock and does not count.
+- `mouth` counts a member's own minutes in voice (section 3.1). The 14-day window is the last fourteen UTC days.
+- `marathon` and `clipper` use the lifetime counters. They do not expire.
+- A short session is a game session of 2 to 10 minutes, ends included.
+- A win moment is a moment posted with the sentiment `win`.
 
 ---
 
@@ -75,14 +89,52 @@ A pair entry also has `values`: one `{title_id, a_value, b_value}` for each titl
 
 ---
 
+### 3.1 Activity doc
+
+Collection `user_activity_stats`, key `stats`, owner is the user. Read and write permission are both 0, so only the server touches the doc. Head2head reads it as the system user and publishes only the title holders, never the counters.
+
+The doc has lifetime counters and 14 daily buckets. A bucket key is a UTC date.
+
+| Field | Lifetime | Per day | Written by |
+|---|---|---|---|
+| `voice_min` | Yes | Yes | Voice leave |
+| `game_min` | Yes | Yes | `game_session_end` |
+| `sessions` | Yes | Yes | `game_session_end` |
+| `short_sessions` | Yes | Yes | `game_session_end` |
+| `longest_session_min` | Yes, the maximum | Yes, the maximum | `game_session_end` |
+| `latest_end_local_min` | Yes, with `latest_end_date` | Yes | `game_session_end`, when `tz_offset_min` is valid |
+| `win_moments` | Yes | Yes | `post_moment` with the sentiment `win` |
+| `clips` | Yes | Yes | `post_clip` |
+
+- Every write drops the buckets older than 14 days, today included. The lifetime counters stay.
+- `latest_end_local_min` is the minute of the local day (0 to 1439). The latest end is the one latest from 18:00, so 01:15 is later than 23:30. `latest_end_date` is the local date of that session.
+- A session of under one minute adds nothing. A duplicate `game_session_end` (same `session_id`) adds nothing.
+- Every `game_session_end` counts, with or without `game_id`.
+
+### 3.2 Voice minutes
+
+The server keeps the join time of each voice member (`joined_at`). A reconnect to the same channel keeps it. On leave, the server adds the whole minutes between `joined_at` and the leave time to `voice_min`.
+
+- A member counts only when the voice session had two or more members at some time. Time alone in a channel nobody joined does not count.
+- A guest has no stats doc and adds nothing.
+- One stint is capped at 24 hours.
+- Every leave path uses the same bookkeeping: the leave RPC, a disconnect, a channel delete, a crew exit, the voice GC and the SFU reconcile.
+- The voice GC passes the last heartbeat of a ghost member as the leave time. So the ghost's minutes, and the `voice_session` duration when the ghost is the last member, end at the last sign of life and not when the GC finds it.
+- The leave path also finds a member that sits in a room with no user to channel entry. Before this, the GC could not remove it.
+- The crew `voice_session` event is unchanged. It is written once, when the last member leaves a session of two or more.
+
 ## 4. Recompute
 
 | Trigger | When | Debounce |
 |---|---|---|
 | Library report | After `library_report` stores the document, including an empty list | Never skipped |
-| Session end | After `game_session_end` writes the stats and the ledger event, when `game_id` is set | Skipped when `updated_at` is under 60 seconds old |
+| Session end | After `game_session_end` writes the stats and the ledger event | Skipped when `updated_at` is under 60 seconds old |
+| Clip post | After `post_clip` stores the clip and counts it | Same as session end |
+| Win moment | After `post_moment` with the sentiment `win` | Same as session end |
+| Voice leave | After a leave adds voice minutes. Recomputes the crew of the voice channel | Same as session end |
+| Recap | When the weekly recap is generated for a crew with activity | Never skipped |
 
-Both triggers recompute every crew the user is in.
+The library, session end, clip post and win moment triggers recompute every crew the user is in.
 
 - The holder is unchanged: keep `since_ms`, `previous_holder_user_id` and `moved_at_ms`.
 - The holder changes: set `since_ms` and `moved_at_ms` to now, and set `previous_holder_user_id` to the old holder.
@@ -126,9 +178,24 @@ Each pair row in the cell shows one chip: the title that decides the pair. The c
 
 ---
 
-## 6. Later
+## 6. Recap sections
 
-- Session titles from the per-user stats doc: `mouth`, `marathon`, `last_one_up`, `clipper`, `rage_quit`, `winner`.
+The weekly recap (spec 19 section 3.5) has two belt sections. The recap job reads them from the holders doc when it generates a recap.
+
+- The job recomputes the doc first, with the library trigger, so the debounce cannot leave it stale.
+- A recap with no activity has neither section. Holding a title is a standing state and does not count as activity.
+
+| Field | Content |
+|---|---|
+| `belts_moved` | Titles whose `moved_at_ms` is in the recap week. Each entry has `title_id`, `holder_user_id`, `holder_name`, `previous_holder_user_id`, `previous_holder_name`, `value`, `unit`, `moved_at_ms` |
+| `belts_held` | One entry per member who holds a title, most titles first, ties by user id. Each entry has `user_id`, `display_name`, `count`, `title_ids` |
+
+- A title that changed hands twice in the week appears once, with the last holder and the last previous holder.
+- The recap fields that the RecapCard already exports are filled from these. `awards` gets one entry of kind `belt` for each moved belt, after the existing game awards. `leaderboard` has the same entries as `belts_held`.
+- The `belt` award has `title` (the English title name), `name` (the new holder) and `detail` (`took it from <name>`, absent without a previous holder).
+
+## 7. Later
+
 - The opened view with the round robin of all pairs.
 - Push when a belt moves.
 - A per-crew off switch.
