@@ -79,6 +79,45 @@ pub fn title_name(id: &str) -> Option<&'static str> {
     look(id).map(|t| t.name)
 }
 
+/// Session titles are not on the feed card, only in the recap. They share one
+/// belt icon until each gets its own.
+const SESSION_TITLE_NAMES: [(&str, &str); 6] = [
+    ("mouth", "Mouth"),
+    ("marathon", "Marathon"),
+    ("last_one_up", "Last One Up"),
+    ("clipper", "Clipper"),
+    ("rage_quit", "Rage Quit"),
+    ("winner", "Winner"),
+];
+
+/// Name and icon of a title in the recap. A card title uses its own icon. A
+/// session title, or an id this client does not know, uses the belt icon and
+/// a name made from the id.
+pub fn belt_look(id: &str) -> (String, slint::Image) {
+    if let Some(t) = look(id) {
+        return (t.name.to_string(), icon_of(id));
+    }
+    let name = SESSION_TITLE_NAMES
+        .iter()
+        .find(|(i, _)| *i == id)
+        .map(|(_, n)| n.to_string())
+        .unwrap_or_else(|| {
+            id.split('_')
+                .filter(|w| !w.is_empty())
+                .map(|w| {
+                    let mut c = w.chars();
+                    c.next()
+                        .map(|f| f.to_uppercase().collect::<String>() + c.as_str())
+                        .unwrap_or_default()
+                })
+                .collect::<Vec<_>>()
+                .join(" ")
+        });
+    let icon = slint::Image::load_from_svg_data(include_bytes!("../ui/icons/h2h-belt.svg"))
+        .unwrap_or_default();
+    (name, icon)
+}
+
 fn display_rank(id: &str) -> usize {
     TITLES.iter().position(|t| t.id == id).unwrap_or(usize::MAX)
 }
@@ -263,7 +302,7 @@ fn grouped(n: i64) -> String {
 
 /// The number and the small unit of a title: hours from 100 up are whole
 /// ("4,167 h"), below that they keep one decimal ("4.6 h").
-fn value_text(value: &Value, unit: &str) -> (String, String) {
+pub(crate) fn value_text(value: &Value, unit: &str) -> (String, String) {
     match value {
         Value::String(s) => (s.clone(), String::new()),
         Value::Number(n) => {

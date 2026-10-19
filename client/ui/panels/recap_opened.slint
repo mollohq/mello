@@ -1,0 +1,316 @@
+import { Theme, MelloScrollArea } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { TitleChip, H2hHue } from "../components/head2head.slint";
+import { FeedCardData, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle } from "../types.slint";
+
+// ============================================================
+//  The weekly recap opened full screen (CLIPS 10.2).
+//  Mockup: mello-backlog mockups/weekly-recap-head2head.html frame 2.
+//  The numbers come first, then every belt that moved, then every
+//  member's belts. The recap card in the feed shows the same two
+//  sections with fewer rows.
+// ============================================================
+
+/// A title a member holds: icon and name, bordered in the holder's hue.
+component BeltTag inherits Rectangle {
+    in property <RecapHeldTitle> t;
+    in property <color> hue: Theme.id-blue;
+
+    height: 28px;
+    width: row.preferred-width;
+    background: transparent;
+
+    CutButtonShape { width: parent.width; height: parent.height; n: 5px; fill: root.hue; }
+    CutButtonShape { width: parent.width; height: parent.height; n: 5px; inset: Theme.keyline; fill: Theme.card-bg; }
+
+    row := HorizontalLayout {
+        padding-left: 9px;
+        padding-right: 10px;
+        spacing: 6px;
+        cross-axis-alignment: center;
+        Image { source: root.t.icon; colorize: root.hue; width: 14px; height: 14px; }
+        Text {
+            text: root.t.title.to-uppercase();
+            font-family: Theme.font-label;
+            font-size: 9px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 0.8px;
+            color: Theme.text-body;
+            vertical-alignment: center;
+        }
+    }
+}
+
+component Kicker inherits Text {
+    font-family: Theme.font-label;
+    font-size: 10px;
+    font-weight: Theme.weight-label;
+    letter-spacing: Theme.track-label;
+    color: Theme.text-secondary;
+}
+
+/// One block of the screen: a kicker over a card with one cut corner.
+component Section inherits Rectangle {
+    in property <string> label;
+    in property <string> source: "";
+
+    background: transparent;
+    height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 10px;
+        HorizontalLayout {
+            Kicker { text: root.label; horizontal-stretch: 1; }
+            if root.source != "": Kicker { text: root.source; color: Theme.text-dim; }
+        }
+        Rectangle {
+            height: body.preferred-height;
+            background: transparent;
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: "bl"; fill: Theme.card-border; }
+            CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: "bl"; inset: Theme.keyline; fill: Theme.card-bg; }
+            body := VerticalLayout {
+                padding: 18px;
+                spacing: 16px;
+                @children
+            }
+        }
+    }
+}
+
+component Stat inherits VerticalLayout {
+    in property <string> label;
+    in property <string> value;
+    spacing: 4px;
+    Kicker { text: root.label; }
+    Text {
+        text: root.value;
+        font-family: Theme.font-display;
+        font-size: 24px;
+        font-weight: Theme.weight-display;
+        color: Theme.text-value;
+        overflow: elide;
+    }
+}
+
+export component RecapOpened inherits Rectangle {
+    in property <FeedCardData> card;
+
+    callback close();
+
+    background: Theme.bg-app;
+
+    TouchArea {
+        // a11y: none (input blocker: stops clicks reaching the feed under the recap)
+    }
+
+    scroll := MelloScrollArea {
+        width: parent.width;
+        height: parent.height;
+        content-height: col.preferred-height + 64px;
+
+        col := VerticalLayout {
+            x: max(24px, (parent.width - self.width) / 2);
+            y: 32px;
+            width: min(880px, parent.width - 48px);
+            spacing: 28px;
+
+            HorizontalLayout {
+                spacing: 16px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 6px;
+                    Text {
+                        text: "Weekly recap";
+                        font-family: Theme.font-display;
+                        font-size: 32px;
+                        font-weight: Theme.weight-display-bold;
+                        color: Theme.text-primary;
+                    }
+                }
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    background: close-ta.has-hover ? Theme.surface-hover : transparent;
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 16px;
+                        height: 16px;
+                        colorize: close-ta.has-hover ? Theme.text-primary : Theme.text-secondary;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+                    close-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close weekly recap";
+                        mouse-cursor: pointer;
+                        clicked => { root.close(); }
+                    }
+                }
+            }
+
+            Section {
+                label: "THIS WEEK";
+                HorizontalLayout {
+                    spacing: 24px;
+                    Stat { label: "HANGOUT"; value: root.card.title; horizontal-stretch: 1; }
+                    Stat { label: "CLIPS"; value: root.card.subtitle != "" ? root.card.subtitle : "0"; horizontal-stretch: 1; }
+                    if root.card.duration != "": Stat { label: "LONGEST"; value: root.card.duration; horizontal-stretch: 1; }
+                    if root.card.game-name != "": Stat { label: "TOP GAME"; value: root.card.game-name; horizontal-stretch: 2; }
+                }
+                if root.card.mvp-count > 0: HorizontalLayout {
+                    spacing: 10px;
+                    cross-axis-alignment: center;
+                    UserAvatar { size: 28px; initials: root.card.mvp0-initials; color-index: 0; avatar: root.card.mvp0-avatar; has-avatar: root.card.mvp0-has-avatar; }
+                    Text {
+                        text: root.card.mvp0-name + " · " + root.card.mvp0-stat;
+                        font-family: Theme.font-body;
+                        font-size: 13px;
+                        font-weight: Theme.weight-sentence;
+                        color: Theme.text-body;
+                        horizontal-stretch: 1;
+                    }
+                }
+            }
+
+            if root.card.belts-moved.length > 0: Section {
+                label: "BELTS MOVED THIS WEEK";
+                source: "HEAD2HEAD";
+                for b in root.card.belts-moved: HorizontalLayout {
+                    spacing: 28px;
+                    cross-axis-alignment: center;
+                    TitleChip {
+                        width: 220px;
+                        hue: H2hHue.of(b.holder-hue);
+                        icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                    }
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+                        Rectangle {
+                            width: 40px;
+                            opacity: 0.4;
+                            UserAvatar { size: 40px; initials: b.prev-initials; color-index: b.prev-hue; avatar: b.prev-avatar; has-avatar: b.prev-has-avatar; }
+                        }
+                        VerticalLayout {
+                            spacing: 2px;
+                            Kicker { text: "WAS HELD BY"; }
+                            Text { text: b.prev-name != "" ? b.prev-name : "Nobody"; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display; color: Theme.text-secondary; }
+                        }
+                    }
+                    HorizontalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+                        UserAvatar { size: 40px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
+                        VerticalLayout {
+                            spacing: 2px;
+                            Kicker { text: "NOW HELD BY"; }
+                            Text { text: b.holder-name; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display; color: Theme.text-primary; }
+                        }
+                    }
+                }
+            }
+
+            if root.card.belts-held.length > 0: Section {
+                label: "BELTS HELD";
+                source: "HEAD2HEAD · NOW";
+                for h[i] in root.card.belts-held: VerticalLayout {
+                    spacing: 10px;
+                    HorizontalLayout {
+                        spacing: 12px;
+                        cross-axis-alignment: center;
+                        UserAvatar { size: 40px; initials: h.initials; color-index: h.hue; avatar: h.avatar; has-avatar: h.has-avatar; }
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 2px;
+                            Kicker { text: "RANK " + (i + 1); }
+                            Text { text: h.name; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display; color: Theme.text-primary; }
+                        }
+                        Text {
+                            text: h.count;
+                            font-family: Theme.font-display;
+                            font-size: 28px;
+                            font-weight: Theme.weight-display-bold;
+                            color: Theme.text-value;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: "belts";
+                            font-family: Theme.font-body;
+                            font-size: 11px;
+                            font-weight: Theme.weight-sentence;
+                            color: Theme.text-dim;
+                            vertical-alignment: center;
+                        }
+                    }
+                    HorizontalLayout {
+                        alignment: start;
+                        spacing: 8px;
+                        for t in h.titles: BeltTag { t: t; hue: H2hHue.of(h.hue); }
+                    }
+                }
+            }
+
+            if root.card.leaderboard.length > 0 || root.card.awards.length > 0: Section {
+                label: "THIS WEEK IN GAMES";
+                if root.card.games-summary != "": Text {
+                    text: root.card.games-summary;
+                    font-family: Theme.font-body;
+                    font-size: 13px;
+                    font-weight: Theme.weight-sentence;
+                    color: Theme.text-body;
+                }
+                for row in root.card.leaderboard: HorizontalLayout {
+                    spacing: 10px;
+                    height: 28px;
+                    UserAvatar { size: 28px; initials: row.initials; color-index: row.color-index; avatar: row.avatar; has-avatar: row.has-avatar; }
+                    Text { text: row.name; font-family: Theme.font-display; font-size: 14px; font-weight: Theme.weight-display; color: Theme.text-primary; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: row.record; font-family: Theme.font-body; font-size: 12px; font-weight: Theme.weight-sentence; color: Theme.text-body; vertical-alignment: center; }
+                }
+                for a in root.card.awards: HorizontalLayout {
+                    spacing: 10px;
+                    Text { text: a.title; font-family: Theme.font-body; font-size: 12px; font-weight: Theme.weight-sentence; color: Theme.text-dim; vertical-alignment: center; horizontal-stretch: 1; }
+                    Text { text: a.name; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-primary; vertical-alignment: center; }
+                    Text { text: a.detail; font-family: Theme.font-body; font-size: 12px; font-weight: Theme.weight-sentence; color: Theme.text-body; vertical-alignment: center; }
+                }
+            }
+        }
+    }
+}
+
+// Slint live-preview harness with mock data.
+export component Preview inherits Rectangle {
+    width: 1000px;
+    height: 1180px;
+    background: Theme.bg-app;
+
+    RecapOpened {
+        width: parent.width;
+        height: parent.height;
+        card: {
+            id: "r", card-type: "recap", title: "23h 10m", subtitle: "9", duration: "4h 5m",
+            game-name: "Rocket League", mvp-count: 1, mvp0-name: "Max", mvp0-initials: "Ma", mvp0-stat: "9.1h",
+            belts-moved: [
+                { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "h", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Jonas", holder-initials: "Jo", holder-hue: 1 },
+                { title: "Marathon", icon: @image-url("../icons/h2h-has-a-life.svg"), value: "245", unit: "min", prev-name: "Sara", prev-initials: "Sa", prev-hue: 3, holder-name: "Max", holder-initials: "Ma", holder-hue: 2 },
+                { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Sara", holder-initials: "Sa", holder-hue: 3 },
+            ],
+            games-summary: "24 matches · Counter-Strike 2",
+            leaderboard: [
+                { name: "Max", initials: "Ma", record: "10W 7L", color-index: 2 },
+                { name: "Bob", initials: "Bo", record: "3W 2L", color-index: 0 },
+            ],
+            awards: [
+                { kind: "grinder", title: "Grinder of the week", name: "Max", detail: "17 matches" },
+            ],
+            belts-held: [
+                { name: "Max", initials: "Ma", hue: 2, count: 3, titles: [{ title: "Marathon", icon: @image-url("../icons/h2h-has-a-life.svg") }, { title: "Mouth", icon: @image-url("../icons/h2h-collector.svg") }, { title: "Sampler", icon: @image-url("../icons/h2h-sampler.svg") }] },
+                { name: "Bob", initials: "Bo", hue: 0, count: 2, titles: [{ title: "Locked In", icon: @image-url("../icons/h2h-locked-in.svg") }, { title: "Has a Life", icon: @image-url("../icons/h2h-has-a-life.svg") }] },
+                { name: "Sara", initials: "Sa", hue: 3, count: 1, titles: [{ title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg") }] },
+                { name: "Jonas", initials: "Jo", hue: 1, count: 1, titles: [{ title: "The Carry", icon: @image-url("../icons/h2h-carry.svg") }] },
+            ],
+        };
+    }
+}

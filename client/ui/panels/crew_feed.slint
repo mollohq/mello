@@ -5,7 +5,7 @@ import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../t
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { SkeletonTrio } from "../components/skeleton_trio.slint";
-import { Head2headCardWide, Head2headCell, VersusHero, InviteCard } from "../components/head2head.slint";
+import { Head2headCardWide, Head2headCell, VersusHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
@@ -690,9 +690,27 @@ component ClipCard inherits Rectangle {
     }
 }
 
+/// The recap that is open full screen. A card sets it, main.slint draws it.
+/// A global, so the card does not pass a callback up through every feed slot.
+export global RecapView {
+    in-out property <bool> open: false;
+    in-out property <FeedCardData> card;
+}
+
 // Weekly recap card
 component RecapCard inherits Rectangle {
     in property <FeedCardData> card;
+    /// Rows of Belts moved the card shows. The full-screen recap shows all.
+    property <int> max-belt-rows: 3;
+    /// Members of Belts held the card shows: as many as fit the width, each
+    /// one an octagon and a count. The full-screen recap shows all.
+    property <int> max-held: Math.max(1, Math.floor((root.width - 70px) / 50px));
+    /// With belts the card has no room for everything. The belts are the news
+    /// of the week, so the MVP row and the games list go to the full-screen
+    /// recap, which shows both. A recap with no belts keeps all of them.
+    property <bool> has-belts: card.belts-moved.length > 0 || card.belts-held.length > 0;
+
+    clip: true;
 
     background: transparent;
     border-width: 0px;
@@ -778,7 +796,7 @@ component RecapCard inherits Rectangle {
         Rectangle { height: 10px; }
 
         // MVP section with avatars
-        if card.mvp-count > 0: Rectangle {
+        if card.mvp-count > 0 && !root.has-belts: Rectangle {
 
             VerticalLayout {
                 spacing: 0px;
@@ -830,8 +848,113 @@ component RecapCard inherits Rectangle {
             }
         }
 
+        // Belts moved (head2head): one row for each title that changed hands.
+        // The previous holder is dimmed, the new holder wears the hue.
+        if card.belts-moved.length > 0: Rectangle {
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle { height: 1px; background: Theme.card-border; }
+                Rectangle { height: 8px; }
+
+                Text {
+                    font-family: Theme.font-label;
+                    text: "BELTS MOVED";
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    color: Theme.skel-text;
+                    letter-spacing: Theme.track-label;
+                }
+
+                Rectangle { height: 6px; }
+
+                VerticalLayout {
+                    spacing: 0px;
+                    // A row past the limit has no height. The 6px gap sits
+                    // inside the row, so a hidden row leaves no gap either.
+                    for b[i] in card.belts-moved: Rectangle {
+                      height: i < root.max-belt-rows ? 52px : 0px;
+                      clip: true;
+                      HorizontalLayout {
+                        spacing: 6px;
+                        padding-bottom: 6px;
+                        cross-axis-alignment: center;
+
+                        Rectangle {
+                            width: 22px;
+                            opacity: 0.4;
+                            UserAvatar { size: 22px; initials: b.prev-initials; color-index: b.prev-hue; avatar: b.prev-avatar; has-avatar: b.prev-has-avatar; }
+                        }
+                        UserAvatar { size: 22px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
+                        TitleChip {
+                            horizontal-stretch: 1;
+                            compact: true;
+                            hue: H2hHue.of(b.holder-hue);
+                            icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                        }
+                      }
+                    }
+                }
+                Rectangle { height: 10px; }
+            }
+        }
+
+        // Belts held: who holds how many titles right now, most first.
+        if card.belts-held.length > 0: Rectangle {
+            VerticalLayout {
+                spacing: 0px;
+
+                Rectangle { height: 1px; background: Theme.card-border; }
+                Rectangle { height: 8px; }
+
+                Text {
+                    font-family: Theme.font-label;
+                    text: "BELTS HELD";
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    color: Theme.skel-text;
+                    letter-spacing: Theme.track-label;
+                }
+
+                Rectangle { height: 6px; }
+
+                HorizontalLayout {
+                    spacing: 0px;
+                    alignment: start;
+                    height: 26px;
+                    for h[i] in card.belts-held: Rectangle {
+                      width: i < root.max-held ? 50px : 0px;
+                      clip: true;
+                      HorizontalLayout {
+                        spacing: 5px;
+                        alignment: start;
+                        cross-axis-alignment: center;
+                        UserAvatar { size: 26px; initials: h.initials; color-index: h.hue; avatar: h.avatar; has-avatar: h.has-avatar; }
+                        Text {
+                            text: h.count;
+                            font-family: Theme.font-display;
+                            font-size: 18px;
+                            font-weight: Theme.weight-display;
+                            color: Theme.text-value;
+                            vertical-alignment: center;
+                        }
+                      }
+                    }
+                    Text {
+                        text: "belts";
+                        font-family: Theme.font-body;
+                        font-size: 11px;
+                        font-weight: Theme.weight-sentence;
+                        color: Theme.text-dim;
+                        vertical-alignment: center;
+                    }
+                }
+                Rectangle { height: 10px; }
+            }
+        }
+
         // This week in games (spec 19)
-        if card.leaderboard.length > 0 || card.awards.length > 0: Rectangle {
+        if (card.leaderboard.length > 0 || card.awards.length > 0) && !root.has-belts: Rectangle {
             VerticalLayout {
                 spacing: 0px;
 
@@ -918,6 +1041,16 @@ component RecapCard inherits Rectangle {
                     }
                 }
             }
+        }
+    }
+
+    TouchArea {
+        accessible-role: button;
+        accessible-label: "Open weekly recap";
+        mouse-cursor: pointer;
+        clicked => {
+            RecapView.card = root.card;
+            RecapView.open = true;
         }
     }
 }
@@ -1989,7 +2122,9 @@ export component CrewFeed inherits Rectangle {
     property <bool> side-is-recap: cards.length > feed-start-index + 1
         && cards[feed-start-index + 1].card-type == "recap"
         && (cards[feed-start-index + 1].leaderboard.length > 0
-            || cards[feed-start-index + 1].awards.length > 0);
+            || cards[feed-start-index + 1].awards.length > 0
+            || cards[feed-start-index + 1].belts-moved.length > 0
+            || cards[feed-start-index + 1].belts-held.length > 0);
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
         : lead-is-plain ? 0
         : lead-is-wide ? Math.min(2, cards.length - feed-start-index)
@@ -2838,6 +2973,17 @@ export component PreviewSessionHero inherits Rectangle {
                     { kind: "grinder", title: "Grinder of the week", name: "b0bben", detail: "17 matches" },
                     { kind: "heater", title: "Biggest heater", name: "b0bben", detail: "4-win streak" },
                     { kind: "skid", title: "Roughest patch", name: "Ostkatt", detail: "4-loss skid" },
+                ],
+                belts-moved: [
+                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "h", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Jonas", holder-initials: "Jo", holder-hue: 1 },
+                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Sara", holder-initials: "Sa", holder-hue: 3 },
+                    { title: "Sampler", icon: @image-url("../icons/h2h-sampler.svg"), value: "9", unit: "games", prev-name: "Sara", prev-initials: "Sa", prev-hue: 3, holder-name: "Max", holder-initials: "Ma", holder-hue: 2 },
+                ],
+                belts-held: [
+                    { name: "Max", initials: "Ma", hue: 2, count: 5 },
+                    { name: "Bob", initials: "Bo", hue: 0, count: 4 },
+                    { name: "Sara", initials: "Sa", hue: 3, count: 3 },
+                    { name: "Jonas", initials: "Jo", hue: 1, count: 3 },
                 ],
             },
             {

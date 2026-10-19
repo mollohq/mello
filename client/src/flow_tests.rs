@@ -6118,3 +6118,155 @@ fn toggling_hide_removes_the_game_from_the_next_report() {
     let ids: Vec<&str> = next.iter().map(|g| g.game_id.as_str()).collect();
     assert_eq!(ids, ["steam-730"], "the hidden game is not reported");
 }
+
+// ---- recap belts (CLIPS 10.2, HEAD2HEAD 6) ----
+
+fn recap_entry(extra: serde_json::Value) -> FeedEntry {
+    let mut data = serde_json::json!({
+        "crew_id": "crew-0",
+        "week_start": 1, "week_end": 2,
+        "total_hangout_min": 620, "top_game": "Rocket League",
+        "longest_session": "Max in General (245m)", "longest_session_min": 245,
+        "clip_count": 9, "most_active": "Max",
+        "top_members": [{"user_id": "user-1", "display_name": "Max", "hangout_min": 300}],
+    });
+    for (k, v) in extra.as_object().expect("object").iter() {
+        data[k] = v.clone();
+    }
+    feed_entry("recap-1", "recap", data)
+}
+
+fn belt_moved(title: &str, value: serde_json::Value, unit: &str) -> serde_json::Value {
+    serde_json::json!({
+        "title_id": title, "value": value, "unit": unit,
+        "holder_user_id": "user-1", "holder_name": "Jonas",
+        "previous_holder_user_id": "user-2", "previous_holder_name": "Bob",
+        "moved_at_ms": 1,
+    })
+}
+
+fn belts_held() -> serde_json::Value {
+    serde_json::json!([
+        {"user_id": "user-1", "display_name": "Jonas", "count": 3, "title_ids": ["the_carry", "clipper", "mouth"]},
+        {"user_id": "user-2", "display_name": "Bob", "count": 1, "title_ids": ["night_owl"]},
+    ])
+}
+
+fn emit_recap(h: &mut Harness, extra: serde_json::Value) {
+    app_with_crew_of(h, 2);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![recap_entry(extra)]),
+    });
+}
+
+/// A recap with two moved belts draws two rows, each a title chip, and the
+/// held section lists the members in count order.
+#[test]
+fn recap_with_two_moved_belts_shows_two_rows_and_the_held_section() {
+    let mut h = Harness::new();
+    emit_recap(
+        &mut h,
+        serde_json::json!({
+            "belts_moved": [
+                belt_moved("the_carry", serde_json::json!(4201.0), "h"),
+                belt_moved("night_owl", serde_json::json!("03:40"), ""),
+            ],
+            "belts_held": belts_held(),
+            "leaderboard": belts_held(),
+            // The belt awards must not show twice, as rows of the games list.
+            "awards": [
+                {"kind": "belt", "title": "The Carry", "name": "Jonas", "detail": "took it from Bob"},
+            ],
+        }),
+    );
+    let card = first_card(&h);
+    assert_eq!(card.card_type.as_str(), "recap");
+    assert_eq!(card.belts_moved.row_count(), 2);
+    assert_eq!(count_of(&h, "TitleChip"), 2, "one chip for each moved belt");
+    let first = card.belts_moved.row_data(0).expect("row");
+    assert_eq!(first.title.as_str(), "The Carry");
+    assert_eq!(first.value.as_str(), "4,201");
+    assert_eq!(first.unit.as_str(), "h");
+    assert_eq!(first.prev_name.as_str(), "Bob");
+    assert_eq!(first.holder_name.as_str(), "Jonas");
+    assert_eq!(card.belts_held.row_count(), 2);
+    let top = card.belts_held.row_data(0).expect("row");
+    assert_eq!((top.name.as_str(), top.count), ("Jonas", 3));
+    assert_eq!(top.titles.row_count(), 3);
+    assert_eq!(
+        card.awards.row_count(),
+        0,
+        "a belt award is not a game award"
+    );
+    // The hangout numbers stay.
+    assert_eq!(card.game_name.as_str(), "Rocket League");
+}
+
+/// The card shows three moved belts at most. The full-screen recap shows all.
+#[test]
+fn recap_card_caps_moved_belts_at_three_and_opens_full_screen_with_all() {
+    let mut h = Harness::new();
+    emit_recap(
+        &mut h,
+        serde_json::json!({
+            "belts_moved": [
+                belt_moved("the_carry", serde_json::json!(10.0), "h"),
+                belt_moved("night_owl", serde_json::json!("03:40"), ""),
+                belt_moved("sampler", serde_json::json!(9), "games"),
+                belt_moved("clipper", serde_json::json!(4), "clips"),
+            ],
+            "belts_held": belts_held(),
+        }),
+    );
+    assert_eq!(count_of(&h, "RecapOpened"), 0);
+    assert_eq!(
+        count_of(&h, "TitleChip"),
+        3,
+        "the card shows three of the four rows: a clipped row is absent from queries"
+    );
+    h.click_label("Open weekly recap");
+    assert_eq!(
+        count_of(&h, "RecapOpened"),
+        1,
+        "the card opens the full-screen recap"
+    );
+    assert_eq!(
+        count_of(&h, "TitleChip"),
+        3 + 4,
+        "the three rows of the card and all four rows of the full-screen recap"
+    );
+    h.click_label("Close weekly recap");
+    assert_eq!(count_of(&h, "RecapOpened"), 0);
+}
+
+/// A recap with no belts shows neither section.
+#[test]
+fn recap_without_belts_shows_neither_section() {
+    let mut h = Harness::new();
+    emit_recap(&mut h, serde_json::json!({}));
+    let card = first_card(&h);
+    assert_eq!(card.card_type.as_str(), "recap");
+    assert_eq!(card.belts_moved.row_count(), 0);
+    assert_eq!(card.belts_held.row_count(), 0);
+    assert_eq!(count_of(&h, "TitleChip"), 0);
+    h.click_label("Open weekly recap");
+    assert_eq!(
+        count_of(&h, "TitleChip"),
+        0,
+        "no belts, no chips in the full-screen recap"
+    );
+}
+
+/// A title this client has no icon for still gets a name and the belt icon.
+#[test]
+fn recap_names_session_titles_the_card_has_no_chip_for() {
+    let mut h = Harness::new();
+    emit_recap(
+        &mut h,
+        serde_json::json!({
+            "belts_moved": [belt_moved("last_one_up", serde_json::json!(5), "nights")],
+        }),
+    );
+    let row = first_card(&h).belts_moved.row_data(0).expect("row");
+    assert_eq!(row.title.as_str(), "Last One Up");
+}

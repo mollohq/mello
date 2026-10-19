@@ -65,6 +65,42 @@ export struct RecapAwardRow {
     detail: string,
 }
 
+// A head2head title that changed hands in the recap week. Value and unit are
+// split as on TitleChip. Hues are identity hue indexes of the two members.
+export struct RecapBeltMovedRow {
+    title: string,
+    icon: image,
+    value: string,
+    unit: string,
+    prev-name: string,
+    prev-initials: string,
+    prev-hue: int,
+    prev-avatar: image,
+    prev-has-avatar: bool,
+    holder-name: string,
+    holder-initials: string,
+    holder-hue: int,
+    holder-avatar: image,
+    holder-has-avatar: bool,
+}
+
+// One title a member holds, for the full-screen recap.
+export struct RecapHeldTitle {
+    title: string,
+    icon: image,
+}
+
+// A member and the number of titles they hold when the recap was written.
+export struct RecapBeltHeldRow {
+    name: string,
+    initials: string,
+    hue: int,
+    avatar: image,
+    has-avatar: bool,
+    count: int,
+    titles: [RecapHeldTitle],
+}
+
 // One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
 // game id. The icon is the runtime icon when one is cached, else the monogram.
 export struct RecentGameTile {
@@ -191,6 +227,9 @@ export struct FeedCardData {
     games-summary: string,
     leaderboard: [RecapLbRow],
     awards: [RecapAwardRow],
+    // Head2head belts of the recap (HEAD2HEAD 6). Empty for a week with none.
+    belts-moved: [RecapBeltMovedRow],
+    belts-held: [RecapBeltHeldRow],
     is-new: bool,
     was-seen: bool,
     snapshot-loading: bool,

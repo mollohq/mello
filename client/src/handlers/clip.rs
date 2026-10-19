@@ -7,7 +7,10 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::app_context::AppContext;
 use crate::converters::{avatar_color_index, make_initials};
 use crate::head2head::{self, Person, Placement};
-use crate::{FeedCardData, RecapAwardRow, RecapLbRow, RecentGameTile};
+use crate::{
+    FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapHeldTitle, RecapLbRow,
+    RecentGameTile,
+};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -521,12 +524,125 @@ fn extract_recap_leaderboard(ctx: &AppContext, data: &serde_json::Value) -> Vec<
         .collect()
 }
 
+/// Rows of the Belts moved section: one for each title that changed hands in
+/// the recap week, from `belts_moved`. Names come from the recap, so a member
+/// who left the crew still has one.
+fn extract_recap_belts_moved(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecapBeltMovedRow> {
+    let arr = match data.get("belts_moved").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let str_of = |v: &serde_json::Value, k: &str| -> String {
+        v.get(k).and_then(|n| n.as_str()).unwrap_or("").to_string()
+    };
+    arr.iter()
+        .map(|v| {
+            let title_id = str_of(v, "title_id");
+            let (title, icon) = head2head::belt_look(&title_id);
+            let (value, unit) = head2head::value_text(
+                v.get("value").unwrap_or(&serde_json::Value::Null),
+                &str_of(v, "unit"),
+            );
+            let holder_id = str_of(v, "holder_user_id");
+            let holder_name = str_of(v, "holder_name");
+            let prev_id = str_of(v, "previous_holder_user_id");
+            let prev_name = str_of(v, "previous_holder_name");
+            let (holder_avatar, holder_has_avatar) = resolve_avatar(ctx, &holder_id);
+            let (prev_avatar, prev_has_avatar) = resolve_avatar(ctx, &prev_id);
+            RecapBeltMovedRow {
+                title: title.into(),
+                icon,
+                value: value.into(),
+                unit: unit.into(),
+                prev_initials: if prev_name.is_empty() {
+                    "".into()
+                } else {
+                    make_initials(&prev_name).into()
+                },
+                prev_name: prev_name.into(),
+                prev_hue: avatar_color_index(&prev_id),
+                prev_avatar,
+                prev_has_avatar,
+                holder_initials: make_initials(&holder_name).into(),
+                holder_name: holder_name.into(),
+                holder_hue: avatar_color_index(&holder_id),
+                holder_avatar,
+                holder_has_avatar,
+            }
+        })
+        .collect()
+}
+
+/// Rows of the Belts held section: members in count order, from
+/// `leaderboard` (the same entries as `belts_held`). A member with no titles
+/// has no row.
+fn extract_recap_belts_held(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecapBeltHeldRow> {
+    let arr = match data
+        .get("leaderboard")
+        .or_else(|| data.get("belts_held"))
+        .and_then(|v| v.as_array())
+    {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut rows: Vec<RecapBeltHeldRow> = arr
+        .iter()
+        .filter_map(|v| {
+            let count = v.get("count").and_then(|n| n.as_i64()).unwrap_or(0);
+            if count <= 0 {
+                return None;
+            }
+            let user_id = v.get("user_id").and_then(|n| n.as_str()).unwrap_or("");
+            let name = v
+                .get("display_name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (avatar, has_avatar) = resolve_avatar(ctx, user_id);
+            let titles: Vec<RecapHeldTitle> = v
+                .get("title_ids")
+                .and_then(|t| t.as_array())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|i| i.as_str())
+                        .map(|id| {
+                            let (title, icon) = head2head::belt_look(id);
+                            RecapHeldTitle {
+                                title: title.into(),
+                                icon,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((
+                count,
+                RecapBeltHeldRow {
+                    initials: make_initials(&name).into(),
+                    name: name.into(),
+                    hue: avatar_color_index(user_id),
+                    avatar,
+                    has_avatar,
+                    count: count as i32,
+                    titles: ModelRc::new(VecModel::from(titles)),
+                },
+            ))
+        })
+        .map(|(_, r)| r)
+        .collect();
+    // The backend sends them most first. Keep that order for equal counts.
+    rows.sort_by_key(|r| std::cmp::Reverse(r.count));
+    rows
+}
+
 fn extract_recap_awards(data: &serde_json::Value) -> Vec<RecapAwardRow> {
     let arr = match data.get("awards").and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return Vec::new(),
     };
     arr.iter()
+        // Belt awards are drawn as the Belts moved section, with the two members.
+        .filter(|v| v.get("kind").and_then(|k| k.as_str()) != Some("belt"))
         .map(|v| {
             let s = |k: &str| {
                 v.get(k)
@@ -1055,6 +1171,8 @@ fn build_feed_card(
     let (mvp2_av, mvp2_has_av) = resolve_avatar(ctx, &mvp2.3);
     let recap_leaderboard = extract_recap_leaderboard(ctx, &data);
     let recap_awards = extract_recap_awards(&data);
+    let recap_belts_moved = extract_recap_belts_moved(ctx, &data);
+    let recap_belts_held = extract_recap_belts_held(ctx, &data);
     let recap_games_summary = games_summary(&data);
     let was_seen = ctx
         .settings
@@ -1140,6 +1258,8 @@ fn build_feed_card(
         games_summary: recap_games_summary.into(),
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
+        belts_moved: ModelRc::new(VecModel::from(recap_belts_moved)),
+        belts_held: ModelRc::new(VecModel::from(recap_belts_held)),
         game_record: game_record.into(),
         game_wins,
         game_losses,

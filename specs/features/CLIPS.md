@@ -376,6 +376,16 @@ A backend job runs weekly (Monday 00:00 UTC) and generates a recap from ledger d
 
 Appears as a card in the crew feed. NOT posted to chat. Tapping expands to a full-screen stats view.
 
+A recap with head2head belts adds two sections. See [HEAD2HEAD.md](./HEAD2HEAD.md) section 6.
+
+| Section | Card | Full screen |
+|---|---|---|
+| Belts moved | Up to three rows. Each row: the previous holder dimmed, the new holder, and a title chip with the value | All rows, with "was held by" and "now held by" |
+| Belts held | Members in count order, with the count and the label "belts" once | All members, with their titles |
+
+- A card with belts drops the MVP row and the games list. The full-screen view shows the games list.
+- A recap with no belts shows neither section.
+
 ---
 
 ## 11. Crew Feed Data
