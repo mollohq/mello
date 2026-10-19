@@ -34,11 +34,9 @@ const (
 	feedGameSessionMaxCards   = 2  // default cap when input has >5 game sessions
 	feedGameSessionNotableMin = 50 // default floor when input has >15 game sessions
 
-	// Fresh-clip premiere (spec CLIPS §12 v1): the newest clip earns hero while
-	// it is still young and the feed has not moved on. Session-previews still
-	// compete for fillers and the wide slot; they only lead when no clip qualifies.
-	feedClipHeroMaxAgeMs = 24 * 60 * 60 * 1000 // premiere window after capture
-	feedClipHeroMaxNewer = 4                   // buried once this many newer cards exist
+	// Hero priority (plans/next-gen-feed.md section 2): a stream preview, or a
+	// moved belt, leads only while it is this young.
+	feedHeroFreshMs = 24 * 60 * 60 * 1000
 )
 
 // feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
@@ -542,8 +540,9 @@ func pickFillerIndices(cards []feedCard, used []bool) []int {
 	return picks
 }
 
-// promoteWideSlot swaps the best visual filler (preview by quality, else a clip)
-// into the wide cell position. Clips beat weak previews, lose to strong ones.
+// promoteWideSlot swaps the best session-preview filler into the wide cell
+// position. A voice clip never takes the wide cell (plans/next-gen-feed.md
+// section 2), so clips are not candidates here.
 func promoteWideSlot(cards []feedCard, picks []int) {
 	if len(picks) <= feedWideFillerIdx {
 		return
@@ -551,14 +550,10 @@ func promoteWideSlot(cards []feedCard, picks []int) {
 	from := -1
 	bestScore := 0
 	for pos, i := range picks {
-		t := cards[i].feedType
-		if t != "session-preview" && t != "clip" {
+		if cards[i].feedType != "session-preview" {
 			continue
 		}
-		s := 5000 // clips beat weak previews for wide, lose to strong previews
-		if t == "session-preview" {
-			s = sessionPreviewQuality(cards[i])
-		}
+		s := sessionPreviewQuality(cards[i])
 		if from == -1 || s >= bestScore {
 			from = pos
 			bestScore = s
@@ -566,6 +561,26 @@ func promoteWideSlot(cards []feedCard, picks []int) {
 	}
 	if from >= 0 {
 		picks[from], picks[feedWideFillerIdx] = picks[feedWideFillerIdx], picks[from]
+	}
+	keepClipOutOfWideSlot(cards, picks)
+}
+
+// keepClipOutOfWideSlot moves a clip off the wide cell position by swapping it
+// with the nearest non-clip filler, later positions first. If every filler is a
+// clip there is nothing to swap with and the clip stays, capped at the standard
+// size by buildThisWeek.
+func keepClipOutOfWideSlot(cards []feedCard, picks []int) {
+	if len(picks) <= feedWideFillerIdx || cards[picks[feedWideFillerIdx]].feedType != "clip" {
+		return
+	}
+	for step := 1; step < len(picks); step++ {
+		for _, pos := range []int{feedWideFillerIdx + step, feedWideFillerIdx - step} {
+			if pos < 0 || pos >= len(picks) || cards[picks[pos]].feedType == "clip" {
+				continue
+			}
+			picks[pos], picks[feedWideFillerIdx] = picks[feedWideFillerIdx], picks[pos]
+			return
+		}
 	}
 }
 
@@ -600,45 +615,86 @@ func fillerRole(c feedCard) string {
 	return "standard"
 }
 
-// freshClipHeroIndex returns the index of the newest clip that qualifies for a
-// premiere hero slot, or -1. A clip premieres while it is younger than
-// feedClipHeroMaxAgeMs and fewer than feedClipHeroMaxNewer pruned cards are
-// newer than it. Pure so premiere/demotion rules are unit-testable.
-func freshClipHeroIndex(cards []feedCard, nowMs int64) int {
+// Hero priority, plans/next-gen-feed.md section 2:
+//
+//  1. a live stream. The feed builder cannot see live streams: they are client
+//     state from crew_state. The client shows a live stream above this_week, so
+//     this list starts at the next item.
+//  2. a stream preview (session-preview) from the last 24 h
+//  3. a belt that moved in the last 24 h (not available yet, see beltMovedHeroIndex)
+//  4. a real recap, on Monday
+//  5. the best session
+//
+// A voice clip is never the hero.
+
+// freshPreviewHeroIndex returns the best session-preview younger than
+// feedHeroFreshMs, or -1.
+func freshPreviewHeroIndex(cards []feedCard, nowMs int64) int {
 	best := -1
 	for i, c := range cards {
-		if c.feedType != "clip" {
+		if c.feedType != "session-preview" || nowMs-c.ts > feedHeroFreshMs {
+			continue
+		}
+		if best == -1 || sessionPreviewQuality(c) >= sessionPreviewQuality(cards[best]) {
+			best = i
+		}
+	}
+	return best
+}
+
+// beltMovedHeroIndex is the slot for "a belt moved in the last 24 h". Belts
+// need the per-user stats doc (plan phase 5), so no card carries one yet. It
+// returns -1 until then; the hero order already calls it in the right place.
+func beltMovedHeroIndex(cards []feedCard, nowMs int64) int {
+	return -1
+}
+
+// mondayRecapHeroIndex returns the recap to lead with on a Monday (UTC), the
+// day the weekly job runs, while that recap is under 24 h old. Empty recaps
+// never reach here: buildThisWeek drops them first. Otherwise -1.
+func mondayRecapHeroIndex(cards []feedCard, nowMs int64) int {
+	if time.UnixMilli(nowMs).UTC().Weekday() != time.Monday {
+		return -1
+	}
+	best := -1
+	for i, c := range cards {
+		if c.feedType != "recap" || nowMs-c.ts > feedHeroFreshMs {
 			continue
 		}
 		if best == -1 || c.ts > cards[best].ts {
 			best = i
 		}
 	}
-	if best == -1 {
-		return -1
-	}
-	clip := cards[best]
-	if nowMs-clip.ts > feedClipHeroMaxAgeMs {
-		return -1
-	}
-	newer := 0
-	for _, c := range cards {
-		if c.ts > clip.ts {
-			newer++
-		}
-	}
-	if newer >= feedClipHeroMaxNewer {
-		return -1
-	}
 	return best
 }
 
-// buildThisWeek curates the recent feed: hero (fresh clip premiere, else best
-// session-preview), the latest recap, then diversity+priority fillers capped
-// at feedFillerSlots with the wide-slot promotion. Pure given its inputs.
+// bestSessionHeroIndex returns the strongest session-preview of any age, or -1.
+func bestSessionHeroIndex(cards []feedCard) int {
+	used := make([]bool, len(cards))
+	return feedBestIndex(cards, used, "session-preview", sessionPreviewQuality)
+}
+
+// heroIndex applies the hero priority above. Pure, so the order is testable.
+func heroIndex(cards []feedCard, nowMs int64) int {
+	if i := freshPreviewHeroIndex(cards, nowMs); i >= 0 {
+		return i
+	}
+	if i := beltMovedHeroIndex(cards, nowMs); i >= 0 {
+		return i
+	}
+	if i := mondayRecapHeroIndex(cards, nowMs); i >= 0 {
+		return i
+	}
+	return bestSessionHeroIndex(cards)
+}
+
+// buildThisWeek curates the recent feed: the hero (see heroIndex), the latest
+// recap, then diversity+priority fillers capped at feedFillerSlots with the
+// wide-slot promotion. Clips are standard cards: never the hero, never wide.
+// Pure given its inputs.
 //
-// A live stream is not surfaced here yet; the live-stream hero is owned by the
-// separate multi-stream PR. Clients keep showing live streams from crew_state.
+// Live streams are not surfaced here. They are client state (crew_state), so
+// the client shows them first and this list starts at the next hero choice.
 func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	var pruned []feedCard
@@ -650,10 +706,7 @@ func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 	used := make([]bool, len(cards))
 	entries := make([]FeedEntry, 0, feedFillerSlots+2)
 
-	if hi := freshClipHeroIndex(cards, nowMs); hi >= 0 {
-		used[hi] = true
-		entries = append(entries, feedEntryFromCard(cards[hi], "hero", "lg"))
-	} else if hi := feedBestIndex(cards, used, "session-preview", sessionPreviewQuality); hi >= 0 {
+	if hi := heroIndex(cards, nowMs); hi >= 0 {
 		used[hi] = true
 		entries = append(entries, feedEntryFromCard(cards[hi], "hero", "lg"))
 	}
@@ -671,7 +724,7 @@ func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
 		if role == "quiet" {
 			size = "sm"
 		}
-		if pos == feedWideFillerIdx {
+		if pos == feedWideFillerIdx && cards[i].feedType != "clip" {
 			size = "lg" // the wide grid cell, ported from the desktop promotion
 		}
 		entries = append(entries, feedEntryFromCard(cards[i], role, size))
