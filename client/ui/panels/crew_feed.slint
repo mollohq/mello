@@ -742,7 +742,7 @@ component RecapCard inherits Rectangle {
         Text {
             font-weight: Theme.weight-sentence;
             font-family: Theme.font-body;
-            text: "Total crew time";
+            text: (card.clip-count > 0 && card.subtitle == "") ? "Clips this week" : "Crew time this week";
             font-size: 11px;
             color: Theme.text-sub;
         }

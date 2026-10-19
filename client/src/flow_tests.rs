@@ -5271,3 +5271,80 @@ fn a_stored_member_volume_is_sent_again_when_the_member_comes_back() {
         "the leave kept it"
     );
 }
+
+fn recap_feed(data: serde_json::Value) -> mello_core::crew_events::FeedResponse {
+    mello_core::crew_events::FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![mello_core::crew_events::FeedSection {
+            id: "this_week".into(),
+            entries: vec![mello_core::crew_events::FeedEntry {
+                id: "recap_1".into(),
+                entry_type: "recap".into(),
+                role: "recap".into(),
+                size: "md".into(),
+                ts: 1,
+                data,
+            }],
+        }],
+    }
+}
+
+fn recap_titles(h: &Harness) -> Vec<String> {
+    use slint::Model;
+    h.app()
+        .get_feed_cards()
+        .iter()
+        .filter(|c| c.card_type == "recap")
+        .map(|c| c.title.to_string())
+        .collect()
+}
+
+/// A recap with game minutes only leads with the game time (total_min), and an
+/// older recap without total_min falls back to total_hangout_min.
+#[test]
+fn recap_card_leads_with_total_min() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: recap_feed(serde_json::json!({
+            "total_hangout_min": 0, "total_game_min": 90, "total_min": 90,
+            "session_count": 2, "clip_count": 0,
+        })),
+    });
+    assert_eq!(recap_titles(&h), vec!["1.5h".to_string()]);
+
+    h.emit(Event::FeedLoaded {
+        response: recap_feed(serde_json::json!({
+            "total_hangout_min": 45, "clip_count": 0,
+        })),
+    });
+    assert_eq!(recap_titles(&h), vec!["45m".to_string()]);
+}
+
+/// A clips-only week leads with the clip count, never "0m", and keeps the card.
+#[test]
+fn clips_only_recap_leads_with_clip_count() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: recap_feed(serde_json::json!({
+            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
+            "session_count": 0, "clip_count": 3,
+        })),
+    });
+    assert_eq!(recap_titles(&h), vec!["3 clips".to_string()]);
+}
+
+/// An empty recap that reaches the client renders no recap card.
+#[test]
+fn empty_recap_renders_no_recap_card() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: recap_feed(serde_json::json!({
+            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
+            "session_count": 0, "clip_count": 0,
+        })),
+    });
+    assert!(recap_titles(&h).is_empty());
+}
