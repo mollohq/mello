@@ -5,6 +5,11 @@
 //! head2head entry and the recent games card. It then moves a belt, and sends
 //! `game_session_end` with `tz_offset_min` to bring in night_owl.
 //!
+//! A second test, `session_titles_and_recap_belts_follow_the_activity_stats`,
+//! drives the six session titles and the recap belts. It needs the dev_fault
+//! RPC (`MELLO_ENABLE_DEV_FAULT=1`, which the script sets on its own stack) to
+//! backdate voice joins and to generate the recap.
+//!
 //! The stack must serve THIS checkout's Nakama module, because the main
 //! checkout may not have `library_report`. Run it with:
 //!
@@ -13,10 +18,11 @@
 //! ./scripts/e2e-head2head.sh --existing   # the stack already on 7350
 //! ```
 //!
-//! The test skips when `MELLO_E2E` is unset, like `backend.rs`. It deletes both
-//! accounts at the end. It takes about 70 seconds: the session trigger of the
-//! holders doc has a 60 second debounce (spec HEAD2HEAD section 4), and the
-//! test waits it out rather than forcing a recompute.
+//! The tests skip when `MELLO_E2E` is unset, like `backend.rs`. They delete
+//! their accounts at the end. Each takes about 70 seconds: the session trigger
+//! of the holders doc has a 60 second debounce (spec HEAD2HEAD section 4), and
+//! the tests wait it out rather than forcing a recompute. They run in
+//! parallel, so the total stays near 70 seconds.
 
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
@@ -358,6 +364,269 @@ fn head2head_entry_follows_two_members_libraries_belts_and_sessions() {
         println!(
             "HEAD2HEAD ENTRY (A = the viewer)\n{}",
             anonymise(&h2h, &ida, &idb)
+        );
+
+        let _ = b.delete_account().await;
+        let _ = a.delete_account().await;
+    });
+}
+
+/// One game session end. `session_id` is unique for each call.
+fn session_payload(crew_id: &str, duration_min: i64, tz: i64) -> Value {
+    json!({
+        "crew_id": crew_id, "game_name": "Shared Game", "game_id": "steam-1000",
+        "duration_min": duration_min, "active_min": duration_min,
+        "session_id": format!("e2e-{:x}", rand::random::<u64>()),
+        "tz_offset_min": tz,
+    })
+}
+
+fn clip_payload(crew_id: &str) -> Value {
+    json!({
+        "crew_id": crew_id, "clip_id": format!("e2e-clip-{:x}", rand::random::<u64>()),
+        "clip_type": "voice", "duration_seconds": 10,
+    })
+}
+
+#[test]
+fn session_titles_and_recap_belts_follow_the_activity_stats() {
+    if std::env::var("MELLO_E2E").is_err() {
+        println!(
+            "SKIP session_titles_and_recap_belts_follow_the_activity_stats: \
+             set MELLO_E2E=1 and run ./scripts/e2e-head2head.sh"
+        );
+        return;
+    }
+
+    rt().block_on(async {
+        let mut a = NakamaClient::new(e2e_config());
+        let (user_a, _) = a
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("auth A");
+        let mut b = NakamaClient::new(e2e_config());
+        let (user_b, _) = b
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("auth B");
+        let (ida, idb) = (user_a.id.clone(), user_b.id.clone());
+        let (crew, _) = a
+            .create_crew(
+                &format!("E2E H2H S {:x}", rand::random::<u32>()),
+                "",
+                true,
+                None,
+                &[],
+            )
+            .await
+            .expect("create_crew");
+        let code = a.create_invite_code(&crew.id).await.expect("invite code");
+        b.join_by_invite_code(&code).await.expect("B joins");
+        let cid = crew.id.as_str();
+
+        // ---- phase 1: a first doc with a clipper held by A ----
+        // A posts 2 clips and B posts 1. The library report is a trigger that
+        // the debounce never skips, so the doc is computed now and A holds
+        // `clipper`. The clip posts before it only write the counters or are
+        // skipped by the debounce.
+        rpc_json(&a, "post_clip", clip_payload(cid)).await;
+        rpc_json(&a, "post_clip", clip_payload(cid)).await;
+        rpc_json(&b, "post_clip", clip_payload(cid)).await;
+        rpc_json(
+            &a,
+            "library_report",
+            json!({"games": [game("steam-1000", "Shared Game", 600)]}),
+        )
+        .await;
+        let first = head2head_of(&a, cid).await;
+        assert_eq!(
+            title(&first, "clipper").expect("clipper is contested")["holder_user_id"],
+            ida.as_str()
+        );
+        let t1 = first["updated_at"].as_i64().expect("updated_at");
+
+        // ---- phase 2: sessions, voice and moments. The debounce skips the recomputes. ----
+        // A: two 3 minute sessions and one 90 minute session. B: one 3 minute
+        // and one 40 minute session. A ends the later clock (22:xx against 20:xx).
+        let tz_a = tz_for_local_minute(22 * 60 + 5);
+        let tz_b = tz_for_local_minute(20 * 60 + 5);
+        for min in [3, 3, 90] {
+            rpc_json(&a, "game_session_end", session_payload(cid, min, tz_a)).await;
+        }
+        for min in [3, 40] {
+            rpc_json(&b, "game_session_end", session_payload(cid, min, tz_b)).await;
+        }
+
+        // B's second clip. The recompute of this one is skipped too.
+        rpc_json(&b, "post_clip", clip_payload(cid)).await;
+
+        // Win moments: A 2, B 1. A loss moment counts for nobody.
+        for _ in 0..2 {
+            rpc_json(
+                &a,
+                "post_moment",
+                json!({"crew_id": cid, "sentiment": "win", "text": "gg"}),
+            )
+            .await;
+        }
+        rpc_json(
+            &b,
+            "post_moment",
+            json!({"crew_id": cid, "sentiment": "win", "text": "gg"}),
+        )
+        .await;
+        rpc_json(
+            &b,
+            "post_moment",
+            json!({"crew_id": cid, "sentiment": "loss", "text": "gg"}),
+        )
+        .await;
+
+        // Voice. The harness cannot run media through the SFU here, so this
+        // drives the server voice state with voice_join and voice_leave (P2P
+        // mode, no media), and backdates the joins with dev_fault: A joined
+        // 80 minutes ago and B 60 minutes ago, so A stays 20 minutes longer.
+        rpc_json(&a, "voice_join", json!({"crew_id": cid})).await;
+        rpc_json(&b, "voice_join", json!({"crew_id": cid})).await;
+        for (client, user, min) in [(&a, &ida, 80), (&b, &idb, 60)] {
+            let raw = client
+                .rpc(
+                    "dev_fault",
+                    &json!({"action": "backdate_voice_join", "user_id": user, "count": min}),
+                )
+                .await;
+            if let Err(e) = raw {
+                panic!(
+                    "dev_fault failed ({e}). The stack needs MELLO_ENABLE_DEV_FAULT=1. \
+                     scripts/e2e-head2head.sh sets it on its own stack"
+                );
+            }
+        }
+        rpc_json(&b, "voice_leave", json!({"crew_id": cid})).await;
+        rpc_json(&a, "voice_leave", json!({"crew_id": cid})).await;
+
+        // ---- phase 3: wait out the debounce, then B's last clip recomputes ----
+        let wait_ms = (61_000 - (now_ms() - t1)).max(0) as u64;
+        println!("waiting {wait_ms} ms for the 60 s session debounce");
+        tokio::time::sleep(Duration::from_millis(wait_ms)).await;
+        // B's third clip is the one recompute after the wait. B has 3 clips
+        // against 2 and takes `clipper` from A. A second clip right after
+        // would be skipped by the debounce again.
+        rpc_json(&b, "post_clip", clip_payload(cid)).await;
+
+        let h2h = head2head_of(&a, cid).await;
+        let holder = |id: &str| -> String {
+            title(&h2h, id).unwrap_or_else(|| panic!("{id} must be contested: {h2h}"))
+                ["holder_user_id"]
+                .as_str()
+                .expect("holder")
+                .to_string()
+        };
+        assert_eq!(holder("clipper"), idb, "B has 3 clips against 2");
+        assert_eq!(title(&h2h, "clipper").expect("clipper")["value"], 3);
+        assert_eq!(
+            title(&h2h, "clipper").expect("clipper")["previous_holder_user_id"],
+            ida.as_str()
+        );
+        assert_eq!(holder("rage_quit"), ida, "A has 2 short sessions against 1");
+        assert_eq!(title(&h2h, "rage_quit").expect("rage_quit")["value"], 2);
+        assert_eq!(holder("marathon"), ida, "A 90 min against B 40 min");
+        assert_eq!(title(&h2h, "marathon").expect("marathon")["value"], 90);
+        assert_eq!(holder("mouth"), ida, "A 80 voice minutes against B 60");
+        let mouth = title(&h2h, "mouth").expect("mouth")["value"]
+            .as_i64()
+            .expect("mouth value");
+        assert!((80..=81).contains(&mouth), "A mouth minutes: {mouth}");
+        assert_eq!(holder("winner"), ida, "A 2 win moments against 1");
+        assert_eq!(holder("last_one_up"), ida, "A ends at 22:xx, B at 20:xx");
+        assert!(title(&h2h, "last_one_up").expect("last_one_up")["value"]
+            .as_str()
+            .expect("clock")
+            .starts_with("22:"));
+
+        // ---- the recap lists the belts ----
+        let raw = a
+            .rpc(
+                "dev_fault",
+                &json!({"action": "generate_recap", "crew_id": cid}),
+            )
+            .await
+            .expect("generate_recap");
+        assert!(raw.contains("\"success\":true"), "generate_recap: {raw}");
+        let recaps = rpc_json(&a, "crew_recaps", json!({"crew_id": cid})).await;
+        let recap = recaps["recaps"][0].clone();
+        // The crew voice_session event is unchanged: it spans the real wall
+        // time of the session, a minute or so here, not the backdated stints.
+        assert!(
+            recap["total_hangout_min"].as_i64().expect("hangout") >= 1,
+            "the voice session gives the recap content: {recap}"
+        );
+        let moved = recap["belts_moved"].as_array().expect("belts_moved");
+        let clipper_move = moved
+            .iter()
+            .find(|m| m["title_id"] == "clipper")
+            .unwrap_or_else(|| panic!("clipper moved this week: {recap}"));
+        assert_eq!(clipper_move["holder_user_id"], idb.as_str());
+        assert_eq!(clipper_move["previous_holder_user_id"], ida.as_str());
+        assert_eq!(clipper_move["value"], 3);
+        assert!(
+            moved.iter().all(|m| m["holder_name"].is_string()),
+            "names resolved: {moved:?}"
+        );
+        let held = recap["belts_held"].as_array().expect("belts_held");
+        let titles_of = |id: &str| -> Vec<String> {
+            held.iter()
+                .find(|h| h["user_id"] == id)
+                .map(|h| {
+                    h["title_ids"]
+                        .as_array()
+                        .expect("title_ids")
+                        .iter()
+                        .map(|t| t.as_str().expect("title id").to_string())
+                        .collect()
+                })
+                .unwrap_or_default()
+        };
+        let (held_a, held_b) = (titles_of(&ida), titles_of(&idb));
+        for id in ["mouth", "marathon", "last_one_up", "rage_quit", "winner"] {
+            assert!(held_a.iter().any(|t| t == id), "A holds {id}: {held:?}");
+        }
+        assert!(
+            held_b.iter().any(|t| t == "clipper"),
+            "B holds clipper: {held:?}"
+        );
+        assert_eq!(
+            held_a.len() + held_b.len(),
+            h2h["titles"].as_array().expect("titles").len(),
+            "every contested title has one holder: {held:?}"
+        );
+        for h in held {
+            assert_eq!(
+                h["count"].as_u64().expect("count"),
+                h["title_ids"].as_array().expect("title_ids").len() as u64
+            );
+        }
+        assert!(
+            held[0]["count"].as_u64() >= held[1]["count"].as_u64(),
+            "most belts first: {held:?}"
+        );
+        assert_eq!(recap["leaderboard"], recap["belts_held"]);
+        assert!(
+            recap["awards"]
+                .as_array()
+                .expect("awards")
+                .iter()
+                .any(|w| w["kind"] == "belt" && w["title"] == "Clipper"),
+            "a belt award for the clipper move: {recap}"
+        );
+
+        println!(
+            "RECAP BELTS (A, B replaced)\n{}",
+            anonymise(
+                &json!({"belts_moved": recap["belts_moved"], "belts_held": recap["belts_held"]}),
+                &ida,
+                &idb
+            )
         );
 
         let _ = b.delete_account().await;

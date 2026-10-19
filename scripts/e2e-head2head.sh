@@ -3,8 +3,10 @@
 #
 # Runs tools/e2e/tests/head2head_feed.rs: two fresh accounts, one crew,
 # library_report for both, crew_feed as the first account, a belt move, and
-# game_session_end with tz_offset_min. About 70 seconds, because the holders
-# doc debounces the session trigger for 60 seconds.
+# game_session_end with tz_offset_min. A second test posts clips, sessions,
+# moments and voice stints, and checks the six session titles and the recap
+# belts. About 70 seconds, because the holders doc debounces the session
+# trigger for 60 seconds. The two tests run in parallel.
 #
 # The Nakama module must be the one in THIS checkout. The stack that other
 # worktrees leave on port 7350 may mount a different checkout, so the default
@@ -17,7 +19,8 @@
 #                                         # (default 127.0.0.1:7350)
 #
 # Local only. It never reads a remote URL, and --existing refuses a host that
-# is not loopback.
+# is not loopback. The second test needs MELLO_ENABLE_DEV_FAULT=1 on the
+# stack. The own stack sets it. With --existing, set it yourself.
 set -eu
 
 cd "$(dirname "$0")/.."
@@ -66,6 +69,10 @@ services:
     container_name: mello-h2h-nakama
     ports: !override
       - "$PORT:7350"
+    # The session titles test backdates voice joins and generates the recap
+    # through the dev_fault RPC.
+    environment:
+      - MELLO_ENABLE_DEV_FAULT=1
 YML
     COMPOSE="docker compose -p $PROJECT -f backend/docker-compose.yml -f $TMP/override.yml"
     cleanup() {

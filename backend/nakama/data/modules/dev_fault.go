@@ -28,6 +28,11 @@ import (
 //   - force_leave:    force a voice leave for user_id (simulates a missed leave).
 //   - clear_channel:  evict every member of channel_id.
 //   - drop_next_push: drop the next `count` voice_update pushes for crew_id.
+//   - backdate_voice_join: move the join time of user_id back by `count`
+//     minutes, so a test can leave voice with a long stint (head2head mouth).
+//     Requires user_id and count.
+//   - generate_recap: generate the weekly recap of crew_id now, as the Monday
+//     job does. Requires crew_id.
 func DevFaultRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
 	if os.Getenv("MELLO_ENABLE_DEV_FAULT") != "1" {
 		return "", runtime.NewError("dev_fault disabled (set MELLO_ENABLE_DEV_FAULT=1)", 9)
@@ -112,10 +117,40 @@ func DevFaultRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		DropNextVoicePush(req.CrewID, n)
 		logger.Warn("dev_fault: dropping next %d voice_update pushes for crew=%s", n, req.CrewID)
 
+	case "backdate_voice_join":
+		if req.UserID == "" || req.Count <= 0 {
+			return "", runtime.NewError("backdate_voice_join requires user_id and a count above 0", 3)
+		}
+		if !backdateVoiceJoin(req.UserID, time.Duration(req.Count)*time.Minute) {
+			return "", runtime.NewError("user is not in a voice room", 5)
+		}
+		logger.Warn("dev_fault: backdated voice join of user=%s by %d min", req.UserID, req.Count)
+
+	case "generate_recap":
+		if req.CrewID == "" {
+			return "", runtime.NewError("generate_recap requires crew_id", 3)
+		}
+		generateWeeklyRecap(ctx, nk, logger, req.CrewID)
+		logger.Warn("dev_fault: generated the weekly recap of crew=%s", req.CrewID)
+
 	default:
 		return "", runtime.NewError("unknown action: "+req.Action, 3)
 	}
 
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "action": req.Action})
 	return string(resp), nil
+}
+
+// backdateVoiceJoin moves the join time of a voice member back by d. It
+// reports whether the user is a member of a room.
+func backdateVoiceJoin(userID string, d time.Duration) bool {
+	voiceRoomsMu.Lock()
+	defer voiceRoomsMu.Unlock()
+	for _, room := range voiceRooms {
+		if m, ok := room.Members[userID]; ok {
+			m.JoinedAt -= d.Milliseconds()
+			return true
+		}
+	}
+	return false
 }

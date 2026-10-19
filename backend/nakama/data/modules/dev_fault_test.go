@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"testing"
+	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
 )
@@ -88,5 +89,24 @@ func TestDropNextVoicePush(t *testing.T) {
 	}
 	if shouldDropVoicePush(crewID) {
 		t.Error("expected third push to pass through")
+	}
+}
+
+func TestBackdateVoiceJoinMovesOneMember(t *testing.T) {
+	seatVoice("crew", "ch", map[string]int{"a": 0, "b": 0})
+	if !backdateVoiceJoin("a", 80*time.Minute) {
+		t.Fatal("a is in a room")
+	}
+	if backdateVoiceJoin("nobody", time.Minute) {
+		t.Fatal("a user outside voice must report false")
+	}
+	nk := newFakeGuestNk()
+	voiceLeaveInternal(context.Background(), testLogger(), nk, "a")
+	voiceLeaveInternal(context.Background(), testLogger(), nk, "b")
+	if got := readActivity(t, nk, "a").VoiceMin; got != 80 {
+		t.Fatalf("a voice_min = %d, want 80", got)
+	}
+	if _, ok := nk.storage[fakeStorageKey(UserActivityStatsCollection, userActivityStatsKey, "b")]; ok {
+		t.Fatal("b stayed under a minute and adds nothing")
 	}
 }
