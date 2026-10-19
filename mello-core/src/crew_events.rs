@@ -85,6 +85,27 @@ pub struct GameSessionEndRequest {
     /// streaks or duplicate the ledger event server-side.
     #[serde(default)]
     pub session_id: String,
+    /// Session start, Unix ms. 0 when unknown. Additive: the backend ignores
+    /// unknown JSON fields today (plain `json.Unmarshal`).
+    #[serde(default)]
+    pub start_ms: i64,
+    /// Session end, Unix ms. For a queued report this is the original end,
+    /// not the time of delivery. 0 when unknown.
+    #[serde(default)]
+    pub end_ms: i64,
+    /// Local UTC offset in minutes at the end of the session (east is positive).
+    #[serde(default)]
+    pub tz_offset_min: i32,
+}
+
+/// Local UTC offset in minutes at `at_ms` (Unix ms), east positive.
+pub fn local_tz_offset_min(at_ms: i64) -> i32 {
+    use chrono::{Local, Offset, TimeZone};
+    Local
+        .timestamp_millis_opt(at_ms)
+        .single()
+        .map(|t| t.offset().fix().local_minus_utc() / 60)
+        .unwrap_or(0)
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

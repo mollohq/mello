@@ -135,6 +135,8 @@ impl GameStateManager {
                         losses,
                         draws,
                         matches: std::mem::take(&mut session.matches),
+                        start_ms: session.game.started_at,
+                        end_ms: ended_at,
                     });
                 }
 
@@ -227,6 +229,10 @@ pub struct SessionSummary {
     /// Drawn matches — recorded but don't move the streak.
     pub draws: u32,
     pub matches: Vec<MatchResult>,
+    /// When the game process started (Unix ms), from the sensor.
+    pub start_ms: i64,
+    /// When the game was last seen alive (Unix ms).
+    pub end_ms: i64,
 }
 
 /// Count streak-eligible wins/losses/draws. Wins/losses move the record;
