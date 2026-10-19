@@ -2602,13 +2602,13 @@ export component Preview inherits Rectangle {
         is-cold-start: false;
         cards: [
             {
-                id: "1", card-type: "clip", is-hero: true, is-skeleton: false,
-                title: "ostkatt clutch ace on Dust II",
+                id: "4", card-type: "session-preview", is-hero: true, is-skeleton: false,
+                title: "alice streamed Cursor - The best way to code with AI",
                 subtitle: "",
-                actor-name: "ostkatt", actor-initials: "os",
-                game-name: "Counter-Strike 2",
-                duration: "0:30", timestamp: "2 hours ago",
-                participant-count: 3, clip-path: "",
+                actor-name: "alice", actor-initials: "al",
+                game-name: "Cursor",
+                duration: "1h 2m", duration-min: 62, timestamp: "Yesterday",
+                participant-count: 2, clip-count: 3, clip-path: "",
             },
             {
                 id: "2", card-type: "recap", is-hero: false, is-skeleton: false,
@@ -2635,15 +2635,6 @@ export component Preview inherits Rectangle {
                 is-new: true,
             },
             {
-                id: "4", card-type: "session-preview", is-hero: false, is-skeleton: false,
-                title: "alice streamed Cursor - The best way to code with AI",
-                subtitle: "",
-                actor-name: "alice", actor-initials: "al",
-                game-name: "Cursor",
-                duration: "1h 2m", duration-min: 62, timestamp: "2 days ago",
-                participant-count: 2, clip-count: 3, clip-path: "",
-            },
-            {
                 id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
                 title: "Counter-Strike 2", game-name: "Counter-Strike 2",
                 game-short-name: "CS2", game-has-color: true, game-color: #DE9B35,
@@ -2663,7 +2654,16 @@ export component Preview inherits Rectangle {
                 participant-count: 0, clip-path: "",
             },
             {
-                id: "inv", card-type: "invite", is-hero: false, is-skeleton: false,
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "14 sessions, 31 h this week",
+                recent-games: [
+                    { game-id: "valorant", game-name: "Valorant", short-name: "VAL", duration-human: "9h 40m" },
+                    { game-id: "counter-strike-2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "7h 5m", game-color: #DE9B35, has-color: true },
+                    { game-id: "rocket-league", game-name: "Rocket League", short-name: "RL", duration-human: "6h 20m" },
+                    { game-id: "minecraft", game-name: "Minecraft", short-name: "MC", duration-human: "4h 15m" },
+                    { game-id: "fall-guys", game-name: "Fall Guys", short-name: "FG", duration-human: "2h 50m" },
+                    { game-id: "apex", game-name: "Apex Legends", short-name: "APX", duration-human: "50m" },
+                ],
             },
             {
                 id: "6", card-type: "clip", is-hero: false, is-skeleton: false,
@@ -2682,12 +2682,6 @@ export component Preview inherits Rectangle {
                 game-name: "Counter-Strike 2",
                 duration: "4h 30m", duration-min: 270, timestamp: "Friday",
                 participant-count: 4, clip-count: 0, clip-path: "",
-            },
-            {
-                id: "8", card-type: "skeleton-stream-clips", is-hero: false, is-skeleton: true,
-            },
-            {
-                id: "9", card-type: "skeleton-recent-games", is-hero: false, is-skeleton: true,
             },
         ];
     }
@@ -2776,7 +2770,8 @@ export component PreviewSessionHero inherits Rectangle {
     }
 }
 
-// Full cold start: brand new crew, no events at all
+// Full cold start: brand new crew, no events at all. The skeleton trio and
+// the invite line, and no cards.
 export component PreviewColdStart inherits Rectangle {
     width: 760px;
     height: 920px;
@@ -2787,20 +2782,16 @@ export component PreviewColdStart inherits Rectangle {
         height: parent.height;
         clip-count: 0;
         is-cold-start: true;
-        cards: [
-            { id: "s1", card-type: "skeleton-hero", is-skeleton: true },
-            { id: "s2", card-type: "skeleton-recap", is-skeleton: true },
-            { id: "s3", card-type: "skeleton-now-playing", is-skeleton: true },
-            { id: "s4", card-type: "skeleton-clip", is-skeleton: true },
-            { id: "s5", card-type: "skeleton-session", is-skeleton: true },
-            { id: "s6", card-type: "skeleton-catchup", is-skeleton: true },
-            { id: "s7", card-type: "skeleton-recent-games", is-skeleton: true },
-            { id: "s8", card-type: "skeleton-stream-clips", is-skeleton: true },
-        ];
+        skeleton-stream: true;
+        skeleton-voice-clip: true;
+        skeleton-recap: true;
+        invite-line: true;
+        cards: [];
     }
 }
 
-// Semi-cold start: crew has some activity (first session + catch-up), rest skeleton
+// Semi-cold start: a solo crew with a first session and a catch-up. The trio
+// stays whole, because none of its card types exists yet.
 export component PreviewSemiCold inherits Rectangle {
     width: 760px;
     height: 920px;
@@ -2810,10 +2801,12 @@ export component PreviewSemiCold inherits Rectangle {
         width: parent.width;
         height: parent.height;
         clip-count: 0;
-        is-cold-start: true;
+        is-cold-start: false;
+        skeleton-stream: true;
+        skeleton-voice-clip: true;
+        skeleton-recap: true;
+        invite-line: true;
         cards: [
-            { id: "s1", card-type: "skeleton-hero", is-skeleton: true },
-            { id: "s2", card-type: "skeleton-recap", is-skeleton: true },
             { id: "3", card-type: "session", is-hero: false, is-skeleton: false,
                 title: "Valorant",
                 subtitle: "Today · 0 clips",
@@ -2822,7 +2815,6 @@ export component PreviewSemiCold inherits Rectangle {
                 duration: "42m", timestamp: "Today",
                 participant-count: 2, clip-path: "",
             },
-            { id: "s4", card-type: "skeleton-clip", is-skeleton: true },
             { id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
                 title: "ostkatt and b0bben hung out in General for 20m earlier today",
                 subtitle: "",
@@ -2831,9 +2823,6 @@ export component PreviewSemiCold inherits Rectangle {
                 duration: "", timestamp: "3 hours ago",
                 participant-count: 0, clip-path: "",
             },
-            { id: "s6", card-type: "skeleton-stream-clips", is-skeleton: true },
-            { id: "s7", card-type: "skeleton-now-playing", is-skeleton: true },
-            { id: "s8", card-type: "skeleton-recent-games", is-skeleton: true },
         ];
     }
 }
