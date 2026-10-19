@@ -47,7 +47,7 @@ Titles later: `mouth`, `marathon`, `last_one_up`, `clipper`, `rage_quit`, `winne
 
 Collection `crew_head2head`, key `holders_<crew_id>`, owner is the system user.
 
-Read permission is public (2). Nakama has no group-member level, only owner (1) and public (2). The feed RPC checks crew membership before it returns any part of the doc.
+Read and write permission are both 0, so only the server touches the doc. The feed RPC reads it as the system user after it checks crew membership, and returns only the trimmed payload for the viewer.
 
 | Field | Meaning |
 |---|---|

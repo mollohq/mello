@@ -7,10 +7,10 @@ package main
 // computes it from the members' library docs and per-game stats, and writes
 // it. The feed reads it and trims it for the viewer (see Head2headFeedData).
 //
-// Storage permission: Nakama has only owner-only (1) and public-read (2) for
-// reads. There is no "group members" level. The doc is public-read, written
-// by the system user, with the crew id in the key, like the other crew docs.
-// The feed RPC checks crew membership before it returns anything from the doc.
+// Storage permission: read 0 and write 0, so only the server touches the doc.
+// Nakama has no "group members" read level, and a public-read doc would let
+// any client read it by crew id. The feed RPC reads it as the system user,
+// after it checks crew membership, and returns the trimmed payload.
 
 import (
 	"context"
@@ -510,7 +510,7 @@ func writeHead2headDoc(ctx context.Context, nk runtime.NakamaModule, doc *Head2h
 		UserID:          SystemUserID,
 		Value:           string(data),
 		Version:         version,
-		PermissionRead:  2, // public read: Nakama has no group-member level
+		PermissionRead:  0, // server only: the feed RPC reads it as system
 		PermissionWrite: 0, // server only
 	}})
 	return err

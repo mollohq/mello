@@ -507,6 +507,29 @@ func TestRecomputeWritesDocForEveryCrewOfTheUser(t *testing.T) {
 	}
 }
 
+func TestHoldersDocIsServerOnly(t *testing.T) {
+	nk := h2hFixture()
+	if recomputeHead2head(context.Background(), testLogger(), nk, "crew", head2headTriggerLibrary, h2hNow) == nil {
+		t.Fatal("compute must write")
+	}
+	got := nk.perms[fakeStorageKey(CrewHead2headCollection, head2headKey("crew"), SystemUserID)]
+	if got != [2]int{0, 0} {
+		t.Fatalf("holders doc permissions read,write = %v, want 0,0", got)
+	}
+}
+
+func TestSessionEndRequestReadsTzOffsetFromClientPayload(t *testing.T) {
+	// Shape of the mello-core GameSessionEndRequest JSON.
+	raw := `{"crew_id":"c","game_name":"G","game_id":"steam-1","duration_min":30,"tz_offset_min":-300,"start_ms":1,"end_ms":2}`
+	var req GameSessionEndRequest
+	if err := json.Unmarshal([]byte(raw), &req); err != nil {
+		t.Fatal(err)
+	}
+	if v := validTzOffset(req.TzOffsetMin); v == nil || *v != -300 {
+		t.Fatalf("tz offset: %v", req.TzOffsetMin)
+	}
+}
+
 func TestSessionTriggerDebounce(t *testing.T) {
 	nk := h2hFixture()
 	ctx := context.Background()

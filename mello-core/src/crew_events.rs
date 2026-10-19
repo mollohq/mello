@@ -334,4 +334,27 @@ mod tests {
         assert!(parsed.games[0].recent_form.is_empty());
         assert!(parsed.games[0].recent_days.is_empty());
     }
+
+    /// The backend reads `tz_offset_min` for the night_owl title. The key must
+    /// be on the wire and carry the local offset at the session end.
+    #[test]
+    fn session_end_request_sends_the_local_tz_offset() {
+        use chrono::{Local, Offset, TimeZone};
+        let end_ms = 1_760_000_000_000;
+        let expect = Local
+            .timestamp_millis_opt(end_ms)
+            .single()
+            .map(|t| t.offset().fix().local_minus_utc() / 60)
+            .unwrap_or(0);
+        let req = serde_json::from_value::<GameSessionEndRequest>(serde_json::json!({
+            "crew_id": "c",
+            "game_name": "G",
+            "game_id": "g",
+            "duration_min": 1,
+            "tz_offset_min": local_tz_offset_min(end_ms),
+        }))
+        .unwrap();
+        let v = serde_json::to_value(&req).unwrap();
+        assert_eq!(v["tz_offset_min"], serde_json::json!(expect));
+    }
 }
