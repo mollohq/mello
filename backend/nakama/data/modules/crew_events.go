@@ -919,6 +919,11 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	logger.Info("User %s game session end in crew %s: game=%s duration=%dm %dW-%dL streak=%d",
 		userID, req.CrewID, req.GameName, req.DurationMin, req.Wins, req.Losses, streakAfter)
+	// Stats changed for every crew the user is in. The debounce keeps a burst
+	// of session ends to one recompute per crew per minute.
+	if req.GameID != "" {
+		recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
+	}
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter})
 	return string(resp), nil
 }

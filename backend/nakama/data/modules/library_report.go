@@ -177,6 +177,9 @@ func LibraryReportRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return "", runtime.NewError("failed to store library", 13)
 	}
 	logger.Debug("library_report: user=%s games=%d", userID, len(games))
+	// Derived data: a failure is logged inside and never fails the report. An
+	// empty list (sharing off) recomputes too, so the user leaves the titles.
+	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerLibrary)
 	return `{"success":true,"count":` + strconv.Itoa(len(games)) + `}`, nil
 }
 
