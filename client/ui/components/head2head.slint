@@ -1,11 +1,25 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape, CutButton } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
+import { TitleHeld, H2hPairRow, H2hPerson } from "../types.slint";
+
+export { TitleHeld }
+
+/// Identity hue of a person by the index `UserAvatar` takes.
+export global H2hHue {
+    pure public function of(i: int) -> color {
+        return i == 0 ? Theme.id-blue
+            : i == 1 ? Theme.id-purple
+            : i == 2 ? Theme.id-teal
+            : i == 3 ? Theme.id-amber : Theme.id-pink;
+    }
+}
 
 // ============================================================
 //  Head2head: the crew-feed card that compares members.
-//  Spec of record: mello-backlog mockups, cold-start-full-flow
-//  frames 4 and 5. Static props only, nothing is wired yet.
+//  Spec of record: mello-backlog mockups/next-gen-feed.html frames
+//  A, B, B2, C, D. The feed (crew_feed.slint) feeds these from the
+//  `head2head` entry of this_week, see client/src/head2head.rs.
 //
 //  Identity hue sits on the avatar and the chip borders. The one
 //  red thing is the commit button.
@@ -170,9 +184,11 @@ export component InviteButton inherits Rectangle {
     in property <bool> compact: false;
     /// Two-line label for a narrow column.
     in property <bool> wrap: false;
+    /// What the button says, and what a screen reader reads.
+    in property <string> label-text: "Invite your crew";
 
     accessible-role: button;
-    accessible-label: "Invite your crew";
+    accessible-label: root.label-text;
 
     height: wrap ? 34px : compact ? 30px : 34px;
     min-width: wrap ? 0px : label.preferred-width + (compact ? 16px : 24px);
@@ -182,7 +198,7 @@ export component InviteButton inherits Rectangle {
         fill-color: ta.pressed ? Theme.confirm-press : Theme.confirm;
     }
     label := Text {
-        text: "INVITE YOUR CREW";
+        text: root.label-text.to-uppercase();
         font-family: Theme.font-label;
         font-size: root.compact ? 9px : 10px;
         font-weight: Theme.weight-label;
@@ -206,21 +222,18 @@ export component CardLabel inherits Text {
     color: Theme.text-dim;
 }
 
-/// Wide slot (two cells). Left: the member. Middle: four titles, two by
-/// two. Right: the open seats and the invite button.
+/// Wide slot (two cells). Left: the member. Middle: the member's titles, two
+/// by two. Right: the open seats and the invite button.
 export component Head2headCardWide inherits Rectangle {
     callback invite-clicked();
     in property <string> member-name;
     in property <string> member-initials;
-    in property <color> hue: Theme.id-blue;
     in property <int> hue-index: 0;
     /// Open seats shown. The seats are the first five, so this is 5 minus
     /// the member count, and 0 from five members on.
     in property <int> open-seats: 4;
-    in property <string> carry-value; in property <string> carry-unit;
-    in property <string> owl-value; in property <string> owl-unit;
-    in property <string> collector-value; in property <string> collector-unit;
-    in property <string> locked-value; in property <string> locked-unit;
+    /// The member's titles, at most four. The chips wear the member's hue.
+    in property <[TitleHeld]> titles;
 
     background: transparent;
 
@@ -276,15 +289,14 @@ export component Head2headCardWide inherits Rectangle {
                 alignment: center;
                 spacing: 8px;
 
-                HorizontalLayout {
+                GridLayout {
                     spacing: 8px;
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
-                }
-                HorizontalLayout {
-                    spacing: 8px;
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-collector.svg"); title: "The Collector"; value: root.collector-value; unit: root.collector-unit; }
-                    TitleChip { horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
+                    for t[i] in root.titles: TitleChip {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        hue: H2hHue.of(t.hue-index);
+                        icon: t.icon; title: t.title; value: t.value; unit: t.unit;
+                    }
                 }
             }
 
@@ -326,19 +338,68 @@ export component Head2headCardWide inherits Rectangle {
     }
 }
 
-/// Standard cell (one column, 232px at the 760px feed). Title row, the
-/// four titles two by two, then one row: open seats left, invite button
-/// right. Three seats and the button do not fit one line at this width,
-/// so two seats and a "+1" stand for the three.
+/// One row of the cell: "You vs Name", the tally between two octagons, and
+/// the title that decides the pair.
+component PairRow inherits Rectangle {
+    in property <H2hPairRow> pair;
+    height: 46px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 6px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+            Text {
+                text: "You vs " + root.pair.name;
+                font-family: Theme.font-display;
+                font-size: 12px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-value;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 5px;
+                cross-axis-alignment: center;
+                UserAvatar { initials: root.pair.you-initials; color-index: root.pair.you-hue-index; size: 20px; }
+                Text {
+                    text: root.pair.you-count + " : " + root.pair.them-count;
+                    font-family: Theme.font-display;
+                    font-size: 13px;
+                    font-weight: Theme.weight-display-bold;
+                    color: Theme.text-value;
+                }
+                UserAvatar { initials: root.pair.initials; color-index: root.pair.hue-index; size: 20px; }
+            }
+        }
+        if root.pair.has-chip: TitleChip {
+            compact: true;
+            width: 108px;
+            hue: H2hHue.of(root.pair.chip.hue-index);
+            icon: root.pair.chip.icon;
+            title: root.pair.chip.title;
+            value: root.pair.chip.value;
+            unit: root.pair.chip.unit;
+        }
+    }
+}
+
+/// Standard cell (one column, 232px at the 760px feed). Title row, then one
+/// row for each pair the viewer is in (frame C). Below that, with seats:
+/// open seats left, invite button right. Three seats and the button do not
+/// fit one line at this width, so two seats and a "+1" stand for the three.
+/// With no seats (five members or more) the bottom row is gone, and the
+/// Invite card carries the invite.
 export component Head2headCell inherits Rectangle {
     callback invite-clicked();
     /// Open seats, 5 minus the member count. Two show, the rest as "+N".
     in property <int> open-seats: 3;
-    in property <color> hue: Theme.id-blue;
-    in property <string> carry-value; in property <string> carry-unit;
-    in property <string> owl-value; in property <string> owl-unit;
-    in property <string> collector-value; in property <string> collector-unit;
-    in property <string> locked-value; in property <string> locked-unit;
+    in property <string> viewer-name;
+    in property <[H2hPairRow]> pairs;
 
     background: transparent;
 
@@ -358,26 +419,21 @@ export component Head2headCell inherits Rectangle {
         padding-left: 16px; padding-right: 16px;
         spacing: 10px;
 
-        CardLabel { text: "HEAD2HEAD"; }
+        HorizontalLayout {
+            CardLabel { text: "HEAD2HEAD"; }
+            Rectangle { horizontal-stretch: 1; }
+            CardLabel { text: (root.viewer-name + " VS THE CREW").to-uppercase(); color: Theme.text-tertiary; overflow: elide; }
+        }
 
         VerticalLayout {
             vertical-stretch: 1;
-            alignment: center;
+            alignment: start;
             spacing: 6px;
 
-            HorizontalLayout {
-                spacing: 6px;
-                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-carry.svg"); title: "The Carry"; value: root.carry-value; unit: root.carry-unit; }
-                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-night-owl.svg"); title: "Night Owl"; value: root.owl-value; unit: root.owl-unit; }
-            }
-            HorizontalLayout {
-                spacing: 6px;
-                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-collector.svg"); title: "The Collector"; value: root.collector-value; unit: root.collector-unit; }
-                TitleChip { compact: true; horizontal-stretch: 1; hue: root.hue; icon: @image-url("../icons/h2h-locked-in.svg"); title: "Locked In"; value: root.locked-value; unit: root.locked-unit; }
-            }
+            for p in root.pairs: PairRow { pair: p; }
         }
 
-        HorizontalLayout {
+        if root.open-seats > 0: HorizontalLayout {
             spacing: 6px;
             cross-axis-alignment: center;
 
@@ -394,15 +450,6 @@ export component Head2headCell inherits Rectangle {
             InviteButton { compact: true; clicked => { root.invite-clicked(); } }
         }
     }
-}
-
-/// One title on a versus card: the icon, the words, and whose it is.
-export struct TitleHeld {
-    icon: image,
-    title: string,
-    value: string,
-    unit: string,
-    hue: color,
 }
 
 /// Full-width head2head between two members (mockup frame B2). Both
@@ -456,7 +503,7 @@ export component VersusHero inherits Rectangle {
                 alignment: start;
                 cross-axis-alignment: center;
                 UserAvatar { initials: root.left-initials; color-index: root.left-hue-index; size: 56px; }
-                Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; }
+                Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
             }
             Text {
                 text: root.left-score + " : " + root.right-score;
@@ -470,7 +517,7 @@ export component VersusHero inherits Rectangle {
                 spacing: 14px;
                 alignment: end;
                 cross-axis-alignment: center;
-                Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; }
+                Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
                 UserAvatar { initials: root.right-initials; color-index: root.right-hue-index; size: 56px; }
             }
         }
@@ -479,11 +526,12 @@ export component VersusHero inherits Rectangle {
             spacing: 8px;
             for t in root.titles: TitleChip {
                 horizontal-stretch: 1;
-                icon: t.icon; title: t.title; value: t.value; unit: t.unit; hue: t.hue;
+                icon: t.icon; title: t.title; value: t.value; unit: t.unit;
+                hue: H2hHue.of(t.hue-index);
             }
         }
 
-        HorizontalLayout {
+        if root.open-seats > 0: HorizontalLayout {
             spacing: 8px;
             cross-axis-alignment: center;
             for i in root.open-seats: OpenSeat { size: 24px; show-label: false; }
@@ -497,6 +545,74 @@ export component VersusHero inherits Rectangle {
             }
             Rectangle { horizontal-stretch: 1; }
             InviteButton { compact: true; clicked => { root.invite-clicked(); } }
+        }
+    }
+}
+
+/// The calm card from five members on (mockup frame D): the members as
+/// filled octagons, no seat, one line, and the red button that shares the
+/// invite link. Up to eight octagons, then "+N".
+export component InviteCard inherits Rectangle {
+    callback invite-clicked();
+    in property <[H2hPerson]> members;
+    in property <int> more-members: 0;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 12px;
+
+        CardLabel { text: "INVITE"; }
+
+        // Octagons never overlap. Five fit a row, so eight wrap to two.
+        GridLayout {
+            spacing: 6px;
+            for m[i] in root.members: UserAvatar {
+                row: floor(i / 5);
+                col: mod(i, 5);
+                initials: m.initials;
+                color-index: m.hue-index;
+                size: 32px;
+            }
+            if root.more-members > 0: Text {
+                row: floor(root.members.length / 5);
+                col: mod(root.members.length, 5);
+                text: "+" + root.more-members;
+                font-family: Theme.font-display;
+                font-size: 13px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "Invite friends";
+            font-family: Theme.font-body;
+            font-size: 14px;
+            font-weight: Theme.weight-sentence;
+            color: Theme.text-primary;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        InviteButton {
+            label-text: "Share invite link";
+            clicked => { root.invite-clicked(); }
         }
     }
 }

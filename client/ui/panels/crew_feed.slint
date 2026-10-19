@@ -5,6 +5,7 @@ import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../t
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { SkeletonTrio } from "../components/skeleton_trio.slint";
+import { Head2headCardWide, Head2headCell, VersusHero, InviteCard } from "../components/head2head.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
@@ -1796,6 +1797,8 @@ component FeedSlot inherits Rectangle {
     callback seek-clip-ms(int);
     callback session-seen(string);
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
+    /// The red invite button of a head2head or invite card.
+    callback invite-clicked();
 
     // Real cards
     if card.card-type == "clip" && card.is-hero: HeroClipCard {
@@ -1864,6 +1867,43 @@ component FeedSlot inherits Rectangle {
     if card.card-type == "locked": LockedCard {
         width: parent.width; height: parent.height;
     }
+    // Head2head: the variant is the placement rule, see client/src/head2head.rs.
+    if card.card-type == "head2head" && card.head2head.variant == "wide": Head2headCardWide {
+        width: parent.width; height: parent.height;
+        member-name: card.head2head.left-name;
+        member-initials: card.head2head.left-initials;
+        hue-index: card.head2head.left-hue-index;
+        open-seats: card.head2head.open-seats;
+        titles: card.head2head.chips;
+        invite-clicked => { root.invite-clicked(); }
+    }
+    if card.card-type == "head2head" && card.head2head.variant == "versus": VersusHero {
+        width: parent.width; height: parent.height;
+        left-name: card.head2head.left-name;
+        left-initials: card.head2head.left-initials;
+        left-hue-index: card.head2head.left-hue-index;
+        right-name: card.head2head.right-name;
+        right-initials: card.head2head.right-initials;
+        right-hue-index: card.head2head.right-hue-index;
+        left-score: card.head2head.left-score;
+        right-score: card.head2head.right-score;
+        titles: card.head2head.chips;
+        open-seats: card.head2head.open-seats;
+        invite-clicked => { root.invite-clicked(); }
+    }
+    if card.card-type == "head2head" && (card.head2head.variant == "cell" || card.head2head.variant == "cell-full"): Head2headCell {
+        width: parent.width; height: parent.height;
+        viewer-name: card.head2head.left-name;
+        pairs: card.head2head.pairs;
+        open-seats: card.head2head.open-seats;
+        invite-clicked => { root.invite-clicked(); }
+    }
+    if card.card-type == "invite": InviteCard {
+        width: parent.width; height: parent.height;
+        members: card.head2head.members;
+        more-members: card.head2head.more-members;
+        invite-clicked => { root.invite-clicked(); }
+    }
 }
 
 export component CrewFeed inherits Rectangle {
@@ -1919,6 +1959,17 @@ export component CrewFeed inherits Rectangle {
     property <bool> hero-is-clip: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "clip"
         && cards[feed-start-index].is-hero;
+    // Head2head leads the feed in one of three ways (plans/next-gen-feed.md
+    // section 3). A versus card takes the hero slot: one full-width row, like
+    // a hero clip. A wide card takes two columns of the first row. A cell or
+    // the invite card is a plain one-column card: no hero, no wide slot.
+    property <string> lead-h2h: cards.length > feed-start-index
+        && cards[feed-start-index].card-type == "head2head"
+        ? cards[feed-start-index].head2head.variant : "";
+    property <bool> hero-is-full-row: hero-is-clip || lead-h2h == "versus";
+    property <bool> lead-is-wide: lead-h2h == "wide";
+    property <bool> lead-is-plain: lead-h2h == "cell" || lead-h2h == "cell-full"
+        || (cards.length > feed-start-index && cards[feed-start-index].card-type == "invite");
     // The recap carries a header, a stat block, an MVP and the games table.
     // It does not fit one row. The design gives it column 3 across both rows,
     // so it takes the side column alone and row 1 holds two cards, not three.
@@ -1927,7 +1978,9 @@ export component CrewFeed inherits Rectangle {
         && (cards[feed-start-index + 1].leaderboard.length > 0
             || cards[feed-start-index + 1].awards.length > 0);
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
-        : hero-is-clip ? 1
+        : lead-is-plain ? 0
+        : lead-is-wide ? Math.min(2, cards.length - feed-start-index)
+        : hero-is-full-row ? 1
         : side-is-recap ? Math.min(2, cards.length - feed-start-index)
         : Math.min(3, cards.length - feed-start-index);
     property <int> row2-base: feed-start-index + row1-consumed;
@@ -2057,6 +2110,7 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
                         }
 
                         if cards.length > 1: FeedSlot {
@@ -2073,6 +2127,7 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
                         }
                     }
                 }
@@ -2126,7 +2181,7 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 1: full-width hero clip OR 2:1 hero + stacked side column
-                if hero-is-clip && cards.length > root.feed-start-index: FeedSlot {
+                if hero-is-full-row && cards.length > root.feed-start-index: FeedSlot {
                     height: Theme.feed-row;
                     card: cards[root.feed-start-index];
                     playing-path: root.clip-playing-path;
@@ -2140,9 +2195,40 @@ export component CrewFeed inherits Rectangle {
                     seek-clip-ms(m) => { root.seek-clip-ms(m); }
                     session-seen(id) => { root.session-seen(id); }
                     session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                    invite-clicked => { root.invite-clicked(); }
                 }
 
-                if !hero-is-clip && cards.length > root.feed-start-index: HorizontalLayout {
+                // Wide head2head (crew of one): two columns, then the next card.
+                if lead-is-wide && cards.length > root.feed-start-index: HorizontalLayout {
+                    height: Theme.feed-row;
+                    spacing: 12px;
+
+                    FeedSlot {
+                        horizontal-stretch: 2;
+                        card: cards[root.feed-start-index];
+                        invite-clicked => { root.invite-clicked(); }
+                    }
+
+                    if cards.length > root.feed-start-index + 1: FeedSlot {
+                        horizontal-stretch: 1;
+                        card: cards[root.feed-start-index + 1];
+                        playing-path: root.clip-playing-path;
+                        clip-progress: root.clip-progress;
+                        clip-paused: root.clip-paused;
+                        clip-anim-tick: root.clip-anim-tick;
+                        clip-position-text: root.clip-position-text;
+                        clip-duration-text: root.clip-duration-text;
+                        clip-duration-ms: root.clip-duration-ms;
+                        play-clicked(id) => { root.card-clicked(id); }
+                        seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                        session-seen(id) => { root.session-seen(id); }
+                        session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
+                    }
+                    if cards.length <= root.feed-start-index + 1: Rectangle { horizontal-stretch: 1; }
+                }
+
+                if !hero-is-full-row && !lead-is-wide && !lead-is-plain && cards.length > root.feed-start-index: HorizontalLayout {
                     height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
@@ -2160,6 +2246,7 @@ export component CrewFeed inherits Rectangle {
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
                     }
 
                     VerticalLayout {
@@ -2182,6 +2269,7 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
                         }
 
                         if !root.side-is-recap && cards.length > root.feed-start-index + 2: FeedSlot {
@@ -2198,6 +2286,7 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
                         }
                     }
                 }
@@ -2223,6 +2312,7 @@ export component CrewFeed inherits Rectangle {
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
                     }
                 }
 
@@ -2245,6 +2335,7 @@ export component CrewFeed inherits Rectangle {
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
                     }
 
                     if cards.length > root.row2-base + 4: FeedSlot {
@@ -2261,6 +2352,7 @@ export component CrewFeed inherits Rectangle {
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
                     }
                 }
 
@@ -2285,6 +2377,7 @@ export component CrewFeed inherits Rectangle {
                         seek-clip-ms(m) => { root.seek-clip-ms(m); }
                         session-seen(id) => { root.session-seen(id); }
                         session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                        invite-clicked => { root.invite-clicked(); }
                     }
                 }
 
@@ -2339,6 +2432,7 @@ export component CrewFeed inherits Rectangle {
                             seek-clip-ms(m) => { root.seek-clip-ms(m); }
                             session-seen(id) => { root.session-seen(id); }
                             session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                            invite-clicked => { root.invite-clicked(); }
                         }
                     }
                 }

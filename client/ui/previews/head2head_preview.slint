@@ -10,7 +10,7 @@ import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { GameBadge } from "../components/game_badge.slint";
-import { Head2headCardWide, Head2headCell, VersusHero, TitleHeld } from "../components/head2head.slint";
+import { Head2headCardWide, VersusHero } from "../components/head2head.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 
 // Same frame as CrewFeed: 20px side padding, 16px top, 12px gaps, 232px rows.
@@ -206,13 +206,14 @@ export component PreviewDayOneAlone inherits Window {
                 width: root.cw * 2 + 12px;
                 member-name: "b0bben";
                 member-initials: "B";
-                hue: Theme.id-blue;
                 hue-index: 0;
                 open-seats: 4;
-                carry-value: "4,167"; carry-unit: "h";
-                owl-value: "03:14";
-                collector-value: "5"; collector-unit: "installed";
-                locked-value: "4.6"; locked-unit: "h";
+                titles: [
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                ];
             }
             RecentGamesCard { width: root.cw; }
         }
@@ -241,13 +242,14 @@ export component PreviewDayOnePlaying inherits Window {
                 width: root.cw * 2 + 12px;
                 member-name: "b0bben";
                 member-initials: "B";
-                hue: Theme.id-blue;
                 hue-index: 0;
                 open-seats: 4;
-                carry-value: "4,168"; carry-unit: "h";
-                owl-value: "03:14";
-                collector-value: "5"; collector-unit: "installed";
-                locked-value: "6.0"; locked-unit: "h";
+                titles: [
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,168", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "6.0", unit: "h", hue-index: 0 },
+                ];
             }
         }
         HorizontalLayout {
@@ -282,10 +284,10 @@ export component PreviewFirstFriend inherits Window {
             left-score: 4; right-score: 3;
             open-seats: 3;
             titles: [
-                { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue: Theme.id-blue },
-                { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue: Theme.id-blue },
-                { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue: Theme.id-purple },
-                { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue: Theme.id-blue },
+                { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
+                { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
             ];
         }
         HorizontalLayout {
