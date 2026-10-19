@@ -120,6 +120,7 @@ gtest suite and the Nakama Go modules.
 | Nakama `go test` | Backend modules | No | ✅ yes | `cd backend/nakama/data/modules && go test ./...` |
 | Nakama `gofmt` / `go vet` | Backend modules | No | ✅ yes | `cd backend/nakama/data/modules && gofmt -l . && go vet ./...` |
 | `dev_fault` RPC | Backend fault injection | Yes (live Nakama) | No (manual/integration) | RPC call, gated by `MELLO_ENABLE_DEV_FAULT=1` |
+| `scripts/e2e-head2head.sh` | Head2head feed entry: library_report, crew_feed, belt move, night_owl | Yes (own local Nakama stack) | No (manual, ~70 s) | `./scripts/e2e-head2head.sh` |
 | SFU `go test` | SFU server | No | ⚠️ not wired (run locally) | `cd mello-sfu && go test ./...` |
 | `voice-soak` | SFU load/churn/resilience | Yes (live SFU) | No (manual/integration) | `go run ./tools/voice-soak ...` |
 | `stream-soak` | SFU H.264 RTP stream relay | Yes (live SFU) | No (manual/integration) | `go run ./tools/stream-soak ...` |
