@@ -585,6 +585,97 @@ func keepClipOutOfWideSlot(cards []feedCard, picks []int) {
 }
 
 // ---------------------------------------------------------------------------
+// Empty-card rule (plans/next-gen-feed.md section 2, principle 1)
+// ---------------------------------------------------------------------------
+
+// decodeCardData decodes a card payload that is a typed struct or a generic
+// JSON map. ok is false for a missing or undecodable payload.
+func decodeCardData[T any](raw interface{}) (T, bool) {
+	var d T
+	if raw == nil {
+		return d, false
+	}
+	b, err := json.Marshal(raw)
+	if err != nil {
+		return d, false
+	}
+	if err := json.Unmarshal(b, &d); err != nil {
+		return d, false
+	}
+	return d, true
+}
+
+// recapHasContent reports whether a recap shows anything: hangout minutes,
+// clips, or game results. A recap with none of these is the "0m" card.
+// fix/recap-real-activity adds isEmptyRecap with game minutes; once that is
+// merged, replace this body with !isEmptyRecap(r).
+func recapHasContent(r WeeklyRecapData) bool {
+	return r.TotalHangoutMin > 0 || r.ClipCount > 0 ||
+		len(r.GamesPlayed) > 0 || len(r.GameRecords) > 0
+}
+
+// cardHasContent is the one rule for whether a card may be emitted. Both
+// sections apply it before they emit a card. feedType is the feed type,
+// backendType the ledger type (stream_session for a plain stream session).
+//
+//   - recap: needs content (recapHasContent).
+//   - session: needs reportable minutes. Zero-minute sessions never emit.
+//   - session-preview: needs at least one snapshot.
+//
+// Every other type is its own content (a clip, a join, a lock). A payload that
+// is absent or cannot be decoded cannot be judged, so the card is kept.
+func cardHasContent(feedType, backendType string, data interface{}) bool {
+	switch feedType {
+	case "recap":
+		r, ok := decodeCardData[WeeklyRecapData](data)
+		return !ok || recapHasContent(r)
+	case "session-preview":
+		d, ok := decodeCardData[StreamSessionData](data)
+		if !ok {
+			return true
+		}
+		for _, u := range d.SnapshotURLs {
+			if u != "" {
+				return true
+			}
+		}
+		return false
+	case "session":
+		switch backendType {
+		case "game_session":
+			d, ok := decodeCardData[GameSessionData](data)
+			return !ok || reportableMinutes(d.DurationMin, d.ActiveMin) > 0
+		case "voice_session":
+			d, ok := decodeCardData[VoiceSessionData](data)
+			return !ok || d.DurationMin > 0
+		case "stream_session":
+			d, ok := decodeCardData[StreamSessionData](data)
+			return !ok || d.DurationMin > 0
+		}
+	}
+	return true
+}
+
+// dropEmptyCards removes the cards cardHasContent rejects. Order is kept.
+func dropEmptyCards(cards []feedCard) []feedCard {
+	out := make([]feedCard, 0, len(cards))
+	for _, c := range cards {
+		if cardHasContent(c.feedType, c.backendType, c.data) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// appendEntryIfContent appends e to a section unless it has no content.
+func appendEntryIfContent(entries []FeedEntry, e FeedEntry, backendType string) []FeedEntry {
+	if !cardHasContent(e.Type, backendType, e.Data) {
+		return entries
+	}
+	return append(entries, e)
+}
+
+// ---------------------------------------------------------------------------
 // this_week assembly
 // ---------------------------------------------------------------------------
 
@@ -696,6 +787,9 @@ func heroIndex(cards []feedCard, nowMs int64) int {
 // Live streams are not surfaced here. They are client state (crew_state), so
 // the client shows them first and this list starts at the next hero choice.
 func buildThisWeek(cards []feedCard, nowMs int64) []FeedEntry {
+	// Empty-card rule first, so an empty card never takes a slot or a count.
+	cards = dropEmptyCards(cards)
+
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	var pruned []feedCard
 	cards, pruned = pruneGameSessions(cards)
@@ -802,14 +896,14 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 		if r.WeekStart == shownRecapWeekStart {
 			continue
 		}
-		entries = append(entries, FeedEntry{
+		entries = appendEntryIfContent(entries, FeedEntry{
 			ID:   fmt.Sprintf("recap_%d", r.WeekStart),
 			Type: "recap",
 			Role: "recap",
 			Size: "md",
 			Ts:   r.GeneratedAt,
 			Data: r,
-		})
+		}, "weekly_recap")
 	}
 
 	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
@@ -817,14 +911,14 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 		if shownClipIDs[c.EventID] {
 			continue
 		}
-		entries = append(entries, FeedEntry{
+		entries = appendEntryIfContent(entries, FeedEntry{
 			ID:   c.EventID,
 			Type: "clip",
 			Role: "standard",
 			Size: "md",
 			Ts:   c.Ts,
 			Data: c,
-		})
+		}, "clip")
 	}
 
 	// Stream replays are durable memories too: a session-preview when snapshots
@@ -838,14 +932,14 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 		if len(s.SnapshotURLs) > 0 {
 			feedType = "session-preview"
 		}
-		entries = append(entries, FeedEntry{
+		entries = appendEntryIfContent(entries, FeedEntry{
 			ID:   s.EventID,
 			Type: feedType,
 			Role: "standard",
 			Size: "md",
 			Ts:   s.Ts,
 			Data: s,
-		})
+		}, "stream_session")
 	}
 
 	sort.SliceStable(entries, func(i, j int) bool {

@@ -12,6 +12,7 @@ func gsCard(id string, wins, losses, draws, streak int) feedCard {
 		backendType: "game_session",
 		data: GameSessionData{
 			GameName:    "Counter-Strike 2",
+			DurationMin: 20, // under the 30 min T0 bonus, over the empty-card rule
 			Wins:        wins,
 			Losses:      losses,
 			Draws:       draws,
