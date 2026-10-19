@@ -1793,6 +1793,9 @@ component FeedSlot inherits Rectangle {
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
     in property <int> clip-duration-ms: 0;
+    /// The slot is one column of the side column beside a live stream, not
+    /// the wide slot. A wide head2head card does not fit there.
+    in property <bool> side-column: false;
     callback play-clicked(string);
     callback seek-clip-ms(int);
     callback session-seen(string);
@@ -1868,13 +1871,23 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height;
     }
     // Head2head: the variant is the placement rule, see client/src/head2head.rs.
-    if card.card-type == "head2head" && card.head2head.variant == "wide": Head2headCardWide {
+    if card.card-type == "head2head" && card.head2head.variant == "wide" && !root.side-column: Head2headCardWide {
         width: parent.width; height: parent.height;
         member-name: card.head2head.left-name;
         member-initials: card.head2head.left-initials;
         hue-index: card.head2head.left-hue-index;
         open-seats: card.head2head.open-seats;
         titles: card.head2head.chips;
+        invite-clicked => { root.invite-clicked(); }
+    }
+    // A live stream holds the hero and sends the first two cards to the side
+    // column. A crew of one has no pair to show, so the wide card gives way
+    // to the cell: its seats as "+N", the invite beside them.
+    if card.card-type == "head2head" && card.head2head.variant == "wide" && root.side-column: Head2headCell {
+        width: parent.width; height: parent.height;
+        viewer-name: card.head2head.left-name;
+        pairs: [];
+        open-seats: card.head2head.open-seats;
         invite-clicked => { root.invite-clicked(); }
     }
     if card.card-type == "head2head" && card.head2head.variant == "versus": VersusHero {
@@ -2098,6 +2111,7 @@ export component CrewFeed inherits Rectangle {
 
                         if cards.length > 0: FeedSlot {
                             height: Theme.feed-row;
+                            side-column: true;
                             card: cards[0];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -2115,6 +2129,7 @@ export component CrewFeed inherits Rectangle {
 
                         if cards.length > 1: FeedSlot {
                             height: Theme.feed-row;
+                            side-column: true;
                             card: cards[1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -3073,6 +3088,57 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 game-winrate: "40%", game-matches: 5,
                 duration-human: "2h 05m", timestamp: "5h ago",
                 actor-name: "Bob", actor-initials: "B",
+            },
+        ];
+    }
+}
+
+// A live stream holds the hero while the crew is one person. The wide card
+// does not fit the side column, so the cell stands in, with the four seats as
+// "+2" beside the invite. The wide card keeps the wide slot when no stream is
+// live (PreviewFeedNewCrew).
+export component PreviewFeedLiveStreamSolo inherits Rectangle {
+    width: 760px;
+    height: 560px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        stream-cards: [
+            {
+                host-id: "alice-id",
+                session-id: "stream-session-1",
+                streamer-name: "alice",
+                subtitle: "Live now",
+                avatar: @image-url("../icons/user.svg"),
+                has-avatar: false,
+                avatar-initials: "AL",
+                avatar-color-index: 1,
+                viewer-count: 3,
+                stream-width: 1920,
+                stream-height: 1080,
+                can-watch: true,
+            },
+        ];
+        cards: [
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "wide", member-count: 1, open-seats: 4,
+                    left-name: "b0bben", left-initials: "B0", left-hue-index: 0,
+                    chips: [
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                    ],
+                },
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "",
+                recent-games: [
+                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "4,167 h" },
+                ],
             },
         ];
     }

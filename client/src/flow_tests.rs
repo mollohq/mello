@@ -4722,6 +4722,71 @@ fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
+/// A live stream holds the hero and sends the first cards to the side column,
+/// one column wide. A crew of one then gets the cell with its four seats as
+/// "+2", not the wide card squeezed into the column. With no live stream the
+/// wide card keeps the wide slot.
+#[test]
+fn wide_card_gives_way_to_the_cell_beside_a_live_stream() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            1,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![],
+            None,
+        )]),
+    });
+
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "no stream: wide slot");
+    assert_eq!(count_of(&h, "Head2headCell"), 0);
+    assert_eq!(count_of(&h, "OpenSeat"), 4);
+
+    h.app()
+        .set_active_stream_cards(slint::ModelRc::new(slint::VecModel::from(vec![
+            crate::StreamCardData {
+                host_id: "u2".into(),
+                streamer_name: "alice".into(),
+                can_watch: true,
+                ..Default::default()
+            },
+        ])));
+
+    assert_eq!(
+        count_of(&h, "Head2headCardWide"),
+        0,
+        "side column is too narrow"
+    );
+    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "OpenSeat"), 2, "two seats and a +N");
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "+2"),
+        "four seats read as two and +2: {:?}",
+        drawn_texts(&h)
+    );
+    assert_eq!(
+        first_card(&h).head2head.variant.as_str(),
+        "wide",
+        "the entry is the same, only the slot differs"
+    );
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+
+    h.app()
+        .set_active_stream_cards(slint::ModelRc::new(slint::VecModel::from(vec![])));
+    assert_eq!(
+        count_of(&h, "Head2headCardWide"),
+        1,
+        "stream ended: wide again"
+    );
+}
+
 /// Five members: the cell has no seats and no button, and the calm invite
 /// card carries the one red button, wired to the share action.
 #[test]
