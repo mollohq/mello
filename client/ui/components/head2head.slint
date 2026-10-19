@@ -162,8 +162,10 @@ export component OpenSeat inherits Rectangle {
     }
 }
 
-/// The commit button of the card. Red, because it commits.
-component InviteButton inherits Rectangle {
+/// The commit button of the card: the design-system CutButton filled with
+/// `Theme.confirm`, white label. No labelled commit button exists in
+/// client/ui yet (each panel inlines its own), so this one wraps CutButton.
+export component InviteButton inherits Rectangle {
     callback clicked();
     in property <bool> compact: false;
     /// Two-line label for a narrow column.
@@ -196,7 +198,7 @@ component InviteButton inherits Rectangle {
     }
 }
 
-component CardLabel inherits Text {
+export component CardLabel inherits Text {
     font-family: Theme.font-label;
     font-size: 10px;
     font-weight: Theme.weight-label;
@@ -212,6 +214,9 @@ export component Head2headCardWide inherits Rectangle {
     in property <string> member-initials;
     in property <color> hue: Theme.id-blue;
     in property <int> hue-index: 0;
+    /// Open seats shown. The seats are the first five, so this is 5 minus
+    /// the member count, and 0 from five members on.
+    in property <int> open-seats: 4;
     in property <string> carry-value; in property <string> carry-unit;
     in property <string> owl-value; in property <string> owl-unit;
     in property <string> collector-value; in property <string> collector-unit;
@@ -300,11 +305,20 @@ export component Head2headCardWide inherits Rectangle {
                     wrap: word-wrap;
                 }
                 HorizontalLayout {
-                    spacing: 8px;
+                    spacing: root.open-seats > 3 ? 4px : 8px;
                     alignment: start;
-                    OpenSeat { size: 30px; }
-                    OpenSeat { size: 30px; }
-                    OpenSeat { size: 30px; }
+                    for i in root.open-seats: OpenSeat {
+                        size: root.open-seats > 3 ? 24px : 30px;
+                        show-label: root.open-seats <= 3;
+                    }
+                }
+                if root.open-seats > 3: Text {
+                    text: "OPEN";
+                    font-family: Theme.font-label;
+                    font-size: 9px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-dim;
                 }
                 InviteButton { compact: true; wrap: true; clicked => { root.invite-clicked(); } }
             }
@@ -318,6 +332,8 @@ export component Head2headCardWide inherits Rectangle {
 /// so two seats and a "+1" stand for the three.
 export component Head2headCell inherits Rectangle {
     callback invite-clicked();
+    /// Open seats, 5 minus the member count. Two show, the rest as "+N".
+    in property <int> open-seats: 3;
     in property <color> hue: Theme.id-blue;
     in property <string> carry-value; in property <string> carry-unit;
     in property <string> owl-value; in property <string> owl-unit;
@@ -365,14 +381,118 @@ export component Head2headCell inherits Rectangle {
             spacing: 6px;
             cross-axis-alignment: center;
 
-            OpenSeat { size: 24px; show-label: false; }
-            OpenSeat { size: 24px; show-label: false; }
-            Text {
-                text: "+1";
+            for i in min(root.open-seats, 2): OpenSeat { size: 24px; show-label: false; }
+            if root.open-seats > 2: Text {
+                text: "+" + (root.open-seats - 2);
                 font-family: Theme.font-label;
                 font-size: 10px;
                 font-weight: Theme.weight-label;
                 letter-spacing: 1px;
+                color: Theme.text-dim;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            InviteButton { compact: true; clicked => { root.invite-clicked(); } }
+        }
+    }
+}
+
+/// One title on a versus card: the icon, the words, and whose it is.
+export struct TitleHeld {
+    icon: image,
+    title: string,
+    value: string,
+    unit: string,
+    hue: color,
+}
+
+/// Full-width head2head between two members (mockup frame B2). Both
+/// octagons and names, the tally between them, the titles in a row, then
+/// the open seats and the red invite.
+export component VersusHero inherits Rectangle {
+    callback invite-clicked();
+    in property <string> left-name;
+    in property <string> left-initials;
+    in property <int> left-hue-index: 0;
+    in property <string> right-name;
+    in property <string> right-initials;
+    in property <int> right-hue-index: 1;
+    in property <int> left-score;
+    in property <int> right-score;
+    in property <[TitleHeld]> titles;
+    in property <int> open-seats: 3;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            CardLabel { text: "HEAD2HEAD"; }
+            Rectangle { horizontal-stretch: 1; }
+            CardLabel { text: (root.left-name + " VS " + root.right-name).to-uppercase(); color: Theme.text-tertiary; }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 20px;
+            cross-axis-alignment: center;
+
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 14px;
+                alignment: start;
+                cross-axis-alignment: center;
+                UserAvatar { initials: root.left-initials; color-index: root.left-hue-index; size: 56px; }
+                Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; }
+            }
+            Text {
+                text: root.left-score + " : " + root.right-score;
+                font-family: Theme.font-display;
+                font-size: 34px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.text-value;
+            }
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 14px;
+                alignment: end;
+                cross-axis-alignment: center;
+                Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; }
+                UserAvatar { initials: root.right-initials; color-index: root.right-hue-index; size: 56px; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            for t in root.titles: TitleChip {
+                horizontal-stretch: 1;
+                icon: t.icon; title: t.title; value: t.value; unit: t.unit; hue: t.hue;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            for i in root.open-seats: OpenSeat { size: 24px; show-label: false; }
+            Text {
+                text: "OPEN";
+                font-family: Theme.font-label;
+                font-size: 9px;
+                font-weight: Theme.weight-label;
+                letter-spacing: Theme.track-label;
                 color: Theme.text-dim;
             }
             Rectangle { horizontal-stretch: 1; }
