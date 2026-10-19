@@ -254,6 +254,45 @@ game's directory wins over the parent directory.
 | Epic | `.item` JSON manifests |
 | GOG | Registry keys |
 
+#### Steam local data
+
+For Steam entries, the scan also reads three optional fields from local files.
+It makes no network call and needs no account link.
+
+| Field | Type | Source |
+|---|---|---|
+| `playtime_min` | `Option<u32>` | `Playtime` in `localconfig.vdf`. Lifetime minutes. Account-wide, so it includes play on other machines |
+| `last_played_unix` | `Option<u64>` | `LastPlayed` in `localconfig.vdf`. The `appmanifest` `LastPlayed` is the fallback. Zero means none |
+| `hidden` | `bool` | `hidden "1"` in `sharedconfig.vdf`. Default false |
+
+Epic and GOG entries leave all three empty.
+
+Files read, under the Steam root:
+
+| File | Path inside the file |
+|---|---|
+| `config/loginusers.vdf` | `users > <steamid64> > MostRecent` |
+| `userdata/<id>/config/localconfig.vdf` | `UserLocalConfigStore > Software > Valve > Steam > apps > <appid>` |
+| `userdata/<id>/7/remote/sharedconfig.vdf` | `UserRoamingConfigStore > Software > Valve > Steam > apps > <appid> > hidden` |
+
+Active user rule:
+
+1. Use the user with `MostRecent "1"` in `loginusers.vdf`. The folder name is the
+   SteamID64 minus 76561197960265728.
+2. If no such folder exists and `userdata` has one user folder, use it.
+3. If it has several, use the folder with the newest `localconfig.vdf`. The scan
+   logs that it made this choice.
+
+The scan fills the fields for installed appids only. `localconfig.vdf` also
+lists games that are not installed. The scan ignores them.
+
+`Playtime2wks` is not read. Steam leaves it stale while the client is idle.
+The parser drops `LaunchOptions` while it reads, and the scan never stores or
+logs it. The scan does not store `LastOwner` from the `appmanifest`.
+
+The scan logs one line with counts: installed, with playtime, hidden. It never
+logs values. Nothing leaves the device in this feature.
+
 `game_id` has the form `<prefix>-<external_id>`. The id stays stable across a
 launcher reinstall and across a library move to another disk.
 

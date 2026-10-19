@@ -1085,6 +1085,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "4fe75bbc5a674f4f9b356b5c90567da5".into(),
             name: "Fortnite".into(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: install_dir.clone(),
         }]);
 
@@ -1124,6 +1127,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "dupe123".into(),
             name: ambiguous.to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\EpicGames\Ambiguous"),
         }]);
         let mut p = make_process("game.exe", 102, false);
@@ -1144,6 +1150,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "abc123".into(),
             name: "Some Unreleased Indie Thing".into(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\EpicGames\Indie"),
         }]);
         let mut p = make_process("indie.exe", 101, false);
@@ -1261,6 +1270,9 @@ mod tests {
             source: crate::library::LibrarySource::Steam,
             external_id: "1145360".to_string(),
             name: "Hades".to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Hades"),
         }]);
         let mut p = make_process("Hades.exe", 4242, true);
@@ -1300,6 +1312,9 @@ mod tests {
             source: crate::library::LibrarySource::Steam,
             external_id: "730".to_string(),
             name: "Counter-Strike 2".to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(
                 r"C:\Steam\steamapps\common\Counter-Strike Global Offensive",
             ),
