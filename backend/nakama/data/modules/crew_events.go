@@ -1046,6 +1046,18 @@ func voiceSessionOnJoin(channelID, crewID, channelName, userID, username string)
 	}
 }
 
+// voiceSessionParticipantCount is the number of unique members who have been
+// in the open voice session of a channel. Zero when there is no session.
+func voiceSessionParticipantCount(channelID string) int {
+	voiceSessionsMu.Lock()
+	defer voiceSessionsMu.Unlock()
+	sess, ok := voiceSessions[channelID]
+	if !ok {
+		return 0
+	}
+	return len(sess.participants)
+}
+
 // voiceSessionOnLastLeave returns session info when the last member leaves
 // a channel that had 2+ unique participants. Returns nil otherwise.
 func voiceSessionOnLastLeave(channelID string) *voiceSessionInfo {
