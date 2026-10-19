@@ -4514,6 +4514,301 @@ fn hiding_the_invite_removes_the_line_not_the_trio() {
     assert_eq!(skeleton_cells(&h), 3);
 }
 
+// ---------------------------------------------------------------------------
+// Head2head placement on the crew feed (plans/next-gen-feed.md section 3)
+// ---------------------------------------------------------------------------
+
+fn count_of(h: &Harness, type_name: &str) -> usize {
+    ElementHandle::find_by_element_type_name(h.app(), type_name).count()
+}
+
+/// The crew list roster the head2head entry names by user id.
+fn set_roster(h: &Harness, names: &[(&str, &str)]) {
+    let members: Vec<crate::MemberData> = names
+        .iter()
+        .map(|(id, name)| crate::MemberData {
+            id: (*id).into(),
+            name: (*name).into(),
+            initials: crate::converters::make_initials(name).into(),
+            ..Default::default()
+        })
+        .collect();
+    h.app()
+        .set_members(slint::ModelRc::new(slint::VecModel::from(members)));
+}
+
+fn h2h_title(id: &str, holder: &str, value: serde_json::Value, unit: &str) -> serde_json::Value {
+    serde_json::json!({
+        "title_id": id, "holder_user_id": holder, "value": value, "unit": unit,
+        "since_ms": 1_000,
+    })
+}
+
+fn h2h_pair(opponent: &str, you: i32, them: i32) -> serde_json::Value {
+    serde_json::json!({"a": "user-1", "b": opponent, "a_count": you, "b_count": them})
+}
+
+fn h2h_entry(
+    members: i32,
+    titles: Vec<serde_json::Value>,
+    pairs: Vec<serde_json::Value>,
+    moved: Option<serde_json::Value>,
+) -> FeedEntry {
+    let mut data = serde_json::json!({
+        "crew_id": "crew-0", "member_count": members,
+        "open_seats": (5 - members).max(0),
+        "titles": titles, "pairs": pairs, "updated_at": 1_000,
+    });
+    if let Some(m) = moved {
+        data["belt_moved_recent"] = m;
+    }
+    feed_entry("head2head", "head2head", data)
+}
+
+fn first_card(h: &Harness) -> FeedCardData {
+    h.app().get_feed_cards().row_data(0).expect("a feed card")
+}
+
+fn invoke_invite_and_expect_code_request(h: &mut Harness, label: &str) {
+    h.click_label(label);
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::CreateInviteCode { crew_id } if crew_id == "crew-0")),
+        "{label} asks for an invite code, the same action as the invite line"
+    );
+}
+
+/// A crew of one: head2head takes the wide slot with the viewer's titles,
+/// four open seats and the red invite inside the card. The trio stays under
+/// it and the invite line gives way, so the surface has one red button.
+#[test]
+fn crew_of_one_shows_the_wide_card_with_four_seats_and_the_invite() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User")]);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            1,
+            vec![
+                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
+                h2h_title("night_owl", "user-1", serde_json::json!("03:14"), ""),
+                h2h_title("the_collector", "user-1", serde_json::json!(5), "installed"),
+                h2h_title("locked_in", "user-1", serde_json::json!(4.6), "h"),
+            ],
+            vec![],
+            None,
+        )]),
+    });
+
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
+    assert_eq!(count_of(&h, "Head2headCell"), 0);
+    assert_eq!(count_of(&h, "VersusHero"), 0);
+    assert_eq!(
+        count_of(&h, "OpenSeat"),
+        4,
+        "the first five seats, one taken"
+    );
+    assert_eq!(count_of(&h, "TitleChip"), 4, "the viewer's four titles");
+    assert_eq!(first_card(&h).head2head.variant.as_str(), "wide");
+    assert_eq!(skeleton_cells(&h), 3, "the trio stays below");
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+    assert!(
+        h.controls_labelled("Share invite link").is_empty(),
+        "one red button: the invite line gives way"
+    );
+    assert!(!h.app().get_feed_invite_line());
+    invoke_invite_and_expect_code_request(&mut h, "Invite your crew");
+}
+
+/// Two members and no move in the last 24 h: a standard cell with the one
+/// pair and the seats that are left, not a hero.
+#[test]
+fn crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![
+                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
+                h2h_title("the_collector", "u2", serde_json::json!(14), "installed"),
+            ],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+
+    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "VersusHero"), 0);
+    assert_eq!(count_of(&h, "Head2headCardWide"), 0);
+    assert_eq!(count_of(&h, "PairRow"), 1);
+    let card = first_card(&h);
+    assert_eq!(card.head2head.variant.as_str(), "cell");
+    assert_eq!(card.head2head.open_seats, 3);
+    // Three seats do not fit one line: two show and a "+1" stands for the third.
+    assert_eq!(count_of(&h, "OpenSeat"), 2);
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+}
+
+/// A belt that moved in the last 24 h puts the versus card in the hero slot,
+/// led by the moved title. The trio stays beside it (frame B2).
+#[test]
+fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let moved = serde_json::json!({
+        "title_id": "the_collector", "holder_user_id": "u2", "value": 14, "unit": "installed",
+        "since_ms": 5_000, "moved_at_ms": 5_000, "previous_holder_user_id": "user-1",
+    });
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            feed_entry(
+                "evt-join-1",
+                "catchup",
+                serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+            ),
+            h2h_entry(
+                2,
+                vec![
+                    h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
+                    moved.clone(),
+                ],
+                vec![h2h_pair("u2", 1, 1)],
+                Some(moved),
+            ),
+        ]),
+    });
+
+    assert_eq!(count_of(&h, "VersusHero"), 1);
+    assert_eq!(count_of(&h, "Head2headCell"), 0);
+    let hero = first_card(&h);
+    assert_eq!(hero.card_type.as_str(), "head2head", "first in the feed");
+    assert_eq!(hero.head2head.variant.as_str(), "versus");
+    assert_eq!(hero.head2head.right_name.as_str(), "Jonas");
+    assert_eq!(
+        hero.head2head.chips.row_data(0).unwrap().id.as_str(),
+        "the_collector",
+        "the moved title leads the chips"
+    );
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+}
+
+/// Five members: the cell has no seats and no button, and the calm invite
+/// card carries the one red button, wired to the share action.
+#[test]
+fn crew_of_five_shows_the_cell_without_seats_and_the_invite_card() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            5,
+            vec![
+                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
+                h2h_title("the_collector", "u2", serde_json::json!(14), "installed"),
+            ],
+            vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 1, 1)],
+            None,
+        )]),
+    });
+
+    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(first_card(&h).head2head.variant.as_str(), "cell-full");
+    assert_eq!(first_card(&h).head2head.open_seats, 0);
+    assert_eq!(count_of(&h, "OpenSeat"), 0, "no seats from five members");
+    assert_eq!(count_of(&h, "InviteCard"), 1);
+    assert_eq!(
+        count_of(&h, "InviteButton"),
+        1,
+        "only the invite card has the button"
+    );
+    assert!(h.controls_labelled("Invite your crew").is_empty());
+    assert_eq!(h.controls_labelled("Share invite link").len(), 1);
+    let invite = (0..h.app().get_feed_cards().row_count())
+        .filter_map(|i| h.app().get_feed_cards().row_data(i))
+        .find(|c| c.card_type.as_str() == "invite")
+        .expect("the invite card is in the feed");
+    assert_eq!(invite.head2head.members.row_count(), 5);
+    assert_eq!(invite.head2head.more_members, 0);
+    invoke_invite_and_expect_code_request(&mut h, "Share invite link");
+}
+
+/// More than eight members show eight octagons and a "+N".
+#[test]
+fn invite_card_shows_eight_members_then_a_count() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 11);
+    let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
+    roster.extend((2..=11).map(|i| (format!("u{i}"), format!("Kim {i}"))));
+    let roster_ref: Vec<(&str, &str)> = roster
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    set_roster(&h, &roster_ref);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(11, vec![], vec![], None)]),
+    });
+
+    assert_eq!(
+        count_of(&h, "Head2headCell"),
+        0,
+        "no data, no head2head cell"
+    );
+    let card = first_card(&h);
+    assert_eq!(card.card_type.as_str(), "invite");
+    assert_eq!(card.head2head.members.row_count(), 8);
+    assert_eq!(card.head2head.more_members, 3);
+}
+
+/// The chip on a pair row is the contested title with the largest gap: the
+/// 4,171 h Carry, not the 4.6 h Locked In.
+#[test]
+fn the_deciding_chip_is_the_title_with_the_largest_gap() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![
+                h2h_title("locked_in", "user-1", serde_json::json!(4.6), "h"),
+                h2h_title("the_carry", "u2", serde_json::json!(4171.0), "h"),
+            ],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+
+    let row = first_card(&h)
+        .head2head
+        .pairs
+        .row_data(0)
+        .expect("a pair row");
+    assert!(row.has_chip);
+    assert_eq!(row.chip.title.as_str(), "The Carry");
+    assert_eq!(row.chip.value.as_str(), "4,171");
+    assert_eq!(row.chip.holder_id.as_str(), "u2");
+    assert_eq!(count_of(&h, "TitleChip"), 1, "one chip on the one row");
+}
+
 /// ★ Regression: discover had no way back. `back-requested` was declared on
 /// DiscoverPanel and wired in main.slint, but nothing emitted it, and the
 /// panel had no header to put a control in.
