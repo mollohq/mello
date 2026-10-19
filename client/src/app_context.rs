@@ -72,6 +72,9 @@ pub struct AppContext {
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
+    /// Installed games from the newest library scan; merged with the hidden
+    /// set from Settings when pushed to the UI.
+    pub installed_games: Rc<RefCell<Vec<mello_core::events::InstalledGameInfo>>>,
     /// Unknown-game candidate currently shown in the "track it?" prompt
     /// (exe, path, display name). Consumed on track/dismiss.
     pub muted_before_deafen: Rc<Cell<bool>>,
@@ -173,6 +176,7 @@ impl AppContext {
             riot_cta_pending: Rc::new(Cell::new(false)),
             session_recovery: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
+            installed_games: Rc::new(RefCell::new(Vec::new())),
             muted_before_deafen: Rc::new(Cell::new(false)),
             updater: Rc::new(RefCell::new(None)),
             hotkey_mgr: Rc::new(RefCell::new(
@@ -234,6 +238,7 @@ impl Clone for AppContext {
             riot_cta_pending: self.riot_cta_pending.clone(),
             session_recovery: self.session_recovery.clone(),
             games_integrations: self.games_integrations.clone(),
+            installed_games: self.installed_games.clone(),
             muted_before_deafen: self.muted_before_deafen.clone(),
             updater: self.updater.clone(),
             hotkey_mgr: self.hotkey_mgr.clone(),

@@ -582,6 +582,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         riot_cta_pending: Rc::new(Cell::new(false)),
         session_recovery: Rc::new(Cell::new(false)),
         games_integrations: Rc::new(RefCell::new(Vec::new())),
+        installed_games: Rc::new(RefCell::new(Vec::new())),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,

@@ -434,6 +434,15 @@ impl Client {
         loop {
             for game_event in self.drain_game_events() {
                 if let crate::game_sensing::GameEvent::LibraryScanned { entries } = game_event {
+                    let games = crate::library_report::installed_games(&entries)
+                        .into_iter()
+                        .map(|g| crate::events::InstalledGameInfo {
+                            game_id: g.game_id,
+                            name: g.name,
+                            steam_hidden: g.steam_hidden,
+                        })
+                        .collect();
+                    let _ = self.event_tx.send(Event::InstalledGames { games });
                     self.library_reporter.set_scan(entries);
                     self.sync_library_report().await;
                     continue;

@@ -20,6 +20,7 @@ import {
     YouStripData,
     GameStatsCardData,
     GameIntegrationData,
+    InstalledGameData,
     InvitePersonData,
     VideoRect,
 } from "types.slint";
@@ -46,7 +47,7 @@ import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, RecentGameTile, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, RecentGameTile, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -287,6 +288,8 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-hud-clip-toasts: true;
     // Games settings
     in property <[GameIntegrationData]> games-list: [];
+    in property <[InstalledGameData]> installed-games: [];
+    callback games-hidden-toggled(string /* game-id */, bool);
     in-out property <bool> settings-share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
@@ -1656,6 +1659,11 @@ export component MainWindow inherits Window {
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
         // Games
         games-list: root.games-list;
+        installed-games: root.installed-games;
+        games-hidden-toggled(id, v) => {
+            root.settings-show-saved = true;
+            root.games-hidden-toggled(id, v);
+        }
         settings-share-game-activity <=> root.settings-share-game-activity;
         riot-available: root.riot-available;
         riot-linked: root.riot-linked;

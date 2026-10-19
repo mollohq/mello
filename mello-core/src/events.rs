@@ -81,6 +81,16 @@ pub struct UserSearchResult {
     pub is_friend: bool,
 }
 
+/// One installed game, for the per-game hide list in settings. Built from the
+/// library scan on the device. Nothing here is sent to the server.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct InstalledGameInfo {
+    pub game_id: String,
+    pub name: String,
+    /// Hidden in the Steam library. Stays hidden from the crew.
+    pub steam_hidden: bool,
+}
+
 /// One game integration row for the Games settings page (from the telemetry
 /// adapter registry; the enabled/disabled state lives in client settings).
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -658,6 +668,10 @@ pub enum Event {
     /// settings open; install detection runs off the UI thread).
     GamesSettings {
         games: Vec<GameIntegrationStatus>,
+    },
+    /// The installed games from the newest library scan, sorted by name.
+    InstalledGames {
+        games: Vec<InstalledGameInfo>,
     },
     /// Riot account link state (response to LoadRiotStatus / RiotLink /
     /// RiotUnlink). `available` = the server has a Riot API key configured.

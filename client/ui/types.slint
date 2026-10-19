@@ -331,6 +331,17 @@ export struct GameIntegrationData {
     has-account-link: bool,
 }
 
+// One installed game in the "Hidden from crew" list (Games settings tab).
+export struct InstalledGameData {
+    game-id: string,
+    name: string,
+    short-name: string,
+    // Hidden from the crew: by the user, or in Steam.
+    hidden: bool,
+    // Hidden in Steam. The user cannot change it here.
+    locked: bool,
+}
+
 export struct CaptureSourceData {
     id: string,
     name: string,

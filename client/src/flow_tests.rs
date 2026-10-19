@@ -5459,3 +5459,158 @@ fn onboarding_with_share_on_turns_start_on_boot_on() {
 fn start_on_boot_defaults_on() {
     assert!(crate::Settings::default().start_on_boot);
 }
+
+// ---- installed games and the "Hidden from crew" list ----
+
+fn installed_game(
+    id: &str,
+    name: &str,
+    steam_hidden: bool,
+) -> mello_core::events::InstalledGameInfo {
+    mello_core::events::InstalledGameInfo {
+        game_id: id.into(),
+        name: name.into(),
+        steam_hidden,
+    }
+}
+
+fn games_tab_with_installed(h: &mut Harness) {
+    // A tall window keeps every row inside the settings scroll area, where a
+    // click can reach it.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 3000));
+    logged_in_app(h);
+    h.emit(Event::InstalledGames {
+        games: vec![
+            installed_game("steam-620", "Portal 2", false),
+            installed_game("steam-730", "Counter-Strike 2", false),
+            installed_game("steam-999", "Steam Hidden Game", true),
+        ],
+    });
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("GAMES");
+}
+
+fn hidden_command(cmds: &[Command]) -> Option<Vec<String>> {
+    cmds.iter().rev().find_map(|c| match c {
+        Command::SetHiddenGames { hidden } => Some(hidden.clone()),
+        _ => None,
+    })
+}
+
+#[test]
+fn the_activity_sharing_section_uses_the_consent_copy() {
+    let mut h = Harness::new();
+    games_tab_with_installed(&mut h);
+    assert!(
+        !h.controls_labelled("Show crew what I play").is_empty(),
+        "the share switch carries the new label"
+    );
+    assert!(
+        h.controls_labelled("Show crew what I'm playing").is_empty(),
+        "the old label is gone"
+    );
+    let texts = ElementHandle::find_by_accessible_label(
+        h.app(),
+        "Let crewmates see your installed games, what game you're in, and your play sessions in the crew feed.",
+    )
+    .count();
+    assert!(texts > 0, "the section shows the new description");
+}
+
+#[test]
+fn onboarding_toggle_and_subline_use_the_consent_copy() {
+    let h = Harness::new();
+    h.app().set_onboarding_step(2);
+    assert!(
+        !h.controls_labelled("Show crew what I play").is_empty(),
+        "the onboarding switch carries the new label"
+    );
+    for line in [
+        "Your installed games, play sessions and what you're in right now.",
+        "m3llo starts with your PC and keeps track of your sessions.",
+    ] {
+        assert!(
+            ElementHandle::find_by_accessible_label(h.app(), line).count() > 0,
+            "missing line: {line}"
+        );
+    }
+}
+
+#[test]
+fn hiding_a_game_sends_the_hidden_set_and_unhiding_clears_it() {
+    let mut h = Harness::new();
+    games_tab_with_installed(&mut h);
+    let _ = h.commands();
+
+    h.click_label("Hidden from crew: Portal 2");
+    assert_eq!(
+        hidden_command(&h.commands()),
+        Some(vec!["steam-620".to_string()])
+    );
+    assert_eq!(h.settings().borrow().hidden_games, ["steam-620"]);
+
+    h.click_label("Hidden from crew: Counter-Strike 2");
+    assert_eq!(
+        hidden_command(&h.commands()),
+        Some(vec!["steam-620".to_string(), "steam-730".to_string()])
+    );
+
+    h.click_label("Hidden from crew: Portal 2");
+    assert_eq!(
+        hidden_command(&h.commands()),
+        Some(vec!["steam-730".to_string()])
+    );
+    assert_eq!(h.settings().borrow().hidden_games, ["steam-730"]);
+}
+
+#[test]
+fn a_game_hidden_in_steam_has_no_switch() {
+    let mut h = Harness::new();
+    games_tab_with_installed(&mut h);
+    assert!(h
+        .controls_labelled("Hidden from crew: Steam Hidden Game")
+        .is_empty());
+    assert!(!h.controls_labelled("Hidden from crew: Portal 2").is_empty());
+}
+
+/// The command from the toggle drives the report: the hidden game is absent
+/// from the next report, and the unhidden one is back.
+#[test]
+fn toggling_hide_removes_the_game_from_the_next_report() {
+    use mello_core::library::{LibraryEntry, LibrarySource};
+    use mello_core::library_report::LibraryReporter;
+
+    let entry = |id: &str, name: &str| LibraryEntry {
+        source: LibrarySource::Steam,
+        external_id: id.into(),
+        name: name.into(),
+        install_dir: std::path::PathBuf::from(format!("C:\\Games\\{name}")),
+        playtime_min: Some(10),
+        last_played_unix: None,
+        hidden: false,
+    };
+    let mut reporter = LibraryReporter::new();
+    reporter.set_scan(vec![
+        entry("620", "Portal 2"),
+        entry("730", "Counter-Strike 2"),
+    ]);
+    let none = std::collections::HashSet::new();
+    let first = reporter.plan(true, true, &none).expect("first report");
+    assert_eq!(first.len(), 2);
+
+    let mut h = Harness::new();
+    games_tab_with_installed(&mut h);
+    let _ = h.commands();
+    h.click_label("Hidden from crew: Portal 2");
+    let hidden: std::collections::HashSet<String> = hidden_command(&h.commands())
+        .expect("SetHiddenGames")
+        .into_iter()
+        .collect();
+
+    let next = reporter.plan(true, true, &hidden).expect("the set changed");
+    let ids: Vec<&str> = next.iter().map(|g| g.game_id.as_str()).collect();
+    assert_eq!(ids, ["steam-730"], "the hidden game is not reported");
+}

@@ -3,7 +3,7 @@ mod chat;
 mod clip;
 mod crew;
 mod game;
-mod games;
+pub(crate) mod games;
 mod presence;
 mod stats;
 mod stream_cards;
@@ -167,6 +167,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
 
         // Games settings + Riot account link
         Event::GamesSettings { .. }
+        | Event::InstalledGames { .. }
         | Event::RiotStatus { .. }
         | Event::RiotLinkFailed { .. } => games::handle(ctx, event),
 
