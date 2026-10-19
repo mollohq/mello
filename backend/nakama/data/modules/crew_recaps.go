@@ -107,6 +107,29 @@ type RecapAward struct {
 	Detail string `json:"detail"`
 }
 
+// RecapBeltMoved is one head2head title that changed hands in the recap week
+// (plans/next-gen-feed.md section 8). The value uses the encoding of
+// Head2headTitle.Value.
+type RecapBeltMoved struct {
+	TitleID        string      `json:"title_id"`
+	HolderUserID   string      `json:"holder_user_id"`
+	HolderName     string      `json:"holder_name"`
+	PreviousUserID string      `json:"previous_holder_user_id"`
+	PreviousName   string      `json:"previous_holder_name"`
+	Value          interface{} `json:"value"`
+	Unit           string      `json:"unit"`
+	MovedAtMs      int64       `json:"moved_at_ms"`
+}
+
+// RecapBeltHeld is the number of titles one member holds when the recap is
+// generated, with the ids of those titles.
+type RecapBeltHeld struct {
+	UserID      string   `json:"user_id"` // for client-side avatar resolution (spec 19)
+	DisplayName string   `json:"display_name"`
+	Count       int      `json:"count"`
+	TitleIDs    []string `json:"title_ids"`
+}
+
 type WeeklyRecapData struct {
 	CrewID            string        `json:"crew_id"`
 	WeekStart         int64         `json:"week_start"`
@@ -125,7 +148,17 @@ type WeeklyRecapData struct {
 	Awards         []RecapAward      `json:"awards,omitempty"`
 	BestStreak     int               `json:"best_streak,omitempty"`
 	BestStreakName string            `json:"best_streak_name,omitempty"`
-	GeneratedAt    int64             `json:"generated_at"`
+	// Head2head belts, read from the holders doc at generation time. Both are
+	// omitted for a recap with no activity.
+	//
+	//   - BeltsMoved: titles whose moved_at_ms is in the recap week. The same
+	//     titles are also appended to Awards (kind "belt").
+	//   - BeltsHeld: titles held by each member, most first. Leaderboard has
+	//     the same rows, for the RecapCard leaderboard field (spec 19, 3.5).
+	BeltsMoved  []RecapBeltMoved `json:"belts_moved,omitempty"`
+	BeltsHeld   []RecapBeltHeld  `json:"belts_held,omitempty"`
+	Leaderboard []RecapBeltHeld  `json:"leaderboard,omitempty"`
+	GeneratedAt int64            `json:"generated_at"`
 }
 
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
@@ -250,12 +283,129 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		GeneratedAt:       time.Now().UnixMilli(),
 	}
 
+	// Belts only join a recap that has activity. Holding titles is a standing
+	// state and must not turn an empty week into a recap with content.
+	if recapHasContent(recap) {
+		attachRecapBelts(ctx, nk, logger, crewID, &recap, startMs, weekEnd.UnixMilli())
+	}
+
 	if err := AppendRecap(ctx, nk, crewID, recap); err != nil {
 		logger.Error("Failed to store weekly recap for crew %s: %v", crewID, err)
 	} else {
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
 	}
+}
+
+// head2headTitleLabels is the English label of each title, for recap awards.
+// The client owns the display copy of the head2head card.
+var head2headTitleLabels = map[string]string{
+	titleTheCarry:   "The Carry",
+	titleLockedIn:   "Locked In",
+	titleHasALife:   "Has a Life",
+	titleNightOwl:   "Night Owl",
+	titleTheCollect: "The Collector",
+	titleSampler:    "Sampler",
+	titleOneTrick:   "One Trick",
+	titleMouth:      "Mouth",
+	titleMarathon:   "Marathon",
+	titleLastOneUp:  "Last One Up",
+	titleClipper:    "Clipper",
+	titleRageQuit:   "Rage Quit",
+	titleWinner:     "Winner",
+}
+
+// buildRecapBelts derives the belt sections from a holders doc. A title moved
+// in the week when its moved_at_ms is in [startMs, endMs]. Held counts every
+// contested title in the doc. Pure, so the rules are unit-testable. name
+// resolves a user id to a display name.
+func buildRecapBelts(doc *Head2headDoc, startMs, endMs int64, name func(string) string) ([]RecapBeltMoved, []RecapBeltHeld) {
+	if doc == nil {
+		return nil, nil
+	}
+	var moved []RecapBeltMoved
+	held := map[string]*RecapBeltHeld{}
+	for _, t := range doc.Titles {
+		if t.HolderUserID == "" {
+			continue
+		}
+		h := held[t.HolderUserID]
+		if h == nil {
+			h = &RecapBeltHeld{UserID: t.HolderUserID, DisplayName: name(t.HolderUserID), TitleIDs: []string{}}
+			held[t.HolderUserID] = h
+		}
+		h.Count++
+		h.TitleIDs = append(h.TitleIDs, t.TitleID)
+		if t.MovedAtMs >= startMs && t.MovedAtMs <= endMs {
+			moved = append(moved, RecapBeltMoved{
+				TitleID:        t.TitleID,
+				HolderUserID:   t.HolderUserID,
+				HolderName:     name(t.HolderUserID),
+				PreviousUserID: t.PreviousHolderUserID,
+				PreviousName:   name(t.PreviousHolderUserID),
+				Value:          t.Value,
+				Unit:           t.Unit,
+				MovedAtMs:      t.MovedAtMs,
+			})
+		}
+	}
+	sort.SliceStable(moved, func(i, j int) bool { return moved[i].MovedAtMs < moved[j].MovedAtMs })
+	heldList := make([]RecapBeltHeld, 0, len(held))
+	for _, h := range held {
+		heldList = append(heldList, *h)
+	}
+	sort.Slice(heldList, func(i, j int) bool {
+		if heldList[i].Count != heldList[j].Count {
+			return heldList[i].Count > heldList[j].Count
+		}
+		return heldList[i].UserID < heldList[j].UserID
+	})
+	return moved, heldList
+}
+
+// beltAwards turns moved belts into recap awards, one for each belt.
+func beltAwards(moved []RecapBeltMoved) []RecapAward {
+	out := make([]RecapAward, 0, len(moved))
+	for _, m := range moved {
+		title := head2headTitleLabels[m.TitleID]
+		if title == "" {
+			title = m.TitleID
+		}
+		detail := ""
+		if m.PreviousName != "" {
+			detail = "took it from " + m.PreviousName
+		}
+		out = append(out, RecapAward{Kind: "belt", Title: title, Name: m.HolderName, Detail: detail})
+	}
+	return out
+}
+
+// attachRecapBelts fills the belt sections of a recap from the holders doc of
+// the crew. It recomputes the doc first, because the session trigger is
+// debounced and the doc can lag the last session. If the recompute fails it
+// reads the stored doc. Never fails the recap.
+func attachRecapBelts(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string, recap *WeeklyRecapData, startMs, endMs int64) {
+	doc := recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerLibrary, endMs)
+	if doc == nil {
+		doc, _ = readHead2headDoc(ctx, nk, crewID)
+	}
+	names := map[string]string{}
+	name := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if n, ok := names[id]; ok {
+			return n
+		}
+		n := resolveOrID(ctx, nk, id)
+		names[id] = n
+		return n
+	}
+	moved, held := buildRecapBelts(doc, startMs, endMs, name)
+	recap.BeltsMoved = moved
+	recap.BeltsHeld = held
+	recap.Leaderboard = held
+	recap.Awards = append(recap.Awards, beltAwards(moved)...)
 }
 
 func resolveOrID(ctx context.Context, nk runtime.NakamaModule, id string) string {
