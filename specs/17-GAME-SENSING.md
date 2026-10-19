@@ -291,7 +291,10 @@ The parser drops `LaunchOptions` while it reads, and the scan never stores or
 logs it. The scan does not store `LastOwner` from the `appmanifest`.
 
 The scan logs one line with counts: installed, with playtime, hidden. It never
-logs values. Nothing leaves the device in this feature.
+logs values. The scan itself sends nothing. After each scan the client can
+report the installed games to the server. See [16](./16-CREW-EVENT-LEDGER.md)
+section 3.6 and [22](./22-GAME-UI-SURFACES.md) section 5. That report happens
+only when `share_game_activity` is on, and it leaves out hidden games.
 
 `game_id` has the form `<prefix>-<external_id>`. The id stays stable across a
 launcher reinstall and across a library move to another disk.

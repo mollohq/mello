@@ -151,11 +151,19 @@ disabled activity sharing. See section 5.
 The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
 
 ```json
-{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "minutes": 600 } ],
+{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "minutes": 600,
+               "last_played": 1760000000000, "member_ids": ["<user id>"] } ],
   "session_count": 14, "total_min": 1860 }
 ```
 
-- Source: `game_session` events of the week. Builder: `buildRecentGames` in `crew_feed.go`. Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3.3 has the rules.
+- Source: the library documents of the crew members plus the `game_session` events of the week. Builder: `buildRecentGames` in `crew_feed.go`. Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3.3 has the rules.
+- Library documents: one per member, in the `user_library` collection. The client writes them with `library_report`. See spec [16](./16-CREW-EVENT-LEDGER.md) section 3.6. The feed RPC reads the documents of the crew members as the system. A member with no document adds nothing.
+- Merge: the union of both sources by game id. A library game with no matching id falls back to a match on the lower-case name, because sessions carry catalogue ids and the library carries launcher ids.
+- Name: the library name when present, else the session name.
+- `minutes`: the summed `playtime_min` of the members when present, else the session minutes.
+- `last_played`: the newer of the library and the sessions, in milliseconds. The tiles sort by it, newest first.
+- `member_ids`: members who have the game installed or played it in the week. The client card does not draw them yet.
+- The header line comes from sessions only. With no sessions the line is empty.
 - Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
 - Art: the runtime game icon when cached, else the monogram tile. Capsule art is a later task.
 - Client: `RecentGamesCard` in `crew_feed.slint`. The header line is `subtitle`.
@@ -228,7 +236,7 @@ No surface renders this copy. The ledger records the data. See
 
 ## 5. Activity Sharing Consent
 
-Onboarding shows a checkbox at the nickname step: "Show crew what I'm playing".
+Onboarding shows a checkbox at the nickname step: "Show crew what I play".
 The default is on. Settings → Games changes it later.
 
 The flag gates every surface in this spec.
@@ -239,11 +247,32 @@ The flag gates every surface in this spec.
 | Session sharing | `should_emit_game_session_end(share)` in the same file |
 | Persistence | `settings.share_game_activity`, default from `default_share_game_activity()` |
 | Runtime change | `Command::SetShareGameActivity` |
+| Library report | `LibraryReporter::plan` in `mello-core/src/library_report.rs` sends only when the flag is on and the session is active |
 
 The client clears published presence on the next scan when the user disables the
 flag. `sync_game_presence` recomputes the value and detects the change.
 
-Per-game hiding is out of scope.
+### Per-game hiding
+
+The user can hide single games from the crew. The setting is `hidden_games` in
+the client settings: a list of game ids (`<prefix>-<external_id>`, spec
+[17](./17-GAME-SENSING.md) section 3.3). Settings → Games shows one
+"Hidden from crew" switch for each installed game.
+
+| Rule | Behavior |
+|---|---|
+| Library report | The client leaves every hidden game out of `library_report`. The server also drops an entry that carries `hidden: true` |
+| Change | A change sends a new report at once, without the game |
+| Steam default | A game hidden in the Steam library is hidden from the crew by default. The row shows "HIDDEN IN STEAM" and has no switch. To share it, unhide it in Steam |
+| Sessions | Hiding a game affects the library report only. The presence line and `game_session_end` still follow the global toggle |
+| Toggle off | The client sends an empty report once. The server document is empty |
+
+The consent copy is the same on both surfaces.
+
+| Surface | Text |
+|---|---|
+| Onboarding | "Show crew what I play". Subline: "Your installed games, play sessions and what you're in right now." |
+| Settings, ACTIVITY SHARING | "Let crewmates see your installed games, what game you're in, and your play sessions in the crew feed." |
 
 ---
 
@@ -310,6 +339,5 @@ No surface in this spec has run against a live backend with real crew traffic.
 ## 9. Out of Scope
 
 - Deep profile view. See spec 19 section 2.4.
-- Per-game activity hiding. Only the global toggle in section 5 exists.
 - Rich telemetry session card beyond the W/L panel in section 4.1.
 - The HUD overlay (section 7.1).

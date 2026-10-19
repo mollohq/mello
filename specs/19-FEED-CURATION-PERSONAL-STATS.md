@@ -197,16 +197,17 @@ option.
 
 Status: the `CREW PLAY` rollup card is removed. `buildGameRollup` no longer exists.
 
-`buildRecentGames` in `crew_feed.go` reads every `game_session` in the week, before pruning. It builds one `recent-games` card.
+`buildRecentGames` in `crew_feed.go` reads every `game_session` in the week, before pruning. It also reads the library documents of the crew members. It builds one `recent-games` card.
 
 | Element | Content |
 |---|---|
-| Header line | Session count and total crew time: "14 sessions, 31 h this week" |
-| Tiles | Three to six games, keyed by game id, with name and minutes. Most minutes first |
+| Header line | Session count and total crew time from sessions: "14 sessions, 31 h this week" |
+| Tiles | One to six games, keyed by game id, with name and minutes. Most recently played first |
 
 - A session with no reportable minutes is not counted.
-- No game with minutes means no card.
-- The card uses no extra read. It comes from the same `game_session` events as the session cards.
+- Tiles are the union of the sessions and the library documents. Spec [22](./22-GAME-UI-SURFACES.md) section 3.4 has the merge rules.
+- No game with minutes and no installed game means no card.
+- The sessions use no extra read. The library documents are one batched storage read of the crew members.
 
 Pruned sessions still get no card of their own. Their time is in the header and the tiles.
 

@@ -325,6 +325,41 @@ Read paths:
 - `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first), powering the deeper memory surfaces.
 
+### 3.6 Library report (not a ledger event)
+
+The `library_report` RPC stores the games installed on a member's device. It is not a ledger event. Nothing is appended to the ledger and no card type exists for it.
+
+Reason: the ledger keeps 7 days of history inside a 256 KB object (section 3.4). A library of 500 games is about 60 KB. Each member would add that to the shared document. The library is state, not history, so a replace is the right model.
+
+| Item | Value |
+|---|---|
+| Collection / key | `user_library` / `snapshot`, one object per user |
+| Permissions | Read: owner only. Write: server only |
+| Write | A replace. The last report wins. No version check |
+| Reader | `crew_feed` reads the documents of the crew members as the system |
+| Gate | The client sends only when `share_game_activity` is on. An empty report clears the document |
+
+Request:
+
+```json
+{ "games": [ { "game_id": "steam-730", "name": "Counter-Strike 2", "launcher": "steam",
+               "playtime_min": 249008, "last_played_unix": 1760000000 } ] }
+```
+
+| Field | Rule |
+|---|---|
+| `game_id` | Required. `<prefix>-<external_id>`, at most 128 bytes, no whitespace |
+| `name` | Required. At most 128 characters |
+| `launcher` | Required. Lower case letters, digits and `_`, at most 32 bytes |
+| `playtime_min` | Optional. 0 to 26,280,000 |
+| `last_played_unix` | Optional. Unix seconds, not negative |
+| `hidden` | Not part of the contract. An entry with `hidden: true` is dropped |
+
+- More than 500 games, or a payload over 256 KB, gives error code 3 (invalid argument). A repeated `game_id` keeps its first entry.
+- The stored document is `{ "games": [...], "updated_at": <unix ms> }`.
+- The client sends after the first scan following login, then only when the set or the playtime changed. Spec [17](./17-GAME-SENSING.md) section 3.3 has the scan.
+- Module: `backend/nakama/data/modules/library_report.go`.
+
 ---
 
 ## 4. Catch-Up Generation (v1, Templates)
