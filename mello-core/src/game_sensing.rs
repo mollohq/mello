@@ -131,6 +131,11 @@ pub enum GameEvent {
     PrimaryChanged {
         game_id: Option<String>,
     },
+    /// A library scan finished. Sent after the first scan and after each
+    /// rescan. The client may report these games to the crew (library_report).
+    LibraryScanned {
+        entries: Vec<crate::library::LibraryEntry>,
+    },
 }
 
 /// Wrapper to make raw pointer Send-safe for the sensor thread.
@@ -169,6 +174,16 @@ impl GameSensor {
     }
 }
 
+/// Tell the client what a library scan found. Fails when the receiver is gone.
+fn announce_library(
+    library: &LibraryIndex,
+    tx: &Sender<GameEvent>,
+) -> Result<(), std::sync::mpsc::SendError<GameEvent>> {
+    tx.send(GameEvent::LibraryScanned {
+        entries: library.iter().cloned().collect(),
+    })
+}
+
 fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     // Every game currently running, keyed by pid. v1 tracked a single
     // Option<ActiveGame>, which made alt-tabbing between two games look like a
@@ -176,6 +191,9 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     let mut active: HashMap<u32, ActiveGame> = HashMap::new();
     let mut primary: Option<u32> = None;
     let mut library = LibraryIndex::scan();
+    if announce_library(&library, tx).is_err() {
+        return;
+    }
     let mut scans_since_library_refresh = 0u32;
     let mut fast_scans_left = ACTIVE_CADENCE_SCANS;
     let mut shadow: HashMap<u32, String> = HashMap::new();
@@ -335,6 +353,9 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         if scans_since_library_refresh >= LIBRARY_RESCAN_SCANS {
             scans_since_library_refresh = 0;
             library = LibraryIndex::scan();
+            if announce_library(&library, tx).is_err() {
+                return;
+            }
         }
 
         let interval = if fast_scans_left > 0 {

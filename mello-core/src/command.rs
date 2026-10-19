@@ -518,6 +518,12 @@ pub enum Command {
         #[serde(default)]
         disabled: Vec<String>,
     },
+    /// Replace the set of installed games the user hides from the crew.
+    /// Hidden games are left out of the library report.
+    SetHiddenGames {
+        #[serde(default)]
+        hidden: Vec<String>,
+    },
     /// Toggle whether sensed play is shared with crews (presence + session-end).
     SetShareGameActivity {
         enabled: bool,

@@ -360,6 +360,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Rc::new(RefCell::new(Settings::load()));
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
     let share_game_activity = settings.borrow().share_game_activity;
+    let hidden_games = settings.borrow().hidden_games.clone();
 
     let config = nakama_config();
     let lounge_host = config.lounge_host.clone();
@@ -375,6 +376,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         );
         client.set_disabled_integrations(disabled_integrations);
         client.set_share_game_activity(share_game_activity);
+        client.set_hidden_games(hidden_games);
         client.run(cmd_rx).await;
     });
 

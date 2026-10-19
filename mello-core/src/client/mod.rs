@@ -180,6 +180,10 @@ pub struct Client {
     disabled_integrations: std::collections::HashSet<String>,
     /// When false, sensed play stays local — no crew presence or session-end RPCs.
     share_game_activity: bool,
+    /// Installed games the user hides from the crew (game ids).
+    hidden_games: std::collections::HashSet<String>,
+    /// Decides when the installed library goes to the server.
+    library_reporter: crate::library_report::LibraryReporter,
     /// `game_session_end` reports that could not be sent, kept across restarts.
     /// Flushed when a crew becomes active (`flush_pending_session_ends`).
     pending_session_ends: tokio::sync::Mutex<crate::pending_session_ends::PendingQueue>,
@@ -261,6 +265,12 @@ impl Client {
     /// called before `run()` so the first presence sync honors it.
     pub fn set_share_game_activity(&mut self, enabled: bool) {
         self.share_game_activity = enabled;
+    }
+
+    /// Seed the hidden games from persisted client settings. Must be called
+    /// before `run()`, so the first library report honors it.
+    pub fn set_hidden_games(&mut self, hidden: Vec<String>) {
+        self.hidden_games = hidden.into_iter().collect();
     }
 
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
@@ -356,6 +366,8 @@ impl Client {
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
             share_game_activity: true,
+            hidden_games: std::collections::HashSet::new(),
+            library_reporter: crate::library_report::LibraryReporter::new(),
             // Unit tests must not read or write the developer's config dir.
             pending_session_ends: tokio::sync::Mutex::new(if cfg!(test) {
                 crate::pending_session_ends::PendingQueue::open(
@@ -421,6 +433,11 @@ impl Client {
 
         loop {
             for game_event in self.drain_game_events() {
+                if let crate::game_sensing::GameEvent::LibraryScanned { entries } = game_event {
+                    self.library_reporter.set_scan(entries);
+                    self.sync_library_report().await;
+                    continue;
+                }
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
@@ -457,7 +474,8 @@ impl Client {
                     }
                     // Focus changes carry no telemetry side-effects; the state
                     // manager handles them below.
-                    crate::game_sensing::GameEvent::PrimaryChanged { .. } => {}
+                    crate::game_sensing::GameEvent::PrimaryChanged { .. }
+                    | crate::game_sensing::GameEvent::LibraryScanned { .. } => {}
                 }
 
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
@@ -1289,16 +1307,25 @@ impl Client {
                 log::info!("[telemetry] disabled integrations set to {disabled:?}");
                 self.disabled_integrations = disabled.into_iter().collect();
             }
+            Command::SetHiddenGames { hidden } => {
+                self.hidden_games = hidden.into_iter().collect();
+                log::info!("[game-sharing] {} game(s) hidden", self.hidden_games.len());
+                self.sync_library_report().await;
+            }
             Command::SetShareGameActivity { enabled } => {
                 let changed = self.share_game_activity != enabled;
                 self.share_game_activity = enabled;
                 log::info!("[game-sharing] share_game_activity = {enabled}");
+                if changed && !enabled {
+                    self.library_reporter.consent_turned_off();
+                }
                 if !enabled {
                     // Sharing off means nothing waits to be sent later.
                     self.pending_session_ends.lock().await.clear();
                 }
                 if changed {
                     self.sync_game_presence().await;
+                    self.sync_library_report().await;
                 }
             }
             Command::RiotLink { riot_id, region } => {

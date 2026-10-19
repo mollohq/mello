@@ -66,6 +66,9 @@ pub struct Settings {
     // Games tab: integrations the user switched off (consent is default-on;
     // absence from this list means enabled).
     pub disabled_game_integrations: Vec<String>,
+    /// Installed games the user hides from the crew (game ids). Left out of
+    /// the library report. Games hidden in Steam are hidden without an entry.
+    pub hidden_games: Vec<String>,
     /// User dismissed the post-game "connect Riot account" CTA; don't re-ask.
     pub riot_prompt_dismissed: bool,
     /// When false, sensed play is kept local — no crew presence or session-end RPCs.
@@ -117,6 +120,7 @@ impl Default for Settings {
             hidden_invite_crew_ids: Vec::new(),
             seen_session_ids: Vec::new(),
             disabled_game_integrations: Vec::new(),
+            hidden_games: Vec::new(),
             riot_prompt_dismissed: false,
             share_game_activity: default_share_game_activity(),
         }

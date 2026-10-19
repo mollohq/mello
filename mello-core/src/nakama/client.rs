@@ -1334,6 +1334,14 @@ impl NakamaClient {
         Ok(())
     }
 
+    /// Replace the server's copy of the installed library. An empty list
+    /// clears it. See `library_report.rs`.
+    pub async fn library_report(&self, games: &[crate::library_report::ReportGame]) -> Result<()> {
+        self.rpc("library_report", &serde_json::json!({ "games": games }))
+            .await?;
+        Ok(())
+    }
+
     pub async fn presence_get(&self, user_ids: &[String]) -> Result<String> {
         let payload = serde_json::json!({ "user_ids": user_ids });
         self.rpc("presence_get", &payload).await

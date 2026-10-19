@@ -150,6 +150,8 @@ impl GameStateManager {
             GameEvent::PrimaryChanged { game_id } => {
                 self.primary = game_id;
             }
+            // The client reads the library before the event reaches here.
+            GameEvent::LibraryScanned { .. } => {}
         }
 
         (events, session_end)

@@ -18,6 +18,7 @@ pub mod game_sensing;
 pub mod game_state;
 pub mod giphy;
 pub mod library;
+pub mod library_report;
 pub mod nakama;
 pub mod oauth;
 pub mod pending_session_ends;

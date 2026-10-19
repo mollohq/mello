@@ -16,6 +16,8 @@ impl super::Client {
         self.check_protocol_version().await;
 
         self.ensure_game_services();
+        // A new login sends the library again, without waiting for a rescan.
+        self.sync_library_report().await;
 
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {

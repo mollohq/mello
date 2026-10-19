@@ -114,6 +114,27 @@ impl Client {
         }
     }
 
+    /// Send the installed library when the reporter says it is due: first scan
+    /// after login, a changed set or playtime, a hide change, or the empty
+    /// report after consent turns off. Logs counts only, never names.
+    pub(super) async fn sync_library_report(&mut self) {
+        let Some(games) = self.library_reporter.plan(
+            self.share_game_activity,
+            self.nakama.has_session(),
+            &self.hidden_games,
+        ) else {
+            return;
+        };
+        let is_clear = games.is_empty() && !self.share_game_activity;
+        match self.nakama.library_report(&games).await {
+            Ok(()) => log::info!("[library-report] sent {} game(s)", games.len()),
+            Err(e) => {
+                log::warn!("[library-report] failed: {e}");
+                self.library_reporter.send_failed(is_clear);
+            }
+        }
+    }
+
     pub(super) fn drain_game_events(&self) -> Vec<GameEvent> {
         let Ok(guard) = self.game_event_rx.lock() else {
             return Vec::new();
