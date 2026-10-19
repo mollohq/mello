@@ -5271,3 +5271,33 @@ fn a_stored_member_volume_is_sent_again_when_the_member_comes_back() {
         "the leave kept it"
     );
 }
+
+/// Finishing onboarding sets start on boot from the share toggle, once.
+/// The OS entry is behind the `autolaunch` test seam, never the real crate.
+fn finalize_with_share(share: bool) -> (Harness, Option<bool>) {
+    let h = Harness::new();
+    h.app().set_onboarding_share_game_activity(share);
+    h.settings().borrow_mut().start_on_boot = !share;
+    finalize(&h);
+    let requested = crate::autolaunch::last_requested();
+    (h, requested)
+}
+
+#[test]
+fn onboarding_with_share_off_leaves_start_on_boot_off() {
+    let (h, requested) = finalize_with_share(false);
+    assert!(!h.settings().borrow().start_on_boot);
+    assert_eq!(requested, Some(false), "autolaunch is disabled");
+}
+
+#[test]
+fn onboarding_with_share_on_turns_start_on_boot_on() {
+    let (h, requested) = finalize_with_share(true);
+    assert!(h.settings().borrow().start_on_boot);
+    assert_eq!(requested, Some(true), "autolaunch is enabled");
+}
+
+#[test]
+fn start_on_boot_defaults_on() {
+    assert!(crate::Settings::default().start_on_boot);
+}

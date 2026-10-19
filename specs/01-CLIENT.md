@@ -280,7 +280,7 @@ The web lounge copies the invite link to the clipboard on a download, and the fi
 | Resizable | Yes |
 | System tray | Yes (minimize to tray) |
 | Close button | Minimize to tray (configurable) |
-| Start on boot | Optional setting |
+| Start on boot | On by default. Onboarding sets it to the share toggle. Optional setting afterwards |
 
 ---
 

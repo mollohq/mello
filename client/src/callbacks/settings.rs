@@ -472,7 +472,7 @@ pub fn wire(ctx: &AppContext) {
                     deafened: app.get_deafened(),
                 });
             }
-            if let Err(e) = crate::autolaunch::set_start_on_boot(false) {
+            if let Err(e) = crate::autolaunch::set_start_on_boot(defaults.start_on_boot) {
                 log::warn!("Failed to reset auto-launch: {}", e);
             }
         });

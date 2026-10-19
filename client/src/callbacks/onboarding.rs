@@ -183,7 +183,13 @@ pub fn wire(ctx: &AppContext) {
                     {
                         let mut settings = s.borrow_mut();
                         settings.share_game_activity = share_game_activity;
+                        // Start on boot follows the share toggle once, here.
+                        // The settings toggle is independent afterwards.
+                        settings.start_on_boot = share_game_activity;
                         settings.save();
+                    }
+                    if let Err(e) = crate::autolaunch::set_start_on_boot(share_game_activity) {
+                        log::warn!("[onboarding] failed to set start on boot: {}", e);
                     }
                     let _ = cmd.send(Command::SetShareGameActivity {
                         enabled: share_game_activity,
