@@ -20,9 +20,13 @@ import (
 const CrewRecapsCollection = "crew_recaps"
 
 type CrewRecapsDoc struct {
-	CrewID    string            `json:"crew_id"`
-	Recaps    []WeeklyRecapData `json:"recaps"` // newest appended last
-	UpdatedAt int64             `json:"updated_at"`
+	CrewID string            `json:"crew_id"`
+	Recaps []WeeklyRecapData `json:"recaps"` // newest appended last
+	// LastRecapWeek is the ISO week ("2026-W43") of the last recap the job
+	// wrote for this crew. The job runs for a crew when the current week is
+	// not this value, so a missed Monday runs later (recapDue).
+	LastRecapWeek string `json:"last_recap_week,omitempty"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 func readRecapsDoc(ctx context.Context, nk runtime.NakamaModule, crewID string) (*CrewRecapsDoc, string) {
@@ -65,6 +69,7 @@ func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, re
 	for attempt := 0; attempt < 3; attempt++ {
 		doc, version := readRecapsDoc(ctx, nk, crewID)
 		doc.Recaps = append(doc.Recaps, recap)
+		doc.LastRecapWeek = isoWeekKey(time.UnixMilli(recap.WeekEnd))
 		doc.UpdatedAt = time.Now().UnixMilli()
 		if err := writeRecapsDoc(ctx, nk, crewID, doc, version); err == nil {
 			return nil
@@ -161,12 +166,21 @@ type WeeklyRecapData struct {
 	GeneratedAt int64            `json:"generated_at"`
 }
 
+// generateWeeklyRecap writes the recap of the 7 days up to now. The dev tools
+// use it. The job uses generateWeeklyRecapAt with the Monday that ends the week.
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
+	generateWeeklyRecapAt(ctx, nk, logger, crewID, time.Now())
+}
+
+// generateWeeklyRecapAt writes the recap of the 7 days that end at weekEnd.
+// Events and clips after weekEnd are left out, so a late run (recapLookback)
+// still reports the week that ended on Monday 00:00 UTC.
+func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string, weekEnd time.Time) {
 	ledger, _ := readLedger(ctx, nk, crewID)
 
-	weekEnd := time.Now()
 	weekStart := weekEnd.Add(-7 * 24 * time.Hour)
 	startMs := weekStart.UnixMilli()
+	endMs := weekEnd.UnixMilli()
 
 	var totalHangoutMin int
 	gameDurations := make(map[string]int)
@@ -185,7 +199,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	longestSessionMin := 0
 
 	for _, e := range ledger.Events {
-		if e.Timestamp < startMs {
+		if e.Timestamp < startMs || e.Timestamp > endMs {
 			continue
 		}
 		// System events (e.g. voice_session) have an empty actor; don't let them
@@ -239,7 +253,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	// Clips are durable and no longer in the ledger; count them from the clips doc.
 	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
 	for _, c := range clipsDoc.Clips {
-		if c.Ts >= startMs {
+		if c.Ts >= startMs && c.Ts <= endMs {
 			clipCount++
 			actorClips[c.ActorID]++
 		}
@@ -294,6 +308,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	} else {
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
+		if recapHasContent(recap) {
+			scheduleRecapPushes(ctx, nk, logger, crewID, recap)
+		}
 	}
 }
 
@@ -569,31 +586,80 @@ func topActor(counts map[string]int, ctx context.Context, nk runtime.NakamaModul
 	return topID
 }
 
-// StartWeeklyRecapJob runs every hour, checks if it's Monday 00:xx UTC,
-// and generates recaps for all active crews.
+// recapLookback is how long after Monday 00:00 UTC the job may still write the
+// recap of the week that ended then. A missed Monday runs on a later tick. After
+// the lookback the week is skipped: a recap on Friday for last week is stale.
+const recapLookback = 72 * time.Hour
+
+// isoWeekKey names an ISO week, for example "2026-W43".
+func isoWeekKey(t time.Time) string {
+	y, w := t.UTC().ISOWeek()
+	return fmt.Sprintf("%04d-W%02d", y, w)
+}
+
+// mondayStartUTC is Monday 00:00 UTC of the ISO week that holds t. It is the
+// end of the week a recap covers.
+func mondayStartUTC(t time.Time) time.Time {
+	u := t.UTC()
+	back := (int(u.Weekday()) + 6) % 7 // Monday is 0
+	return time.Date(u.Year(), u.Month(), u.Day()-back, 0, 0, 0, 0, time.UTC)
+}
+
+// recapDue reports whether the job must write a recap for a crew at now: the
+// current ISO week has none yet, and now is inside the lookback after Monday
+// 00:00 UTC. A recap already stored with a week end in this week counts as
+// written, which covers a crew whose recap predates last_recap_week.
+func recapDue(doc *CrewRecapsDoc, now time.Time) bool {
+	weekEnd := mondayStartUTC(now)
+	if now.Before(weekEnd) || now.Sub(weekEnd) >= recapLookback {
+		return false
+	}
+	key := isoWeekKey(now)
+	if doc.LastRecapWeek == key {
+		return false
+	}
+	if n := len(doc.Recaps); n > 0 && isoWeekKey(time.UnixMilli(doc.Recaps[n-1].WeekEnd)) == key {
+		return false
+	}
+	return true
+}
+
+// StartWeeklyRecapJob runs at start and then every hour. Each run writes the
+// recap of every crew that is due (recapDue) and sends the recap pushes that
+// are due. The state is in storage, so a restart or a missed Monday loses
+// nothing within the lookback.
 func StartWeeklyRecapJob(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
+	runWeeklyRecapTick(ctx, nk, logger, time.Now())
+
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-
-	lastRunWeek := -1
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			_, week := t.UTC().ISOWeek()
-			if t.UTC().Weekday() == time.Monday && t.UTC().Hour() == 0 && week != lastRunWeek {
-				lastRunWeek = week
-				logger.Info("Weekly recap job started for week %d", week)
-				generateRecapsForAllCrews(ctx, nk, logger)
-			}
+			runWeeklyRecapTick(ctx, nk, logger, t)
 		}
 	}
 }
 
-func generateRecapsForAllCrews(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
-	// List all crews (Nakama groups)
+// runWeeklyRecapTick is one pass of the job at now.
+func runWeeklyRecapTick(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("Weekly recap tick panic: %v", r)
+		}
+	}()
+	generateDueRecaps(ctx, nk, logger, now)
+	sendDueRecapPushes(ctx, nk, logger, now)
+}
+
+// generateDueRecaps writes the recap of each crew that is due at now.
+func generateDueRecaps(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, now time.Time) {
+	if now.Before(mondayStartUTC(now)) || now.Sub(mondayStartUTC(now)) >= recapLookback {
+		return
+	}
+	logger.Info("Weekly recap check for %s", isoWeekKey(now))
 	cursor := ""
 	for {
 		groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, nil, 100, cursor)
@@ -602,7 +668,10 @@ func generateRecapsForAllCrews(ctx context.Context, nk runtime.NakamaModule, log
 			return
 		}
 		for _, g := range groups {
-			generateWeeklyRecap(ctx, nk, logger, g.GetId())
+			doc, _ := readRecapsDoc(ctx, nk, g.GetId())
+			if recapDue(doc, now) {
+				generateWeeklyRecapAt(ctx, nk, logger, g.GetId(), mondayStartUTC(now))
+			}
 		}
 		if nextCursor == "" || len(groups) == 0 {
 			break

@@ -66,10 +66,14 @@ type UserActivityStats struct {
 	// LatestEndLocalMin is the minute of the local day of the latest session
 	// end seen so far, ranked from 18:00. LatestEndDate is the local date of
 	// that session. Nil and empty until a session carries an offset.
-	LatestEndLocalMin *int          `json:"latest_end_local_min,omitempty"`
-	LatestEndDate     string        `json:"latest_end_date,omitempty"`
-	Days              []ActivityDay `json:"days"`
-	UpdatedAt         int64         `json:"updated_at"`
+	LatestEndLocalMin *int   `json:"latest_end_local_min,omitempty"`
+	LatestEndDate     string `json:"latest_end_date,omitempty"`
+	// TzOffsetMin is the UTC offset of the member's clock in minutes, east
+	// positive, from the latest session that sent one. The Monday recap push
+	// reads it to send at 18:00 local. Nil until a session carries an offset.
+	TzOffsetMin *int          `json:"tz_offset_min,omitempty"`
+	Days        []ActivityDay `json:"days"`
+	UpdatedAt   int64         `json:"updated_at"`
 }
 
 // activityDelta is one write to the doc. A zero field changes nothing.
@@ -85,8 +89,10 @@ type activityDelta struct {
 	// session on the local clock. Nil EndLocalMin means no offset was sent.
 	EndLocalMin  *int
 	EndLocalDate string
-	WinMoments   int
-	Clips        int
+	// TzOffsetMin is the offset of that clock. Nil keeps the stored one.
+	TzOffsetMin *int
+	WinMoments  int
+	Clips       int
 }
 
 // activityNightKey ranks a local minute of the day from 18:00, so 01:15 ranks
@@ -119,6 +125,10 @@ func applyActivityDelta(s *UserActivityStats, d activityDelta, now time.Time) {
 	s.Clips += d.Clips
 	if d.SessionMin > s.LongestSessionMin {
 		s.LongestSessionMin = d.SessionMin
+	}
+	if d.TzOffsetMin != nil {
+		v := *d.TzOffsetMin
+		s.TzOffsetMin = &v
 	}
 	if d.EndLocalMin != nil {
 		if s.LatestEndLocalMin == nil || activityNightKey(*d.EndLocalMin) >= activityNightKey(*s.LatestEndLocalMin) {
@@ -234,6 +244,8 @@ func recordGameSessionActivity(ctx context.Context, logger runtime.Logger, nk ru
 	if tz != nil {
 		d.EndLocalMin = new(int)
 		*d.EndLocalMin, d.EndLocalDate = sessionEndLocal(endMs, *tz)
+		v := *tz
+		d.TzOffsetMin = &v
 	}
 	if err := UpdateUserActivityStats(ctx, nk, userID, d, time.UnixMilli(endMs)); err != nil {
 		logger.Warn("user_activity_stats game session write failed: %v", err)
