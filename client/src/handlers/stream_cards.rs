@@ -63,4 +63,6 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
         .set_active_stream_cards(Rc::new(slint::VecModel::from(cards)).into());
     // A live stream is a real stream card: its skeleton goes.
     super::clip::refresh_feed_skeletons(ctx);
+    // One live stream takes two grid cards: the wide slots move.
+    super::clip::rearrange_feed_cards(ctx);
 }

@@ -453,7 +453,7 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
     if !section.entries.iter().any(|e| e.entry_type == "head2head") {
         return;
     }
-    let cards = build_this_week(ctx, &section.entries);
+    let cards = arranged(ctx, build_this_week(ctx, &section.entries));
     ctx.app
         .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
     refresh_feed_skeletons(ctx);
@@ -517,6 +517,22 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
         feed.set_row_data(row, card);
     }
+}
+
+/// Put the cards where the grid wants them: recent games on the first screen
+/// and no clip in a wide slot (`feed_grid`).
+fn arranged(ctx: &AppContext, cards: Vec<FeedCardData>) -> Vec<FeedCardData> {
+    let start =
+        crate::feed_grid::grid_start(ctx.app.get_active_stream_cards().row_count(), cards.len());
+    crate::feed_grid::arrange_cards(cards, start)
+}
+
+/// Arrange the cards on screen again. A live stream moves the first grid slot,
+/// so the wide slots move with it.
+pub(super) fn rearrange_feed_cards(ctx: &AppContext) {
+    let live = ctx.app.get_active_stream_cards().row_count();
+    let arranged = crate::feed_grid::arrange_model(&ctx.app.get_feed_cards(), live);
+    ctx.app.set_feed_cards(arranged);
 }
 
 /// The cards of the `this_week` section. Wide and versus lead the feed (the
@@ -1525,6 +1541,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 0
             };
             cards.insert(insert_pos.min(cards.len()), new_card);
+            let cards = arranged(ctx, cards);
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
             refresh_feed_skeletons(ctx);
@@ -1609,7 +1626,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .iter()
                 .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
                 && !has_real_memory;
-            let cards = this_week;
+            let cards = arranged(ctx, this_week);
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());

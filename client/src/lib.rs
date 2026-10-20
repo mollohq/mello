@@ -16,6 +16,7 @@ mod diag_capture;
 mod e2e_state;
 mod edit_shortcuts;
 mod emoji_font;
+mod feed_grid;
 #[cfg(test)]
 mod flow_catalogue;
 #[cfg(test)]

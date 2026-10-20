@@ -6579,3 +6579,105 @@ fn empty_recap_renders_no_recap_card() {
     });
     assert!(recap_titles(&h).is_empty());
 }
+
+fn clip_entry(id: &str) -> FeedEntry {
+    feed_entry(
+        id,
+        "clip",
+        serde_json::json!({"duration_seconds": 12.0, "media_url": "/clips/x.wav", "clipper_name": "alice"}),
+    )
+}
+
+fn feed_card_types(h: &Harness) -> Vec<String> {
+    let m = h.app().get_feed_cards();
+    (0..m.row_count())
+        .filter_map(|i| m.row_data(i))
+        .map(|c| c.card_type.to_string())
+        .collect()
+}
+
+fn big_crew_feed(clips: usize) -> FeedResponse {
+    let mut entries = vec![h2h_entry(
+        50,
+        vec![h2h_title(
+            "the_collector",
+            "u2",
+            serde_json::json!(14),
+            "installed",
+        )],
+        vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 1, 1)],
+        None,
+    )];
+    for i in 0..clips {
+        entries.push(clip_entry(&format!("clip{i}")));
+    }
+    entries.push(feed_entry(
+        "recent_games",
+        "recent-games",
+        serde_json::json!({
+            "session_count": 14, "total_min": 1860,
+            "games": [{ "game_id": "valorant", "game_name": "Valorant", "minutes": 600 }]
+        }),
+    ));
+    entries.push(feed_entry(
+        "s1",
+        "session",
+        serde_json::json!({"game_name": "Valorant", "duration_min": 60, "active_min": 60}),
+    ));
+    feed_of(entries)
+}
+
+/// A voice clip never takes a wide slot (CLIPS 7.1). With a head2head cell,
+/// the invite card and five clips, the wide slots hold no clip.
+#[test]
+fn five_clips_never_take_a_wide_slot() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 50);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Sara")],
+    );
+    h.emit(Event::FeedLoaded {
+        response: big_crew_feed(5),
+    });
+
+    let types = feed_card_types(&h);
+    let infos: Vec<crate::feed_grid::CardInfo> = {
+        let m = h.app().get_feed_cards();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i))
+            .map(|c| crate::feed_grid::CardInfo::of(&c))
+            .collect()
+    };
+    let wide = crate::feed_grid::wide_slot_indices(&infos, 0);
+    assert!(!wide.is_empty(), "the layout has a wide slot: {types:?}");
+    for w in wide {
+        assert_ne!(types[w], "clip", "a clip is in wide slot {w}: {types:?}");
+    }
+}
+
+/// Recent games is on the first screen for a big crew: in the first two rows
+/// of the plain grid (head2head, invite and one card, then one card and the
+/// wide slot), not behind the clips.
+#[test]
+fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 50);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Sara")],
+    );
+    h.emit(Event::FeedLoaded {
+        response: big_crew_feed(5),
+    });
+
+    let types = feed_card_types(&h);
+    let at = types
+        .iter()
+        .position(|t| t == "recent-games")
+        .expect("recent games card");
+    assert!(
+        at <= 4,
+        "recent games at card {at}, past the second row: {types:?}"
+    );
+}
