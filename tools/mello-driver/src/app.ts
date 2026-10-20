@@ -138,6 +138,25 @@ export type AppState = {
   feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string }[];
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };
+  /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */
+  head2head: {
+    present: boolean;
+    placement: "wide" | "cell" | "versus" | "none";
+    member_count: number;
+    open_seats: number;
+    /** The chips the card draws: the viewer's own values on the wide card. */
+    own_values: { title_id: string; display: string }[];
+    titles: { title_id: string; holder_name: string }[];
+    pairs_count: number;
+    belt_moved_recent: boolean;
+  };
+  /** The recent games card of the feed. Empty tiles when the feed has none. */
+  recent_games: {
+    header_note: string;
+    tiles: { name: string; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
+  };
+  /** The skeleton trio cells that show, 0 to 3. */
+  skeleton_trio: number;
   /** The audio page of the settings. */
   audio: { capture_device: string; playback_device: string; push_to_talk: boolean; push_to_talk_key: string };
   riot: { linked: boolean; id: string };

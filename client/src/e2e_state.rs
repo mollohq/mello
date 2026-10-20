@@ -153,6 +153,12 @@ struct Snapshot {
     feed_cards: Vec<FeedCardSnap>,
     /// The clip that plays in the feed.
     clip: ClipSnap,
+    /// The head2head card of the feed (the first one), if any.
+    head2head: Head2headSnap,
+    /// The recent games card of the feed, if any.
+    recent_games: RecentGamesSnap,
+    /// The skeleton trio cells that show (0 to 3).
+    skeleton_trio: usize,
     /// The audio page of the settings.
     audio: AudioSnap,
     riot: RiotSnap,
@@ -250,6 +256,57 @@ struct ClipSnap {
     /// From 0.0 to 1.0.
     progress: f32,
     duration_ms: i32,
+}
+
+/// The head2head card of the feed. `present` is false when the feed has none;
+/// then `placement` is `"none"` and the lists are empty.
+#[derive(Serialize)]
+struct Head2headSnap {
+    present: bool,
+    /// `"wide"`, `"cell"`, `"versus"` or `"none"`. A cell with no seats
+    /// (`cell-full` on screen) is reported as `"cell"`.
+    placement: &'static str,
+    member_count: i32,
+    open_seats: i32,
+    /// The chips the card draws: the viewer's own values on the wide card.
+    own_values: Vec<TitleChipSnap>,
+    /// Every contested title and who holds it.
+    titles: Vec<TitleHolderSnap>,
+    pairs_count: usize,
+    belt_moved_recent: bool,
+}
+
+#[derive(Serialize)]
+struct TitleChipSnap {
+    title_id: String,
+    /// The number and its unit as the chip reads them, for example `"4.2 h"`.
+    display: String,
+}
+
+#[derive(Serialize)]
+struct TitleHolderSnap {
+    title_id: String,
+    /// The member list name of the holder. Empty when the holder is not in it.
+    holder_name: String,
+}
+
+#[derive(Serialize)]
+struct RecentGamesSnap {
+    /// The right side of the card header, for example `"From this PC"`.
+    header_note: String,
+    tiles: Vec<RecentGameTileSnap>,
+}
+
+#[derive(Serialize)]
+struct RecentGameTileSnap {
+    name: String,
+    /// The line under the name, for example `"4,167 H"` or `"EPIC"`.
+    hours_text: String,
+    /// Lower case: `"steam"`, `"epic"`, `"gog"`, or empty when unknown.
+    launcher: String,
+    tracked: bool,
+    /// `"image"` (game art or icon) or `"monogram"` (the two-letter fallback).
+    art: &'static str,
 }
 
 #[derive(Serialize)]
@@ -369,6 +426,93 @@ fn image_key(img: &slint::Image) -> String {
         hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
     }
     format!("{}x{}-{hash:016x}", size.width, size.height)
+}
+
+/// The placement name that the state port reports for a head2head variant.
+fn placement_name(variant: &str) -> &'static str {
+    match variant {
+        "wide" => "wide",
+        "versus" => "versus",
+        "cell" | "cell-full" => "cell",
+        _ => "none",
+    }
+}
+
+/// The head2head card of the feed, read from the first `head2head` card.
+fn read_head2head(app: &MainWindow) -> Head2headSnap {
+    let feed = app.get_feed_cards();
+    let Some(card) = feed.iter().find(|c| c.card_type == "head2head") else {
+        return Head2headSnap {
+            present: false,
+            placement: "none",
+            member_count: 0,
+            open_seats: 0,
+            own_values: Vec::new(),
+            titles: Vec::new(),
+            pairs_count: 0,
+            belt_moved_recent: false,
+        };
+    };
+    let h = &card.head2head;
+    let members = app.get_members();
+    Head2headSnap {
+        present: true,
+        placement: placement_name(&h.variant),
+        member_count: h.member_count,
+        open_seats: h.open_seats,
+        own_values: first_rows(&h.chips, |c| TitleChipSnap {
+            title_id: c.id.to_string(),
+            display: if c.unit.is_empty() {
+                c.value.to_string()
+            } else {
+                format!("{} {}", c.value, c.unit)
+            },
+        }),
+        titles: first_rows(&h.titles, |t| TitleHolderSnap {
+            title_id: t.id.to_string(),
+            holder_name: members
+                .iter()
+                .find(|m| m.id == t.holder_id)
+                .map(|m| m.name.to_string())
+                .unwrap_or_default(),
+        }),
+        pairs_count: h.pairs.row_count(),
+        belt_moved_recent: h.belt_moved_recent,
+    }
+}
+
+/// The recent games card of the feed, read from the first such card.
+fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
+    let feed = app.get_feed_cards();
+    let Some(card) = feed.iter().find(|c| c.card_type == "recent-games") else {
+        return RecentGamesSnap {
+            header_note: String::new(),
+            tiles: Vec::new(),
+        };
+    };
+    RecentGamesSnap {
+        header_note: card.subtitle.to_string(),
+        tiles: first_rows(&card.recent_games, |t| {
+            // The tile shows the launcher in place of hours when it has none.
+            let hours = t.hours.to_string();
+            let launcher = if hours.starts_with(|c: char| c.is_ascii_digit()) {
+                crate::recent_games::launcher_of(&t.game_id, "")
+            } else {
+                hours.to_lowercase()
+            };
+            RecentGameTileSnap {
+                name: t.game_name.to_string(),
+                hours_text: hours,
+                launcher,
+                tracked: t.tracked,
+                art: if t.has_capsule || t.has_icon {
+                    "image"
+                } else {
+                    "monogram"
+                },
+            }
+        }),
+    }
 }
 
 /// The first [`LIST_LIMIT`] rows of a model, converted.
@@ -775,6 +919,16 @@ fn read(app: &MainWindow) -> Snapshot {
             progress: app.get_clip_progress(),
             duration_ms: app.get_clip_duration_ms(),
         },
+        head2head: read_head2head(app),
+        recent_games: read_recent_games(app),
+        skeleton_trio: [
+            app.get_feed_skeleton_stream(),
+            app.get_feed_skeleton_voice_clip(),
+            app.get_feed_skeleton_recap(),
+        ]
+        .into_iter()
+        .filter(|on| *on)
+        .count(),
         audio: AudioSnap {
             capture_device: app.get_selected_capture_name().into(),
             playback_device: app.get_selected_playback_name().into(),
@@ -975,6 +1129,89 @@ mod tests {
         assert_eq!(s["riot"], json!({"linked": true, "id": "alice#EUW"}));
         assert_eq!(s["update_available"], true);
         assert_eq!(s["app_version"], "v1.2.3");
+    }
+
+    #[test]
+    fn the_snapshot_reads_head2head_recent_games_and_the_skeleton_trio() {
+        let h = Harness::new();
+        let app = h.app();
+        let none = snapshot_json(app);
+        assert_eq!(none["head2head"]["present"], false);
+        assert_eq!(none["head2head"]["placement"], "none");
+        assert_eq!(
+            none["recent_games"],
+            json!({"header_note": "", "tiles": []})
+        );
+        assert_eq!(none["skeleton_trio"], 0);
+
+        app.set_members(model(vec![crate::MemberData {
+            id: "u1".into(),
+            name: "bob".into(),
+            ..Default::default()
+        }]));
+        let chip = |id: &str, value: &str, unit: &str| crate::TitleHeld {
+            id: id.into(),
+            value: value.into(),
+            unit: unit.into(),
+            holder_id: "u1".into(),
+            ..Default::default()
+        };
+        let tile = |name: &str, id: &str, hours: &str, capsule: bool| crate::RecentGameTile {
+            game_id: id.into(),
+            game_name: name.into(),
+            hours: hours.into(),
+            has_capsule: capsule,
+            tracked: capsule,
+            ..Default::default()
+        };
+        app.set_feed_cards(model(vec![
+            crate::FeedCardData {
+                card_type: "head2head".into(),
+                head2head: crate::Head2headData {
+                    variant: "cell-full".into(),
+                    member_count: 1,
+                    open_seats: 4,
+                    belt_moved_recent: true,
+                    chips: model(vec![
+                        chip("the_carry", "62", "%"),
+                        chip("one_trick", "9", ""),
+                    ]),
+                    titles: model(vec![chip("the_carry", "62", "%")]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            crate::FeedCardData {
+                card_type: "recent-games".into(),
+                subtitle: "From this PC".into(),
+                recent_games: model(vec![
+                    tile("Brawlhalla", "steam-291550", "4,167 H", true),
+                    tile("Fortnite", "epic-fortnite", "EPIC", false),
+                ]),
+                ..Default::default()
+            },
+        ]));
+        app.set_feed_skeleton_stream(true);
+        app.set_feed_skeleton_recap(true);
+
+        let s = snapshot_json(app);
+        assert_eq!(
+            s["head2head"],
+            json!({"present": true, "placement": "cell", "member_count": 1, "open_seats": 4,
+                   "own_values": [{"title_id": "the_carry", "display": "62 %"},
+                                  {"title_id": "one_trick", "display": "9"}],
+                   "titles": [{"title_id": "the_carry", "holder_name": "bob"}],
+                   "pairs_count": 0, "belt_moved_recent": true})
+        );
+        assert_eq!(
+            s["recent_games"],
+            json!({"header_note": "From this PC", "tiles": [
+                {"name": "Brawlhalla", "hours_text": "4,167 H", "launcher": "steam",
+                 "tracked": true, "art": "image"},
+                {"name": "Fortnite", "hours_text": "EPIC", "launcher": "epic",
+                 "tracked": false, "art": "monogram"}]})
+        );
+        assert_eq!(s["skeleton_trio"], 2);
     }
 
     /// The QA harness asserts the member volume and the local mute.
