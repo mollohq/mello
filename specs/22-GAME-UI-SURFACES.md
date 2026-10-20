@@ -151,8 +151,8 @@ disabled activity sharing. See section 5.
 The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
 
 ```json
-{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "minutes": 600,
-               "last_played": 1760000000000, "member_ids": ["<user id>"] } ],
+{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "launcher": "steam",
+               "minutes": 600, "last_played": 1760000000000, "member_ids": ["<user id>"] } ],
   "session_count": 14, "total_min": 1860 }
 ```
 
@@ -165,8 +165,12 @@ The recent games card gets its data from the `crew_feed` RPC. Entry type: `recen
 - `member_ids`: members who have the game installed or played it in the week. The client card does not draw them yet.
 - The header line comes from sessions only. With no sessions the line is empty.
 - Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
-- Art: the runtime game icon when cached, else the monogram tile. Capsule art is a later task.
-- Client: `RecentGamesCard` in `crew_feed.slint`. The header line is `subtitle`.
+- `launcher`: the launcher prefix of the library entry (`steam`, `epic`, `gog`). Absent for a game only seen in sessions.
+- Art ladder, first hit wins: the runtime game icon (cached or crew-shared), then the local Steam header art, then the monogram.
+- Local Steam art: `mello_core::library::local_steam_art` reads `<steam root>/appcache/librarycache/`. It tries `<appid>_header.jpg`, then `header.jpg` and `library_header.jpg` in `<appid>/` and in each hash folder under it, then `library_600x900.jpg`. It reads the disk only. Nothing is fetched or uploaded. The log carries counts only.
+- Monogram: two letters, the first letters of the first two words of the name (one word: its first two letters), on a two-corner tile in an identity hue chosen from the game id.
+- Client: `RecentGamesCard` in `crew_feed.slint`, one row per game, at most three rows. Each row has the art (76 px wide, the shape of a Steam header), the name in Oxanium, and under it the hours in capitals ("4,167 H"; one decimal under 100 hours). With no hours known it shows the launcher ("EPIC"). The right side of the row shows "TRACKED" when the game sensor catalogue knows the game (by game id, Steam appid or name). Otherwise it shows nothing.
+- Header: "RECENT GAMES" on the left. The right side is "From this PC" when every tile is installed on this device (the viewer's own library), else the sessions line (`subtitle`).
 - The sidebar list still uses live presence only.
 
 ---
