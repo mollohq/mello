@@ -484,9 +484,17 @@ export component Head2headCell inherits Rectangle {
         spacing: 10px;
 
         HorizontalLayout {
-            CardLabel { text: "HEAD2HEAD"; }
-            Rectangle { horizontal-stretch: 1; }
-            CardLabel { text: (root.viewer-name + " VS THE CREW").to-uppercase(); color: Theme.text-tertiary; overflow: elide; }
+            spacing: 12px;
+            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; }
+            // The name can be long. It elides, and never touches the label.
+            CardLabel {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                horizontal-alignment: right;
+                text: (root.viewer-name + " VS THE CREW").to-uppercase();
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
         }
 
         VerticalLayout {
@@ -570,9 +578,16 @@ export component VersusHero inherits Rectangle {
         spacing: 10px;
 
         HorizontalLayout {
-            CardLabel { text: "HEAD2HEAD"; }
-            Rectangle { horizontal-stretch: 1; }
-            CardLabel { text: (root.left-name + " VS " + root.right-name).to-uppercase(); color: Theme.text-tertiary; }
+            spacing: 12px;
+            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; }
+            CardLabel {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                horizontal-alignment: right;
+                text: (root.left-name + " VS " + root.right-name).to-uppercase();
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
         }
 
         HorizontalLayout {

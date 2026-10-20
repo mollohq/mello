@@ -403,7 +403,7 @@ fn head2head_cards(
     let model = head2head::build(&data, &viewer, &roster, now_ms)?;
     // The octagons wear the avatar the app already loaded for the user id,
     // and fall back to initials. A late avatar patches the card in place
-    // (`patch_head2head_avatar`).
+    // (`refresh_head2head_cards`).
     let cache = ctx.avatar_cache.borrow();
     let avatar = |id: &str| cache.get(id).cloned();
     let mut cards = vec![FeedCardData {
@@ -459,61 +459,63 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
     refresh_feed_skeletons(ctx);
 }
 
-/// Put a newly loaded avatar on the head2head and invite cards that already
-/// show the user as initials. The feed is not rebuilt: an avatar can arrive
-/// after the feed did.
-pub(super) fn patch_head2head_avatar(app: &crate::MainWindow, user_id: &str, img: &slint::Image) {
-    let feed = app.get_feed_cards();
-    for i in 0..feed.row_count() {
-        let Some(mut card) = feed.row_data(i) else {
-            continue;
-        };
-        let mut changed = false;
-        match card.card_type.as_str() {
+/// True when a head2head or invite card draws an octagon for the user. A big
+/// crew loads dozens of avatars, and most belong to members the cards do not
+/// draw: those need no rebuild.
+fn head2head_cards_show(app: &crate::MainWindow, user_id: &str) -> bool {
+    app.get_feed_cards()
+        .iter()
+        .any(|c| match c.card_type.as_str() {
             "head2head" => {
-                let h = &mut card.head2head;
-                if h.left_id.as_str() == user_id {
-                    h.left_avatar = img.clone();
-                    h.left_has_avatar = true;
-                    changed = true;
-                }
-                if h.right_id.as_str() == user_id {
-                    h.right_avatar = img.clone();
-                    h.right_has_avatar = true;
-                    changed = true;
-                }
-                let you = h.left_id.as_str() == user_id;
-                for j in 0..h.pairs.row_count() {
-                    if let Some(mut r) = h.pairs.row_data(j) {
-                        if r.id.as_str() == user_id {
-                            r.avatar = img.clone();
-                            r.has_avatar = true;
-                            h.pairs.set_row_data(j, r);
-                        } else if you {
-                            r.you_avatar = img.clone();
-                            r.you_has_avatar = true;
-                            h.pairs.set_row_data(j, r);
-                        }
-                    }
-                }
+                let h = &c.head2head;
+                h.left_id.as_str() == user_id
+                    || h.right_id.as_str() == user_id
+                    || h.pairs.iter().any(|r| r.id.as_str() == user_id)
             }
-            "invite" => {
-                let members = &card.head2head.members;
-                for j in 0..members.row_count() {
-                    if let Some(mut m) = members.row_data(j) {
-                        if m.id.as_str() == user_id {
-                            m.avatar = img.clone();
-                            m.has_avatar = true;
-                            members.set_row_data(j, m);
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        if changed {
-            feed.set_row_data(i, card);
-        }
+            "invite" => c.head2head.members.iter().any(|m| m.id.as_str() == user_id),
+            _ => false,
+        })
+}
+
+/// Put a newly loaded avatar on the head2head and invite cards. The two cards
+/// are built again from the last feed, which reads the avatar cache, and
+/// replace their rows in the feed model. Editing the avatar of a row inside
+/// the card's own model changes the data but the octagons keep their
+/// initials on screen, so the row is replaced instead. Without a feed, or
+/// when the cards of the feed changed shape, the whole this_week is rebuilt.
+pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
+    if !head2head_cards_show(&ctx.app, user_id) {
+        return;
+    }
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let Some(entry) = resp
+        .sections
+        .iter()
+        .filter(|s| s.id == "this_week")
+        .flat_map(|s| s.entries.iter())
+        .find(|e| e.entry_type == "head2head")
+    else {
+        return;
+    };
+    let Some((_, cards)) = head2head_cards(ctx, entry) else {
+        return;
+    };
+    let feed = ctx.app.get_feed_cards();
+    let rows: Vec<Option<usize>> = cards
+        .iter()
+        .map(|c| (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id == c.id)))
+        .collect();
+    if rows.iter().any(Option::is_none) {
+        rebuild_roster_cards(ctx);
+        return;
+    }
+    for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
+        feed.set_row_data(row, card);
     }
 }
 

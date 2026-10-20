@@ -591,9 +591,22 @@ pub fn build(
 // ---- Slint ----
 
 fn icon_of(id: &str) -> slint::Image {
-    look(id)
-        .and_then(|t| slint::Image::load_from_svg_data(t.icon_svg).ok())
-        .unwrap_or_default()
+    // A rebuild draws every chip again, and parsing an SVG is the slow part.
+    thread_local! {
+        static ICONS: std::cell::RefCell<std::collections::HashMap<String, slint::Image>> =
+            std::cell::RefCell::new(std::collections::HashMap::new());
+    }
+    ICONS.with(|cache| {
+        cache
+            .borrow_mut()
+            .entry(id.to_string())
+            .or_insert_with(|| {
+                look(id)
+                    .and_then(|t| slint::Image::load_from_svg_data(t.icon_svg).ok())
+                    .unwrap_or_default()
+            })
+            .clone()
+    })
 }
 
 /// The small label under a chip: "held 9 days", "held 1 day", and nothing
