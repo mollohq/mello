@@ -127,7 +127,15 @@ impl Client {
         };
         let is_clear = games.is_empty() && !self.share_game_activity;
         match self.nakama.library_report(&games).await {
-            Ok(()) => log::info!("[library-report] sent {} game(s)", games.len()),
+            Ok(()) => {
+                log::info!("[library-report] sent {} game(s)", games.len());
+                // The server recomputes head2head from the report (HEAD2HEAD
+                // 4). The first feed of a session loads before the first
+                // scan ends, so it holds no own values. Load it again.
+                if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                    self.handle_load_crew_feed(&crew_id).await;
+                }
+            }
             Err(e) => {
                 log::warn!("[library-report] failed: {e}");
                 self.library_reporter.send_failed(is_clear);
