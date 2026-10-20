@@ -436,6 +436,29 @@ fn head2head_cards(
     Some((model.placement, cards))
 }
 
+/// Build the this_week cards again from the last feed. The member list and the
+/// feed load in no fixed order, and the head2head and invite cards name
+/// members from the list: a feed that came first would show "Crew mate" and a
+/// short invite card. Called when the member list is set.
+pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let Some(section) = resp.sections.iter().find(|s| s.id == "this_week") else {
+        return;
+    };
+    if !section.entries.iter().any(|e| e.entry_type == "head2head") {
+        return;
+    }
+    let cards = build_this_week(ctx, &section.entries);
+    ctx.app
+        .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+    refresh_feed_skeletons(ctx);
+}
+
 /// Put a newly loaded avatar on the head2head and invite cards that already
 /// show the user as initials. The feed is not rebuilt: an avatar can arrive
 /// after the feed did.
@@ -1572,6 +1595,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
 
+            *ctx.last_feed.borrow_mut() = Some(response.clone());
             let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
 
             // The feed shows real cards only. The skeleton trio is separate

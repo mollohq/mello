@@ -5018,6 +5018,57 @@ fn crew_of_five_shows_the_cell_without_seats_and_the_invite_card() {
     invoke_invite_and_expect_code_request(&mut h, "Share invite link");
 }
 
+/// The feed can load before the member list. The invite card and the pair
+/// names are built again when the list arrives, so they never keep the
+/// short roster.
+#[test]
+fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            5,
+            vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+            vec![h2h_pair("u2", 1, 2)],
+            None,
+        )]),
+    });
+    let invite = |h: &Harness| {
+        (0..h.app().get_feed_cards().row_count())
+            .filter_map(|i| h.app().get_feed_cards().row_data(i))
+            .find(|c| c.card_type.as_str() == "invite")
+            .expect("the invite card")
+    };
+    assert_eq!(invite(&h).head2head.members.row_count(), 1, "viewer only");
+
+    let member = |id: &str, name: &str| mello_core::crew_state::CrewMember {
+        user_id: id.into(),
+        username: name.into(),
+        ..Default::default()
+    };
+    h.emit(Event::CrewStateLoaded {
+        state: mello_core::crew_state::CrewState {
+            crew_id: "crew-0".into(),
+            name: "Crew".into(),
+            members: Some(vec![
+                member("user-1", "Test User"),
+                member("u2", "Jonas"),
+                member("u3", "Max"),
+                member("u4", "Sara"),
+                member("u5", "Leo"),
+            ]),
+            ..Default::default()
+        },
+    });
+    assert_eq!(invite(&h).head2head.members.row_count(), 5);
+    let cell = first_card(&h);
+    assert_eq!(
+        cell.head2head.pairs.row_data(0).unwrap().name.as_str(),
+        "Jonas",
+        "the pair row names the member, not Crew mate"
+    );
+}
+
 /// More than eight members show eight octagons and a "+N".
 #[test]
 fn invite_card_shows_eight_members_then_a_count() {

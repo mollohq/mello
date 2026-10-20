@@ -593,6 +593,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         gif_chat_anim,
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        last_feed: Rc::new(RefCell::new(None)),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,

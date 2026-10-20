@@ -85,6 +85,9 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// The last crew feed, so cards that name members (head2head, invite) can
+    /// be built again when the member list arrives after the feed.
+    pub last_feed: Rc<RefCell<Option<mello_core::crew_events::FeedResponse>>>,
     /// Runtime game icons (exe-extracted or crew-shared), keyed by game_id.
     /// Populated from the disk cache on demand; misses are negative-cached
     /// per run by the fetch glue.
@@ -187,6 +190,7 @@ impl AppContext {
             gif_chat_anim: GifAnimator::new(50, Some(2)),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
+            last_feed: Rc::new(RefCell::new(None)),
             game_icon_cache: Rc::new(RefCell::new(HashMap::new())),
             hud_manager: Rc::new(HudManager::start(false)),
             fg_monitor: Rc::new(RefCell::new(ForegroundMonitor::new(false))),
@@ -247,6 +251,7 @@ impl Clone for AppContext {
             gif_chat_anim: self.gif_chat_anim.clone(),
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
+            last_feed: self.last_feed.clone(),
             game_icon_cache: self.game_icon_cache.clone(),
             hud_manager: self.hud_manager.clone(),
             fg_monitor: self.fg_monitor.clone(),

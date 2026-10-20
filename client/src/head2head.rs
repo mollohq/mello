@@ -675,7 +675,13 @@ pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Hea
         right_avatar: pic(right_id),
         right_has_avatar: !right_id.is_empty() && has(right_id),
         pairs_total: m.pairs_total as i32,
-        more_pairs: m.pairs_total.saturating_sub(m.pairs.len()) as i32,
+        // Only the cell has a pair list to continue.
+        more_pairs: match m.placement {
+            Placement::Cell | Placement::CellFull => {
+                m.pairs_total.saturating_sub(m.pairs.len()) as i32
+            }
+            _ => 0,
+        },
         left_score: m.left_score,
         right_score: m.right_score,
         members: model_of(Vec::new()),

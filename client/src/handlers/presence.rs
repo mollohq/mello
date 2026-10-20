@@ -523,6 +523,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app
                         .set_members(Rc::new(slint::VecModel::from(member_data)).into());
                     crate::callbacks::refresh_mention_members(ctx);
+                    super::clip::rebuild_roster_cards(ctx);
                 }
                 // Catch-up is now fetched in mello-core handle_select_crew
                 // (before set_active_crew) to avoid the last_seen race.
