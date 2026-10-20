@@ -634,7 +634,7 @@ func feedFirstIndexOfType(cards []feedCard, used []bool, feedType string) int {
 func pickFillerIndices(cards []feedCard, used []bool) []int {
 	picks := make([]int, 0, feedFillerSlots)
 
-	for _, ft := range []string{"clip", "session", "session-preview", "catchup"} {
+	for _, ft := range []string{"clip", "session", "recent-games", "session-preview", "catchup"} {
 		if len(picks) >= feedFillerSlots {
 			break
 		}

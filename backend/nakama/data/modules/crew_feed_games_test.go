@@ -384,6 +384,27 @@ func TestBuildThisWeek_LoudWeekHasRecentGamesNotRollup(t *testing.T) {
 	}
 }
 
+// A busy crew (50 members) has more clips and strong sessions than slots.
+// Clips rank 10000 and strong sessions above the recent games card, so before
+// the diversity pick the card was crowded out of the week.
+func TestBuildThisWeek_BusyCrewStillHasRecentGames(t *testing.T) {
+	now := time.Now().UnixMilli()
+	cards := make([]feedCard, 0, 40)
+	for i := 0; i < 8; i++ {
+		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
+	}
+	for i := 0; i < 16; i++ {
+		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
+	}
+	entries := buildThisWeek(cards, now)
+	for _, e := range entries {
+		if e.Type == "recent-games" {
+			return
+		}
+	}
+	t.Fatalf("a busy crew lost the recent games card: %d entries", len(entries))
+}
+
 func TestFillerPriority_RecentGamesBeatsWeakSession(t *testing.T) {
 	recent := feedCard{feedType: "recent-games", backendType: "recent_games"}
 	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
