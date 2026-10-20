@@ -43,7 +43,16 @@ export default journey({
 
     await step("the card draws one chip for each own value, and four OPEN seats", async () => {
       const s = await bob.state();
-      const texts = await bob.ui.texts();
+      // One entry for each Text on screen. The element query can list an
+      // element twice, so a place counts once.
+      const seen = new Set<string>();
+      const els = (await bob.ui.textElements()).filter((e) => {
+        const key = `${e.text}@${e.x},${e.y}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      const texts = els.map((e) => e.text);
       const names = Object.values(TITLE_NAMES);
       const drawn = texts.filter((t) => names.includes(t));
       expect(
