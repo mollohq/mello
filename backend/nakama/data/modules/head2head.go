@@ -838,14 +838,123 @@ const head2headFeedID = "head2head"
 //   - BeltMovedRecent: the title with the newest MovedAtMs, when that is less
 //     than 24 h old. Nil otherwise. The same title also sits in Titles.
 //   - UpdatedAt: when the doc was computed. Zero when no doc exists yet.
+//   - OwnValues: what the viewer holds in every title their own data can
+//     compute, contested or not, so a crew of one still has chips to show. A
+//     title with no data for the viewer is absent. Never null.
 type Head2headFeedData struct {
-	CrewID          string           `json:"crew_id"`
-	MemberCount     int              `json:"member_count"`
-	OpenSeats       int              `json:"open_seats"`
-	Titles          []Head2headTitle `json:"titles"`
-	Pairs           []Head2headPair  `json:"pairs"`
-	BeltMovedRecent *Head2headTitle  `json:"belt_moved_recent,omitempty"`
-	UpdatedAt       int64            `json:"updated_at"`
+	CrewID          string              `json:"crew_id"`
+	MemberCount     int                 `json:"member_count"`
+	OpenSeats       int                 `json:"open_seats"`
+	Titles          []Head2headTitle    `json:"titles"`
+	Pairs           []Head2headPair     `json:"pairs"`
+	BeltMovedRecent *Head2headTitle     `json:"belt_moved_recent,omitempty"`
+	UpdatedAt       int64               `json:"updated_at"`
+	OwnValues       []Head2headOwnValue `json:"own_values"`
+}
+
+// Head2headOwnValue is the viewer's value in one title. Value and Unit use the
+// encoding of Head2headTitle. Display is the value as text, ready to draw:
+// whole hours from 100 up, one decimal below, thousands separated.
+type Head2headOwnValue struct {
+	TitleID string      `json:"title_id"`
+	Value   interface{} `json:"value"`
+	Unit    string      `json:"unit"`
+	Display string      `json:"display"`
+}
+
+// ownValueOrder is the order of own_values. It follows the display order of
+// the client card, then the session titles.
+var ownValueOrder = []string{
+	titleTheCarry, titleNightOwl, titleTheCollect, titleLockedIn, titleHasALife,
+	titleSampler, titleOneTrick,
+	titleMouth, titleMarathon, titleLastOneUp, titleClipper, titleRageQuit, titleWinner,
+}
+
+// groupedInt writes 4167 as "4,167".
+func groupedInt(n int64) string {
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	digits := fmt.Sprintf("%d", n)
+	out := make([]byte, 0, len(digits)+len(digits)/3+1)
+	for i := 0; i < len(digits); i++ {
+		if i > 0 && (len(digits)-i)%3 == 0 {
+			out = append(out, ',')
+		}
+		out = append(out, digits[i])
+	}
+	if neg {
+		return "-" + string(out)
+	}
+	return string(out)
+}
+
+// ownDisplay is the text of one value.
+func ownDisplay(value interface{}, unit string) string {
+	switch v := value.(type) {
+	case string:
+		return v
+	case float64:
+		if unit == "h" && math.Abs(v) < 100 {
+			return fmt.Sprintf("%.1f", v)
+		}
+		return groupedInt(int64(math.Round(v)))
+	case int:
+		return groupedInt(int64(v))
+	}
+	return ""
+}
+
+// computeOwnValues runs every title computation for the one member and keeps
+// the member's own score. It reuses the contested computations, so a value
+// here is the value the member would hold in a crew of any size.
+func computeOwnValues(m h2hMemberData, nowMs int64) []Head2headOwnValue {
+	out := []Head2headOwnValue{}
+	if !m.hasData() {
+		return out
+	}
+	ms := []h2hMemberData{m}
+	locked, life := computeWeekTitles(ms, nowMs)
+	results := []h2hResult{
+		computeTheCarry(ms),
+		locked,
+		life,
+		computeNightOwl(ms, nowMs),
+		computeCollector(ms),
+		computeSampler(ms, nowMs),
+		computeOneTrick(ms),
+	}
+	results = append(results, computeActivityTitles(ms, nowMs)...)
+	byID := map[string]h2hResult{}
+	for _, r := range results {
+		byID[r.titleID] = r
+	}
+	for _, id := range ownValueOrder {
+		r, ok := byID[id]
+		if !ok {
+			continue
+		}
+		score, has := r.scores[m.UserID]
+		if !has {
+			continue
+		}
+		v := r.value(score)
+		out = append(out, Head2headOwnValue{TitleID: id, Value: v, Unit: r.unit, Display: ownDisplay(v, r.unit)})
+	}
+	return out
+}
+
+// readMemberData reads the library, the per-game stats and the activity doc of
+// one user.
+func readMemberData(ctx context.Context, nk runtime.NakamaModule, userID string) h2hMemberData {
+	ids := []string{userID}
+	return h2hMemberData{
+		UserID:   userID,
+		Library:  readLibraryDocs(ctx, nk, ids)[userID],
+		Stats:    readAllUserGameStats(ctx, nk, ids)[userID],
+		Activity: readAllUserActivityStats(ctx, nk, ids)[userID],
+	}
 }
 
 // trimHead2headForViewer builds the feed payload from the doc. doc may be nil.
@@ -856,6 +965,7 @@ func trimHead2headForViewer(doc *Head2headDoc, crewID, viewerID string, memberCo
 		OpenSeats:   head2headOpenSeats(memberCount),
 		Titles:      []Head2headTitle{},
 		Pairs:       []Head2headPair{},
+		OwnValues:   []Head2headOwnValue{},
 	}
 	if doc == nil {
 		return out
@@ -904,5 +1014,7 @@ func crewHead2headForViewer(ctx context.Context, logger runtime.Logger, nk runti
 		// A crew that existed before head2head shipped. Build the doc once.
 		doc = recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerLibrary, nowMs)
 	}
-	return trimHead2headForViewer(doc, crewID, viewerID, len(ids), nowMs)
+	out := trimHead2headForViewer(doc, crewID, viewerID, len(ids), nowMs)
+	out.OwnValues = computeOwnValues(readMemberData(ctx, nk, viewerID), nowMs)
+	return out
 }

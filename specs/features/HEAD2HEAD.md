@@ -159,13 +159,23 @@ The `this_week` section has one entry for every crew: `type` `head2head`, `id` `
 | `pairs` | Only the pairs with the viewer. The viewer is `a`. The counts and the `values` follow the swap |
 | `belt_moved_recent` | The title with the newest `moved_at_ms`, when under 24 hours old. Absent otherwise |
 | `updated_at` | Doc time. Zero when no doc exists |
+| `own_values` | The viewer's own value in every title their data can compute, contested or not. Each entry has `title_id`, `value`, `unit` and `display`. A title with no data for the viewer is absent. Never null |
+
+`own_values` is computed from the viewer's library, game stats and activity doc at read time. It does not use the holders doc. It lets a crew of one show chips. The `display` field is the value as text: whole hours from 100 up, one decimal below, thousands separated, `HH:MM` for the two clock titles.
 
 Role and size:
 
 - When a belt moved in the last 24 hours, the entry is the hero (`hero`, `lg`). The hero order is: live stream, belt moved, stream preview from the last 24 hours, recap on Monday, best session.
 - Otherwise the entry is `standard`, `lg`. It follows the hero and the recap. It never takes a filler slot.
 
-The client decides if a card renders. A card with no titles and no open seats has no data.
+The client decides if a card renders. A card with no titles, no `own_values` and no open seats has no data.
+
+### Solo card
+
+A crew of one gets the wide card (frame A of the mockup). The card shows the viewer as an octagon with the full name, then four chips in a 2 by 2 grid, a keyline divider, "Nobody to compare with yet", four open seats each labelled "Open", and the red invite button.
+
+- The chips come from `own_values`: the first four in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick). They wear the viewer's identity hue. There is no holder octagon.
+- The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.
 
 ### Deciding chip
 

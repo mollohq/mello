@@ -806,3 +806,120 @@ func TestPairValuesCarryBothMembersValues(t *testing.T) {
 		t.Fatalf("wire shape: %s", raw)
 	}
 }
+
+// ---- own_values ----
+
+func ownByID(t *testing.T, vs []Head2headOwnValue, id string) Head2headOwnValue {
+	t.Helper()
+	for _, v := range vs {
+		if v.TitleID == id {
+			return v
+		}
+	}
+	t.Fatalf("own value %s missing, have %+v", id, vs)
+	return Head2headOwnValue{}
+}
+
+func hasOwn(vs []Head2headOwnValue, id string) bool {
+	for _, v := range vs {
+		if v.TitleID == id {
+			return true
+		}
+	}
+	return false
+}
+
+func TestOwnValuesOneInstalledGameNoSessions(t *testing.T) {
+	g := LibraryGame{GameID: "steam-1", Name: "A", Launcher: "steam"}
+	vs := computeOwnValues(member("u1", hdoc(g)), h2hNow)
+	if len(vs) != 1 {
+		t.Fatalf("only the collector has data: %+v", vs)
+	}
+	c := ownByID(t, vs, titleTheCollect)
+	if c.Value != 1 || c.Unit != "installed" || c.Display != "1" {
+		t.Fatalf("collector: %+v", c)
+	}
+}
+
+func TestOwnValuesCarryTheViewersFiguresInDisplayOrder(t *testing.T) {
+	m := member("u1", hdoc(hgame("steam-1", 249_008), hgame("steam-2", 100)), played("steam-1", 1, 276))
+	tz := -300
+	m.Stats[0].LastTzOffsetMin = &tz
+	vs := computeOwnValues(m, h2hNow)
+	carry := ownByID(t, vs, titleTheCarry)
+	if carry.Unit != "h" || carry.Display != "4,150" {
+		t.Fatalf("carry: %+v", carry)
+	}
+	if lk := ownByID(t, vs, titleLockedIn); lk.Display != "4.6" || lk.Unit != "h" {
+		t.Fatalf("locked_in: %+v", lk)
+	}
+	if ownByID(t, vs, titleTheCollect).Display != "2" {
+		t.Fatalf("collector: %+v", vs)
+	}
+	if ot := ownByID(t, vs, titleOneTrick); ot.Display != "100" || ot.Unit != "%" {
+		t.Fatalf("one_trick: %+v", ot)
+	}
+	if ow := ownByID(t, vs, titleNightOwl); ow.Unit != "" || len(ow.Display) != 5 {
+		t.Fatalf("night_owl: %+v", ow)
+	}
+	// Display order: the_carry, night_owl, the_collector, locked_in ...
+	var got []string
+	for _, v := range vs {
+		got = append(got, v.TitleID)
+	}
+	want := []string{titleTheCarry, titleNightOwl, titleTheCollect, titleLockedIn, titleHasALife, titleSampler, titleOneTrick}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Fatalf("order %v, want %v", got, want)
+	}
+}
+
+func TestOwnValuesOmitTitlesWithoutData(t *testing.T) {
+	vs := computeOwnValues(member("u1", nil), h2hNow)
+	if vs == nil || len(vs) != 0 {
+		t.Fatalf("no data gives an empty list, not nil: %#v", vs)
+	}
+	m := member("u1", hdoc(hgame("steam-1", 60)))
+	vs = computeOwnValues(m, h2hNow)
+	for _, id := range []string{titleNightOwl, titleLockedIn, titleSampler, titleMouth, titleWinner} {
+		if hasOwn(vs, id) {
+			t.Fatalf("%s should be absent: %+v", id, vs)
+		}
+	}
+}
+
+func TestOwnValuesIncludeActivityTitles(t *testing.T) {
+	m := member("u1", nil)
+	m.Activity = &UserActivityStats{Clips: 3, LongestSessionMin: 245}
+	vs := computeOwnValues(m, h2hNow)
+	if c := ownByID(t, vs, titleClipper); c.Unit != "clips" || c.Display != "3" {
+		t.Fatalf("clipper: %+v", c)
+	}
+	if mr := ownByID(t, vs, titleMarathon); mr.Unit != "min" || mr.Display != "245" {
+		t.Fatalf("marathon: %+v", mr)
+	}
+}
+
+func TestFeedPayloadForCrewOfOneCarriesOwnValuesAndNoTitles(t *testing.T) {
+	nk := newFakeGuestNk()
+	nk.addMember("crew", "u1", "a")
+	nk.put(UserLibraryCollection, UserLibraryKey, "u1", hdoc(hgame("steam-1", 600)))
+	f := crewHead2headForViewer(context.Background(), testLogger(), nk, "crew", "u1", h2hNow)
+	if f == nil || f.MemberCount != 1 || len(f.Titles) != 0 {
+		t.Fatalf("a crew of one contests nothing: %+v", f)
+	}
+	if c := ownByID(t, f.OwnValues, titleTheCollect); c.Display != "1" {
+		t.Fatalf("own values: %+v", f.OwnValues)
+	}
+	raw, _ := json.Marshal(f)
+	if !strings.Contains(string(raw), `"own_values":[{`) {
+		t.Fatalf("wire: %s", raw)
+	}
+}
+
+func TestFeedPayloadOwnValuesNeverNull(t *testing.T) {
+	f := trimHead2headForViewer(nil, "crew", "u1", 1, h2hNow)
+	raw, _ := json.Marshal(f)
+	if !strings.Contains(string(raw), `"own_values":[]`) {
+		t.Fatalf("wire: %s", raw)
+	}
+}
