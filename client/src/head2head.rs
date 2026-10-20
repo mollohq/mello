@@ -291,6 +291,8 @@ pub struct Model {
     /// Wide: the viewer's titles. Versus: four, led by the moved title.
     pub chips: Vec<Chip>,
     pub pairs: Vec<PairRow>,
+    /// Every pair of the viewer, drawn or not.
+    pub pairs_total: usize,
     pub viewer: Person,
     /// Versus: the other member.
     pub other: Option<Person>,
@@ -504,6 +506,7 @@ pub fn build(
         titles,
         chips: Vec::new(),
         pairs: Vec::new(),
+        pairs_total: pairs.len(),
         viewer: viewer.clone(),
         other: None,
         left_score: 0,
@@ -571,6 +574,9 @@ pub fn build(
         }
     }
 
+    // Closest tallies first: the pairs that are still open to a move lead.
+    // The sort is stable, so equal gaps keep the payload order.
+    pairs.sort_by_key(|p| (p.you_count - p.them_count).abs());
     if wire.member_count >= SEATS {
         model.placement = Placement::CellFull;
         model.open_seats = 0;
@@ -620,27 +626,34 @@ fn model_of<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
 }
 
 /// The UI struct of the head2head card.
-pub fn to_slint(m: &Model) -> Head2headData {
+pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Head2headData {
+    let pic = |id: &str| avatar(id).unwrap_or_default();
+    let has = |id: &str| avatar(id).is_some();
     let pairs: Vec<H2hPairRow> = m
         .pairs
         .iter()
         .map(|p| H2hPairRow {
+            id: p.opponent.id.as_str().into(),
             name: p.opponent.name.as_str().into(),
             initials: p.opponent.initials.as_str().into(),
             hue_index: p.opponent.hue,
+            avatar: pic(&p.opponent.id),
+            has_avatar: has(&p.opponent.id),
             you_initials: m.viewer.initials.as_str().into(),
             you_hue_index: m.viewer.hue,
+            you_avatar: pic(&m.viewer.id),
+            you_has_avatar: has(&m.viewer.id),
             you_count: p.you_count,
             them_count: p.them_count,
             has_chip: p.deciding.is_some(),
             chip: p.deciding.as_ref().map(title_held).unwrap_or_default(),
         })
         .collect();
-    let (right_name, right_initials, right_hue) = m
+    let (right_id, right_name, right_initials, right_hue) = m
         .other
         .as_ref()
-        .map(|o| (o.name.as_str(), o.initials.as_str(), o.hue))
-        .unwrap_or(("", "", 0));
+        .map(|o| (o.id.as_str(), o.name.as_str(), o.initials.as_str(), o.hue))
+        .unwrap_or(("", "", "", 0));
     Head2headData {
         variant: m.placement.variant().into(),
         member_count: m.member_count,
@@ -649,12 +662,20 @@ pub fn to_slint(m: &Model) -> Head2headData {
         titles: model_of(m.titles.iter().map(title_held).collect()),
         chips: model_of(m.chips.iter().map(title_held).collect()),
         pairs: model_of(pairs),
+        left_id: m.viewer.id.as_str().into(),
         left_name: m.viewer.name.as_str().into(),
         left_initials: m.viewer.initials.as_str().into(),
         left_hue_index: m.viewer.hue,
+        left_avatar: pic(&m.viewer.id),
+        left_has_avatar: has(&m.viewer.id),
+        right_id: right_id.into(),
         right_name: right_name.into(),
         right_initials: right_initials.into(),
         right_hue_index: right_hue,
+        right_avatar: pic(right_id),
+        right_has_avatar: !right_id.is_empty() && has(right_id),
+        pairs_total: m.pairs_total as i32,
+        more_pairs: m.pairs_total.saturating_sub(m.pairs.len()) as i32,
         left_score: m.left_score,
         right_score: m.right_score,
         members: model_of(Vec::new()),
@@ -663,14 +684,21 @@ pub fn to_slint(m: &Model) -> Head2headData {
 }
 
 /// The UI struct of the invite card: the first members as octagons.
-pub fn invite_card_data(members: &[Person], member_count: i32) -> Head2headData {
+pub fn invite_card_data(
+    members: &[Person],
+    member_count: i32,
+    avatar: &dyn Fn(&str) -> Option<slint::Image>,
+) -> Head2headData {
     let shown: Vec<H2hPerson> = members
         .iter()
         .take(INVITE_CARD_MEMBERS)
         .map(|p| H2hPerson {
+            id: p.id.as_str().into(),
             name: p.name.as_str().into(),
             initials: p.initials.as_str().into(),
             hue_index: p.hue,
+            avatar: avatar(&p.id).unwrap_or_default(),
+            has_avatar: avatar(&p.id).is_some(),
         })
         .collect();
     let more = (member_count - shown.len() as i32).max(0);
@@ -1089,11 +1117,50 @@ mod tests {
         let members: Vec<Person> = (0..11)
             .map(|i| Person::new(&format!("u{i}"), "Kim"))
             .collect();
-        let d = invite_card_data(&members, 11);
+        let d = invite_card_data(&members, 11, &|_| None);
         use slint::Model;
         assert_eq!(d.members.row_count(), 8);
         assert_eq!(d.more_members, 3);
-        let d = invite_card_data(&members[..5], 5);
+        let d = invite_card_data(&members[..5], 5, &|_| None);
         assert_eq!((d.members.row_count(), d.more_members), (5, 0));
+    }
+
+    #[test]
+    fn the_cell_keeps_the_three_closest_pairs_and_counts_the_rest() {
+        // Five members and more: three rows, the closest tallies first.
+        let pairs = vec![
+            pair("u2", 9, 0),
+            pair("u3", 4, 5),
+            pair("u4", 7, 2),
+            pair("u5", 3, 3),
+            pair("u6", 0, 8),
+        ];
+        let data = feed(6, vec![], pairs, None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.placement, Placement::CellFull);
+        let order: Vec<&str> = m.pairs.iter().map(|p| p.opponent.id.as_str()).collect();
+        assert_eq!(order, ["u5", "u3", "u4"], "gaps 0, 1, 5");
+        assert_eq!(m.pairs_total, 5);
+        let d = to_slint(&m, &|_| None);
+        assert_eq!((d.pairs_total, d.more_pairs), (5, 2));
+    }
+
+    #[test]
+    fn an_avatar_in_the_cache_reaches_every_octagon_of_the_entry() {
+        let data = feed(2, vec![], vec![pair("u2", 1, 0)], None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let img =
+            slint::Image::from_rgba8(slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(2, 2));
+        let only_u2 = |id: &str| (id == "u2").then(|| img.clone());
+        let d = to_slint(&m, &only_u2);
+        use slint::Model;
+        let row = d.pairs.row_data(0).unwrap();
+        assert!(row.has_avatar, "the opponent shows the image");
+        assert!(!row.you_has_avatar, "the viewer has none, so initials");
+        assert!(!d.left_has_avatar);
+        let members = [Person::new("u2", "Jonas"), Person::new("me", "Bob")];
+        let c = invite_card_data(&members, 2, &only_u2);
+        assert!(c.members.row_data(0).unwrap().has_avatar);
+        assert!(!c.members.row_data(1).unwrap().has_avatar);
     }
 }

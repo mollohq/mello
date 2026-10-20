@@ -155,6 +155,8 @@ struct Snapshot {
     clip: ClipSnap,
     /// The head2head card of the feed (the first one), if any.
     head2head: Head2headSnap,
+    /// The invite card of the feed, if any.
+    invite_card: InviteCardSnap,
     /// The recent games card of the feed, if any.
     recent_games: RecentGamesSnap,
     /// The skeleton trio cells that show (0 to 3).
@@ -272,8 +274,28 @@ struct Head2headSnap {
     own_values: Vec<TitleChipSnap>,
     /// Every contested title and who holds it.
     titles: Vec<TitleHolderSnap>,
+    /// Every pair of the viewer, drawn or not.
     pairs_count: usize,
+    /// The pair rows the cell draws.
+    pair_rows: usize,
+    /// The "+N more" line of the cell. 0 when it does not show.
+    more_pairs: i32,
     belt_moved_recent: bool,
+    /// The viewer's octagon on the card: a fingerprint of the avatar image,
+    /// "" when it shows initials (as `crew_members`).
+    own_avatar_key: String,
+    /// The opponent octagons of the pair rows, in row order. "" for initials.
+    pair_avatar_keys: Vec<String>,
+}
+
+/// The invite card of the feed. `present` is false when the feed has none.
+#[derive(Serialize)]
+struct InviteCardSnap {
+    present: bool,
+    /// The member octagons drawn.
+    octagons: usize,
+    /// The "+N" after the octagons. 0 when there is none.
+    more_count: i32,
 }
 
 #[derive(Serialize)]
@@ -450,7 +472,11 @@ fn read_head2head(app: &MainWindow) -> Head2headSnap {
             own_values: Vec::new(),
             titles: Vec::new(),
             pairs_count: 0,
+            pair_rows: 0,
+            more_pairs: 0,
             belt_moved_recent: false,
+            own_avatar_key: String::new(),
+            pair_avatar_keys: Vec::new(),
         };
     };
     let h = &card.head2head;
@@ -476,8 +502,43 @@ fn read_head2head(app: &MainWindow) -> Head2headSnap {
                 .map(|m| m.name.to_string())
                 .unwrap_or_default(),
         }),
-        pairs_count: h.pairs.row_count(),
+        pairs_count: h.pairs_total.max(0) as usize,
+        pair_rows: h.pairs.row_count(),
+        more_pairs: h.more_pairs,
         belt_moved_recent: h.belt_moved_recent,
+        own_avatar_key: if h.left_has_avatar {
+            image_key(&h.left_avatar)
+        } else {
+            String::new()
+        },
+        pair_avatar_keys: h
+            .pairs
+            .iter()
+            .map(|r| {
+                if r.has_avatar {
+                    image_key(&r.avatar)
+                } else {
+                    String::new()
+                }
+            })
+            .collect(),
+    }
+}
+
+/// The invite card of the feed, read from the first `invite` card.
+fn read_invite_card(app: &MainWindow) -> InviteCardSnap {
+    let feed = app.get_feed_cards();
+    match feed.iter().find(|c| c.card_type == "invite") {
+        Some(card) => InviteCardSnap {
+            present: true,
+            octagons: card.head2head.members.row_count(),
+            more_count: card.head2head.more_members,
+        },
+        None => InviteCardSnap {
+            present: false,
+            octagons: 0,
+            more_count: 0,
+        },
     }
 }
 
@@ -920,6 +981,7 @@ fn read(app: &MainWindow) -> Snapshot {
             duration_ms: app.get_clip_duration_ms(),
         },
         head2head: read_head2head(app),
+        invite_card: read_invite_card(app),
         recent_games: read_recent_games(app),
         skeleton_trio: [
             app.get_feed_skeleton_stream(),
@@ -1172,6 +1234,11 @@ mod tests {
                     member_count: 1,
                     open_seats: 4,
                     belt_moved_recent: true,
+                    pairs_total: 4,
+                    more_pairs: 3,
+                    left_has_avatar: true,
+                    left_avatar: pixels([9, 9, 9, 255]),
+                    pairs: model(vec![crate::H2hPairRow::default()]),
                     chips: model(vec![
                         chip("the_carry", "62", "%"),
                         chip("one_trick", "9", ""),
@@ -1201,7 +1268,13 @@ mod tests {
                    "own_values": [{"title_id": "the_carry", "display": "62 %"},
                                   {"title_id": "one_trick", "display": "9"}],
                    "titles": [{"title_id": "the_carry", "holder_name": "bob"}],
-                   "pairs_count": 0, "belt_moved_recent": true})
+                   "pairs_count": 4, "pair_rows": 1, "more_pairs": 3, "belt_moved_recent": true,
+                   "own_avatar_key": image_key(&pixels([9, 9, 9, 255])),
+                   "pair_avatar_keys": [""]})
+        );
+        assert_eq!(
+            s["invite_card"],
+            json!({"present": false, "octagons": 0, "more_count": 0})
         );
         assert_eq!(
             s["recent_games"],

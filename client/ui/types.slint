@@ -137,11 +137,17 @@ export struct TitleHeld {
 
 // One row of the head2head cell: the viewer against one member.
 export struct H2hPairRow {
+    /// User id of the other member, so a late avatar finds the row.
+    id: string,
     name: string,
     initials: string,
     hue-index: int,
+    avatar: image,
+    has-avatar: bool,
     you-initials: string,
     you-hue-index: int,
+    you-avatar: image,
+    you-has-avatar: bool,
     you-count: int,
     them-count: int,
     has-chip: bool,
@@ -150,9 +156,12 @@ export struct H2hPairRow {
 
 // A crew member shown as an octagon (the invite card).
 export struct H2hPerson {
+    id: string,
     name: string,
     initials: string,
     hue-index: int,
+    avatar: image,
+    has-avatar: bool,
 }
 
 // The head2head feed entry as the UI draws it. `variant` is the placement:
@@ -171,8 +180,13 @@ export struct Head2headData {
     pairs: [H2hPairRow],
     // Wide: the viewer is `left`. Versus: `left` is the viewer, `right` the
     // other member.
-    left-name: string, left-initials: string, left-hue-index: int,
-    right-name: string, right-initials: string, right-hue-index: int,
+    left-id: string, left-name: string, left-initials: string, left-hue-index: int,
+    left-avatar: image, left-has-avatar: bool,
+    right-id: string, right-name: string, right-initials: string, right-hue-index: int,
+    right-avatar: image, right-has-avatar: bool,
+    // Every pair of the viewer, and how many the cell does not draw.
+    pairs-total: int,
+    more-pairs: int,
     left-score: int, right-score: int,
     // Invite card: the first members, and how many more there are.
     members: [H2hPerson],

@@ -401,12 +401,17 @@ fn head2head_cards(
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0);
     let model = head2head::build(&data, &viewer, &roster, now_ms)?;
+    // The octagons wear the avatar the app already loaded for the user id,
+    // and fall back to initials. A late avatar patches the card in place
+    // (`patch_head2head_avatar`).
+    let cache = ctx.avatar_cache.borrow();
+    let avatar = |id: &str| cache.get(id).cloned();
     let mut cards = vec![FeedCardData {
         id: e.id.as_str().into(),
         card_type: "head2head".into(),
         role: e.role.as_str().into(),
         size: e.size.as_str().into(),
-        head2head: head2head::to_slint(&model),
+        head2head: head2head::to_slint(&model, &avatar),
         ..Default::default()
     }];
     // From five members the cell loses its seats and button. The invite card
@@ -419,7 +424,7 @@ fn head2head_cards(
             card_type: "invite".into(),
             role: "standard".into(),
             size: "md".into(),
-            head2head: head2head::invite_card_data(&shown, model.member_count),
+            head2head: head2head::invite_card_data(&shown, model.member_count, &avatar),
             ..Default::default()
         });
     }
@@ -429,6 +434,64 @@ fn head2head_cards(
         cards.remove(0);
     }
     Some((model.placement, cards))
+}
+
+/// Put a newly loaded avatar on the head2head and invite cards that already
+/// show the user as initials. The feed is not rebuilt: an avatar can arrive
+/// after the feed did.
+pub(super) fn patch_head2head_avatar(app: &crate::MainWindow, user_id: &str, img: &slint::Image) {
+    let feed = app.get_feed_cards();
+    for i in 0..feed.row_count() {
+        let Some(mut card) = feed.row_data(i) else {
+            continue;
+        };
+        let mut changed = false;
+        match card.card_type.as_str() {
+            "head2head" => {
+                let h = &mut card.head2head;
+                if h.left_id.as_str() == user_id {
+                    h.left_avatar = img.clone();
+                    h.left_has_avatar = true;
+                    changed = true;
+                }
+                if h.right_id.as_str() == user_id {
+                    h.right_avatar = img.clone();
+                    h.right_has_avatar = true;
+                    changed = true;
+                }
+                let you = h.left_id.as_str() == user_id;
+                for j in 0..h.pairs.row_count() {
+                    if let Some(mut r) = h.pairs.row_data(j) {
+                        if r.id.as_str() == user_id {
+                            r.avatar = img.clone();
+                            r.has_avatar = true;
+                            h.pairs.set_row_data(j, r);
+                        } else if you {
+                            r.you_avatar = img.clone();
+                            r.you_has_avatar = true;
+                            h.pairs.set_row_data(j, r);
+                        }
+                    }
+                }
+            }
+            "invite" => {
+                let members = &card.head2head.members;
+                for j in 0..members.row_count() {
+                    if let Some(mut m) = members.row_data(j) {
+                        if m.id.as_str() == user_id {
+                            m.avatar = img.clone();
+                            m.has_avatar = true;
+                            members.set_row_data(j, m);
+                        }
+                    }
+                }
+            }
+            _ => {}
+        }
+        if changed {
+            feed.set_row_data(i, card);
+        }
+    }
 }
 
 /// The cards of the `this_week` section. Wide and versus lead the feed (the

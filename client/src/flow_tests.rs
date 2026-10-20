@@ -4796,6 +4796,65 @@ fn crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats() {
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
+const TEST_AVATAR_SVG: &str = "<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 8 8'><rect width='8' height='8' fill='#c33'/></svg>";
+
+/// The octagons of the head2head cell show the avatar the app loaded for the
+/// user id, and initials for a user with none. An avatar that arrives after
+/// the feed patches the card.
+#[test]
+fn head2head_octagons_show_the_loaded_avatar_and_initials_without_one() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 3);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Max")],
+    );
+    // Jonas loaded before the feed.
+    h.emit(Event::UserAvatarLoaded {
+        user_id: "u2".into(),
+        data: TEST_AVATAR_SVG.into(),
+    });
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            3,
+            vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+            vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 0, 2)],
+            None,
+        )]),
+    });
+    let rows = first_card(&h).head2head.pairs;
+    let row = |i: usize| rows.row_data(i).expect("pair row");
+    let by_name = |n: &str| {
+        (0..rows.row_count())
+            .map(row)
+            .find(|r| r.name == n)
+            .unwrap()
+    };
+    assert!(
+        by_name("Jonas").has_avatar,
+        "the loaded avatar is on the row"
+    );
+    assert!(!by_name("Max").has_avatar, "no avatar, initials");
+    assert!(!by_name("Max").you_has_avatar);
+
+    // Max and the viewer arrive after the feed.
+    h.emit(Event::UserAvatarLoaded {
+        user_id: "u3".into(),
+        data: TEST_AVATAR_SVG.into(),
+    });
+    h.emit(Event::UserAvatarLoaded {
+        user_id: "user-1".into(),
+        data: TEST_AVATAR_SVG.into(),
+    });
+    let card = first_card(&h);
+    assert!(card.head2head.left_has_avatar, "the viewer octagon");
+    let rows = card.head2head.pairs;
+    for i in 0..rows.row_count() {
+        let r = rows.row_data(i).unwrap();
+        assert!(r.has_avatar && r.you_has_avatar, "{} wears images", r.name);
+    }
+}
+
 /// A belt that moved in the last 24 h puts the versus card in the hero slot,
 /// led by the moved title. The trio stays beside it (frame B2).
 #[test]

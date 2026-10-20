@@ -147,9 +147,20 @@ export type AppState = {
     /** The chips the card draws: the viewer's own values on the wide card. */
     own_values: { title_id: string; display: string }[];
     titles: { title_id: string; holder_name: string }[];
+    /** Every pair of the viewer, drawn or not. */
     pairs_count: number;
+    /** The pair rows the cell draws. */
+    pair_rows: number;
+    /** The "+N more" line of the cell. 0 when it does not show. */
+    more_pairs: number;
     belt_moved_recent: boolean;
+    /** A fingerprint of the viewer's octagon image. "" when it shows initials. */
+    own_avatar_key: string;
+    /** The same for the opponent octagon of each pair row. */
+    pair_avatar_keys: string[];
   };
+  /** The invite card of the feed. `present` is false when the feed has none. */
+  invite_card: { present: boolean; octagons: number; more_count: number };
   /** The recent games card of the feed. Empty tiles when the feed has none. */
   recent_games: {
     header_note: string;

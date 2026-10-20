@@ -59,6 +59,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
 
             crate::avatar::update_chat_avatars_for_sender(&ctx.app, &user_id, &ui_img);
+            super::clip::patch_head2head_avatar(&ctx.app, &user_id, &ui_img);
 
             {
                 let members_model = ctx.app.get_members();

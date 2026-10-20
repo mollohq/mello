@@ -68,6 +68,11 @@ export default journey({
       expect(texts.includes("NOBODY TO COMPARE WITH YET"), "the empty-compare line shows");
     });
 
+    await step("the viewer octagon wears the avatar the app loaded, not initials", async () => {
+      const s = await bob.waitFor("the avatar on the head2head octagon", (st) => st.head2head.own_avatar_key !== "", 20_000);
+      expect(s.head2head.own_avatar_key !== "", "the octagon shows an image");
+    });
+
     await step("the invite button is a control", async () => {
       const c = await bob.find("Invite your crew");
       expect(c.label === "Invite your crew", `label is "Invite your crew", got "${c.label}"`);

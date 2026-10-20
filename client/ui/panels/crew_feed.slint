@@ -2062,6 +2062,8 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height;
         member-name: card.head2head.left-name;
         member-initials: card.head2head.left-initials;
+        member-avatar: card.head2head.left-avatar;
+        member-has-avatar: card.head2head.left-has-avatar;
         hue-index: card.head2head.left-hue-index;
         open-seats: card.head2head.open-seats;
         titles: card.head2head.chips;
@@ -2081,9 +2083,13 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height;
         left-name: card.head2head.left-name;
         left-initials: card.head2head.left-initials;
+        left-avatar: card.head2head.left-avatar;
+        left-has-avatar: card.head2head.left-has-avatar;
         left-hue-index: card.head2head.left-hue-index;
         right-name: card.head2head.right-name;
         right-initials: card.head2head.right-initials;
+        right-avatar: card.head2head.right-avatar;
+        right-has-avatar: card.head2head.right-has-avatar;
         right-hue-index: card.head2head.right-hue-index;
         left-score: card.head2head.left-score;
         right-score: card.head2head.right-score;
@@ -2095,6 +2101,7 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height;
         viewer-name: card.head2head.left-name;
         pairs: card.head2head.pairs;
+        more-pairs: card.head2head.more-pairs;
         open-seats: card.head2head.open-seats;
         invite-clicked => { root.invite-clicked(); }
     }

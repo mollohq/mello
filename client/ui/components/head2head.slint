@@ -292,6 +292,8 @@ export component Head2headCardWide inherits Rectangle {
     callback invite-clicked();
     in property <string> member-name;
     in property <string> member-initials;
+    in property <image> member-avatar;
+    in property <bool> member-has-avatar: false;
     in property <int> hue-index: 0;
     /// Open seats shown. The seats are the first five, so this is 5 minus
     /// the member count, and 0 from five members on.
@@ -340,6 +342,8 @@ export component Head2headCardWide inherits Rectangle {
                     UserAvatar {
                         x: (parent.width - self.width) / 2;
                         initials: root.member-initials;
+                        avatar: root.member-avatar;
+                        has-avatar: root.member-has-avatar;
                         color-index: root.hue-index;
                         size: root.wide-room ? 64px : 56px;
                     }
@@ -427,7 +431,7 @@ component PairRow inherits Rectangle {
                 alignment: start;
                 spacing: 5px;
                 cross-axis-alignment: center;
-                UserAvatar { initials: root.pair.you-initials; color-index: root.pair.you-hue-index; size: 20px; }
+                UserAvatar { initials: root.pair.you-initials; avatar: root.pair.you-avatar; has-avatar: root.pair.you-has-avatar; color-index: root.pair.you-hue-index; size: 20px; }
                 Text {
                     text: root.pair.you-count + " : " + root.pair.them-count;
                     font-family: Theme.font-display;
@@ -435,7 +439,7 @@ component PairRow inherits Rectangle {
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-value;
                 }
-                UserAvatar { initials: root.pair.initials; color-index: root.pair.hue-index; size: 20px; }
+                UserAvatar { initials: root.pair.initials; avatar: root.pair.avatar; has-avatar: root.pair.has-avatar; color-index: root.pair.hue-index; size: 20px; }
             }
         }
         if root.pair.has-chip: HeldChip {
@@ -458,6 +462,8 @@ export component Head2headCell inherits Rectangle {
     in property <int> open-seats: 3;
     in property <string> viewer-name;
     in property <[H2hPairRow]> pairs;
+    /// Pairs of the viewer that the cell does not draw. 0 draws no line.
+    in property <int> more-pairs: 0;
 
     background: transparent;
 
@@ -489,6 +495,29 @@ export component Head2headCell inherits Rectangle {
             spacing: 6px;
 
             for p in root.pairs: PairRow { pair: p; }
+
+            // The line stands for the opened view, which does not exist yet.
+            // It is a control that opens nothing.
+            if root.more-pairs > 0: Rectangle {
+                height: 22px;
+                accessible-role: button;
+                accessible-label: "+" + root.more-pairs + " more";
+                Text {
+                    x: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    text: "+" + root.more-pairs + " MORE";
+                    font-family: Theme.font-label;
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-dim;
+                    vertical-alignment: center;
+                }
+                TouchArea {
+                    clicked => { }
+                }
+            }
         }
 
         if root.open-seats > 0: HorizontalLayout {
@@ -509,9 +538,13 @@ export component VersusHero inherits Rectangle {
     callback invite-clicked();
     in property <string> left-name;
     in property <string> left-initials;
+    in property <image> left-avatar;
+    in property <bool> left-has-avatar: false;
     in property <int> left-hue-index: 0;
     in property <string> right-name;
     in property <string> right-initials;
+    in property <image> right-avatar;
+    in property <bool> right-has-avatar: false;
     in property <int> right-hue-index: 1;
     in property <int> left-score;
     in property <int> right-score;
@@ -552,7 +585,7 @@ export component VersusHero inherits Rectangle {
                 spacing: 14px;
                 alignment: start;
                 cross-axis-alignment: center;
-                UserAvatar { initials: root.left-initials; color-index: root.left-hue-index; size: 56px; }
+                UserAvatar { initials: root.left-initials; avatar: root.left-avatar; has-avatar: root.left-has-avatar; color-index: root.left-hue-index; size: 56px; }
                 Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
             }
             Text {
@@ -568,7 +601,7 @@ export component VersusHero inherits Rectangle {
                 alignment: end;
                 cross-axis-alignment: center;
                 Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
-                UserAvatar { initials: root.right-initials; color-index: root.right-hue-index; size: 56px; }
+                UserAvatar { initials: root.right-initials; avatar: root.right-avatar; has-avatar: root.right-has-avatar; color-index: root.right-hue-index; size: 56px; }
             }
         }
 
@@ -633,6 +666,8 @@ export component InviteCard inherits Rectangle {
                 row: floor(i / 5);
                 col: mod(i, 5);
                 initials: m.initials;
+                avatar: m.avatar;
+                has-avatar: m.has-avatar;
                 color-index: m.hue-index;
                 size: 32px;
             }
