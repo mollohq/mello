@@ -99,9 +99,9 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
     expect(h.placement === "cell" || h.placement === "versus", `placement is cell or versus, got ${h.placement}`);
     expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
     if (h.placement === "cell") {
-      expect(h.pair_rows === 3, `the cell draws the three closest pairs, got ${h.pair_rows}`);
-      expect(h.more_pairs === total - 1 - 3, `the +N more line says ${total - 4}, got ${h.more_pairs}`);
-      expect((await bob.find(`+${total - 4} more`)).role === "Button", "the +N more line is a control");
+      expect(h.pair_rows === 4, `the cell draws the four closest pairs, got ${h.pair_rows}`);
+      expect(h.more_pairs === total - 1 - 4, `the +N more line says ${total - 5}, got ${h.more_pairs}`);
+      expect((await bob.find(`+${total - 5} more`)).role === "Button", "the +N more line is a control");
     }
   });
 

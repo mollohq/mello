@@ -188,6 +188,10 @@ A crew of one gets the wide card (frame A of the mockup). The card shows the vie
 - The chips come from `own_values`: the first four in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick). They wear the viewer's identity hue. There is no holder octagon.
 - The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.
 
+### Pair rows in the cell
+
+The cell shows the viewer's closest pairs (smallest gap first). With no open seats (five members or more) it shows up to four rows, as in frame D. With seats it shows up to two. A "+N more" line shows only when pairs remain.
+
 ### Deciding chip
 
 Each pair row in the cell shows one chip: the title that decides the pair. The client picks it from `values`.

@@ -15,9 +15,9 @@ use crate::{H2hPairRow, H2hPerson, Head2headData, TitleHeld};
 /// Seats head2head shows, as in the backend. A crew of five or more has none.
 pub const SEATS: i32 = 5;
 /// Most pair rows in the cell. With seats and the invite button the cell has
-/// room for two rows, without them for three.
+/// room for two rows, without them for four (mockup frame D).
 const ROWS_WITH_SEATS: usize = 2;
-const ROWS_FULL: usize = 3;
+const ROWS_FULL: usize = 4;
 /// Most octagons on the invite card. More members show as "+N".
 pub const INVITE_CARD_MEMBERS: usize = 8;
 /// Chips on the wide card and the versus card.
@@ -960,6 +960,30 @@ mod tests {
         assert_eq!(m.pairs.len(), ROWS_FULL);
     }
 
+    /// Frame D: five members, four pairs, all four in the cell. No "+N more"
+    /// line, because no row remains. With seats the cell keeps two rows.
+    #[test]
+    fn five_members_show_four_pairs_and_no_more_line() {
+        let roster = |id: &str| Person::new(id, id);
+        let pairs = vec![
+            pair("u2", 1, 1),
+            pair("u3", 2, 0),
+            pair("u4", 0, 2),
+            pair("u5", 3, 1),
+        ];
+        let data = feed(5, vec![], pairs.clone(), None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.placement, Placement::CellFull);
+        assert_eq!(m.pairs.len(), 4);
+        assert_eq!(to_slint(&m, &|_| None).more_pairs, 0);
+
+        let data = feed(4, vec![], pairs, None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.placement, Placement::Cell);
+        assert_eq!(m.pairs.len(), 2, "two rows when the cell has seats");
+        assert_eq!(to_slint(&m, &|_| None).more_pairs, 2);
+    }
+
     fn pair_v(b: &str, a: i32, bc: i32, values: Vec<Value>) -> Value {
         json!({"a": "me", "b": b, "a_count": a, "b_count": bc, "values": values})
     }
@@ -1145,7 +1169,7 @@ mod tests {
     }
 
     #[test]
-    fn the_cell_keeps_the_three_closest_pairs_and_counts_the_rest() {
+    fn the_cell_keeps_the_four_closest_pairs_and_counts_the_rest() {
         // Five members and more: three rows, the closest tallies first.
         let pairs = vec![
             pair("u2", 9, 0),
@@ -1158,10 +1182,10 @@ mod tests {
         let m = build(&data, &me(), &roster, NOW).unwrap();
         assert_eq!(m.placement, Placement::CellFull);
         let order: Vec<&str> = m.pairs.iter().map(|p| p.opponent.id.as_str()).collect();
-        assert_eq!(order, ["u5", "u3", "u4"], "gaps 0, 1, 5");
+        assert_eq!(order, ["u5", "u3", "u4", "u6"], "gaps 0, 1, 5, 8");
         assert_eq!(m.pairs_total, 5);
         let d = to_slint(&m, &|_| None);
-        assert_eq!((d.pairs_total, d.more_pairs), (5, 2));
+        assert_eq!((d.pairs_total, d.more_pairs), (5, 1));
     }
 
     #[test]

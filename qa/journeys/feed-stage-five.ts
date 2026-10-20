@@ -18,6 +18,7 @@ export default journey({
       expect(h.placement === "cell" || h.placement === "versus", `placement is cell or versus, got ${h.placement}`);
       expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
       expect(h.pairs_count === 4, `pairs_count is 4, got ${h.pairs_count}`);
+      expect(h.pair_rows === 4 && h.more_pairs === 0, `frame D: four pairs and no +N more, got ${h.pair_rows} and ${h.more_pairs}`);
     });
 
     await step("the invite card is there with five octagons and no seat", async () => {
