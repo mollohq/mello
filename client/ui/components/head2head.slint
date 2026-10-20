@@ -35,10 +35,12 @@ export component TitleChip inherits Rectangle {
     in property <string> unit;
     in property <color> hue: Theme.id-blue;
     in property <bool> compact: false;
+    /// Four pair rows in one cell: the compact chip a little shorter.
+    in property <bool> dense: false;
 
     property <length> cut: compact ? 5px : 7px;
 
-    height: root.compact ? 46px : 52px;
+    height: root.dense ? 34px : root.compact ? 46px : 52px;
     background: transparent;
 
     CutButtonShape {
@@ -102,15 +104,15 @@ export component TitleChip inherits Rectangle {
     if root.compact: VerticalLayout {
         padding-left: 8px; padding-right: 6px;
         alignment: center;
-        spacing: 1px;
+        spacing: root.dense ? 0px : 1px;
         HorizontalLayout {
             spacing: 4px;
             cross-axis-alignment: center;
             Image {
                 source: root.icon;
                 colorize: root.hue;
-                width: 13px;
-                height: 13px;
+                width: root.dense ? 11px : 13px;
+                height: root.dense ? 11px : 13px;
             }
             Text {
                 text: root.title.to-uppercase();
@@ -129,7 +131,7 @@ export component TitleChip inherits Rectangle {
             Text {
                 text: root.value;
                 font-family: Theme.font-display;
-                font-size: 15px;
+                font-size: root.dense ? 13px : 15px;
                 font-weight: Theme.weight-display;
                 color: Theme.text-value;
             }
@@ -149,9 +151,10 @@ export component TitleChip inherits Rectangle {
 export component HeldChip inherits Rectangle {
     in property <TitleHeld> t;
     in property <bool> compact: false;
+    in property <bool> dense: false;
 
     background: transparent;
-    height: chip.height + (root.t.held-label != "" ? 16px : 0px);
+    height: chip.height + (root.t.held-label != "" && !root.dense ? 16px : 0px);
 
     // No layout here: a layout would give the chip a preferred width and
     // skew the equal columns of the grid it sits in.
@@ -159,10 +162,11 @@ export component HeldChip inherits Rectangle {
         x: 0px; y: 0px;
         width: parent.width;
         compact: root.compact;
+        dense: root.dense;
         hue: H2hHue.of(root.t.hue-index);
         icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
     }
-    if root.t.held-label != "": Text {
+    if root.t.held-label != "" && !root.dense: Text {
         x: 2px;
         y: chip.height + 3px;
         width: parent.width - 2px;
@@ -408,7 +412,9 @@ export component Head2headCardWide inherits Rectangle {
 /// the title that decides the pair.
 component PairRow inherits Rectangle {
     in property <H2hPairRow> pair;
-    height: root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
+    /// Four rows share the cell: a shorter row, and no held label.
+    in property <bool> dense: false;
+    height: root.dense ? 36px : root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
     background: transparent;
 
     HorizontalLayout {
@@ -444,6 +450,7 @@ component PairRow inherits Rectangle {
         }
         if root.pair.has-chip: HeldChip {
             compact: true;
+            dense: root.dense;
             width: 108px;
             t: root.pair.chip;
         }
@@ -500,9 +507,9 @@ export component Head2headCell inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 1;
             alignment: start;
-            spacing: 6px;
+            spacing: root.pairs.length >= 4 ? 3px : 6px;
 
-            for p in root.pairs: PairRow { pair: p; }
+            for p in root.pairs: PairRow { pair: p; dense: root.pairs.length >= 4; }
 
             // The line stands for the opened view, which does not exist yet.
             // It is a control that opens nothing.
