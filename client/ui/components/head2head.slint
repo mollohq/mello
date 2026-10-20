@@ -299,6 +299,9 @@ export component Head2headCardWide inherits Rectangle {
     /// The member's titles, at most four. The chips wear the member's hue.
     in property <[TitleHeld]> titles;
 
+    // Room for the 64 px octagon and 40 px seats of the mockup.
+    property <bool> wide-room: root.width >= 640px;
+
     background: transparent;
 
     CutShape {
@@ -320,27 +323,29 @@ export component Head2headCardWide inherits Rectangle {
         CardLabel { text: "HEAD2HEAD"; }
 
         HorizontalLayout {
-            spacing: 12px;
+            spacing: 20px;
             vertical-stretch: 1;
 
+            // The member. The column is as wide as the name, so the name
+            // never elides at the card's width.
             VerticalLayout {
-                width: 56px;
+                width: max(80px, min(160px, name.preferred-width));
                 alignment: center;
                 spacing: 8px;
 
                 Rectangle {
-                    height: 48px;
+                    height: root.wide-room ? 64px : 56px;
                     UserAvatar {
                         x: (parent.width - self.width) / 2;
                         initials: root.member-initials;
                         color-index: root.hue-index;
-                        size: 48px;
+                        size: root.wide-room ? 64px : 56px;
                     }
                 }
-                Text {
+                name := Text {
                     text: root.member-name;
                     font-family: Theme.font-display;
-                    font-size: 14px;
+                    font-size: root.wide-room ? 20px : 16px;
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-value;
                     horizontal-alignment: center;
@@ -366,7 +371,7 @@ export component Head2headCardWide inherits Rectangle {
             Rectangle { width: Theme.keyline; background: Theme.card-border; }
 
             VerticalLayout {
-                width: 112px;
+                width: root.wide-room ? 200px : 152px;
                 alignment: center;
                 spacing: 10px;
 
@@ -382,19 +387,11 @@ export component Head2headCardWide inherits Rectangle {
                 OpenSeatStrip {
                     seats: root.open-seats;
                     max-shown: 4;
-                    size: root.open-seats > 3 ? 24px : 30px;
-                    gap: root.open-seats > 3 ? 4px : 8px;
-                    show-labels: root.open-seats <= 3;
+                    size: root.wide-room ? 40px : 32px;
+                    gap: root.wide-room ? 10px : 8px;
+                    show-labels: true;
                 }
-                if root.open-seats > 3: Text {
-                    text: "OPEN";
-                    font-family: Theme.font-label;
-                    font-size: 9px;
-                    font-weight: Theme.weight-label;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-dim;
-                }
-                InviteButton { compact: true; wrap: true; clicked => { root.invite-clicked(); } }
+                InviteButton { compact: true; wrap: !root.wide-room; clicked => { root.invite-clicked(); } }
             }
         }
     }

@@ -178,6 +178,21 @@ struct WireFeed {
     pairs: Vec<WirePair>,
     #[serde(default)]
     belt_moved_recent: Option<WireTitle>,
+    /// The viewer's own value in each title their data computes.
+    #[serde(default, deserialize_with = "null_as_empty")]
+    own_values: Vec<WireOwnValue>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct WireOwnValue {
+    title_id: String,
+    #[serde(default)]
+    value: Value,
+    #[serde(default)]
+    unit: String,
+    /// The value as text, built by the server. Empty from an older server.
+    #[serde(default)]
+    display: String,
 }
 
 fn null_as_empty<'de, D, T>(d: D) -> Result<Vec<T>, D::Error>
@@ -333,6 +348,33 @@ fn magnitude(v: &Value) -> f64 {
     }
 }
 
+/// A chip for one of the viewer's own values: the viewer's hue, no holder, no
+/// held days. Locked In reads "h this week" as in the mockup.
+fn own_chip(o: &WireOwnValue, viewer: &Person) -> Chip {
+    let (value, unit) = value_text(&o.value, &o.unit);
+    let unit = if o.title_id == "locked_in" && unit == "h" {
+        "h this week".to_string()
+    } else {
+        unit
+    };
+    Chip {
+        id: o.title_id.clone(),
+        name: title_name(&o.title_id)
+            .map(str::to_string)
+            .unwrap_or_else(|| o.title_id.clone()),
+        value: if o.display.is_empty() {
+            value
+        } else {
+            o.display.clone()
+        },
+        unit,
+        holder_id: String::new(),
+        holder_hue: viewer.hue,
+        held_days: 0,
+        moved_recent: false,
+    }
+}
+
 fn chip_of(t: &WireTitle, roster: &dyn Fn(&str) -> Person, now_ms: i64, moved: bool) -> Chip {
     let (value, unit) = value_text(&t.value, &t.unit);
     Chip {
@@ -471,13 +513,28 @@ pub fn build(
     if wire.member_count < 2 {
         model.placement = Placement::Wide;
         model.open_seats = (SEATS - wire.member_count.max(1)).clamp(0, SEATS);
-        model.chips = model
-            .titles
+        // The viewer's own values, first four in display order. An older
+        // server sends none: then the titles the viewer holds stand in.
+        let mut own: Vec<&WireOwnValue> = wire
+            .own_values
             .iter()
-            .filter(|c| c.holder_id == viewer.id)
-            .take(CHIPS)
-            .cloned()
+            .filter(|o| look(&o.title_id).is_some())
             .collect();
+        own.sort_by_key(|o| display_rank(&o.title_id));
+        model.chips = if own.is_empty() {
+            model
+                .titles
+                .iter()
+                .filter(|c| c.holder_id == viewer.id)
+                .take(CHIPS)
+                .cloned()
+                .collect()
+        } else {
+            own.iter()
+                .take(CHIPS)
+                .map(|o| own_chip(o, viewer))
+                .collect()
+        };
         return Some(model);
     }
 
@@ -730,6 +787,48 @@ mod tests {
         let ids: Vec<_> = m.chips.iter().map(|c| c.id.as_str()).collect();
         assert_eq!(ids, ["the_carry", "night_owl"]);
         assert_eq!(m.chips[0].held_days, 3);
+    }
+
+    fn own(id: &str, value: Value, unit: &str, display: &str) -> Value {
+        json!({"title_id": id, "value": value, "unit": unit, "display": display})
+    }
+
+    #[test]
+    fn a_solo_crew_shows_the_viewers_own_values_in_display_order() {
+        let mut data = feed(1, vec![], vec![], None);
+        data["own_values"] = json!([
+            own("the_carry", json!(4167.0), "h", "4,167"),
+            own("night_owl", json!("03:14"), "", "03:14"),
+            own("the_collector", json!(5), "installed", "5"),
+            own("locked_in", json!(4.6), "h", "4.6"),
+            own("has_a_life", json!(4.6), "h", "4.6"),
+            own("mouth", json!(30), "min", "30"),
+        ]);
+        // Out of order on the wire: the card sorts by display order.
+        data["own_values"].as_array_mut().unwrap().reverse();
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.placement, Placement::Wide);
+        let ids: Vec<_> = m.chips.iter().map(|c| c.id.as_str()).collect();
+        assert_eq!(
+            ids,
+            ["the_carry", "night_owl", "the_collector", "locked_in"]
+        );
+        assert_eq!(m.chips[0].value, "4,167");
+        assert_eq!(m.chips[0].unit, "h");
+        assert_eq!(m.chips[3].value, "4.6");
+        assert_eq!(m.chips[3].unit, "h this week");
+        for c in &m.chips {
+            assert_eq!(c.holder_hue, me().hue, "the viewer's own hue");
+            assert_eq!(c.held_days, 0);
+        }
+    }
+
+    #[test]
+    fn own_values_fall_back_to_value_text_without_a_display() {
+        let mut data = feed(1, vec![], vec![], None);
+        data["own_values"] = json!([{"title_id": "the_carry", "value": 4167.0, "unit": "h"}]);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.chips[0].value, "4,167");
     }
 
     #[test]

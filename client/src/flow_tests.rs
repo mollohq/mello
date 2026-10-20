@@ -4636,6 +4636,45 @@ fn crew_of_one_shows_the_wide_card_with_four_seats_and_the_invite() {
     invoke_invite_and_expect_code_request(&mut h, "Invite your crew");
 }
 
+/// A crew of one with no contested title: the server sends `own_values` and
+/// the card draws the viewer's four first values as chips, four open seats
+/// each labelled "OPEN", and the invite.
+#[test]
+fn solo_card_shows_four_own_value_chips_and_four_open_labels() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User")]);
+
+    let mut entry = h2h_entry(1, vec![], vec![], None);
+    entry.data["own_values"] = serde_json::json!([
+        {"title_id": "the_carry", "value": 4167.0, "unit": "h", "display": "4,167"},
+        {"title_id": "night_owl", "value": "03:14", "unit": "", "display": "03:14"},
+        {"title_id": "the_collector", "value": 5, "unit": "installed", "display": "5"},
+        {"title_id": "locked_in", "value": 4.6, "unit": "h", "display": "4.6"},
+        {"title_id": "sampler", "value": 3, "unit": "games", "display": "3"},
+    ]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![entry]),
+    });
+
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
+    assert_eq!(count_of(&h, "TitleChip"), 4, "the first four own values");
+    let texts = drawn_texts(&h);
+    assert_eq!(
+        texts.iter().filter(|t| t.as_str() == "OPEN").count(),
+        4,
+        "every seat is labelled"
+    );
+    for want in ["4,167", "03:14", "5", "4.6", "NOBODY TO COMPARE WITH YET"] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
+    assert!(
+        !texts.iter().any(|t| t == "3"),
+        "the fifth value is not drawn"
+    );
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+}
+
 /// Two members and no move in the last 24 h: a standard cell with the one
 /// pair and the seats that are left, not a hero.
 #[test]
