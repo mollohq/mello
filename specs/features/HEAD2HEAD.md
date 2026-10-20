@@ -79,6 +79,17 @@ Title entry: `title_id`, `holder_user_id`, `value`, `unit`, `since_ms`, `previou
 - `since_ms` is when the current holder took the title.
 - `previous_holder_user_id` and `moved_at_ms` are absent for a title that never changed hands.
 
+### Size
+
+The pair count grows with the square of the crew. Measured with 13 values for each pair (`head2head_scale_test.go`):
+
+| Members | Pairs | Compute | Doc | Feed payload |
+|---|---|---|---|---|
+| 50 | 1,225 | under 10 ms | 0.8 MB | 35 KB |
+| 100 (the member list cap) | 4,950 | under 10 ms | 3.3 MB | 69 KB |
+
+The doc is not capped. A crew of 50 reads and writes it in well under one second. The feed returns only the viewer's pairs. A test fails when 50 members take over one second or over 1 MB.
+
 ### Pair tally
 
 A pair entry is `{a, b, a_count, b_count}` with `a` before `b` in id order. The count of a member is the number of contested titles that member would hold if only the two members existed.
