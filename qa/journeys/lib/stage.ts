@@ -5,7 +5,7 @@ import type { App, AppEvent, AppState } from "../../../tools/mello-driver/src/ap
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./onboarding.ts";
 import { readInviteCode } from "./setup.ts";
-import { crewFeed, profiles, seedCrew, type SeededMember } from "./seed.ts";
+import { crewFeed, endSession, profiles, seedCrew, signInEmail, type SeededMember } from "./seed.ts";
 
 export type Stage = { bob: App; crew: string; code: string; members: SeededMember[] };
 
@@ -19,10 +19,29 @@ export async function bobWithSeededCrew(ctx: JourneyContext, seeded: number): Pr
   const crew = `Stage ${runId}`;
   const bob = await launch("bob");
   let code = "";
+  let bobCreds = { email: "", password: "" };
   await step("setup: bob creates a crew and reads the invite link", async () => {
-    await onboardWithNewCrew(bob, crew, `bob${runId}`, "Public");
+    bobCreds = await onboardWithNewCrew(bob, crew, `bob${runId}`, "Public");
     await bob.waitFor("the head2head card of a crew of one", (s) => s.head2head.present, 30_000);
     code = await readInviteCode(bob);
+  });
+  await step("setup: bob has played a few sessions, so his pairs contest more than the library titles", async () => {
+    // The real app on this machine has a library and no sessions. A member
+    // with no sessions contends for no session title, so every pair with bob
+    // would tally on the three library titles at most (the carry, the
+    // collector, one trick). Bob's sessions go in as bob, over REST.
+    const token = await signInEmail(bobCreds.email, bobCreds.password);
+    const crewId = (await bob.state()).active_crew_id;
+    const played = [
+      [{ id: "steam-730", name: "Counter-Strike 2" }, 95, 23 * 60, 1],
+      [{ id: "steam-730", name: "Counter-Strike 2" }, 60, 22 * 60, 3],
+      [{ id: "steam-291550", name: "Brawlhalla" }, 7, 21 * 60, 4],
+      [{ id: "steam-252950", name: "Rocket League" }, 140, 20 * 60, 6],
+    ] as const;
+    for (let i = 0; i < played.length; i++) {
+      const [game, min, endLocal, daysAgo] = played[i];
+      await endSession(token, crewId, game, min, endLocal, `stage-${runId}-bob-${i}`, daysAgo);
+    }
   });
   let members: SeededMember[] = [];
   await step(`setup: ${seeded} members join over REST with games, sessions and clips`, async () => {

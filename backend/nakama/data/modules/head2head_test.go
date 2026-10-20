@@ -923,3 +923,52 @@ func TestFeedPayloadOwnValuesNeverNull(t *testing.T) {
 		t.Fatalf("wire: %s", raw)
 	}
 }
+
+// A crew of five with varied data: a pair of members who both have a library,
+// sessions and an activity doc contests at least four titles. A member with a
+// library and nothing else contends for the three library titles only, which
+// is why a viewer who has not played reads 1:1 style tallies (the e2e stages
+// gave the real viewer sessions for this reason).
+func TestPairTallyOverFiveMembersWithVariedData(t *testing.T) {
+	end := func(min int) *int { return ip(min) }
+	act := func(game, short, longest, clips int, endLocal int) *UserActivityStats {
+		return &UserActivityStats{
+			LongestSessionMin: longest, Clips: clips,
+			Days: []ActivityDay{{Date: dayAgo(1), GameMin: game, Sessions: 2, ShortSessions: short, LongestSessionMin: longest, LatestEndLocalMin: end(endLocal)}},
+		}
+	}
+	mk := func(id string, lib *LibraryDoc, a *UserActivityStats, stats ...UserGameStats) h2hMemberData {
+		m := member(id, lib, stats...)
+		m.Activity = a
+		return m
+	}
+	tz := ip(0)
+	s := func(game string, days, min int) UserGameStats {
+		st := played(game, days, min)
+		st.LastTzOffsetMin = tz
+		return st
+	}
+	ms := []h2hMemberData{
+		mk("u1", hdoc(hgame("steam-1", 9000), hgame("steam-2", 100), hgame("steam-3", 50)), act(120, 0, 120, 0, 23*60), s("steam-1", 1, 120)),
+		mk("u2", hdoc(hgame("steam-1", 3000), hgame("steam-2", 800)), act(60, 2, 40, 2, 2*60), s("steam-1", 2, 40), s("steam-2", 3, 20)),
+		mk("u3", hdoc(hgame("steam-1", 500), hgame("steam-4", 700), hgame("steam-5", 90), hgame("steam-2", 5)), act(300, 1, 200, 1, 20*60), s("steam-4", 1, 200), s("steam-1", 4, 100)),
+		mk("u4", hdoc(hgame("steam-1", 40000)), act(30, 3, 15, 0, 22*60), s("steam-1", 1, 30)),
+		mk("u5", hdoc(hgame("steam-1", 7000), hgame("steam-2", 20)), nil), // library only
+	}
+	d := compute(nil, h2hNow, 5, ms...)
+	if len(d.Pairs) != 10 {
+		t.Fatalf("pairs: %d", len(d.Pairs))
+	}
+	for _, p := range d.Pairs {
+		n := len(p.Values)
+		if p.A == "u5" || p.B == "u5" {
+			if n > 3 {
+				t.Fatalf("library-only member contests %d titles with %s/%s", n, p.A, p.B)
+			}
+			continue
+		}
+		if n < 4 || p.ACount+p.BCount != n {
+			t.Fatalf("pair %s/%s contests %d titles, tally %d:%d", p.A, p.B, n, p.ACount, p.BCount)
+		}
+	}
+}
