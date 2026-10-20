@@ -666,6 +666,29 @@ fn catalogue_head() -> Option<&'static crate::catalogue::Head> {
     .as_ref()
 }
 
+/// Whether the game sensor can track this game: the catalogue knows it by
+/// game id, by Steam appid (`steam-<appid>` through the bundled appid index),
+/// or by display name. The feed uses this for the "Tracked" label. Reads the
+/// bundled data only.
+pub fn is_tracked_game(game_id: &str, game_name: &str) -> bool {
+    let Some(head) = catalogue_head() else {
+        return false;
+    };
+    if head.by_game_id(game_id).is_some() {
+        return true;
+    }
+    if let Some(igdb) = game_id
+        .strip_prefix("steam-")
+        .and_then(|a| a.parse::<u32>().ok())
+        .and_then(|appid| appid_index()?.igdb_id(appid))
+    {
+        if head.get(igdb).is_some() {
+            return true;
+        }
+    }
+    head.by_name(game_name).is_some()
+}
+
 /// What a process resolved to, and how.
 struct Matched {
     game_id: String,
@@ -1066,6 +1089,18 @@ fn detect_games(library: &LibraryIndex, processes: &[RawGameProcess], now: i64) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tracked_games_resolve_by_id_appid_and_name() {
+        assert!(is_tracked_game("counter-strike-2", ""));
+        assert!(is_tracked_game("steam-730", "Counter-Strike 2"));
+        assert!(is_tracked_game("", "counter-strike 2"));
+        assert!(!is_tracked_game(
+            "epic-no-such-game",
+            "No Such Game Anywhere"
+        ));
+        assert!(!is_tracked_game("", ""));
+    }
+
     use super::*;
 
     fn make_process(exe: &str, pid: u32, fullscreen: bool) -> RawGameProcess {

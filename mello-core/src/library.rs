@@ -309,6 +309,58 @@ fn scan_steam() -> Vec<LibraryEntry> {
     out
 }
 
+// ------------------------------------------------------------ Steam local art
+
+/// Files Steam keeps for one app in `appcache/librarycache/<appid>/`, best
+/// first. A header is the landscape capsule (460 by 215). The portrait cover
+/// is the last resort. Newer clients put the header in a hash-named
+/// subfolder, so each name is also tried one level down.
+const STEAM_ART_NAMES: &[&str] = &["header.jpg", "library_header.jpg", "library_600x900.jpg"];
+
+/// Local Steam header art for a game id such as `steam-730`. `None` for any
+/// other launcher, for an id with a non-numeric tail, or when the Steam cache
+/// has no art for the app. Reads the disk only: nothing goes to the network
+/// and nothing leaves the device.
+pub fn local_steam_art(game_id: &str) -> Option<PathBuf> {
+    let appid = game_id.strip_prefix("steam-")?;
+    steam_header_art_in(&steam_root()?, appid)
+}
+
+/// The header image of an installed Steam app under a Steam root.
+///
+/// The appid must be all digits, so an id cannot walk out of the cache folder.
+/// Order: `<appid>_header.jpg` (old clients), then for each art name
+/// `<appid>/<name>`, then `<appid>/<hash>/<name>` with the hash folders in
+/// name order, so the answer does not depend on directory order.
+pub fn steam_header_art_in(root: &Path, appid: &str) -> Option<PathBuf> {
+    if appid.is_empty() || !appid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let cache = root.join("appcache").join("librarycache");
+    let old = cache.join(format!("{appid}_header.jpg"));
+    if old.is_file() {
+        return Some(old);
+    }
+    let app_dir = cache.join(appid);
+    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(&app_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    subdirs.sort();
+    for name in STEAM_ART_NAMES {
+        let direct = app_dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        if let Some(found) = subdirs.iter().map(|d| d.join(name)).find(|p| p.is_file()) {
+            return Some(found);
+        }
+    }
+    None
+}
+
 // ------------------------------------------------------- Steam local readers
 
 /// A parsed Valve KeyValues document. Only what the readers below need.
@@ -1270,5 +1322,73 @@ mod tests {
                 .count(),
             entries.iter().filter(|e| e.hidden).count()
         );
+    }
+
+    // ---- local Steam art ----
+
+    fn art_fixture(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("m3llo-steam-art-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("appcache").join("librarycache")).unwrap();
+        dir
+    }
+
+    fn put(root: &Path, rel: &str) -> PathBuf {
+        let path = root.join("appcache").join("librarycache").join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"jpg").unwrap();
+        path
+    }
+
+    #[test]
+    fn steam_art_finds_each_cache_layout() {
+        let root = art_fixture("layouts");
+        let old = put(&root, "10_header.jpg");
+        let flat = put(&root, "20/header.jpg");
+        let hashed = put(&root, "30/97fc0b0f/header.jpg");
+        let lib_header = put(&root, "40/97fc0b0f/library_header.jpg");
+        let portrait = put(&root, "50/library_600x900.jpg");
+        assert_eq!(steam_header_art_in(&root, "10"), Some(old));
+        assert_eq!(steam_header_art_in(&root, "20"), Some(flat));
+        assert_eq!(steam_header_art_in(&root, "30"), Some(hashed));
+        assert_eq!(steam_header_art_in(&root, "40"), Some(lib_header));
+        assert_eq!(steam_header_art_in(&root, "50"), Some(portrait));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_prefers_a_header_over_the_portrait_cover() {
+        let root = art_fixture("prefer");
+        put(&root, "7/library_600x900.jpg");
+        let header = put(&root, "7/abc/header.jpg");
+        assert_eq!(steam_header_art_in(&root, "7"), Some(header));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_is_none_when_the_cache_has_nothing() {
+        let root = art_fixture("none");
+        put(&root, "8/logo.png");
+        assert_eq!(steam_header_art_in(&root, "8"), None);
+        assert_eq!(steam_header_art_in(&root, "9999"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_rejects_ids_that_are_not_an_appid() {
+        let root = art_fixture("reject");
+        put(&root, "1/header.jpg");
+        for bad in ["", "..", "../1", "1/../1", "1a", "-1"] {
+            assert_eq!(steam_header_art_in(&root, bad), None, "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_steam_ids_have_local_art() {
+        assert_eq!(local_steam_art("epic-fortnite"), None);
+        assert_eq!(local_steam_art("counter-strike-2"), None);
+        assert_eq!(local_steam_art("steam-"), None);
     }
 }
