@@ -117,9 +117,9 @@ export component TitleChip inherits Rectangle {
                 font-family: Theme.font-label;
                 font-size: 8px;
                 font-weight: Theme.weight-label;
-                letter-spacing: 0.8px;
+                letter-spacing: 0.4px;
                 color: Theme.text-body;
-                overflow: clip;
+                overflow: elide;
             }
         }
         HorizontalLayout {
@@ -301,6 +301,8 @@ export component Head2headCardWide inherits Rectangle {
 
     // Room for the 64 px octagon and 40 px seats of the mockup.
     property <bool> wide-room: root.width >= 640px;
+    // Under 640 px the chips go compact so four of them and the seats fit.
+    property <bool> tight: root.width < 640px;
 
     background: transparent;
 
@@ -323,13 +325,13 @@ export component Head2headCardWide inherits Rectangle {
         CardLabel { text: "HEAD2HEAD"; }
 
         HorizontalLayout {
-            spacing: 20px;
+            spacing: root.tight ? 10px : 20px;
             vertical-stretch: 1;
 
             // The member. The column is as wide as the name, so the name
             // never elides at the card's width.
             VerticalLayout {
-                width: max(80px, min(160px, name.preferred-width));
+                width: max(72px, min(160px, name.preferred-width));
                 alignment: center;
                 spacing: 8px;
 
@@ -345,7 +347,7 @@ export component Head2headCardWide inherits Rectangle {
                 name := Text {
                     text: root.member-name;
                     font-family: Theme.font-display;
-                    font-size: root.wide-room ? 20px : 16px;
+                    font-size: root.wide-room ? 20px : root.tight ? 13px : 16px;
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-value;
                     horizontal-alignment: center;
@@ -364,6 +366,7 @@ export component Head2headCardWide inherits Rectangle {
                         row: floor(i / 2);
                         col: mod(i, 2);
                         t: ch;
+                        compact: root.tight;
                     }
                 }
             }
@@ -371,7 +374,7 @@ export component Head2headCardWide inherits Rectangle {
             Rectangle { width: Theme.keyline; background: Theme.card-border; }
 
             VerticalLayout {
-                width: root.wide-room ? 200px : 152px;
+                width: root.wide-room ? 200px : root.tight ? 134px : 152px;
                 alignment: center;
                 spacing: 10px;
 
@@ -387,8 +390,8 @@ export component Head2headCardWide inherits Rectangle {
                 OpenSeatStrip {
                     seats: root.open-seats;
                     max-shown: 4;
-                    size: root.wide-room ? 40px : 32px;
-                    gap: root.wide-room ? 10px : 8px;
+                    size: root.wide-room ? 40px : root.tight ? 30px : 32px;
+                    gap: root.wide-room ? 10px : root.tight ? 4px : 8px;
                     show-labels: true;
                 }
                 InviteButton { compact: true; wrap: !root.wide-room; clicked => { root.invite-clicked(); } }

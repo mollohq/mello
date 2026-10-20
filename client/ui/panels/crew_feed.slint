@@ -3148,7 +3148,7 @@ export component PreviewSemiCold inherits Rectangle {
 // seats and the red invite inside it. The trio stays below. The invite line
 // gives way, because the card already carries the one red button.
 export component PreviewFeedNewCrew inherits Rectangle {
-    width: 760px;
+    width: 900px;
     height: 520px;
     background: Theme.bg-app;
 
@@ -3165,22 +3165,24 @@ export component PreviewFeedNewCrew inherits Rectangle {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
                     variant: "wide", member-count: 1, open-seats: 4,
-                    left-name: "b0bben", left-initials: "B0", left-hue-index: 0,
+                    left-name: "bobbyfeedtest1", left-initials: "BO", left-hue-index: 4,
+                    // The viewer's own values: their hue, no holder, no held days.
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0, held-days: 9, held-label: "held 9 days" },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 4 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 4 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 4 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 4 },
                     ],
                 },
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "",
+                title: "RECENT GAMES", subtitle: "From this PC",
                 recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
-                    { game-id: "ns", game-name: "Night Stones", monogram: "NS", hue-index: 0, hours: "12.6 H" },
-                    { game-id: "rl", game-name: "Rocket League", monogram: "RL", hue-index: 2, hours: "" },
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", tracked: true,
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample.png") },
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true },
+                    { game-id: "steam-1", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H" },
                 ],
             },
         ];
