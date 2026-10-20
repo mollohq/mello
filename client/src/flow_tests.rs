@@ -4345,6 +4345,89 @@ fn recent_games_card_carries_header_and_tiles() {
     assert_eq!(card.subtitle.as_str(), "14 sessions, 31 h this week");
 }
 
+fn recent_games_entry(games: serde_json::Value) -> FeedEntry {
+    feed_entry(
+        "recent_games",
+        "recent-games",
+        serde_json::json!({ "session_count": 0, "total_min": 0, "games": games }),
+    )
+}
+
+/// The tile shows hours in capitals, the launcher when the hours are unknown,
+/// "TRACKED" only for a game the sensor catalogue knows, and a two-letter
+/// monogram for a game with no art. Never the name clipped into a badge.
+#[test]
+fn recent_games_tiles_read_like_the_mockup() {
+    let mut h = Harness::new();
+    // A narrow window clips the right edge of the card, and clipped elements
+    // are absent from queries.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![recent_games_entry(serde_json::json!([
+            { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam" },
+            { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 0, "launcher": "epic" },
+            { "game_id": "steam-4999999", "game_name": "Night Stones", "minutes": 756 }
+        ]))]),
+    });
+    let texts = drawn_texts(&h);
+    for want in ["4,167 H", "EPIC", "12.6 H", "ZU", "NS", "RECENT GAMES"] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
+    assert_eq!(
+        texts.iter().filter(|t| t.as_str() == "TRACKED").count(),
+        1,
+        "only the catalogue game is tracked: {texts:?}"
+    );
+    assert!(
+        !texts.iter().any(|t| t == "From this PC"),
+        "nothing is installed here: {texts:?}"
+    );
+}
+
+/// When every tile is installed on this device the header note reads
+/// "From this PC" instead of the sessions line.
+#[test]
+fn recent_games_header_says_from_this_pc_when_all_tiles_are_installed() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.emit(Event::InstalledGames {
+        games: vec![
+            installed_game("steam-730", "Counter-Strike 2", false),
+            installed_game("epic-rl", "Rocket League", false),
+        ],
+    });
+    let games = serde_json::json!([
+        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 },
+        { "game_id": "epic-rl", "game_name": "Rocket League", "minutes": 0 }
+    ]);
+    let mut entry = recent_games_entry(games);
+    entry.data["session_count"] = serde_json::json!(14);
+    entry.data["total_min"] = serde_json::json!(1860);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![entry]),
+    });
+    assert_eq!(first_card(&h).subtitle.as_str(), "From this PC");
+
+    // One tile that is not installed brings the sessions line back.
+    let games = serde_json::json!([
+        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 },
+        { "game_id": "valorant", "game_name": "Valorant", "minutes": 60 }
+    ]);
+    let mut entry = recent_games_entry(games);
+    entry.data["session_count"] = serde_json::json!(14);
+    entry.data["total_min"] = serde_json::json!(1860);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![entry]),
+    });
+    assert_eq!(
+        first_card(&h).subtitle.as_str(),
+        "14 sessions, 31 h this week"
+    );
+}
+
 /// App with one crew of `members` people, as the crew list reports it.
 fn app_with_crew_of(h: &mut Harness, members: i32) {
     // The default test window is 800 px wide, which leaves the feed too narrow

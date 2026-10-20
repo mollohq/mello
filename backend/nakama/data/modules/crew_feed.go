@@ -78,10 +78,13 @@ type FeedEntry struct {
 // Minutes is the lifetime playtime from the members' library documents when
 // one has it, else the minutes of the sessions in the window. LastPlayed is Unix
 // milliseconds. MemberIDs are the members who have the game installed or
-// played it in the window.
+// played it in the window. Launcher is the launcher prefix of the library
+// entry ("steam", "epic", "gog"), absent for a game only seen in sessions. The
+// client shows it when no playtime is known.
 type RecentGameTile struct {
 	GameID     string   `json:"game_id"`
 	GameName   string   `json:"game_name"`
+	Launcher   string   `json:"launcher,omitempty"`
 	Minutes    int      `json:"minutes"`
 	LastPlayed int64    `json:"last_played,omitempty"`
 	MemberIDs  []string `json:"member_ids,omitempty"`
@@ -375,6 +378,7 @@ type recentGameAgg struct {
 	libraryTs      int64 // Unix milliseconds
 	libraryName    string
 	libraryID      string
+	launcher       string
 	members        map[string]bool
 	hasLibraryMins bool
 }
@@ -490,6 +494,9 @@ func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, 
 			if g.libraryID == "" {
 				g.libraryID = lg.GameID
 			}
+			if g.launcher == "" {
+				g.launcher = lg.Launcher
+			}
 			g.members[userID] = true
 			if lg.PlaytimeMin != nil && *lg.PlaytimeMin > 0 {
 				g.libraryMin += *lg.PlaytimeMin
@@ -536,7 +543,7 @@ func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, 
 			members = members[:feedRecentGamesMaxPips]
 		}
 		tiles = append(tiles, RecentGameTile{
-			GameID: id, GameName: name, Minutes: minutes,
+			GameID: id, GameName: name, Launcher: g.launcher, Minutes: minutes,
 			LastPlayed: lastPlayed, MemberIDs: members,
 		})
 	}

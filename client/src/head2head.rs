@@ -299,7 +299,7 @@ pub struct Model {
 }
 
 /// A number with thousands separators: 4167 -> "4,167".
-fn grouped(n: i64) -> String {
+pub(crate) fn grouped(n: i64) -> String {
     let digits = n.abs().to_string();
     let mut out = String::new();
     for (i, c) in digits.chars().enumerate() {

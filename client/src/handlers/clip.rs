@@ -761,40 +761,99 @@ fn recent_games_header(session_count: i64, total_min: i64) -> String {
 }
 
 /// Tiles for the recent games card, keyed by game id, from the server's
-/// `games` array. The art is the runtime game icon when cached, else the
-/// monogram. The capsule art source is a later task.
-fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecentGameTile> {
-    data.get("games")
+/// `games` array, and whether every tile is installed on this device.
+///
+/// Art ladder: the runtime icon (cached or crew-shared), else the Steam header
+/// art on this disk, else the monogram. Nothing leaves the device. The log
+/// carries counts only.
+fn extract_recent_game_tiles(
+    ctx: &AppContext,
+    data: &serde_json::Value,
+) -> (Vec<RecentGameTile>, bool) {
+    let installed = ctx.installed_games.borrow();
+    let installed_ids: std::collections::HashSet<String> =
+        installed.iter().map(|g| g.game_id.clone()).collect();
+    let installed_names: std::collections::HashSet<String> = installed
+        .iter()
+        .map(|g| g.name.trim().to_lowercase())
+        .collect();
+    drop(installed);
+
+    let rows = data
+        .get("games")
         .and_then(|v| v.as_array())
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| {
-                    let game_name = row.get("game_name")?.as_str()?;
-                    let wire_id = row.get("game_id").and_then(|v| v.as_str()).unwrap_or("");
-                    let minutes = row.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
-                    let (game_id, short_name, color_hex) =
-                        resolve_game_meta(ctx, wire_id, game_name);
-                    let (game_icon, has_icon) =
-                        match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
-                            Some(img) => (img, true),
-                            None => (slint::Image::default(), false),
-                        };
-                    Some(RecentGameTile {
-                        game_id: game_id.into(),
-                        game_name: game_name.into(),
-                        short_name: short_name.into(),
-                        game_color: slint::Color::from_argb_encoded(super::game::parse_hex_color(
-                            color_hex.as_deref().unwrap_or("#2a2a30"),
-                        )),
-                        has_color: color_hex.is_some(),
-                        game_icon,
-                        has_icon,
-                        duration_human: humanize_duration_min(minutes).into(),
-                    })
-                })
-                .collect()
+        .cloned()
+        .unwrap_or_default();
+    let (mut local_art, mut tracked_count, mut installed_count) = (0, 0, 0);
+    let tiles: Vec<RecentGameTile> = rows
+        .iter()
+        .filter_map(|row| {
+            let game_name = row.get("game_name")?.as_str()?;
+            let wire_id = row.get("game_id").and_then(|v| v.as_str()).unwrap_or("");
+            let minutes = row.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
+            let wire_launcher = row.get("launcher").and_then(|v| v.as_str()).unwrap_or("");
+            let (game_id, _, _) = resolve_game_meta(ctx, wire_id, game_name);
+
+            let (game_icon, has_icon) =
+                match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
+                    Some(img) => (img, true),
+                    None => (slint::Image::default(), false),
+                };
+            // The local header is tried under the id the server sent: a
+            // launcher id (`steam-730`) is what names the Steam app.
+            let (capsule, has_capsule) = if has_icon {
+                (slint::Image::default(), false)
+            } else {
+                [wire_id, game_id.as_str()]
+                    .iter()
+                    .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
+                    .map_or((slint::Image::default(), false), |img| (img, true))
+            };
+            if has_capsule {
+                local_art += 1;
+            }
+            let tracked = mello_core::game_sensing::is_tracked_game(wire_id, game_name)
+                || mello_core::game_sensing::is_tracked_game(&game_id, game_name);
+            if tracked {
+                tracked_count += 1;
+            }
+            if crate::recent_games::is_installed(
+                wire_id,
+                game_name,
+                &installed_ids,
+                &installed_names,
+            ) || crate::recent_games::is_installed(
+                &game_id,
+                "",
+                &installed_ids,
+                &installed_names,
+            ) {
+                installed_count += 1;
+            }
+            let launcher = crate::recent_games::launcher_of(wire_id, wire_launcher);
+            Some(RecentGameTile {
+                game_id: game_id.as_str().into(),
+                game_name: game_name.into(),
+                monogram: crate::recent_games::monogram(game_name).into(),
+                hue_index: crate::recent_games::hue_index(&game_id, game_name),
+                game_icon,
+                has_icon,
+                capsule,
+                has_capsule,
+                hours: crate::recent_games::hours_label(minutes, &launcher).into(),
+                tracked,
+            })
         })
-        .unwrap_or_default()
+        .collect();
+    let all_installed = !tiles.is_empty() && installed_count == tiles.len();
+    log::info!(
+        "[recent-games] {} tile(s), {} with local art, {} tracked, {} installed",
+        tiles.len(),
+        local_art,
+        tracked_count,
+        installed_count
+    );
+    (tiles, all_installed)
 }
 
 /// Wall-time duration for game sessions; uses active time when wall time is
@@ -1023,6 +1082,11 @@ fn build_feed_card(
     } else {
         feed_type
     };
+    let (recent_games, recent_all_installed) = if is_recent_games {
+        extract_recent_game_tiles(ctx, &data)
+    } else {
+        (Vec::new(), false)
+    };
     let (title, subtitle) = if is_recent_games {
         let session_count = data
             .get("session_count")
@@ -1031,15 +1095,13 @@ fn build_feed_card(
         let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
         (
             "RECENT GAMES".to_string(),
-            recent_games_header(session_count, total_min),
+            crate::recent_games::header_note(
+                recent_all_installed,
+                recent_games_header(session_count, total_min),
+            ),
         )
     } else {
         (title, subtitle)
-    };
-    let recent_games = if is_recent_games {
-        extract_recent_game_tiles(ctx, &data)
-    } else {
-        Vec::new()
     };
     let game_verified = is_game_session
         && data

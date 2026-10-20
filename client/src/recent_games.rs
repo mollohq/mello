@@ -1,0 +1,173 @@
+//! Recent games card: the text and the art of each tile. Plan
+//! `next-gen-feed.md`, spec 22 section 3.4, mockup frame A.
+//!
+//! The pure functions here have no window, so tests need none. The handler in
+//! `handlers/clip.rs` calls them and fills the Slint structs.
+
+use std::collections::HashSet;
+
+use crate::head2head::grouped;
+
+/// Hours as the mockup writes them, uppercase: "4,167 H" from 100 hours up,
+/// one decimal below ("12.6 H"). No minutes gives the launcher name
+/// ("EPIC"), or nothing when even that is unknown.
+pub fn hours_label(minutes: i64, launcher: &str) -> String {
+    if minutes <= 0 {
+        return launcher.trim().to_uppercase();
+    }
+    let hours = minutes as f64 / 60.0;
+    if hours >= 100.0 {
+        format!("{} H", grouped(hours.round() as i64))
+    } else {
+        format!("{:.1} H", hours.max(0.1))
+    }
+}
+
+/// The launcher of a tile: the server's field, else the prefix of a launcher
+/// game id (`epic-fortnite`). A catalogue id such as `valorant` has none.
+pub fn launcher_of(game_id: &str, launcher: &str) -> String {
+    if !launcher.trim().is_empty() {
+        return launcher.trim().to_string();
+    }
+    match game_id.split_once('-') {
+        Some((p @ ("steam" | "epic" | "gog"), _)) => p.to_string(),
+        _ => String::new(),
+    }
+}
+
+/// Two letters for the fallback tile: the first letters of the first two words
+/// ("Counter-Strike 2" gives "CS"), or the first two letters of a single
+/// word. Letters and digits only. Never empty for a non-empty name.
+pub fn monogram(name: &str) -> String {
+    let words: Vec<&str> = name
+        .split(|c: char| !c.is_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .collect();
+    let letters: String = match words.as_slice() {
+        [] => String::new(),
+        [one] => one.chars().take(2).collect(),
+        [a, b, ..] => a.chars().take(1).chain(b.chars().take(1)).collect(),
+    };
+    letters.to_uppercase()
+}
+
+/// One of the five identity hues for a game, stable for the same id.
+pub fn hue_index(game_id: &str, name: &str) -> i32 {
+    let key = if game_id.is_empty() { name } else { game_id };
+    // FNV-1a: the hue must not change between runs, so no std hasher.
+    let mut h: u32 = 0x811c_9dc5;
+    for b in key.to_lowercase().bytes() {
+        h ^= u32::from(b);
+        h = h.wrapping_mul(0x0100_0193);
+    }
+    (h % 5) as i32
+}
+
+/// Whether a tile is installed on this device: its id is in the viewer's own
+/// library, or its name matches an installed game (sessions carry catalogue
+/// ids, the library carries launcher ids).
+pub fn is_installed(
+    game_id: &str,
+    name: &str,
+    installed_ids: &HashSet<String>,
+    installed_names: &HashSet<String>,
+) -> bool {
+    (!game_id.is_empty() && installed_ids.contains(game_id))
+        || (!name.is_empty() && installed_names.contains(&name.trim().to_lowercase()))
+}
+
+/// The right side of the card header: "From this PC" when every tile is
+/// installed on this device, else the sessions line the server built.
+pub fn header_note(all_installed: bool, sessions_line: String) -> String {
+    if all_installed {
+        "From this PC".to_string()
+    } else {
+        sessions_line
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn hours_read_like_the_mockup() {
+        assert_eq!(hours_label(249_008, ""), "4,150 H");
+        assert_eq!(hours_label(250_020, "steam"), "4,167 H");
+        assert_eq!(hours_label(756, ""), "12.6 H");
+        assert_eq!(hours_label(6_000, ""), "100 H");
+        assert_eq!(hours_label(5_940, ""), "99.0 H");
+        assert_eq!(hours_label(2, ""), "0.1 H");
+    }
+
+    #[test]
+    fn unknown_hours_show_the_launcher_in_capitals() {
+        assert_eq!(hours_label(0, "epic"), "EPIC");
+        assert_eq!(hours_label(0, ""), "");
+        assert_eq!(
+            hours_label(60, "epic"),
+            "1.0 H",
+            "hours win over the launcher"
+        );
+    }
+
+    #[test]
+    fn the_launcher_comes_from_the_field_or_the_id_prefix() {
+        assert_eq!(launcher_of("epic-rocketleague", ""), "epic");
+        assert_eq!(launcher_of("steam-730", ""), "steam");
+        assert_eq!(launcher_of("valorant", ""), "");
+        assert_eq!(launcher_of("valorant", "gog"), "gog");
+        assert_eq!(launcher_of("counter-strike-2", ""), "");
+    }
+
+    #[test]
+    fn the_monogram_is_two_letters_never_the_name() {
+        assert_eq!(monogram("Counter-Strike 2"), "CS");
+        assert_eq!(monogram("Night Stones"), "NS");
+        assert_eq!(monogram("Brawlhalla"), "BR");
+        assert_eq!(monogram("Rocket League"), "RL");
+        assert_eq!(monogram("X"), "X");
+        assert_eq!(monogram("  "), "");
+        assert_eq!(monogram("ärlig Öl"), "ÄÖ");
+    }
+
+    #[test]
+    fn a_game_keeps_its_hue() {
+        assert_eq!(hue_index("steam-730", "x"), hue_index("steam-730", "y"));
+        assert!((0..5).contains(&hue_index("steam-730", "")));
+        assert!((0..5).contains(&hue_index("", "Some Game")));
+        let hues: HashSet<i32> = ["a", "b", "c", "d", "e", "f", "g", "h"]
+            .iter()
+            .map(|k| hue_index(k, ""))
+            .collect();
+        assert!(hues.len() > 1, "ids spread over the hues");
+    }
+
+    #[test]
+    fn installed_matches_by_id_or_by_name() {
+        let ids: HashSet<String> = ["steam-730".to_string()].into();
+        let names: HashSet<String> = ["counter-strike 2".to_string()].into();
+        assert!(is_installed("steam-730", "", &ids, &names));
+        assert!(is_installed(
+            "counter-strike-2",
+            "Counter-Strike 2",
+            &ids,
+            &names
+        ));
+        assert!(!is_installed("valorant", "Valorant", &ids, &names));
+        assert!(!is_installed("", "", &ids, &names));
+    }
+
+    #[test]
+    fn the_header_note_is_from_this_pc_only_when_all_are_installed() {
+        assert_eq!(
+            header_note(true, "14 sessions, 31 h this week".into()),
+            "From this PC"
+        );
+        assert_eq!(
+            header_note(false, "14 sessions, 31 h this week".into()),
+            "14 sessions, 31 h this week"
+        );
+        assert_eq!(header_note(false, String::new()), "");
+    }
+}

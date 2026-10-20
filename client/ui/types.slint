@@ -102,16 +102,20 @@ export struct RecapBeltHeldRow {
 }
 
 // One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
-// game id. The icon is the runtime icon when one is cached, else the monogram.
+// game id. Art ladder: the runtime icon (server or crew), else the local
+// Steam header (`capsule`), else the two-letter `monogram` in the game's hue.
+// `hours` is "4,167 H", or the launcher ("EPIC") when the hours are unknown.
 export struct RecentGameTile {
     game-id: string,
     game-name: string,
-    short-name: string,
-    game-color: color,
-    has-color: bool,
+    monogram: string,
+    hue-index: int,
     game-icon: image,
     has-icon: bool,
-    duration-human: string,
+    capsule: image,
+    has-capsule: bool,
+    hours: string,
+    tracked: bool,
 }
 
 // One head2head title and who holds it. Display strings are pre-formatted in

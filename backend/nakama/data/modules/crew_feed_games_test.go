@@ -617,3 +617,24 @@ func TestBuildThisWeek_SnapshotFeedsRecentGamesCard(t *testing.T) {
 		t.Fatalf("entries = %+v, want a recent-games card from the snapshot", entries)
 	}
 }
+
+// The tile carries the launcher of the library entry, so the client can show
+// it when the playtime is unknown.
+func TestBuildRecentGames_TileCarriesTheLauncher(t *testing.T) {
+	epic := libGame("epic-rocketleague", "Rocket League", -1, 0)
+	epic.Launcher = "epic"
+	libs := map[string]*LibraryDoc{
+		"alice": libDoc(5_000, epic, libGame("steam-730", "Counter-Strike 2", 600, 1_760_000_000)),
+	}
+	card, ok := buildRecentGames(nil, libs)
+	if !ok {
+		t.Fatal("a snapshot alone must give a card")
+	}
+	d := recentData(t, card)
+	if got := tileByID(t, d, "epic-rocketleague").Launcher; got != "epic" {
+		t.Fatalf("launcher = %q, want epic", got)
+	}
+	if got := tileByID(t, d, "steam-730").Launcher; got != "steam" {
+		t.Fatalf("launcher = %q, want steam", got)
+	}
+}

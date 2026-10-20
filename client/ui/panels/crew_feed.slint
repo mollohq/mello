@@ -1624,50 +1624,103 @@ component GameSessionCard inherits Rectangle {
     }
 }
 
-// Recent games card. The header line carries the week's session count and
-// total time, which the Crew play rollup used to carry. Up to six tiles in two
-// columns, keyed by game id.
+// Recent games card (mockup frame A). One row per game: the art, the name in
+// Oxanium with the hours under it, and "TRACKED" at the right when the game
+// sensor knows the game. Art ladder: the runtime icon, the local Steam header,
+// then a two-letter monogram in the game's hue. The art slot is 76 px wide, the
+// shape of a Steam header (460 by 215), two corners cut.
 component RecentGameTileCell inherits Rectangle {
     in property <RecentGameTile> tile;
 
-    height: 38px;
+    height: 36px;
     background: transparent;
 
     HorizontalLayout {
-        spacing: 8px;
+        spacing: 12px;
         cross-axis-alignment: center;
 
-        GameIcon {
-            game-id: tile.game-id;
-            short-name: tile.short-name != "" ? tile.short-name :
-                        tile.game-name != "" ? tile.game-name : "GG";
-            badge-color: tile.has-color ? tile.game-color : Theme.raised;
-            runtime-icon: tile.game-icon;
-            has-runtime-icon: tile.has-icon;
-            size: 32px;
+        Rectangle {
+            width: 76px;
+            height: 36px;
+            background: transparent;
+
+            if tile.has-capsule: Rectangle {
+                width: parent.width;
+                height: parent.height;
+                clip: true;
+                Image {
+                    source: tile.capsule;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: cover;
+                }
+                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: Theme.card-bg; }
+                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: Theme.card-bg; }
+            }
+            // A square icon keeps its shape: it sits at the left of the slot.
+            if !tile.has-capsule && tile.has-icon: GameIcon {
+                x: 0px;
+                game-id: tile.game-id;
+                short-name: tile.monogram;
+                runtime-icon: tile.game-icon;
+                has-runtime-icon: true;
+                size: 36px;
+            }
+            if !tile.has-capsule && !tile.has-icon: Rectangle {
+                width: parent.width;
+                height: parent.height;
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 6px;
+                    fill: H2hHue.of(tile.hue-index);
+                }
+                Text {
+                    text: tile.monogram;
+                    width: parent.width;
+                    height: parent.height;
+                    font-family: Theme.font-display;
+                    font-size: 18px;
+                    font-weight: Theme.weight-display-bold;
+                    color: Theme.on-action;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+            }
         }
 
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
-            spacing: 1px;
+            spacing: 2px;
 
             Text {
                 font-family: Theme.font-display;
                 font-weight: Theme.weight-display;
                 text: tile.game-name;
-                font-size: 12px;
-                color: Theme.text-primary;
+                font-size: 13px;
+                color: Theme.text-value;
                 overflow: elide;
             }
-            Text {
-                font-family: Theme.font-body;
-                font-weight: Theme.weight-sentence;
-                text: tile.duration-human;
-                font-size: 11px;
-                color: Theme.text-sub;
+            if tile.hours != "": Text {
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                text: tile.hours.to-uppercase();
+                font-size: 9px;
+                letter-spacing: Theme.track-label;
+                color: Theme.text-dim;
                 overflow: elide;
             }
+        }
+
+        if tile.tracked: Text {
+            horizontal-stretch: 0;
+            text: "TRACKED";
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 8.5px;
+            letter-spacing: 1.4px;
+            color: Theme.text-value;
         }
     }
 }
@@ -1696,40 +1749,41 @@ component RecentGamesCard inherits Rectangle {
 
     VerticalLayout {
         padding: 14px;
-        spacing: 10px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 12px;
         alignment: start;
 
-        VerticalLayout {
-            spacing: 3px;
+        // Label left, note right: "From this PC", or the week's sessions line.
+        HorizontalLayout {
+            height: 16px;
+            spacing: 8px;
             Text {
                 font-family: Theme.font-label;
                 text: "RECENT GAMES";
                 font-size: 10px;
                 font-weight: Theme.weight-label;
-                color: Theme.text-sub;
+                color: Theme.text-dim;
                 letter-spacing: Theme.track-label;
+                vertical-alignment: center;
             }
             Text {
+                horizontal-stretch: 1;
                 font-weight: Theme.weight-sentence;
                 font-family: Theme.font-body;
                 text: card.subtitle;
-                font-size: 12px;
-                color: Theme.text-value;
+                font-size: 11px;
+                color: Theme.text-dim;
+                horizontal-alignment: right;
+                vertical-alignment: center;
                 overflow: elide;
             }
         }
 
-        Rectangle { height: 1px; background: Theme.card-border; }
-
-        for row in Math.ceil(card.recent-games.length / 2.0): HorizontalLayout {
-            spacing: 10px;
-            height: 38px;
-            for col in 2: RecentGameTileCell {
-                property <int> idx: row * 2 + col;
-                horizontal-stretch: 1;
-                visible: idx < card.recent-games.length;
-                tile: idx < card.recent-games.length ? card.recent-games[idx] : {};
-            }
+        for tile[i] in card.recent-games: RecentGameTileCell {
+            visible: i < 3;
+            height: i < 3 ? 36px : 0px;
+            tile: tile;
         }
     }
 }
@@ -2901,12 +2955,12 @@ export component Preview inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "14 sessions, 31 h this week",
                 recent-games: [
-                    { game-id: "valorant", game-name: "Valorant", short-name: "VAL", duration-human: "9h 40m" },
-                    { game-id: "counter-strike-2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "7h 5m", game-color: #DE9B35, has-color: true },
-                    { game-id: "rocket-league", game-name: "Rocket League", short-name: "RL", duration-human: "6h 20m" },
-                    { game-id: "minecraft", game-name: "Minecraft", short-name: "MC", duration-human: "4h 15m" },
-                    { game-id: "fall-guys", game-name: "Fall Guys", short-name: "FG", duration-human: "2h 50m" },
-                    { game-id: "apex", game-name: "Apex Legends", short-name: "APX", duration-human: "50m" },
+                    { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 1, hours: "9H 40M" },
+                    { game-id: "counter-strike-2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 1, hours: "7H 5M" },
+                    { game-id: "rocket-league", game-name: "Rocket League", monogram: "RL", hue-index: 0, hours: "6H 20M" },
+                    { game-id: "minecraft", game-name: "Minecraft", monogram: "MI", hue-index: 3, hours: "4H 15M" },
+                    { game-id: "fall-guys", game-name: "Fall Guys", monogram: "FG", hue-index: 1, hours: "2H 50M" },
+                    { game-id: "apex", game-name: "Apex Legends", monogram: "AL", hue-index: 0, hours: "50M" },
                 ],
             },
             {
@@ -3124,9 +3178,9 @@ export component PreviewFeedNewCrew inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "4,167 h" },
-                    { game-id: "ns", game-name: "Night Stones", short-name: "NS", duration-human: "12.6 h" },
-                    { game-id: "rl", game-name: "Rocket League", short-name: "RL", duration-human: "" },
+                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
+                    { game-id: "ns", game-name: "Night Stones", monogram: "NS", hue-index: 0, hours: "12.6 H" },
+                    { game-id: "rl", game-name: "Rocket League", monogram: "RL", hue-index: 2, hours: "" },
                 ],
             },
         ];
@@ -3178,7 +3232,7 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "1 session, 1 h this week",
                 recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "1h 25m" },
+                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "1H 25M" },
                 ],
             },
         ];
@@ -3283,7 +3337,7 @@ export component PreviewFeedLiveStreamSolo inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", short-name: "CS2", duration-human: "4,167 h" },
+                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
                 ],
             },
         ];
