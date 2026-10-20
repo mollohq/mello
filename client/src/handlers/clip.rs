@@ -1101,6 +1101,7 @@ fn build_feed_card(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let wire_game_id = game_id.clone();
     let (game_id, game_short_name, game_color_hex) = resolve_game_meta(ctx, &game_id, &game);
     let game_has_color = game_color_hex.is_some();
     let game_color = slint::Color::from_argb_encoded(super::game::parse_hex_color(
@@ -1112,6 +1113,18 @@ fn build_feed_card(
         Some(img) => (img, true),
         None => (slint::Image::default(), false),
     };
+    // The rest of the tile ladder, as in the recent games card: the local
+    // Steam header under the id the server sent, then the monogram.
+    let (game_capsule, game_has_capsule) = if game_has_icon {
+        (slint::Image::default(), false)
+    } else {
+        [wire_game_id.as_str(), game_id.as_str()]
+            .iter()
+            .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
+            .map_or((slint::Image::default(), false), |img| (img, true))
+    };
+    let game_monogram = crate::recent_games::monogram(&game);
+    let game_hue_index = crate::recent_games::hue_index(&game_id, &game);
 
     let clip_path = data
         .get("media_url")
@@ -1403,6 +1416,10 @@ fn build_feed_card(
         game_has_color,
         game_icon,
         game_has_icon,
+        game_capsule,
+        game_has_capsule,
+        game_monogram: game_monogram.into(),
+        game_hue_index,
         session_kind: session_kind.into(),
         duration_human: duration_human.into(),
         peak_count,

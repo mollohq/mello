@@ -6681,3 +6681,39 @@ fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
         "recent games at card {at}, past the second row: {types:?}"
     );
 }
+
+/// A session card whose game has no art wears the two-letter monogram tile of
+/// the recent games card. The long name never reaches a square tile: "Brawl",
+/// "Terrar" and "Apex" were cut off there.
+#[test]
+fn a_session_card_without_art_wears_the_two_letter_monogram() {
+    for (name, mono) in [
+        ("Brawlhalla", "BR"),
+        ("Terraria", "TE"),
+        ("Apex Legends", "AL"),
+    ] {
+        let mut h = Harness::new();
+        logged_in_app(&mut h);
+        let mut feed = zero_telemetry_game_session_feed();
+        feed.sections[0].entries[0].data["game_name"] = serde_json::json!(name);
+        feed.sections[0].entries[0].data["game_id"] = serde_json::json!("custom-no-art");
+        h.emit(Event::FeedLoaded { response: feed });
+
+        let card = first_card(&h);
+        assert_eq!(card.game_monogram.as_str(), mono, "{name}");
+        assert!(
+            !card.game_has_icon && !card.game_has_capsule,
+            "{name} has no art"
+        );
+        assert_eq!(
+            card.game_monogram.as_str(),
+            crate::recent_games::monogram(name),
+            "{name}: the same monogram as the recent games card"
+        );
+        assert_eq!(
+            count_of(&h, "GameArt"),
+            1,
+            "{name}: the session card draws the shared game tile"
+        );
+    }
+}

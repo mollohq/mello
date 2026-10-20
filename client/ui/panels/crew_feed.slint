@@ -1060,6 +1060,60 @@ component RecapCard inherits Rectangle {
 // session-cards-redesign.html (Option B: game/channel-first). Typed header,
 // real avatars, humanized duration, peak stat — a card must answer "who did
 // what, for how long" at a glance.
+// The square game tile of a session card. Art ladder, as in the recent games
+// card: the server icon, then the local Steam header, then a two-letter
+// monogram in the game's hue. A long name never reaches the tile.
+component GameArt inherits Rectangle {
+    in property <FeedCardData> card;
+    in property <length> size: 36px;
+
+    width: size;
+    height: size;
+    background: transparent;
+
+    if card.game-has-icon: GameIcon {
+        game-id: card.game-id;
+        short-name: card.game-monogram;
+        runtime-icon: card.game-icon;
+        has-runtime-icon: true;
+        size: root.size;
+    }
+    if !card.game-has-icon && card.game-has-capsule: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+        Image {
+            source: card.game-capsule;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "tl"; fill: Theme.card-bg; }
+        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "br"; fill: Theme.card-bg; }
+    }
+    if !card.game-has-icon && !card.game-has-capsule: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        CutButtonShape {
+            width: parent.width;
+            height: parent.height;
+            n: max(4px, root.size * 0.22);
+            fill: H2hHue.of(card.game-hue-index);
+        }
+        Text {
+            text: card.game-monogram;
+            width: parent.width;
+            height: parent.height;
+            font-family: Theme.font-display;
+            font-size: root.size > 36px ? 16px : 14px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.on-action;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}
+
 component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
@@ -1125,15 +1179,7 @@ component SessionCard inherits Rectangle {
                     height: 40px;
                     y: (parent.height - self.height) / 2;
 
-                    GameIcon {
-                        game-id: card.game-id;
-                        short-name: card.game-short-name != "" ? card.game-short-name :
-                                    card.game-name != "" ? card.game-name : "GG";
-                        badge-color: card.game-has-color ? card.game-color : Theme.accent;
-                        runtime-icon: card.game-icon;
-                        has-runtime-icon: card.game-has-icon;
-                        size: 40px;
-                    }
+                    GameArt { card: card; size: 40px; }
                     if card.actor-has-avatar || card.actor-initials != "": UserAvatar {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
@@ -1376,15 +1422,7 @@ component GameSessionCompactBody inherits VerticalLayout {
         spacing: 10px;
         cross-axis-alignment: center;
 
-        GameIcon {
-            game-id: card.game-id;
-            short-name: card.game-short-name != "" ? card.game-short-name :
-                        card.game-name != "" ? card.game-name : "GG";
-            badge-color: game-accent;
-            runtime-icon: card.game-icon;
-            has-runtime-icon: card.game-has-icon;
-            size: quiet ? 32px : 36px;
-        }
+        GameArt { card: card; size: quiet ? 32px : 36px; }
 
         VerticalLayout {
             spacing: 2px;
@@ -1517,15 +1555,7 @@ component GameSessionCard inherits Rectangle {
 
             VerticalLayout {
                 alignment: center;
-                GameIcon {
-                    game-id: card.game-id;
-                    short-name: card.game-short-name != "" ? card.game-short-name :
-                                card.game-name != "" ? card.game-name : "GG";
-                    badge-color: game-accent;
-                    runtime-icon: card.game-icon;
-                    has-runtime-icon: card.game-has-icon;
-                    size: 40px;
-                }
+                GameArt { card: card; size: 40px; }
             }
 
             VerticalLayout {
