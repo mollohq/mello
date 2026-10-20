@@ -62,7 +62,6 @@ struct Layout {
     lead: Lead,
     start: usize,
     row2_base: usize,
-    side_recap: bool,
 }
 
 fn layout(cards: &[CardInfo], start: usize) -> Layout {
@@ -99,7 +98,6 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         lead,
         start,
         row2_base: start + consumed,
-        side_recap,
     }
 }
 
@@ -119,6 +117,7 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
 }
 
 /// The indices of the two-column slots of the cards, in the order on screen.
+#[cfg(test)]
 pub fn wide_slot_indices(cards: &[CardInfo], start: usize) -> Vec<usize> {
     wide_slots(&layout(cards, start), cards.len())
 }

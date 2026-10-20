@@ -305,6 +305,15 @@ pub struct MessagePreviewUpdate {
 // Sidebar batch push
 // ---------------------------------------------------------------------------
 
+/// Notification 116: the feed of a crew has new content. Carries the crew and
+/// the reason, never data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeedChanged {
+    pub crew_id: String,
+    #[serde(default)]
+    pub reason: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SidebarUpdate {
     pub crews: Vec<CrewSidebarState>,

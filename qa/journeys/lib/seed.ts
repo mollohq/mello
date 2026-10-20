@@ -319,13 +319,3 @@ export async function crewFeed(token: string, crewId: string): Promise<{ ms: num
   const feed = await rpc<any>(token, "crew_feed", { crew_id: crewId });
   return { ms: Date.now() - t0, feed };
 }
-
-/**
- * Add a voice channel as the crew owner. The server pushes `channel_created`
- * to every member who is online, and an open app loads the crew feed again on
- * it. Session ends and library reports push nothing, so a journey whose
- * viewers stay open uses this after seeding, as a crew mate would.
- */
-export async function addChannel(token: string, crewId: string, name: string): Promise<void> {
-  await rpc(token, "channel_create", { crew_id: crewId, name });
-}

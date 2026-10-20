@@ -5,7 +5,7 @@
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { expectFullFeed } from "./lib/stage.ts";
-import { addChannel, endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
+import { endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
 
 export default journey({
@@ -18,8 +18,9 @@ export default journey({
 
     await step("alice reports games of her own and one session, so the two libraries differ", async () => {
       // The apps have reported their own libraries by now. A report from alice
-      // replaces hers: do it after the apps. A new channel then makes both
-      // open apps load the feed again.
+      // replaces hers: do it after the apps. The server pushes "feed changed"
+      // for the library report and the session end, and both open apps load
+      // the feed again (at most once every 5 s).
       await Promise.all([alice, bob].map((a) => a.waitFor("the library report of the app", (s) => s.recent_games.tiles.length > 0, 30_000)));
       const token = await signInEmail(aliceCreds.email, aliceCreds.password);
       await reportLibrary(token, [
@@ -29,7 +30,6 @@ export default journey({
         { id: "steam-1245620", name: "Elden Ring", playtimeMin: 9_000 },
       ]);
       await endSession(token, crewId, { id: "steam-291550", name: "Brawlhalla" }, 40, 23 * 60);
-      await addChannel(token, crewId, "Squad"); // the push that makes both open apps load the feed
     });
 
     for (const app of [bob, alice]) {

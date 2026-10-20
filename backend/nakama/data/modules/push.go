@@ -268,16 +268,16 @@ func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 
 // PushFeedChanged tells the members who have the crew open that its feed
 // changed: a session ended, a library report moved the recent games or the
-// head2head titles, a clip was posted. The actor is skipped: the client that
-// made the change already reloads its own feed. The payload names the crew and
-// the reason only, never data.
-func PushFeedChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, actorID, reason string) {
+// head2head titles, a clip was posted. The actor gets it too: a second device
+// of the same user has the crew open, and the client coalesces its own reload.
+// The payload names the crew and the reason only, never data.
+func PushFeedChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, reason string) {
 	content := map[string]interface{}{
 		"type":    "feed_changed",
 		"crew_id": crewID,
 		"reason":  reason,
 	}
-	seen := map[string]bool{actorID: true}
+	seen := map[string]bool{}
 	for _, sub := range getActiveSubscribersForCrew(crewID) {
 		if seen[sub.UserID] {
 			continue
@@ -300,7 +300,7 @@ func PushFeedChangedForUser(ctx context.Context, logger runtime.Logger, nk runti
 			continue
 		}
 		if id := g.GetGroup().GetId(); id != "" {
-			PushFeedChanged(ctx, logger, nk, id, userID, reason)
+			PushFeedChanged(ctx, logger, nk, id, reason)
 		}
 	}
 }

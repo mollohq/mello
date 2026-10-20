@@ -6717,3 +6717,58 @@ fn a_session_card_without_art_wears_the_two_letter_monogram() {
         );
     }
 }
+
+/// A crew mate's session or clip makes the server push "feed changed". The UI
+/// hands it to the core, which coalesces to one reload per 5 s
+/// (`mello_core::feed_reload`). Here: every push becomes one command, and the
+/// core gate decides.
+#[test]
+fn a_feed_changed_push_goes_to_the_core_as_a_command() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    for _ in 0..3 {
+        h.emit(Event::FeedChanged {
+            crew_id: "crew-0".into(),
+        });
+    }
+    let n = h
+        .commands()
+        .iter()
+        .filter(|c| matches!(c, Command::FeedChanged { crew_id } if crew_id == "crew-0"))
+        .count();
+    assert_eq!(
+        n, 3,
+        "the gate lives in the core, one command for each push"
+    );
+}
+
+/// A crew mate joined and the feed reloaded on a push. The crew list still
+/// says one member, the head2head entry of the feed says two: the skeleton
+/// trio goes, because a real card is there.
+#[test]
+fn the_feed_member_count_hides_the_skeleton_trio_before_the_crew_list_catches_up() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let mut feed = recent_games_feed();
+    feed.sections[0].entries.insert(
+        0,
+        h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_collector",
+                "u2",
+                serde_json::json!(14),
+                "installed",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        ),
+    );
+    h.emit(Event::FeedLoaded { response: feed });
+    assert_eq!(
+        skeleton_cells(&h),
+        0,
+        "two members and a real card: no trio"
+    );
+}

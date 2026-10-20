@@ -823,6 +823,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             });
             let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
         }
+        Event::FeedChanged { crew_id } => {
+            // The core loads the feed of the active crew, at most once every
+            // 5 s, and ignores another crew.
+            let _ = ctx.cmd_tx.send(Command::FeedChanged { crew_id });
+        }
         Event::CatchupLoaded { response } => {
             log::info!(
                 "UI: catchup loaded for crew {} ({} events)",

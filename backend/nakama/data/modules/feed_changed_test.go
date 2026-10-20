@@ -67,8 +67,9 @@ func TestGameSessionEndTellsTheCrewMatesTheFeedChanged(t *testing.T) {
 	if len(got) != 1 || got[0].content["crew_id"] != "fc-crew-1" || got[0].content["reason"] != "game_session" {
 		t.Fatalf("mate got %+v", got)
 	}
-	if n := feedChangedTo("fc-actor"); len(n) != 0 {
-		t.Fatalf("the actor reloads on its own, got %+v", n)
+	// A second device of the actor has the crew open too.
+	if n := feedChangedTo("fc-actor"); len(n) != 1 {
+		t.Fatalf("the actor's own devices get it too, got %+v", n)
 	}
 }
 
@@ -110,7 +111,7 @@ func TestPostClipTellsTheCrewMatesTheFeedChanged(t *testing.T) {
 func TestFeedChangedSkipsMembersWhoDoNotHaveTheCrewOpen(t *testing.T) {
 	nk := feedChangedFixture("fc-crew-4")
 	openCrew("fc-mate", "some-other-crew")
-	PushFeedChanged(context.Background(), testLogger(), nk, "fc-crew-4", "fc-actor", "test")
+	PushFeedChanged(context.Background(), testLogger(), nk, "fc-crew-4", "test")
 	if n := feedChangedTo("fc-mate"); len(n) != 0 {
 		t.Fatalf("got %+v", n)
 	}

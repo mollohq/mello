@@ -184,6 +184,8 @@ pub struct Client {
     hidden_games: std::collections::HashSet<String>,
     /// Decides when the installed library goes to the server.
     library_reporter: crate::library_report::LibraryReporter,
+    /// Coalesces "feed changed" pushes into one feed reload per 5 s.
+    feed_reload: crate::feed_reload::FeedReloadGate,
     /// `game_session_end` reports that could not be sent, kept across restarts.
     /// Flushed when a crew becomes active (`flush_pending_session_ends`).
     pending_session_ends: tokio::sync::Mutex<crate::pending_session_ends::PendingQueue>,
@@ -368,6 +370,7 @@ impl Client {
             share_game_activity: true,
             hidden_games: std::collections::HashSet::new(),
             library_reporter: crate::library_report::LibraryReporter::new(),
+            feed_reload: crate::feed_reload::FeedReloadGate::new(),
             // Unit tests must not read or write the developer's config dir.
             pending_session_ends: tokio::sync::Mutex::new(if cfg!(test) {
                 crate::pending_session_ends::PendingQueue::open(
@@ -430,6 +433,10 @@ impl Client {
         // Sends a rate-limited speaking presence change that waited.
         let mut presence_tick = tokio::time::interval(tokio::time::Duration::from_millis(250));
         presence_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Runs the feed reload that the coalescing gate held back.
+        let mut feed_reload_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        feed_reload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             for game_event in self.drain_game_events() {
@@ -578,6 +585,14 @@ impl Client {
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
+                }
+                _ = feed_reload_tick.tick(), if self.feed_reload.has_pending() => {
+                    let _step = watchdog.step("feed_reload");
+                    if self.feed_reload.due(Instant::now()) {
+                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                            self.handle_load_crew_feed(&crew_id).await;
+                        }
+                    }
                 }
                 _ = presence_tick.tick(), if self.speaking_presence.has_pending() => {
                     let _step = watchdog.step("speaking_presence");
@@ -1195,6 +1210,15 @@ impl Client {
             }
             Command::LoadCrewFeed { crew_id } => {
                 self.handle_load_crew_feed(&crew_id).await;
+            }
+            Command::FeedChanged { crew_id } => {
+                let active = self.nakama.active_crew_id().map(String::from);
+                if self
+                    .feed_reload
+                    .changed(&crew_id, active.as_deref(), Instant::now())
+                {
+                    self.handle_load_crew_feed(&crew_id).await;
+                }
             }
 
             // --- Crew events ---

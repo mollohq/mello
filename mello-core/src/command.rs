@@ -463,6 +463,12 @@ pub enum Command {
     LoadCrewFeed {
         crew_id: String,
     },
+    /// The server pushed "feed changed" for a crew. The core loads the feed of
+    /// the active crew again, at most once every five seconds
+    /// (`feed_reload::FeedReloadGate`).
+    FeedChanged {
+        crew_id: String,
+    },
 
     // --- Crew events (event ledger) ---
     CrewCatchup {

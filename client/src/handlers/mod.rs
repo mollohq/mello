@@ -132,6 +132,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         Event::CrewStateLoaded { .. }
         | Event::SidebarUpdated { .. }
         | Event::CrewEventReceived { .. }
+        | Event::FeedChanged { .. }
         | Event::PresenceChanged { .. }
         | Event::PresenceUpdated { .. }
         | Event::MemberJoined { .. }

@@ -462,6 +462,10 @@ pub enum Event {
     SidebarUpdated {
         crews: Vec<CrewSidebarState>,
     },
+    /// The server says the feed of a crew has new content (notification 116).
+    FeedChanged {
+        crew_id: String,
+    },
     /// Priority crew event (stream_started, voice_joined, etc.).
     CrewEventReceived {
         event: CrewEvent,

@@ -14,6 +14,7 @@ pub mod crew_state;
 pub mod emoji;
 pub mod error;
 pub mod events;
+pub mod feed_reload;
 pub mod game_sensing;
 pub mod game_state;
 pub mod giphy;

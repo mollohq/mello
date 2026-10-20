@@ -341,6 +341,17 @@ pub(super) fn refresh_feed_skeletons(ctx: &AppContext) {
         .find(|c| c.id.as_str() == active)
         .map(|c| c.member_count)
         .unwrap_or(0);
+    // The feed carries the live crew size in its head2head entry. The crew
+    // list learns a new member only when the crew state loads, so a feed that
+    // reloads on a push can be ahead of it.
+    let feed_members = app
+        .get_feed_cards()
+        .iter()
+        .filter(|c| c.card_type.as_str() == "head2head")
+        .map(|c| c.head2head.member_count)
+        .max()
+        .unwrap_or(0);
+    let members = members.max(feed_members);
     let live = app.get_active_stream_cards().row_count();
     let trio = skeleton_trio_for(types.iter().map(String::as_str), live, members);
     let invite_hidden = ctx
