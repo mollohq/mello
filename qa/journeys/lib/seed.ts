@@ -27,6 +27,8 @@ export type SeedSession = {
   durationMin: number;
   /** The end of the session as a minute of the local clock (0 to 1439). */
   endLocalMin: number;
+  /** Whole days before now that the session ended (0 to 13). */
+  daysAgo: number;
 };
 
 export type SeedProfile = {
@@ -91,6 +93,8 @@ function prng(seed: number): () => number {
  * - two night owls end their sessions between 01:00 and 04:00 local;
  * - a few members play short sessions of 3 to 9 minutes (rage_quit);
  * - two members have no sessions at all (a library and nothing else);
+ * - sessions end anywhere in the last 14 days, so the daily buckets and the
+ *   14 day titles (Sampler, Locked In, Has a Life, One Trick) differ;
  * - a few members post clips.
  * `runId` only names nothing today: it is accepted so a caller passes the
  * same arguments to both functions and a later change can use it.
@@ -118,7 +122,7 @@ export function profiles(n: number, _runId: string): SeedProfile[] {
     const nightOwl = i === 1 || i === 6;
     const raging = i % 7 === 3;
     if (!noSessions) {
-      const count = int(2, 4);
+      const count = int(3, 6);
       for (let k = 0; k < count; k++) {
         const game = owned[int(0, owned.length - 1)];
         const short = raging && k < 3;
@@ -126,6 +130,7 @@ export function profiles(n: number, _runId: string): SeedProfile[] {
           game,
           durationMin: short ? int(3, 9) : int(25, 190),
           endLocalMin: nightOwl ? int(60, 240) : int(18 * 60, 23 * 60 + 30),
+          daysAgo: int(0, 13),
         });
       }
     }
@@ -211,10 +216,11 @@ export async function joinByCode(token: string, code: string): Promise<string> {
 }
 
 /**
- * `game_session_end`: the member ended a session just now, at `endLocalMin`
- * (minute of the local day) on their clock. `start_ms` and `end_ms` go along
- * as the real client sends them; the server ignores them and stamps the session
- * when it receives it.
+ * `game_session_end`: the member ended a session `daysAgo` days ago, at
+ * `endLocalMin` (minute of the local day) on their clock. `start_ms` and
+ * `end_ms` go along as the real client sends them, and the server stamps the
+ * session with them, as it does for a session that waited in the client's
+ * pending queue.
  */
 export async function endSession(
   token: string,
@@ -223,8 +229,9 @@ export async function endSession(
   durationMin: number,
   endLocalMin: number,
   sessionId = `seed-${Math.random().toString(36).slice(2)}`,
+  daysAgo = 0,
 ): Promise<void> {
-  const endMs = Date.now();
+  const endMs = Date.now() - daysAgo * 86_400_000 - 1000;
   await rpc(token, "game_session_end", {
     crew_id: crewId,
     game_name: game.name,
@@ -244,10 +251,9 @@ export async function endSession(
  * then sessions and clips. A session end can be skipped by the 60 s debounce.
  * `seedCrew` ends with one library report that recomputes the crew once.
  *
- * The server stamps a session at the time it receives it, so the sessions land
- * today. `start_ms` and `end_ms` go along as the real client sends them; the
- * server ignores them (plans/next-gen-feed.md section 5, not built). The local
- * clock comes through `tz_offset_min`.
+ * Each session carries the `start_ms` and `end_ms` of its day in the last 14,
+ * and the server stamps it with them. The local clock comes through
+ * `tz_offset_min`.
  */
 export async function seedMember(crewInviteCode: string, name: string, profile: SeedProfile, runId: string): Promise<SeededMember> {
   const token = await deviceToken(`seed-${runId}-${name}`.toLowerCase());
@@ -277,7 +283,7 @@ export async function seedMember(crewInviteCode: string, name: string, profile: 
 
   let seq = 0;
   for (const s of profile.sessions) {
-    await endSession(token, crewId, s.game, s.durationMin, s.endLocalMin, `seed-${runId}-${name}-${seq++}`.toLowerCase());
+    await endSession(token, crewId, s.game, s.durationMin, s.endLocalMin, `seed-${runId}-${name}-${seq++}`.toLowerCase(), s.daysAgo);
   }
   for (let c = 0; c < profile.clips; c++) {
     await rpc(token, "post_clip", {
