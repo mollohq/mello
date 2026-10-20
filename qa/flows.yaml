@@ -431,6 +431,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-03
+    title: "Solo crew feed: head2head wide card with own values, open seats, recent games, skeleton trio"
+    priority: P1
+    users: 1
+    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_says_from_this_pc_when_all_tiles_are_installed, new_empty_crew_shows_three_skeletons_and_no_cards]
+    journeys: [qa/journeys/feed-solo-head2head.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar
