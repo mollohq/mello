@@ -2,9 +2,9 @@
 
 import type { App } from "../../../tools/mello-driver/src/app.ts";
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
-import { onboardFromInvite, onboardWithNewCrew, type Visibility } from "./onboarding.ts";
+import { onboardFromInvite, onboardWithNewCrew, type Credentials, type Visibility } from "./onboarding.ts";
 
-export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobName: string };
+export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobName: string; aliceCreds: Credentials };
 
 /**
  * alice creates a crew and invites bob. bob opens the link on a fresh install:
@@ -12,21 +12,17 @@ export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobN
  * with the crew active.
  */
 export async function twoUsersInOneCrew(ctx: JourneyContext, visibility: Visibility = "Public"): Promise<Crew> {
-  const { runId, launch, step, expect } = ctx;
+  const { runId, launch, step } = ctx;
   const crew = `Crew ${runId}`;
   const aliceName = `alice${runId}`;
   const bobName = `bob${runId}`;
 
   const alice = await launch("alice");
   let code = "";
+  let aliceCreds: Credentials = { email: "", password: "" };
   await step("setup: alice creates a crew and reads the invite link", async () => {
-    await onboardWithNewCrew(alice, crew, aliceName, visibility);
-    await alice.click("Share invite link");
-    const m = (await alice.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
-    expect(m, "the invite modal shows a join link");
-    code = m![1];
-    await alice.click("Copy link");
-    await alice.dismiss("invite_share"); // no close button or Escape: click outside
+    aliceCreds = await onboardWithNewCrew(alice, crew, aliceName, visibility);
+    code = await readInviteCode(alice);
   });
 
   const bob = await launch("bob", `mello://join/${code}`);
@@ -38,7 +34,7 @@ export async function twoUsersInOneCrew(ctx: JourneyContext, visibility: Visibil
     await selectCrew(alice, crew);
     await selectCrew(bob, crew);
   });
-  return { alice, bob, crew, aliceName, bobName };
+  return { alice, bob, crew, aliceName, bobName, aliceCreds };
 }
 
 /**
@@ -51,4 +47,20 @@ export async function selectCrew(app: App, crew: string): Promise<void> {
   const before = (await app.state()).active_crew_id;
   await app.click(crew);
   await app.waitFor(`${crew} becomes the active crew`, (s) => s.active_crew_id !== before);
+}
+
+/**
+ * Open the invite modal of the active crew and read the join code from the
+ * link. A crew of one has the red invite on its head2head card ("Invite your
+ * crew"). Without that card the invite line under the skeleton trio has it
+ * ("Share invite link"). Both ask for the same code.
+ */
+export async function readInviteCode(app: App): Promise<string> {
+  const labels = (await app.controls()).map((c) => c.label);
+  await app.click(labels.includes("Invite your crew") ? "Invite your crew" : "Share invite link");
+  const m = (await app.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
+  if (!m) throw new Error("the invite modal shows no join link");
+  await app.click("Copy link");
+  await app.dismiss("invite_share"); // no close button or Escape: click outside
+  return m[1];
 }

@@ -296,6 +296,8 @@ struct InviteCardSnap {
     octagons: usize,
     /// The "+N" after the octagons. 0 when there is none.
     more_count: i32,
+    /// The octagons that wear an image and not initials.
+    with_avatar: usize,
 }
 
 #[derive(Serialize)]
@@ -533,11 +535,18 @@ fn read_invite_card(app: &MainWindow) -> InviteCardSnap {
             present: true,
             octagons: card.head2head.members.row_count(),
             more_count: card.head2head.more_members,
+            with_avatar: card
+                .head2head
+                .members
+                .iter()
+                .filter(|m| m.has_avatar)
+                .count(),
         },
         None => InviteCardSnap {
             present: false,
             octagons: 0,
             more_count: 0,
+            with_avatar: 0,
         },
     }
 }
@@ -756,7 +765,9 @@ fn on_ui_thread(
         }
     })
     .ok()?;
-    rx.recv_timeout(Duration::from_secs(2)).ok()
+    // A Slint MCP query holds the UI thread for as long as it walks the element
+    // tree: about 14 s for a crew of 50 members. The state port waits it out.
+    rx.recv_timeout(Duration::from_secs(30)).ok()
 }
 
 /// The controls on screen that declare `accessible-enabled: false`.
@@ -1274,7 +1285,7 @@ mod tests {
         );
         assert_eq!(
             s["invite_card"],
-            json!({"present": false, "octagons": 0, "more_count": 0})
+            json!({"present": false, "octagons": 0, "more_count": 0, "with_avatar": 0})
         );
         assert_eq!(
             s["recent_games"],

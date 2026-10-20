@@ -160,7 +160,7 @@ export type AppState = {
     pair_avatar_keys: string[];
   };
   /** The invite card of the feed. `present` is false when the feed has none. */
-  invite_card: { present: boolean; octagons: number; more_count: number };
+  invite_card: { present: boolean; octagons: number; more_count: number; with_avatar: number };
   /** The recent games card of the feed. Empty tiles when the feed has none. */
   recent_games: {
     header_note: string;

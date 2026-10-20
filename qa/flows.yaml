@@ -440,6 +440,42 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-04
+    title: "Crew feed with 2 members: one pair, three open seats, contested titles, avatars on the octagons"
+    priority: P1
+    users: 2
+    harness: [crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats, head2head_octagons_show_the_loaded_avatar_and_initials_without_one, a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster]
+    journeys: [qa/journeys/feed-stage-two.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-05
+    title: "Crew feed with 5 members: head2head without seats, the invite card with five octagons"
+    priority: P1
+    users: 1
+    harness: [crew_of_five_shows_the_cell_without_seats_and_the_invite_card]
+    journeys: [qa/journeys/feed-stage-five.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-06
+    title: "Crew feed with 20 members: three closest pairs and a +N more line, invite card with eight octagons and a +N"
+    priority: P1
+    users: 1
+    harness: [invite_card_shows_eight_members_then_a_count]
+    journeys: [qa/journeys/feed-stage-twenty.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-07
+    title: "Crew feed with 50 members: the feed loads in under 3 s and no layout breaks"
+    priority: P1
+    users: 1
+    harness: [invite_card_shows_eight_members_then_a_count]
+    journeys: [qa/journeys/feed-stage-fifty.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar
