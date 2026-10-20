@@ -348,9 +348,7 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	} else {
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
-		if recapHasContent(recap) {
-			scheduleRecapPushes(ctx, nk, logger, crewID, recap)
-		}
+		scheduleRecapPushes(ctx, nk, logger, crewID, recap)
 	}
 }
 

@@ -729,19 +729,11 @@ func decodeCardData[T any](raw interface{}) (T, bool) {
 	return d, true
 }
 
-// recapHasContent reports whether a recap shows anything: hangout minutes,
-// clips, or game results. A recap with none of these is the "0m" card.
-// fix/recap-real-activity adds isEmptyRecap with game minutes; once that is
-// merged, replace this body with !isEmptyRecap(r).
-func recapHasContent(r WeeklyRecapData) bool {
-	return !isEmptyRecap(r)
-}
-
 // cardHasContent is the one rule for whether a card may be emitted. Both
 // sections apply it before they emit a card. feedType is the feed type,
 // backendType the ledger type (stream_session for a plain stream session).
 //
-//   - recap: needs content (recapHasContent).
+//   - recap: not empty (isEmptyRecap).
 //   - session: needs reportable minutes. Zero-minute sessions never emit.
 //   - session-preview: needs at least one snapshot.
 //   - recent-games: needs a tile with minutes or with a member who has it.
@@ -752,7 +744,7 @@ func cardHasContent(feedType, backendType string, data interface{}) bool {
 	switch feedType {
 	case "recap":
 		r, ok := decodeCardData[WeeklyRecapData](data)
-		return !ok || recapHasContent(r)
+		return !ok || !isEmptyRecap(r)
 	case "session-preview":
 		d, ok := decodeCardData[StreamSessionData](data)
 		if !ok {
