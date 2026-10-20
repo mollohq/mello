@@ -136,10 +136,20 @@ type RecapBeltHeld struct {
 }
 
 type WeeklyRecapData struct {
-	CrewID            string        `json:"crew_id"`
-	WeekStart         int64         `json:"week_start"`
-	WeekEnd           int64         `json:"week_end"`
-	TotalHangoutMin   int           `json:"total_hangout_min"`
+	CrewID    string `json:"crew_id"`
+	WeekStart int64  `json:"week_start"`
+	WeekEnd   int64  `json:"week_end"`
+	// Voice plus stream minutes only (CLIPS.md 10.1). Game time is separate.
+	TotalHangoutMin int `json:"total_hangout_min"`
+	// Game session minutes, counted by reportableMinutes so the recap agrees
+	// with the Crew play card.
+	TotalGameMin int `json:"total_game_min"`
+	// TotalMin is TotalHangoutMin + TotalGameMin: the figure the card leads with.
+	// Recaps stored before this field existed have 0 here; fall back to
+	// TotalHangoutMin.
+	TotalMin int `json:"total_min"`
+	// Voice, stream and game sessions in the week.
+	SessionCount      int           `json:"session_count"`
 	TopGame           string        `json:"top_game"`
 	LongestSession    string        `json:"longest_session"`
 	LongestSessionMin int           `json:"longest_session_min"`
@@ -166,6 +176,24 @@ type WeeklyRecapData struct {
 	GeneratedAt int64            `json:"generated_at"`
 }
 
+// isEmptyRecap reports whether a recap has nothing to show: no hangout or game
+// minutes and no clips. The weekly job skips these, and the feed hides any
+// already stored.
+//
+// SessionCount is not checked. A session with zero minutes would render the
+// "0m" hero this guard exists to prevent. A week with only joins or chat adds
+// no minutes and no clips, so it is empty too. A week with clips and no
+// minutes is not empty: the card shows the clip count.
+//
+// Old recaps: recaps stored before TotalGameMin and TotalMin existed hold 0
+// there. One with game play only has TotalHangoutMin 0 and no clips, so it is
+// now hidden. This is accepted: it was the "0m" card, and its game time was
+// never stored, so it cannot be rebuilt.
+func isEmptyRecap(r WeeklyRecapData) bool {
+	return r.TotalHangoutMin == 0 && r.TotalGameMin == 0 && r.TotalMin == 0 &&
+		r.ClipCount == 0
+}
+
 // generateWeeklyRecap writes the recap of the 7 days up to now. The dev tools
 // use it. The job uses generateWeeklyRecapAt with the Monday that ends the week.
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
@@ -183,6 +211,8 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	endMs := weekEnd.UnixMilli()
 
 	var totalHangoutMin int
+	var totalGameMin int
+	sessionCount := 0
 	gameDurations := make(map[string]int)
 	actorActivity := make(map[string]int)
 	actorClips := make(map[string]int)
@@ -213,6 +243,7 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		case "voice_session":
 			var d VoiceSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
 			totalHangoutMin += d.DurationMin
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
@@ -222,6 +253,7 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		case "stream_session":
 			var d StreamSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
 			totalHangoutMin += d.DurationMin
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
@@ -231,6 +263,8 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		case "game_session":
 			var d GameSessionData
 			json.Unmarshal(dataBytes, &d)
+			sessionCount++
+			totalGameMin += reportableMinutes(d.DurationMin, d.ActiveMin)
 			gameDurations[d.GameName] += d.DurationMin
 			matches := d.Wins + d.Losses + d.Draws
 			if matches > 0 {
@@ -282,6 +316,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		WeekStart:         startMs,
 		WeekEnd:           weekEnd.UnixMilli(),
 		TotalHangoutMin:   totalHangoutMin,
+		TotalGameMin:      totalGameMin,
+		TotalMin:          totalHangoutMin + totalGameMin,
+		SessionCount:      sessionCount,
 		TopGame:           topGame,
 		LongestSession:    longestSessionDesc,
 		LongestSessionMin: longestSessionMin,
@@ -297,11 +334,14 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		GeneratedAt:       time.Now().UnixMilli(),
 	}
 
+	if isEmptyRecap(recap) {
+		logger.Debug("Weekly recap skipped for crew %s: no activity", crewID)
+		return
+	}
+
 	// Belts only join a recap that has activity. Holding titles is a standing
 	// state and must not turn an empty week into a recap with content.
-	if recapHasContent(recap) {
-		attachRecapBelts(ctx, nk, logger, crewID, &recap, startMs, weekEnd.UnixMilli())
-	}
+	attachRecapBelts(ctx, nk, logger, crewID, &recap, startMs, weekEnd.UnixMilli())
 
 	if err := AppendRecap(ctx, nk, crewID, recap); err != nil {
 		logger.Error("Failed to store weekly recap for crew %s: %v", crewID, err)

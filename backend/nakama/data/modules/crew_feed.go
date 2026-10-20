@@ -734,8 +734,7 @@ func decodeCardData[T any](raw interface{}) (T, bool) {
 // fix/recap-real-activity adds isEmptyRecap with game minutes; once that is
 // merged, replace this body with !isEmptyRecap(r).
 func recapHasContent(r WeeklyRecapData) bool {
-	return r.TotalHangoutMin > 0 || r.ClipCount > 0 ||
-		len(r.GamesPlayed) > 0 || len(r.GameRecords) > 0
+	return !isEmptyRecap(r)
 }
 
 // cardHasContent is the one rule for whether a card may be emitted. Both
@@ -1089,7 +1088,7 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
 	for _, r := range recapsDoc.Recaps {
-		if r.WeekStart == shownRecapWeekStart {
+		if r.WeekStart == shownRecapWeekStart || isEmptyRecap(r) {
 			continue
 		}
 		entries = appendEntryIfContent(entries, FeedEntry{
