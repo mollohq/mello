@@ -5,6 +5,9 @@ use crate::session;
 impl super::Client {
     /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
     pub(super) async fn on_connected(&mut self) {
+        // Every login path ends here. It may be another account than the last
+        // one, so the first scan after it sends in full.
+        self.library_reporter.reset_for_account();
         if let Err(e) = self
             .nakama
             .presence_update(&PresenceStatus::Online, None)

@@ -149,6 +149,13 @@ impl LibraryReporter {
         self.clear_pending = true;
     }
 
+    /// Logout or a login as another account. Forget what the server holds, so
+    /// the first plan after the next login sends in full even when the games
+    /// are the same. The scan stays: it describes this device, not the account.
+    pub fn reset_for_account(&mut self) {
+        self.held = Held::Unknown;
+    }
+
     /// A send failed. The next plan tries again.
     pub fn send_failed(&mut self, was_clear: bool) {
         self.held = Held::Unknown;
@@ -339,6 +346,21 @@ mod tests {
         // Logout, then login again: the server may hold another user's state.
         assert!(r.plan(true, false, &none()).is_none());
         assert!(r.plan(true, true, &none()).is_some());
+    }
+
+    #[test]
+    fn login_a_logout_login_b_sends_for_b_even_with_the_same_entries() {
+        let mut r = LibraryReporter::new();
+        r.set_scan(vec![steam("1", "A"), steam("2", "B")]);
+        assert!(r.plan(true, true, &none()).is_some(), "login A sends");
+        assert!(r.plan(true, true, &none()).is_none(), "unchanged");
+
+        // Logout and the next login happen with no plan call in between: the
+        // sender must not rely on a plan with `session_active == false`.
+        r.reset_for_account();
+        let b = r.plan(true, true, &none()).expect("login B sends");
+        assert_eq!(ids(&b), ["steam-1", "steam-2"]);
+        assert!(r.plan(true, true, &none()).is_none(), "then quiet again");
     }
 
     #[test]
