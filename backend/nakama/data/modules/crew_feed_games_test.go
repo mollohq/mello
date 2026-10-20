@@ -659,3 +659,34 @@ func TestBuildRecentGames_TileCarriesTheLauncher(t *testing.T) {
 		t.Fatalf("launcher = %q, want steam", got)
 	}
 }
+
+// The recent games card is on the first screen for every crew size: right
+// after the head2head card, ahead of the clips that fill the other slots. A
+// busy crew used to get it as the 7th entry, after the wide-slot swap pushed
+// it back.
+func TestBuildThisWeek_RecentGamesFollowsHead2headInABusyCrew(t *testing.T) {
+	now := time.Now().UnixMilli()
+	cards := make([]feedCard, 0, 40)
+	for i := 0; i < 13; i++ {
+		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
+	}
+	for i := 0; i < 16; i++ {
+		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
+	}
+	entries := buildThisWeekFull(cards, now, nil, &Head2headFeedData{UpdatedAt: now})
+	if len(entries) < 3 || entries[0].Type != "head2head" {
+		t.Fatalf("entries: %+v", entries)
+	}
+	pos := -1
+	for i, e := range entries {
+		if e.Type == "recent-games" {
+			pos = i
+		}
+		if e.Type == "clip" && e.Size == "lg" {
+			t.Fatalf("clip %s is wide", e.ID)
+		}
+	}
+	if pos < 0 || pos > 1 {
+		t.Fatalf("recent games at entry %d, want right after head2head", pos)
+	}
+}

@@ -119,6 +119,17 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
     expectFullFeed(s, expect);
   });
 
+  await step("recent games is in the first two rows and no clip is in a wide slot", async () => {
+    const s = await bob.state();
+    const types = s.feed_cards.map((c) => c.card_type);
+    const at = types.indexOf("recent-games");
+    // Plain grid: head2head, invite and one card, then one card and the wide
+    // slot (client/src/feed_grid.rs). Cards 0 to 4 are the first two rows.
+    expect(at >= 0 && at <= 4, `recent games is in the first two rows, at card ${at} of ${types.join(",")}`);
+    const wide = 4;
+    expect(types[wide] !== "clip", `no clip in the wide slot, card ${wide} is ${types[wide]}`);
+  });
+
   await step("the feed loads in under three seconds", async () => {
     const events = await bob.events();
     // From the crew list (the app knows the crew) to the last of the feed and

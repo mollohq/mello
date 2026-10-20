@@ -696,8 +696,24 @@ func promoteWideSlot(cards []feedCard, picks []int) {
 	keepClipOutOfWideSlot(cards, picks)
 }
 
+// hoistRecentGames puts the recent games card first among the fillers, so it
+// is on the first screen for every crew size, next to the hero or in the
+// second row of a plain grid. The wide-slot swap above can push a card back
+// to a late position, and clips (priority 10000) fill the slots around it. The
+// client lays the card on its slot (client/src/feed_grid.rs).
+func hoistRecentGames(cards []feedCard, picks []int) {
+	for pos, i := range picks {
+		if cards[i].feedType != "recent-games" {
+			continue
+		}
+		copy(picks[1:pos+1], picks[:pos])
+		picks[0] = i
+		return
+	}
+}
+
 // keepClipOutOfWideSlot moves a clip off the wide cell position by swapping it
-// with the nearest non-clip filler, later positions first. If every filler is a
+// with the nearest non-clip filler (not the recent games card), later positions first. If every filler is a
 // clip there is nothing to swap with and the clip stays, capped at the standard
 // size by buildThisWeek.
 func keepClipOutOfWideSlot(cards []feedCard, picks []int) {
@@ -706,7 +722,8 @@ func keepClipOutOfWideSlot(cards []feedCard, picks []int) {
 	}
 	for step := 1; step < len(picks); step++ {
 		for _, pos := range []int{feedWideFillerIdx + step, feedWideFillerIdx - step} {
-			if pos < 0 || pos >= len(picks) || cards[picks[pos]].feedType == "clip" {
+			// The recent games card keeps its place at the front.
+			if pos < 0 || pos >= len(picks) || cards[picks[pos]].feedType == "clip" || cards[picks[pos]].feedType == "recent-games" {
 				continue
 			}
 			picks[pos], picks[feedWideFillerIdx] = picks[feedWideFillerIdx], picks[pos]
@@ -986,6 +1003,7 @@ func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDo
 	}
 
 	fillers := pickFillerIndices(cards, used)
+	hoistRecentGames(cards, fillers)
 	promoteWideSlot(cards, fillers)
 	for pos, i := range fillers {
 		role := fillerRole(cards[i])
