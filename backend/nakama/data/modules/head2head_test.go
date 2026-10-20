@@ -428,14 +428,14 @@ func TestRecentDaysCapKeepsFourteen(t *testing.T) {
 func TestSessionStoresTzOffsetAndKeepsItWhenAbsent(t *testing.T) {
 	nk := newFakeGuestNk()
 	ctx := context.Background()
-	if _, _, err := UpdateUserGameStatsForSession(ctx, nk, "u1", "steam-1", 10, 5, 0, 0, 0, ip(120)); err != nil {
+	if _, _, err := UpdateUserGameStatsForSession(ctx, nk, "u1", "steam-1", 10, 5, 0, 0, 0, ip(120), time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	s, _ := readUserGameStats(ctx, nk, "u1", "steam-1")
 	if s.LastTzOffsetMin == nil || *s.LastTzOffsetMin != 120 {
 		t.Fatalf("tz: %v", s.LastTzOffsetMin)
 	}
-	if _, _, err := UpdateUserGameStatsForSession(ctx, nk, "u1", "steam-1", 10, 5, 0, 0, 0, nil); err != nil {
+	if _, _, err := UpdateUserGameStatsForSession(ctx, nk, "u1", "steam-1", 10, 5, 0, 0, 0, nil, time.Now()); err != nil {
 		t.Fatal(err)
 	}
 	s, _ = readUserGameStats(ctx, nk, "u1", "steam-1")

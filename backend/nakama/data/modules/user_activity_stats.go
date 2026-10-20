@@ -167,8 +167,15 @@ func applyActivityDelta(s *UserActivityStats, d activityDelta, now time.Time) {
 		}
 	}
 
-	// Drop what is older than the window, and keep the order by date.
-	cutoff := cutoffDate(now.UnixMilli(), activityDaysCap)
+	// Drop what is older than the window, counted back from the newest day
+	// held, so a late session does not push the window into the past.
+	newest := now.UnixMilli()
+	for _, dd := range s.Days {
+		if t, err := time.Parse("2006-01-02", dd.Date); err == nil && t.UnixMilli() > newest {
+			newest = t.UnixMilli()
+		}
+	}
+	cutoff := cutoffDate(newest, activityDaysCap)
 	kept := s.Days[:0]
 	for _, dd := range s.Days {
 		if dd.Date >= cutoff {
