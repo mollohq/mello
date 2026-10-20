@@ -159,6 +159,7 @@ func LibraryReportRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 		return "", err
 	}
 
+	changed := libraryGamesChanged(readLibraryDocs(ctx, nk, []string{userID})[userID], games)
 	doc := LibraryDoc{Games: games, UpdatedAt: time.Now().UnixMilli()}
 	data, err := json.Marshal(doc)
 	if err != nil {
@@ -180,7 +181,42 @@ func LibraryReportRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	// Derived data: a failure is logged inside and never fails the report. An
 	// empty list (sharing off) recomputes too, so the user leaves the titles.
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerLibrary)
+	// The recent games card and the head2head titles read the library. A
+	// report that changes nothing (the client repeats it on every start) does
+	// not wake the feeds of the crew.
+	if changed {
+		PushFeedChangedForUser(ctx, logger, nk, userID, "library")
+	}
 	return `{"success":true,"count":` + strconv.Itoa(len(games)) + `}`, nil
+}
+
+// libraryGamesChanged reports whether the new list differs from the stored
+// document: another game, launcher or playtime. The time stamp does not count.
+func libraryGamesChanged(prev *LibraryDoc, next []LibraryGame) bool {
+	if prev == nil {
+		return len(next) > 0
+	}
+	if len(prev.Games) != len(next) {
+		return true
+	}
+	byID := make(map[string]LibraryGame, len(prev.Games))
+	for _, g := range prev.Games {
+		byID[g.GameID] = g
+	}
+	for _, g := range next {
+		p, ok := byID[g.GameID]
+		if !ok || p.Name != g.Name || p.Launcher != g.Launcher || !equalIntPtr(p.PlaytimeMin, g.PlaytimeMin) {
+			return true
+		}
+	}
+	return false
+}
+
+func equalIntPtr(a, b *int) bool {
+	if a == nil || b == nil {
+		return a == b
+	}
+	return *a == *b
 }
 
 // readLibraryDocs reads the library documents of the given users as the

@@ -241,6 +241,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		userID, username, req.CrewID, req.ClipID, req.ClipType)
 	recordClipActivity(ctx, logger, nk, userID)
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
+	PushFeedChanged(ctx, logger, nk, req.CrewID, userID, "clip")
 
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":  true,

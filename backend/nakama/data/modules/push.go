@@ -19,6 +19,9 @@ const (
 	NotifyPresenceChange = 113
 	NotifyVoiceUpdate    = 114
 	NotifyMessagePreview = 115
+	// NotifyFeedChanged says the crew feed has new content. The client loads
+	// the feed of the active crew again, at most once every 5 s.
+	NotifyFeedChanged = 116
 )
 
 // Priority events are always pushed immediately to all subscribers.
@@ -260,6 +263,45 @@ func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 		}
 		seen[sub.UserID] = true
 		pushNotification(ctx, nk, sub.UserID, NotifyCrewEvent, content)
+	}
+}
+
+// PushFeedChanged tells the members who have the crew open that its feed
+// changed: a session ended, a library report moved the recent games or the
+// head2head titles, a clip was posted. The actor is skipped: the client that
+// made the change already reloads its own feed. The payload names the crew and
+// the reason only, never data.
+func PushFeedChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, actorID, reason string) {
+	content := map[string]interface{}{
+		"type":    "feed_changed",
+		"crew_id": crewID,
+		"reason":  reason,
+	}
+	seen := map[string]bool{actorID: true}
+	for _, sub := range getActiveSubscribersForCrew(crewID) {
+		if seen[sub.UserID] {
+			continue
+		}
+		seen[sub.UserID] = true
+		pushNotification(ctx, nk, sub.UserID, NotifyFeedChanged, content)
+	}
+}
+
+// PushFeedChangedForUser sends PushFeedChanged for every crew the user is in.
+// Never fails the caller: the feed also loads when a member opens the crew.
+func PushFeedChangedForUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID, reason string) {
+	groups, _, err := nk.UserGroupsList(ctx, userID, 100, nil, "")
+	if err != nil {
+		logger.Warn("feed_changed: crew list failed for user %s: %v", userID, err)
+		return
+	}
+	for _, g := range groups {
+		if st := g.GetState(); st != nil && st.GetValue() > 2 {
+			continue
+		}
+		if id := g.GetGroup().GetId(); id != "" {
+			PushFeedChanged(ctx, logger, nk, id, userID, reason)
+		}
 	}
 }
 

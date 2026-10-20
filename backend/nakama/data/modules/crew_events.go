@@ -975,6 +975,9 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	// Stats changed for every crew the user is in. The debounce keeps a burst
 	// of session ends to one recompute per crew per minute.
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
+	// The feed of the crew has a new session, and the recent games card and
+	// the head2head titles of every crew of the user may have moved.
+	PushFeedChangedForUser(ctx, logger, nk, userID, "game_session")
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter})
 	return string(resp), nil
 }
