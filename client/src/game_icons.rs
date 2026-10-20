@@ -50,6 +50,47 @@ pub fn resolve_or_fetch_icon(ctx: &AppContext, game_id: &str) -> Option<slint::I
     None
 }
 
+/// Local Steam header art for a game id, decoded and cached in memory. The
+/// third rung of the tile ladder: the server icon, then this, then the
+/// monogram. The file is read from the Steam cache on this disk. Nothing is
+/// fetched and nothing is uploaded.
+pub fn resolve_local_steam_art(ctx: &AppContext, game_id: &str) -> Option<slint::Image> {
+    let key = format!("steam-art:{game_id}");
+    if let Some(img) = ctx.game_icon_cache.borrow().get(&key) {
+        return Some(img.clone());
+    }
+    let path = mello_core::library::local_steam_art(game_id)?;
+    let (rgba, w, h) = decode_capsule(&path)?;
+    let img = crate::avatar::rgba_to_image(&rgba, w, h);
+    ctx.game_icon_cache.borrow_mut().insert(key, img.clone());
+    Some(img)
+}
+
+/// Widest decoded capsule. The tile draws it at 76 px, so this holds the art
+/// at 2x scale without keeping a full header in memory.
+const CAPSULE_MAX_WIDTH: u32 = 184;
+
+/// Decode a JPEG or PNG from the Steam cache to RGBA, shrunk to
+/// `CAPSULE_MAX_WIDTH` wide at most. `None` for an unreadable file.
+fn decode_capsule(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
+    let decoded = image::open(path).ok()?.to_rgba8();
+    let (w, h) = decoded.dimensions();
+    if w == 0 || h == 0 {
+        return None;
+    }
+    if w <= CAPSULE_MAX_WIDTH {
+        return Some((decoded.into_raw(), w, h));
+    }
+    let nh = ((h as u64 * CAPSULE_MAX_WIDTH as u64) / w as u64).max(1) as u32;
+    let small = image::imageops::resize(
+        &decoded,
+        CAPSULE_MAX_WIDTH,
+        nh,
+        image::imageops::FilterType::Triangle,
+    );
+    Some((small.into_raw(), CAPSULE_MAX_WIDTH, nh))
+}
+
 /// Make sure a detected game has art, extracting the executable's own icon if
 /// we have not already cached one.
 ///
@@ -157,4 +198,39 @@ pub fn extract_and_cache(
             Err(std::sync::mpsc::TryRecvError::Empty) => {}
         },
     );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn write_jpeg(path: &std::path::Path, w: u32, h: u32) {
+        let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 40, 40]));
+        img.save_with_format(path, image::ImageFormat::Jpeg)
+            .expect("write fixture jpeg");
+    }
+
+    #[test]
+    fn a_header_jpeg_decodes_and_shrinks() {
+        let dir = std::env::temp_dir().join(format!("m3llo-capsule-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let big = dir.join("header.jpg");
+        write_jpeg(&big, 460, 215);
+        let (rgba, w, h) = decode_capsule(&big).expect("decodes");
+        assert_eq!((w, h), (CAPSULE_MAX_WIDTH, 86));
+        assert_eq!(rgba.len(), (w * h * 4) as usize);
+
+        let small = dir.join("small.jpg");
+        write_jpeg(&small, 100, 47);
+        assert_eq!(
+            decode_capsule(&small).map(|(_, w, h)| (w, h)),
+            Some((100, 47))
+        );
+
+        let bad = dir.join("bad.jpg");
+        std::fs::write(&bad, b"not a jpeg").unwrap();
+        assert!(decode_capsule(&bad).is_none());
+        assert!(decode_capsule(&dir.join("missing.jpg")).is_none());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
