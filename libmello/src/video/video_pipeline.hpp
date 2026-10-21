@@ -51,6 +51,22 @@ public:
     bool start_host(const CaptureSourceDesc& source, const PipelineConfig& config, PacketCallback on_packet);
     void stop_host();
     void get_host_resolution(uint32_t& w, uint32_t& h) const;
+
+    /// The encode size for a capture size and a preset height.
+    ///
+    /// The height is the preset height, the width follows the source aspect
+    /// and is rounded to a multiple of 16. The size never goes above the
+    /// capture size. When the size is over H.264 level 4.2 (8704 macroblocks
+    /// per frame, 522240 per second), the height goes down until it fits and
+    /// `level_capped` is set. Pure, so it is testable without a GPU.
+    struct EncodeSize {
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool     level_capped = false;
+    };
+    static EncodeSize encode_size_for(uint32_t capture_w, uint32_t capture_h,
+                                      uint32_t preset_h, uint32_t fps);
+
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
     /// Evidence gathered over one observation window, used to decide whether the

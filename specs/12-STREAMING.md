@@ -317,6 +317,16 @@ waited for a frame that never came. Counted as `idle_rep_hz` in host stats.
 
 BGRA→NV12 conversion via a D3D11 compute shader. Uses a 3-slot NV12 ring buffer so the convert output doesn't alias with an in-flight encode input. Typical `convert_ms` is 0.1–0.3ms. Also handles GPU downscale when the capture resolution exceeds the target encode resolution.
 
+The encode size keeps the source aspect (`VideoPipeline::encode_size_for`):
+
+| Rule | Example |
+|---|---|
+| The height is the preset height. The width follows the source aspect, rounded to a multiple of 16. | 1920x1200 on 1080p gives 1728x1080. 1440x1080 on 720p gives 960x720. |
+| The size never goes above the capture size. | 1280x720 on 1080p stays 1280x720. |
+| Over H.264 level 4.2 (8704 macroblocks per frame, 522240 per second), the height goes down until the size fits. The host logs a warning. | 3440x1440 on 1080p60 gives 2288x960, not 2560x1080 (10880 macroblocks). |
+
+The host reports the size through `mello_stream_get_host_resolution`.
+
 ### 3.3 Encode Queue
 
 A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins). This decouples the capture callback thread from the potentially-blocking encode path.

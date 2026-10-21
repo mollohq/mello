@@ -9,6 +9,7 @@
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -176,12 +177,16 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     uint32_t cap_w = capture_->width()  & ~1u;
     uint32_t cap_h = capture_->height() & ~1u;
 
-    // If the config specifies a target resolution smaller than the capture,
-    // the color converter will downscale in the same GPU pass as BGRA→NV12.
-    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
-    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
-    encode_w_ = target_w;
-    encode_h_ = target_h;
+    // The color converter downscales in the same GPU pass as BGRA→NV12. The
+    // encode size keeps the source aspect, so the converter never stretches.
+    const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
+    if (target.level_capped) {
+        MELLO_LOG_WARN(TAG,
+            "Encode size for %ux%u at %u fps is over H.264 level 4.2; reduced to %ux%u",
+            cap_w, cap_h, config.fps, target.width, target.height);
+    }
+    encode_w_ = target.width;
+    encode_h_ = target.height;
     uint32_t enc_w = encode_w_;
     uint32_t enc_h = encode_h_;
 
@@ -260,10 +265,9 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly
     uint32_t cap_w = capture_->width()  & ~1u;
     uint32_t cap_h = capture_->height() & ~1u;
-    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
-    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
-    encode_w_ = target_w;
-    encode_h_ = target_h;
+    const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
+    encode_w_ = target.width;
+    encode_h_ = target.height;
 
     EncoderConfig enc_config{};
     enc_config.width         = encode_w_;
@@ -426,6 +430,45 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
 void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     w = encode_w_;
     h = encode_h_;
+}
+
+// H.264 level 4.2, the level every encoder backend configures.
+static constexpr uint64_t kLevel42MaxFrameMbs  = 8704;
+static constexpr uint64_t kLevel42MaxMbsPerSec = 522240;
+
+VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uint32_t capture_h,
+                                                         uint32_t preset_h, uint32_t fps) {
+    EncodeSize out{};
+    const uint32_t cap_w = capture_w & ~1u;
+    const uint32_t cap_h = capture_h & ~1u;
+    if (cap_w == 0 || cap_h == 0) return out;
+
+    // The width that keeps the source aspect at height `h`, a multiple of 16
+    // and never wider than the capture. Without a vertical scale there is no
+    // horizontal scale either.
+    auto width_for = [&](uint32_t h) -> uint32_t {
+        if (h >= cap_h) return cap_w;
+        const double exact = static_cast<double>(cap_w) * h / cap_h;
+        uint32_t w = static_cast<uint32_t>(std::lround(exact / 16.0)) * 16;
+        if (w > cap_w) w = cap_w & ~15u;
+        if (w < 16) w = std::min<uint32_t>(16, cap_w);
+        return w;
+    };
+    auto fits_level = [&](uint32_t w, uint32_t h) {
+        const uint64_t mbs = static_cast<uint64_t>((w + 15) / 16) * ((h + 15) / 16);
+        return mbs <= kLevel42MaxFrameMbs && mbs * fps <= kLevel42MaxMbsPerSec;
+    };
+
+    uint32_t h = (preset_h > 0 && preset_h < cap_h) ? (preset_h & ~1u) : cap_h;
+    uint32_t w = width_for(h);
+    while (h > 2 && !fits_level(w, h)) {
+        out.level_capped = true;
+        h -= 2;
+        w = width_for(h);
+    }
+    out.width = w;
+    out.height = h;
+    return out;
 }
 
 void VideoPipeline::request_keyframe() {

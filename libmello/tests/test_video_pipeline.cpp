@@ -506,6 +506,84 @@ TEST(FrameCadence, AStallGivesNoBurst) {
     EXPECT_LE(burst, 1) << "a stall must not be caught up";
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// Encode size. Before stage 2 each axis was clamped on its own and the
+// preprocessor stretched the source to it: 3440x1440 on the 1080p preset was
+// encoded at 1920x1080, a squashed picture.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+double aspect(uint32_t w, uint32_t h) { return static_cast<double>(w) / h; }
+} // namespace
+
+TEST(EncodeSize, KeepsThePresetHeightAndTheSourceAspect) {
+    auto s = VideoPipeline::encode_size_for(1920, 1200, 1080, 60);
+    EXPECT_EQ(s.width, 1728u);
+    EXPECT_EQ(s.height, 1080u);
+    EXPECT_FALSE(s.level_capped);
+
+    s = VideoPipeline::encode_size_for(1440, 1080, 720, 60);  // 4:3
+    EXPECT_EQ(s.width, 960u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(1920, 1080, 720, 60);
+    EXPECT_EQ(s.width, 1280u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(2560, 1440, 1080, 60);
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+
+    s = VideoPipeline::encode_size_for(3440, 1440, 720, 60);  // ultrawide, 720p
+    EXPECT_EQ(s.width, 1728u);
+    EXPECT_EQ(s.height, 720u);
+}
+
+// 2560x1080 is 10880 macroblocks, over the 8704 of level 4.2, which every
+// encoder backend configures. The height goes down, the aspect stays.
+TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+    const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 60);
+    EXPECT_TRUE(s.level_capped);
+    EXPECT_EQ(s.width, 2288u);
+    EXPECT_EQ(s.height, 960u);
+    EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
+    const uint32_t mbs = ((s.width + 15) / 16) * ((s.height + 15) / 16);
+    EXPECT_LE(mbs, 8704u);
+    EXPECT_LE(mbs * 60u, 522240u);
+}
+
+TEST(EncodeSize, NeverUpscales) {
+    auto s = VideoPipeline::encode_size_for(1280, 720, 1080, 60);
+    EXPECT_EQ(s.width, 1280u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(1921, 1081, 1080, 60);  // odd: NV12 needs even
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+
+    s = VideoPipeline::encode_size_for(1920, 1080, 0, 60);  // no preset height
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+}
+
+TEST(EncodeSize, AWidthIsAMultipleOf16WhenScaled) {
+    for (const uint32_t cap_w : {1366u, 1600u, 1680u, 2560u, 3440u, 3840u, 5120u}) {
+        for (const uint32_t cap_h : {768u, 900u, 1050u, 1080u, 1440u, 1600u, 2160u}) {
+            for (const uint32_t preset_h : {480u, 720u, 1080u}) {
+                const auto s = VideoPipeline::encode_size_for(cap_w, cap_h, preset_h, 60);
+                if (s.height < cap_h) {
+                    EXPECT_EQ(s.width % 16, 0u) << cap_w << "x" << cap_h << " on " << preset_h;
+                    EXPECT_NEAR(aspect(s.width, s.height), aspect(cap_w, cap_h), 0.02)
+                        << cap_w << "x" << cap_h << " on " << preset_h;
+                }
+                EXPECT_LE(s.width, cap_w);
+                EXPECT_LE(s.height, cap_h);
+                EXPECT_EQ(s.height % 2, 0u);
+            }
+        }
+    }
+}
+
 // Idle keepalive: a quiet capture still needs video, or a viewer who joins a
 // static stream waits for a keyframe that never comes.
 TEST(IdleKeepalive, NothingToRepeatBeforeTheFirstFrame) {
