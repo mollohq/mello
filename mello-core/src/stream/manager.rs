@@ -160,6 +160,13 @@ const VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS: u64 = 500;
 const FEEDBACK_POLL_INTERVAL_MS: u64 = 10;
 const REMB_STALE_SECS: u64 = 3;
 const REMB_INCREASE_MAX_PER_SEC: f32 = 0.05;
+/// At most one encoder bitrate increase per window. A decrease over the dead
+/// band applies at once. REMB arrives on a 10 ms poll, and each encoder
+/// reconfigure costs the encoder control path, so per-tick changes are not
+/// wanted.
+const BITRATE_CHANGE_MIN_INTERVAL: Duration = Duration::from_millis(250);
+/// A target within this fraction of the current bitrate changes nothing.
+const BITRATE_DEAD_BAND_PERCENT: u64 = 5;
 
 #[derive(Clone, Copy)]
 struct ViewerRembState {
@@ -320,6 +327,9 @@ pub struct StreamManager {
     max_bitrate_kbps: u32,
     viewer_remb: HashMap<String, ViewerRembState>,
     remb_increase_last_at: Instant,
+    /// The last encoder bitrate change. Increases wait
+    /// `BITRATE_CHANGE_MIN_INTERVAL` after it.
+    last_bitrate_change_at: Instant,
     audio_seq: AtomicU16,
     last_queue_keyframe_request: Instant,
     // Separate cooldown clocks per request class: a 2s queue-pressure
@@ -419,6 +429,7 @@ impl StreamManager {
             max_bitrate_kbps,
             viewer_remb: HashMap::new(),
             remb_increase_last_at: Instant::now(),
+            last_bitrate_change_at: Instant::now() - BITRATE_CHANGE_MIN_INTERVAL,
             config,
             input: Arc::new(InputPassthroughStub),
             video_rx,
@@ -515,6 +526,14 @@ impl StreamManager {
         Some(self.clamp_bitrate_kbps((min_bps / 1_000).max(1)))
     }
 
+    /// True when `target_kbps` differs from the current bitrate by at least
+    /// the dead band.
+    fn outside_dead_band(&self, target_kbps: u32) -> bool {
+        let current = u64::from(self.current_bitrate_kbps);
+        let diff = u64::from(target_kbps.abs_diff(self.current_bitrate_kbps));
+        diff * 100 >= current * BITRATE_DEAD_BAND_PERCENT
+    }
+
     async fn apply_remb_aggregate(&mut self, now: Instant) {
         self.expire_stale_remb(now);
         let Some(desired_kbps) = self.aggregate_remb_target_kbps(now) else {
@@ -527,13 +546,21 @@ impl StreamManager {
 
         let current_kbps = self.current_bitrate_kbps;
         if desired_kbps <= current_kbps {
-            if self.apply_bitrate_kbps(desired_kbps) {
+            // A decrease over the dead band applies at once: the viewers
+            // lose packets now. A smaller one changes nothing.
+            if self.outside_dead_band(desired_kbps) && self.apply_bitrate_kbps(desired_kbps) {
+                self.last_bitrate_change_at = now;
                 self.refresh_pacing_target().await;
             }
             self.remb_increase_last_at = now;
             return;
         }
 
+        // An increase waits for the window. The increase clock is not reset
+        // while it waits, so the allowed step grows with the wait (5 %/s).
+        if now.duration_since(self.last_bitrate_change_at) < BITRATE_CHANGE_MIN_INTERVAL {
+            return;
+        }
         let elapsed_secs = now
             .duration_since(self.remb_increase_last_at)
             .as_secs_f32()
@@ -542,7 +569,13 @@ impl StreamManager {
             .round()
             .max(1.0) as u32;
         let capped_kbps = current_kbps.saturating_add(max_step_kbps).min(desired_kbps);
+        // The last step to the preset ceiling can be smaller than the dead
+        // band; without it the stream stays up to 5 % under the ceiling.
+        if !self.outside_dead_band(capped_kbps) && capped_kbps != self.max_bitrate_kbps {
+            return;
+        }
         if self.apply_bitrate_kbps(capped_kbps) {
+            self.last_bitrate_change_at = now;
             self.refresh_pacing_target().await;
         }
         self.remb_increase_last_at = now;
@@ -1037,6 +1070,7 @@ impl StreamManager {
             // viewer starts at full quality. Distinct from stale-REMB hold:
             // an empty map after an explicit leave is real, not packet loss.
             if self.apply_bitrate_kbps(self.max_bitrate_kbps) {
+                self.last_bitrate_change_at = Instant::now();
                 self.refresh_pacing_target().await;
             }
             return;
@@ -2062,6 +2096,112 @@ mod tests {
         rt.block_on(mgr.apply_remb_aggregate(now));
 
         assert_eq!(mgr.current_bitrate_kbps, 3_150);
+        std::mem::forget(mgr);
+    }
+
+    fn remb_test_manager(sink: Arc<FakeSink>) -> StreamManager {
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink,
+            config,
+            video_rx,
+            audio_rx,
+        )
+    }
+
+    fn set_remb(mgr: &mut StreamManager, bitrate_bps: u32, at: Instant) {
+        mgr.viewer_remb.insert(
+            "viewer".to_string(),
+            ViewerRembState {
+                bitrate_bps,
+                updated_at: at,
+            },
+        );
+    }
+
+    /// REMB arrives on the 10 ms feedback poll. The encoder used to get a
+    /// new bitrate on every poll during a ramp (up to 100 per second).
+    #[test]
+    fn remb_ramp_changes_the_encoder_at_most_once_per_250_ms() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let start = Instant::now();
+        let mut changes: Vec<(Duration, u32, u32)> = Vec::new();
+        for tick in 0..=300u64 {
+            let now = start + Duration::from_millis(tick * 10);
+            set_remb(&mut mgr, 8_000_000, now);
+            let before = mgr.current_bitrate_kbps;
+            rt.block_on(mgr.apply_remb_aggregate(now));
+            if mgr.current_bitrate_kbps != before {
+                changes.push((now - start, before, mgr.current_bitrate_kbps));
+            }
+        }
+
+        assert!(
+            mgr.current_bitrate_kbps > 3_000,
+            "the ramp must still go up: {changes:?}"
+        );
+        assert!(
+            changes.len() <= 12,
+            "{} encoder changes in 3 s: {changes:?}",
+            changes.len()
+        );
+        for pair in changes.windows(2) {
+            assert!(
+                pair[1].0 - pair[0].0 >= Duration::from_millis(250),
+                "two changes under 250 ms apart: {changes:?}"
+            );
+        }
+        for (_, before, after) in &changes {
+            assert!(
+                u64::from(after - before) * 100 >= u64::from(*before) * 5
+                    || *after == mgr.max_bitrate_kbps,
+                "a change inside the 5 % dead band: {changes:?}"
+            );
+        }
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn remb_decrease_inside_the_dead_band_changes_nothing() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let now = Instant::now();
+        set_remb(&mut mgr, 2_900_000, now);
+
+        rt.block_on(mgr.apply_remb_aggregate(now));
+
+        assert_eq!(mgr.current_bitrate_kbps, 3_000);
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn remb_decrease_over_the_dead_band_applies_right_after_an_increase() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let now = Instant::now();
+        mgr.last_bitrate_change_at = now;
+        set_remb(&mut mgr, 2_000_000, now);
+
+        rt.block_on(mgr.apply_remb_aggregate(now));
+
+        assert_eq!(mgr.current_bitrate_kbps, 2_000);
         std::mem::forget(mgr);
     }
 
