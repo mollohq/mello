@@ -164,6 +164,19 @@ impl Sfu {
         ))
     }
 
+    /// The process handle, for the load guard (`load.rs`).
+    pub fn raw_handle(&self) -> *mut std::ffi::c_void {
+        #[cfg(windows)]
+        {
+            use std::os::windows::io::AsRawHandle;
+            self.child.as_raw_handle()
+        }
+        #[cfg(not(windows))]
+        {
+            std::ptr::null_mut()
+        }
+    }
+
     pub fn is_running(&mut self) -> bool {
         matches!(self.child.try_wait(), Ok(None))
     }

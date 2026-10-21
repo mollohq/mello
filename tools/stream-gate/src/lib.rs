@@ -11,6 +11,7 @@
 
 pub mod clip;
 pub mod code;
+pub mod load;
 pub mod metrics;
 pub mod netmodel;
 pub mod profile;

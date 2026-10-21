@@ -192,6 +192,24 @@ pub fn mean_kbps(bins: &[u64], from_s: f64, to_s: f64) -> Option<f64> {
     Some(bytes as f64 * 8.0 / ((b - a) as f64 * 100.0))
 }
 
+/// Per metric, the median of the runs that have a value (the mean of the
+/// middle two for an even count). A metric no run has stays None.
+pub fn median_metrics(runs: &[crate::report::Metrics]) -> crate::report::Metrics {
+    let mut keys: std::collections::BTreeSet<&String> = Default::default();
+    for r in runs {
+        keys.extend(r.keys());
+    }
+    let mut out = crate::report::Metrics::new();
+    for k in keys {
+        let vals: Vec<f64> = runs
+            .iter()
+            .filter_map(|r| r.get(k).cloned().flatten())
+            .collect();
+        out.insert(k.clone(), percentile(&vals, 50.0));
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -262,6 +280,25 @@ mod tests {
         let d = delivery(&[], &clock(), 0, 5_000_000, 150.0);
         assert_eq!((d.freeze_count, d.freeze_ms), (1, 5000.0));
         assert_eq!(d.ttff_ms, None);
+    }
+
+    #[test]
+    fn the_median_of_three_runs_takes_each_metric_alone() {
+        let run = |a: Option<f64>, b: Option<f64>| {
+            let mut m = crate::report::Metrics::new();
+            m.insert("freeze_ms".into(), a);
+            m.insert("vmaf_mean".into(), b);
+            m
+        };
+        let med = median_metrics(&[
+            run(Some(9000.0), Some(90.0)),
+            run(Some(100.0), None),
+            run(Some(300.0), Some(80.0)),
+        ]);
+        assert_eq!(med["freeze_ms"], Some(300.0));
+        assert_eq!(med["vmaf_mean"], Some(85.0));
+        let none = median_metrics(&[run(None, None)]);
+        assert_eq!(none["freeze_ms"], None);
     }
 
     #[test]

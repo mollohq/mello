@@ -326,9 +326,11 @@ source is D3D11.
 ./scripts/stream-gate.sh --clip game.yuv --clip-size 1920x1080   # a real I420 clip: transport metrics only, no baseline
 ```
 
-The exit code is 1 when VMAF drops by more than 1 point on any profile,
-when freeze time rises by more than the profile's spread
-(`gates.json` `freeze_ms_max_rise`), or when a gate of `gates.json` fails.
+The exit code is 1 when VMAF drops by more than 1 point on any profile
+with a VMAF floor (more where `gates.json` `vmaf_max_drop_profile` records a
+wider measured spread), when freeze time rises by more than the profile's
+spread (`freeze_ms_max_rise`), or when a gate of `gates.json` fails. It is 2
+for a setup error and for a run on a busy machine.
 
 | Part | Where | What it does |
 |---|---|---|
@@ -371,7 +373,15 @@ Rules:
   and a real SFU, so a run varies. `--repeat N` measures the spread; the
   freeze rule allows the spread at the baseline, nothing more.
 - **Keep the machine quiet.** A build, a game or a soak on the same machine
-  moves every number. The run fails at setup when UDP port 10000 is taken.
+  moves every number (two `cargo clippy` runs of other worktrees took the
+  CPU lane's clean profile from 48 to 13-26 fps). The load guard
+  (`load.rs`) measures the CPU that other processes use during each run;
+  over 10 % of the machine, the run is INVALID (exit code 2) and nothing is
+  compared or written. The run also stops at setup when UDP port 10000 is
+  taken.
+- **Median of three on a failure.** A profile outside a gate runs twice
+  more, and the gates read the median of its three runs (`--no-confirm`
+  turns this off). A profile that passes only on a lucky run does not pass.
 - **Setup on first run**: Go (fetches go1.24.9), Python 3 (standard library
   only), network for the OpenH264 2.6.0 DLL (Cisco, into
   `libmello/third_party/openh264/`) and `vmaf.exe` 3.0.0, both checked

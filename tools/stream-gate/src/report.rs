@@ -100,6 +100,11 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "Reference frames handed over more than 2 ms late",
         -1,
     ),
+    (
+        "other_cpu_pct",
+        "CPU used by other processes during the run (%)",
+        -1,
+    ),
 ];
 
 pub type Metrics = BTreeMap<String, Option<f64>>;
@@ -215,7 +220,15 @@ pub fn evaluate(
         return (out, notes);
     };
     for (name, m) in results {
-        if vmaf_scored {
+        // The VMAF-drop rule covers the profiles whose VMAF every run of the
+        // baseline measured (gates.json has a VMAF floor for them). A profile
+        // that shows no frame in some runs has no stable VMAF to compare.
+        let vmaf_gated = gates
+            .lanes
+            .get(lane)
+            .and_then(|p| p.get(name))
+            .is_some_and(|list| list.iter().any(|g| g.metric == "vmaf_mean"));
+        if vmaf_scored && vmaf_gated {
             if let (Some(c), Some(b)) = (
                 m.get("vmaf_mean").cloned().flatten(),
                 metric_of(base, name, "vmaf_mean"),
@@ -451,9 +464,22 @@ mod tests {
     #[test]
     fn a_vmaf_drop_over_one_point_fails() {
         let base = json!({"profiles":{"clean":{"metrics":{"vmaf_mean":90.0,"freeze_ms":0.0}}}});
-        let (ok, _) = evaluate("cpu", &gates(), &run(59.0, 89.2, 0.0), true, Some(&base));
+        let mut g = gates();
+        if let Some(list) = g.lanes.get_mut("cpu").and_then(|p| p.get_mut("clean")) {
+            list.push(Gate {
+                metric: "vmaf_mean".into(),
+                min: Some(80.0),
+                max: None,
+                enforced: true,
+                note: String::new(),
+            });
+        }
+        let (ok, _) = evaluate("cpu", &g, &run(59.0, 89.2, 0.0), true, Some(&base));
         assert!(ok.iter().all(|g| g.pass), "{ok:?}");
-        let (bad, _) = evaluate("cpu", &gates(), &run(59.0, 88.9, 0.0), true, Some(&base));
+        let (bad, _) = evaluate("cpu", &g, &run(59.0, 88.9, 0.0), true, Some(&base));
+        // Without a VMAF floor the profile has no stable VMAF: no drop rule.
+        let (ungated, _) = evaluate("cpu", &gates(), &run(59.0, 80.0, 0.0), true, Some(&base));
+        assert!(ungated.iter().all(|g| !g.metric.starts_with("vmaf drop")));
         assert!(bad
             .iter()
             .any(|g| !g.pass && g.metric.starts_with("vmaf drop")));

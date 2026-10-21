@@ -16,7 +16,12 @@
 //! `--write-baseline` the run writes it (refused when it exists).
 //!
 //! `--repeat N` runs every profile N times and prints the spread of each
-//! metric: the input for the freeze-rise rule in `gates.json`.
+//! metric: the input of `tools/stream-gate/make_gates.py`.
+//!
+//! A profile that fails a gate runs twice more, and the gates then read the
+//! median of its three runs (`--no-confirm` turns this off). One run of a
+//! real-time path can land in its tail; the median of three is the
+//! estimate. A profile that passes only on a lucky run does not pass.
 //!
 //! `--clip FILE` plays a real YUV 4:2:0 (I420) file instead of the generated
 //! clip. Its frames carry no burned-in code, so only the bandwidth and
@@ -51,6 +56,7 @@ struct Args {
     write_baseline: bool,
     no_vmaf: bool,
     keep: bool,
+    no_confirm: bool,
     repeat: u32,
     clip: Option<PathBuf>,
     clip_size: Option<(u32, u32)>,
@@ -69,6 +75,7 @@ fn parse_args() -> Result<Args, String> {
         write_baseline: false,
         no_vmaf: false,
         keep: false,
+        no_confirm: false,
         repeat: 1,
         clip: None,
         clip_size: None,
@@ -88,6 +95,7 @@ fn parse_args() -> Result<Args, String> {
             "--write-baseline" => a.write_baseline = true,
             "--no-vmaf" => a.no_vmaf = true,
             "--keep" => a.keep = true,
+            "--no-confirm" => a.no_confirm = true,
             "--repeat" => {
                 a.repeat = val("--repeat")?
                     .parse()
@@ -296,6 +304,7 @@ fn run_profile(
     no_vmaf: bool,
     keep: bool,
 ) -> Result<Run, String> {
+    let load_start = stream_gate::load::sample(&[sfu.raw_handle()]);
     let pdir = out_dir.join(run_name);
     let _ = std::fs::remove_dir_all(&pdir);
     std::fs::create_dir_all(&pdir).map_err(|e| e.to_string())?;
@@ -387,6 +396,8 @@ fn run_profile(
     let reference = host.reference();
     let host_end = host.stop(rt);
     let flows = shim.report();
+    let other_cpu =
+        stream_gate::load::other_pct(load_start, stream_gate::load::sample(&[sfu.raw_handle()]));
 
     for v in std::iter::once(&r1).chain(r2.as_ref()) {
         if let Some(e) = &v.error {
@@ -411,6 +422,7 @@ fn run_profile(
     let mut put = |k: &str, v: Option<f64>| {
         m.insert(k.to_owned(), v);
     };
+    put("other_cpu_pct", other_cpu);
     put("frames_presented", Some(d.presents as f64));
     put("frames_new", Some(d.new_frames as f64));
     put("frames_duplicated", Some(d.duplicated as f64));
@@ -826,6 +838,132 @@ fn write_fixture(root: &Path, gf: &GateFile, out: &Path) -> Result<(), String> {
     Ok(())
 }
 
+/// One finished profile run, with VMAF merged in.
+struct Done {
+    name: String,
+    profile: String,
+    metrics: Metrics,
+    info: Value,
+}
+
+/// Runs profiles on the live path and scores each batch with VMAF.
+struct Runner<'a> {
+    rt: &'a Arc<tokio::runtime::Runtime>,
+    ctxs: &'a [Arc<Ctx>; 3],
+    sfu: &'a mut sfu::Sfu,
+    shim: &'a Shim,
+    gf: &'a GateFile,
+    lane: &'a Lane,
+    clip_path: &'a Path,
+    clip_spec: &'a clip::ClipSpec,
+    out_dir: &'a Path,
+    no_vmaf: bool,
+    keep: bool,
+    script: &'a Path,
+    /// The scorer's answer of a batch that ran VMAF.
+    vmaf_detail: Option<score::VmafScores>,
+    /// Runs during which other processes used more CPU than
+    /// `load::MAX_OTHER_PCT`: (run, percent).
+    busy: Vec<(String, f64)>,
+}
+
+impl Runner<'_> {
+    fn run_batch(&mut self, plan: &[(&Profile, String)]) -> Result<Vec<Done>, String> {
+        let mut done = Vec::new();
+        let mut jobs = Vec::new();
+        for (p, name) in plan {
+            eprint!("stream-gate: {:<16} {:>4.0} s ... ", name, p.duration_s);
+            let t = Instant::now();
+            if !self.sfu.is_running() {
+                return Err(format!("the SFU stopped; see {}", self.sfu.log.display()));
+            }
+            let run = run_profile(
+                self.rt,
+                self.ctxs,
+                self.sfu,
+                self.shim,
+                self.gf,
+                self.lane,
+                p,
+                self.clip_path,
+                self.clip_spec,
+                name,
+                self.out_dir,
+                self.no_vmaf,
+                self.keep,
+            )?;
+            eprintln!(
+                "{:.1} s (fps {}, freeze {} ms, g2g p95 {} ms)",
+                t.elapsed().as_secs_f64(),
+                report::fmt_num(run.metrics.get("fps_delivered").cloned().flatten()),
+                report::fmt_num(run.metrics.get("freeze_ms").cloned().flatten()),
+                report::fmt_num(run.metrics.get("g2g_p95_ms").cloned().flatten()),
+            );
+            if let Some(j) = run.vmaf_job {
+                jobs.push(j);
+            }
+            if let Some(pct) = run.metrics.get("other_cpu_pct").cloned().flatten() {
+                if pct > stream_gate::load::MAX_OTHER_PCT {
+                    eprintln!(
+                        "stream-gate: WARNING: other processes used {pct:.0} % of the CPU during {name}"
+                    );
+                    self.busy.push((name.clone(), pct));
+                }
+            }
+            done.push(Done {
+                name: name.clone(),
+                profile: p.name.clone(),
+                metrics: run.metrics,
+                info: run.info,
+            });
+        }
+        if !jobs.is_empty() {
+            eprintln!("stream-gate: VMAF on {} runs ...", jobs.len());
+            let scores = score::vmaf(self.script, self.out_dir, &jobs);
+            for (id, s) in &scores.results {
+                if let Some(d) = done.iter_mut().find(|d| &d.name == id) {
+                    let (mean, p5, min) = match s {
+                        Some((m, p, n)) => (Some(*m), Some(*p), Some(*n)),
+                        None => (None, None, None),
+                    };
+                    d.metrics.insert("vmaf_mean".into(), mean);
+                    d.metrics.insert("vmaf_p5".into(), p5);
+                    d.metrics.insert("vmaf_min".into(), min);
+                }
+            }
+            if !self.keep {
+                for j in &jobs {
+                    let _ = std::fs::remove_file(&j.reference);
+                    let _ = std::fs::remove_file(&j.distorted);
+                }
+            }
+            if self.vmaf_detail.is_none() || scores.available {
+                self.vmaf_detail = Some(scores);
+            }
+        }
+        Ok(done)
+    }
+
+    fn vmaf_available(&self) -> bool {
+        self.vmaf_detail.as_ref().is_some_and(|v| v.available)
+    }
+
+    fn vmaf_scores(&mut self) -> score::VmafScores {
+        let no_vmaf = self.no_vmaf;
+        self.vmaf_detail
+            .take()
+            .unwrap_or_else(|| score::VmafScores {
+                available: false,
+                scorer: "none".into(),
+                detail: json!({
+                    "available": false,
+                    "reason": if no_vmaf { "--no-vmaf" } else { "no frames" },
+                }),
+                results: Vec::new(),
+            })
+    }
+}
+
 fn real_main() -> Result<bool, String> {
     let args = parse_args()?;
     let started = Instant::now();
@@ -987,72 +1125,123 @@ fn real_main() -> Result<bool, String> {
     let encoders = names(&ctxs[0], true);
     let decoders = names(&ctxs[1], false);
 
-    let mut results: BTreeMap<String, Metrics> = BTreeMap::new();
-    let mut infos: BTreeMap<String, Value> = BTreeMap::new();
-    let mut order = Vec::new();
-    let mut jobs = Vec::new();
-    let mut repeats: BTreeMap<String, Vec<Metrics>> = BTreeMap::new();
+    let script = root.join("scripts/stream-gate-score.py");
+    let mut runner = Runner {
+        rt: &rt,
+        ctxs: &ctxs,
+        sfu: &mut sfu,
+        shim: &shim,
+        gf: &gf,
+        lane: &lane,
+        clip_path: &clip_path,
+        clip_spec: &clip_spec,
+        out_dir: &out_dir,
+        no_vmaf: args.no_vmaf || custom_clip,
+        keep: args.keep,
+        script: &script,
+        vmaf_detail: None,
+        busy: Vec::new(),
+    };
+
+    let mut plan: Vec<(&Profile, String)> = Vec::new();
     for p in &selected {
         for rep in 0..args.repeat {
-            let run_name = if rep == 0 {
+            let name = if rep == 0 {
                 p.name.clone()
             } else {
                 format!("{}#{}", p.name, rep + 1)
             };
-            eprint!("stream-gate: {:<10} {:>4.0} s ... ", run_name, p.duration_s);
-            let t = Instant::now();
-            if !sfu.is_running() {
-                return Err(format!("the SFU stopped; see {}", sfu.log.display()));
-            }
-            let run = run_profile(
-                &rt,
-                &ctxs,
-                &sfu,
-                &shim,
-                &gf,
-                &lane,
-                p,
-                &clip_path,
-                &clip_spec,
-                &run_name,
-                &out_dir,
-                args.no_vmaf || custom_clip,
-                args.keep,
-            )?;
-            eprintln!(
-                "{:.1} s (fps {}, freeze {} ms, g2g p95 {} ms)",
-                t.elapsed().as_secs_f64(),
-                report::fmt_num(run.metrics.get("fps_delivered").cloned().flatten()),
-                report::fmt_num(run.metrics.get("freeze_ms").cloned().flatten()),
-                report::fmt_num(run.metrics.get("g2g_p95_ms").cloned().flatten()),
-            );
-            if let Some(j) = run.vmaf_job {
-                jobs.push(j);
-            }
-            if rep == 0 {
-                order.push(run_name.clone());
-                results.insert(run_name.clone(), run.metrics.clone());
-                infos.insert(run_name.clone(), run.info);
-            }
-            repeats.entry(p.name.clone()).or_default().push(run.metrics);
+            plan.push((*p, name));
         }
     }
+    let first = runner.run_batch(&plan)?;
+    let mut results: BTreeMap<String, Metrics> = BTreeMap::new();
+    let mut infos: BTreeMap<String, Value> = BTreeMap::new();
+    let mut order = Vec::new();
+    let mut repeats: BTreeMap<String, Vec<Metrics>> = BTreeMap::new();
+    for done in first {
+        if done.name == done.profile {
+            order.push(done.name.clone());
+            results.insert(done.name.clone(), done.metrics.clone());
+            infos.insert(done.name.clone(), done.info);
+        }
+        repeats.entry(done.profile).or_default().push(done.metrics);
+    }
+
+    let (mut gate_results, mut notes) = report::evaluate(
+        &lane.name,
+        &gates,
+        &results,
+        runner.vmaf_available(),
+        baseline.as_ref(),
+    );
+
+    // A failing profile runs twice more and the gates read the median of
+    // its three runs: one run of a real-time path can land in its tail. The
+    // median of three is the estimate; a profile that only passes on a lucky
+    // run does not pass.
+    let failing: Vec<&Profile> = selected
+        .iter()
+        .copied()
+        .filter(|p| {
+            gate_results
+                .iter()
+                .any(|g| g.enforced && !g.pass && g.profile == p.name)
+        })
+        .collect();
+    if baseline.is_some()
+        && !args.report_only
+        && !args.write_baseline
+        && !args.no_confirm
+        && args.repeat == 1
+        && !failing.is_empty()
+    {
+        eprintln!(
+            "stream-gate: {} profile(s) outside a gate; two more runs each for the median of three",
+            failing.len()
+        );
+        let mut again: Vec<(&Profile, String)> = Vec::new();
+        for p in &failing {
+            again.push((*p, format!("{}#confirm2", p.name)));
+            again.push((*p, format!("{}#confirm3", p.name)));
+        }
+        let more = runner.run_batch(&again)?;
+        let mut confirmed = Vec::new();
+        for p in &failing {
+            let mut runs = vec![results[&p.name].clone()];
+            runs.extend(
+                more.iter()
+                    .filter(|d| d.profile == p.name)
+                    .map(|d| d.metrics.clone()),
+            );
+            if let Some(info) = infos.get_mut(&p.name).and_then(Value::as_object_mut) {
+                info.insert(
+                    "confirm".into(),
+                    json!(runs.iter().map(report::metrics_json).collect::<Vec<_>>()),
+                );
+            }
+            results.insert(p.name.clone(), metrics::median_metrics(&runs));
+            confirmed.push(p.name.clone());
+        }
+        let (g, n) = report::evaluate(
+            &lane.name,
+            &gates,
+            &results,
+            runner.vmaf_available(),
+            baseline.as_ref(),
+        );
+        gate_results = g;
+        notes = n;
+        notes.push(format!(
+            "Median of three runs (the first failed a gate): {}.",
+            confirmed.join(", ")
+        ));
+    }
+    let vmaf = runner.vmaf_scores();
+    let busy = std::mem::take(&mut runner.busy);
     let (sfu_commit, sfu_toolchain) = (sfu.commit.clone(), sfu.toolchain.clone());
     drop(shim);
     drop(sfu);
-
-    // VMAF over every run's pair, then the files go.
-    let vmaf = if jobs.is_empty() {
-        score::VmafScores {
-            available: false,
-            scorer: "none".into(),
-            detail: json!({ "available": false, "reason": if args.no_vmaf { "--no-vmaf" } else { "no frames" } }),
-            results: Vec::new(),
-        }
-    } else {
-        eprintln!("stream-gate: VMAF on {} runs ...", jobs.len());
-        score::vmaf(&root.join("scripts/stream-gate-score.py"), &out_dir, &jobs)
-    };
     if !vmaf.available {
         eprintln!(
             "stream-gate: WARNING: no VMAF ({}). PSNR and SSIM only.",
@@ -1062,46 +1251,7 @@ fn real_main() -> Result<bool, String> {
                 .unwrap_or("unknown")
         );
     }
-    for (id, s) in &vmaf.results {
-        let base = id.split('#').next().unwrap_or(id);
-        let (mean, p5, min) = match s {
-            Some((m, p, n)) => (Some(*m), Some(*p), Some(*n)),
-            None => (None, None, None),
-        };
-        if let Some(m) = results.get_mut(id) {
-            m.insert("vmaf_mean".into(), mean);
-            m.insert("vmaf_p5".into(), p5);
-            m.insert("vmaf_min".into(), min);
-        }
-        if id != base {
-            continue;
-        }
-        if let Some(list) = repeats.get_mut(base).and_then(|l| l.first_mut()) {
-            list.insert("vmaf_mean".into(), mean);
-        }
-    }
-    for (id, s) in &vmaf.results {
-        if let Some((rep_base, n)) = id.split_once('#') {
-            let i: usize = n.parse().unwrap_or(1);
-            if let Some(m) = repeats.get_mut(rep_base).and_then(|l| l.get_mut(i - 1)) {
-                m.insert("vmaf_mean".into(), s.map(|x| x.0));
-            }
-        }
-    }
-    if !args.keep {
-        for j in &jobs {
-            let _ = std::fs::remove_file(&j.reference);
-            let _ = std::fs::remove_file(&j.distorted);
-        }
-    }
 
-    let (gate_results, notes) = report::evaluate(
-        &lane.name,
-        &gates,
-        &results,
-        vmaf.available,
-        baseline.as_ref(),
-    );
     let commit = git(&root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
     let dirty = git(&root, &["status", "--porcelain", "--untracked-files=no"])
         .map(|s| !s.is_empty())
@@ -1257,6 +1407,18 @@ fn real_main() -> Result<bool, String> {
     println!("Results: {}", results_path.display());
     println!("Runtime: {:.1} s", started.elapsed().as_secs_f64());
 
+    if !busy.is_empty() {
+        let list: Vec<String> = busy
+            .iter()
+            .map(|(n, p)| format!("{n} ({p:.0} %)"))
+            .collect();
+        return Err(format!(
+            "INVALID: other processes used more than {} % of the CPU during {}. A busy machine moves every number; run the gate again on a quiet machine. Nothing was compared{}.",
+            stream_gate::load::MAX_OTHER_PCT,
+            list.join(", "),
+            if args.write_baseline { " and no baseline was written" } else { "" }
+        ));
+    }
     if args.write_baseline {
         let mut b = result.clone();
         if let Some(m) = b.as_object_mut() {

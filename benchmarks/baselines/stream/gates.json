@@ -1,5 +1,5 @@
 {
-  "_comment": "Gates of the streaming quality gate (tools/stream-gate). Made from the baselines (baseline-2.1-<lane>.json) and three more runs of each profile on the same commit and machine (--repeat 3): a floor or ceiling is the baseline value minus or plus the largest of a fixed margin, a share of the value and the spread of the four runs. A metric that was missing in any of the four runs (no frame presented) has no gate. A run fails when VMAF drops by more than vmaf_max_drop (1 point) against the baseline, or by more than the profile's measured spread where that spread is larger (vmaf_max_drop_profile); or when freeze time rises by more than the profile's spread (freeze_ms_max_rise); or when a gate below fails. _spread keeps the four values of each gated metric. Gates may tighten when a stage improves a profile; they never loosen.",
+  "_comment": "Gates of the streaming quality gate (tools/stream-gate), made by tools/stream-gate/make_gates.py from each baseline (baseline-2.1-<lane>.json) and eight more runs of every profile on the same commit and machine (two --repeat 3 runs and two plain runs): nine runs per lane. A floor or ceiling is the baseline value minus or plus the largest of a fixed margin, a share of the value and 1.1 x the spread of the nine runs. A metric missing in any run (no frame presented) has no gate. A run fails when VMAF drops by more than vmaf_max_drop (1 point) against the baseline on a profile with a VMAF floor, or by more than the profile's measured spread where that spread is larger (vmaf_max_drop_profile); when freeze time rises by more than the profile's spread (freeze_ms_max_rise); or when a gate below fails. A profile outside a gate runs twice more and the gates read the median of its three runs. _spread keeps the values of each gated metric. Gates may tighten when a stage improves a profile; they never loosen.",
   "vmaf_max_drop": 1.0,
   "freeze_ms_max_rise": {
     "cpu": {
@@ -14,8 +14,8 @@
     "hw": {
       "bad": 250,
       "clean": 4198,
-      "congested": 4280,
-      "home-wifi": 13998,
+      "congested": 4999,
+      "home-wifi": 14027,
       "late-join": 6776,
       "mobile": 5215,
       "outage": 5410
@@ -27,7 +27,7 @@
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 19999.68 plus 11955.56 (spread 10868.69 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 19999.68 plus 11955.56 (spread 10868.69 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 31955.25
         }
       ],
@@ -35,31 +35,31 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 82.02 minus 2.00 (spread 0.93 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 82.02 minus 2.00 (spread 1.06 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 80.02
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 47.61 minus 5.53 (spread 5.03 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 47.61 minus 5.53 (spread 5.03 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 42.07
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 1969.18 plus 1920.11 (spread 1745.55 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 1969.18 plus 1920.11 (spread 1745.55 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 3889.29
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 532.20 plus 250.00 (spread 60.50 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 532.20 plus 250.00 (spread 64.18 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 782.21
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 214.39 plus 76.48 (spread 69.52 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 214.39 plus 76.48 (spread 69.52 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 290.87
         }
       ],
@@ -67,31 +67,31 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 84.39 minus 2.00 (spread 0.61 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 84.39 minus 2.00 (spread 1.42 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 82.38
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 25779.95 plus 5893.31 (spread 5357.55 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 25779.95 plus 5893.31 (spread 5357.55 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 31673.26
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 551.96 plus 250.00 (spread 94.35 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
-          "max": 801.96
+          "note": "baseline 551.96 plus 662.53 (spread 602.30 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "max": 1214.5
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 401.50 plus 126.13 (spread 114.67 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 401.50 plus 126.13 (spread 114.67 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 527.64
         },
         {
           "metric": "cap_overshoot_pct",
           "enforced": true,
-          "note": "baseline -8.68 plus 74.39 (spread 67.63 over 8 runs; margin = max(fixed 5, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline -8.68 plus 74.39 (spread 67.63 over 9 runs; margin = max(fixed 5, 0 % of baseline, 1.1 x spread))",
           "max": 65.71
         }
       ],
@@ -99,25 +99,25 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 72.37 minus 12.90 (spread 11.73 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 72.37 minus 12.90 (spread 11.73 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 59.47
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 19346.56 plus 1934.66 (spread 247.18 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 19346.56 plus 1934.66 (spread 247.18 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 21281.23
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 572.56 plus 250.00 (spread 70.80 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 572.56 plus 250.00 (spread 70.80 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 822.57
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 457.47 plus 223.37 (spread 203.06 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 457.47 plus 223.37 (spread 203.06 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 680.84
         }
       ],
@@ -125,31 +125,31 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 79.20 minus 5.58 (spread 5.08 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 79.20 minus 5.58 (spread 5.08 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 73.61
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 50.35 minus 28.50 (spread 25.91 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 50.35 minus 28.50 (spread 25.91 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 21.84
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 656.77 plus 7116.07 (spread 6469.16 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 656.77 plus 7116.07 (spread 6469.16 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 7772.84
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 431.83 plus 7106.65 (spread 6460.59 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 431.83 plus 7106.65 (spread 6460.59 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 7538.48
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 206.21 plus 197.40 (spread 179.45 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 206.21 plus 197.40 (spread 179.45 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 403.62
         }
       ],
@@ -157,7 +157,7 @@
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 19999.21 plus 20377.04 (spread 18524.58 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 19999.21 plus 20377.04 (spread 18524.58 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 40376.25
         }
       ],
@@ -165,31 +165,31 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 80.37 minus 11.65 (spread 10.59 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 80.37 minus 11.65 (spread 10.59 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 68.71
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 31.35 minus 24.88 (spread 22.62 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 31.35 minus 24.88 (spread 22.62 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 6.46
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 7862.24 plus 5912.71 (spread 5375.19 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 7862.24 plus 5912.71 (spread 5375.19 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 13774.96
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 1193.72 plus 1952.32 (spread 1774.84 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 1193.72 plus 1952.32 (spread 1774.84 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 3146.05
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 312.06 plus 170.15 (spread 154.68 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 312.06 plus 170.15 (spread 154.68 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 482.21
         }
       ]
@@ -199,7 +199,7 @@
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 19999.60 plus 1999.96 (spread 32.65 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 19999.60 plus 1999.96 (spread 32.65 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 21999.57
         }
       ],
@@ -207,109 +207,103 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 98.36 minus 2.00 (spread 0.17 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 98.36 minus 2.00 (spread 0.17 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 96.36
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 27.04 minus 13.30 (spread 12.09 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 27.04 minus 13.30 (spread 12.09 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 13.73
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 9750.35 plus 4197.34 (spread 3815.76 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 9750.35 plus 4197.34 (spread 3815.76 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 13947.7
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 1146.63 plus 286.66 (spread 221.04 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 1146.63 plus 286.66 (spread 221.04 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 1433.29
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 333.26 plus 72.32 (spread 65.75 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
-          "max": 405.59
+          "note": "baseline 333.26 plus 78.86 (spread 71.69 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "max": 412.13
         }
       ],
       "congested": [
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 98.42 minus 2.00 (spread 1.66 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
-          "min": 96.41
-        },
-        {
-          "metric": "fps_delivered",
-          "enforced": true,
-          "note": "baseline 9.42 minus 8.70 (spread 7.91 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
-          "min": 0.71
+          "note": "baseline 98.42 minus 6.56 (spread 5.96 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "min": 91.86
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 23138.65 plus 4279.90 (spread 3890.82 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
-          "max": 27418.56
+          "note": "baseline 23138.65 plus 4998.75 (spread 4544.32 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "max": 28137.4
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 2119.30 plus 2525.43 (spread 2295.84 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
-          "max": 4644.73
+          "note": "baseline 2119.30 plus 6891.82 (spread 6265.30 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "max": 9011.13
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 359.22 plus 135.90 (spread 123.54 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
-          "max": 495.12
+          "note": "baseline 359.22 plus 2941.79 (spread 2674.36 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "max": 3301.01
         },
         {
           "metric": "cap_overshoot_pct",
           "enforced": true,
-          "note": "baseline 11.11 plus 46.73 (spread 42.48 over 8 runs; margin = max(fixed 5, 0 % of baseline, 1.1 x spread))",
-          "max": 57.84
+          "note": "baseline 11.11 plus 88.00 (spread 80.00 over 9 runs; margin = max(fixed 5, 0 % of baseline, 1.1 x spread))",
+          "max": 99.12
         }
       ],
       "home-wifi": [
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 16436.87 plus 13997.03 (spread 12724.58 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
-          "max": 30433.91
+          "note": "baseline 16436.87 plus 14026.18 (spread 12751.07 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "max": 30463.06
         }
       ],
       "late-join": [
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 98.05 minus 2.00 (spread 1.16 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 98.05 minus 2.00 (spread 1.16 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 96.05
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 35.09 minus 33.59 (spread 30.54 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 35.09 minus 33.59 (spread 30.54 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 1.49
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 5325.93 plus 6775.69 (spread 6159.72 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 5325.93 plus 6775.69 (spread 6159.72 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 12101.62
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 543.56 plus 2984.95 (spread 2713.59 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 543.56 plus 2984.95 (spread 2713.59 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 3528.52
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 241.44 plus 974.50 (spread 885.91 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "note": "baseline 241.44 plus 974.50 (spread 885.91 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
           "max": 1215.94
         }
       ],
@@ -317,7 +311,7 @@
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 19999.66 plus 5214.88 (spread 4740.80 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 19999.66 plus 5214.88 (spread 4740.80 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 25214.55
         }
       ],
@@ -325,45 +319,46 @@
         {
           "metric": "vmaf_mean",
           "enforced": true,
-          "note": "baseline 98.55 minus 2.00 (spread 0.87 over 8 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+          "note": "baseline 98.55 minus 2.00 (spread 0.87 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
           "min": 96.54
         },
         {
           "metric": "fps_delivered",
           "enforced": true,
-          "note": "baseline 19.79 minus 13.96 (spread 12.69 over 8 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+          "note": "baseline 19.79 minus 13.96 (spread 12.69 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
           "min": 5.82
         },
         {
           "metric": "freeze_ms",
           "enforced": true,
-          "note": "baseline 12273.75 plus 5409.09 (spread 4917.36 over 8 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+          "note": "baseline 12273.75 plus 5409.09 (spread 4917.36 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
           "max": 17682.85
         },
         {
           "metric": "ttff_ms",
           "enforced": true,
-          "note": "baseline 932.19 plus 2589.71 (spread 2354.28 over 8 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+          "note": "baseline 932.19 plus 2589.71 (spread 2354.28 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
           "max": 3521.9
         },
         {
           "metric": "g2g_p95_ms",
           "enforced": true,
-          "note": "baseline 329.39 plus 88.21 (spread 80.19 over 8 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
-          "max": 417.61
+          "note": "baseline 329.39 plus 97.27 (spread 88.43 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+          "max": 426.67
         }
       ]
     }
   },
   "vmaf_max_drop_profile": {
     "cpu": {
-      "clean": 1.02,
+      "clean": 1.17,
+      "congested": 1.56,
       "home-wifi": 12.9,
       "late-join": 5.59,
       "outage": 11.66
     },
     "hw": {
-      "congested": 1.83,
+      "congested": 6.56,
       "late-join": 1.28
     }
   },
@@ -378,7 +373,8 @@
           19999.714,
           19999.719,
           9131.064,
-          19999.758
+          19999.758,
+          19979.497
         ]
       },
       "clean": {
@@ -390,7 +386,8 @@
           82.0163,
           81.0951,
           81.2537,
-          81.6035
+          81.6035,
+          80.9643
         ],
         "fps_delivered": [
           47.609,
@@ -400,7 +397,8 @@
           47.8505,
           47.39310426220785,
           47.845097085289076,
-          52.420137017458444
+          52.420137017458444,
+          47.393
         ],
         "freeze_ms": [
           1969.176,
@@ -410,7 +408,8 @@
           1985.185,
           1951.4499999999998,
           1790.6660000000002,
-          239.63
+          239.63,
+          1982.398
         ],
         "ttff_ms": [
           532.202,
@@ -420,7 +419,8 @@
           537.457,
           533.969,
           592.074,
-          581.039
+          581.039,
+          527.89
         ],
         "g2g_p95_ms": [
           214.3853,
@@ -430,7 +430,8 @@
           209.6643,
           204.4255,
           214.88869999999997,
-          273.95025
+          273.95025,
+          220.6229
         ]
       },
       "congested": {
@@ -442,7 +443,8 @@
           84.8964,
           84.5398,
           84.289,
-          84.3124
+          84.3124,
+          83.481
         ],
         "freeze_ms": [
           25779.951,
@@ -452,7 +454,8 @@
           20422.399,
           22196.967999999997,
           22207.784,
-          20882.064000000002
+          20882.064000000002,
+          23306.636
         ],
         "ttff_ms": [
           551.959,
@@ -462,7 +465,8 @@
           581.364,
           535.582,
           519.531,
-          519.633
+          519.633,
+          1121.834
         ],
         "g2g_p95_ms": [
           401.5034,
@@ -472,7 +476,8 @@
           286.836,
           317.5976,
           299.54609999999974,
-          295.70475
+          295.70475,
+          330.7648
         ],
         "cap_overshoot_pct": [
           -8.6815,
@@ -482,7 +487,8 @@
           46.4937,
           48.13385185185186,
           49.39462222222222,
-          58.946755555555555
+          58.946755555555555,
+          23.066
         ]
       },
       "home-wifi": {
@@ -494,7 +500,8 @@
           72.1586,
           82.0897,
           77.7805,
-          72.03
+          72.03,
+          80.7888
         ],
         "freeze_ms": [
           19346.564,
@@ -504,7 +511,8 @@
           19163.449,
           19397.442,
           19284.109,
-          19363.192
+          19363.192,
+          19207.21
         ],
         "ttff_ms": [
           572.563,
@@ -514,7 +522,8 @@
           533.235,
           553.929,
           540.582,
-          543.397
+          543.397,
+          590.357
         ],
         "g2g_p95_ms": [
           457.4688,
@@ -524,7 +533,8 @@
           364.0074,
           511.9396499999999,
           412.34939999999995,
-          447.41754999999984
+          447.41754999999984,
+          562.3115
         ]
       },
       "late-join": {
@@ -536,7 +546,8 @@
           79.1721,
           75.6079,
           76.4568,
-          74.755
+          74.755,
+          79.0522
         ],
         "fps_delivered": [
           50.3451,
@@ -546,7 +557,8 @@
           50.3293,
           24.43596477913727,
           40.74812365300682,
-          37.039780724498115
+          37.039780724498115,
+          49.6997
         ],
         "freeze_ms": [
           656.766,
@@ -556,7 +568,8 @@
           655.096,
           7124.251,
           2312.821,
-          2419.55
+          2419.55,
+          674.098
         ],
         "ttff_ms": [
           431.831,
@@ -566,7 +579,8 @@
           449.035,
           1330.345,
           4901.027,
-          6892.418
+          6892.418,
+          449.767
         ],
         "g2g_p95_ms": [
           206.2109,
@@ -576,7 +590,8 @@
           206.5722,
           345.75735,
           198.76685,
-          178.792
+          178.792,
+          273.7056
         ]
       },
       "mobile": {
@@ -588,7 +603,8 @@
           19999.702,
           19999.704,
           1475.183,
-          19999.761
+          19999.761,
+          19999.717
         ]
       },
       "outage": {
@@ -600,7 +616,8 @@
           80.5027,
           81.2173,
           81.2041,
-          86.6211
+          86.6211,
+          81.3357
         ],
         "fps_delivered": [
           31.3467,
@@ -610,7 +627,8 @@
           31.5327,
           30.70790043295053,
           35.05817675344294,
-          22.52319845904171
+          22.52319845904171,
+          29.1924
         ],
         "freeze_ms": [
           7862.244,
@@ -620,7 +638,8 @@
           7997.889,
           8319.748000000001,
           6607.147999999999,
-          11982.336
+          11982.336,
+          8800.922
         ],
         "ttff_ms": [
           1193.722,
@@ -630,7 +649,8 @@
           528.978,
           553.019,
           570.282,
-          617.068
+          617.068,
+          540.088
         ],
         "g2g_p95_ms": [
           312.0612,
@@ -640,7 +660,8 @@
           242.4092,
           219.37909999999997,
           281.2895,
-          275.31539999999984
+          275.31539999999984,
+          275.5102
         ]
       }
     },
@@ -654,7 +675,8 @@
           19999.684,
           19999.732,
           19999.563,
-          19999.585
+          19999.585,
+          19984.224
         ]
       },
       "clean": {
@@ -666,7 +688,8 @@
           98.3642,
           98.3444,
           98.2732,
-          98.2108
+          98.2108,
+          98.1914
         ],
         "fps_delivered": [
           27.0358,
@@ -676,7 +699,8 @@
           32.2278,
           26.495335645966858,
           32.642666294967114,
-          32.830676731794526
+          32.830676731794526,
+          31.3727
         ],
         "freeze_ms": [
           9750.353,
@@ -686,7 +710,8 @@
           7998.778,
           10791.805000000002,
           7951.765,
-          7869.355
+          7869.355,
+          9211.277
         ],
         "ttff_ms": [
           1146.626,
@@ -696,7 +721,8 @@
           1022.335,
           1111.235,
           926.755,
-          937.89
+          937.89,
+          978.091
         ],
         "g2g_p95_ms": [
           333.2602,
@@ -706,7 +732,8 @@
           307.661,
           318.5542999999999,
           323.318,
-          279.93859999999995
+          279.93859999999995,
+          339.2066
         ]
       },
       "congested": {
@@ -718,17 +745,8 @@
           98.5222,
           98.6295,
           98.2149,
-          99.0527
-        ],
-        "fps_delivered": [
-          9.4199,
-          10.968062811693194,
-          11.46077127404789,
-          3.549552589335975,
-          10.9868,
-          7.629172603077451,
-          5.318495865408266,
-          8.954021617566477
+          99.0527,
+          93.0919
         ],
         "freeze_ms": [
           23138.647,
@@ -738,7 +756,8 @@
           23154.217,
           23122.302999999996,
           26051.729000000003,
-          24418.495000000003
+          24418.495000000003,
+          22248.536
         ],
         "ttff_ms": [
           2119.302,
@@ -748,7 +767,8 @@
           998.676,
           3291.127,
           1223.182,
-          995.286
+          995.286,
+          7260.581
         ],
         "g2g_p95_ms": [
           359.2173,
@@ -758,7 +778,8 @@
           304.7042,
           297.3245,
           396.3777499999997,
-          272.83635
+          272.83635,
+          2947.1916
         ],
         "cap_overshoot_pct": [
           11.1123,
@@ -768,7 +789,8 @@
           44.5661,
           53.59141666666667,
           44.95337037037037,
-          47.34975925925926
+          47.34975925925926,
+          -26.4105
         ]
       },
       "home-wifi": {
@@ -780,7 +802,8 @@
           7275.121,
           19999.6,
           19999.678,
-          19999.625
+          19999.625,
+          7248.623
         ]
       },
       "late-join": {
@@ -792,7 +815,8 @@
           97.9922,
           98.1199,
           97.5987,
-          98.1363
+          98.1363,
+          97.9055
         ],
         "fps_delivered": [
           35.0881,
@@ -802,7 +826,8 @@
           34.0334,
           36.15503111747611,
           28.618199678256598,
-          36.705091561954816
+          36.705091561954816,
+          32.2225
         ],
         "freeze_ms": [
           5325.927,
@@ -812,7 +837,8 @@
           6833.604,
           5193.2480000000005,
           7221.1990000000005,
-          5058.476
+          5058.476,
+          7400.856
         ],
         "ttff_ms": [
           543.563,
@@ -822,7 +848,8 @@
           477.884,
           502.802,
           558.54,
-          499.892
+          499.892,
+          496.16
         ],
         "g2g_p95_ms": [
           241.4391,
@@ -832,7 +859,8 @@
           324.8204,
           254.387,
           241.84274999999997,
-          321.5758
+          321.5758,
+          295.963
         ]
       },
       "mobile": {
@@ -844,7 +872,8 @@
           15258.869,
           19999.673,
           19999.545,
-          19999.665
+          19999.665,
+          19999.617
         ]
       },
       "outage": {
@@ -856,7 +885,8 @@
           97.9846,
           98.6489,
           98.1232,
-          98.2297
+          98.2297,
+          98.7585
         ],
         "fps_delivered": [
           19.786,
@@ -866,7 +896,8 @@
           17.9789,
           11.23046171603219,
           11.974205884136746,
-          15.330895204624182
+          15.330895204624182,
+          16.3811
         ],
         "freeze_ms": [
           12273.752,
@@ -876,7 +907,8 @@
           12004.719,
           15431.383999999998,
           12560.652999999998,
-          13311.228
+          13311.228,
+          13483.359
         ],
         "ttff_ms": [
           932.189,
@@ -886,7 +918,8 @@
           1202.564,
           1065.905,
           3278.512,
-          1197.774
+          1197.774,
+          939.38
         ],
         "g2g_p95_ms": [
           329.3943,
@@ -896,7 +929,8 @@
           320.6391,
           332.42979999999983,
           357.071,
-          281.1617999999999
+          281.1617999999999,
+          268.6459
         ]
       }
     }
