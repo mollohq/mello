@@ -16,7 +16,7 @@ Mello currently supports a single implicit voice session per crew. This spec add
 
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
-| Capacity cap | 6 per channel | Keeps P2P mesh small; crew can spread across channels |
+| Capacity cap | 50 per channel | The SFU limit of one voice session; crew can spread across channels |
 | Default channel | "General" — always exists, renamable, not deletable | Every crew needs a guaranteed landing spot |
 | Channel limit | No hard cap | Practical limit is UI space; no need to gate this |
 | Channel CRUD permissions | Creator + configurable | Flexible without overcomplicating beta |
@@ -37,7 +37,7 @@ Mello currently supports a single implicit voice session per crew. This spec add
 
 ### What Doesn't Change
 
-- P2P mesh topology (full mesh per channel, each channel independent)
+- Voice topology: one SFU voice session per channel, each channel independent
 - Voice pipeline (libmello C API unchanged)
 - Chat (stays crew-wide, single Nakama channel)
 - Streaming (crew-wide, `PacketSink` model untouched)
@@ -108,12 +108,12 @@ The channel bitrate (section 3.1) has no control in the UI yet. `channel_update`
 
 When a user clicks a different channel:
 
-1. Leave current voice mesh (tear down peer connections)
+1. Leave the current SFU voice session
 2. Call `voice_join(crew_id, channel_id)` RPC
-3. Establish new P2P mesh with members in target channel
+3. Join the SFU voice session of the target channel
 4. Accordion expands new channel, collapses old
 
-If the target channel is full (6 members), the click does nothing and a toast appears: **"Channel is full (6/6)"**.
+If the target channel is full (50 members), the click does nothing and a toast appears: **"Channel is full (50/50)"**.
 
 ---
 
@@ -369,15 +369,20 @@ type VoiceJoinRequest struct {
     PreferredRegion string `json:"preferred_region,omitempty"`
 }
 
-// Response (also before this change): success, channel_id, voice_state,
-// mode ("sfu" or "p2p"), sfu_endpoint and sfu_token in SFU mode, and
-// bitrate_kbps: the channel bitrate (section 3.1). The client sets it as
-// the top rung of its encoder ladder before capture starts.
+// Response: success, channel_id, voice_state, mode (always "sfu"),
+// sfu_endpoint, sfu_token, and bitrate_kbps: the channel bitrate (section
+// 3.1). The client sets it as the top rung of its encoder ladder before
+// capture starts.
+//
+// The SFU is the only voice transport. When the server has no SFU signing
+// key, signing fails, or the crew metadata has "sfu_enabled": false (an
+// operator kill switch), voice_join returns the error SFU_UNAVAILABLE
+// (code 14) and seats nobody.
 //
 // Behaviour:
 // 1. If user is already in a channel in this crew → leave it first (implicit move)
 // 2. If user is in a channel in a DIFFERENT crew → leave that too (one channel at a time globally)
-// 3. Check channel capacity (max 6) → reject with CHANNEL_FULL if at limit
+// 3. Check channel capacity (max 50) → reject with CHANNEL_FULL if at limit
 // 4. Add user to VoiceRoom for channel_id
 // 5. Update user presence: activity = { type: "in_voice", crew_id, channel_id }
 // 6. Update crew state cache
@@ -470,10 +475,10 @@ Voice updates now include channel context:
 | Who sees the ring | Path | Delay |
 |---|---|---|
 | Members in the same SFU call | In-band on the SFU control channel: the speaker's VAD -> SFU -> `Event::VoiceActivity` | One SFU hop (about 1 ms on localhost) |
-| Crew members outside the channel, and P2P calls | `voice_speaking` RPC -> `VoiceRoom.Members[].Speaking` -> coalesced `voice_update` push (200 ms) | RPC + up to 200 ms + push |
+| Crew members outside the channel | `voice_speaking` RPC -> `VoiceRoom.Members[].Speaking` -> coalesced `voice_update` push (200 ms) | RPC + up to 200 ms + push |
 
 - In an SFU call the client sends `voice_speaking` at most once per second.
-  The last state always goes out. In P2P it goes at once.
+  The last state always goes out. Outside an SFU call it goes at once.
 - Only the local member's own state goes to `voice_speaking`. A remote
   member's in-band state is never sent back to the backend.
 - In an SFU call the client prefers the in-band state over `voice_update`
@@ -701,10 +706,8 @@ impl VoiceManager {
         self.connected_crew = Some(crew_id.to_string());
         self.connected_channel = Some(channel_id.to_string());
 
-        // Establish P2P connections with channel members (same mesh logic as before)
-        for member in &members {
-            self.connect_peer(nakama, &member.user_id).await?;
-        }
+        // Join the SFU voice session of the channel
+        self.join_sfu(&members).await?;
 
         self.event_tx.send(Event::VoiceConnected {
             crew_id: crew_id.to_string(),
@@ -761,7 +764,7 @@ This allows the sidebar to show "user_abc is in General @ Neon Syndicate" withou
 
 | Code | Name | Description |
 |------|------|-------------|
-| `CHANNEL_FULL` | Channel is full | 6/6 members in target channel |
+| `CHANNEL_FULL` | Channel is full | 50/50 members in target channel |
 | `CHANNEL_NOT_FOUND` | Channel not found | Invalid channel_id for this crew |
 | `CANNOT_DELETE_DEFAULT` | Cannot delete default channel | Attempted to delete is_default channel |
 | `CHANNEL_NAME_TAKEN` | Name already exists | Duplicate channel name within crew |
@@ -795,9 +798,9 @@ This allows the sidebar to show "user_abc is in General @ Neon Syndicate" withou
 - [ ] Setting "member" allows everyone to manage
 - [ ] Non-permitted users don't see management UI options
 
-### P2P Mesh
-- [ ] Each channel has independent peer connections
-- [ ] Moving between channels tears down old connections, builds new
+### SFU Voice Sessions
+- [ ] Each channel has an independent SFU voice session
+- [ ] Moving between channels leaves the old session and joins the new one
 - [ ] Speaking indicator works per-channel
 - [ ] User in channel A does not hear users in channel B
 

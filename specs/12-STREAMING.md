@@ -1,7 +1,7 @@
 # Streaming
 
 > **Component:** libmello (C++) · mello-core (Rust) · mello-client (Rust/Slint) · Backend (Go/Nakama)
-> **Status:** H.264 RTP video path implemented (P2P + SFU); production SFU deployed; client runtime certification remains
+> **Status:** H.264 RTP video path implemented through the SFU (the only transport); production SFU deployed; client runtime certification remains
 > **Related:** [03-LIBMELLO.md](./03-LIBMELLO.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [14-VIDEO-PIPELINE.md](./14-VIDEO-PIPELINE.md), [EXTERNAL-SFU.md](./EXTERNAL-SFU.md)
 
 ---
@@ -44,7 +44,7 @@ The host captures frames, converts them, encodes them, and hands complete Annex-
 
 ```
 Capture → GPU Preprocess → Encode Queue → Encode Thread → Stream Manager → RTP egress
-(DXGI/WGC) (BGRA→NV12)    (bounded ring)   (NVENC async)   (pacing, REMB)   (SFU/P2P)
+(DXGI/WGC) (BGRA→NV12)    (bounded ring)   (NVENC async)   (pacing, REMB)   (SFU)
 ```
 
 ### 3.1 Capture
@@ -370,7 +370,7 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 1. **Drain video packets** from the mpsc channel (bounded coalescing to avoid starvation).
 2. **Send** complete access units via `PacketSink::send_video` (native RTP packetization in libmello).
 3. **Poll RTCP feedback** (PLI, REMB) from sinks and request host keyframes or adjust bitrate.
-4. **Aggregate REMB** — P2P: per-viewer minimum; SFU: single aggregated target from the SFU relay path.
+4. **Apply REMB** — the SFU forwards one aggregated target from the relay path, under the synthetic viewer id `sfu`.
 5. **Send game audio** — Opus packets from loopback capture via `PacketSink::send_audio`.
 6. **Emit telemetry** every second: `video_in_hz`, `audio_in_hz`, `audio_out_hz`, `send_fail_*_delta`, `recovery_mode`, queue depths, `bitrate_kbps`.
 
@@ -399,7 +399,7 @@ Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or 
 
 **Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When ULPFEC is negotiated (`ulpfec/90000` PT 127 in SDP), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). The host offer SDP advertises `a=ssrc-group:FEC-FR media_ssrc (media_ssrc+1)` so intermediaries (SFU/Pion) bind the repair SSRC.
 
-**TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`; the estimator target is forwarded to Rust as `GCC_TARGET` feedback and applied to the encoder immediately (the estimator smooths internally — no 5 %/s REMB ramp). Per viewer, a fresh GCC estimate supersedes that viewer's REMB.
+**TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`. The estimator target is the host's own estimate for the host-to-SFU hop. It is forwarded to Rust as `GCC_TARGET` feedback, and the stream manager does not apply it to the encoder: the SFU sends the viewer-path capacity as REMB.
 
 **Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB/TWCC. NACK retry budget is RTT-adaptive (one attempt per ~20 ms of measured RTT, clamped 2–8). Access units expire on a 120 ms stall (no fragment progress) or a 600 ms hard age cap, so paced large AUs (e.g. IDRs at low bitrates) complete while lost tails fail fast — only repaired complete access units reach the decoder. When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
@@ -413,14 +413,13 @@ Implementation: `libmello/src/transport/rtp_video_sender.cpp`, `rtp_video_receiv
 
 ### 6.1 PacketSink Trait
 
-The stream manager sends access units to a `PacketSink` — it does not know whether they go to P2P peers or an SFU. Two implementations:
+The stream manager sends access units to a `PacketSink`. `SfuSink` is the one implementation; the stream manager tests use a fake sink.
 
 | Sink | Transport | Max viewers | Video path |
 |------|-----------|-------------|------------|
-| `P2PFanoutSink` | One native RTP sender per viewer | 5 | Independent seq/pacer/NACK per peer |
 | `SfuSink` | One SFU signaling connection + one host RTP track | 100 by current backend/SFU defaults | One encoded stream; SFU relays RTP |
 
-Both sinks expose `native_rtp_telemetry()`, `poll_video_feedback()` (PLI/REMB), and `set_pacing_kbps()`. P2P also fans out per-viewer REMB; SFU aggregates viewer REMB through the relay and reports it under synthetic viewer id `sfu`.
+The sink exposes `native_rtp_telemetry()`, `poll_video_feedback()` (PLI/REMB), and `set_pacing_kbps()`. The SFU aggregates viewer REMB through the relay and reports it under the synthetic viewer id `sfu`.
 
 ### 6.2 SFU Connection
 
@@ -444,13 +443,20 @@ Rules of the viewer list (`mello-core/src/stream/members.rs`):
 - The list holds the other members in join order. Each user is in it once: a reconnect sends `member_joined` again.
 - The list holds at most one host. A viewer that joined before the host gets `member_joined {role: host}`; that sets the host. A second host entry replaces the first.
 - An SFU that sends no events to viewers leaves the `joined.members` snapshot.
-- A P2P viewer has no list.
 
 No UI shows the list. The UI viewer count comes from crew state (`viewer_count`). The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
 
-### 6.3 Topology Selection
+### 6.3 Topology
 
-The backend is authoritative for topology. `start_stream` / `watch_stream` return `mode: "p2p" | "sfu"` based on entitlement and SFU configuration. If SFU token creation is unavailable, the backend may return P2P. Once an RPC returns `mode: "sfu"`, client connect/join/control-channel setup is fail-closed: it reports a stream error instead of silently switching that session to P2P.
+The SFU is the only stream topology. `start_stream` and `watch_stream` always return `mode: "sfu"` with an SFU endpoint and token.
+
+| Condition | RPC result |
+|---|---|
+| The server has no SFU signing key, or signing fails | Error `SFU_UNAVAILABLE` (code 14). `start_stream` writes no stream state. |
+| The crew metadata has `"sfu_enabled": false` (operator kill switch) | `start_stream` returns `SFU_UNAVAILABLE`. |
+| A `watch_stream` session has no SFU endpoint (a record from before the SFU was the only transport) | `SFU_UNAVAILABLE`. |
+
+The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host stops the native host and reports a stream error.
 
 ---
 
@@ -598,7 +604,7 @@ Game audio is wired end-to-end on Windows and macOS:
 | SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
 | Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
 
-Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path (SFU): `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header); P2P: `mello_peer_set_audio_track_callback` (4-byte sequence header) → the same decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
+Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path: `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header) → the decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 
 ### 9.0 Capture scope (Windows)
 
@@ -628,27 +634,11 @@ symptom users report and it must be attributable.
 
 ### 9.1 Inbound audio framing
 
-Packets handed to Rust by an audio track callback are **not** raw Opus. After
-stripping the RTP header, `PeerConnectionImpl::wire_incoming_audio_track_callbacks`
-prepends four bytes:
-
-| Offset | Size | Field |
-|--------|------|-------|
-| 0 | 2 | RTP sequence number, little-endian |
-| 2 | 2 | Reserved, always zero |
-| 4 | n | Opus payload |
-
-Callers must skip those four bytes before decoding. A packet of four bytes or
-fewer carries no payload and is dropped.
-
-This framing is **shared with voice**, which strips it in `voice/mod.rs` before
-forwarding to the SFU; the stream path strips it in
-`client/stream_ffi.rs::feed_viewer_audio_packet` (`AUDIO_SEQ_HEADER_LEN`).
-
-The sequence number is currently unused by both paths — RTP already handles
-ordering and loss detection. It is carried because the receive handler has it
-cheaply to hand, and would be the input to Opus PLC concealment if packet-loss
-concealment is added later.
+The viewer gets complete RTP packets from `mello_peer_set_audio_rtp_callback`
+(`SfuEvent::AudioRtp`). `client/stream_ffi.rs::feed_viewer_audio_rtp` strips
+the RTP header (`rtp_payload`: fixed header, CSRC list, header extension and
+padding) and feeds the Opus payload to the decoder. libmello adds no framing
+of its own.
 
 ### 9.2 macOS capture (ScreenCaptureKit)
 
@@ -713,7 +703,7 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave SFU/P2P session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
+Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
 
 ---
 
@@ -740,7 +730,7 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 Everything above lands in the *local* log. Field failures happen on machines we
 have no access to, so host and viewer additionally report to the SFU every 10 s
 over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
-`mello-sfu/01-SFU.md §5.3`). SFU mode only: P2P has no relay to report to.
+`mello-sfu/01-SFU.md §5.3`).
 
 **Host:** `src`, `gpu`, `enc`, `enc_tier`, `cap_backend`, `cap_fps`,
 `cap_idle_ms`, `enc_fps`, `enc_ms`, `enc_ms_avg`, `enc_submit_ms`,
@@ -804,7 +794,6 @@ DComp presenter diagnostics:
 | Stream manager | `mello-core/src/stream/manager.rs` |
 | PacketSink trait | `mello-core/src/stream/sink.rs` |
 | SFU sink (RTP) | `mello-core/src/stream/sink_sfu.rs` |
-| P2P fan-out sink (RTP) | `mello-core/src/stream/sink_p2p.rs` |
 | RTP peer FFI | `mello-core/src/stream/rtp_peer.rs` |
 | Viewer congestion (REMB) | `mello-core/src/stream/congestion.rs` |
 | Quality presets + config | `mello-core/src/stream/config.rs` |
@@ -838,7 +827,7 @@ DComp presenter diagnostics:
 
 ## 14. Current State and Known Gaps
 
-**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, proper IDR detection, H.264 RTP transport (P2P + SFU), REMB congestion control, native RTCP recovery, SFU control-only DataChannel, probe tooling with native RTP telemetry, jitter buffer, DComp rendering with NT shared handle import (Windows RGBA8 path), callback-driven geometry sync.
+**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, proper IDR detection, H.264 RTP transport through the SFU, REMB congestion control, native RTCP recovery, SFU control-only DataChannel, probe tooling with native RTP telemetry, jitter buffer, DComp rendering with NT shared handle import (Windows RGBA8 path), callback-driven geometry sync.
 
 **Known gaps and future work:**
 

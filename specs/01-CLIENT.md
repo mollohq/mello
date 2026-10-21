@@ -146,7 +146,7 @@ Only your local mute dims the row (avatar and name). The green name of a member 
 | Apply | `Command::SetPeerVolume { peer_id: user_id, volume }`, `volume = 0.0` when muted, else `percent / 100`. |
 | Apply again | `handlers::voice::sync_member_audio` runs after each event that changes the voice channel models. It sends the stored value for each member who appears in the joined channel: a join, a rejoin, a reconnect. |
 
-libmello names the receive state of a member after the user id, for P2P and for SFU (the SFU slot maps a mid to the user id). libmello keeps the gain of a peer for the life of its context, also across `remove_peer` and a slot release. The client sends the value again so that it does not depend on that.
+libmello names the receive state of a member after the user id (the SFU slot maps a mid to the user id). libmello keeps the gain of a peer for the life of its context, also across `remove_peer` and a slot release. The client sends the value again so that it does not depend on that.
 
 Stream audio has its own volume. This slider does not change it.
 

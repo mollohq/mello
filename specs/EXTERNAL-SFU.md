@@ -17,12 +17,14 @@ The SFU (Selective Forwarding Unit) is Mello's server-side media relay. Its rela
 
 ### 1.1 What the SFU Enables
 
-| Capability | Without SFU (P2P) | With SFU |
-|---|---|---|
-| Stream viewers | Max 5 (host uploads 5×) | Up to configured backend/SFU capacity (currently 100; host uploads 1×) |
-| Voice per channel | Max 6 (full mesh, 5 connections each) | Up to configured SFU capacity (currently 100; each member: 1 upload, N relayed downloads) |
-| Host bandwidth | Scales linearly with viewers | Constant regardless of viewer count |
-| Stream quality consistency | Varies per viewer (per-viewer ABR) | Single quality, server relays equally |
+The SFU is the only media transport for voice and streams.
+
+| Capability | With SFU |
+|---|---|
+| Stream viewers | Up to configured backend/SFU capacity (currently 100; host uploads 1×) |
+| Voice per channel | 50 per channel in the backend (`MaxVoiceChannelMembers`); each member: 1 upload, N relayed downloads |
+| Host bandwidth | Constant regardless of viewer count |
+| Stream quality consistency | Single quality, server relays equally |
 
 ### 1.2 Design Principles
 
@@ -30,7 +32,7 @@ The SFU (Selective Forwarding Unit) is Mello's server-side media relay. Its rela
 |---|---|
 | **Opaque RTP forwarding** | SFU preserves host RTP seq/timestamp/marker; hop-local NACK only |
 | **Control on DataChannel** | Stream sessions use reliable `control` DC; video is not on DataChannel |
-| **Backend decides topology** | `start_stream` / `watch_stream` return P2P or SFU from entitlement and SFU configuration |
+| **SFU only** | `start_stream`, `watch_stream` and `voice_join` return `mode: "sfu"`, or the error `SFU_UNAVAILABLE` when the backend cannot sign a token. The crew flag `"sfu_enabled": false` is an operator kill switch; the default is on |
 | **Latency over features** | No server-side transcoding, mixing, or simulcast |
 | **Stateless sessions** | Session state is in-memory only — an SFU restart ends active media sessions; clients must reconnect and rejoin |
 | **Region-aware routing** | Nakama routes clients to the nearest SFU region |
@@ -513,7 +515,10 @@ The existing `start_stream` RPC (spec 12 §9.1) gains region selection:
 func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
     // ... existing validation ...
 
-    if hasPremium {
+    if !sfuAvailableForCrew(ctx, nk, crewID) {
+        return "", errSFUUnavailable // "SFU_UNAVAILABLE", code 14
+    }
+    {
         region := selectSFURegion(userRegion)  // "eu-west" or "us-east"
         endpoint := sfuEndpoints[region]       // "wss://sfu-eu.m3llo.app/ws" etc.
         sessionID := generateSessionID()
@@ -542,7 +547,6 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
             SFUToken:    token,
         }
     }
-    // ... P2P fallback unchanged ...
 }
 ```
 
@@ -591,80 +595,55 @@ func WatchStreamRPC(ctx context.Context, ...) (string, error) {
 }
 ```
 
-### 7.3 Voice Mode (Crew-Level Setting)
+### 7.3 Voice Mode
 
-Voice mode is a **crew-level setting**, not a per-channel runtime decision. A crew is either P2P or SFU for all voice, always. There is **no live P2P↔SFU transition** — the mode is determined at `voice_join` time based on the crew's entitlement and never changes mid-session.
+The SFU is the only voice transport. `voice_join` always answers `mode: "sfu"` or the error `SFU_UNAVAILABLE`. There is no other mode and no transition between modes.
 
-| Crew Type | Voice Mode | Channel Capacity | Notes |
+| Server | Voice | Channel Capacity | Notes |
 |---|---|---|---|
-| Free (official network) | P2P | 6 per channel | Hard cap, no upgrade path |
-| Premium (official network) | SFU | 50 per channel | All voice routes through Mello's SFU |
-| Self-hosted (no SFU subscription) | P2P | 6 per channel | Hard cap |
+| Official network | SFU | 50 per channel | All voice routes through Mello's SFU |
 | Self-hosted (with SFU subscription) | SFU | 50 per channel | Routes through Mello's hosted SFU; see §7.3.2 |
+| Self-hosted (no SFU subscription) | none | — | `voice_join` returns `SFU_UNAVAILABLE` |
 
 **The SFU is never distributed.** Self-hosters do not run their own SFU. They buy *usage* of Mello's hosted SFU infrastructure as a paid service. Their self-hosted Nakama instance is configured with Mello's SFU endpoints, and voice/stream traffic routes through Mello's servers. The SFU binary, source code, and admin dashboard are 100% proprietary and never leave Mello's infrastructure.
 
-The "waste" of routing small channels through the SFU is negligible — voice is 128 kbps Opus per member, and the SFU's forwarding overhead for a 2-person call is effectively zero. The benefit is enormous: zero transition code, zero edge cases, zero mid-call interruptions.
+The "waste" of routing small channels through the SFU is negligible — voice is 128 kbps Opus per member, and the SFU's forwarding overhead for a 2-person call is effectively zero.
 
-#### 7.3.1 Updated `voice_join` RPC
+#### 7.3.1 `voice_join` RPC
 
 ```go
-// nakama/data/modules/voice_state.go — updated voice_join
+// nakama/data/modules/voice_state.go
 
 func VoiceJoinRPC(ctx context.Context, ...) (string, error) {
     // ... existing validation ...
 
-    crewVoiceMode := getCrewVoiceMode(ctx, nk, crewID)
-
-    switch crewVoiceMode {
-    case "sfu":
-        // Premium crew or self-hosted with SFU subscription — route through Mello's SFU
-        memberCount := len(room.Members)
-        if memberCount >= 50 {
-            return "", errors.New("CHANNEL_FULL")
-        }
-
-        region := selectSFURegion(userRegion)
-        endpoint := sfuEndpoints[region]
-        voiceSessionKey := fmt.Sprintf("voice:%s:%s", crewID, channelID)
-
-        token := signSFUToken(SFUTokenClaims{
-            UserID:    userID,
-            SessionID: voiceSessionKey,
-            Type:      "voice",
-            Role:      "member",
-            CrewID:    crewID,
-            ChannelID: channelID,
-            Region:    region,
-        })
-
-        return marshal(VoiceJoinResponse{
-            Mode:        "sfu",
-            SFUEndpoint: endpoint,
-            SFUToken:    token,
-            Members:     room.MemberList(),
-        }), nil
-
-    default: // "p2p"
-        // Free / unlicensed crew — P2P mesh, 6-member cap
-        memberCount := len(room.Members)
-        if memberCount >= 6 {
-            return "", errors.New("CHANNEL_FULL")
-        }
-        return existingP2PJoinFlow(ctx, nk, userID, crewID, channelID)
+    // Server has a signing key, and the crew kill switch is off.
+    if !sfuAvailableForCrew(ctx, nk, crewID) {
+        return "", errSFUUnavailable // "SFU_UNAVAILABLE", code 14
     }
+
+    // joinVoiceRoom checks capacity (MaxVoiceChannelMembers, 50).
+    snap, err := joinVoiceRoom(ctx, logger, nk, params)
+    if err != nil {
+        return "", err // CHANNEL_FULL and others
+    }
+
+    endpoint, token, ok := issueVoiceSFUToken(logger, params)
+    if !ok {
+        voiceLeaveInternal(ctx, logger, nk, userID) // a failed join seats nobody
+        return "", errSFUUnavailable
+    }
+
+    return marshal(VoiceJoinResponse{
+        Mode:        "sfu",
+        SFUEndpoint: endpoint,
+        SFUToken:    token,
+        VoiceState:  snap,
+    }), nil
 }
 
-func getCrewVoiceMode(ctx context.Context, nk runtime.NakamaModule, crewID string) string {
-    // Check crew entitlement:
-    // 1. Official network: premium crew → "sfu", free crew → "p2p"
-    // 2. Self-hosted: active SFU subscription → "sfu", otherwise → "p2p"
-    // In both cases, "sfu" means routing through Mello's hosted SFU infrastructure
-    if hasPremiumCrew(ctx, nk, crewID) {
-        return "sfu"
-    }
-    return "p2p"
-}
+// sfuEnabledForCrew: true unless the crew metadata has "sfu_enabled": false.
+func sfuEnabledForCrew(ctx context.Context, nk runtime.NakamaModule, crewID string) bool
 ```
 
 #### 7.3.2 Self-Hosted SFU Subscription
@@ -682,14 +661,14 @@ MELLO_SFU_API_KEY=msk_live_abc123...
 MELLO_SFU_ENDPOINTS=sfu-eu.m3llo.app,sfu-us.m3llo.app
 ```
 
-4. Their Nakama's `getCrewVoiceMode()` checks the API key validity and returns `"sfu"` for all crews
+4. Their Nakama checks the API key validity before it signs a token
 5. Clients on that server get routed to Mello's SFU with tokens signed using the shared API key
 6. If already in active voice sessions when the key is added, a server restart or `voice_mode_changed` notification triggers reconnection through the SFU
 
 **Key points:**
 - The SFU validates the API key in the JWT claims, so unauthorized servers cannot use Mello's SFU
 - Usage is metered and billed per the subscription (bandwidth or peer-minutes, TBD)
-- If the subscription lapses, `getCrewVoiceMode()` falls back to `"p2p"` and channels cap at 6
+- If the subscription lapses, `voice_join`, `start_stream` and `watch_stream` return `SFU_UNAVAILABLE`
 
 ### 7.4 Region Selection
 
@@ -875,7 +854,7 @@ impl SfuConnection {
 
 ### 8.3 Voice Manager SFU Integration
 
-The `VoiceManager` (spec 13 §6.4) gains SFU awareness. Voice mode is determined at join time based on the `voice_join` RPC response — the VoiceManager is always in one mode for a given crew, never transitions between modes mid-session.
+The `VoiceManager` (spec 13 §6.4) joins every voice channel through the SFU, with the endpoint and token of the `voice_join` RPC response.
 
 ```rust
 // Historical sketch; current VoiceManager lives in mello-core/src/voice/mod.rs.
@@ -887,15 +866,13 @@ pub struct VoiceManager {
     connected_crew: Option<CrewId>,
     connected_channel: Option<ChannelId>,
 
-    // Voice connection mode — set at join time, never changes mid-session
+    // Disconnected or SFU
     mode: VoiceMode,
-    peers: HashMap<MemberId, PeerHandle>,         // P2P mode only
-    sfu_connection: Option<Arc<SfuConnection>>,    // SFU mode only
+    sfu_connection: Option<Arc<SfuConnection>>,
 }
 
 enum VoiceMode {
     Disconnected,
-    P2P,
     SFU,
 }
 
@@ -911,7 +888,7 @@ impl VoiceManager {
             self.leave_current(nakama).await?;
         }
 
-        // RPC: voice_join — server decides P2P or SFU based on crew entitlement
+        // RPC: voice_join — SFU endpoint and token, or SFU_UNAVAILABLE
         let resp = nakama.rpc("voice_join", &VoiceJoinRequest {
             crew_id: crew_id.to_string(),
             channel_id: channel_id.to_string(),
@@ -920,37 +897,20 @@ impl VoiceManager {
         self.connected_crew = Some(crew_id.to_string());
         self.connected_channel = Some(channel_id.to_string());
 
-        match resp.mode.as_str() {
-            "sfu" => {
-                // Connect to SFU — all voice packets routed through server
-                let conn = SfuConnection::connect(
-                    &resp.sfu_endpoint,
-                    &resp.sfu_token,
-                ).await?;
-                conn.join_voice(crew_id, channel_id).await?;
+        // Connect to SFU — all voice packets routed through server
+        let conn = SfuConnection::connect(
+            &resp.sfu_endpoint,
+            &resp.sfu_token,
+        ).await?;
+        conn.join_voice(crew_id, channel_id).await?;
 
-                self.sfu_connection = Some(Arc::new(conn));
-                self.mode = VoiceMode::SFU;
+        self.sfu_connection = Some(Arc::new(conn));
+        self.mode = VoiceMode::SFU;
 
-                self.event_tx.send(Event::VoiceConnected {
-                    crew_id: crew_id.to_string(),
-                    channel_id: channel_id.to_string(),
-                }).await.ok();
-            }
-            _ => {
-                // P2P mesh — existing behaviour from spec 13
-                self.mode = VoiceMode::P2P;
-
-                for member in &resp.members {
-                    self.connect_peer(nakama, &member.user_id).await?;
-                }
-
-                self.event_tx.send(Event::VoiceConnected {
-                    crew_id: crew_id.to_string(),
-                    channel_id: channel_id.to_string(),
-                }).await.ok();
-            }
-        }
+        self.event_tx.send(Event::VoiceConnected {
+            crew_id: crew_id.to_string(),
+            channel_id: channel_id.to_string(),
+        }).await.ok();
 
         Ok(())
     }
@@ -960,11 +920,6 @@ impl VoiceManager {
             VoiceMode::SFU => {
                 if let Some(conn) = self.sfu_connection.take() {
                     conn.leave().await.ok();
-                }
-            }
-            VoiceMode::P2P => {
-                for (_, peer) in self.peers.drain() {
-                    peer.close().await;
                 }
             }
             VoiceMode::Disconnected => {}
@@ -1339,7 +1294,7 @@ The copy-on-write pattern ensures the forwarding loop (hot path) never takes a l
 
 ### 10.2 TURN Server (coturn) Co-Location
 
-Each SFU VM also runs [coturn](https://github.com/coturn/coturn) as the TURN relay for P2P connections. Coturn is deployed first (before the SFU is built) so that P2P voice and streaming have reliable NAT traversal from day one.
+Each SFU VM also runs [coturn](https://github.com/coturn/coturn) as the TURN relay for client connections to the SFU. Coturn was deployed first (before the SFU was built).
 
 **Why co-locate:**
 - Both services are stateless UDP packet routers with identical networking needs (public IP, open UDP ports)
@@ -2153,12 +2108,12 @@ SFU_LOG_LEVEL=info                               # debug, info, warn, error
 - [ ] Member audio not echoed back to sender
 - [ ] 10+ members → all hear each other (N-1 forwarding)
 - [ ] Member disconnects → removed from forwarding, others notified
-- [ ] Free crew → voice_join returns P2P mode, 6-member cap enforced
-- [ ] Premium crew → voice_join returns SFU mode, even for 2 members
-- [ ] Premium crew → 50 members in one channel works
+- [ ] Any crew → voice_join returns SFU mode, even for 2 members
+- [ ] 50 members in one channel works
+- [ ] Crew with "sfu_enabled": false → voice_join returns SFU_UNAVAILABLE
+- [ ] No signing key → voice_join and start_stream return SFU_UNAVAILABLE and leave no state
 - [ ] Self-hosted with SFU subscription → voice routes through Mello's SFU
-- [ ] Self-hosted without subscription → P2P only, 6-member cap
-- [ ] Lapsed SFU subscription → falls back to P2P
+- [ ] Self-hosted without subscription → SFU_UNAVAILABLE
 
 ### Auth & Security
 - [ ] Expired JWT → connection rejected
@@ -2169,8 +2124,8 @@ SFU_LOG_LEVEL=info                               # debug, info, warn, error
 ### TURN Server (coturn)
 - [ ] coturn starts and listens on 3478 (UDP/TCP) and 5349 (TLS)
 - [ ] HMAC-SHA1 credentials from Nakama `get_ice_servers` RPC are accepted by coturn
-- [ ] P2P voice connects through TURN relay when direct connection fails
-- [ ] P2P streaming connects through TURN relay when direct connection fails
+- [ ] Voice connects to the SFU through TURN relay when the direct path fails
+- [ ] Streaming connects to the SFU through TURN relay when the direct path fails
 - [ ] Trickle ICE test (webrtc.github.io) shows relay candidates
 - [ ] Relay port range stays within 49152-65535
 - [ ] Private IP ranges blocked (no SSRF via relay)
@@ -2277,7 +2232,7 @@ backend/nakama/data/modules/
 2. Update Nakama backend `.env` with `TURN_SECRET` and `TURN_HOST`
 3. Verify TURN works: Trickle ICE test with credentials from `get_ice_servers` RPC
 4. Run `deploy-instance.sh us` for the US region
-5. Test P2P voice/streaming with TURN relay available
+5. Test voice and streaming with TURN relay available
 
 This gives you working NAT traversal immediately, and the VMs are ready for the SFU when it's built.
 

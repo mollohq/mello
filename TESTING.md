@@ -126,7 +126,6 @@ gtest suite and the Nakama Go modules.
 | Stream certification | SFU soak + LAN client gates | Yes (local Nakama + SFU) | No (manual) | `scripts/run-stream-certification.ps1` |
 | `stream-host` probe | Client host RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-host.ps1` |
 | `sfu-stream-viewer-probe` | Client viewer RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-viewer.ps1` |
-| `mello_rtp_tests` | Native RTP AU send/receive + P2P roles | No | No (manual) | `scripts/run-p2p-stream-probe.ps1` |
 | `voice-test-client` (GUI) | Client DSP A/B | Yes (live backend) | No (manual) | `cargo run` in `tools/voice-test-client` |
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
 | `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
@@ -287,7 +286,7 @@ Voice receive and playout (no device, no sleep, deterministic):
 |---|---|---|
 | `VoicePlayout` | `test_voice_playout.cpp` | One NetEQ per peer: clean playout, a new SSRC and a sender restart start a new stream, reorder is not a restart, late frames count a stall and not a talk pause, a long gate gap leaves no delay, the pre-roll burst is held and not learned as jitter, real jitter still raises the target, a target jump does not stretch speech, volume and pan per peer, two peers mix, removal keeps lifetime counts, junk is rejected. |
 | `ParseRtp`, `StreamResampler` | `test_voice_playout.cpp` | The RTP parser (CSRC, extension, padding) and the sinc resampler of the WASAPI edges (rate, level, frequency, channel order, block sizes). |
-| `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the P2P voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
+| `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the loopback voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
 | `NetEqSpike` | `test_neteq_spike.cpp` | The stage 3 spike: NetEQ and the mixer driven directly (clean, loss, burst tuning, drift, gap, limiter, cost). |
 
 Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
@@ -299,12 +298,11 @@ Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
 | `VoiceSendFeedback` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | The RTCP parser with crafted receiver and sender reports (compound, signed 24-bit loss, malformed lengths), the round trip from LSR and DLSR, the per-report interval of the tracker. |
 | `VoiceSendFeedbackWire` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | A plain libdatachannel peer answers our sender reports with crafted receiver reports; they reach the voice peer's send track and its callback with the right loss, jitter and a real round trip. |
 
-RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
+RTP transport (sender, receiver, peer roles) — release gate for stream PRs:
 
 ```powershell
 cmake --build libmello/build --config Release --target mello_rtp_tests
 libmello/build/tests/Release/mello_rtp_tests.exe
-# or: .\scripts\run-p2p-stream-probe.ps1
 ```
 
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
@@ -918,7 +916,7 @@ Unit tests run in `cargo test --workspace` and in libmello `ctest`:
 |---|---|
 | Region ranking: the median of three probes, 2xx only, 2 s timeout, fastest first | `mello-core/src/transport/sfu_region.rs` |
 | `get_sfu_regions` lists both regions with their health URLs | `backend/nakama/data/modules/sfu_routing_test.go` |
-| First reconnect attempt after 500 ms, then 1 s, then every 2 s; no gap over 2 s, and the give-up 30 s after the drop; a valid voice token is reused, an expired one is not; a failed reconnect does not fall back to P2P | `mello-core/src/client/voice.rs` |
+| First reconnect attempt after 500 ms, then 1 s, then every 2 s; no gap over 2 s, and the give-up 30 s after the drop; a valid voice token is reused, an expired one is not | `mello-core/src/client/voice.rs` |
 | A server close of the signaling socket is a disconnect; the close after `left` is not; a connect without an answer fails at its 5 s limit | `mello-core/src/client/sfu_voice_join.rs` |
 | No local ICE candidate before the offer; a candidate found after the answer still reaches the SFU (a fake SFU and a fake STUN server that answers late) | `mello-core/src/client/sfu_voice_join.rs`, `transport/sfu_connection.rs` |
 | The ICE servers reach libdatachannel: a TURN server on a local UDP port gets the Allocate request | `transport/sfu_connection.rs` |
@@ -1147,8 +1145,6 @@ Host (SFU RTP via Nakama `start_stream` — default path):
 # logs: host_probe_tick ... tx_aus_sent tx_rtp_packets tx_remb
 ```
 
-Legacy UDP chunked mode is diagnostic-only: pass `--legacy-udp-chunks` to `stream-host` / `stream-viewer` binaries directly (not used by the probe scripts).
-
 Viewer (auto-detects session from host log):
 
 ```powershell
@@ -1251,7 +1247,6 @@ unset CARGO_TARGET_DIR
 Key guards baked into the gate:
 
 - Fails on SFU liveness regression markers (`liveness_timeout`, repeated unhealthy checks).
-- Fails if voice scenarios silently fell back to P2P (`SFU peer creation failed ... falling back to P2P`).
 - Collects per-step artifacts (`command.log`, Nakama/SFU logs, health/overview API snapshots).
 
 Desktop + mobile LAN testing:
