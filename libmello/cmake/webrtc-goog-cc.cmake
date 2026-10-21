@@ -53,6 +53,7 @@ if(MELLO_WEBRTC_GOOG_CC)
         webrtc/modules/congestion_controller/goog_cc/trendline_estimator.cc
         webrtc/modules/pacing/interval_budget.cc
         webrtc/modules/remote_bitrate_estimator/aimd_rate_control.cc
+        webrtc/modules/remote_bitrate_estimator/bwe_defines.cc
         webrtc/modules/remote_bitrate_estimator/inter_arrival.cc
         webrtc/modules/remote_bitrate_estimator/overuse_detector.cc
         webrtc/rtc_base/experiments/alr_experiment.cc
@@ -63,7 +64,15 @@ if(MELLO_WEBRTC_GOOG_CC)
 
     add_library(webrtc_goog_cc STATIC ${GOOG_CC_SOURCES})
     set_target_properties(webrtc_goog_cc PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_compile_definitions(webrtc_goog_cc PRIVATE ${WAP_DEFINES})
+    # WAP_DEFINES without WEBRTC_ENABLE_SYMBOL_EXPORT. With it, RTC_EXPORT is
+    # dllexport on Windows, and MSVC then emits every inline member of an
+    # exported class. rate_control_settings.h includes the video codec
+    # headers, and their exported inline comparison operators call
+    # SdpVideoFormat and SimulcastStream code that is not vendored. The
+    # target is static, so it has nothing to export.
+    set(GOOG_CC_DEFINES ${WAP_DEFINES})
+    list(REMOVE_ITEM GOOG_CC_DEFINES WEBRTC_ENABLE_SYMBOL_EXPORT)
+    target_compile_definitions(webrtc_goog_cc PRIVATE ${GOOG_CC_DEFINES})
     # The event stubs replace the upstream event headers. PRIVATE: the
     # goog_cc public headers do not include them.
     target_include_directories(webrtc_goog_cc BEFORE PRIVATE
