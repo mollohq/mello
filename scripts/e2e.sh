@@ -38,6 +38,14 @@ PUSH_WORKER_TOKEN="${PUSH_WORKER_TOKEN:-e2e-push-token}"
 PUSH_DESKTOP_GRACE_SECS="${PUSH_DESKTOP_GRACE_SECS:-2}"
 export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN PUSH_DESKTOP_GRACE_SECS
 
+# The SFU is the only voice and stream transport: without a signing key,
+# voice_join and start_stream return SFU_UNAVAILABLE. The RPC tests only need
+# the token, not a running SFU, so an unset key gets a key for this run.
+if [ -z "${SFU_JWT_PRIVATE_KEY:-}" ]; then
+    SFU_JWT_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)"
+    export SFU_JWT_PRIVATE_KEY
+fi
+
 if ! docker info >/dev/null 2>&1; then
     echo "✗ Docker is not running. Start Docker Desktop and retry." >&2
     exit 1

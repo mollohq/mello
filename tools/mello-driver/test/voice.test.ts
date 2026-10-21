@@ -66,7 +66,6 @@ const ev = (seq: number, type: string, transport?: AppEvent["transport"]): AppEv
 
 test("the transport of a join is the first VoiceStateChanged after its VoiceJoined", () => {
   assert.equal(lastJoinTransport([ev(1, "VoiceJoined"), ev(2, "MicLevel"), ev(3, "VoiceStateChanged", "sfu")]), "sfu");
-  assert.equal(lastJoinTransport([ev(1, "VoiceJoined"), ev(2, "VoiceStateChanged", "p2p")]), "p2p");
   assert.equal(lastJoinTransport([ev(1, "VoiceJoined"), ev(2, "VoiceStateChanged", "disconnected")]), "disconnected");
 });
 
@@ -74,7 +73,7 @@ test("an earlier join does not answer for a later join that still runs", () => {
   // A channel switch: the first call started on the SFU, the second join runs.
   const switching = [ev(1, "VoiceJoined"), ev(2, "VoiceStateChanged", "sfu"), ev(3, "VoiceJoined"), ev(4, "VoiceUpdated")];
   assert.equal(lastJoinTransport(switching), null);
-  assert.equal(lastJoinTransport([...switching, ev(5, "VoiceStateChanged", "p2p")]), "p2p");
+  assert.equal(lastJoinTransport([...switching, ev(5, "VoiceStateChanged", "disconnected")]), "disconnected");
   assert.equal(lastJoinTransport([]), null, "no join");
 });
 
@@ -91,12 +90,6 @@ async function runVoice(transport: string) {
   };
   return runJourney(inVoice, opts);
 }
-
-test("a voice call over P2P fails the journey", async () => {
-  const r = await runVoice("p2p");
-  assert.equal(r.ok, false, "a P2P call must fail a voice journey");
-  assert.match(r.error ?? "", /alice: the voice call runs over P2P, not through the SFU/);
-});
 
 test("a voice call through the SFU passes the journey", async () => {
   const r = await runVoice("sfu");

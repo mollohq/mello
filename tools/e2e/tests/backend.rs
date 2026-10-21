@@ -214,8 +214,9 @@ fn an_existing_email_identity_can_still_sign_in() {
     });
 }
 
-/// `voice_join` decides SFU vs P2P, enforces capacity and signs an SFU token.
-/// None of that logic is covered by the Go unit tests at the RPC level.
+/// `voice_join` enforces capacity and signs an SFU token. The SFU is the only
+/// voice transport, so the answer is always mode "sfu" with an endpoint and a
+/// token. scripts/e2e.sh gives Nakama a signing key.
 #[test]
 fn voice_join_returns_a_usable_room() {
     if !e2e_enabled("voice_join_returns_a_usable_room") {
@@ -251,11 +252,23 @@ fn voice_join_returns_a_usable_room() {
             .expect("voice_join on a crew we just created and own");
         let body: serde_json::Value = serde_json::from_str(&raw).expect("JSON");
 
-        assert!(
-            body.get("mode").is_some() || body.get("channel_id").is_some(),
-            "voice_join must say which channel/mode was joined; the client \
-             branches on it to pick SFU or P2P. Got: {body}"
+        assert_eq!(
+            body.get("mode").and_then(|v| v.as_str()),
+            Some("sfu"),
+            "voice_join must answer mode sfu. Got: {body}"
         );
+        assert!(
+            body.get("channel_id").and_then(|v| v.as_str()).is_some(),
+            "voice_join must say which channel was joined. Got: {body}"
+        );
+        for field in ["sfu_endpoint", "sfu_token"] {
+            assert!(
+                body.get(field)
+                    .and_then(|v| v.as_str())
+                    .is_some_and(|s| !s.is_empty()),
+                "voice_join must carry {field}. Got: {body}"
+            );
+        }
 
         let _ = client.delete_account().await;
     });
