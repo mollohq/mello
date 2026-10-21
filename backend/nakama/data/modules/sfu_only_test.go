@@ -95,7 +95,7 @@ func TestWatchStream_SessionWithoutEndpoint_ReturnsSFUUnavailable(t *testing.T) 
 	withSFUKey(t, true)
 	nk := seedSfuOnlyCrew("")
 	nk.put(StreamSessionCol, "stream_old", SystemUserID, map[string]string{
-		"crew_id": sfuOnlyCrew, "host_user_id": "host", "mode": "p2p",
+		"crew_id": sfuOnlyCrew, "host_user_id": "host",
 	})
 
 	_, err := WatchStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
