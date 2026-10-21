@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #include "capture_dxgi.hpp"
 #include "../util/log.hpp"
+#include "frame_cadence.hpp"
 #include <dxgi1_2.h>
 #include <chrono>
 #include <cassert>
@@ -148,17 +149,10 @@ void DxgiCapture::capture_thread() {
 
     UINT timeout_ms = std::max(1000u / target_fps_ * 2, 34u);
 
-    // Adaptive throttle: accept a frame when elapsed >= target_interval - tolerance.
-    // The tolerance is half a vsync period so we snap to the nearest vsync that
-    // satisfies target_fps, regardless of monitor refresh rate (60-360Hz).
-    // We estimate vsync from the first two acquired frames; until then use 1ms.
-    auto target_interval = std::chrono::microseconds(1'000'000 / target_fps_);
-    auto tolerance       = std::chrono::microseconds(1000); // updated after first frames
-    auto deadline        = target_interval - tolerance;
-    auto last_callback   = clock::now() - target_interval;
-
-    clock::time_point first_frame_tp{};
-    bool vsync_calibrated = false;
+    // Throttle to target_fps with the same rule as the pipeline decimator
+    // (frame_cadence.hpp). The old rule reset to the arrival time with a
+    // half-vsync tolerance, which quantises the output onto the refresh grid.
+    uint64_t cadence_deadline_us = 0;
 
     uint64_t frame_count = 0;
     uint64_t skip_count  = 0;
@@ -254,29 +248,11 @@ void DxgiCapture::capture_thread() {
         }
 
         auto now_tp = clock::now();
+        const uint64_t now = static_cast<uint64_t>(
+            std::chrono::duration_cast<std::chrono::microseconds>(now_tp.time_since_epoch())
+                .count());
 
-        // Calibrate vsync interval from the first two delivered frames
-        if (!vsync_calibrated) {
-            if (first_frame_tp == clock::time_point{}) {
-                first_frame_tp = now_tp;
-            } else {
-                auto vsync_us = std::chrono::duration_cast<std::chrono::microseconds>(
-                    now_tp - first_frame_tp);
-                if (vsync_us.count() > 0 && vsync_us.count() < 100'000) {
-                    tolerance = vsync_us / 2;
-                    deadline  = target_interval - tolerance;
-                    if (deadline < std::chrono::microseconds(0))
-                        deadline = std::chrono::microseconds(0);
-                    vsync_calibrated = true;
-                    MELLO_LOG_INFO(TAG, "DXGI-DDI vsync=%.2fms tolerance=%.2fms deadline=%.2fms",
-                        vsync_us.count() / 1000.0,
-                        tolerance.count() / 1000.0,
-                        deadline.count() / 1000.0);
-                }
-            }
-        }
-
-        if (now_tp - last_callback < deadline) {
+        if (!frame_cadence_accepts(now, cadence_deadline_us, target_fps_)) {
             duplication_->ReleaseFrame();
             ++skip_count;
             continue;
@@ -295,10 +271,7 @@ void DxgiCapture::capture_thread() {
             }
         }
         if (SUCCEEDED(hr) && callback_) {
-            auto now = std::chrono::duration_cast<std::chrono::microseconds>(
-                now_tp.time_since_epoch()).count();
-            callback_(texture.Get(), static_cast<uint64_t>(now));
-            last_callback = now_tp;
+            callback_(texture.Get(), now);
             ++frame_count;
         }
 

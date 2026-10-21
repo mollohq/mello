@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "video/video_pipeline.hpp"
+#include "video/frame_cadence.hpp"
 #include <vector>
 #include <algorithm>
 #include <mutex>
@@ -413,6 +414,96 @@ TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
     // keeps frames flowing instead of stalling until the old clock is passed.
     uint64_t deadline = 9'000'000;
     EXPECT_TRUE(VideoPipeline::decimation_accepts(5, deadline, 30));
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// The capture backend throttles (hook, WGC, DXGI) and the pipeline decimator
+// share one rule, frame_cadence_accepts. Before stage 2 each backend had its
+// own: the hook gave 48 fps from a 144 fps game for a 60 fps target (50 from
+// 100, 37.5 from 75), WGC counted a dropped frame's time twice, and DXGI reset
+// to the arrival time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Deterministic jitter in [-amplitude, +amplitude] microseconds.
+struct Jitter {
+    uint32_t state = 12345;
+    int64_t next(int64_t amplitude) {
+        if (amplitude == 0) return 0;
+        state = state * 1103515245u + 12345u;
+        return static_cast<int64_t>((state >> 8) % (2 * amplitude + 1)) - amplitude;
+    }
+};
+
+uint64_t present_time_us(double source_fps, int frame, uint64_t offset_us, Jitter& jitter,
+                         int64_t jitter_us) {
+    return 1'000'000ULL + offset_us +
+           static_cast<uint64_t>(static_cast<double>(frame) * 1'000'000.0 / source_fps) +
+           static_cast<uint64_t>(jitter.next(jitter_us));
+}
+
+} // namespace
+
+TEST(FrameCadence, EveryGameRateGivesTheTarget) {
+    for (const double source_fps : {144.0, 100.0, 75.0, 60.0}) {
+        uint64_t deadline = 0;
+        Jitter jitter;
+        int delivered = 0;
+        const int frames = static_cast<int>(source_fps * 10);  // 10 s
+        for (int i = 0; i < frames; ++i) {
+            if (frame_cadence_accepts(present_time_us(source_fps, i, 0, jitter, 0), deadline, 60)) {
+                ++delivered;
+            }
+        }
+        const double fps = delivered / 10.0;
+        EXPECT_NEAR(fps, 60.0, 1.0) << "source " << source_fps << " fps";
+    }
+}
+
+// A backend throttle feeds the pipeline decimator, and the two cadences start
+// at different times (the ladder swaps backends during a stream). The second
+// stage must pass what the first passes, at every phase. With the old pipeline
+// rule (a hard reset after a late frame) a 75 fps game with a 7 ms phase gave
+// 45 fps here.
+TEST(FrameCadence, ABackendThrottleIntoThePipelineKeepsTheRate) {
+    for (const double source_fps : {144.0, 100.0, 75.0, 60.0}) {
+        for (uint64_t offset_ms = 0; offset_ms < 17; ++offset_ms) {
+            for (const int64_t jitter_us : {0, 500, 1000}) {
+                uint64_t backend_deadline = 0;
+                uint64_t pipeline_deadline = 0;
+                // The pipeline cadence started with an earlier backend.
+                ASSERT_TRUE(VideoPipeline::decimation_accepts(1'000'000, pipeline_deadline, 60));
+                Jitter jitter;
+                int delivered = 0;
+                const int frames = static_cast<int>(source_fps * 10);
+                for (int i = 0; i < frames; ++i) {
+                    const uint64_t ts =
+                        present_time_us(source_fps, i, offset_ms * 1000, jitter, jitter_us);
+                    if (!frame_cadence_accepts(ts, backend_deadline, 60)) continue;
+                    if (VideoPipeline::decimation_accepts(ts, pipeline_deadline, 60)) ++delivered;
+                }
+                EXPECT_NEAR(delivered / 10.0, 60.0, 1.0)
+                    << "source " << source_fps << " fps, phase " << offset_ms << " ms, jitter "
+                    << jitter_us << " us";
+            }
+        }
+    }
+}
+
+// Lateness is kept as credit up to 3/4 of an interval and no more. After a
+// stall the cadence gives one frame now and the next no sooner than 1/8 of an
+// interval later: never a burst of frames to catch up.
+TEST(FrameCadence, AStallGivesNoBurst) {
+    uint64_t deadline = 0;
+    ASSERT_TRUE(frame_cadence_accepts(0, deadline, 60));
+    const uint64_t after_stall = 2'000'000;
+    ASSERT_TRUE(frame_cadence_accepts(after_stall, deadline, 60));
+    int burst = 0;
+    for (uint64_t t = after_stall + 1'000; t < after_stall + 16'666; t += 1'000) {
+        if (frame_cadence_accepts(t, deadline, 60)) ++burst;
+    }
+    EXPECT_LE(burst, 1) << "a stall must not be caught up";
 }
 
 // Idle keepalive: a quiet capture still needs video, or a viewer who joins a

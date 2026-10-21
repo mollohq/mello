@@ -3,6 +3,7 @@
 #include <future>
 #include "encoder_factory.hpp"
 #include "decoder_factory.hpp"
+#include "frame_cadence.hpp"
 #include "../util/log.hpp"
 #include <chrono>
 #include <cstring>
@@ -494,46 +495,12 @@ void VideoPipeline::set_output_fps(uint32_t fps) {
 }
 
 // True when this captured frame should be passed downstream under the current
-// decimation target. Uses a half-interval tolerance for the same reason the DXGI
-// throttle does: capture lands on vsync boundaries, so demanding a full interval
-// would systematically reject the frame that is closest to the deadline and
-// deliver 20fps when 30 was asked for.
+// decimation target. The rule is shared with the capture backend throttles
+// (frame_cadence.hpp), so a frame a backend passes is a frame this passes.
 bool VideoPipeline::decimation_accepts(uint64_t timestamp_us,
                                        uint64_t& next_deadline_us,
                                        uint32_t output_fps) {
-    if (output_fps == 0) {
-        return true;
-    }
-
-    const uint64_t interval_us = 1'000'000ULL / output_fps;
-
-    if (next_deadline_us == 0 || timestamp_us + interval_us < next_deadline_us) {
-        // First frame, or the clock went backwards. Start a fresh cadence here.
-        next_deadline_us = timestamp_us + interval_us;
-        return true;
-    }
-
-    // Small tolerance so an arrival landing a hair before the deadline still
-    // counts. It is a fixed fraction of the *target* interval, deliberately: an
-    // earlier version used half a *source* interval, and when the source rate
-    // approached twice the target that tolerance swallowed an entire target
-    // interval, so every frame cleared the deadline and nothing was decimated.
-    const uint64_t tolerance_us = interval_us / 8;
-    if (timestamp_us + tolerance_us < next_deadline_us) {
-        return false;
-    }
-
-    // Advance by exactly one interval rather than resetting to now. Resetting is
-    // what collapses the output back onto the source's quantisation — with a
-    // 12 ms source and a 16.7 ms target it can only ever emit every source frame
-    // or every other one, never the 60 of 83 that actually equals 60fps.
-    next_deadline_us += interval_us;
-    // If capture stalled we may be many intervals behind; catching up would emit
-    // a burst the encoder and pacer then have to absorb. Resync instead.
-    if (next_deadline_us < timestamp_us) {
-        next_deadline_us = timestamp_us + interval_us;
-    }
-    return true;
+    return frame_cadence_accepts(timestamp_us, next_deadline_us, output_fps);
 }
 
 bool VideoPipeline::encoder_is_overloaded(const EncoderLoadSample& sample) {
