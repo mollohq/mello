@@ -606,6 +606,8 @@ TEST(CaptureState, ABlindMethodInExclusiveFullscreenIsFailedWithProof) {
 }
 
 #include "video/hook_policy.hpp"
+#include <windows.h>
+#include <psapi.h>
 
 // Choosing what to capture from what the user picked. A window picker lists
 // every window a game has, including ones that can never carry a stream.
@@ -690,6 +692,41 @@ TEST(HookPolicy, NothingIsHookedWithoutTheCallersPermission) {
     const PolicyResult result = check_process(GetCurrentProcessId(), false);
     EXPECT_FALSE(result.allowed());
     EXPECT_EQ(result.verdict, PolicyVerdict::NotAllowedByCaller);
+}
+
+// A module list that cannot be read is not proof that no anti-cheat module is
+// loaded. The policy must refuse the hook, not allow it (it did until stage 2).
+// A process created suspended has no loader data yet, so EnumProcessModulesEx
+// fails on it with ERROR_PARTIAL_COPY. Every other check passes for it.
+TEST(HookPolicy, AnUnreadableModuleListIsRefused) {
+    using namespace mello::video::hook;
+    wchar_t command[] = L"cmd.exe /c exit 0";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    ASSERT_TRUE(CreateProcessW(nullptr, command, nullptr, nullptr, FALSE,
+                               CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                               &child))
+        << "CreateProcessW failed: " << GetLastError();
+    struct Reaper {
+        PROCESS_INFORMATION& info;
+        ~Reaper() {
+            TerminateProcess(info.hProcess, 0);
+            WaitForSingleObject(info.hProcess, 5000);
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+        }
+    } reaper{child};
+
+    HMODULE first = nullptr;
+    DWORD needed = 0;
+    if (EnumProcessModulesEx(child.hProcess, &first, sizeof(first), &needed, LIST_MODULES_ALL)) {
+        GTEST_SKIP() << "this Windows build reads the module list of a suspended process";
+    }
+
+    const PolicyResult result = check_process(child.dwProcessId, true);
+    EXPECT_FALSE(result.allowed());
+    EXPECT_EQ(result.verdict, PolicyVerdict::ProcessUnreadable) << verdict_name(result.verdict);
 }
 #endif
 
