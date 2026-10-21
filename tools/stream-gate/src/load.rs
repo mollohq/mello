@@ -102,6 +102,47 @@ mod imp {
         let own = b.own.saturating_sub(a.own);
         Some(100.0 * busy.saturating_sub(own) as f64 / total as f64)
     }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+
+        #[test]
+        fn other_load_is_busy_time_minus_own_time() {
+            // 1 s of all processors: 600 ms idle, 400 ms busy, of which this
+            // process and the SFU used 150 ms.
+            let a = Sample {
+                idle: 1_000,
+                total: 10_000,
+                own: 500,
+            };
+            let b = Sample {
+                idle: 1_000 + 6_000_000,
+                total: 10_000 + 10_000_000,
+                own: 500 + 1_500_000,
+            };
+            let pct = other_pct(a, b).expect("counters moved");
+            assert!((pct - 25.0).abs() < 1e-9, "{pct}");
+            // Counters that did not move give no value, not 0 %.
+            assert_eq!(other_pct(a, a), None);
+        }
+
+        #[test]
+        fn own_cpu_time_is_counted() {
+            let a = sample(&[]);
+            let t = std::time::Instant::now();
+            let mut x = 0u64;
+            while t.elapsed() < std::time::Duration::from_millis(200) {
+                x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
+            }
+            std::hint::black_box(x);
+            let b = sample(&[]);
+            // The busy loop shows as CPU time of this process (100 ns units),
+            // so it is taken out of the other load.
+            assert!(b.own > a.own, "{a:?} {b:?}");
+            assert!(b.total > a.total, "{a:?} {b:?}");
+        }
+    }
 }
 
 #[cfg(not(windows))]
@@ -117,26 +158,3 @@ mod imp {
 }
 
 pub use imp::{other_pct, sample, Sample};
-
-#[cfg(all(test, windows))]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn this_process_does_not_count_as_other_load() {
-        let a = sample(&[]);
-        // Busy work in this process only.
-        let t = std::time::Instant::now();
-        let mut x = 0u64;
-        while t.elapsed() < std::time::Duration::from_millis(300) {
-            x = x.wrapping_mul(6364136223846793005).wrapping_add(1);
-        }
-        std::hint::black_box(x);
-        let b = sample(&[]);
-        let pct = other_pct(a, b).expect("counters move");
-        // One busy core of this process is about 100 / cores percent of the
-        // machine; none of it may show as other load. Other processes on a
-        // developer machine may still use a little.
-        assert!(pct < 50.0, "{pct}");
-    }
-}
