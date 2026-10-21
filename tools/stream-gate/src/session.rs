@@ -163,7 +163,6 @@ impl Host {
             session_id: Some(session_id.to_owned()),
             stream_id: None,
             mode: "sfu".to_owned(),
-            max_viewers: None,
             sfu_endpoint: Some(ws.to_owned()),
             sfu_token: None,
             capture: None,
