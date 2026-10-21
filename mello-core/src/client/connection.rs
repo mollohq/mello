@@ -185,6 +185,9 @@ impl super::Client {
     /// were in a voice channel, re-assert Nakama membership without rebuilding a
     /// healthy media session.
     pub(super) async fn resync_after_reconnect(&mut self) {
+        // The stream is advertised in its own crew, which need not be the
+        // active one, so this runs before the active-crew check.
+        self.readvertise_stream_after_reconnect().await;
         let Some(crew_id) = self.nakama.active_crew_id().map(String::from) else {
             return;
         };

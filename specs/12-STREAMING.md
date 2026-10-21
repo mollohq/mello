@@ -467,7 +467,7 @@ The SFU is the only stream topology. `start_stream` and `watch_stream` always re
 | The crew metadata has `"sfu_enabled": false` (operator kill switch) | `start_stream` returns `SFU_UNAVAILABLE`. |
 | A `watch_stream` session has no SFU endpoint (a record from before the SFU was the only transport) | `SFU_UNAVAILABLE`. |
 
-The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host stops the native host and reports a stream error.
+The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host, or a failed session creation, stops the native host, retracts the advertised stream (`stop_stream` for the crew of the start) and reports a stream error.
 
 ---
 
@@ -710,7 +710,12 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid.
 2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint, and the `capture` block. For a process target, `hook_allowed_for_game` turns the block and `igdb_id` into `allow_hook` (§3.1.1).
 3. `start_host` creates the libmello video pipeline (capture + preprocess + encoder) and sets up mpsc channels for encoded packets.
-4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop.
+4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop. The `StreamSession` keeps the crew id of the start (`PendingStreamStart.crew_id`).
+5. `start_stream` advertises the stream before the host has started. Every start failure after it (encoder check, native start, SFU connect, join, transport, session creation) calls `stop_stream` for that crew, so no viewer sees a stream that does not exist.
+
+### Nakama reconnect
+
+The backend removes the stream records when the host's realtime socket ends (`OnSessionEnd` → `StreamCleanupUser`). The SFU session and the encoder keep running. After the reconnect, `resync_after_reconnect` calls `start_stream` with `crew_id` and `resume_session_id` (the live session). The backend restores the same session (specs/04-BACKEND.md §5). When it cannot, no viewer can find the stream, so the host ends it and reports a stream error. A start still on its thread during the reconnect is not re-advertised.
 
 ### Viewer start
 
@@ -724,7 +729,7 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
+Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. `stop_stream` goes to the crew in `StreamSession.crew_id`, not to the crew the UI shows. The backend accepts it only from the host. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
 
 ---
 

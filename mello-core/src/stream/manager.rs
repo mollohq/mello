@@ -219,6 +219,10 @@ pub fn capture_state_reason(state: u32) -> &'static str {
 pub struct StreamSession {
     pub session_id: String,
     pub mode: String,
+    /// The crew the stream is advertised in. END STREAM and the re-advertise
+    /// after a Nakama reconnect use it, not the crew the UI shows now.
+    /// Empty for sessions that no crew advertises (tools).
+    pub crew_id: String,
     stop_tx: Option<oneshot::Sender<()>>,
     manager_task: Option<tokio::task::JoinHandle<()>>,
     /// Set by the manager when every capture method failed. Taken by the
@@ -236,6 +240,7 @@ impl StreamSession {
         Self {
             session_id,
             mode,
+            crew_id: String::new(),
             stop_tx: Some(stop_tx),
             manager_task: Some(manager_task),
             capture_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -253,6 +258,12 @@ impl StreamSession {
         let mut session = Self::new(session_id, mode, stop_tx, manager_task);
         session.capture_failed = capture_failed;
         session
+    }
+
+    /// Set the crew the stream is advertised in.
+    pub fn with_crew_id(mut self, crew_id: impl Into<String>) -> Self {
+        self.crew_id = crew_id.into();
+        self
     }
 
     /// The flag the manager sets when every capture method failed.

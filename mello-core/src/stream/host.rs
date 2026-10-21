@@ -103,6 +103,34 @@ impl StartStreamResponse {
 
 /// Call the backend RPC to start a stream and get topology info.
 /// This is a separate async step so raw pointers don't cross await points.
+/// Payload of `start_stream` when the host re-advertises a stream that its
+/// SFU session still carries (after a Nakama realtime reconnect).
+#[derive(Debug, Serialize)]
+struct ResumeStreamRequest<'a> {
+    crew_id: &'a str,
+    resume_session_id: &'a str,
+}
+
+/// Re-advertise the stream `session_id` in `crew_id`. The backend restores
+/// the records that its session-end cleanup removed, or confirms that they
+/// are still there. It does not start a new session.
+pub async fn request_resume_stream(
+    nakama: &NakamaClient,
+    crew_id: &str,
+    session_id: &str,
+) -> Result<StartStreamResponse, StreamError> {
+    let payload = serde_json::to_value(ResumeStreamRequest {
+        crew_id,
+        resume_session_id: session_id,
+    })
+    .map_err(|e| StreamError::Backend(e.to_string()))?;
+    let resp_str = nakama
+        .rpc("start_stream", &payload)
+        .await
+        .map_err(|e| StreamError::Backend(e.to_string()))?;
+    serde_json::from_str(&resp_str).map_err(|e| StreamError::Backend(e.to_string()))
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn request_start_stream(
     nakama: &NakamaClient,

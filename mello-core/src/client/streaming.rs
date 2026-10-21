@@ -1097,6 +1097,9 @@ impl super::Client {
             log::error!("{}", message);
             // Bounded native stop on the teardown thread, never inline here.
             drop(teardown);
+            // start_stream advertised the stream to the crew. Without this,
+            // viewers see a live stream that no SFU session carries.
+            self.retract_advertised_stream(crew_id).await;
             let _ = self.event_tx.send(Event::StreamError {
                 message: message.to_string(),
             });
@@ -1120,6 +1123,7 @@ impl super::Client {
             Some(self.event_tx.clone()),
         ) {
             Ok(session) => {
+                let session = session.with_crew_id(crew_id);
                 let _ = self.event_tx.send(Event::StreamStarted {
                     crew_id: crew_id.to_string(),
                     session_id: session.session_id.clone(),
@@ -1135,10 +1139,12 @@ impl super::Client {
                 // The teardown guard moved into create_stream_session and was
                 // dropped there, which already stopped the host.
                 log::error!("Failed to create stream session: {}", e);
+                self.retract_advertised_stream(crew_id).await;
                 let _ = self.event_tx.send(Event::StreamError {
                     message: e.to_string(),
                 });
                 self.stream_host_sink = None;
+                self.stream_sfu_connection = None;
             }
         }
     }
@@ -1156,8 +1162,10 @@ impl super::Client {
         );
         let payload = serde_json::json!({ "crew_id": crew_id });
         if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
-            // Nothing else to try here. The backend drops a session when the
-            // host stops sending, so this is a delay, not a permanent lie.
+            // Nothing else to try here. The backend does not watch the
+            // stream: it removes the record when the host's Nakama session
+            // ends (OnSessionEnd) or when the stream GC finds the host
+            // offline or stale for 2 h (streaming.go streamGC).
             log::warn!("stop_stream RPC failed while retracting: {}", e);
         }
     }
@@ -1189,7 +1197,9 @@ impl super::Client {
         // join is bounded, native teardown runs on its own thread, and the RPC
         // is best effort. On 2026-09-15 this event waited behind a native stop
         // that never returned, and the button looked dead.
-        let crew_id = self.nakama.active_crew_id().map(String::from);
+        // The crew the stream is advertised in, not the crew the UI shows
+        // now: the host can switch crews while it streams.
+        let crew_id = Some(session.crew_id.clone()).filter(|c| !c.is_empty());
         let _ = self.event_tx.send(Event::StreamEnded {
             crew_id: crew_id.clone().unwrap_or_default(),
         });
@@ -1210,6 +1220,43 @@ impl super::Client {
             let payload = serde_json::json!({ "crew_id": crew_id });
             if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
                 log::warn!("stop_stream RPC failed: {}", e);
+            }
+        }
+    }
+
+    /// Re-advertise the hosted stream after a Nakama realtime reconnect.
+    ///
+    /// The backend's session-end cleanup removes the stream records when the
+    /// realtime socket drops (OnSessionEnd), and the SFU session and the
+    /// encoder keep running. `start_stream` with `resume_session_id` restores
+    /// the records for the same session. When the backend cannot restore
+    /// them, no viewer can find the stream, so the host ends it.
+    pub(super) async fn readvertise_stream_after_reconnect(&mut self) {
+        let Some(session) = self.stream_session.as_ref() else {
+            return;
+        };
+        if session.crew_id.is_empty() {
+            return;
+        }
+        let crew_id = session.crew_id.clone();
+        let session_id = session.session_id.clone();
+        match crate::stream::host::request_resume_stream(&self.nakama, &crew_id, &session_id).await
+        {
+            Ok(_) => log::info!(
+                "Reconnect: stream session {} advertised again in crew {}",
+                session_id,
+                crew_id
+            ),
+            Err(e) => {
+                log::error!(
+                    "Reconnect: stream session {} could not be advertised again: {}; ending it",
+                    session_id,
+                    e
+                );
+                self.handle_stop_stream().await;
+                let _ = self.event_tx.send(Event::StreamError {
+                    message: "The stream ended: the server lost it during a reconnect".to_string(),
+                });
             }
         }
     }
@@ -1944,5 +1991,330 @@ mod stream_members_tests {
             [member("host-1", "host")],
             "the late host stays, viewer-2 left"
         );
+    }
+}
+
+/// Host stream lifecycle against a fake Nakama HTTP API and a fake SFU:
+/// a failed start takes the advertised stream back, END STREAM and the
+/// re-advertise after a Nakama reconnect use the crew the stream is in.
+#[cfg(test)]
+mod stream_lifecycle_tests {
+    use std::sync::atomic::{AtomicBool, AtomicU8};
+    use std::sync::{mpsc, Arc, Mutex};
+    use std::time::Duration;
+
+    use futures::{SinkExt, StreamExt};
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
+    use tokio_tungstenite::tungstenite::Message;
+
+    use super::{NativeStartOutcome, StreamHostHandle};
+    use crate::client::Client;
+    use crate::config::Config;
+    use crate::events::Event;
+    use crate::stream::host::StartStreamResponse;
+    use crate::stream::manager::StreamSession;
+    use crate::voice::VoiceManager;
+
+    const LIMIT: Duration = Duration::from_secs(10);
+    const STREAMED_CREW: &str = "crew-streamed";
+    const ACTIVE_CREW: &str = "crew-active";
+    const SESSION: &str = "stream_host_1";
+
+    /// The RPCs the fake Nakama received: name and payload, in order.
+    type Rpcs = Arc<Mutex<Vec<(String, serde_json::Value)>>>;
+
+    /// A fake Nakama HTTP API. It answers every RPC with an empty payload,
+    /// or with an error for the names in `fail`, and records each call.
+    async fn fake_nakama(fail: &'static [&'static str]) -> (u16, Rpcs) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let port = listener.local_addr().expect("listener address").port();
+        let rpcs: Rpcs = Arc::default();
+        let seen = Arc::clone(&rpcs);
+        tokio::spawn(async move {
+            while let Ok((stream, _)) = listener.accept().await {
+                let seen = Arc::clone(&seen);
+                tokio::spawn(async move {
+                    let (read, mut write) = stream.into_split();
+                    let mut reader = BufReader::new(read);
+                    let mut request_line = String::new();
+                    if reader.read_line(&mut request_line).await.unwrap_or(0) == 0 {
+                        return;
+                    }
+                    let mut content_length = 0usize;
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).await.unwrap_or(0) == 0 {
+                            return;
+                        }
+                        if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
+                            content_length = v.trim().parse().unwrap_or(0);
+                        }
+                        if line == "\r\n" {
+                            break;
+                        }
+                    }
+                    let mut body = vec![0u8; content_length];
+                    if reader.read_exact(&mut body).await.is_err() {
+                        return;
+                    }
+                    let path = request_line.split_whitespace().nth(1).unwrap_or_default();
+                    let name = path
+                        .strip_prefix("/v2/rpc/")
+                        .unwrap_or(path)
+                        .split('?')
+                        .next()
+                        .unwrap_or_default()
+                        .to_string();
+                    // Nakama wraps the RPC payload in a JSON string.
+                    let payload = serde_json::from_slice::<String>(&body)
+                        .ok()
+                        .and_then(|s| serde_json::from_str(&s).ok())
+                        .unwrap_or(serde_json::Value::Null);
+                    let failed = fail.contains(&name.as_str());
+                    seen.lock().expect("rpc log").push((name, payload));
+                    let (status, reply) = if failed {
+                        (
+                            "404 Not Found",
+                            r#"{"error":"stream not resumable","code":5}"#,
+                        )
+                    } else {
+                        ("200 OK", r#"{"payload":"{}"}"#)
+                    };
+                    let response = format!(
+                        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
+                        reply.len()
+                    );
+                    let _ = write.write_all(response.as_bytes()).await;
+                });
+            }
+        });
+        (port, rpcs)
+    }
+
+    fn client_for(port: u16) -> (Client, mpsc::Receiver<Event>) {
+        let mut config = Config::development();
+        config.nakama_host = "127.0.0.1".into();
+        config.nakama_port = port;
+        config.nakama_ssl = false;
+        let (event_tx, events) = mpsc::channel();
+        let voice = VoiceManager::with_test_audio_backend(event_tx.clone());
+        let mut client = Client::with_voice(
+            config,
+            event_tx,
+            voice,
+            Arc::new(Mutex::new(None)),
+            Arc::new(Mutex::new(None)),
+            Arc::new(AtomicBool::new(false)),
+            Arc::new(AtomicU8::new(0)),
+            false,
+            false,
+        );
+        // The UI shows another crew than the one the stream is in.
+        client
+            .nakama
+            .set_test_session("session-token", Some(ACTIVE_CREW));
+        (client, events)
+    }
+
+    fn rpc_calls(rpcs: &Rpcs, name: &str) -> Vec<serde_json::Value> {
+        rpcs.lock()
+            .expect("rpc log")
+            .iter()
+            .filter(|(n, _)| n == name)
+            .map(|(_, p)| p.clone())
+            .collect()
+    }
+
+    /// A native start that finished with no host: the tests drive the SFU
+    /// half of the start.
+    fn native_outcome() -> NativeStartOutcome {
+        let (_video_tx, video_rx) = tokio::sync::mpsc::channel(1);
+        let (_audio_tx, audio_rx) = tokio::sync::mpsc::channel(1);
+        NativeStartOutcome {
+            host: StreamHostHandle(std::ptr::null_mut()),
+            video_rx,
+            audio_rx,
+            teardown: crate::stream::teardown::NativeTeardownGuard::new("test-host", |_| {}),
+            actual_w: 1280,
+            actual_h: 720,
+        }
+    }
+
+    fn start_response(endpoint: &str) -> StartStreamResponse {
+        serde_json::from_value(serde_json::json!({
+            "session_id": SESSION,
+            "stream_id": SESSION,
+            "mode": "sfu",
+            "sfu_endpoint": endpoint,
+            "sfu_token": "token",
+        }))
+        .expect("valid start_stream response")
+    }
+
+    fn text(value: serde_json::Value) -> Message {
+        Message::Text(value.to_string())
+    }
+
+    /// A stream SFU that rejects `join_stream`.
+    async fn sfu_rejecting_join() -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!("ws://{}/ws", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                if v["type"] == "join_stream" {
+                    ws.send(text(serde_json::json!({
+                        "type": "error",
+                        "data": { "code": "SESSION_FULL", "message": "Session at capacity" }
+                    })))
+                    .await
+                    .expect("send error");
+                }
+            }
+        });
+        endpoint
+    }
+
+    async fn assert_start_failure_retracts(endpoint: String) {
+        let (port, rpcs) = fake_nakama(&[]).await;
+        let (mut client, events) = client_for(port);
+        let config = crate::stream::StreamConfig::from_preset(
+            crate::stream::config::QualityPreset::Medium,
+            crate::stream::config::Codec::H264,
+        );
+        tokio::time::timeout(
+            LIMIT,
+            client.finish_stream_start(
+                STREAMED_CREW,
+                native_outcome(),
+                config,
+                4_000,
+                start_response(&endpoint),
+            ),
+        )
+        .await
+        .expect("the start ends in time");
+
+        assert_eq!(
+            rpc_calls(&rpcs, "stop_stream"),
+            [serde_json::json!({ "crew_id": STREAMED_CREW })],
+            "the advertised stream is taken back in its own crew"
+        );
+        assert!(client.stream_session.is_none());
+        let errors: Vec<Event> = events
+            .try_iter()
+            .filter(|e| matches!(e, Event::StreamError { .. }))
+            .collect();
+        assert_eq!(errors.len(), 1, "one stream error: {errors:?}");
+    }
+
+    /// The SFU does not answer: the crew must not keep a stream that no SFU
+    /// session carries.
+    #[tokio::test]
+    async fn a_failed_sfu_connect_takes_the_advertised_stream_back() {
+        let closed = std::net::TcpListener::bind("127.0.0.1:0").expect("bind");
+        let endpoint = format!("ws://{}/ws", closed.local_addr().expect("address"));
+        drop(closed);
+        assert_start_failure_retracts(endpoint).await;
+    }
+
+    #[tokio::test]
+    async fn a_rejected_sfu_join_takes_the_advertised_stream_back() {
+        assert_start_failure_retracts(sfu_rejecting_join().await).await;
+    }
+
+    fn hosted_session(client: &mut Client) {
+        let (stop_tx, _stop_rx) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async {});
+        client.stream_session = Some(
+            StreamSession::new(SESSION.to_string(), "sfu".to_string(), stop_tx, task)
+                .with_crew_id(STREAMED_CREW),
+        );
+    }
+
+    /// END STREAM stops the stream in the crew it is in, not in the crew the
+    /// UI shows now.
+    #[tokio::test]
+    async fn end_stream_uses_the_crew_of_the_stream() {
+        let (port, rpcs) = fake_nakama(&[]).await;
+        let (mut client, events) = client_for(port);
+        hosted_session(&mut client);
+
+        tokio::time::timeout(LIMIT, client.handle_stop_stream())
+            .await
+            .expect("END STREAM ends in time");
+
+        assert_eq!(
+            rpc_calls(&rpcs, "stop_stream"),
+            [serde_json::json!({ "crew_id": STREAMED_CREW })]
+        );
+        let ended: Vec<Event> = events
+            .try_iter()
+            .filter(|e| matches!(e, Event::StreamEnded { .. }))
+            .collect();
+        assert!(
+            matches!(ended.as_slice(), [Event::StreamEnded { crew_id }] if crew_id == STREAMED_CREW),
+            "{ended:?}"
+        );
+    }
+
+    /// After a Nakama realtime reconnect the backend has removed the stream
+    /// records (OnSessionEnd), while the SFU session still runs. The host
+    /// advertises the same session again, in its own crew.
+    #[tokio::test]
+    async fn a_nakama_reconnect_advertises_the_live_stream_again() {
+        let (port, rpcs) = fake_nakama(&[]).await;
+        let (mut client, _events) = client_for(port);
+        // No active crew: the resync of the crew view returns at once, and
+        // the stream is advertised all the same.
+        client.nakama.set_test_session("session-token", None);
+        hosted_session(&mut client);
+
+        tokio::time::timeout(LIMIT, client.resync_after_reconnect())
+            .await
+            .expect("the resync ends in time");
+
+        assert_eq!(
+            rpc_calls(&rpcs, "start_stream"),
+            [serde_json::json!({ "crew_id": STREAMED_CREW, "resume_session_id": SESSION })]
+        );
+        assert!(client.stream_session.is_some(), "the stream keeps running");
+    }
+
+    /// When the backend cannot restore the stream, no viewer can find it:
+    /// the host ends it and says why.
+    #[tokio::test]
+    async fn a_stream_the_backend_cannot_restore_ends() {
+        let (port, rpcs) = fake_nakama(&["start_stream"]).await;
+        let (mut client, events) = client_for(port);
+        hosted_session(&mut client);
+
+        tokio::time::timeout(LIMIT, client.readvertise_stream_after_reconnect())
+            .await
+            .expect("the re-advertise ends in time");
+
+        assert!(client.stream_session.is_none());
+        assert_eq!(
+            rpc_calls(&rpcs, "stop_stream"),
+            [serde_json::json!({ "crew_id": STREAMED_CREW })]
+        );
+        assert!(events
+            .try_iter()
+            .any(|e| matches!(e, Event::StreamError { .. })));
     }
 }
