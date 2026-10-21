@@ -373,7 +373,7 @@ func voiceRoomSFURegion(channelID, preferred string) string {
 }
 
 // issueVoiceSFUToken signs a short-lived SFU token for a voice participant.
-// Returns ok=false when signing fails, leaving the caller to fall back to P2P.
+// Returns ok=false when signing fails. The caller then returns SFU_UNAVAILABLE.
 func issueVoiceSFUToken(logger runtime.Logger, p voiceJoinParams) (endpoint, token string, ok bool) {
 	region := voiceRoomSFURegion(p.ChannelID, p.PreferredRegion)
 	if p.PreferredRegion != "" && p.PreferredRegion != region {
@@ -431,13 +431,10 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	// Determine voice mode based on crew entitlement
-	sfuMode := sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID)
-
-	// Capacity differs by mode (SFU: 50, P2P: 6).
-	maxMembers := MaxVoiceChannelMembers
-	if sfuMode {
-		maxMembers = MaxSFUVoiceChannelMembers
+	// The SFU is the only voice transport.
+	if !sfuAvailableForCrew(ctx, nk, req.CrewID) {
+		logger.Warn("voice_join: SFU unavailable for crew %s (auth=%v)", req.CrewID, sfuAuthEnabled())
+		return "", errSFUUnavailable
 	}
 
 	params := voiceJoinParams{
@@ -446,7 +443,7 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 		ChannelName:     channelName,
 		UserID:          userID,
 		Username:        resolveUsername(ctx, nk, userID),
-		MaxMembers:      maxMembers,
+		MaxMembers:      MaxVoiceChannelMembers,
 		PreferredRegion: req.PreferredRegion,
 	}
 
@@ -459,28 +456,19 @@ func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk run
 	// (spec 10 section 4.6).
 	bitrate := channelBitrateKbps(ctx, nk, req.CrewID, channelID)
 
-	if sfuMode {
-		if endpoint, token, ok := issueVoiceSFUToken(logger, params); ok {
-			resp, _ := json.Marshal(map[string]interface{}{
-				"success":      true,
-				"channel_id":   channelID,
-				"voice_state":  snap,
-				"mode":         "sfu",
-				"sfu_endpoint": endpoint,
-				"sfu_token":    token,
-				"bitrate_kbps": bitrate,
-			})
-			return string(resp), nil
-		}
-		// Signing failed — fall through to P2P.
+	endpoint, token, ok := issueVoiceSFUToken(logger, params)
+	if !ok {
+		// Undo the seat, so a failed join leaves no member behind.
+		voiceLeaveInternal(ctx, logger, nk, userID)
+		return "", errSFUUnavailable
 	}
-
-	logger.Info("Voice join (P2P): user=%s crew=%s channel=%s", userID, req.CrewID, channelID)
 	resp, _ := json.Marshal(map[string]interface{}{
 		"success":      true,
 		"channel_id":   channelID,
 		"voice_state":  snap,
-		"mode":         "p2p",
+		"mode":         "sfu",
+		"sfu_endpoint": endpoint,
+		"sfu_token":    token,
 		"bitrate_kbps": bitrate,
 	})
 	return string(resp), nil

@@ -16,10 +16,9 @@ import (
 // ---------------------------------------------------------------------------
 
 const (
-	VoiceChannelCollection    = "voice_channels"
-	MaxChannelsPerCrew        = 8
-	MaxVoiceChannelMembers    = 6
-	MaxSFUVoiceChannelMembers = 50
+	VoiceChannelCollection = "voice_channels"
+	MaxChannelsPerCrew     = 8
+	MaxVoiceChannelMembers = 50
 
 	// Voice bitrate of a channel in kbps: the top rung of the encoder ladder
 	// (spec 10 section 4.6). 96 is the highest rung for now.

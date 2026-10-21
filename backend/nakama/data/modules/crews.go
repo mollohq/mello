@@ -126,11 +126,8 @@ func DiscoverCrewsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 
 // newCrewMetadata builds the group metadata stored on a newly created crew.
 //
-// sfu_enabled must be set here. It is the flag hasPremiumCrew reads to decide
-// whether voice and streaming use the SFU, and when it is absent both silently
-// fall back to P2P — no error, no log, and the crew still reports members as
-// connected. Every crew created before this was set ran P2P without anyone
-// noticing, so keep this in sync with sfu_entitlement.go.
+// sfu_enabled is the operator kill switch that sfuEnabledForCrew reads
+// (sfu_entitlement.go). The default is on; a new crew states it explicitly.
 func newCrewMetadata(userID string, inviteOnly bool) map[string]interface{} {
 	return map[string]interface{}{
 		"max_members":    MaxCrewMembers,
