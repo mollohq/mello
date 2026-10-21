@@ -11,7 +11,8 @@
 #
 # Contents: modules/video_coding/timing (VCMTiming, JitterEstimator and their
 # filters), api/video/frame_buffer (FrameBuffer, the M131 successor of
-# frame_buffer2), video/frame_decode_timing (the release decision), and the
+# frame_buffer2), video/frame_decode_timing (the release decision),
+# modules/video_coding/frame_helpers (the bad-render-time reset rule), and the
 # EncodedFrame/EncodedImage types that FrameBuffer stores. No RTP
 # depacketization, no decoder, no transport.
 #
@@ -31,9 +32,12 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     set(VIDEO_TIMING_ROOT ${CMAKE_CURRENT_LIST_DIR}/../third_party/webrtc-video-timing)
 
     set(VIDEO_TIMING_SOURCES
+        webrtc/api/transport/rtp/dependency_descriptor.cc
         webrtc/api/video/encoded_frame.cc
         webrtc/api/video/encoded_image.cc
         webrtc/api/video/frame_buffer.cc
+        webrtc/common_video/generic_frame_descriptor/generic_frame_info.cc
+        webrtc/modules/video_coding/frame_helpers.cc
         webrtc/modules/video_coding/include/video_codec_interface.cc
         webrtc/modules/video_coding/timing/decode_time_percentile_filter.cc
         webrtc/modules/video_coding/timing/frame_delay_variation_kalman_filter.cc
@@ -51,7 +55,14 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     # frame_decode_timing.cc uses designated initializers: C++20, as on the
     # APM and NetEQ targets.
     set_target_properties(webrtc_video_timing PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_compile_definitions(webrtc_video_timing PRIVATE ${WAP_DEFINES})
+    # No WEBRTC_ENABLE_SYMBOL_EXPORT: with it, RTC_EXPORT is dllexport on
+    # Windows, and a dllexport class emits its vtable in every object that
+    # includes it. api/video/video_frame_buffer.h then needs
+    # video_frame_buffer.cc, which needs I420Buffer and libyuv. A static
+    # library exports nothing, so the macro has no use here.
+    set(VIDEO_TIMING_DEFINES ${WAP_DEFINES})
+    list(REMOVE_ITEM VIDEO_TIMING_DEFINES WEBRTC_ENABLE_SYMBOL_EXPORT)
+    target_compile_definitions(webrtc_video_timing PRIVATE ${VIDEO_TIMING_DEFINES})
     target_include_directories(webrtc_video_timing BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(webrtc_video_timing PUBLIC ${VIDEO_TIMING_ROOT}/webrtc)
     target_link_libraries(webrtc_video_timing
