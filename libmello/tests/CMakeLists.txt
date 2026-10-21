@@ -152,3 +152,25 @@ if(MELLO_WEBRTC_NETEQ)
     endif()
     gtest_discover_tests(mello_neteq_spike_tests)
 endif()
+
+# Stage 3 streaming spike: vendored video receive timing and frame buffer
+# (option MELLO_WEBRTC_VIDEO_TIMING, cmake/webrtc-video-timing.cmake). Own
+# executable: it replaces the global operator new to count heap per timeline,
+# and it does not link the mello library.
+if(MELLO_WEBRTC_VIDEO_TIMING)
+    add_executable(mello_video_timing_spike_tests test_video_timing_spike.cpp)
+    set_target_properties(mello_video_timing_spike_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(mello_video_timing_spike_tests PRIVATE
+        webrtc_video_timing
+        GTest::gtest
+        GTest::gtest_main
+    )
+    target_include_directories(mello_video_timing_spike_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
+    )
+    if(WIN32)
+        # rtc_base headers include winsock2.h; windows.h must not pull winsock.h.
+        target_compile_definitions(mello_video_timing_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    gtest_discover_tests(mello_video_timing_spike_tests)
+endif()
