@@ -41,6 +41,15 @@ struct EncodePhaseTiming {
     double lock_ms = 0.0;
 };
 
+/// True when a bitrate change must force an IDR: a down-step of more than
+/// 25 %. Congestion can leave a damaged reference chain, and a keyframe
+/// resyncs it. A routine estimator step must not give a keyframe, or a ramp
+/// of small steps becomes a keyframe storm. Every backend uses this rule.
+inline bool bitrate_step_forces_idr(uint32_t from_kbps, uint32_t to_kbps) {
+    return from_kbps > 0 &&
+           static_cast<uint64_t>(to_kbps) * 4 < static_cast<uint64_t>(from_kbps) * 3;
+}
+
 struct EncoderStats {
     uint32_t bitrate_kbps;
     uint32_t fps_actual;

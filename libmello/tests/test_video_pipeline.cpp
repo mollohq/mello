@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 #include "video/video_pipeline.hpp"
 #include "video/frame_cadence.hpp"
+#include "video/encoder_control.hpp"
+#include <future>
 #include <vector>
 #include <algorithm>
 #include <mutex>
@@ -582,6 +584,181 @@ TEST(EncodeSize, AWidthIsAMultipleOf16WhenScaled) {
             }
         }
     }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encoder control. The Rust threads set the bitrate and the framerate and ask
+// for keyframes while the encode thread encodes and changes cost tiers. Before
+// stage 2 nothing serialised them, and no encoder backend is thread safe.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Counts any two calls that run at the same time, and any encode that sees a
+// bitrate half written. Its two rate fields are written one after the other.
+class TornStateEncoder : public Encoder {
+public:
+    std::atomic<int>      inside{0};
+    std::atomic<int>      overlaps{0};
+    std::atomic<int>      torn{0};
+    std::atomic<int>      encodes{0};
+    std::atomic<int>      keyframes{0};
+    std::atomic<uint32_t> rate_a{1000};
+    std::atomic<uint32_t> rate_b{1000};
+    std::atomic<uint32_t> fps{60};
+    // When set, encode() waits here until it is cleared.
+    std::atomic<bool>     hold_encode{false};
+    std::atomic<bool>     in_held_encode{false};
+
+    bool initialize(const GraphicsDevice&, const EncoderConfig&) override { return true; }
+    void shutdown() override {}
+#ifdef _WIN32
+    bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
+#elif defined(__APPLE__)
+    bool encode(void*, EncodedPacket& out) override { return run_encode(out); }
+#endif
+    void request_keyframe() override {
+        enter();
+        keyframes.fetch_add(1);
+        leave();
+    }
+    void set_bitrate(uint32_t kbps) override {
+        enter();
+        rate_a.store(kbps);
+        for (int i = 0; i < 4; ++i) std::this_thread::yield();
+        rate_b.store(kbps);
+        leave();
+    }
+    void set_framerate(uint32_t value) override {
+        enter();
+        fps.store(value);
+        leave();
+    }
+    bool reduce_cost_tier() override {
+        enter();
+        std::this_thread::yield();
+        leave();
+        return false;
+    }
+    void get_stats(EncoderStats& out) const override { out = EncoderStats{}; }
+    bool supports_codec(VideoCodec) const override { return true; }
+    const char* name() const override { return "torn-state"; }
+
+private:
+    void enter() {
+        if (inside.fetch_add(1) != 0) overlaps.fetch_add(1);
+    }
+    void leave() { inside.fetch_sub(1); }
+    bool run_encode(EncodedPacket& out) {
+        enter();
+        in_held_encode.store(hold_encode.load());
+        while (hold_encode.load()) std::this_thread::yield();
+        in_held_encode.store(false);
+        const uint32_t a = rate_a.load();
+        std::this_thread::yield();
+        const uint32_t b = rate_b.load();
+        if (a != b) torn.fetch_add(1);
+        encodes.fetch_add(1);
+        leave();
+        out.data.assign(4, 0);
+        return true;
+    }
+};
+
+} // namespace
+
+TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+
+    std::atomic<bool> setters_done{false};
+    std::thread encode_thread([&] {
+        EncodedPacket packet;
+        int frames = 0;
+        while (!setters_done.load() || frames < 1000) {
+            control.encode(nullptr, packet);
+            if (frames % 50 == 0) control.reduce_cost_tier();
+            ++frames;
+        }
+    });
+    // Both threads run at the same time from here.
+    while (encoder.encodes.load() == 0) std::this_thread::yield();
+    for (uint32_t i = 0; i < 1000; ++i) {
+        control.set_bitrate(1000 + i);
+        if (i % 100 == 0) control.set_framerate(i % 200 == 0 ? 30 : 60);
+        if (i % 10 == 0) control.request_keyframe();
+    }
+    setters_done.store(true);
+    encode_thread.join();
+    control.apply_pending();
+
+    EXPECT_EQ(encoder.overlaps.load(), 0) << "a setter ran beside the encode path";
+    EXPECT_EQ(encoder.torn.load(), 0) << "an encode saw a half-written bitrate";
+    EXPECT_EQ(encoder.rate_a.load(), 1999u) << "the last bitrate wins";
+    EXPECT_EQ(encoder.fps.load(), 60u);
+    EXPECT_GE(encoder.keyframes.load(), 1);
+    EXPECT_FALSE(control.has_pending());
+}
+
+// A setter must never wait for an encode: an encode can be stuck in the display
+// driver for minutes (2026-09-16), and the caller is a Rust stream thread.
+TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+
+    encoder.hold_encode.store(true);
+    std::thread encode_thread([&] {
+        EncodedPacket packet;
+        control.encode(nullptr, packet);
+    });
+    while (!encoder.in_held_encode.load()) std::this_thread::yield();
+
+    auto setter = std::async(std::launch::async, [&] {
+        control.set_bitrate(4000);
+        control.request_keyframe();
+    });
+    const bool returned = setter.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    EXPECT_TRUE(returned) << "set_bitrate waited for the encode";
+    EXPECT_EQ(encoder.rate_a.load(), 1000u) << "applied beside a running encode";
+    EXPECT_TRUE(control.has_pending());
+
+    encoder.hold_encode.store(false);
+    encode_thread.join();
+    setter.wait();
+
+    // The encode thread applies the value on its next wake.
+    control.apply_pending();
+    EXPECT_EQ(encoder.rate_a.load(), 4000u);
+    EXPECT_EQ(encoder.keyframes.load(), 1);
+    EXPECT_FALSE(control.has_pending());
+    EXPECT_EQ(encoder.overlaps.load(), 0);
+}
+
+TEST(EncoderControl, AnIdleEncoderTakesTheValueAtOnce) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+    control.set_bitrate(2500);
+    EXPECT_EQ(encoder.rate_a.load(), 2500u);
+    EXPECT_FALSE(control.has_pending());
+
+    control.attach(nullptr);
+    control.set_bitrate(800);  // no encoder: nothing to call
+    EXPECT_EQ(encoder.rate_a.load(), 2500u);
+}
+
+// AMF and QSV forced an IDR on every bitrate change; NVENC only on a down-step
+// of more than 25 %. All three now share the rule.
+TEST(EncoderControl, OnlyALargeDownStepForcesAKeyframe) {
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 1100)) << "an up-step";
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 950)) << "a routine estimator step";
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 750)) << "exactly 25 %";
+    EXPECT_TRUE(bitrate_step_forces_idr(1000, 749));
+    EXPECT_TRUE(bitrate_step_forces_idr(8000, 2000));
+    EXPECT_FALSE(bitrate_step_forces_idr(0, 2000)) << "no previous bitrate";
+    EXPECT_TRUE(bitrate_step_forces_idr(4'000'000'000u, 1)) << "no overflow";
 }
 
 // Idle keepalive: a quiet capture still needs video, or a viewer who joins a

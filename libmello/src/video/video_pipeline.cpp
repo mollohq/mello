@@ -228,6 +228,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "No encoder available");
         return false;
     }
+    encoder_control_.attach(encoder_.get());
 
     // 4. Start encode thread + capture — frames flow: capture -> preprocess -> queue -> encode thread
     host_running_    = true;
@@ -282,6 +283,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "No encoder available");
         return false;
     }
+    encoder_control_.attach(encoder_.get());
 
     host_running_    = true;
     host_start_time_ = now_us();
@@ -370,6 +372,7 @@ void VideoPipeline::stop_host() {
         return;
     }
 
+    encoder_control_.attach(nullptr);
     MELLO_LOG_INFO(TAG, "stop_host: encoder shutdown (%s)", encoder_ ? encoder_->name() : "none");
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
@@ -403,7 +406,7 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_->encode(cv_pixel_buffer, packet)) {
+    if (encoder_control_.encode(cv_pixel_buffer, packet)) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {
@@ -472,7 +475,7 @@ VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uin
 }
 
 void VideoPipeline::request_keyframe() {
-    if (encoder_) encoder_->request_keyframe();
+    encoder_control_.request_keyframe();
     // An idle stream has no next frame to carry the IDR. Wake the encode
     // thread so it re-encodes the last picture now.
     keepalive_kick_.store(true, std::memory_order_relaxed);
@@ -501,7 +504,7 @@ bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
 // keep the target FPS constant and leave headroom between target and actual
 // bitrate so the encoder naturally recovers after transient drops.
 void VideoPipeline::set_bitrate(uint32_t kbps) {
-    if (encoder_) encoder_->set_bitrate(kbps);
+    encoder_control_.set_bitrate(kbps);
 }
 
 void VideoPipeline::get_stats(EncoderStats& out) const {
@@ -528,9 +531,7 @@ void VideoPipeline::set_output_fps(uint32_t fps) {
 
     // Rate control budgets bits per frame from the framerate, so the encoder has
     // to be told or a 30fps stream gets 60fps-sized frames.
-    if (encoder_) {
-        encoder_->set_framerate(target == 0 ? capture_fps : target);
-    }
+    encoder_control_.set_framerate(target == 0 ? capture_fps : target);
     MELLO_LOG_INFO(TAG, "output framerate %u -> %u fps (capture %u)",
                    previous == 0 ? capture_fps : previous,
                    target == 0 ? capture_fps : target,
@@ -671,6 +672,9 @@ void VideoPipeline::encode_thread_func() {
     static constexpr auto kIdlePoll = std::chrono::milliseconds(100);
 
     while (true) {
+        // A control value that met a running encode waits here (EncoderControl).
+        encoder_control_.apply_pending();
+
         EncodeJob job{};
         bool idle_repeat = false;
         {
@@ -704,7 +708,7 @@ void VideoPipeline::encode_thread_func() {
 
         auto t0 = std::chrono::steady_clock::now();
         EncodedPacket packet{};
-        if (encoder_->encode(job.texture, packet)) {
+        if (encoder_control_.encode(job.texture, packet)) {
             auto t1 = std::chrono::steady_clock::now();
             last_encode_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
             // Exponential mean, ~1s of history at 60fps. Cheap, and unlike the
@@ -770,7 +774,7 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     }
 
     if (encoder_is_overloaded(sample)) {
-        encoder_->reduce_cost_tier();
+        encoder_control_.reduce_cost_tier();
     }
     // Reset the window either way: after a downgrade so the next decision
     // measures the new configuration, and after a healthy window so old drops

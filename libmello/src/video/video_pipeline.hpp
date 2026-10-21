@@ -2,6 +2,7 @@
 #include "graphics_device.hpp"
 #include "capture_source.hpp"
 #include "encoder.hpp"
+#include "encoder_control.hpp"
 #include "decoder.hpp"
 #include "cursor.hpp"
 #include <memory>
@@ -220,6 +221,9 @@ private:
     GraphicsDevice                       device_{};
     std::unique_ptr<CaptureSource>       capture_;
     std::unique_ptr<Encoder>             encoder_;
+    // Every call into encoder_ that can run beside the encode path goes
+    // through this: encode, cost tiers, bitrate, framerate, keyframes.
+    EncoderControl                       encoder_control_;
     std::unique_ptr<Decoder>             decoder_;
 #ifdef _WIN32
     std::unique_ptr<VideoPreprocessor>   preprocessor_;
