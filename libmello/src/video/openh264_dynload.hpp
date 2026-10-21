@@ -6,16 +6,13 @@
 #ifdef _WIN32
 #include <cstdint>
 
-// Forward declarations matching the OpenH264 C API
-struct ISVCDecoder;
-struct SDecodingParam;
-struct SBufferInfo;
-
 namespace mello::video::openh264 {
 
+/// Decoder entry points, typed `void**` like EncoderApi: the decoder
+/// classes come from the vendored API headers in decoder_openh264.cpp.
 struct DecoderApi {
-    long (*create_decoder)(ISVCDecoder** ppDecoder);
-    void (*destroy_decoder)(ISVCDecoder* pDecoder);
+    long (*create_decoder)(void** ppDecoder);
+    void (*destroy_decoder)(void* pDecoder);
 };
 
 bool load();
