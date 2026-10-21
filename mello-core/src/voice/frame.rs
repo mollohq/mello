@@ -1,5 +1,4 @@
-//! The voice frame of the P2P data channel and the mic test (spec 10
-//! section 4.2).
+//! The voice frame of the mic test (spec 10 section 4.2).
 //!
 //! ```text
 //! [sequence: u32 LE][rtp timestamp: u32 LE][opus payload ...]
@@ -7,8 +6,8 @@
 //!
 //! `mello_voice_feed_packet` takes this frame. libmello builds the RTP fields
 //! for NetEQ from it (payload type 111, the low 16 bits of the sequence, the
-//! timestamp), so the P2P and loopback paths play through the same NetEQ as
-//! the SFU path. `mello_voice_get_packet` still returns only the 4-byte
+//! timestamp), so the loopback path plays through the same NetEQ as the SFU
+//! path. `mello_voice_get_packet` still returns only the 4-byte
 //! sequence header; the timestamp comes from
 //! `mello_voice_get_packet_with_timestamp`.
 

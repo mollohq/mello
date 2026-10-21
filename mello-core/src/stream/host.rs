@@ -42,11 +42,9 @@ pub struct StartStreamRequest {
 pub struct StartStreamResponse {
     pub session_id: Option<String>,
     pub stream_id: Option<String>,
-    #[serde(default = "default_mode")]
-    pub mode: String,
-    #[allow(dead_code)]
+    /// Always "sfu": the SFU is the only stream transport.
     #[serde(default)]
-    pub max_viewers: Option<u32>,
+    pub mode: String,
     #[serde(default)]
     pub sfu_endpoint: Option<String>,
     #[serde(default)]
@@ -70,10 +68,6 @@ pub struct CapturePolicy {
     pub hook_allow_ids: Vec<u32>,
     #[serde(default)]
     pub hook_deny_ids: Vec<u32>,
-}
-
-fn default_mode() -> String {
-    "p2p".to_string()
 }
 
 /// Gate 1 of the hook policy, keyed by catalogue identity.
@@ -437,7 +431,7 @@ mod tests {
 
     #[test]
     fn old_backend_response_without_capture_parses() {
-        let resp: StartStreamResponse = serde_json::from_str(r#"{"session_id":"s1","mode":"p2p"}"#)
+        let resp: StartStreamResponse = serde_json::from_str(r#"{"session_id":"s1","mode":"sfu"}"#)
             .expect("old response parses");
         assert!(resp.capture.is_none());
         assert!(!hook_allowed_for_game(WITCHER3, resp.capture.as_ref()));
@@ -446,7 +440,7 @@ mod tests {
     #[test]
     fn backend_response_with_id_lists_parses() {
         let resp: StartStreamResponse = serde_json::from_str(
-            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v1","hook_allow_ids":[1942],"hook_deny_ids":[242408]}}"#,
+            r#"{"session_id":"s1","mode":"sfu","capture":{"hook_enabled":true,"policy_version":"v1","hook_allow_ids":[1942],"hook_deny_ids":[242408]}}"#,
         )
         .expect("response parses");
         let capture = resp.capture.as_ref().expect("capture block present");
@@ -460,7 +454,7 @@ mod tests {
         // A backend that still sends the old string lists: the id lists
         // default to empty, so nothing is hooked.
         let resp: StartStreamResponse = serde_json::from_str(
-            r#"{"session_id":"s1","mode":"p2p","capture":{"hook_enabled":true,"policy_version":"v0","hook_allow":["witcher3.exe"],"hook_deny":[]}}"#,
+            r#"{"session_id":"s1","mode":"sfu","capture":{"hook_enabled":true,"policy_version":"v0","hook_allow":["witcher3.exe"],"hook_deny":[]}}"#,
         )
         .expect("old capture block parses");
         let capture = resp.capture.as_ref().expect("capture block present");

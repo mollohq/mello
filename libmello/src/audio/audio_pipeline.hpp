@@ -175,8 +175,8 @@ public:
     /// thread, but never from inside the sink (it would wait for itself).
     void set_packet_sink(PacketSink sink);
 
-    /// Receive one voice frame of the P2P and loopback paths (spec 10
-    /// section 4.2): VOICE_FRAME_HEADER_SIZE bytes of header, then Opus.
+    /// Receive one voice frame of the loopback path (spec 10 section
+    /// 4.2): VOICE_FRAME_HEADER_SIZE bytes of header, then Opus.
     /// Builds the RTP fields from the header (payload type 111, the low 16
     /// bits of the sequence, the timestamp, SSRC 0) and inserts the frame
     /// into the peer's NetEQ. Any thread.

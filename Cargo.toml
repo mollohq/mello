@@ -8,7 +8,6 @@ members = [
     "mello-core-ffi",
     "mello-sys",
     "tools/stream-host",
-    "tools/stream-viewer",
     "tools/rtp-client-test",
     "tools/sfu-stream-viewer-probe",
     "tools/voice-test-client",

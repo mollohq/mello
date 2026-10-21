@@ -1,6 +1,5 @@
 use crate::crew_state::VoiceJoinResponse;
 use crate::events::Event;
-use crate::voice::{SignalEnvelope, SignalPurpose};
 
 use super::sfu_voice_join::{JoinOutcome, JoinStep, SfuVoiceJoin};
 
@@ -131,29 +130,6 @@ impl super::Client {
         }
 
         steps.mark("sfu_reconnect");
-
-        // Send any pending signaling messages through Nakama
-        let signals = self.voice.drain_signals();
-        for (to, signal) in signals {
-            let envelope = SignalEnvelope {
-                purpose: SignalPurpose::Voice,
-                stream_width: None,
-                stream_height: None,
-                stream_bitrate_kbps: None,
-                message: signal,
-            };
-            let payload = match serde_json::to_string(&envelope) {
-                Ok(p) => p,
-                Err(e) => {
-                    log::error!("Failed to serialize signal: {}", e);
-                    continue;
-                }
-            };
-            if let Err(e) = self.nakama.send_signal(&to, &payload).await {
-                log::error!("Failed to send signal to {}: {}", to, e);
-            }
-        }
-        steps.mark("signal_send");
         self.voice_tick_budget
             .check(sfu_mode, &steps, std::time::Instant::now());
     }
@@ -172,8 +148,7 @@ impl super::Client {
     /// One SFU voice reconnect attempt for `channel_id`. While the voice
     /// token of the last join is valid, the attempt goes straight to the SFU
     /// with it. Else it asks the backend for a new token (`voice_join`).
-    /// A failed attempt leaves voice disconnected for the next one: it does
-    /// not fall back to P2P, because the other members stay on the SFU.
+    /// A failed attempt leaves voice disconnected for the next one.
     pub(super) async fn reconnect_voice(&mut self, channel_id: &str) {
         let now = tokio::time::Instant::now();
         let grant = self
@@ -260,12 +235,11 @@ impl super::Client {
 
     /// Stop the current voice media and start it for the joined channel.
     ///
-    /// P2P starts here. An SFU join only starts here: its network steps run
-    /// off the command loop, and `on_sfu_voice_join_step` finishes it. Voice
-    /// ticks and other commands keep running while the SFU answers or fails.
+    /// The SFU join only starts here: its network steps run off the command
+    /// loop, and `on_sfu_voice_join_step` finishes it. Voice ticks and other
+    /// commands keep running while the SFU answers or fails.
     ///
-    /// `reconnect` is true for an attempt of the reconnect scheduler. A
-    /// failed SFU reconnect does not fall back to P2P.
+    /// `reconnect` is true for an attempt of the reconnect scheduler.
     pub(super) async fn start_voice_media(
         &mut self,
         crew_id: &str,
@@ -285,34 +259,20 @@ impl super::Client {
             return;
         };
 
-        let p2p_peer_ids: Vec<String> = resp
-            .voice_state
-            .members
-            .iter()
-            .filter(|m| m.user_id != local_id)
-            .map(|m| m.user_id.clone())
-            .collect();
-
-        if resp.mode.as_deref().unwrap_or("p2p") == "sfu" {
-            let join = SfuVoiceJoin {
-                crew_id: crew_id.to_string(),
-                channel_id: resp.channel_id.clone(),
-                local_id: local_id.to_string(),
-                p2p_peer_ids,
-                reconnect,
-            };
-            let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
-            let token = resp.sfu_token.as_deref().unwrap_or_default();
-            self.sfu_voice_joins.connect(join, endpoint, token);
-            return;
-        }
-
-        self.voice.join_voice(local_id, &p2p_peer_ids);
-        self.on_voice_media_started();
+        let join = SfuVoiceJoin {
+            crew_id: crew_id.to_string(),
+            channel_id: resp.channel_id.clone(),
+            local_id: local_id.to_string(),
+            reconnect,
+        };
+        let endpoint = resp.sfu_endpoint.as_deref().unwrap_or_default();
+        let token = resp.sfu_token.as_deref().unwrap_or_default();
+        self.sfu_voice_joins.connect(join, endpoint, token);
     }
 
     /// Continue the SFU voice join with the outcome of its last network step.
-    /// Runs on the loop. A failed step falls back to P2P.
+    /// Runs on the loop. A failed step leaves voice disconnected, and the
+    /// reconnect scheduler tries again.
     pub(super) fn on_sfu_voice_join_step(&mut self, outcome: JoinOutcome) {
         let JoinOutcome { join, step, result } = outcome;
         match result {
@@ -332,8 +292,7 @@ impl super::Client {
                         return;
                     }
                     Err(e) => {
-                        log::error!("SFU peer creation failed: {}, falling back to P2P", e);
-                        self.voice.join_voice(&join.local_id, &join.p2p_peer_ids);
+                        log::error!("SFU peer creation failed: {}", e);
                     }
                 }
             }
@@ -343,8 +302,7 @@ impl super::Client {
                     .join_voice_sfu(&join.local_id, &join.crew_id, conn);
             }
             Err(e) if join.reconnect => {
-                // The other members stay on the SFU: P2P would reach none of
-                // them. Voice stays disconnected; the scheduler tries again.
+                // Voice stays disconnected; the scheduler tries again.
                 log::warn!(
                     "SFU reconnect: {} failed: {}; the next attempt follows",
                     step,
@@ -353,8 +311,7 @@ impl super::Client {
                 return;
             }
             Err(e) => {
-                log::error!("SFU {} failed: {}, falling back to P2P", step, e);
-                self.voice.join_voice(&join.local_id, &join.p2p_peer_ids);
+                log::error!("SFU {} failed: {}", step, e);
             }
         }
         self.on_voice_media_started();
@@ -367,8 +324,7 @@ impl super::Client {
             self.sfu_voice_reconnect = None;
         }
 
-        // The transport is the one that started: the SFU, or P2P after an
-        // SFU join failed.
+        // The transport is the SFU, or Disconnected when the SFU join failed.
         let _ = self.event_tx.send(Event::VoiceStateChanged {
             in_call: true,
             transport: self.voice.voice_mode(),
@@ -575,7 +531,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn the_loop_handles_commands_while_the_sfu_connect_waits_then_falls_back() {
+    async fn the_loop_handles_commands_while_the_sfu_connect_waits_then_fails() {
         // The SFU takes the connection and does not answer: the connect waits.
         let sfu = silent_sfu().await;
         let (mut client, events) = client_without_audio();
@@ -610,7 +566,7 @@ mod tests {
                 "voice started before the SFU connect ended: {before:?}"
             );
 
-            // The connect fails. The loop falls back to P2P and reports the call.
+            // The connect fails. The loop reports the call without a transport.
             drop(sfu.release);
             wait_for_event(&events, "VoiceStateChanged { in_call: true }", is_in_call).await;
 
@@ -774,7 +730,7 @@ mod tests {
         let resp: VoiceJoinResponse = serde_json::from_value(serde_json::json!({
             "channel_id": "ch-1",
             "voice_state": { "channel_id": "ch-1", "members": [{ "user_id": "me" }] },
-            "mode": "p2p",
+            "mode": "sfu",
             "bitrate_kbps": 32,
         }))
         .expect("valid voice_join response");
@@ -793,7 +749,7 @@ mod tests {
         let old: VoiceJoinResponse = serde_json::from_value(serde_json::json!({
             "channel_id": "ch-1",
             "voice_state": { "channel_id": "ch-1", "members": [{ "user_id": "me" }] },
-            "mode": "p2p",
+            "mode": "sfu",
         }))
         .expect("valid voice_join response");
         client
@@ -935,10 +891,9 @@ mod tests {
     }
 
     /// A failed SFU reconnect leaves voice disconnected for the next
-    /// attempt. It does not fall back to P2P: the other members are on the
-    /// SFU, and P2P would end the reconnect.
+    /// attempt, and reports no call.
     #[tokio::test]
-    async fn a_failed_sfu_reconnect_does_not_fall_back_to_p2p() {
+    async fn a_failed_sfu_reconnect_reports_no_call() {
         let (mut client, events) = client_without_audio();
         client.last_voice_channel = Some("ch-1".into());
         let mut join = join_for("ch-1");

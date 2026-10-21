@@ -40,10 +40,8 @@ public:
     // opens or closes (mello.h mello_peer_set_transport_callback).
     void set_transport_callback(MelloPeerTransportCallback cb, void* user_data);
     void set_data_callback(MelloPeerDataCallback cb, void* user_data);
-    void set_audio_track_callback(MelloAudioTrackCallback cb, void* user_data);
     void set_audio_rtp_callback(MelloAudioTrackCallback cb, void* user_data);
 
-    bool send_unreliable(const uint8_t* data, int size);
     bool send_reliable(const uint8_t* data, int size);
     bool send_audio(const uint8_t* data, int size);
     // One Opus frame with its media time in 48 kHz samples. The RTP
@@ -52,8 +50,6 @@ public:
     bool is_connected() const;
     bool is_unreliable_open() const;
     bool is_reliable_open() const;
-
-    int recv(uint8_t* buffer, int buffer_size);
 
     const char* handle_remote_offer(const char* sdp);
 
@@ -249,9 +245,7 @@ private:
     void* transport_ud_ = nullptr;
     MelloPeerDataCallback data_cb_ = nullptr;
     void* data_ud_ = nullptr;
-    MelloAudioTrackCallback audio_track_cb_ = nullptr;
-    void* audio_track_ud_ = nullptr;
-    // Whole RTP packets for the voice receive path (mello_voice_feed_rtp).
+    // Whole RTP packets for the voice and stream audio receive paths.
     MelloAudioTrackCallback audio_rtp_cb_ = nullptr;
     void* audio_rtp_ud_ = nullptr;
     // Control-channel text messages other than pong.
@@ -296,11 +290,6 @@ private:
     std::mutex feedback_mutex_;
     std::deque<QueuedVideoFeedback> feedback_queue_;
     static constexpr size_t kMaxFeedbackQueue = 64;
-
-    std::mutex recv_mutex_;
-    std::queue<std::vector<uint8_t>> recv_queue_;
-    static constexpr size_t MAX_RECV_QUEUE = 200;
-
 };
 
 } // namespace mello::transport

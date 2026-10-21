@@ -26,7 +26,7 @@ import (
 //   - Works with any number of SFUs: each session lives on exactly one SFU, so
 //     we just ask each configured SFU until one recognizes the session.
 //   - Disabled entirely unless SFU_ADMIN_PASSWORD and at least one
-//     SFU_ADMIN_BASE_* are set, so self-hosters and P2P-only deployments are
+//     SFU_ADMIN_BASE_* are set, so self-hosters without the admin API are
 //     unaffected.
 
 // sfuAdminBases maps region -> SFU admin HTTP base URL (no trailing slash).
@@ -133,17 +133,14 @@ func lookupSFUSession(bases map[string]string, password, sessionID string) (map[
 }
 
 // absentFromSFU reports whether a seated user is missing from the SFU session.
-// A session no SFU has is proof only for a guest: guests can only use the SFU,
-// while a member's room may be P2P, which no SFU ever knows about.
-func absentFromSFU(state sfuLookup, sfuMembers map[string]bool, uid string, isGuest bool) (absent, known bool) {
+// Every voice room uses the SFU, so a session that no SFU has is proof that
+// the user is absent.
+func absentFromSFU(state sfuLookup, sfuMembers map[string]bool, uid string) (absent, known bool) {
 	switch state {
 	case sfuSessionFound:
 		return !sfuMembers[uid], true
 	case sfuSessionAbsent:
-		if isGuest {
-			return true, true
-		}
-		return false, false
+		return true, true
 	default:
 		return false, false
 	}
@@ -208,10 +205,10 @@ func reconcileVoiceRooms(ctx context.Context, logger runtime.Logger, nk runtime.
 		for uid, joinedAt := range r.members {
 			key := r.channelID + "|" + uid
 			activeKeys[key] = struct{}{}
-			// The last guest in a channel whose leave was lost (a closed tab)
-			// leaves an SFU session that no longer exists. Counting that as a
-			// miss is what lets the seat go.
-			absent, known := absentFromSFU(state, sfuMembers, uid, IsGuestUser(uid))
+			// The last member in a channel whose leave was lost (a closed tab,
+			// a crashed client) leaves an SFU session that no longer exists.
+			// Counting that as a miss is what lets the seat go.
+			absent, known := absentFromSFU(state, sfuMembers, uid)
 			if !known || !absent {
 				voiceReconcileMissesMu.Lock()
 				delete(voiceReconcileMisses, key)

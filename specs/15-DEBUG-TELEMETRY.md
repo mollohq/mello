@@ -46,7 +46,7 @@ All log lines should include timestamp, level, target module, and message. Examp
 
 ```
 2026-03-13T14:22:01.443Z  INFO libmello: [video/device] D3D11 device created: adapter="NVIDIA GeForce RTX 4070" vram=8176MB
-2026-03-13T14:22:01.891Z  INFO mello_core::stream: Stream session started session_id=abc123 mode=p2p viewers_max=5
+2026-03-13T14:22:01.891Z  INFO mello_core::stream: Stream session started session_id=abc123 mode=sfu
 2026-03-13T14:22:02.103Z DEBUG mello_core::stream::congestion: REMB emit target_bps=4200000 loss=0.04 jitter_ms=8.2
 ```
 
@@ -63,7 +63,6 @@ These describe what to log and when in the Rust layer. Use `tracing` macros (`in
 Log when the `start_stream` RPC response is received and the sink type is determined. This is the most important single log line for understanding session configuration.
 
 ```
-mode=p2p max_viewers=5 session_id=abc123
 mode=sfu endpoint=wss://sfu.mello.app/eu-west/abc123 session_id=def456
 ```
 
@@ -73,7 +72,7 @@ If `SfuSink::new()` fails, log at `ERROR` with the reason.
 
 **Level:** `INFO`
 
-Log every viewer connection and disconnection with their ID and, where known, whether they are connecting via TURN relay or direct P2P.
+Log every viewer connection and disconnection with their ID and, where known, whether they reach the SFU via TURN relay or directly.
 
 ```
 viewer_joined viewer_id=xyz789 transport=direct viewers_now=2
@@ -225,21 +224,9 @@ pub struct HostStats {
     pub pacing_target_kbps:     u32,
     pub pacing_out_kbps:        u32,
 
-    // Per-viewer REMB (P2P mode only; empty slice in SFU mode)
-    pub viewers: Vec<ViewerPeerStats>,
-
     // Topology
-    pub topology: String,               // "p2p" or "sfu"
+    pub topology: String,               // always "sfu"
     pub session_id: String,
-}
-
-#[derive(Debug, Clone)]
-pub struct ViewerPeerStats {
-    pub viewer_id:    String,
-    pub remb_kbps:    u32,              // Last REMB receive target from this viewer
-    pub loss_pct:     f32,              // RTP packet loss % (native stats)
-    pub bytes_sent:   u64,
-    pub transport:    String,           // "direct" or "relay (TURN)"
 }
 
 #[derive(Debug, Clone)]
@@ -344,11 +331,7 @@ The dialog shows only sections relevant to the current session state. `BackendSt
 │  FPS       59.8                          │
 │  Capture   WGC · Minecraft (pid 18432)   │
 │  Keyframes 4  (last: loss_recovery)      │
-│  Topology  P2P                           │
-│                                          │
-│  Viewers                                 │
-│  abc123   loss 0.3%  remb 4200kbps  direct │
-│  xyz789   loss 6.1%  remb 3000kbps  relay  │
+│  Topology  SFU                           │
 ├──────────────────────────────────────────┤
 │  👁 VIEWER                               │
 │  Decoder   NVDEC · H.264 · 720p60        │

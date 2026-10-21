@@ -205,7 +205,7 @@ impl VoiceTickBudget {
 }
 
 /// True when a voice tick of `elapsed` breaks the budget. Only SFU mode has
-/// the budget: P2P and the mic test still send audio on the tick.
+/// the budget: the mic test still sends audio on the tick.
 fn over_voice_tick_budget(sfu_mode: bool, elapsed: Duration) -> bool {
     sfu_mode && elapsed > VOICE_TICK_BUDGET
 }
@@ -295,7 +295,7 @@ mod tests {
         assert!(!over_voice_tick_budget(true, Duration::from_micros(4_900)));
         assert!(!over_voice_tick_budget(true, VOICE_TICK_BUDGET));
         assert!(over_voice_tick_budget(true, Duration::from_micros(5_100)));
-        // P2P and the mic test send audio on the tick: no budget.
+        // The mic test sends audio on the tick: no budget.
         assert!(!over_voice_tick_budget(false, Duration::from_millis(50)));
     }
 
@@ -308,7 +308,7 @@ mod tests {
         assert!(line.contains("'sfu_events'"), "{line}");
         assert!(line.contains("12.0 ms"), "{line}");
 
-        // A short tick and a long P2P tick are not reported.
+        // A short tick and a long tick outside an SFU call are not reported.
         let mut quiet = VoiceTickBudget::default();
         assert_eq!(
             quiet.check(

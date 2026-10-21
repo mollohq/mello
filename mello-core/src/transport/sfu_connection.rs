@@ -211,7 +211,7 @@ pub struct SessionInfo {
 }
 
 // ---------------------------------------------------------------------------
-// ICE callback data (same pattern as mesh.rs)
+// ICE callback data
 // ---------------------------------------------------------------------------
 
 struct IceCallbackData {

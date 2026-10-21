@@ -236,13 +236,13 @@ TEST(VoicePlayout, NewSsrcStartsANewStream) {
     EXPECT_LE(first_audible_after_switch - switch_ms, 200) << "the new stream must play at once";
 }
 
-// A sender restart on the P2P path keeps SSRC 0 and restarts the timestamp
+// A sender restart on the loopback path keeps SSRC 0 and restarts the timestamp
 // at the capture clock origin. A far-behind timestamp starts a new stream.
 TEST(VoicePlayout, SenderRestartStartsANewStream) {
     VoicePlayout playout(default_config());
     ToneSender tx;
-    auto arrivals = tone_stream(tx, "p2p", 300, 0, 48000 * 60);
-    auto restarted = tone_stream(tx, "p2p", 100, 0, 0, 0, {}, 300 * 20);
+    auto arrivals = tone_stream(tx, "loopback", 300, 0, 48000 * 60);
+    auto restarted = tone_stream(tx, "loopback", 100, 0, 0, 0, {}, 300 * 20);
     arrivals.insert(arrivals.end(), restarted.begin(), restarted.end());
     int64_t first_audible_after_restart = -1;
     const int64_t restart_ms = 300 * 20 + 20;

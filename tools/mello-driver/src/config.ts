@@ -28,7 +28,7 @@ export function sfuHealthUrl(): string {
 
 /**
  * Fail early when the local SFU does not answer. Without it, every voice join
- * falls back to P2P, and a voice journey tests a path that is being removed.
+ * fails: the SFU is the only voice transport.
  * The SFU is healthy when its health address answers JSON with status "ok".
  */
 export async function checkSfu(url = sfuHealthUrl()): Promise<void> {

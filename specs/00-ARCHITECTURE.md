@@ -22,7 +22,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 | RAM (idle) | <50MB |
 | RAM (in crew, voice active) | <80MB |
 | RAM (watching stream) | <100MB |
-| Voice latency (P2P) | <50ms |
+| Voice latency (through the SFU, same region) | <50ms |
 | Stream latency (LAN) | <20ms |
 | Stream latency (WAN, 30ms ping) | <60ms |
 | NAT traversal success | >90% |
@@ -72,13 +72,13 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
                     │                               │
                     ▼                               ▼
         ┌───────────────────────┐       ┌───────────────────────┐
-        │    NAKAMA SERVER      │       │      P2P NETWORK      │
+        │    NAKAMA SERVER      │       │      SFU (mello-sfu)  │
         │                       │       │                       │
-        │  - Authentication     │       │  - Voice mesh (≤6)    │
+        │  - Authentication     │       │  - Voice sessions     │
         │  - Presence           │       │  - Stream delivery    │
-        │  - Groups (Crews)     │       │  - Direct P2P         │
+        │  - Groups (Crews)     │       │  - RTP forwarding     │
         │  - Chat               │       │  - TURN relay fallback│
-        │  - P2P Signaling      │       │                       │
+        │  - SFU tokens         │       │                       │
         └───────────────────────┘       └───────────────────────┘
 ```
 
@@ -103,7 +103,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 - **Language:** C++
 - **Responsibility:** Low-level audio/video/networking
 - **Dependencies:** 
-  - libdatachannel (P2P transport)
+  - libdatachannel (peer transport to the SFU)
   - Opus (audio codec)
   - RNNoise (noise suppression)
   - Silero VAD (voice activity detection)
@@ -112,7 +112,7 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
 ### 4.4 Backend (Nakama)
 
 - **Platform:** Heroic Labs Nakama
-- **Responsibility:** Auth, presence, groups, chat, P2P signaling
+- **Responsibility:** Auth, presence, groups, chat, SFU tokens
 
 ---
 
@@ -136,15 +136,15 @@ Mello is a lightweight crew-based social platform with Parsec-tier streaming cap
     │ 3. Member list    │                   │
     │◀──────────────────│                   │
     │                   │                   │
-    │ 4. For each member: ICE exchange      │
-    │◀─────────────────────────────────────▶│
+    │ 4. voice_join: SFU endpoint + token   │
+    │◀──────────────────│                   │
     │                   │                   │
-    │ 5. P2P voice connections established  │
-    │◀═════════════════════════════════════▶│
+    │ 5. Voice through the SFU session      │
+    │◀═══════════════ SFU ═════════════════▶│
     │                   │                   │
 ```
 
-### 5.2 Voice Flow (P2P Mesh)
+### 5.2 Voice Flow (SFU)
 
 ```
 Mic ──▶ WASAPI Capture
@@ -165,12 +165,14 @@ Mic ──▶ WASAPI Capture
         Encode (Opus, 48kHz, 20ms frames)
             │
             ▼
-        Send to each peer (libdatachannel, unreliable)
+        Send on the RTP audio track (libdatachannel)
             │
             ▼
+        SFU forwards to each member on a receive slot
+            │
     ┌───────┴───────┐
     ▼               ▼
-  Peer A          Peer B  ... (full mesh, max 5 connections for 6 people)
+  Member A        Member B  ... (one connection per member, to the SFU)
 ```
 
 ### 5.3 Stream Sharing
@@ -190,11 +192,11 @@ Mic ──▶ WASAPI Capture
     │                   │ 3. Request watch  │
     │                   │◀──────────────────│
     │                   │                   │
-    │ 4. ICE exchange via Nakama            │
-    │◀─────────────────────────────────────▶│
+    │ 4. start_stream / watch_stream:       │
+    │    SFU endpoint + token for each side │
     │                   │                   │
-    │ 5. Video stream (P2P, per viewer)     │
-    │══════════════════════════════════════▶│
+    │ 5. Video stream through the SFU       │
+    │════════════════ SFU ═════════════════▶│
     │                   │                   │
 ```
 
@@ -209,40 +211,19 @@ User ──▶ mello-core ──▶ Nakama Channel Message ──▶ All crew me
 
 ---
 
-## 6. Voice Mesh Topology
+## 6. Voice Topology
 
-### 6.1 Small Crews (≤6 people) — Full Mesh
-
-```
-        A ◀────────▶ B
-        ▲ ╲        ╱ ▲
-        │  ╲      ╱  │
-        │   ╲    ╱   │
-        │    ╲  ╱    │
-        ▼     ╲╱     ▼
-        C ◀───╳────▶ D
-              ╲╱
-        E ◀────────▶ F
-
-Connections per person: n-1
-Total connections: n(n-1)/2
-
-6 people = 15 connections total
-Each person maintains 5 connections
-```
-
-### 6.2 Large Crews (>6 people) — SFU (Post-Beta)
+Every voice channel is one SFU voice session. Each member has one connection to the SFU: one upload (the microphone) and one download per remote member (a receive slot). The SFU forwards RTP and does not mix or transcode.
 
 ```
         A ──┐
         B ──┤
-        C ──┼──▶ SFU Server ──▶ All
+        C ──┼──▶ SFU ──▶ each member
         D ──┤
         E ──┘
-
-Each person: 1 upload, 1 download
-Server mixes/forwards
 ```
+
+The SFU is the only voice and stream transport. `voice_join`, `start_stream` and `watch_stream` return `SFU_UNAVAILABLE` when the backend cannot sign an SFU token. The crew metadata flag `"sfu_enabled": false` is an operator kill switch; the default is on.
 
 ---
 
@@ -307,7 +288,7 @@ Server mixes/forwards
 | Core Logic | Rust | - |
 | Low-level | C++ | - |
 | Nakama Client | WebSocket (Rust) | - |
-| P2P Transport | libdatachannel | MPL 2.0 |
+| Peer Transport (to the SFU) | libdatachannel | MPL 2.0 |
 | Audio Codec | Opus | BSD |
 | Noise Suppression | RNNoise | BSD |
 | Voice Activity | Silero VAD | MIT |
@@ -324,7 +305,7 @@ Server mixes/forwards
 
 | Aspect | Implementation |
 |--------|----------------|
-| P2P Encryption | DTLS 1.2 (via libdatachannel) |
+| Media Encryption (client to SFU) | DTLS 1.2 (via libdatachannel) |
 | Auth | Nakama (supports OAuth, email, device) |
 | Signaling | WSS to Nakama |
 | Secrets | Never stored in plaintext |
@@ -337,10 +318,10 @@ Server mixes/forwards
 
 - Windows client + macOS client, both host and view streams
 - Crews up to 6 people with voice channels
-- Voice chat (P2P mesh, RNNoise, Silero VAD)
+- Voice chat (SFU, RNNoise, Silero VAD)
 - Text chat (Nakama)
 - Stream sharing (watch only, H.264 RTP, REMB congestion control)
-- Hosted SFU relay for entitled crews; P2P remains available for small sessions
+- Hosted SFU relay for every crew; it carries all voice and streams
 - Presence indicators and crew state
 - Social login: Steam, Twitch, Google, Apple, Discord + email/device auth
 - Onboarding flow with crew discovery
@@ -400,7 +381,7 @@ mello/
 │       ├── command.rs           # Command enum (UI → core)
 │       ├── events.rs            # Event enum (core → UI)
 │       ├── nakama/              # Nakama HTTP + WebSocket client
-│       ├── voice/               # Voice mesh coordination
+│       ├── voice/               # Voice session through the SFU
 │       ├── stream/              # Stream manager, RTP sinks, congestion/recovery
 │       ├── crew_state.rs        # Sidebar & crew state models
 │       └── presence.rs          # Presence types
@@ -425,12 +406,11 @@ mello/
 │       ├── voice_channels.go    # Voice channel CRUD
 │       ├── crew_state.go        # Crew state streaming
 │       ├── presence.go          # Presence hooks
-│       └── signaling.go         # P2P signaling helpers
+│       └── signaling.go         # ICE server list (STUN, TURN)
 │
 └── tools/                       # Standalone test binaries
     ├── stream-host/
-    ├── sfu-stream-viewer-probe/
-    └── stream-viewer/           # Legacy UDP chunk diagnostic only
+    └── sfu-stream-viewer-probe/
 ```
 
 ---
@@ -457,7 +437,7 @@ Crew creation uses the `create_crew` RPC which: creates a Nakama group, optional
 |--------|--------|
 | Voice quality score (MOS) | >4.0 |
 | Stream frame drops | <1% |
-| P2P connection success | >90% |
+| Media connection success (client to SFU) | >90% |
 | Crash-free sessions | >99% |
 | Cold start time | <3 seconds |
 

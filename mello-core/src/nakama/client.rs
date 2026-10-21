@@ -25,21 +25,6 @@ use crate::{Error, Result};
 #[derive(Default)]
 struct WsShared {
     channel_id: Option<String>,
-    local_user_id: Option<String>,
-}
-
-/// Internal signal from a peer, received via Nakama channel message
-#[derive(Debug)]
-pub struct InternalSignal {
-    pub from: String,
-    pub payload: String,
-}
-
-/// Channel presence change forwarded to the client run loop for voice wiring
-#[derive(Debug)]
-pub enum InternalPresence {
-    Joined { user_id: String },
-    Left { user_id: String },
 }
 
 pub struct NakamaClient {
@@ -56,10 +41,6 @@ pub struct NakamaClient {
     /// Counts socket connections, so state tied to a socket session (the push
     /// activity report) can be sent again after a reconnect.
     ws_generation: u64,
-    signal_rx: Option<mpsc::Receiver<InternalSignal>>,
-    signal_tx_template: Option<mpsc::Sender<InternalSignal>>,
-    presence_rx: Option<mpsc::Receiver<InternalPresence>>,
-    presence_tx_template: Option<mpsc::Sender<InternalPresence>>,
     /// user_id -> display name, shared with the WS reader task
     member_names: MemberNames,
     /// True while the *current* generation's WS reader+writer tasks are alive.
@@ -74,8 +55,6 @@ pub struct NakamaClient {
 
 impl NakamaClient {
     pub fn new(config: Config) -> Self {
-        let (sig_tx, sig_rx) = mpsc::channel(256);
-        let (pres_tx, pres_rx) = mpsc::channel(256);
         let http = reqwest::Client::new();
         let token: SharedToken = Arc::new(std::sync::RwLock::new(None));
         let member_names = MemberNames::new(Arc::new(HttpUserLookup {
@@ -94,11 +73,7 @@ impl NakamaClient {
             ws_shared: Arc::new(RwLock::new(WsShared::default())),
             next_cid: 1,
             ws_generation: 0,
-            signal_rx: Some(sig_rx),
-            signal_tx_template: Some(sig_tx),
             member_names,
-            presence_rx: Some(pres_rx),
-            presence_tx_template: Some(pres_tx),
             ws_connected: Arc::new(AtomicBool::new(false)),
             ws_tasks: Vec::new(),
         }
@@ -552,11 +527,6 @@ impl NakamaClient {
         self.ws_generation += 1;
 
         let shared = self.ws_shared.clone();
-        if let Some(user) = &self.current_user {
-            shared.write().await.local_user_id = Some(user.id.clone());
-        }
-        let signal_tx = self.signal_tx_template.clone().unwrap();
-        let presence_tx = self.presence_tx_template.clone().unwrap();
 
         // Per-generation liveness flag: only this connection's own tasks can flip
         // it, so a straggler from an earlier generation is harmless.
@@ -567,8 +537,6 @@ impl NakamaClient {
             read,
             event_tx,
             shared,
-            signal_tx,
-            presence_tx,
             self.member_names.clone(),
             connected,
         ));
@@ -618,16 +586,6 @@ impl NakamaClient {
         self.refresh_token = None;
         self.current_user = None;
         self.active_crew_id = None;
-    }
-
-    /// Take the signal receiver (call once, from the client run loop)
-    pub fn take_signal_rx(&mut self) -> Option<mpsc::Receiver<InternalSignal>> {
-        self.signal_rx.take()
-    }
-
-    /// Take the presence receiver (call once, from the client run loop)
-    pub fn take_presence_rx(&mut self) -> Option<mpsc::Receiver<InternalPresence>> {
-        self.presence_rx.take()
     }
 
     /// Increases on every successful `connect_ws`.
@@ -2136,35 +2094,6 @@ impl NakamaClient {
     pub fn current_user_id(&self) -> Option<&str> {
         self.current_user.as_ref().map(|u| u.id.as_str())
     }
-
-    /// Send a P2P signaling message through the Nakama channel.
-    /// The message is a channel message with a special "signal" field.
-    pub async fn send_signal(&self, to: &str, payload: &str) -> Result<()> {
-        let channel_id = self
-            .ws_shared
-            .read()
-            .await
-            .channel_id
-            .clone()
-            .ok_or(Error::NotConnected)?;
-
-        let content = serde_json::json!({
-            "signal": true,
-            "to": to,
-            "data": payload
-        })
-        .to_string();
-
-        let msg = serde_json::json!({
-            "channel_message_send": {
-                "channel_id": channel_id,
-                "content": content
-            }
-        })
-        .to_string();
-
-        self.ws_send(msg).await
-    }
 }
 
 // --- Message parsing (extracted for testability) ---
@@ -2300,8 +2229,6 @@ async fn ws_reader_task(
     >,
     event_tx: std::sync::mpsc::Sender<Event>,
     shared: Arc<RwLock<WsShared>>,
-    signal_tx: mpsc::Sender<InternalSignal>,
-    presence_tx: mpsc::Sender<InternalPresence>,
     member_names: MemberNames,
     connected: Arc<AtomicBool>,
 ) {
@@ -2322,15 +2249,7 @@ async fn ws_reader_task(
         };
         match msg {
             Ok(Message::Text(text)) => {
-                handle_ws_message(
-                    &text,
-                    &event_tx,
-                    &shared,
-                    &signal_tx,
-                    &presence_tx,
-                    &member_names,
-                )
-                .await;
+                handle_ws_message(&text, &event_tx, &shared, &member_names).await;
             }
             Ok(Message::Close(_)) => {
                 log::info!("WebSocket closed by server");
@@ -2353,8 +2272,6 @@ async fn handle_ws_message(
     text: &str,
     event_tx: &std::sync::mpsc::Sender<Event>,
     shared: &Arc<RwLock<WsShared>>,
-    signal_tx: &mpsc::Sender<InternalSignal>,
-    presence_tx: &mpsc::Sender<InternalPresence>,
     member_names: &MemberNames,
 ) {
     let envelope: WsEnvelope = match serde_json::from_str(text) {
@@ -2385,34 +2302,6 @@ async fn handle_ws_message(
     // Channel message
     if let Some(msg) = envelope.channel_message {
         let content_str = msg.content.unwrap_or_default();
-
-        // Check if this is a signaling message -- route to internal signal channel
-        if let Ok(parsed) = serde_json::from_str::<serde_json::Value>(&content_str) {
-            if parsed.get("signal").and_then(|v| v.as_bool()) == Some(true) {
-                let from = msg.sender_id.unwrap_or_default();
-                let to = parsed.get("to").and_then(|v| v.as_str()).unwrap_or("");
-                let our_id = shared
-                    .read()
-                    .await
-                    .local_user_id
-                    .clone()
-                    .unwrap_or_default();
-                if from == our_id || (!to.is_empty() && to != our_id) {
-                    return;
-                }
-
-                let data = parsed
-                    .get("data")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("")
-                    .to_string();
-                let _ = signal_tx.try_send(InternalSignal {
-                    from,
-                    payload: data,
-                });
-                return;
-            }
-        }
 
         if crate::chat::is_non_display_channel_content(&content_str) {
             return;
@@ -2491,13 +2380,12 @@ async fn handle_ws_message(
                 let _ = event_tx.send(Event::MemberJoined {
                     crew_id: presence.channel_id.clone().unwrap_or_default(),
                     member: Member {
-                        id: user_id.clone(),
+                        id: user_id,
                         username,
                         display_name,
                         online: true,
                     },
                 });
-                let _ = presence_tx.try_send(InternalPresence::Joined { user_id });
             }
         }
         if let Some(leaves) = presence.leaves {
@@ -2505,9 +2393,8 @@ async fn handle_ws_message(
                 let user_id = p.user_id.unwrap_or_default();
                 let _ = event_tx.send(Event::MemberLeft {
                     crew_id: presence.channel_id.clone().unwrap_or_default(),
-                    member_id: user_id.clone(),
+                    member_id: user_id,
                 });
-                let _ = presence_tx.try_send(InternalPresence::Left { user_id });
             }
         }
     }
@@ -2965,11 +2852,6 @@ mod tests {
         event_tx: std::sync::mpsc::Sender<Event>,
         event_rx: std::sync::mpsc::Receiver<Event>,
         shared: Arc<RwLock<WsShared>>,
-        signal_tx: mpsc::Sender<InternalSignal>,
-        presence_tx: mpsc::Sender<InternalPresence>,
-        // Kept so that `presence_tx.try_send` does not send to a closed channel.
-        _signal_rx: mpsc::Receiver<InternalSignal>,
-        _presence_rx: mpsc::Receiver<InternalPresence>,
     }
 
     impl WsHarness {
@@ -2977,18 +2859,12 @@ mod tests {
         fn new() -> Self {
             let lookup = FakeLookup::with(&[("u-bob", "bob-display")]);
             let (event_tx, event_rx) = std::sync::mpsc::channel();
-            let (signal_tx, _signal_rx) = mpsc::channel(8);
-            let (presence_tx, _presence_rx) = mpsc::channel(8);
             Self {
                 names: MemberNames::new(lookup.clone()),
                 lookup,
                 event_tx,
                 event_rx,
                 shared: Arc::new(RwLock::new(WsShared::default())),
-                signal_tx,
-                presence_tx,
-                _signal_rx,
-                _presence_rx,
             }
         }
 
@@ -2997,8 +2873,6 @@ mod tests {
                 &frame.to_string(),
                 &self.event_tx,
                 &self.shared,
-                &self.signal_tx,
-                &self.presence_tx,
                 &self.names,
             )
             .await;

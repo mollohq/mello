@@ -29,7 +29,7 @@
 namespace mello::audio {
 
 /// RTP fields that NetEQ needs. Parsed from a packet by parse_rtp(), or
-/// built from the P2P voice frame (spec 10 section 4.2).
+/// built from the loopback voice frame (spec 10 section 4.2).
 struct RtpInfo {
     uint8_t payload_type = 0;
     uint16_t sequence = 0;

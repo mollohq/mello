@@ -221,9 +221,8 @@ func GuestVoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	guestLastJoin[code] = time.Now()
 	guestLastJoinMu.Unlock()
 
-	// A browser cannot join the native P2P mesh, so the SFU is mandatory here.
-	// Unlike VoiceJoinRPC there is no premium-crew gate and no P2P fallback: if
-	// the SFU is unavailable the honest answer is that the lounge cannot open.
+	// The SFU is the only voice transport. Unlike VoiceJoinRPC there is no
+	// crew kill switch here: if the SFU is unavailable the lounge cannot open.
 	if !sfuAuthEnabled() {
 		return "", runtime.NewError("voice is unavailable for web guests right now", 14)
 	}
@@ -243,7 +242,7 @@ func GuestVoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		ChannelName: channelName,
 		UserID:      userID,
 		Username:    sanitizeGuestNickname(req.Nickname),
-		MaxMembers:  MaxSFUVoiceChannelMembers,
+		MaxMembers:  MaxVoiceChannelMembers,
 		IsGuest:     true,
 	}
 

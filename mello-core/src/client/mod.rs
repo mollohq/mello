@@ -34,22 +34,19 @@ use crate::game_sensing::GameSensor;
 use crate::game_state::GameStateManager;
 use crate::giphy::GiphyClient;
 use crate::nakama::NakamaClient;
-use crate::nakama::{InternalPresence, InternalSignal};
 use crate::stream::manager::StreamSession;
 use crate::stream::pacer::PacingTelemetry;
 use crate::stream::sink::PacketSink;
-use crate::stream::sink_p2p::P2PFanoutSink;
 use crate::telemetry::{AdapterRegistry, TelemetryListener, TELEMETRY_PORT};
 use crate::transport::SfuConnection;
-use crate::voice::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceManager};
+use crate::voice::VoiceManager;
 use browser_flow::{FlowIntent, SocialProvider};
 
-use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 use std::time::Instant;
 
-pub use stream_ffi::{feed_viewer_audio_packet, feed_viewer_audio_rtp};
-use stream_ffi::{StreamHostPeer, StreamPeerDisconnect, ViewerState};
+pub use stream_ffi::feed_viewer_audio_rtp;
+use stream_ffi::ViewerState;
 
 /// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
 /// Zero when no adapter is usable, and always zero off Windows.
@@ -125,17 +122,10 @@ pub struct Client {
     stream_session: Option<StreamSession>,
     stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sfu_connection: Option<Arc<SfuConnection>>,
-    stream_sink: Option<Arc<P2PFanoutSink>>,
     /// Native host start in flight on its own thread. Polled on the stream
     /// tick; never awaited. See `PendingStreamStart` in streaming.rs.
     pending_stream_start: Option<crate::client::streaming::PendingStreamStart>,
-    stream_host_peers: HashMap<String, StreamHostPeer>,
     viewer_state: Option<ViewerState>,
-    stream_signal_queue: Arc<std::sync::Mutex<Vec<(String, SignalEnvelope)>>>,
-    /// Terminal P2P stream peer callbacks queued for main-loop cleanup.
-    stream_disconnect_queue: Arc<std::sync::Mutex<VecDeque<StreamPeerDisconnect>>>,
-    /// ICE candidates received before the peer was created (host side).
-    pending_remote_ice: HashMap<String, Vec<SignalMessage>>,
     ice_servers: Vec<String>,
     /// Actual encode resolution (set after host pipeline starts).
     stream_encode_width: u32,
@@ -320,16 +310,11 @@ impl Client {
             stream_session: None,
             stream_host_sink: None,
             stream_sfu_connection: None,
-            stream_sink: None,
             pending_stream_start: None,
-            stream_host_peers: HashMap::new(),
             viewer_state: None,
-            stream_signal_queue: Arc::new(std::sync::Mutex::new(Vec::new())),
-            stream_disconnect_queue: Arc::new(std::sync::Mutex::new(VecDeque::new())),
             stream_encode_width: 0,
             stream_encode_height: 0,
             stream_bitrate_kbps: 0,
-            pending_remote_ice: HashMap::new(),
             ice_servers: Vec::new(),
             thumbnail_stop: None,
             cached_windows: Vec::new(),
@@ -386,8 +371,6 @@ impl Client {
             log::info!("Game sensor disabled");
         }
 
-        let mut signal_rx = self.nakama.take_signal_rx().unwrap();
-        let mut presence_rx = self.nakama.take_presence_rx().unwrap();
         // Reports any loop step that holds the loop, while it still holds it.
         let watchdog = loop_watchdog::LoopWatchdog::start();
         let mut voice_tick = tokio::time::interval(tokio::time::Duration::from_millis(20));
@@ -489,19 +472,6 @@ impl Client {
                         None => break,
                     }
                 }
-                // Voice signals and roster changes wait in their channels while
-                // an SFU voice join runs. A P2P fallback must see them after its
-                // mesh starts, in the order they arrived.
-                signal = signal_rx.recv(), if !self.sfu_voice_joins.is_pending() => {
-                    if let Some(sig) = signal {
-                        self.handle_signal(sig);
-                    }
-                }
-                presence = presence_rx.recv(), if !self.sfu_voice_joins.is_pending() => {
-                    if let Some(p) = presence {
-                        self.handle_presence(p);
-                    }
-                }
                 // Never completes while no join runs. Borrows only
                 // `self.sfu_voice_joins`.
                 outcome = self.sfu_voice_joins.finished() => {
@@ -552,65 +522,6 @@ impl Client {
         self.browser_flows.cancel();
         self.sfu_voice_joins.cancel();
         log::info!("Mello client shutting down");
-    }
-
-    fn handle_presence(&mut self, presence: InternalPresence) {
-        if !self.voice.is_active() {
-            return;
-        }
-
-        let local_id = match self.nakama.current_user_id() {
-            Some(id) => id.to_string(),
-            None => return,
-        };
-
-        match presence {
-            InternalPresence::Joined { user_id } => {
-                if user_id != local_id {
-                    log::info!(
-                        "Presence: member {} joined channel, adding to voice mesh",
-                        user_id
-                    );
-                    self.voice.on_member_joined(&local_id, &user_id);
-                }
-            }
-            InternalPresence::Left { user_id } => {
-                if user_id != local_id {
-                    log::info!(
-                        "Presence: member {} left channel, removing from voice mesh",
-                        user_id
-                    );
-                    self.voice.on_member_left(&user_id);
-                }
-            }
-        }
-    }
-
-    fn handle_signal(&mut self, signal: InternalSignal) {
-        match serde_json::from_str::<SignalEnvelope>(&signal.payload) {
-            Ok(env) => match env.purpose {
-                SignalPurpose::Voice => {
-                    log::info!("Voice signal from {}: {:?}", signal.from, env.message);
-                    self.voice.handle_signal(&signal.from, env.message);
-                }
-                SignalPurpose::Stream => {
-                    log::info!("Stream signal from {}: {:?}", signal.from, env.message);
-                    self.handle_stream_signal(&signal.from, env);
-                }
-            },
-            Err(_) => {
-                // Backward compat: try parsing as bare SignalMessage (no envelope)
-                match serde_json::from_str::<SignalMessage>(&signal.payload) {
-                    Ok(msg) => {
-                        log::info!("Voice signal (legacy) from {}: {:?}", signal.from, msg);
-                        self.voice.handle_signal(&signal.from, msg);
-                    }
-                    Err(e) => {
-                        log::warn!("Failed to parse signal from {}: {}", signal.from, e);
-                    }
-                }
-            }
-        }
     }
 
     async fn handle_command(&mut self, cmd: Command) {
