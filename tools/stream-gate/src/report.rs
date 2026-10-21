@@ -235,7 +235,12 @@ pub fn evaluate(
             m.get("freeze_ms").cloned().flatten(),
             metric_of(base, name, "freeze_ms"),
         ) {
-            let rise = gates.freeze_ms_max_rise.get(name).cloned().unwrap_or(0.0);
+            let rise = gates
+                .freeze_ms_max_rise
+                .get(lane)
+                .and_then(|p| p.get(name))
+                .cloned()
+                .unwrap_or(0.0);
             out.push(GateResult {
                 profile: name.clone(),
                 metric: "freeze ms rise vs baseline".into(),
@@ -409,8 +414,10 @@ mod tests {
         );
         let mut lanes = BTreeMap::new();
         lanes.insert("cpu".to_owned(), per);
+        let mut per_profile = BTreeMap::new();
+        per_profile.insert("clean".to_owned(), 50.0);
         let mut rise = BTreeMap::new();
-        rise.insert("clean".to_owned(), 50.0);
+        rise.insert("cpu".to_owned(), per_profile);
         Gates {
             vmaf_max_drop: 1.0,
             freeze_ms_max_rise: rise,

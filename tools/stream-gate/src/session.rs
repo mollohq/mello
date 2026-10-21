@@ -321,8 +321,11 @@ pub struct PresentRec {
 /// the pixels and hands them to a worker thread; the worker reads the code,
 /// converts to luma and writes the file. The tick then costs the product's
 /// present plus one copy.
+/// One presented frame on its way to the worker: present time and RGBA.
+type FrameMsg = (u64, Vec<u8>);
+
 struct FrameSink {
-    tx: Mutex<Option<std::sync::mpsc::Sender<(u64, Vec<u8>)>>>,
+    tx: Mutex<Option<std::sync::mpsc::Sender<FrameMsg>>>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
     wrong_size: AtomicU64,
     /// Longest callback, us: the harness's own cost inside the present.
@@ -365,7 +368,7 @@ unsafe extern "C" fn on_frame(
 
 /// The worker of a FrameSink: one present at a time, in order.
 fn frame_worker(
-    rx: std::sync::mpsc::Receiver<(u64, Vec<u8>)>,
+    rx: std::sync::mpsc::Receiver<FrameMsg>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
     file: std::fs::File,
     width: u32,

@@ -284,9 +284,10 @@ pub struct Gate {
 pub struct Gates {
     /// A run fails when VMAF drops by more than this against the baseline.
     pub vmaf_max_drop: f64,
-    /// A run fails when freeze time rises by more than this (ms) against the
-    /// baseline: the run-to-run spread measured at the baseline.
-    pub freeze_ms_max_rise: BTreeMap<String, f64>,
+    /// Per lane and profile: a run fails when freeze time rises by more
+    /// than this (ms) against the baseline, the run-to-run spread measured at
+    /// the baseline.
+    pub freeze_ms_max_rise: BTreeMap<String, BTreeMap<String, f64>>,
     pub lanes: BTreeMap<String, BTreeMap<String, Vec<Gate>>>,
 }
 
@@ -296,8 +297,15 @@ pub fn load_gates(path: &Path) -> Result<Gates, String> {
         serde_json::from_slice(&bytes).map_err(|e| format!("{}: {e}", path.display()))?;
     let mut rise = BTreeMap::new();
     if let Some(m) = root.get("freeze_ms_max_rise").and_then(Value::as_object) {
-        for (k, v) in m {
-            rise.insert(k.clone(), v.as_f64().ok_or("freeze_ms_max_rise: number")?);
+        for (lane, per) in m {
+            let mut p = BTreeMap::new();
+            for (k, v) in per
+                .as_object()
+                .ok_or("freeze_ms_max_rise: object per lane")?
+            {
+                p.insert(k.clone(), v.as_f64().ok_or("freeze_ms_max_rise: number")?);
+            }
+            rise.insert(lane.clone(), p);
         }
     }
     let mut lanes = BTreeMap::new();
