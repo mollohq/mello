@@ -1047,12 +1047,21 @@ MELLO_API void mello_stream_set_native_frame_callback(
     void*                     user_data
 );
 
-/** Feed an encoded game-audio packet received from the host for playback. */
+/** Feed an encoded game-audio packet received from the host for playback.
+ *  The playout opens the output device chosen with mello_set_audio_output
+ *  (the default device when none is set), at the first packet and after an
+ *  unmute. A packet fed while muted is dropped and returns MELLO_OK. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(
     MelloStreamView* view,
     const uint8_t*   data,
     int              size
 );
+
+/** Mute or unmute the game audio of a stream view (for a paused stream).
+ *  Mute closes the output device, which drops the audio already queued, so
+ *  playback goes silent at once; packets fed while muted are dropped. Unmute
+ *  opens the device again at the next packet. Any thread. */
+MELLO_API MelloResult mello_stream_viewer_set_audio_muted(MelloStreamView* view, bool muted);
 
 /* ---- Stats ---- */
 

@@ -237,3 +237,162 @@ TEST(StreamAudioHostPipeline, IgnoresEmptyAndNullInput) {
 }
 
 #endif // __APPLE__
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Viewer playout: mute on a paused stream, and the user's output device.
+//
+// Before stage 2 a paused stream kept playing the game audio already queued
+// for the device, packets that still arrived kept playing, and the playout
+// always opened the default device, not the one chosen for voice. A fake
+// playback backend records what reaches the device: no audio hardware.
+// ─────────────────────────────────────────────────────────────────────────────
+
+#include "audio/audio_playback.hpp"
+#include "audio/opus_codec.hpp"
+#include "audio/stream_audio_pipeline.hpp"
+
+#include <gtest/gtest.h>
+#include <cmath>
+#include <cstdlib>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace {
+
+using mello::audio::AudioPlayback;
+using mello::audio::OpusApplication;
+using mello::audio::OpusEnc;
+using mello::audio::StreamAudioPlayout;
+
+/// What the fake devices saw, shared across the devices the playout opens.
+struct DeviceLog {
+    int opened = 0;
+    int stopped = 0;
+    int live = 0;
+    std::string last_device_id = "(none)";
+    uint64_t samples = 0;
+    double energy = 0.0;  // sum of squares of the samples fed
+    bool fail_named_device = false;
+};
+
+class FakePlayback : public AudioPlayback {
+public:
+    explicit FakePlayback(DeviceLog& log) : log_(log) { ++log_.live; }
+    ~FakePlayback() override { --log_.live; }
+
+    bool initialize(const char* device_id) override {
+        if (device_id && log_.fail_named_device) return false;
+        log_.last_device_id = device_id ? device_id : "";
+        ++log_.opened;
+        initialized_ = true;
+        return true;
+    }
+    bool start() override { return initialized_; }
+    void stop() override { ++log_.stopped; }
+    size_t feed(const int16_t* samples, size_t count) override {
+        for (size_t i = 0; i < count; ++i) {
+            log_.energy += static_cast<double>(samples[i]) * samples[i];
+        }
+        log_.samples += count;
+        return count;
+    }
+    uint32_t sample_rate() const override { return 48000; }
+
+private:
+    DeviceLog& log_;
+    bool initialized_ = false;
+};
+
+/// Twenty 20 ms Opus packets of a 400 Hz stereo tone, as the host sends them.
+std::vector<std::vector<uint8_t>> tone_packets(int count) {
+    OpusEnc encoder;
+    EXPECT_TRUE(encoder.initialize(mello::audio::STREAM_AUDIO_SAMPLE_RATE,
+                                   mello::audio::STREAM_AUDIO_CHANNELS,
+                                   mello::audio::STREAM_AUDIO_BITRATE, OpusApplication::Audio));
+    const int frame = mello::audio::STREAM_AUDIO_FRAME_SAMPLES;
+    std::vector<int16_t> pcm(static_cast<size_t>(frame) * 2);
+    for (int i = 0; i < frame; ++i) {
+        const auto v = static_cast<int16_t>(
+            12000.0 * std::sin(2.0 * 3.14159265358979 * 400.0 * i / 48000.0));
+        pcm[static_cast<size_t>(i) * 2] = v;
+        pcm[static_cast<size_t>(i) * 2 + 1] = v;
+    }
+    std::vector<std::vector<uint8_t>> packets;
+    uint8_t buf[mello::audio::MAX_PACKET_SIZE];
+    for (int n = 0; n < count; ++n) {
+        const int size = encoder.encode(pcm.data(), frame, buf, sizeof(buf));
+        EXPECT_GT(size, 0);
+        packets.emplace_back(buf, buf + size);
+    }
+    return packets;
+}
+
+struct PlayoutHarness {
+    DeviceLog log;
+    std::string chosen_device = "{0.0.0.00000000}.{headset}";
+    StreamAudioPlayout playout{[this] { return chosen_device; },
+                               [this] { return std::make_unique<FakePlayback>(log); }};
+
+    void feed(const std::vector<std::vector<uint8_t>>& packets) {
+        for (const auto& p : packets) {
+            EXPECT_TRUE(playout.feed_packet(p.data(), static_cast<int>(p.size())));
+        }
+    }
+};
+
+} // namespace
+
+TEST(StreamAudioPlayout, OpensTheOutputDeviceChosenForVoice) {
+    PlayoutHarness h;
+    h.feed(tone_packets(5));
+    EXPECT_EQ(h.log.opened, 1);
+    EXPECT_EQ(h.log.last_device_id, "{0.0.0.00000000}.{headset}");
+    EXPECT_GT(h.log.samples, 0u);
+}
+
+TEST(StreamAudioPlayout, NoChosenDeviceOpensTheDefault) {
+    PlayoutHarness h;
+    h.chosen_device.clear();
+    h.feed(tone_packets(2));
+    EXPECT_EQ(h.log.last_device_id, "") << "nullptr: the default device";
+}
+
+TEST(StreamAudioPlayout, AFailedChosenDeviceFallsBackToTheDefault) {
+    PlayoutHarness h;
+    h.log.fail_named_device = true;
+    h.feed(tone_packets(2));
+    EXPECT_EQ(h.log.opened, 1);
+    EXPECT_EQ(h.log.last_device_id, "");
+    EXPECT_GT(h.log.samples, 0u);
+}
+
+TEST(StreamAudioPlayout, MuteIsSilentAndUnmuteResumes) {
+    PlayoutHarness h;
+    const auto packets = tone_packets(20);
+
+    h.feed(packets);
+    ASSERT_GT(h.log.energy, 0.0) << "the tone must reach the device before the mute";
+    const uint64_t samples_before = h.log.samples;
+
+    // Mute: the device closes, and its queued audio goes with it.
+    h.playout.set_muted(true);
+    EXPECT_TRUE(h.playout.muted());
+    EXPECT_EQ(h.log.stopped, 1);
+    EXPECT_EQ(h.log.live, 0) << "the device and its queue stay open while muted";
+
+    // While muted nothing reaches a device.
+    h.feed(packets);
+    EXPECT_EQ(h.log.samples, samples_before) << "audio played while muted";
+    EXPECT_EQ(h.log.opened, 1);
+    EXPECT_EQ(h.playout.packets_dropped_muted(), packets.size());
+
+    // Unmute: the next packet opens the device again and plays.
+    h.playout.set_muted(false);
+    const double energy_before = h.log.energy;
+    h.feed(packets);
+    EXPECT_EQ(h.log.opened, 2);
+    EXPECT_EQ(h.log.live, 1);
+    EXPECT_GT(h.log.samples, samples_before);
+    EXPECT_GT(h.log.energy, energy_before) << "unmuted audio is silent";
+}

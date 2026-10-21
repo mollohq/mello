@@ -621,7 +621,8 @@ Game audio is wired end-to-end on Windows and macOS:
 | Viewer SDP | recvonly audio m-line alongside recvonly H.264 |
 | Viewer RTP receive | `RtcpReceivingSession` on the recvonly audio track before `onMessage` (libdatachannel media-receiver pattern) |
 | SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
-| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
+| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS), on the output device chosen for voice (`mello_set_audio_output`; the default device when none is set or the chosen one fails) |
+| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` closes the output device, which drops the queued audio, and drops packets until unmute. Unmute opens the device at the next packet with a fresh decoder. mello-core mutes on `StreamPaused` |
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path: `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header) → the decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 
