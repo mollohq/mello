@@ -788,6 +788,16 @@ Four of these carry more weight than the rest:
 - **`freeze_n` / `freeze_ms`.** A freeze is a present gap over 150 ms, counted
   once per stall and extended rather than re-counted per tick. Every other
   viewer metric is a proxy; this is the thing the user actually experiences.
+  A present counts as a frame only when a frame callback delivered a new
+  frame (`delivered_frames`); a present of an unchanged frame does not end a
+  gap and does not count in `present_fps`. Gaps while the host is paused or
+  idle do not count. Idle: the pipeline re-encodes the last picture at
+  2 fps (500 ms gaps) because the capture delivers nothing new. The host
+  reads `idle_repeat_frames` on the 1 s manager tick and sends
+  `[0x04, 0x04, idle]` on the reliable control channel on each change, and
+  to a viewer that joins while idle. The flag arrives up to about 1 s after
+  the keepalive starts, so the first keepalive gap of a static scene can
+  still count as one freeze.
 
 Payload keys are abbreviated to stay inside the cap as the field set grows; a
 unit test sizes the worst-case host payload against it.

@@ -259,11 +259,9 @@ impl super::Client {
                 reason: reason_now,
             });
         }
-        if paused_now {
-            vs.last_new_frame_at = Instant::now();
-            vs.in_freeze = false;
-            vs.freeze_accounted_ms = 0;
-        }
+        // The host's idle keepalive (2 fps re-encodes of a static picture)
+        // holds the freeze clock the same way: those gaps are not stalls.
+        let held_now = paused_now || vs.pause_slot.is_host_idle();
 
         // Present at most one frame per stream tick so visual cadence tracks
         // UI cadence instead of burst-draining the decoder queue.
@@ -274,17 +272,26 @@ impl super::Client {
             vs.present_attempts = vs.present_attempts.saturating_add(1);
             let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
             vs.last_present_attempt = Instant::now();
-            if presented {
+            if !presented {
+                break; // ring buffer empty
+            }
+            presented_this_tick += 1;
+            // Only a present that delivered a new frame is a frame.
+            let delivered = vs
+                .delivered_frames
+                .load(std::sync::atomic::Ordering::Acquire);
+            if super::stream_ffi::present_is_new_frame(
+                presented,
+                delivered,
+                &mut vs.last_delivered_frames,
+            ) {
                 vs.frames_presented += 1;
-                presented_this_tick += 1;
                 vs.last_new_frame_at = Instant::now();
                 vs.in_freeze = false;
                 vs.freeze_accounted_ms = 0;
                 if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
                     log::info!("Stream frame presented #{}", vs.frames_presented);
                 }
-            } else {
-                break; // ring buffer empty
             }
         }
 
@@ -296,7 +303,7 @@ impl super::Client {
         // first IDR would otherwise register as a freeze on every session, and
         // "startup took a while" is a different measurement from "the picture
         // stalled" (the certification gate already times first-keyframe).
-        if vs.frames_presented > 0 {
+        {
             let present_gap_ms = vs.last_new_frame_at.elapsed().as_millis() as u64;
             let (mut in_freeze, mut count, mut total, mut accounted) = (
                 vs.in_freeze,
@@ -304,13 +311,17 @@ impl super::Client {
                 vs.freeze_ms_total,
                 vs.freeze_accounted_ms,
             );
-            super::stream_ffi::note_present_gap(
+            if super::stream_ffi::freeze_clock_tick(
+                held_now,
+                vs.frames_presented > 0,
                 present_gap_ms,
                 &mut in_freeze,
                 &mut count,
                 &mut total,
                 &mut accounted,
-            );
+            ) {
+                vs.last_new_frame_at = Instant::now();
+            }
             vs.in_freeze = in_freeze;
             vs.freeze_count = count;
             vs.freeze_ms_total = total;
@@ -1446,12 +1457,14 @@ impl super::Client {
             (config.width, config.height)
         };
 
+        let delivered_frames = Arc::new(std::sync::atomic::AtomicU64::new(0));
         let frame_cb_data = Box::into_raw(Box::new(FrameCallbackData {
             frame_slot: self.frame_slot.clone(),
             native_frame_slot: self.native_frame_slot.clone(),
             frame_consumed: self.frame_consumed.clone(),
             frame_lifecycle: self.frame_lifecycle.clone(),
             surface_frame_seq: self.surface_frame_seq.clone(),
+            delivered_frames: Arc::clone(&delivered_frames),
         }));
         self.frame_lifecycle
             .store(FRAME_STATE_PRESENTED, std::sync::atomic::Ordering::Release);
@@ -1567,6 +1580,8 @@ impl super::Client {
             stats_last_frames_presented: 0,
             stats_last_freeze_count: 0,
             stats_last_freeze_ms: 0,
+            delivered_frames,
+            last_delivered_frames: 0,
         });
     }
 

@@ -396,6 +396,14 @@ pub struct StreamManager {
     last_manager_sample: ManagerTelemetrySnapshot,
     last_manager_sample_at: Instant,
     drop_delta_until_keyframe: bool,
+    /// The capture delivers nothing new and the pipeline re-encodes the last
+    /// picture at 2 fps (idle keepalive). Viewers learn it on the control
+    /// channel and do not count the keepalive gaps as freezes.
+    host_idle: bool,
+    /// `idle_repeat_frames` at the last 1 s tick.
+    idle_tick_last_repeats: u64,
+    /// `idle_repeat_frames` as `check_capture_state` last read it.
+    idle_repeats_seen: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -484,6 +492,9 @@ impl StreamManager {
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
             drop_delta_until_keyframe: false,
+            host_idle: false,
+            idle_tick_last_repeats: 0,
+            idle_repeats_seen: 0,
         }
     }
 
@@ -745,6 +756,7 @@ impl StreamManager {
         // Sticky in the capture layer; kept sticky here so a later read can
         // never walk it back.
         self.target_exited_seen |= stats.target_exited != 0;
+        self.idle_repeats_seen = stats.idle_repeat_frames;
 
         if stats.capture_state != self.capture_state_last {
             log::info!(
@@ -804,6 +816,34 @@ impl StreamManager {
                 "headroom recovered, restoring"
             }
         );
+    }
+
+    /// The idle state from the keepalive counter, read on the 1 s tick.
+    /// Returns the new state on a change. No FFI, so tests drive it.
+    fn observe_idle(&mut self, idle_repeats_total: u64) -> Option<bool> {
+        let idle = idle_repeats_total > self.idle_tick_last_repeats;
+        self.idle_tick_last_repeats = idle_repeats_total;
+        if idle == self.host_idle {
+            return None;
+        }
+        self.host_idle = idle;
+        Some(idle)
+    }
+
+    /// Tell viewers when the idle keepalive starts and stops, on change
+    /// only, like the pause state.
+    async fn tick_host_idle(&mut self) {
+        let Some(idle) = self.observe_idle(self.idle_repeats_seen) else {
+            return;
+        };
+        log::info!(
+            "Stream host idle: {} (the capture {} new frames)",
+            idle,
+            if idle { "delivers no" } else { "delivers" }
+        );
+        self.sink
+            .send_control(&super::pause::idle_message(idle))
+            .await;
     }
 
     /// Broadcast the pause state on the reliable control channel, both wire
@@ -1023,6 +1063,7 @@ impl StreamManager {
                     self.tick_framerate_ladder();
                     self.check_capture_state();
                     self.tick_stream_pause().await;
+                    self.tick_host_idle().await;
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
@@ -1065,6 +1106,12 @@ impl StreamManager {
         // stare at a black frame instead of the pause card.
         if self.pause.is_paused() {
             self.send_pause_state(true).await;
+        }
+        // Same for the idle keepalive: the newcomer must not count its gaps.
+        if self.host_idle {
+            self.sink
+                .send_control(&super::pause::idle_message(true))
+                .await;
         }
     }
 
@@ -2375,6 +2422,40 @@ mod tests {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
         ));
+        std::mem::forget(mgr);
+    }
+
+    /// The host tells viewers when the idle keepalive starts and stops, once
+    /// per change, and tells a viewer that joins during it.
+    #[test]
+    fn idle_keepalive_is_sent_on_change_and_to_a_late_joiner() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let sink = Arc::new(FakeSink::new());
+        let mut mgr = remb_test_manager(sink.clone());
+
+        for total in [0u64, 0, 2, 4, 6] {
+            mgr.idle_repeats_seen = total;
+            rt.block_on(mgr.tick_host_idle());
+        }
+        rt.block_on(mgr.handle_viewer_joined("late-viewer"));
+        for total in [6u64, 6] {
+            mgr.idle_repeats_seen = total;
+            rt.block_on(mgr.tick_host_idle());
+        }
+
+        let control = sink.control.lock().expect("lock").clone();
+        assert_eq!(
+            control,
+            vec![
+                vec![0x04, 0x04, 0x01],
+                vec![0x04, 0x04, 0x01],
+                vec![0x04, 0x04, 0x00]
+            ],
+            "idle on, the late joiner's copy, idle off"
+        );
         std::mem::forget(mgr);
     }
 
