@@ -55,8 +55,12 @@ CORR_START_RE = re.compile(r"corr_start_unix_ms:\s*(\d+)")
 HOST_SESSION_START_RE = re.compile(r"Nakama start_stream:\s+mode=sfu\s+session=([^\s]+)")
 HOST_SESSION_LINE_RE = re.compile(r"Session:\s*([^\s]+)\s+\(role=")
 VIEWER_SESSION_LINE_RE = re.compile(r"session:\s*([^\s]+)")
+# The host prints "video_open" since the native RTP video track replaced the
+# media DataChannel; older logs print "media_open". Counters between
+# control_open and rtt_ms (tx_aus, tx_drop, tx_fec, tx_gcc_kbps) are skipped.
 HOST_TICK_RE = re.compile(
-    r"^\[\s*(\d+)s\]\s+viewers=(\d+)\s+media_open=(\w+)\s+control_open=(\w+)\s+rtt_ms=([0-9.]+)\s+disconnect=([^\s]+)"
+    r"^\[\s*(\d+)s\]\s+viewers=(\d+)\s+(?:video|media)_open=(\w+)\s+control_open=(\w+)"
+    r"(?:\s+[A-Za-z_][A-Za-z0-9_]*=\S+)*?\s+rtt_ms=([0-9.]+)\s+disconnect=([^\s]+)"
 )
 KV_RE = re.compile(r"\b([A-Za-z_][A-Za-z0-9_]*)=([^\s]+)")
 HOST_DIAG_MARKERS = (
@@ -346,8 +350,8 @@ def parse_legacy_probe_lines(
             }
         )
 
-    # Legacy host progress line:
-    # [ 12s] viewers=1 media_open=true control_open=true rtt_ms=0.0 disconnect=-
+    # Host progress line (older logs print media_open):
+    # [ 12s] viewers=1 video_open=true control_open=true tx_aus=60 tx_drop=0 tx_fec=6 tx_gcc_kbps=4000 rtt_ms=0.0 disconnect=-
     if source == "host" and corr_start_ms is not None:
         for line in lines:
             match = HOST_TICK_RE.match(line.strip())
@@ -355,7 +359,7 @@ def parse_legacy_probe_lines(
                 continue
             sec = int(match.group(1))
             viewers = int(match.group(2))
-            media_open = match.group(3)
+            video_open = match.group(3)
             control_open = match.group(4)
             rtt_ms = match.group(5)
             disconnect = match.group(6)
@@ -369,7 +373,7 @@ def parse_legacy_probe_lines(
                     "mono_ms": sec * 1000,
                     "raw": line,
                     "viewers": viewers,
-                    "media_open": media_open,
+                    "video_open": video_open,
                     "control_open": control_open,
                     "rtt_ms": rtt_ms,
                     "disconnect": disconnect,
