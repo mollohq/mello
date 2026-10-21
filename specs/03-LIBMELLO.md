@@ -74,7 +74,9 @@ libmello/
 │   ├── opus/
 │   ├── rnnoise/
 │   ├── webrtc-audio-processing/    # Submodule: github.com/helloooideeeeea/webrtc-audio-processing (WebRTC APM)
-│   ├── webrtc-video-timing/        # Vendored overlay: WebRTC video receive timing + frame buffer (M131)
+│   ├── webrtc-neteq/               # Overlay: WebRTC NetEQ + audio mixer (M131)
+│   ├── webrtc-video-timing/        # Overlay: WebRTC video receive timing + frame buffer (M131)
+│   ├── webrtc-goog-cc/             # Overlay: WebRTC goog_cc send-side congestion controller (M131)
 │   └── silero-vad/                 # ONNX model + runtime
 │
 ├── models/                         # ML model files (Silero VAD .onnx)
@@ -85,16 +87,24 @@ libmello/
     └── test_peer_connection.cpp
 ```
 
-### Vendored WebRTC video timing
+### Vendored WebRTC overlays
 
-| Item | Value |
-|---|---|
-| Overlay | `third_party/webrtc-video-timing/webrtc/`, the upstream path layout, with LICENSE and PATENTS. It holds only files that the APM submodule and the NetEQ overlay (`third_party/webrtc-neteq/`) do not have. |
-| Upstream | `https://webrtc.googlesource.com/src`, `refs/branch-heads/6778` (M131), commit `79aff54b0fa9238ce3518dd9eaf9610cd6f22e82`. The files are byte-identical to upstream. |
-| Contents | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers`, and the `EncodedFrame` types. No depacketizer, decoder or transport. |
-| Build | Static target `webrtc_video_timing` in `cmake/webrtc-video-timing.cmake`, included from the end of `cmake/webrtc-audio-processing/CMakeLists.txt`. It links `webrtc_neteq`. |
-| Option | `MELLO_WEBRTC_VIDEO_TIMING`: ON on Windows and Linux, OFF on Apple until a Mac build is verified. Needs `MELLO_WEBRTC_NETEQ`. |
-| Use | Nothing in libmello links it yet. `tests/test_video_timing_spike.cpp` (`mello_video_timing_spike_tests`) proves it as the viewer jitter buffer. The stage 3 viewer timeline builds on it. |
+The APM submodule points at a repository that mello cannot push to. Other
+WebRTC code lives in mello-owned overlay trees under `third_party/`, with the
+upstream path layout, LICENSE and PATENTS. An overlay holds only files that
+the submodule and the other overlays do not have. Upstream files are
+byte-identical; shims go in a `compat` directory under `cmake/`. Every overlay
+comes from `https://webrtc.googlesource.com/src`, `refs/branch-heads/6778`
+(M131), commit `79aff54b0fa9238ce3518dd9eaf9610cd6f22e82`. Each build file is
+included from the end of `cmake/webrtc-audio-processing/CMakeLists.txt`, and
+the video timing and goog_cc targets link `webrtc_neteq` for the shared base
+(rtc_base, api/units, field trials, environment).
+
+| Overlay | Target and option | Contents | Users |
+|---|---|---|---|
+| `third_party/webrtc-neteq/` | `webrtc_neteq`, `MELLO_WEBRTC_NETEQ`: ON on every platform | NetEQ, the audio mixer, the Opus and CNG decoders, and the shared WebRTC base | Voice playout (section 4) |
+| `third_party/webrtc-video-timing/` | `webrtc_video_timing` (`cmake/webrtc-video-timing.cmake`), `MELLO_WEBRTC_VIDEO_TIMING`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers` and the `EncodedFrame` types. No depacketizer, decoder or transport | Nothing in libmello yet. `tests/test_video_timing_spike.cpp` (`mello_video_timing_spike_tests`) proves it as the viewer jitter buffer; the stage 3 viewer timeline builds on it |
+| `third_party/webrtc-goog-cc/` | `webrtc_goog_cc` (`cmake/webrtc-goog-cc.cmake`), `MELLO_WEBRTC_GOOG_CC`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/congestion_controller/goog_cc`, the `remote_bitrate_estimator` parts it uses, `api/transport` network control and the rate control parsers. No pacer, RTCP or RTC event log encoder: the logged event classes are stubs in `cmake/webrtc-goog-cc/compat/mello_rtc_event_stubs.h` | Nothing in libmello yet. `tests/test_goog_cc_spike.cpp` (`mello_goog_cc_spike_tests`); the stream sender uses it from streaming-quality stage 4 |
 
 ---
 
