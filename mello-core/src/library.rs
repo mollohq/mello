@@ -488,9 +488,18 @@ fn parse_vdf(text: &str) -> Option<Vdf> {
 /// Steam account ids in `userdata/` are the low 32 bits of the SteamID64.
 const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
 
-/// `userdata/<id>` folder names for users marked `MostRecent "1"` in
-/// `config/loginusers.vdf`.
-fn most_recent_account_ids(loginusers: &str) -> Vec<String> {
+/// One user of `config/loginusers.vdf`. Holds no account or persona name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginUser {
+    /// The `userdata/<id>` folder name.
+    account_id: String,
+    most_recent: bool,
+    auto_login: bool,
+    timestamp: Option<u64>,
+}
+
+/// The users of `config/loginusers.vdf`, in file order.
+fn parse_login_users(loginusers: &str) -> Vec<LoginUser> {
     let Some(doc) = parse_vdf(loginusers) else {
         return Vec::new();
     };
@@ -500,25 +509,80 @@ fn most_recent_account_ids(loginusers: &str) -> Vec<String> {
     users
         .entries()
         .iter()
-        .filter(|(_, u)| u.get("MostRecent").and_then(Vdf::as_str) == Some("1"))
-        .filter_map(|(id64, _)| id64.parse::<u64>().ok())
-        .filter(|id| *id >= STEAM_ID64_BASE)
-        .map(|id| (id - STEAM_ID64_BASE).to_string())
+        .filter_map(|(id64, u)| {
+            let id = id64
+                .parse::<u64>()
+                .ok()
+                .filter(|id| *id >= STEAM_ID64_BASE)?;
+            let flag = |k: &str| u.get(k).and_then(Vdf::as_str) == Some("1");
+            Some(LoginUser {
+                account_id: (id - STEAM_ID64_BASE).to_string(),
+                most_recent: flag("MostRecent"),
+                auto_login: flag("AutoLogin"),
+                timestamp: u
+                    .get("timestamp")
+                    .and_then(Vdf::as_str)
+                    .and_then(|t| t.trim().parse().ok()),
+            })
+        })
         .collect()
+}
+
+/// Which rule chose the active Steam user. Logged, never the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserRule {
+    MostRecent,
+    AutoLogin,
+    NewestTimestamp,
+    OnlyFolder,
+    NewestLocalconfig,
+}
+
+impl UserRule {
+    fn label(self) -> &'static str {
+        match self {
+            UserRule::MostRecent => "MostRecent flag",
+            UserRule::AutoLogin => "the only AutoLogin user",
+            UserRule::NewestTimestamp => "newest loginusers timestamp",
+            UserRule::OnlyFolder => "the only userdata folder",
+            UserRule::NewestLocalconfig => "newest localconfig",
+        }
+    }
+}
+
+/// Pick the account id from `loginusers.vdf` by the first three rules.
+/// `has_dir` tells if `userdata/<id>` exists.
+fn pick_login_user(loginusers: &str, has_dir: impl Fn(&str) -> bool) -> Option<(String, UserRule)> {
+    let users: Vec<LoginUser> = parse_login_users(loginusers)
+        .into_iter()
+        .filter(|u| has_dir(&u.account_id))
+        .collect();
+    if let Some(u) = users.iter().find(|u| u.most_recent) {
+        return Some((u.account_id.clone(), UserRule::MostRecent));
+    }
+    let mut auto = users.iter().filter(|u| u.auto_login);
+    if let (Some(u), None) = (auto.next(), auto.next()) {
+        return Some((u.account_id.clone(), UserRule::AutoLogin));
+    }
+    users
+        .iter()
+        .filter_map(|u| Some((u.timestamp?, u)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, u)| (u.account_id.clone(), UserRule::NewestTimestamp))
 }
 
 /// The `userdata/<id>` folder of the active Steam user.
 ///
-/// Order: the `MostRecent "1"` user in `loginusers.vdf`; else the only
-/// `userdata` folder; else the folder whose `localconfig.vdf` changed last.
+/// Order: the `MostRecent "1"` user in `loginusers.vdf`; else the one user
+/// with `AutoLogin "1"`; else the user with the newest `timestamp`; else the
+/// only `userdata` folder; else the folder whose `localconfig.vdf` changed
+/// last. The log line names the rule, never the user.
 fn active_user_dir(root: &Path) -> Option<PathBuf> {
     let userdata = root.join("userdata");
     if let Ok(text) = std::fs::read_to_string(root.join("config").join("loginusers.vdf")) {
-        for id in most_recent_account_ids(&text) {
-            let dir = userdata.join(&id);
-            if dir.is_dir() {
-                return Some(dir);
-            }
+        if let Some((id, rule)) = pick_login_user(&text, |id| userdata.join(id).is_dir()) {
+            log::info!("[library] steam: active user chosen by {}", rule.label());
+            return Some(userdata.join(id));
         }
     }
     let mut dirs: Vec<PathBuf> = std::fs::read_dir(&userdata)
@@ -534,7 +598,13 @@ fn active_user_dir(root: &Path) -> Option<PathBuf> {
         .collect();
     match dirs.len() {
         0 => None,
-        1 => dirs.pop(),
+        1 => {
+            log::info!(
+                "[library] steam: active user chosen by {}",
+                UserRule::OnlyFolder.label()
+            );
+            dirs.pop()
+        }
         _ => {
             let newest = dirs
                 .into_iter()
@@ -547,7 +617,10 @@ fn active_user_dir(root: &Path) -> Option<PathBuf> {
                 .max_by_key(|(m, _)| *m)
                 .map(|(_, d)| d);
             if newest.is_some() {
-                log::info!("[library] steam: no MostRecent user, using newest localconfig");
+                log::info!(
+                    "[library] steam: active user chosen by {}",
+                    UserRule::NewestLocalconfig.label()
+                );
             }
             newest
         }
@@ -1214,7 +1287,8 @@ mod tests {
     #[test]
     fn active_user_is_the_most_recent_one() {
         // 76561198000000002 - 76561197960265728 = 39734274
-        assert_eq!(most_recent_account_ids(LOGINUSERS), vec!["39734274"]);
+        let picked = pick_login_user(LOGINUSERS, |_| true);
+        assert_eq!(picked, Some(("39734274".into(), UserRule::MostRecent)));
     }
 
     #[test]
@@ -1228,7 +1302,7 @@ mod tests {
     fn malformed_files_give_nothing() {
         assert!(parse_local_stats("\"a\" { \"b\"").is_empty());
         assert!(parse_hidden_apps("not vdf").is_empty());
-        assert!(most_recent_account_ids("").is_empty());
+        assert!(parse_login_users("").is_empty());
     }
 
     #[test]
@@ -1302,6 +1376,68 @@ mod tests {
         assert_eq!(
             active_user_dir(&root),
             Some(root.join("userdata").join("39734275"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The Windows shape: two users, no MostRecent, these keys only.
+    fn loginusers_without_most_recent(auto1: &str, auto2: &str, t1: u64, t2: u64) -> String {
+        let user = |id: u64, auto: &str, t: u64| {
+            format!(
+                "\t\t\"{id}\"\n\t{{\n\t\t\"AccountName\"\t\t\"acct\"\n\t\t\"PersonaName\"\t\t\"persona\"\n\t\t\"RememberPassword\"\t\t\"1\"\n\t\t\"WantsOfflineMode\"\t\t\"0\"\n\t\t\"SkipOfflineModeWarning\"\t\t\"0\"\n\t\t\"AutoLogin\"\t\t\"{auto}\"\n\t\t\"timestamp\"\t\t\"{t}\"\n\t}}\n"
+            )
+        };
+        format!(
+            "\"users\"\n{{\n{}{}}}\n",
+            user(76561198000000001, auto1, t1),
+            user(76561198000000002, auto2, t2)
+        )
+    }
+
+    #[test]
+    fn no_most_recent_uses_the_one_auto_login_user() {
+        // The older user has AutoLogin: the flag beats the timestamp.
+        let text = loginusers_without_most_recent("1", "0", 1_760_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734273".into(), UserRule::AutoLogin))
+        );
+    }
+
+    #[test]
+    fn no_most_recent_and_no_single_auto_login_uses_the_newest_timestamp() {
+        let text = loginusers_without_most_recent("0", "0", 1_760_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734274".into(), UserRule::NewestTimestamp))
+        );
+        // Both have AutoLogin: not exactly one, so the timestamp decides.
+        let text = loginusers_without_most_recent("1", "1", 1_780_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734273".into(), UserRule::NewestTimestamp))
+        );
+        // The newest user has no userdata folder: only the other one counts.
+        assert_eq!(
+            pick_login_user(&text, |id| id == "39734274"),
+            Some(("39734274".into(), UserRule::AutoLogin))
+        );
+    }
+
+    #[test]
+    fn active_user_dir_uses_timestamp_for_a_two_user_file_without_most_recent() {
+        let root = std::env::temp_dir().join(format!("m3llo-steam-ts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for id in ["39734273", "39734274"] {
+            std::fs::create_dir_all(root.join("userdata").join(id).join("config")).expect("mkdir");
+        }
+        std::fs::create_dir_all(root.join("config")).expect("mkdir");
+        // The older timestamp is on the first user. The second one wins.
+        let text = loginusers_without_most_recent("0", "0", 1_760_000_000, 1_770_000_000);
+        std::fs::write(root.join("config").join("loginusers.vdf"), text).expect("write");
+        assert_eq!(
+            active_user_dir(&root),
+            Some(root.join("userdata").join("39734274"))
         );
         let _ = std::fs::remove_dir_all(&root);
     }

@@ -271,17 +271,22 @@ Files read, under the Steam root:
 
 | File | Path inside the file |
 |---|---|
-| `config/loginusers.vdf` | `users > <steamid64> > MostRecent` |
+| `config/loginusers.vdf` | `users > <steamid64> > MostRecent`, `AutoLogin`, `timestamp` |
 | `userdata/<id>/config/localconfig.vdf` | `UserLocalConfigStore > Software > Valve > Steam > apps > <appid>` |
 | `userdata/<id>/7/remote/sharedconfig.vdf` | `UserRoamingConfigStore > Software > Valve > Steam > apps > <appid> > hidden` |
 
-Active user rule:
+Active user rule. The scan applies the first rule that gives a user:
 
 1. Use the user with `MostRecent "1"` in `loginusers.vdf`. The folder name is the
    SteamID64 minus 76561197960265728.
-2. If no such folder exists and `userdata` has one user folder, use it.
-3. If it has several, use the folder with the newest `localconfig.vdf`. The scan
-   logs that it made this choice.
+2. If no user has `MostRecent "1"` and exactly one user has `AutoLogin "1"`, use
+   that user.
+3. Else use the user with the newest `timestamp` in `loginusers.vdf`.
+4. If no such folder exists and `userdata` has one user folder, use it.
+5. If it has several, use the folder with the newest `localconfig.vdf`.
+
+A rule only counts a user whose `userdata/<id>` folder exists. The scan logs
+which rule chose the user. It never logs an account name or a persona name.
 
 The scan fills the fields for installed appids only. `localconfig.vdf` also
 lists games that are not installed. The scan ignores them.
