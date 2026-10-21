@@ -20,7 +20,12 @@
 # cmake/webrtc-audio-processing/CMakeLists.txt, so WAP_ROOT, WAP_DEFINES and
 # the webrtc_neteq target are in scope. It links webrtc_neteq for the shared
 # rtc_base, system_wrappers (Clock) and struct_parameters_parser objects.
-option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" ON)
+# Apple clang build is unverified: OFF on Apple until stage 3 turns it on after a Mac build.
+if(APPLE)
+    option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" OFF)
+else()
+    option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" ON)
+endif()
 
 if(MELLO_WEBRTC_VIDEO_TIMING)
     if(NOT MELLO_WEBRTC_NETEQ)

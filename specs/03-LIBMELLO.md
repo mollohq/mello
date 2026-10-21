@@ -74,6 +74,7 @@ libmello/
 │   ├── opus/
 │   ├── rnnoise/
 │   ├── webrtc-audio-processing/    # Submodule: github.com/helloooideeeeea/webrtc-audio-processing (WebRTC APM)
+│   ├── webrtc-video-timing/        # Vendored overlay: WebRTC video receive timing + frame buffer (M131)
 │   └── silero-vad/                 # ONNX model + runtime
 │
 ├── models/                         # ML model files (Silero VAD .onnx)
@@ -83,6 +84,17 @@ libmello/
     ├── test_video_pipeline.cpp
     └── test_peer_connection.cpp
 ```
+
+### Vendored WebRTC video timing
+
+| Item | Value |
+|---|---|
+| Overlay | `third_party/webrtc-video-timing/webrtc/`, the upstream path layout, with LICENSE and PATENTS. It holds only files that the APM submodule and the NetEQ overlay (`third_party/webrtc-neteq/`) do not have. |
+| Upstream | `https://webrtc.googlesource.com/src`, `refs/branch-heads/6778` (M131), commit `79aff54b0fa9238ce3518dd9eaf9610cd6f22e82`. The files are byte-identical to upstream. |
+| Contents | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers`, and the `EncodedFrame` types. No depacketizer, decoder or transport. |
+| Build | Static target `webrtc_video_timing` in `cmake/webrtc-video-timing.cmake`, included from the end of `cmake/webrtc-audio-processing/CMakeLists.txt`. It links `webrtc_neteq`. |
+| Option | `MELLO_WEBRTC_VIDEO_TIMING`: ON on Windows and Linux, OFF on Apple until a Mac build is verified. Needs `MELLO_WEBRTC_NETEQ`. |
+| Use | Nothing in libmello links it yet. `tests/test_video_timing_spike.cpp` (`mello_video_timing_spike_tests`) proves it as the viewer jitter buffer. The stage 3 viewer timeline builds on it. |
 
 ---
 
