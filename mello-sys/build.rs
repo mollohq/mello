@@ -49,6 +49,23 @@ fn main() {
         .define("VCPKG_TARGET_TRIPLET", triplet)
         .profile("Release");
 
+    // The cmake crate fills CMAKE_<LANG>_FLAGS_RELEASE from the cc crate,
+    // which follows the Rust profile's opt-level. On MSVC that gives
+    // "-nologo -MD -Brepro -W0" with no -O flag for every Rust profile (the
+    // release profile is opt-level "z"), so the Visual Studio "Release"
+    // configuration compiled libmello without optimization: the CPU NV12 to
+    // RGBA conversion took 34 ms for one 1280x720 frame (streaming quality
+    // gate, 2026-10-21). Keep cc's flags and add -O2. No NDEBUG: asserts stay
+    // as they were.
+    if target_os == "windows" {
+        for lang in ["C", "CXX"] {
+            cmake_cfg.define(
+                format!("CMAKE_{lang}_FLAGS_RELEASE"),
+                "-nologo -MD -Brepro -W0 -O2",
+            );
+        }
+    }
+
     if target_os == "macos" {
         if target_arch == "aarch64" {
             cmake_cfg.define("CMAKE_OSX_ARCHITECTURES", "arm64");
