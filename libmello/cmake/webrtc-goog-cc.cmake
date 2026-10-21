@@ -23,7 +23,13 @@
 # rate_control_settings.h; none of their sources are compiled.
 #
 # Stage 4 spike: only tests/test_goog_cc_spike.cpp links this target.
-option(MELLO_WEBRTC_GOOG_CC "Build the vendored WebRTC goog_cc congestion controller" ON)
+# Apple clang is unverified: OFF on Apple until a Mac build runs, then stage 4 turns it on.
+if(APPLE)
+    set(MELLO_WEBRTC_GOOG_CC_DEFAULT OFF)
+else()
+    set(MELLO_WEBRTC_GOOG_CC_DEFAULT ON)
+endif()
+option(MELLO_WEBRTC_GOOG_CC "Build the vendored WebRTC goog_cc congestion controller" ${MELLO_WEBRTC_GOOG_CC_DEFAULT})
 
 if(MELLO_WEBRTC_GOOG_CC)
     if(NOT MELLO_WEBRTC_NETEQ)
