@@ -179,45 +179,6 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         upload_buf_.assign(bytes, 0);
     }
 
-    if (use_interop_) {
-        D3D11_TEXTURE2D_DESC shared_desc{};
-        shared_desc.Width = config.width;
-        shared_desc.Height = coded_height_ + coded_height_ / 2;
-        shared_desc.MipLevels = 1;
-        shared_desc.ArraySize = 1;
-        shared_desc.Format = DXGI_FORMAT_R8_UNORM;
-        shared_desc.SampleDesc.Count = 1;
-        shared_desc.Usage = D3D11_USAGE_DEFAULT;
-        shared_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-        shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED;
-
-        HRESULT hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_frame_tex_);
-        if (FAILED(hr)) {
-            MELLO_LOG_WARN(TAG, "NVDEC: shared frame texture creation failed: 0x%08X", hr);
-            shared_frame_tex_.Reset();
-            shared_frame_handle_ = nullptr;
-        } else {
-            Microsoft::WRL::ComPtr<IDXGIResource> dxgi_res;
-            hr = shared_frame_tex_.As(&dxgi_res);
-            if (FAILED(hr)) {
-                MELLO_LOG_WARN(TAG, "NVDEC: shared texture IDXGIResource query failed: 0x%08X", hr);
-                shared_frame_tex_.Reset();
-                shared_frame_handle_ = nullptr;
-            } else {
-                HANDLE h = nullptr;
-                hr = dxgi_res->GetSharedHandle(&h);
-                if (FAILED(hr) || !h) {
-                    MELLO_LOG_WARN(TAG, "NVDEC: shared texture handle fetch failed: 0x%08X", hr);
-                    shared_frame_tex_.Reset();
-                    shared_frame_handle_ = nullptr;
-                } else {
-                    shared_frame_handle_ = reinterpret_cast<void*>(h);
-                    MELLO_LOG_INFO(TAG, "NVDEC: shared decoded frame handle ready");
-                }
-            }
-        }
-    }
-
     MELLO_LOG_DEBUG(TAG, "Probing NVDEC... ok");
     MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u interop=%s",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
@@ -247,8 +208,6 @@ void NvdecDecoder::shutdown() {
     if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
     if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
     frame_tex_.Reset();
-    shared_frame_tex_.Reset();
-    shared_frame_handle_ = nullptr;
     decode_buf_.clear();
     ready_buf_.clear();
     upload_buf_.clear();
@@ -260,7 +219,6 @@ void NvdecDecoder::shutdown() {
     sequence_callback_count_ = 0;
     {
         std::lock_guard<std::mutex> lock(publish_mutex_);
-        pending_shared_copy_ = false;
         pending_r8_upload_ = false;
         pending_nv12_upload_ = false;
     }
@@ -465,7 +423,6 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
             self->decode_buf_.swap(self->ready_buf_);
             if (self->use_interop_) {
                 self->pending_r8_upload_ = true;
-                if (self->shared_frame_tex_) self->pending_shared_copy_ = true;
             } else {
                 self->pending_nv12_upload_ = true;
             }
@@ -491,30 +448,15 @@ DXGI_FORMAT NvdecDecoder::frame_format() const {
     return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_NV12;
 }
 
-void* NvdecDecoder::shared_frame_handle() const {
-    return use_interop_ ? shared_frame_handle_ : nullptr;
-}
-
-DXGI_FORMAT NvdecDecoder::shared_frame_format() const {
-    return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_UNKNOWN;
-}
-
-uint32_t NvdecDecoder::shared_frame_uv_offset() const {
-    return use_interop_ ? coded_height_ : 0;
-}
-
 void NvdecDecoder::publish_d3d11_frame() {
     if (!context_) return;
 
-    bool do_shared_copy = false;
     bool do_r8_upload = false;
     bool do_nv12_upload = false;
     {
         std::lock_guard<std::mutex> lock(publish_mutex_);
-        do_shared_copy = pending_shared_copy_;
         do_r8_upload = pending_r8_upload_;
         do_nv12_upload = pending_nv12_upload_;
-        pending_shared_copy_ = false;
         pending_r8_upload_ = false;
         pending_nv12_upload_ = false;
         // Take the newest frame. The decode thread now fills another buffer.
@@ -525,9 +467,6 @@ void NvdecDecoder::publish_d3d11_frame() {
         context_->UpdateSubresource(
             frame_tex_.Get(), 0, nullptr,
             upload_buf_.data(), config_.width, 0);
-    }
-    if (do_shared_copy && shared_frame_tex_ && frame_tex_) {
-        context_->CopyResource(shared_frame_tex_.Get(), frame_tex_.Get());
     }
 }
 
