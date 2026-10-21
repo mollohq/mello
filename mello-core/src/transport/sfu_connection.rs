@@ -536,12 +536,15 @@ impl SfuConnection {
     }
 
     /// Create a stream PeerConnection with an explicit host/viewer media role.
+    /// `ice_servers` are the `get_ice_servers` URLs, as for `create_peer`;
+    /// empty keeps libmello's default STUN servers.
     ///
     /// # Safety
-    /// `ctx` must be a valid, non-null `MelloContext` pointer.
+    /// `ctx` must be a valid `MelloContext` pointer or null.
     pub unsafe fn create_stream_peer(
         ctx: *mut mello_sys::MelloContext,
         role: StreamPeerRole,
+        ice_servers: &[String],
     ) -> Result<PeerHandle, StreamError> {
         let media_role = role.to_media_role();
         let peer_id_c = CString::new("sfu").expect("CString::new failed");
@@ -558,6 +561,10 @@ impl SfuConnection {
                 role
             )));
         }
+        // The same STUN and TURN servers as the voice peer: a network that
+        // blocks the SFU's UDP port can still relay the stream (spec 10
+        // section 7.6). Stream peers used to get none.
+        unsafe { set_peer_ice_servers(peer, ice_servers) };
         Ok(PeerHandle {
             peer,
             peer_id_c,
@@ -2136,7 +2143,7 @@ unsafe fn set_peer_ice_servers(peer: *mut mello_sys::MelloPeerConnection, urls: 
             ptrs.len() as std::os::raw::c_int,
         )
     };
-    log::info!("SFU voice peer: {} ICE server URL(s) set", urls.len());
+    log::info!("SFU peer: {} ICE server URL(s) set", urls.len());
 }
 
 fn rtp_peer_error_to_stream_error(err: RtpPeerError) -> StreamError {
@@ -2491,6 +2498,43 @@ mod tests {
         );
         // SAFETY: created above, destroyed once.
         unsafe { mello_sys::mello_peer_destroy(handle.peer) };
+    }
+
+    /// Stream peers get the same ICE servers as the voice peer: the TURN
+    /// server gets an Allocate request from a host and from a viewer peer.
+    #[tokio::test]
+    async fn create_stream_peer_gives_the_ice_servers_to_libdatachannel() {
+        for role in [StreamPeerRole::Host, StreamPeerRole::Viewer] {
+            let turn = tokio::net::UdpSocket::bind("127.0.0.1:0")
+                .await
+                .expect("bind a local UDP port");
+            let port = turn.local_addr().expect("socket has an address").port();
+            let ice = [format!(
+                "turn:user%3A1:secret@127.0.0.1:{port}?transport=udp"
+            )];
+            // SAFETY: a null context is allowed.
+            let handle =
+                unsafe { SfuConnection::create_stream_peer(std::ptr::null_mut(), role, &ice) }
+                    .expect("stream peer");
+            // SAFETY: the peer is live until the destroy below.
+            let offer = unsafe { mello_sys::mello_peer_create_offer(handle.peer) };
+            assert!(!offer.is_null(), "offer");
+
+            let mut buf = [0u8; 1500];
+            let (n, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), turn.recv_from(&mut buf))
+                    .await
+                    .unwrap_or_else(|_| panic!("{role:?}: the TURN server got no request"))
+                    .expect("recv");
+            assert!(n >= 20, "a STUN message");
+            assert_eq!(
+                &buf[0..2],
+                &[0x00, 0x03],
+                "{role:?}: a TURN Allocate request"
+            );
+            // SAFETY: created above, destroyed once.
+            unsafe { mello_sys::mello_peer_destroy(handle.peer) };
+        }
     }
 
     #[test]

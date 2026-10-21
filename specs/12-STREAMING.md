@@ -438,7 +438,7 @@ The sink exposes `native_rtp_telemetry()`, `poll_video_feedback()` (PLI/REMB), a
 
 When the RTP video track or control channel closes, send attempts return errors that flow through `video_send_fail_total` telemetry counters.
 
-Stream peers use active ICE-TCP like voice peers: a network that blocks UDP can reach the SFU's passive ICE-TCP port. Spec 10 section 7.6 lists the libjuice limits of that path.
+Stream peers use active ICE-TCP like voice peers: a network that blocks UDP can reach the SFU's passive ICE-TCP port. Stream peers also get the same STUN and TURN servers as the voice peer (`get_ice_servers`, `create_stream_peer`'s `ice_servers`); the probe tools pass none. Spec 10 section 7.6 lists the libjuice limits of that path.
 
 ### 6.2.1 Stream membership
 

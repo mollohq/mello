@@ -1071,7 +1071,13 @@ impl super::Client {
             Ok(mut conn) => {
                 let peer_handle = {
                     let ctx = self.voice.mello_ctx();
-                    unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Host) }
+                    unsafe {
+                        SfuConnection::create_stream_peer(
+                            ctx,
+                            StreamPeerRole::Host,
+                            &self.ice_servers,
+                        )
+                    }
                 };
                 match peer_handle {
                     Ok(ph) => match conn.join_stream(ph, &resp.session_id(), "host").await {
@@ -1340,7 +1346,9 @@ impl super::Client {
 
         let peer_handle = {
             let ctx = self.voice.mello_ctx();
-            unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Viewer) }
+            unsafe {
+                SfuConnection::create_stream_peer(ctx, StreamPeerRole::Viewer, &self.ice_servers)
+            }
         };
         let ph = match peer_handle {
             Ok(ph) => ph,
@@ -1779,7 +1787,7 @@ mod stream_members_tests {
             .expect("connect");
         // SAFETY: a null context is allowed.
         let peer = unsafe {
-            SfuConnection::create_stream_peer(std::ptr::null_mut(), StreamPeerRole::Viewer)
+            SfuConnection::create_stream_peer(std::ptr::null_mut(), StreamPeerRole::Viewer, &[])
         }
         .expect("viewer peer");
         let session = tokio::time::timeout(LIMIT, conn.join_stream(peer, SESSION, "viewer"))
@@ -1899,7 +1907,7 @@ mod stream_members_tests {
             .await
             .expect("connect to the SFU");
         // SAFETY: a null context is allowed.
-        let peer = unsafe { SfuConnection::create_stream_peer(std::ptr::null_mut(), role) }
+        let peer = unsafe { SfuConnection::create_stream_peer(std::ptr::null_mut(), role, &[]) }
             .expect("stream peer");
         let signaling_role = match role {
             StreamPeerRole::Host => "host",

@@ -289,14 +289,15 @@ fn main() {
             std::process::exit(1);
         });
 
-    let peer_handle = unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Viewer) }
-        .unwrap_or_else(|e| {
-            eprintln!("SFU stream viewer peer creation failed: {}", e);
-            unsafe {
-                mello_sys::mello_destroy(ctx);
-            }
-            std::process::exit(1);
-        });
+    let peer_handle =
+        unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Viewer, &[]) }
+            .unwrap_or_else(|e| {
+                eprintln!("SFU stream viewer peer creation failed: {}", e);
+                unsafe {
+                    mello_sys::mello_destroy(ctx);
+                }
+                std::process::exit(1);
+            });
 
     rt.block_on(conn.join_stream(peer_handle, &session_id, &role))
         .unwrap_or_else(|e| {
