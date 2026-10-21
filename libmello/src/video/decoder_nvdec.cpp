@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "decoder_nvdec.hpp"
+#include "nvdec_host_layout.hpp"
 #include "../util/log.hpp"
 #include <Windows.h>
 #include <dxgi.h>
@@ -142,7 +143,7 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
         if (SUCCEEDED(hr)) {
             use_interop_ = true;
-            host_r8_buf_.resize(static_cast<size_t>(config.width) * (mb_height + mb_height / 2));
+            layout_rows_ = mb_height;
             MELLO_LOG_INFO(TAG, "NVDEC: R8 layout decode path (host upload %ux%u)",
                 tex_desc.Width, tex_desc.Height);
         } else {
@@ -167,7 +168,15 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
             MELLO_LOG_ERROR(TAG, "NVDEC: Failed to create output texture: hr=0x%08X", hr);
             return false;
         }
-        nv12_buf_.resize(static_cast<size_t>(config.width) * config.height * 3 / 2);
+        layout_rows_ = config.height & ~1u;
+    }
+
+    {
+        const size_t bytes =
+            plan_nvdec_host_copy(config.width, layout_rows_, layout_rows_).buffer_bytes;
+        decode_buf_.assign(bytes, 0);
+        ready_buf_.assign(bytes, 0);
+        upload_buf_.assign(bytes, 0);
     }
 
     if (use_interop_) {
@@ -240,8 +249,10 @@ void NvdecDecoder::shutdown() {
     frame_tex_.Reset();
     shared_frame_tex_.Reset();
     shared_frame_handle_ = nullptr;
-    host_r8_buf_.clear();
-    nv12_buf_.clear();
+    decode_buf_.clear();
+    ready_buf_.clear();
+    upload_buf_.clear();
+    stream_coded_height_ = 0;
     decoder_coded_width_ = 0;
     decoder_coded_height_ = 0;
     decoder_codec_ = -1;
@@ -306,7 +317,7 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
     auto* self = static_cast<NvdecDecoder*>(user);
     self->sequence_callback_count_++;
 
-    self->coded_height_ = fmt->coded_height;
+    self->stream_coded_height_ = fmt->coded_height;
     const bool decoder_params_unchanged = self->decoder_
         && self->decoder_coded_width_ == fmt->coded_width
         && self->decoder_coded_height_ == fmt->coded_height
@@ -412,63 +423,53 @@ int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO
                                           &dev_ptr, &pitch, &proc);
     if (res != CUDA_SUCCESS) return 0;
 
-    uint32_t w = self->config_.width;
-    uint32_t h = self->coded_height_; // macroblock-aligned height (UV plane offset)
+    // CUDA to host on this (decode) thread; the D3D11 upload is deferred to
+    // publish_d3d11_frame() on the present thread. The luma and the chroma
+    // go as two blocks into the fixed host layout, so a stream with a larger
+    // coded height cannot write past the buffer.
+    const uint32_t w = self->config_.width;
+    const NvdecHostCopy plan = plan_nvdec_host_copy(w, self->layout_rows_,
+                                                    self->stream_coded_height_);
     bool copied = false;
 
-    if (self->use_interop_) {
-        auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
-            GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
-        if (cuMemcpy2D_fn && !self->host_r8_buf_.empty()) {
-            uint32_t copy_w = (w <= pitch) ? w : pitch;
+    auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
+        GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
+    if (!cuMemcpy2D_fn) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing");
+    } else if (self->decode_buf_.size() < plan.buffer_bytes ||
+               plan.bytes_written(w) > self->decode_buf_.size()) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: host buffer %zu bytes is smaller than the layout %zu",
+                        self->decode_buf_.size(), plan.buffer_bytes);
+    } else {
+        const uint32_t copy_w = (w <= pitch) ? w : pitch;
+        auto copy_rows = [&](uint32_t src_row, uint32_t dst_row, uint32_t rows) {
             CudaMemcpy2D cp{};
             cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
             cp.srcDevice     = dev_ptr;
+            cp.srcY          = src_row;
             cp.srcPitch      = pitch;
             cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
-            cp.dstHost       = self->host_r8_buf_.data();
+            cp.dstHost       = self->decode_buf_.data();
+            cp.dstY          = dst_row;
             cp.dstPitch      = w;
             cp.WidthInBytes  = copy_w;
-            cp.Height        = h + h / 2;
-            int rc_cpy = cuMemcpy2D_fn(&cp);
-            if (rc_cpy != 0) {
-                MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host R8 copy failed: %d", rc_cpy);
-            } else {
-                std::lock_guard<std::mutex> lock(self->publish_mutex_);
+            cp.Height        = rows;
+            return cuMemcpy2D_fn(&cp);
+        };
+        int rc_cpy = copy_rows(0, 0, plan.luma_rows);
+        if (rc_cpy == 0) rc_cpy = copy_rows(plan.chroma_src_row, plan.chroma_dst_row, plan.chroma_rows);
+        if (rc_cpy != 0) {
+            MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host copy failed: %d", rc_cpy);
+        } else {
+            std::lock_guard<std::mutex> lock(self->publish_mutex_);
+            self->decode_buf_.swap(self->ready_buf_);
+            if (self->use_interop_) {
                 self->pending_r8_upload_ = true;
-                if (self->shared_frame_tex_) {
-                    self->pending_shared_copy_ = true;
-                }
-                copied = true;
-            }
-        } else {
-            MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing or host buffer empty");
-        }
-    } else {
-        // Fallback: CUDA → CPU; D3D11 upload deferred to publish_d3d11_frame().
-        auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
-            GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
-        if (cuMemcpy2D_fn) {
-            uint32_t copy_w = (w <= pitch) ? w : pitch;
-            CudaMemcpy2D cp{};
-            cp.srcMemoryType = 2;
-            cp.srcDevice     = dev_ptr;
-            cp.srcPitch      = pitch;
-            cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
-            cp.dstHost       = self->nv12_buf_.data();
-            cp.dstPitch      = w;
-            cp.WidthInBytes  = copy_w;
-            cp.Height        = h + h / 2;
-            int rc_cpy = cuMemcpy2D_fn(&cp);
-            if (rc_cpy != 0) {
-                MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host copy failed: %d", rc_cpy);
+                if (self->shared_frame_tex_) self->pending_shared_copy_ = true;
             } else {
-                std::lock_guard<std::mutex> lock(self->publish_mutex_);
                 self->pending_nv12_upload_ = true;
-                copied = true;
             }
-        } else {
-            MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing");
+            copied = true;
         }
     }
 
@@ -516,20 +517,17 @@ void NvdecDecoder::publish_d3d11_frame() {
         pending_shared_copy_ = false;
         pending_r8_upload_ = false;
         pending_nv12_upload_ = false;
+        // Take the newest frame. The decode thread now fills another buffer.
+        if (do_r8_upload || do_nv12_upload) ready_buf_.swap(upload_buf_);
     }
 
-    if (do_r8_upload && frame_tex_ && !host_r8_buf_.empty()) {
+    if ((do_r8_upload || do_nv12_upload) && frame_tex_ && !upload_buf_.empty()) {
         context_->UpdateSubresource(
             frame_tex_.Get(), 0, nullptr,
-            host_r8_buf_.data(), config_.width, 0);
+            upload_buf_.data(), config_.width, 0);
     }
     if (do_shared_copy && shared_frame_tex_ && frame_tex_) {
         context_->CopyResource(shared_frame_tex_.Get(), frame_tex_.Get());
-    }
-    if (do_nv12_upload && frame_tex_ && !nv12_buf_.empty()) {
-        context_->UpdateSubresource(
-            frame_tex_.Get(), 0, nullptr,
-            nv12_buf_.data(), config_.width, 0);
     }
 }
 

@@ -2,6 +2,7 @@
 #include "video/video_pipeline.hpp"
 #include "video/frame_cadence.hpp"
 #include "video/encoder_control.hpp"
+#include "video/nvdec_host_layout.hpp"
 #include <future>
 #include <vector>
 #include <algorithm>
@@ -763,6 +764,42 @@ TEST(EncoderControl, OnlyALargeDownStepForcesAKeyframe) {
     EXPECT_TRUE(bitrate_step_forces_idr(8000, 2000));
     EXPECT_FALSE(bitrate_step_forces_idr(0, 2000)) << "no previous bitrate";
     EXPECT_TRUE(bitrate_step_forces_idr(4'000'000'000u, 1)) << "no overflow";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NVDEC host copy. Before stage 2 the NV12 fallback buffer was w*h*3/2 and the
+// copy wrote w*coded_h*3/2 bytes: 1920 * 8 * 1.5 = 23040 bytes past the end at
+// 1080p. The R8 buffer was sized at start, so a stream with a larger coded
+// height also wrote past it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(NvdecHostCopy, TheNv12FallbackStaysInsideItsBufferAt1080p) {
+    const auto plan = plan_nvdec_host_copy(1920, 1080, 1088);
+    EXPECT_EQ(plan.buffer_bytes, 1920u * 1080u * 3u / 2u);
+    EXPECT_LE(plan.bytes_written(1920), plan.buffer_bytes);
+    EXPECT_EQ(plan.luma_rows, 1080u);
+    EXPECT_EQ(plan.chroma_src_row, 1088u) << "the CUDA surface has its chroma at the coded height";
+    EXPECT_EQ(plan.chroma_dst_row, 1080u) << "an NV12 texture has its chroma after the last row";
+    EXPECT_EQ(plan.chroma_rows, 540u);
+}
+
+TEST(NvdecHostCopy, TheR8LayoutKeepsItsChromaRow) {
+    const auto plan = plan_nvdec_host_copy(1920, 1088, 1088);
+    EXPECT_EQ(plan.buffer_bytes, 1920u * 1632u);
+    EXPECT_EQ(plan.bytes_written(1920), plan.buffer_bytes);
+    EXPECT_EQ(plan.chroma_dst_row, 1088u) << "the shader reads the chroma at the start uv offset";
+}
+
+TEST(NvdecHostCopy, ALargerStreamCannotWritePastTheBuffer) {
+    for (const uint32_t coded_h : {720u, 1088u, 1440u, 2160u}) {
+        for (const uint32_t layout : {720u, 1080u, 1088u}) {
+            const auto plan = plan_nvdec_host_copy(1920, layout, coded_h);
+            EXPECT_LE(plan.bytes_written(1920), plan.buffer_bytes)
+                << "coded " << coded_h << " layout " << layout;
+            EXPECT_EQ(plan.chroma_src_row, coded_h);
+            EXPECT_LE(plan.luma_rows, layout);
+        }
+    }
 }
 
 // Idle keepalive: a quiet capture still needs video, or a viewer who joins a
