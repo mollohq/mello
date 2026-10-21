@@ -62,6 +62,19 @@ export function between(events: AppEvent[], from: string, to: string): number | 
   return a && b ? b.ts_ms - a.ts_ms : null;
 }
 
+/**
+ * Wait for the feed a crew of two or more shows once the library report and
+ * the contested titles have arrived: head2head, recent games tiles, titles and
+ * no skeleton. `present` alone comes first and lags the content.
+ */
+export async function waitForFullFeed(app: { waitFor: (label: string, p: (s: AppState) => boolean, ms: number) => Promise<AppState> }): Promise<AppState> {
+  return app.waitFor(
+    "the full feed: head2head with titles, recent_games tiles, skeleton_trio 0",
+    (s) => s.head2head.present && s.head2head.titles.length > 0 && s.recent_games.tiles.length > 0 && s.skeleton_trio === 0,
+    15_000,
+  );
+}
+
 /** The checks that every stage from two members on shares: no skeleton, no empty card. */
 export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => void): void {
   expect(s.skeleton_trio === 0, `no skeletons from two members on, got ${s.skeleton_trio}`);
@@ -106,7 +119,7 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
   });
 
   await step("the invite card shows eight octagons and a +N", async () => {
-    const s = await bob.state();
+    const s = await bob.waitFor("the invite card with eight octagons", (st) => st.invite_card.present && st.invite_card.octagons === 8, 15_000);
     expect(s.invite_card.present, "the invite card shows");
     expect(s.invite_card.octagons === 8, `eight octagons, got ${s.invite_card.octagons}`);
     expect(s.invite_card.more_count === total - 8, `+${total - 8}, got ${s.invite_card.more_count}`);
@@ -114,7 +127,7 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
   });
 
   await step("recent games stays at six tiles at most, and no card is empty", async () => {
-    const s = await bob.state();
+    const s = await waitForFullFeed(bob);
     expect(s.recent_games.tiles.length >= 1 && s.recent_games.tiles.length <= 6, `at most six tiles, got ${s.recent_games.tiles.length}`);
     expectFullFeed(s, expect);
   });

@@ -32,7 +32,13 @@ export default journey({
     });
 
     await step("the head2head card arrives as the wide card for a crew of one", async () => {
-      const s = await bob.waitFor("the head2head card", (st) => st.head2head.present, 30_000);
+      // The card appears before the library report returns the own values and
+      // the recent games tiles, so wait for them, not for `present` alone.
+      const s = await bob.waitFor(
+        "the head2head card with own_values and recent_games tiles",
+        (st) => st.head2head.present && st.head2head.own_values.length > 0 && st.recent_games.tiles.length > 0,
+        15_000,
+      );
       const h = s.head2head;
       expect(h.placement === "wide", `placement is wide, got ${h.placement}`);
       expect(h.member_count === 1, `member_count is 1, got ${h.member_count}`);

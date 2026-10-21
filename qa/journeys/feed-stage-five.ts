@@ -3,7 +3,7 @@
 // members are seeded over REST.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { bobWithSeededCrew, expectFullFeed } from "./lib/stage.ts";
+import { bobWithSeededCrew, expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 
 export default journey({
   id: "feed.stage-five",
@@ -22,11 +22,12 @@ export default journey({
     });
 
     await step("the invite card is there with five octagons and no seat", async () => {
-      const s = await bob.state();
+      const s = await bob.waitFor("the invite card with five octagons", (st) => st.invite_card.present && st.invite_card.octagons === 5, 15_000);
+      const full = await waitForFullFeed(bob);
       expect(s.invite_card.present, "the invite card shows");
       expect(s.invite_card.octagons === 5, `five octagons, got ${s.invite_card.octagons}`);
       expect(s.invite_card.more_count === 0, `no +N, got ${s.invite_card.more_count}`);
-      expectFullFeed(s, expect);
+      expectFullFeed(full, expect);
       await bob.waitFor("every octagon wears its avatar", (st) => st.invite_card.with_avatar === 5, 15_000);
       
       await bob.checkpoint("five-feed");

@@ -4,7 +4,7 @@
 // Head2head shows one pair, three open seats and the red invite.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { expectFullFeed } from "./lib/stage.ts";
+import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 import { endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
 
@@ -53,6 +53,7 @@ export default journey({
       // members and one real card of any kind hide the trio. The head2head
       // card is not one. Recent games is.
       for (const app of [bob, alice]) {
+        await waitForFullFeed(app);
         expectFullFeed(await app.state(), expect);
         await app.checkpoint("two-feed");
       }
