@@ -329,10 +329,6 @@ pub fn apply_to(
 
 /// Persist the state to the UI property and to settings, together.
 ///
-/// Also refreshes `has-device-account`, which decides whether step 1 offers
-/// "I already have an account" (#67). Every entry into step 1 passes here, so
-/// the entry cannot read a stale value.
-///
 /// Also ends the invite path on step 1, at startup and when onboarding is
 /// done. The invite path has two steps, not three: it skips step 1.
 fn write_state(
@@ -342,7 +338,6 @@ fn write_state(
 ) {
     app.set_onboarding_step(state.to_step());
     let mut s = settings.borrow_mut();
-    app.set_has_device_account(s.has_device_account());
     if matches!(
         state,
         OnboardingState::Loading | OnboardingState::PickCrew | OnboardingState::Done

@@ -15,6 +15,7 @@ import { linkEmailAtStep3, onboardWithNewCrew, profileAtStep2 } from "./lib/onbo
 /** The controls on step 1 that are not crew cards. A crew card is a button labelled with the crew name. */
 const STEP1_CONTROLS = new Set([
   "I already have an account",
+  "Use another account",
   "Sign in",
   "Create your own crew",
   "Open invite",
