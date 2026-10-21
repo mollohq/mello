@@ -193,3 +193,76 @@ func TestStartStreamResume_RejectsOtherSessionsAndUsers(t *testing.T) {
 		t.Fatal("a rejected resume advertised a stream")
 	}
 }
+
+func watchTestStream(t *testing.T, nk *fakeStreamNk, userID, sessionID string) {
+	t.Helper()
+	if _, err := WatchStreamRPC(ctxWithUser(userID), testLogger(), nil, nk,
+		`{"session_id":"`+sessionID+`"}`); err != nil {
+		t.Fatalf("watch_stream as %s: %v", userID, err)
+	}
+}
+
+func viewerCount(nk *fakeStreamNk) int {
+	return getActiveStreamForCrew(context.Background(), nk, sfuOnlyCrew).ViewerCount
+}
+
+// watch_stream counts the viewer in, once; stream_viewer_left from the host
+// counts it out. crew_state viewer_count follows. It was always 0: only the
+// dev seed wrote ViewerIDs.
+func TestViewerCount_WatchAndLeave(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStream(t, nk)
+
+	watchTestStream(t, nk, streamTestViewer, sessionID)
+	watchTestStream(t, nk, streamTestViewer, sessionID)
+	if got := viewerCount(nk); got != 1 {
+		t.Fatalf("viewer_count after one viewer watched twice = %d, want 1", got)
+	}
+
+	_, err := StreamViewerLeftRPC(ctxWithUser(streamTestViewer), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","viewer_id":"`+streamTestViewer+`"}`)
+	assertRuntimeCode(t, err, 7)
+	if got := viewerCount(nk); got != 1 {
+		t.Fatalf("a non-host changed viewer_count to %d", got)
+	}
+
+	if _, err := StreamViewerLeftRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","viewer_id":"`+streamTestViewer+`"}`); err != nil {
+		t.Fatalf("stream_viewer_left by the host: %v", err)
+	}
+	if got := viewerCount(nk); got != 0 {
+		t.Fatalf("viewer_count after the viewer left = %d, want 0", got)
+	}
+}
+
+// The session ledger keeps every viewer that watched and the peak, also
+// after the viewers left.
+func TestStopStream_LedgerKeepsPeakAndAllViewers(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStream(t, nk)
+	watchTestStream(t, nk, streamTestViewer, sessionID)
+	if _, err := StreamViewerLeftRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","viewer_id":"`+streamTestViewer+`"}`); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := StopStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`"}`); err != nil {
+		t.Fatal(err)
+	}
+	ledger, _ := readLedger(context.Background(), nk, sfuOnlyCrew)
+	for _, e := range ledger.Events {
+		if e.Type != "stream_session" {
+			continue
+		}
+		data, err := decodeStreamSessionData(e.Data)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if data.PeakViewers != 1 || len(data.ViewerIDs) != 1 || data.ViewerIDs[0] != streamTestViewer {
+			t.Fatalf("stream_session data %+v, want peak 1 and the one viewer", data)
+		}
+		return
+	}
+	t.Fatal("no stream_session event")
+}

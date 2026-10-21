@@ -455,7 +455,7 @@ Rules of the viewer list (`mello-core/src/stream/members.rs`):
 - The list holds at most one host. A viewer that joined before the host gets `member_joined {role: host}`; that sets the host. A second host entry replaces the first.
 - An SFU that sends no events to viewers leaves the `joined.members` snapshot.
 
-No UI shows the list. The UI viewer count comes from crew state (`viewer_count`). The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
+No UI shows the list. The UI viewer count comes from crew state (`viewer_count`), the length of `stream_meta.viewer_ids`: `watch_stream` adds the viewer, and the host calls `stream_viewer_left {crew_id, viewer_id}` on each `MemberLeft` (`report_stream_viewer_left`). The SFU sends `member_left` only for a viewer that left, not for one that reconnected. The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
 
 ### 6.3 Topology
 

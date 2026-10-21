@@ -154,18 +154,124 @@ type ActiveStream struct {
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
 type StreamMeta struct {
-	StreamID           string   `json:"stream_id"`
-	CrewID             string   `json:"crew_id"`
-	StreamerID         string   `json:"streamer_id"`
-	StreamerUsername   string   `json:"streamer_username"`
-	Title              string   `json:"title"`
-	StartedAt          string   `json:"started_at"`
-	ThumbnailURL       string   `json:"thumbnail_url,omitempty"`
-	ThumbnailUpdatedAt string   `json:"thumbnail_updated_at,omitempty"`
-	ViewerIDs          []string `json:"viewer_ids,omitempty"`
-	Width              uint32   `json:"width,omitempty"`
-	Height             uint32   `json:"height,omitempty"`
-	BitrateKbps        uint32   `json:"bitrate_kbps,omitempty"`
+	StreamID           string `json:"stream_id"`
+	CrewID             string `json:"crew_id"`
+	StreamerID         string `json:"streamer_id"`
+	StreamerUsername   string `json:"streamer_username"`
+	Title              string `json:"title"`
+	StartedAt          string `json:"started_at"`
+	ThumbnailURL       string `json:"thumbnail_url,omitempty"`
+	ThumbnailUpdatedAt string `json:"thumbnail_updated_at,omitempty"`
+	// ViewerIDs are the viewers that watch now: watch_stream adds one,
+	// stream_viewer_left (from the host, on the SFU member_left) removes it.
+	// crew_state viewer_count is its length.
+	ViewerIDs []string `json:"viewer_ids,omitempty"`
+	// WatchedIDs are all the viewers that watched, for the session ledger.
+	WatchedIDs []string `json:"watched_ids,omitempty"`
+	// PeakViewers is the largest len(ViewerIDs) so far.
+	PeakViewers int    `json:"peak_viewers,omitempty"`
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+}
+
+// peakViewers is the largest number of viewers at one time.
+func (m *StreamMeta) peakViewers() int {
+	if len(m.ViewerIDs) > m.PeakViewers {
+		return len(m.ViewerIDs)
+	}
+	return m.PeakViewers
+}
+
+// allViewers is every viewer that watched: WatchedIDs, plus any current
+// viewer missing from it (records written before WatchedIDs existed).
+func (m *StreamMeta) allViewers() []string {
+	out := append([]string(nil), m.WatchedIDs...)
+	for _, id := range m.ViewerIDs {
+		if !containsString(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// addViewer counts viewerID in. It reports whether anything changed.
+func (m *StreamMeta) addViewer(viewerID string) bool {
+	changed := false
+	if !containsString(m.ViewerIDs, viewerID) {
+		m.ViewerIDs = append(m.ViewerIDs, viewerID)
+		changed = true
+	}
+	if !containsString(m.WatchedIDs, viewerID) {
+		m.WatchedIDs = append(m.WatchedIDs, viewerID)
+		changed = true
+	}
+	if len(m.ViewerIDs) > m.PeakViewers {
+		m.PeakViewers = len(m.ViewerIDs)
+		changed = true
+	}
+	return changed
+}
+
+// removeViewer counts viewerID out. It reports whether it was counted.
+func (m *StreamMeta) removeViewer(viewerID string) bool {
+	for i, id := range m.ViewerIDs {
+		if id == viewerID {
+			m.ViewerIDs = append(m.ViewerIDs[:i], m.ViewerIDs[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// updateStreamMeta applies change to stream_meta/{crewID} with optimistic
+// concurrency: viewers join and leave at the same time. change returns
+// false when nothing must be written. A missing record is not an error.
+func updateStreamMeta(ctx context.Context, nk runtime.NakamaModule, crewID string, change func(*StreamMeta) bool) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+			{Collection: StreamMetaCollection, Key: crewID, UserID: SystemUserID},
+		})
+		if err != nil {
+			return err
+		}
+		if len(objects) == 0 {
+			return nil
+		}
+		var meta StreamMeta
+		if err := json.Unmarshal([]byte(objects[0].GetValue()), &meta); err != nil {
+			return err
+		}
+		if !change(&meta) {
+			return nil
+		}
+		data, _ := json.Marshal(meta)
+		if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+			{
+				Collection:      StreamMetaCollection,
+				Key:             crewID,
+				UserID:          SystemUserID,
+				Value:           string(data),
+				Version:         objects[0].GetVersion(),
+				PermissionRead:  2,
+				PermissionWrite: 0,
+			},
+		}); err == nil {
+			InvalidateCrewState(crewID)
+			return nil
+		}
+		time.Sleep(time.Duration(20*(attempt+1)) * time.Millisecond)
+	}
+	return fmt.Errorf("stream_meta write for crew %s failed after 3 retries", crewID)
 }
 
 const (
@@ -416,8 +522,8 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			StreamerName: streamMeta.StreamerUsername,
 			Title:        streamMeta.Title,
 			DurationMin:  durationMin,
-			PeakViewers:  len(streamMeta.ViewerIDs),
-			ViewerIDs:    streamMeta.ViewerIDs,
+			PeakViewers:  streamMeta.peakViewers(),
+			ViewerIDs:    streamMeta.allViewers(),
 			SnapshotURLs: snapshotURLs,
 		}
 		event := CrewEvent{
@@ -623,6 +729,16 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return "", errSFUUnavailable
 	}
 
+	// Count the viewer in. crew_state viewer_count reads this list; the
+	// host takes the viewer out again with stream_viewer_left.
+	if userID != meta.HostUserID {
+		if err := updateStreamMeta(ctx, nk, meta.CrewID, func(m *StreamMeta) bool {
+			return m.StreamID == req.SessionID && m.addViewer(userID)
+		}); err != nil {
+			logger.Warn("watch_stream: viewer count not updated for %s: %v", req.SessionID, err)
+		}
+	}
+
 	resp, _ := json.Marshal(map[string]interface{}{
 		"mode":         "sfu",
 		"sfu_endpoint": meta.SFUEndpoint,
@@ -632,6 +748,40 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		"bitrate_kbps": streamBitrateKbps,
 	})
 	return string(resp), nil
+}
+
+// StreamViewerLeftRPC takes a viewer out of the crew's viewer count. The
+// host calls it on the SFU member_left for a viewer (the SFU sends none for
+// a viewer that reconnects). Only the host of the crew's stream can call it.
+func StreamViewerLeftRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	var req struct {
+		CrewID   string `json:"crew_id"`
+		ViewerID string `json:"viewer_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" || req.ViewerID == "" {
+		return "", runtime.NewError("crew_id and viewer_id required", 3)
+	}
+	meta := readStreamMeta(ctx, nk, req.CrewID)
+	if meta == nil {
+		return "{}", nil
+	}
+	if meta.StreamerID != userID {
+		return "", runtime.NewError("not the host of this stream", 7)
+	}
+	if err := updateStreamMeta(ctx, nk, req.CrewID, func(m *StreamMeta) bool {
+		return m.StreamerID == userID && m.removeViewer(req.ViewerID)
+	}); err != nil {
+		logger.Warn("stream_viewer_left: %v", err)
+		return "", runtime.NewError("failed to update the viewer count", 13)
+	}
+	return "{}", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -841,8 +991,8 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		StreamerName: meta.StreamerUsername,
 		Title:        meta.Title,
 		DurationMin:  durationMin,
-		PeakViewers:  len(meta.ViewerIDs),
-		ViewerIDs:    meta.ViewerIDs,
+		PeakViewers:  meta.peakViewers(),
+		ViewerIDs:    meta.allViewers(),
 		SnapshotURLs: snapshotURLs,
 	}
 	event := CrewEvent{

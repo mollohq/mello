@@ -497,6 +497,7 @@ impl super::Client {
                 }
                 SfuEvent::MemberLeft { user_id, .. } => {
                     sink.on_viewer_left(&user_id).await;
+                    self.report_stream_viewer_left(&user_id).await;
                 }
                 SfuEvent::Disconnected { reason } => {
                     log::warn!("Stream SFU host disconnected: {}", reason);
@@ -504,6 +505,25 @@ impl super::Client {
                 SfuEvent::MediaPacket { .. } | SfuEvent::ControlPacket { .. } => {}
                 SfuEvent::AudioRtp { .. } | SfuEvent::SlotReleased { .. } => {}
             }
+        }
+    }
+
+    /// Tell the backend that a viewer left, so the crew's viewer count goes
+    /// down (`stream_viewer_left`; `watch_stream` counts the viewer in). The
+    /// SFU sends `member_left` only for a viewer that left, not for one that
+    /// reconnected.
+    async fn report_stream_viewer_left(&mut self, viewer_id: &str) {
+        let Some(crew_id) = self
+            .stream_session
+            .as_ref()
+            .map(|s| s.crew_id.clone())
+            .filter(|c| !c.is_empty())
+        else {
+            return;
+        };
+        let payload = serde_json::json!({ "crew_id": crew_id, "viewer_id": viewer_id });
+        if let Err(e) = self.nakama.rpc("stream_viewer_left", &payload).await {
+            log::warn!("stream_viewer_left RPC failed for {}: {}", viewer_id, e);
         }
     }
 
@@ -2302,6 +2322,128 @@ mod stream_lifecycle_tests {
             [serde_json::json!({ "crew_id": STREAMED_CREW, "resume_session_id": SESSION })]
         );
         assert!(client.stream_session.is_some(), "the stream keeps running");
+    }
+
+    /// A real SDP answer to the host's offer, from a native viewer peer that
+    /// lives only inside this call.
+    fn viewer_answer(offer: &str) -> String {
+        let id = std::ffi::CString::new("fake-sfu").expect("static id");
+        let offer = std::ffi::CString::new(offer).expect("offer has no NUL");
+        // SAFETY: a null context is allowed; the peer is destroyed before
+        // return and the answer is copied first.
+        unsafe {
+            let peer = mello_sys::mello_peer_create_for_role(
+                std::ptr::null_mut(),
+                id.as_ptr(),
+                mello_sys::MelloPeerMediaRole_MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+            );
+            assert!(!peer.is_null(), "native answerer");
+            let answer = mello_sys::mello_peer_create_answer(peer, offer.as_ptr());
+            assert!(!answer.is_null(), "native answer");
+            let text = std::ffi::CStr::from_ptr(answer)
+                .to_string_lossy()
+                .into_owned();
+            mello_sys::mello_peer_destroy(peer);
+            text
+        }
+    }
+
+    /// A fake stream SFU: it answers the host's `join_stream` and offer, then
+    /// sends `member_left` for `viewer`.
+    async fn sfu_sending_member_left(viewer: &'static str) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!("ws://{}/ws", listener.local_addr().expect("address"));
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                match v["type"].as_str() {
+                    Some("join_stream") => {
+                        ws.send(text(serde_json::json!({
+                            "type": "joined",
+                            "data": { "session_type": "stream", "session_id": SESSION, "members": [] }
+                        })))
+                        .await
+                        .expect("send joined");
+                    }
+                    Some("offer") => {
+                        let answer = viewer_answer(v["data"]["sdp"].as_str().expect("offer sdp"));
+                        ws.send(text(
+                            serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+                        ))
+                        .await
+                        .expect("send answer");
+                        ws.send(text(serde_json::json!({
+                            "type": "member_left",
+                            "data": { "user_id": viewer, "reason": "disconnect", "role": "viewer" }
+                        })))
+                        .await
+                        .expect("send member_left");
+                    }
+                    _ => {}
+                }
+            }
+        });
+        endpoint
+    }
+
+    /// A viewer that leaves the SFU session leaves the crew's viewer count:
+    /// the host reports it with `stream_viewer_left`.
+    #[tokio::test]
+    async fn a_viewer_leaving_the_sfu_session_is_reported() {
+        let (port, rpcs) = fake_nakama(&[]).await;
+        let (mut client, _events) = client_for(port);
+        hosted_session(&mut client);
+        let endpoint = sfu_sending_member_left("viewer-7").await;
+        let mut conn = tokio::time::timeout(
+            LIMIT,
+            crate::transport::SfuConnection::connect(&endpoint, "token"),
+        )
+        .await
+        .expect("connect in time")
+        .expect("connect");
+        // SAFETY: a null context is allowed.
+        let peer = unsafe {
+            crate::transport::SfuConnection::create_stream_peer(
+                std::ptr::null_mut(),
+                crate::transport::sfu_connection::StreamPeerRole::Host,
+                &[],
+            )
+        }
+        .expect("host peer");
+        tokio::time::timeout(LIMIT, conn.join_stream(peer, SESSION, "host"))
+            .await
+            .expect("join in time")
+            .expect("the join succeeds");
+        let conn = Arc::new(conn);
+        client.stream_sfu_connection = Some(Arc::clone(&conn));
+        client.stream_host_sink = Some(Arc::new(crate::stream::sink_sfu::SfuSink::new(conn)));
+
+        let deadline = tokio::time::Instant::now() + LIMIT;
+        while rpc_calls(&rpcs, "stream_viewer_left").is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no stream_viewer_left RPC"
+            );
+            client.poll_sfu_host_membership_events().await;
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        assert_eq!(
+            rpc_calls(&rpcs, "stream_viewer_left"),
+            [serde_json::json!({ "crew_id": STREAMED_CREW, "viewer_id": "viewer-7" })]
+        );
     }
 
     /// When the backend cannot restore the stream, no viewer can find it:
