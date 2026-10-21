@@ -706,7 +706,7 @@ and thin typed wrappers for each call. See Section 4 for payloads.
 
 | Action | RPC ID | Called when |
 |--------|--------|------------|
-| Update presence | `presence_update` | Login, logout, activity change |
+| Update presence | `presence_update` | Logout, activity change. Not login: the session-start hook sets online (§8.3) |
 | Get presence | `presence_get` | On demand |
 | Set active crew | `set_active_crew` | Crew focused in UI |
 | Subscribe sidebar | `subscribe_sidebar` | After crews loaded |
@@ -1249,8 +1249,12 @@ Implemented in `mello-core/src/client.rs`:
 ```rust
 // Called after successful auth + WS connect (handle_device_auth, handle_login, handle_restore)
 async fn on_connected(&self) {
-    // Set online presence via RPC
-    self.nakama.presence_update(&PresenceStatus::Online, None).await;
+    // No presence write. OnSessionStart sets the account online when the
+    // socket registers, and keeps the stored activity when another session
+    // of the same account is up. A presence_update here wrote the same row
+    // at the same moment, and on a fresh account Nakama refused the second
+    // insert (code 13, "failed to update presence").
+    self.check_protocol_version().await;
 }
 
 // load_crews() — called after login/restore — subscribes sidebar for all crews

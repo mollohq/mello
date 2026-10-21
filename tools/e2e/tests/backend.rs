@@ -151,6 +151,52 @@ fn signup_and_crew_creation_round_trip() {
     });
 }
 
+/// Presence at connect belongs to the server. `OnSessionStart` sets a fresh
+/// account online when its socket registers. The client sends no
+/// `presence_update` at connect: it wrote the same row at the same moment,
+/// and on a fresh account Nakama refused the second insert (code 13).
+#[test]
+fn a_fresh_account_is_online_once_its_socket_connects() {
+    if !e2e_enabled("a_fresh_account_is_online_once_its_socket_connects") {
+        return;
+    }
+
+    rt().block_on(async {
+        let mut client = NakamaClient::new(e2e_config());
+        let (user, created) = client
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth");
+        assert!(created, "a fresh device id must create a new account");
+
+        let (event_tx, _events) = std::sync::mpsc::channel();
+        client.connect_ws(event_tx).await.expect("socket connect");
+
+        // The hook runs on Nakama's event queue, so wait on the stored
+        // state, bounded.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            let raw = client
+                .presence_get(std::slice::from_ref(&user.id))
+                .await
+                .expect("presence_get");
+            let body: serde_json::Value =
+                serde_json::from_str(&raw).expect("presence_get returns JSON");
+            let status = body["presences"][&user.id]["status"].as_str().unwrap_or("");
+            if status == "online" {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the session-start hook did not set the account online; got {body}"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let _ = client.delete_account().await;
+    });
+}
+
 /// Signing in with an unknown email must fail, not quietly create an account.
 ///
 /// This used to send `create=true`, so a typo on the sign-in panel produced a

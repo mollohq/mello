@@ -1,18 +1,16 @@
 use crate::events::Event;
-use crate::presence::PresenceStatus;
 use crate::session;
 
 impl super::Client {
-    /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
+    /// Called after successful auth + WS connect. Checks the protocol, starts
+    /// the game services and fetches the ICE config.
+    ///
+    /// Presence is not written here. The server's session-start hook sets the
+    /// account online when the socket registers (spec 11 section 8.3), and it
+    /// keeps the stored activity when another session of the same account is
+    /// already up. A `presence_update` from here wrote the same row at the
+    /// same moment; on a fresh account Nakama refused the second insert.
     pub(super) async fn on_connected(&mut self) {
-        if let Err(e) = self
-            .nakama
-            .presence_update(&PresenceStatus::Online, None)
-            .await
-        {
-            log::warn!("Failed to set online presence: {}", e);
-        }
-
         self.check_protocol_version().await;
 
         self.ensure_game_services();

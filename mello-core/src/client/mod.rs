@@ -3,6 +3,8 @@ mod browser_flow;
 mod chat;
 mod clip;
 mod connection;
+#[cfg(test)]
+mod connection_tests;
 mod crew;
 mod diagnostics;
 mod game_services;
