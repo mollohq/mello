@@ -394,20 +394,21 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 ## 5. Video Transport (H.264 RTP)
 
-Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking. **ULPFEC** (RFC 5109 XOR parity, PT 127) is optional when negotiated in SDP.
+Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking.
+
+**FEC is off.** The stream offers carry no `ulpfec` payload type, and the SFU does not negotiate ULPFEC (mello-sfu 01-SFU.md §6.1). The stage 4 measurement decides if FEC comes back, end to end. Before, the host sent one parity packet per 10 media packets: no viewer received them (the SFU FEC track had no binding), and the parity plus RTP overhead (about 1.13×) was over the 1.08× pacing ceiling, so the AU queue overflowed. The sender and receiver FEC code stays; it runs only when an answer negotiates PT 127.
 
 | Parameter | Value |
 |-----------|-------|
 | Payload type | 96 (H.264 media) |
-| FEC payload type | 127 (`ulpfec/90000`, RFC 5109 level-0 XOR parity) |
-| FEC SSRC | `media_ssrc + 1` (parallel RTP stream; host offer includes `a=ssrc-group:FEC-FR`; SFU viewer leg uses separate FEC m-line/track) |
+| FEC | Off (no `ulpfec` payload type in the offers) |
 | Clock rate | 90 kHz |
 | Packetization | RFC 6184 mode 1, max payload 1100 bytes |
 | Host output | Annex-B access units (SPS/PPS on every IDR, no B-frames) |
 | RTCP feedback | `nack`, `nack pli`, `goog-remb`, `transport-cc` |
 | Header extension | TWCC (`transport-wide-cc`, id 3) |
 
-**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When ULPFEC is negotiated (`ulpfec/90000` PT 127 in SDP), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). The host offer SDP advertises `a=ssrc-group:FEC-FR media_ssrc (media_ssrc+1)` so intermediaries (SFU/Pion) bind the repair SSRC.
+**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When an answer negotiates ULPFEC (`ulpfec/90000` PT 127), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). No offer negotiates it now.
 
 **TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`. The estimator target is the host's own estimate for the host-to-SFU hop. It is forwarded to Rust as `GCC_TARGET` feedback, and the stream manager does not apply it to the encoder: the SFU sends the viewer-path capacity as REMB.
 
