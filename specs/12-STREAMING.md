@@ -446,7 +446,7 @@ The SFU lists the other members of the session in `joined.members`. It then send
 
 | Side | What the client does |
 |---|---|
-| Host | `MemberJoined` with role `viewer` and `MemberLeft` go to the `PacketSink` (`on_viewer_joined`, `on_viewer_left`). |
+| Host | `MemberJoined` with role `viewer` and `MemberLeft` go to the `PacketSink` (`on_viewer_joined`, `on_viewer_left`). A join requests no IDR: `member_joined` comes before the viewer's ICE and DTLS are up. |
 | Viewer | `ViewerState.members` (`stream::StreamMembers`) starts from `joined.members`. Each `MemberJoined` and `MemberLeft` updates it. A change emits `Event::StreamMembersChanged` with the whole list. |
 
 Rules of the viewer list (`mello-core/src/stream/members.rs`):
@@ -485,7 +485,7 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 ### 7.2 Viewer recovery policy
 
 - **Pre-keyframe gating:** All access units before the first keyframe are dropped.
-- **PLI/IDR:** Native receiver sends PLI when gated; host manager also honors viewer-join and queue-pressure keyframe requests.
+- **PLI/IDR:** Native receiver sends PLI when gated; host manager also honors queue-pressure keyframe requests. A late joiner gets the SFU's cached IDR when its PeerConnection connects (mello-sfu 01-SFU.md §6.1), then its own PLI asks for a fresh IDR.
 - **H.264 IDR detection:** Scans all NALs in the access unit for type 5 (IDR), not just the first.
 - **REMB uplink:** Viewer congestion controller drives receive targets; host steps down immediately on severe loss, ramps up slowly (5%/s cap in SFU aggregate mode).
 
@@ -604,7 +604,7 @@ See `plans/STREAM-CAPTURE-QUALITY.md`.
 
 **Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Encoder bitrate changes are coalesced: a target within 5 % of the current bitrate changes nothing (the dead band); a decrease over the dead band applies immediately; an increase waits until 250 ms after the last change, is rate-limited to 5%/s, and applies only over the dead band (the last step to the preset ceiling can be smaller). REMB is polled every 10 ms, so before this the encoder got up to 100 changes per second during a ramp. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale or missing (lost RTCP), the host **holds** the current target — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. A last-viewer-leave is an explicit signal and does restore the configured ceiling for the next viewer. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
 
-In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg), stamps per-leg transport-wide sequences toward viewers, and runs a per-viewer GCC estimator from each viewer's TWCC feedback. Each viewer leg has a token-bucket egress pacer tracking that estimate, and the aggregated minimum (GCC estimates, superseding client REMBs) is forwarded upstream as REMB on the ~1 s tick. The SFU also caches the last complete IDR access unit and replays it to newly wired viewers for instant late-join start.
+In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg) and stamps per-leg transport-wide sequences toward viewers. It runs no estimator and no pacer of its own: the minimum of the fresh viewer REMB values goes upstream as REMB, on arrival and on the ~1 s tick. The SFU caches the last complete IDR access unit and sends it to a viewer when the viewer's PeerConnection connects.
 
 ---
 

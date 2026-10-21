@@ -1045,16 +1045,11 @@ impl StreamManager {
     async fn handle_viewer_joined(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
         self.sink.on_viewer_joined(viewer_id).await;
-        self.manager_keyframe_req_viewer_total =
-            self.manager_keyframe_req_viewer_total.saturating_add(1);
-        log::info!(
-            "Stream manager viewer joined: {} — requesting IDR",
-            viewer_id
-        );
-        self.request_host_keyframe_with_cooldown(
-            "viewer_join",
-            Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
-        );
+        // No IDR here. `member_joined` comes before the viewer's ICE and DTLS
+        // are up, so an IDR now does not reach the viewer, and its cooldown
+        // delays the viewer's own PLI. The SFU sends its cached IDR when the
+        // viewer connects, and the viewer's PLI asks for a fresh one.
+        log::info!("Stream manager viewer joined: {}", viewer_id);
         // Late join into a paused stream: tell the newcomer at once, or they
         // stare at a black frame instead of the pause card.
         if self.pause.is_paused() {
@@ -2369,6 +2364,32 @@ mod tests {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
         ));
+        std::mem::forget(mgr);
+    }
+
+    /// `member_joined` comes before the viewer's ICE and DTLS are up. An IDR
+    /// on it does not reach the viewer, and its cooldown used to swallow the
+    /// viewer's own PLI that came right after.
+    #[test]
+    fn a_viewer_join_alone_forces_no_idr() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        let cooldown_before = mgr.last_viewer_keyframe_request;
+
+        rt.block_on(mgr.handle_viewer_joined("viewer"));
+
+        assert_eq!(mgr.last_viewer_keyframe_request, cooldown_before);
+        assert_eq!(mgr.manager_keyframe_req_viewer_total, 0);
+        assert!(
+            mgr.request_host_keyframe_with_cooldown(
+                "native_pli",
+                Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
+            ),
+            "the viewer's PLI right after its join must reach the encoder"
+        );
         std::mem::forget(mgr);
     }
 
