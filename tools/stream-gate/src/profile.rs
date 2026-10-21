@@ -284,6 +284,11 @@ pub struct Gate {
 pub struct Gates {
     /// A run fails when VMAF drops by more than this against the baseline.
     pub vmaf_max_drop: f64,
+    /// Per lane and profile, a larger allowed VMAF drop: the measured
+    /// run-to-run spread of a profile whose VMAF moves more than
+    /// `vmaf_max_drop` between runs of the same code. Without it the rule
+    /// would fail runs at random.
+    pub vmaf_max_drop_profile: BTreeMap<String, BTreeMap<String, f64>>,
     /// Per lane and profile: a run fails when freeze time rises by more
     /// than this (ms) against the baseline, the run-to-run spread measured at
     /// the baseline.
@@ -306,6 +311,22 @@ pub fn load_gates(path: &Path) -> Result<Gates, String> {
                 p.insert(k.clone(), v.as_f64().ok_or("freeze_ms_max_rise: number")?);
             }
             rise.insert(lane.clone(), p);
+        }
+    }
+    let mut vmaf_drop = BTreeMap::new();
+    if let Some(m) = root.get("vmaf_max_drop_profile").and_then(Value::as_object) {
+        for (lane, per) in m {
+            let mut p = BTreeMap::new();
+            for (k, v) in per
+                .as_object()
+                .ok_or("vmaf_max_drop_profile: object per lane")?
+            {
+                p.insert(
+                    k.clone(),
+                    v.as_f64().ok_or("vmaf_max_drop_profile: number")?,
+                );
+            }
+            vmaf_drop.insert(lane.clone(), p);
         }
     }
     let mut lanes = BTreeMap::new();
@@ -334,6 +355,7 @@ pub fn load_gates(path: &Path) -> Result<Gates, String> {
     }
     Ok(Gates {
         vmaf_max_drop: f_or(&root, "vmaf_max_drop", 1.0),
+        vmaf_max_drop_profile: vmaf_drop,
         freeze_ms_max_rise: rise,
         lanes,
     })

@@ -220,14 +220,26 @@ pub fn evaluate(
                 m.get("vmaf_mean").cloned().flatten(),
                 metric_of(base, name, "vmaf_mean"),
             ) {
+                let spread = gates
+                    .vmaf_max_drop_profile
+                    .get(lane)
+                    .and_then(|p| p.get(name))
+                    .cloned();
+                let allowed = spread
+                    .unwrap_or(gates.vmaf_max_drop)
+                    .max(gates.vmaf_max_drop);
                 out.push(GateResult {
                     profile: name.clone(),
                     metric: "vmaf drop vs baseline".into(),
                     value: Some(b - c),
-                    rule: format!("<= {}", gates.vmaf_max_drop),
+                    rule: format!("<= {}", fmt_num(Some(allowed))),
                     enforced: true,
-                    pass: b - c <= gates.vmaf_max_drop + 1e-9,
-                    note: "plans/streaming-quality.md stage 1".into(),
+                    pass: b - c <= allowed + 1e-9,
+                    note: if spread.is_some() {
+                        "the run-to-run VMAF spread of the profile at the baseline".into()
+                    } else {
+                        "plans/streaming-quality.md stage 1".into()
+                    },
                 });
             }
         }
@@ -420,6 +432,7 @@ mod tests {
         rise.insert("cpu".to_owned(), per_profile);
         Gates {
             vmaf_max_drop: 1.0,
+            vmaf_max_drop_profile: BTreeMap::new(),
             freeze_ms_max_rise: rise,
             lanes,
         }

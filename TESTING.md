@@ -342,7 +342,7 @@ when freeze time rises by more than the profile's spread
 | Scores | `score.rs`, `scripts/stream-gate-score.py` | PSNR and SSIM on luma per new presented frame against the clip frame of the same index. VMAF: `vmaf` 3.0.0 CLI (Netflix release `vmaf.exe`, SHA-256 pinned in `stream-gate.sh`, fetched into `target/stream-gate/tools/`), model `vmaf_v0.6.1`, luma. |
 | Profiles | `benchmarks/baselines/stream/profiles.json` | `clean`, `home-wifi` (viewer leg 2 % loss, 20 ms jitter), `mobile` (5 %, 40 ms, 250 ms spikes, reorder, 300 ppm drift), `bad` (10 % with bursts, 30 ms), `congested` (host uplink capped at 60 % of the preset with a 150 ms tail-drop queue, 5 s to 25 s), `outage` (host leg down 3 s from 8 s), `late-join` (a second viewer at 5 s, measured). 10 ms each way on every leg. |
 | Baselines | `baseline-2.1-cpu.json`, `baseline-2.1-hw.json` | Taken once, never edited. Commit, machine, GPU, driver, encoder, decoder, clip hash, seeds, SFU commit and Go, scorer versions. |
-| Gates | `benchmarks/baselines/stream/gates.json` | Per lane and profile: VMAF floor, freeze-time ceiling, time-to-first-frame ceiling, glass-to-glass p95 ceiling, fps floor, send rate within the cap. |
+| Gates | `benchmarks/baselines/stream/gates.json` | Per lane and profile: VMAF floor, freeze-time ceiling, time-to-first-frame ceiling, glass-to-glass p95 ceiling, fps floor, send rate within the cap. Made by `tools/stream-gate/make_gates.py` from the baseline and repeat runs on the same commit: the baseline value minus or plus the largest of a fixed margin, a share of the value and 1.1 x the spread of the runs. A metric missing in any run (no frame presented) has no gate. |
 
 Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
 
