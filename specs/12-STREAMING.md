@@ -782,7 +782,9 @@ DComp presenter diagnostics:
 | `tools/sfu-stream-viewer-probe` | Standalone viewer; minifb window or `--native-metrics` headless RTP telemetry |
 | `scripts/run-stream-host.ps1` | Launch host probe (release, Nakama `start_stream`) |
 | `scripts/run-stream-viewer.ps1` | Launch viewer probe; `-NativeMetrics` for headless soak |
-| `scripts/coalesce_stream_timeline.py` | Merges host + viewer + SFU logs into a single timeline |
+| `scripts/coalesce_stream_timeline.py` | Merges host + viewer + SFU logs into a single timeline. Reads the host tick line with `video_open` (and the older `media_open`) |
+| `tools/stream-gate` (`scripts/stream-gate.sh`) | The streaming quality gate: the reference clip (`MELLO_CAPTURE_REFERENCE`) through the real host, an impairment shim, the real SFU in test mode and the real viewer, on seven profiles; VMAF, PSNR, SSIM, delivery, glass-to-glass and wire metrics against the frozen baseline (`benchmarks/baselines/stream/`). CPU lane (OpenH264, `MELLO_SOFT_ENCODER=1`, `MELLO_SOFT_DECODER=1`) and hardware lane. `TESTING.md` "Streaming quality gate" |
+| `mello-sfu/tools/stream-soak` | SFU relay soak: a Pion host sends the real H.264 fixture (the gate's 720p60 clip, 2 s, FU-A) to N viewers; `--sim-drop-pct` and `--sim-jitter-ms` impair the host leg |
 
 ---
 

@@ -1,0 +1,6 @@
+{
+  "_comment": "Gates of the streaming quality gate. Thresholds come from the baselines (baseline-2.1-<lane>.json). A run fails when VMAF drops by more than vmaf_max_drop on any profile, or when freeze time rises by more than the measured run-to-run spread of the profile (freeze_ms_max_rise).",
+  "vmaf_max_drop": 1.0,
+  "freeze_ms_max_rise": {},
+  "lanes": {}
+}

@@ -1,0 +1,29 @@
+[package]
+name = "stream-gate"
+version = "0.0.0-DEV"
+edition = "2021"
+license = "Apache-2.0"
+publish = false
+description = "Streaming quality gate: a reference clip through the real stream path, an impairment shim and the real SFU, scored against a frozen baseline."
+
+# Same shape as tools/voice-gate. The harness runs as a release build
+# (scripts/stream-gate.sh): the host manager, the pacer and the viewer tick
+# are mello-core code whose timing the gate measures, and the product ships
+# them optimized. See plans/streaming-quality.md stage 1 and the "Streaming
+# quality gate" section of TESTING.md.
+
+[[bin]]
+name = "stream-gate"
+path = "src/main.rs"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+mello-sys = { path = "../../mello-sys" }
+mello-core = { path = "../../mello-core" }
+voice-gate = { path = "../voice-gate" }
+serde_json = { workspace = true }
+tokio = { workspace = true }
+log = { workspace = true }
+env_logger = "0.11"

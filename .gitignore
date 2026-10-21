@@ -87,3 +87,6 @@ scripts/.catalogue_work/
 # Claude Code: local settings and the worktrees of agent sessions. A file here
 # would mark every build and every QA result as dirty.
 .claude/
+
+# Streaming quality gate: reference clips rendered on first use (tools/stream-gate)
+benchmarks/clips/

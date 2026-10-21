@@ -16,6 +16,7 @@ members = [
     "tools/canary",
     "tools/e2e",
     "tools/voice-gate",
+    "tools/stream-gate",
 ]
 # Vendored upstream code. It is not ours to lint or format.
 exclude = ["third_party/i-slint-backend-winit"]
