@@ -108,6 +108,21 @@ gtest_discover_tests(mello_tests)
 gtest_discover_tests(mello_rtp_tests)
 gtest_discover_tests(mello_procenum_tests)
 
+# The reference source and the software encoder of the streaming quality
+# gate are Windows only (D3D11). The loopback needs the Cisco OpenH264 DLL,
+# which scripts/stream-gate.sh fetches into third_party/openh264; it is
+# copied next to the tests when present, else the loopback skips.
+if(WIN32 AND NOT IOS)
+    target_sources(mello_tests PRIVATE test_capture_reference.cpp)
+    set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
+    if(EXISTS "${_oh264_dll}")
+        add_custom_command(TARGET mello_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_oh264_dll}" "$<TARGET_FILE_DIR:mello_tests>/openh264-2.6.0-win64.dll"
+            COMMENT "Copying the OpenH264 DLL next to mello_tests")
+    endif()
+endif()
+
 # Windows: ORT loads onnxruntime.dll at runtime via LoadLibrary. Copy it
 # next to the test binaries so ctest passes without manual PATH setup.
 # Desktop-only: iOS links ORT statically and has no DLLs.
