@@ -103,10 +103,8 @@ export component MainWindow inherits Window {
     in-out property <string> onboarding-invite-code-text: "";
     in property <string> onboarding-invite-code-error: "";
     in property <bool> onboarding-invite-code-checking: false;
+    // Device auth found an existing device account: step 1 shows its card.
     in property <bool> is-returning-user: false;
-    // This machine has a device account (a persisted device id). Step 1
-    // offers "I already have an account" only when it has none (#67).
-    in property <bool> has-device-account: false;
     out property <string> onboarding-nickname;
     in-out property <bool> onboarding-share-game-activity: true;
     in-out property <int> selected-avatar: -1;
@@ -748,7 +746,6 @@ export component MainWindow inherits Window {
         device-user-name: root.user-name;
         device-user-initials: root.user-initials;
         is-returning-user: root.is-returning-user;
-        has-device-account: root.has-device-account;
         capture-devices: root.capture-devices;
         playback-devices: root.playback-devices;
         selected-capture-id: root.selected-capture-id;

@@ -1,9 +1,9 @@
 // AUTH-03: sign out, then sign in with email and password.
 //
-// After a logout, step 1 on the same computer offers the returning-user
-// "Sign in" for the device account (#67, #70, AUTH-02), not "I already have
-// an account". Email sign-in is therefore tested on a second computer: erin
-// is a new user folder, a fresh install. dana onboards and links an email,
+// After a logout, step 1 on the same computer shows the device card and
+// "Use another account" (AUTH-02). Email sign-in from "I already have an
+// account" is tested on a second computer: erin is a new user folder, a
+// fresh install. dana onboards and links an email,
 // then logs out. On erin, a wrong password gets a plain message and keeps
 // the panel open; the right password opens the app as dana, with her crew.
 
