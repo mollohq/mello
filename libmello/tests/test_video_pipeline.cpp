@@ -121,7 +121,10 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
         ASSERT_GT(packets.size(), 0u) << "No packets to feed to viewer";
     }
 
-    // Phase 2: decode
+    // Phase 2: decode, at the size the host encoded (the client does the same
+    // through mello_stream_get_host_resolution). It keeps the source aspect,
+    // so it is not the preset size on every monitor.
+    pipeline.get_host_resolution(config.width, config.height);
     std::atomic<uint32_t> frames_decoded{0};
     uint32_t last_w = 0, last_h = 0;
 
@@ -187,6 +190,7 @@ TEST_F(VideoPipelineTest, SaveDecodedFrame) {
         return;
     }
 
+    pipeline.get_host_resolution(config.width, config.height);
     std::vector<uint8_t> saved_rgba;
     uint32_t saved_w = 0, saved_h = 0;
 
