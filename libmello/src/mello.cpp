@@ -1,5 +1,7 @@
 #include "mello.h"
 #include "context.hpp"
+#include <chrono>
+#include "video/capture_reference.hpp"
 #include "transport/peer_connection_impl.hpp"
 #include "video/video_pipeline.hpp"
 #include "video/encoder_factory.hpp"
@@ -1421,6 +1423,14 @@ MelloStreamHost* mello_stream_start_host(
                 desc.monitor_index = source->monitor_index;
                 desc.prefer_wgc = true;
                 break;
+            case MELLO_CAPTURE_REFERENCE:
+                desc.mode = mello::video::CaptureMode::Reference;
+                desc.reference = c->reference_clip();
+                if (desc.reference.path.empty()) {
+                    MELLO_LOG_ERROR("stream", "MELLO_CAPTURE_REFERENCE without a reference clip");
+                    return nullptr;
+                }
+                break;
         }
         // The hook permission belongs to the request, not to the mode a caller
         // happened to pick. A window that cannot carry a stream becomes its
@@ -1478,6 +1488,50 @@ void mello_stream_stop_host(MelloStreamHost* host) {
         MELLO_LOG_INFO("stream", "stop_host: done");
     } catch (...) {}
     stream_timer_resolution_release();
+}
+
+MelloResult mello_test_set_reference_clip(MelloContext* ctx,
+                                          const char* path_utf8,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          uint32_t fps,
+                                          MelloReferencePixelFormat format) {
+    if (!ctx || !path_utf8 || width == 0 || height == 0 || (width & 1u) || (height & 1u)) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    mello::video::ReferenceClip clip{};
+    clip.path = path_utf8;
+    clip.width = width;
+    clip.height = height;
+    clip.fps = fps == 0 ? 60 : fps;
+    clip.nv12 = (format == MELLO_REFERENCE_NV12);
+    ctx_cast(ctx)->set_reference_clip(clip);
+    return MELLO_OK;
+}
+
+bool mello_stream_reference_info(MelloStreamHost* host, MelloReferenceInfo* out) {
+    if (!host || !out || !host->video) return false;
+#ifdef _WIN32
+    auto* ref = dynamic_cast<mello::video::ReferenceCapture*>(host->video->capture());
+    if (!ref) return false;
+    const mello::video::ReferenceInfo info = ref->info();
+    out->start_us = info.start_us;
+    out->frames_delivered = info.frames_delivered;
+    out->late_frames = info.late_frames;
+    out->max_late_us = info.max_late_us;
+    out->clip_frames = info.clip_frames;
+    out->fps = info.fps;
+    out->loops = info.loops;
+    return true;
+#else
+    return false;
+#endif
+}
+
+uint64_t mello_clock_now_us(void) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
 }
 
 uint32_t mello_stream_abandoned_pipelines(void) {

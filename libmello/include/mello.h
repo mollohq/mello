@@ -799,6 +799,10 @@ typedef enum MelloCaptureMode {
     /* Monitor captured with Windows Graphics Capture instead of DXGI desktop
      * duplication. For the DXGI vs WGC benchmark; Windows only. */
     MELLO_CAPTURE_MONITOR_WGC = 3,
+    /* Test only: play the context's reference clip
+     * (mello_test_set_reference_clip) instead of capturing. For the
+     * streaming quality gate (tools/stream-gate); Windows only. */
+    MELLO_CAPTURE_REFERENCE = 4,
 } MelloCaptureMode;
 
 typedef struct MelloCaptureSource {
@@ -925,6 +929,49 @@ MELLO_API void mello_stream_stop_host(MelloStreamHost* host);
 
 /** Get the actual capture resolution after host pipeline has started. */
 MELLO_API void mello_stream_get_host_resolution(MelloStreamHost* host, uint32_t* width, uint32_t* height);
+
+/* ---- Streaming quality gate test hooks (not for production use) ---- */
+
+typedef enum MelloReferencePixelFormat {
+    MELLO_REFERENCE_I420 = 0, /* Y plane, then U, then V */
+    MELLO_REFERENCE_NV12 = 1, /* Y plane, then interleaved UV */
+} MelloReferencePixelFormat;
+
+/** Test only. Set the raw YUV 4:2:0 clip that a host started with
+ *  MELLO_CAPTURE_REFERENCE plays: frames back to back, 8 bits, no header,
+ *  BT.709 studio range, played at `fps` from its own thread and looped.
+ *  The clip is read when the host starts. Windows only: elsewhere a
+ *  reference host fails to start. Returns MELLO_ERROR_INVALID_PARAM for a
+ *  null path or an odd or zero size. */
+MELLO_API MelloResult mello_test_set_reference_clip(
+    MelloContext*             ctx,
+    const char*               path_utf8,
+    uint32_t                  width,
+    uint32_t                  height,
+    uint32_t                  fps,
+    MelloReferencePixelFormat format
+);
+
+/** What a reference source did so far. Times are on the clock of
+ *  mello_clock_now_us(). Frame n (counted over loops) is due at
+ *  start_us + n * 1000000 / fps. */
+typedef struct MelloReferenceInfo {
+    uint64_t start_us;
+    uint64_t frames_delivered;
+    uint64_t late_frames;   /* handed to the pipeline more than 2 ms after due */
+    uint64_t max_late_us;
+    uint32_t clip_frames;
+    uint32_t fps;
+    uint32_t loops;         /* completed passes over the clip */
+} MelloReferenceInfo;
+
+/** Test only. Fill `out` for a host that plays a reference clip. Returns
+ *  false for any other host. */
+MELLO_API bool mello_stream_reference_info(MelloStreamHost* host, MelloReferenceInfo* out);
+
+/** The steady clock libmello stamps capture times and the viewer frame
+ *  callback (`ts`) with, in microseconds. Monotonic; the epoch is arbitrary. */
+MELLO_API uint64_t mello_clock_now_us(void);
 
 /** Capture pipelines abandoned this session because a capture thread would not
  *  stop (stuck in the display driver). Non-zero means leaked GPU resources. */

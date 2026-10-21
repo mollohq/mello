@@ -10,6 +10,8 @@ static constexpr const char* TAG = "video/openh264";
 static HMODULE h_openh264 = nullptr;
 static bool    loaded_     = false;
 static DecoderApi api_{};
+static EncoderApi enc_api_{};
+static bool       enc_loaded_ = false;
 
 template<typename T>
 static bool load_fn(HMODULE mod, const char* name, T& out) {
@@ -45,6 +47,17 @@ bool load() {
         return false;
     }
 
+    // The encoder is optional: a DLL without it still decodes.
+    enc_api_.create_encoder = reinterpret_cast<int (*)(void**)>(
+        GetProcAddress(h_openh264, "WelsCreateSVCEncoder"));
+    enc_api_.destroy_encoder = reinterpret_cast<void (*)(void*)>(
+        GetProcAddress(h_openh264, "WelsDestroySVCEncoder"));
+    enc_loaded_ = enc_api_.create_encoder && enc_api_.destroy_encoder;
+    if (!enc_loaded_) {
+        enc_api_ = {};
+        MELLO_LOG_WARN(TAG, "OpenH264 DLL has no encoder entry points");
+    }
+
     loaded_ = true;
     MELLO_LOG_INFO(TAG, "OpenH264 Cisco DLL loaded successfully (runtime)");
     return true;
@@ -53,12 +66,18 @@ bool load() {
 void unload() {
     if (h_openh264) { FreeLibrary(h_openh264); h_openh264 = nullptr; }
     api_ = {};
+    enc_api_ = {};
+    enc_loaded_ = false;
     loaded_ = false;
 }
 
 bool is_loaded() { return loaded_; }
 
 const DecoderApi& api() { return api_; }
+
+bool encoder_api_loaded() { return loaded_ && enc_loaded_; }
+
+const EncoderApi& encoder_api() { return enc_api_; }
 
 } // namespace mello::video::openh264
 #endif

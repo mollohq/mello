@@ -1,5 +1,10 @@
 #include "decoder_factory.hpp"
 #include "../util/log.hpp"
+#include <cstdlib>
+#include <cstring>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 
 #ifdef _WIN32
 #include "decoder_nvdec.hpp"
@@ -14,11 +19,36 @@ namespace mello::video {
 
 static constexpr const char* TAG = "video/decoder";
 
+bool soft_decoder_requested() {
+#ifdef _WIN32
+    // The process environment, not the C runtime's copy: a harness that sets
+    // the variable after start (Rust std::env::set_var) changes only the
+    // first. Same rule as MELLO_AUDIO_BACKEND (audio_backend_test.cpp).
+    char buf[8] = {};
+    const DWORD n = GetEnvironmentVariableA("MELLO_SOFT_DECODER", buf, sizeof(buf));
+    return n == 1 && buf[0] == '1';
+#else
+    const char* v = std::getenv("MELLO_SOFT_DECODER");
+    return v && std::strcmp(v, "1") == 0;
+#endif
+}
+
 std::unique_ptr<Decoder> create_best_decoder(
     const GraphicsDevice& device,
     const DecoderConfig&  config)
 {
 #ifdef _WIN32
+    if (soft_decoder_requested()) {
+        // Test lane: OpenH264 only, never a hardware decoder.
+        MELLO_LOG_INFO(TAG, "MELLO_SOFT_DECODER=1: software OpenH264 decoder only");
+        if (config.codec == VideoCodec::H264 && OpenH264Decoder::is_available()) {
+            auto dec = std::make_unique<OpenH264Decoder>();
+            if (dec->initialize(device, config)) return dec;
+        }
+        MELLO_LOG_ERROR(TAG, "MELLO_SOFT_DECODER=1 but OpenH264 cannot decode here");
+        return nullptr;
+    }
+
     // 1. NVDEC (HW)
     if (NvdecDecoder::is_available()) {
         auto dec = std::make_unique<NvdecDecoder>();

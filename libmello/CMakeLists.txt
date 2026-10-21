@@ -299,6 +299,8 @@ if(WIN32)
         src/video/encoder_nvenc.cpp
         src/video/encoder_amf.cpp
         src/video/encoder_qsv.cpp
+        src/video/encoder_openh264.cpp
+        src/video/capture_reference.cpp
         src/video/decoder_nvdec.cpp
         src/video/decoder_amf.cpp
         src/video/decoder_d3d11va.cpp
@@ -361,6 +363,9 @@ target_include_directories(mello PRIVATE
     ${MELLO_NV_CODEC_DIR}
     ${MELLO_AMF_DIR}
     ${MELLO_VPL_DIR}
+    # OpenH264 v2.6.0 API headers for the test-lane encoder; the Cisco DLL is
+    # loaded at run time, nothing links.
+    ${CMAKE_CURRENT_SOURCE_DIR}/third_party/openh264/include
 )
 # Nullability compat shims for the vendored WAP tree (see
 # cmake/webrtc-audio-processing/compat). BEFORE keeps them ahead of absl

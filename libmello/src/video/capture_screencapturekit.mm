@@ -241,6 +241,11 @@ bool SCKCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
                         (uint32_t)target.windowID, w, h);
                     break;
                 }
+                case CaptureMode::Reference:
+                    // The reference source is Windows only; the factory
+                    // never builds an SCKCapture for it.
+                    MELLO_LOG_ERROR(TAG, "Reference clip capture is not available on macOS");
+                    return;
             }
 
             if (!filter) return;
@@ -420,6 +425,8 @@ bool SCKCapture::get_cursor(CursorData& out) {
 
 // Factory function — creates the appropriate capture source for macOS
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc) {
+    // The reference clip source (streaming quality gate) is Windows only.
+    if (desc.mode == CaptureMode::Reference) return nullptr;
     return std::make_unique<SCKCapture>();
 }
 
