@@ -300,11 +300,16 @@ void PeerConnectionImpl::apply_loopback_ice_config() {
         return;
     }
 
+    // No ICE servers means an in-process test pair. Bind to loopback and let
+    // the OS pick the ports. A fixed port range (this used 50000 + 100 per
+    // peer) fails on a Windows machine where Hyper-V or WSL has reserved
+    // those ports: libjuice cannot bind inside the range, gathering fails,
+    // and the offer is null. The reserved ranges change on every boot, so
+    // which peers fail changes with them. `netsh interface ipv4 show
+    // excludedportrange protocol=udp` lists them.
     config_.bindAddress = "127.0.0.1";
-    static std::atomic<uint16_t> port_base{50000};
-    const uint16_t base = port_base.fetch_add(100, std::memory_order_relaxed);
-    config_.portRangeBegin = base;
-    config_.portRangeEnd = static_cast<uint16_t>(base + 99);
+    config_.portRangeBegin = 1024;
+    config_.portRangeEnd = 65535;
 }
 
 void PeerConnectionImpl::set_ice_servers(const std::vector<std::string>& urls) {

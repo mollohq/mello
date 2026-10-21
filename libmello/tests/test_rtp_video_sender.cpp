@@ -49,8 +49,6 @@ constexpr uint8_t kPayloadType = 96;
 constexpr uint32_t kSenderSsrc = 0x12345678;
 constexpr char kCname[] = "mello-rtp-test";
 
-std::atomic<uint16_t> g_next_port_base{50000};
-
 bool is_h264_format(const std::string& format) noexcept {
     return format.size() == 4
         && (format[0] == 'H' || format[0] == 'h')
@@ -128,14 +126,11 @@ rtc::Configuration make_loopback_config() {
     rtc::Configuration config;
     config.iceServers.clear();
     config.forceMediaTransport = true;
+    // Loopback, OS-chosen ports. A fixed range from 50000 fails on a Windows
+    // machine where Hyper-V or WSL reserved those ports: gathering throws
+    // "Failed to gather local ICE candidates". See
+    // PeerConnectionImpl::apply_loopback_ice_config.
     config.bindAddress = "127.0.0.1";
-
-    const uint16_t base = g_next_port_base.fetch_add(
-        100,
-        std::memory_order_relaxed
-    );
-    config.portRangeBegin = base;
-    config.portRangeEnd = static_cast<uint16_t>(base + 99);
     return config;
 }
 
