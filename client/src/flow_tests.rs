@@ -1100,18 +1100,6 @@ fn a_stale_backend_update_does_not_flicker_the_sfu_speaking_ring() {
     );
 }
 
-/// Outside an SFU call (P2P) the backend stays the source of remote rings.
-#[test]
-fn in_p2p_the_backend_speaking_state_applies() {
-    let mut h = Harness::new();
-    in_squad_with_bob(&mut h, VoiceMode::P2P);
-
-    h.emit(squad_update_with_bob_speaking(true));
-    assert!(squad_member_speaking(&h, "u-bob"));
-    h.emit(squad_update_with_bob_speaking(false));
-    assert!(!squad_member_speaking(&h, "u-bob"));
-}
-
 /// ★ A join that fails after `VoiceJoined` ends with
 /// `VoiceStateChanged { in_call: false }`. The active mark goes, and a later
 /// crew update does not put it back on a channel the user is not in.

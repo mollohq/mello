@@ -1,7 +1,5 @@
-use std::ffi::c_void;
 use std::io::Write;
-use std::net::UdpSocket;
-use std::sync::atomic::{AtomicBool, AtomicU16, AtomicU32, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -12,24 +10,6 @@ use mello_core::stream::sink::PacketSink;
 use mello_core::stream::StreamConfig;
 use mello_core::transport::{SfuConnection, SfuEvent, StreamPeerRole};
 
-const DEFAULT_PORT: u16 = 9800;
-const HEADER_CONFIG: u8 = 0x00;
-const HEADER_VIDEO: u8 = 0x01;
-const HEADER_KEYFRAME: u8 = 0x02;
-
-const CHUNK_HEADER_SIZE: usize = 7; // type(1) + frame_id(2) + chunk_idx(2) + chunk_count(2)
-const MAX_CHUNK_PAYLOAD: usize = 60_000;
-
-struct HostState {
-    socket: UdpSocket,
-    dest: std::net::SocketAddr,
-    frame_id: AtomicU16,
-    packets_sent: AtomicU32,
-    bytes_sent: AtomicU64,
-    keyframes_sent: AtomicU32,
-    send_errors: AtomicU32,
-}
-
 struct NakamaHostContext {
     http_base: String,
     auth_token: String,
@@ -37,56 +17,6 @@ struct NakamaHostContext {
 }
 
 static RUNNING: AtomicBool = AtomicBool::new(true);
-static mut HOST_STATE: *const HostState = std::ptr::null();
-
-unsafe extern "C" fn on_video_packet(
-    _user_data: *mut c_void,
-    data: *const u8,
-    size: i32,
-    is_keyframe: bool,
-    _ts: u64,
-) {
-    let state = &*HOST_STATE;
-    let payload = std::slice::from_raw_parts(data, size as usize);
-    let header = if is_keyframe {
-        HEADER_KEYFRAME
-    } else {
-        HEADER_VIDEO
-    };
-    let frame_id = state.frame_id.fetch_add(1, Ordering::Relaxed);
-
-    let chunk_count = payload.len().div_ceil(MAX_CHUNK_PAYLOAD);
-    let chunk_count = chunk_count.max(1) as u16;
-
-    for i in 0..chunk_count {
-        let start = i as usize * MAX_CHUNK_PAYLOAD;
-        let end = ((i as usize + 1) * MAX_CHUNK_PAYLOAD).min(payload.len());
-        let chunk_data = &payload[start..end];
-
-        let mut buf = Vec::with_capacity(CHUNK_HEADER_SIZE + chunk_data.len());
-        buf.push(header);
-        buf.extend_from_slice(&frame_id.to_le_bytes());
-        buf.extend_from_slice(&i.to_le_bytes());
-        buf.extend_from_slice(&chunk_count.to_le_bytes());
-        buf.extend_from_slice(chunk_data);
-
-        match state.socket.send_to(&buf, state.dest) {
-            Ok(_) => {
-                state
-                    .bytes_sent
-                    .fetch_add(buf.len() as u64, Ordering::Relaxed);
-            }
-            Err(_) => {
-                state.send_errors.fetch_add(1, Ordering::Relaxed);
-            }
-        }
-    }
-
-    state.packets_sent.fetch_add(1, Ordering::Relaxed);
-    if is_keyframe {
-        state.keyframes_sent.fetch_add(1, Ordering::Relaxed);
-    }
-}
 
 fn main() {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
@@ -107,7 +37,6 @@ fn main() {
 
     // Parse CLI args
     let args: Vec<String> = std::env::args().collect();
-    let port = parse_arg(&args, "--port").unwrap_or(DEFAULT_PORT);
     let fps: u32 = parse_arg(&args, "--fps").unwrap_or(60);
     let bitrate: u32 = parse_arg(&args, "--bitrate").unwrap_or(8000);
     let mut sfu_endpoint = parse_arg_string(&args, "--sfu-endpoint");
@@ -260,7 +189,6 @@ fn main() {
     .expect("Failed to set Ctrl+C handler");
 
     let use_sfu = sfu_endpoint.is_some() || sfu_token.is_some() || sfu_session.is_some();
-    let legacy_udp = has_flag(&args, "--legacy-udp-chunks");
     let result = if use_sfu {
         let endpoint = sfu_endpoint.unwrap_or_else(|| {
             eprintln!("Missing --sfu-endpoint");
@@ -285,13 +213,8 @@ fn main() {
             &sfu_role,
             nakama_host_context.as_ref(),
         )
-    } else if legacy_udp {
-        run_udp_mode(ctx, &source, fps, bitrate, port)
     } else {
-        eprintln!(
-            "ERROR: legacy UDP chunked video mode removed from default probes. \
-Use --nakama-start-stream / --sfu-* for RTP, or pass --legacy-udp-chunks for diagnostics."
-        );
+        eprintln!("ERROR: no SFU target. Use --nakama-start-stream or --sfu-*.");
         unsafe { mello_sys::mello_destroy(ctx) };
         std::process::exit(1);
     };
@@ -446,124 +369,6 @@ fn enumerate_sources(
     sources
 }
 
-fn run_udp_mode(
-    ctx: *mut mello_sys::MelloContext,
-    source: &mello_sys::MelloCaptureSource,
-    fps: u32,
-    bitrate: u32,
-    port: u16,
-) -> Result<(), String> {
-    println!("Config: {}fps {}kbps -> 127.0.0.1:{}\n", fps, bitrate, port);
-
-    let socket = UdpSocket::bind("0.0.0.0:0").map_err(|e| e.to_string())?;
-    let dest: std::net::SocketAddr = format!("127.0.0.1:{}", port)
-        .parse::<std::net::SocketAddr>()
-        .map_err(|e| e.to_string())?;
-
-    let host_state = Arc::new(HostState {
-        socket,
-        dest,
-        frame_id: AtomicU16::new(0),
-        packets_sent: AtomicU32::new(0),
-        bytes_sent: AtomicU64::new(0),
-        keyframes_sent: AtomicU32::new(0),
-        send_errors: AtomicU32::new(0),
-    });
-    unsafe {
-        HOST_STATE = Arc::as_ptr(&host_state);
-    }
-
-    let config = mello_sys::MelloStreamConfig {
-        width: 0,
-        height: 0,
-        fps,
-        bitrate_kbps: bitrate,
-    };
-
-    let host = unsafe {
-        mello_sys::mello_stream_start_host(
-            ctx,
-            source,
-            &config,
-            Some(on_video_packet),
-            std::ptr::null_mut(),
-        )
-    };
-
-    if host.is_null() {
-        return Err("mello_stream_start_host() failed".to_string());
-    }
-
-    let mut cap_w: u32 = 0;
-    let mut cap_h: u32 = 0;
-    unsafe { mello_sys::mello_stream_get_host_resolution(host, &mut cap_w, &mut cap_h) };
-    println!("Capture resolution: {}x{}", cap_w, cap_h);
-
-    let mut config_pkt = vec![HEADER_CONFIG];
-    config_pkt.extend_from_slice(&(cap_w as u16).to_le_bytes());
-    config_pkt.extend_from_slice(&(cap_h as u16).to_le_bytes());
-    config_pkt.push(fps as u8);
-    for _ in 0..3 {
-        let _ = host_state.socket.send_to(&config_pkt, dest);
-        std::thread::sleep(Duration::from_millis(50));
-    }
-
-    println!("Streaming over UDP... (Ctrl+C to stop)\n");
-
-    let start = Instant::now();
-    let mut last_packets = 0u32;
-    let mut last_bytes = 0u64;
-    let mut last_time = Instant::now();
-    let mut last_errors = 0u32;
-
-    while RUNNING.load(Ordering::Relaxed) {
-        std::thread::sleep(Duration::from_secs(1));
-
-        let now = Instant::now();
-        let dt = now.duration_since(last_time).as_secs_f64();
-        let total_packets = host_state.packets_sent.load(Ordering::Relaxed);
-        let total_bytes = host_state.bytes_sent.load(Ordering::Relaxed);
-        let total_keyframes = host_state.keyframes_sent.load(Ordering::Relaxed);
-        let total_errors = host_state.send_errors.load(Ordering::Relaxed);
-
-        let pps = (total_packets - last_packets) as f64 / dt.max(0.001);
-        let bps = ((total_bytes - last_bytes) as f64 * 8.0) / dt.max(0.001) / 1000.0;
-        let elapsed = start.elapsed().as_secs();
-
-        let err_str = if total_errors > last_errors {
-            format!(" send_err={}", total_errors - last_errors)
-        } else {
-            String::new()
-        };
-
-        let _ = host_state.socket.send_to(&config_pkt, dest);
-
-        print!(
-            "\r[{:3}s] fps={:.0} bitrate={:.0}kbps keyframes={} total={:.1}MB{}   ",
-            elapsed,
-            pps,
-            bps,
-            total_keyframes,
-            total_bytes as f64 / (1024.0 * 1024.0),
-            err_str,
-        );
-        std::io::stdout().flush().map_err(|e| e.to_string())?;
-
-        last_packets = total_packets;
-        last_bytes = total_bytes;
-        last_time = now;
-        last_errors = total_errors;
-    }
-
-    println!("\n\nStopping...");
-    unsafe {
-        mello_sys::mello_stream_stop_host(host);
-        HOST_STATE = std::ptr::null();
-    }
-    println!("Done.");
-    Ok(())
-}
-
 #[allow(clippy::too_many_arguments)]
 fn run_sfu_mode(
     ctx: *mut mello_sys::MelloContext,
@@ -668,7 +473,6 @@ fn run_sfu_mode(
         session_id: Some(session_id.to_string()),
         stream_id: None,
         mode: "sfu".to_string(),
-        max_viewers: None,
         sfu_endpoint: Some(endpoint.to_string()),
         sfu_token: None,
         capture: None,

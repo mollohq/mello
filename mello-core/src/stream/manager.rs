@@ -13,7 +13,6 @@ use super::ladder::FramerateLadder;
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::pause::{pause_message, PauseController};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
-use super::sink_sfu::SFU_CONTROL_VIEWER_ID;
 use crate::events::Event;
 
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
@@ -320,9 +319,6 @@ pub struct StreamManager {
     min_bitrate_kbps: u32,
     max_bitrate_kbps: u32,
     viewer_remb: HashMap<String, ViewerRembState>,
-    /// Per-viewer send-side GCC estimates from TWCC legs. Preferred over
-    /// REMB for the same viewer: delay-gradient sees congestion before loss.
-    viewer_gcc: HashMap<String, ViewerRembState>,
     remb_increase_last_at: Instant,
     audio_seq: AtomicU16,
     last_queue_keyframe_request: Instant,
@@ -422,7 +418,6 @@ impl StreamManager {
             min_bitrate_kbps,
             max_bitrate_kbps,
             viewer_remb: HashMap::new(),
-            viewer_gcc: HashMap::new(),
             remb_increase_last_at: Instant::now(),
             config,
             input: Arc::new(InputPassthroughStub),
@@ -505,29 +500,10 @@ impl StreamManager {
     fn expire_stale_remb(&mut self, now: Instant) {
         self.viewer_remb
             .retain(|_, state| now.duration_since(state.updated_at).as_secs() <= REMB_STALE_SECS);
-        self.viewer_gcc
-            .retain(|_, state| now.duration_since(state.updated_at).as_secs() <= REMB_STALE_SECS);
     }
 
     fn aggregate_fresh_remb_bps(&self, now: Instant) -> Option<u32> {
         self.viewer_remb
-            .iter()
-            .filter(|(id, state)| {
-                now.duration_since(state.updated_at).as_secs() <= REMB_STALE_SECS
-                    // A fresh GCC estimate supersedes this viewer's REMB.
-                    && self
-                        .viewer_gcc
-                        .get(*id)
-                        .is_none_or(|gcc| {
-                            now.duration_since(gcc.updated_at).as_secs() > REMB_STALE_SECS
-                        })
-            })
-            .map(|(_, state)| state.bitrate_bps)
-            .min()
-    }
-
-    fn aggregate_fresh_gcc_bps(&self, now: Instant) -> Option<u32> {
-        self.viewer_gcc
             .values()
             .filter(|state| now.duration_since(state.updated_at).as_secs() <= REMB_STALE_SECS)
             .map(|state| state.bitrate_bps)
@@ -541,11 +517,6 @@ impl StreamManager {
 
     async fn apply_remb_aggregate(&mut self, now: Instant) {
         self.expire_stale_remb(now);
-        if self.aggregate_fresh_gcc_bps(now).is_some() {
-            // A live estimator owns the decision; REMB is the fallback path.
-            self.apply_gcc_aggregate(now).await;
-            return;
-        }
         let Some(desired_kbps) = self.aggregate_remb_target_kbps(now) else {
             // No fresh estimates: receivers are quiet, REMBs were lost, or no
             // viewers remain. Hold the current target — REMB rides unreliable
@@ -575,26 +546,6 @@ impl StreamManager {
             self.refresh_pacing_target().await;
         }
         self.remb_increase_last_at = now;
-    }
-
-    /// GCC aggregation: min over fresh estimator targets and REMB estimates
-    /// from viewers without an estimator. The estimator ramps/smooths
-    /// internally, so targets are applied immediately (no 5%/s REMB ramp).
-    async fn apply_gcc_aggregate(&mut self, now: Instant) {
-        self.expire_stale_remb(now);
-        let gcc_kbps = self
-            .aggregate_fresh_gcc_bps(now)
-            .map(|bps| self.clamp_bitrate_kbps((bps / 1_000).max(1)));
-        let remb_kbps = self.aggregate_remb_target_kbps(now);
-        let desired_kbps = match (gcc_kbps, remb_kbps) {
-            (Some(g), Some(r)) => g.min(r),
-            (Some(g), None) => g,
-            (None, Some(r)) => r,
-            (None, None) => return, // hold: nothing fresh
-        };
-        if desired_kbps != self.current_bitrate_kbps && self.apply_bitrate_kbps(desired_kbps) {
-            self.refresh_pacing_target().await;
-        }
     }
 
     async fn log_pacing_telemetry(&mut self) {
@@ -1053,9 +1004,7 @@ impl StreamManager {
         while let Some(feedback) = self.sink.poll_video_feedback().await {
             self.handle_video_feedback(&feedback, now).await;
         }
-        if !self.viewer_gcc.is_empty() {
-            self.apply_gcc_aggregate(now).await;
-        } else if !self.viewer_remb.is_empty() {
+        if !self.viewer_remb.is_empty() {
             self.apply_remb_aggregate(now).await;
         }
     }
@@ -1082,9 +1031,8 @@ impl StreamManager {
 
     async fn handle_viewer_left(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
-        self.viewer_gcc.remove(viewer_id);
         self.sink.on_viewer_left(viewer_id).await;
-        if self.viewer_remb.is_empty() && self.viewer_gcc.is_empty() {
+        if self.viewer_remb.is_empty() {
             // No viewers remain: restore the configured ceiling so the next
             // viewer starts at full quality. Distinct from stale-REMB hold:
             // an empty map after an explicit leave is real, not packet loss.
@@ -1142,30 +1090,10 @@ impl StreamManager {
                 );
                 self.apply_remb_aggregate(now).await;
             }
-            SinkVideoFeedbackKind::GccTarget { bitrate_bps } => {
-                if bitrate_bps == 0 {
-                    return;
-                }
-                // SFU mode: this is the host's local TWCC estimate for the
-                // host→SFU hop (already applied to RTP pacing in libmello).
-                // Viewer-path capacity is forwarded separately as REMB.
-                if feedback.viewer_id == SFU_CONTROL_VIEWER_ID {
-                    return;
-                }
-                self.viewer_gcc.insert(
-                    feedback.viewer_id.clone(),
-                    ViewerRembState {
-                        bitrate_bps,
-                        updated_at: now,
-                    },
-                );
-                log::debug!(
-                    "Stream manager GCC target from {}: {} bps (gcc_viewers={})",
-                    feedback.viewer_id,
-                    bitrate_bps,
-                    self.viewer_gcc.len()
-                );
-                self.apply_gcc_aggregate(now).await;
+            SinkVideoFeedbackKind::GccTarget { .. } => {
+                // The host's local TWCC estimate for the host-to-SFU hop.
+                // libmello already applies it to RTP pacing. The SFU forwards
+                // the viewer-path capacity separately as REMB.
             }
         }
     }
@@ -2332,49 +2260,8 @@ mod tests {
             },
             now,
         ));
-        assert!(mgr.viewer_gcc.is_empty());
+        assert!(mgr.viewer_remb.is_empty());
         assert_eq!(mgr.current_bitrate_kbps, mgr.max_bitrate_kbps);
-        std::mem::forget(mgr);
-    }
-
-    #[test]
-    fn fresh_gcc_estimate_supersedes_viewer_remb() {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .enable_all()
-            .build()
-            .expect("runtime");
-        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
-        let sink = Arc::new(FakeSink::new());
-        let (_video_tx, video_rx) = mpsc::channel(4);
-        let (_audio_tx, audio_rx) = mpsc::channel(4);
-        let mut mgr = StreamManager::new(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            sink,
-            config,
-            video_rx,
-            audio_rx,
-        );
-        let now = Instant::now();
-        // Same viewer reports REMB 1 Mbps and GCC 3 Mbps: GCC owns the
-        // decision, applied immediately (no 5%/s REMB ramp).
-        mgr.viewer_remb.insert(
-            "viewer".to_string(),
-            ViewerRembState {
-                bitrate_bps: 1_000_000,
-                updated_at: now,
-            },
-        );
-        mgr.viewer_gcc.insert(
-            "viewer".to_string(),
-            ViewerRembState {
-                bitrate_bps: 3_000_000,
-                updated_at: now,
-            },
-        );
-
-        rt.block_on(mgr.apply_gcc_aggregate(now));
-        assert_eq!(mgr.current_bitrate_kbps, 3_000);
         std::mem::forget(mgr);
     }
 
@@ -2395,7 +2282,7 @@ mod tests {
             });
             let session = StreamSession::new(
                 "session".to_string(),
-                "p2p".to_string(),
+                "sfu".to_string(),
                 stop_tx,
                 manager_task,
             );

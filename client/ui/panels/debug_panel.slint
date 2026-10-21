@@ -629,8 +629,7 @@ export component DebugPanel inherits Rectangle {
                     font-weight: Theme.weight-label;
                     font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.stream-mode == "sfu" ? Theme.accent-green :
-                           root.stream-mode == "p2p" ? Theme.id-amber : Theme.text-secondary;
+                    color: root.stream-mode == "sfu" ? Theme.accent-green : Theme.text-secondary;
                     text: root.stream-mode;
                     col: 1;
                 }
@@ -793,8 +792,7 @@ export component DebugPanel inherits Rectangle {
                     font-weight: Theme.weight-label;
                     font-family: Theme.font-label;
                     font-size: 10px;
-                    color: root.host-pacing-mode == "sfu" ? Theme.accent-green :
-                           root.host-pacing-mode == "p2p" ? Theme.id-amber : Theme.text-secondary;
+                    color: root.host-pacing-mode == "sfu" ? Theme.accent-green : Theme.text-secondary;
                     text: root.host-pacing-mode;
                     col: 1;
                 }

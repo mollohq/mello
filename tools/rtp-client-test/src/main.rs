@@ -108,7 +108,7 @@ fn main() {
 
     unsafe {
         mello_sys::mello_peer_set_state_callback(peer, Some(on_state), std::ptr::null_mut());
-        mello_sys::mello_peer_set_audio_track_callback(
+        mello_sys::mello_peer_set_audio_rtp_callback(
             peer,
             Some(on_audio_track),
             Arc::as_ptr(&cb_state) as *mut c_void,

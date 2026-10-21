@@ -10,7 +10,6 @@ pub mod pacer;
 pub mod pause;
 pub mod rtp_peer;
 pub mod sink;
-pub mod sink_p2p;
 pub mod sink_sfu;
 pub mod teardown;
 

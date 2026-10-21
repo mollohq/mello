@@ -290,9 +290,9 @@ pub enum Event {
 
     VoiceStateChanged {
         in_call: bool,
-        /// The voice transport after this change: `SFU` or `P2P` when the
-        /// call started on it, `Disconnected` when the call ended or voice
-        /// capture did not start. An SFU join that fails reports `P2P` here.
+        /// The voice transport after this change: `SFU` when the call
+        /// started on it, `Disconnected` when the call ended, voice capture
+        /// did not start, or the SFU join failed.
         #[serde(default)]
         transport: VoiceMode,
     },

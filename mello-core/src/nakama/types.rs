@@ -101,7 +101,8 @@ pub struct HealthResponse {
 
 #[derive(Debug, Deserialize)]
 pub struct WatchStreamResponse {
-    #[serde(default = "default_p2p")]
+    /// Always "sfu": the SFU is the only stream transport.
+    #[serde(default)]
     pub mode: String,
     #[serde(default)]
     pub sfu_endpoint: Option<String>,
@@ -113,10 +114,6 @@ pub struct WatchStreamResponse {
     pub height: u32,
     #[serde(default)]
     pub bitrate_kbps: u32,
-}
-
-fn default_p2p() -> String {
-    "p2p".to_string()
 }
 
 // --- Riot account linking ---
@@ -411,7 +408,7 @@ mod stream_tests {
     #[test]
     fn legacy_watch_stream_response_defaults_bitrate_to_zero() {
         let response: WatchStreamResponse =
-            serde_json::from_str(r#"{"mode":"p2p"}"#).expect("deserialize");
+            serde_json::from_str(r#"{"mode":"sfu"}"#).expect("deserialize");
         assert_eq!(response.bitrate_kbps, 0);
     }
 }

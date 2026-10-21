@@ -27,17 +27,13 @@ use crate::stream::StreamError;
 use crate::transport::{PeerHandle, SfuConnection};
 
 /// The voice session that an SFU join is for. The loop uses it to finish the
-/// join, or to fall back to P2P when the join fails.
+/// join.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SfuVoiceJoin {
     pub crew_id: String,
     pub channel_id: String,
     pub local_id: String,
-    /// The channel members other than the local user. The P2P fallback
-    /// connects to them.
-    pub p2p_peer_ids: Vec<String>,
-    /// An attempt of the reconnect scheduler. A failed reconnect does not
-    /// fall back to P2P: the other members stay on the SFU.
+    /// An attempt of the reconnect scheduler.
     pub reconnect: bool,
 }
 
@@ -214,7 +210,6 @@ pub(super) mod tests {
             crew_id: "crew-1".into(),
             channel_id: channel_id.into(),
             local_id: "me".into(),
-            p2p_peer_ids: vec!["peer-1".into()],
             reconnect: false,
         }
     }

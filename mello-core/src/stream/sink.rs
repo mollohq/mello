@@ -20,7 +20,7 @@ pub struct SinkVideoFeedback {
     pub kind: SinkVideoFeedbackKind,
 }
 
-/// Aggregated native RTP egress stats across sink peers.
+/// Native RTP egress stats of the sink.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct NativeRtpTelemetry {
     pub target_kbps: u32,
@@ -39,23 +39,11 @@ impl NativeRtpTelemetry {
             sleep_ms_total: 0,
         }
     }
-
-    pub(crate) fn aggregate(self, other: Self) -> Self {
-        Self {
-            target_kbps: self.target_kbps.max(other.target_kbps),
-            tx_access_units_sent: self
-                .tx_access_units_sent
-                .saturating_add(other.tx_access_units_sent),
-            tx_access_units_dropped: self
-                .tx_access_units_dropped
-                .saturating_add(other.tx_access_units_dropped),
-            tx_bytes_sent: self.tx_bytes_sent.saturating_add(other.tx_bytes_sent),
-        }
-    }
 }
 
-/// Topology-agnostic packet sink. The stream manager sends encoded Annex-B access
-/// units through this trait — it doesn't know whether they go to P2P peers or an SFU.
+/// Packet sink of the stream manager. The manager sends encoded Annex-B access
+/// units through this trait. `SfuSink` is the one implementation; the manager
+/// tests use a fake.
 #[async_trait]
 pub trait PacketSink: Send + Sync {
     /// Send one complete encoded Annex-B access unit with its capture timestamp.
@@ -91,10 +79,10 @@ pub trait PacketSink: Send + Sync {
     /// Poll one queued native video feedback event, if any.
     async fn poll_video_feedback(&self) -> Option<SinkVideoFeedback>;
 
-    /// Drain one viewer-join notification queued by the sink (e.g. P2P add_viewer).
+    /// Drain one viewer-join notification queued by the sink.
     async fn poll_viewer_joined(&self) -> Option<String>;
 
-    /// Drain one viewer-leave notification queued by the sink (e.g. P2P remove_viewer).
+    /// Drain one viewer-leave notification queued by the sink.
     async fn poll_viewer_left(&self) -> Option<String>;
 
     /// Called when a new viewer joins mid-session.
@@ -103,10 +91,9 @@ pub trait PacketSink: Send + Sync {
     /// Called when a viewer leaves; drops per-viewer feedback state.
     async fn on_viewer_left(&self, viewer_id: &str);
 
-    /// Report host diagnostics to the relay, when the transport has one.
+    /// Report host diagnostics to the SFU.
     ///
-    /// Default no-op: P2P has no server to report to, and the manager should not
-    /// have to know which topology it is running on. Only `SfuSink` overrides it.
+    /// Default no-op, for the test fake. `SfuSink` overrides it.
     /// Telemetry is best-effort — a failure here must never disturb the media
     /// path, so the result is deliberately discarded.
     async fn send_stats(&self, _payload: &serde_json::Value) {}
@@ -129,26 +116,5 @@ mod tests {
         assert_eq!(pacing.paced_bytes, 900_000);
         assert_eq!(pacing.sleep_count, 0);
         assert_eq!(pacing.sleep_ms_total, 0);
-    }
-
-    #[test]
-    fn native_rtp_telemetry_aggregate_keeps_max_target_and_sums_traffic() {
-        let a = NativeRtpTelemetry {
-            target_kbps: 2_000,
-            tx_access_units_sent: 10,
-            tx_access_units_dropped: 1,
-            tx_bytes_sent: 50_000,
-        };
-        let b = NativeRtpTelemetry {
-            target_kbps: 3_000,
-            tx_access_units_sent: 20,
-            tx_access_units_dropped: 2,
-            tx_bytes_sent: 70_000,
-        };
-        let agg = a.aggregate(b);
-        assert_eq!(agg.target_kbps, 3_000);
-        assert_eq!(agg.tx_access_units_sent, 30);
-        assert_eq!(agg.tx_access_units_dropped, 3);
-        assert_eq!(agg.tx_bytes_sent, 120_000);
     }
 }

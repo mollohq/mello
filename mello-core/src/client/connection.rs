@@ -20,8 +20,7 @@ impl super::Client {
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {
                 log::info!("Fetched {} ICE server(s) from backend", urls.len());
-                self.ice_servers = urls.clone();
-                self.voice.set_ice_servers(urls);
+                self.ice_servers = urls;
             }
             Err(e) => {
                 log::warn!("Failed to fetch ICE servers, using defaults: {}", e);
@@ -203,7 +202,7 @@ impl super::Client {
     /// Re-register our voice membership with Nakama after a realtime reconnect,
     /// WITHOUT tearing down or rebuilding the media session.
     ///
-    /// A Nakama WS blip does not imply the SFU/P2P media leg died — that has its
+    /// A Nakama WS blip does not imply the SFU media leg died — that has its
     /// own liveness detection (`SfuEvent::Disconnected` -> `mark_disconnected`),
     /// and the voice tick is the sole owner of media rebuilds. Rebuilding here on
     /// every reconnect (the old behaviour) churned the SFU and, combined with a
