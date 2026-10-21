@@ -490,7 +490,16 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 
 ### 7.3 Hardware Decode
 
-NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+NVDEC (R8 layout: CUDA to host on the decode worker, host to GPU on the present thread), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+
+Every Windows decoder has a native present path. `StagingTexture` converts the decoded frame to RGBA in a compute shader, into the shared RGBA texture of §7.5:
+
+| Decoder output | Shader entry | Source views |
+|---|---|---|
+| R8, NV12 layout (NVDEC) | `CSMain` | one R8 view; chroma from row `uv_y` |
+| `DXGI_FORMAT_NV12` (AMF, D3D11VA, OpenH264) | `CSMainNv12` | R8 view of the luma plane, R8G8 view of the chroma plane |
+
+The CPU conversion runs only when the shader cannot be built. `MELLO_SOFT_DECODER=1` forces OpenH264 for tests.
 
 ### 7.4 Decoded-Frame Ring
 

@@ -10,8 +10,11 @@ namespace mello::video {
 
 class StagingTexture {
 public:
-    /// @param format  DXGI_FORMAT_NV12 (default) or DXGI_FORMAT_R8_UNORM (NVDEC zero-copy).
-    ///                R8 sources get GPU-converted to RGBA via compute shader.
+    /// @param format  DXGI_FORMAT_NV12 (default) or DXGI_FORMAT_R8_UNORM (NVDEC layout).
+    ///                Both get GPU-converted to RGBA via compute shader, into
+    ///                the shared RGBA texture of shared_rgba_handle(). The CPU
+    ///                conversion runs only when the shader cannot be built.
+    ///                An NV12 source needs D3D11_BIND_SHADER_RESOURCE.
     /// @param uv_y_offset  Row where UV plane starts in R8 layout (coded_height, may differ from video_height).
     /// @param enable_cpu_readback  If false, skip allocating CPU staging texture/readback path.
     bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
@@ -45,13 +48,14 @@ private:
     uint64_t read_count_   = 0;
     bool cpu_readback_enabled_ = true;
 
-    // GPU NV12→RGBA compute shader path (R8 sources only)
+    // GPU NV12→RGBA compute shader path (R8 and NV12 sources)
     bool gpu_convert_ = false;
     Microsoft::WRL::ComPtr<ID3D11ComputeShader>       cs_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           rgba_tex_;
     Microsoft::WRL::ComPtr<ID3D11UnorderedAccessView> rgba_uav_;
     Microsoft::WRL::ComPtr<ID3D11Buffer>              cb_;
-    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  src_srv_;
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  src_srv_;     // R8 layout, or NV12 luma
+    Microsoft::WRL::ComPtr<ID3D11ShaderResourceView>  chroma_srv_;  // NV12 chroma (R8G8)
     Microsoft::WRL::ComPtr<ID3D11Texture2D>           shared_rgba_tex_;
     void*                                              shared_rgba_handle_ = nullptr;
     ID3D11Texture2D* src_tex_cached_ = nullptr;

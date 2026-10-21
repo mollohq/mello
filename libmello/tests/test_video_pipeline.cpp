@@ -164,6 +164,73 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
     EXPECT_EQ(last_h, config.height);
 }
 
+#ifdef _WIN32
+// The viewer of a Windows client without an NVIDIA GPU: a decoder that emits
+// NV12 (here OpenH264, forced with MELLO_SOFT_DECODER=1) and only a native
+// frame callback, no CPU callback. Every presented frame must reach the
+// native callback with a shared RGBA handle. Before stage 2 present_frame
+// returned false on every frame of this path.
+TEST_F(VideoPipelineTest, AnNv12DecoderReachesTheNativeCallback) {
+    // The Cisco DLL is fetched by scripts/stream-gate.sh (stage 1), not built.
+    bool openh264 = false;
+    for (const char* name : {"openh264-2.6.0-win64.dll", "openh264-2.5.0-win64.dll", "openh264.dll"}) {
+        if (HMODULE dll = LoadLibraryA(name)) {
+            FreeLibrary(dll);
+            openh264 = true;
+            break;
+        }
+    }
+    if (!openh264) GTEST_SKIP() << "the Cisco OpenH264 DLL is not next to the tests";
+
+    std::vector<CapturedPacket> packets;
+    std::mutex pkt_mtx;
+    auto config = default_config();
+    ASSERT_TRUE(pipeline.start_host(monitor_source(), config,
+        [&](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
+            std::lock_guard<std::mutex> lock(pkt_mtx);
+            packets.push_back({std::vector<uint8_t>(data, data + size), is_keyframe, ts});
+        }));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    pipeline.stop_host();
+    ASSERT_FALSE(packets.empty()) << "No packets to feed to viewer";
+    pipeline.get_host_resolution(config.width, config.height);
+
+    struct SoftDecoder {
+        SoftDecoder() { SetEnvironmentVariableA("MELLO_SOFT_DECODER", "1"); }
+        ~SoftDecoder() { SetEnvironmentVariableA("MELLO_SOFT_DECODER", nullptr); }
+    } soft_decoder;
+
+    std::atomic<uint32_t> native_frames{0};
+    std::atomic<bool> null_handle{false};
+    std::atomic<uint32_t> native_format{0};
+    pipeline.set_native_frame_callback(
+        [&](void* handle, uint32_t, uint32_t, uint32_t format, uint32_t, uint64_t) {
+            if (!handle) null_handle = true;
+            native_format = format;
+            native_frames++;
+        });
+    ASSERT_TRUE(pipeline.start_viewer(config, nullptr));
+
+    bool seen_keyframe = false;
+    for (auto& p : packets) {
+        if (!seen_keyframe) {
+            if (!p.is_keyframe) continue;
+            seen_keyframe = true;
+        }
+        pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
+    }
+    for (int i = 0; i < 400 && native_frames.load() == 0; ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    pipeline.stop_viewer();
+
+    EXPECT_GT(native_frames.load(), 0u) << "no frame reached the native callback";
+    EXPECT_FALSE(null_handle.load());
+    EXPECT_EQ(native_format.load(), 1u) << "RGBA8";
+}
+#endif
+
 TEST_F(VideoPipelineTest, SaveDecodedFrame) {
     // Capture a couple seconds, decode, save one frame as BMP for visual inspection.
     // This test always passes — check the output file manually.
@@ -1116,6 +1183,106 @@ TEST(HookPolicy, AnUnreadableModuleListIsRefused) {
     EXPECT_EQ(result.verdict, PolicyVerdict::ProcessUnreadable) << verdict_name(result.verdict);
 }
 #endif
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native present for NV12 decoders. The Windows client registers no CPU frame
+// callback, so a viewer sees only what reaches the native callback, through
+// StagingTexture::shared_rgba_handle(). Before stage 2 that handle existed only
+// for the R8 layout of NVDEC. AMF, D3D11VA and OpenH264 emit NV12, so
+// present_frame returned false on every frame: no picture on any viewer
+// without an NVIDIA GPU. No hardware decoder here: an NV12 texture with a
+// known colour stands in for the decoded frame.
+// ─────────────────────────────────────────────────────────────────────────────
+#ifdef _WIN32
+#include "video/staging_texture.hpp"
+#include <wrl/client.h>
+
+namespace {
+
+struct TestDevice {
+    GraphicsDevice device = create_d3d11_device();
+    ~TestDevice() {
+        if (device.handle) device.d3d11()->Release();
+    }
+};
+
+Microsoft::WRL::ComPtr<ID3D11Texture2D> make_nv12(ID3D11Device* device, uint32_t w, uint32_t h,
+                                                  uint8_t y, uint8_t u, uint8_t v) {
+    std::vector<uint8_t> data(static_cast<size_t>(w) * h * 3 / 2);
+    std::fill(data.begin(), data.begin() + static_cast<size_t>(w) * h, y);
+    for (size_t i = static_cast<size_t>(w) * h; i + 1 < data.size(); i += 2) {
+        data[i] = u;
+        data[i + 1] = v;
+    }
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = w;
+    desc.Height = h;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;  // as every NV12 decoder creates it
+    D3D11_SUBRESOURCE_DATA init{data.data(), w, 0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    device->CreateTexture2D(&desc, &init, &texture);
+    return texture;
+}
+
+// The integer BT.709 studio-swing conversion of the CPU path.
+uint8_t expected_channel(int value) { return static_cast<uint8_t>(std::clamp(value, 0, 255)); }
+
+bool nv12_shader_input_supported(ID3D11Device* device) {
+    UINT support = 0;
+    if (FAILED(device->CheckFormatSupport(DXGI_FORMAT_NV12, &support))) return false;
+    return (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) && (support & D3D11_FORMAT_SUPPORT_SHADER_LOAD);
+}
+
+} // namespace
+
+TEST(NativePresent, AnNv12DecoderGetsASharedRgbaFrame) {
+    TestDevice test;
+    if (!test.device.handle) GTEST_SKIP() << "no D3D11 device";
+    if (!nv12_shader_input_supported(test.device.d3d11())) {
+        GTEST_SKIP() << "this adapter cannot read NV12 in a shader";
+    }
+
+    constexpr uint32_t kW = 64, kH = 32;
+    const uint8_t y = 63, u = 102, v = 240;  // a red, studio swing
+    auto texture = make_nv12(test.device.d3d11(), kW, kH, y, u, v);
+    ASSERT_TRUE(texture);
+
+    // The Windows client: a native callback and no CPU readback.
+    StagingTexture native_only;
+    ASSERT_TRUE(native_only.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, false));
+    EXPECT_NE(native_only.shared_rgba_handle(), nullptr)
+        << "an NV12 decoder has no native present path";
+    native_only.copy_from(texture.Get(), false);
+    native_only.shutdown();
+
+    // The same conversion, read back to check the picture.
+    StagingTexture staging;
+    ASSERT_TRUE(staging.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, true));
+    ASSERT_NE(staging.shared_rgba_handle(), nullptr);
+    staging.copy_from(texture.Get(), true);
+    std::vector<uint8_t> rgba(static_cast<size_t>(kW) * kH * 4);
+    staging.read_rgba(rgba.data());
+    staging.shutdown();
+
+    const int c = y - 16, d = u - 128, e = v - 128;
+    const uint8_t r = expected_channel((298 * c + 459 * e + 128) >> 8);
+    const uint8_t g = expected_channel((298 * c - 55 * d - 136 * e + 128) >> 8);
+    const uint8_t b = expected_channel((298 * c + 541 * d + 128) >> 8);
+    for (const auto [px, py] : {std::pair<uint32_t, uint32_t>{0, 0}, {kW / 2, kH / 2},
+                                {kW - 1, kH - 1}, {kW - 1, 0}}) {
+        const size_t at = (static_cast<size_t>(py) * kW + px) * 4;
+        EXPECT_NEAR(rgba[at + 0], r, 2) << "red at " << px << "," << py;
+        EXPECT_NEAR(rgba[at + 1], g, 2) << "green at " << px << "," << py;
+        EXPECT_NEAR(rgba[at + 2], b, 2) << "blue at " << px << "," << py;
+        EXPECT_EQ(rgba[at + 3], 255);
+    }
+}
+#endif // _WIN32
 
 // Present-to-capture delay histogram used by the DXGI vs WGC benchmark.
 TEST(PresentDelayHistogram, BucketsAreOneMillisecondWide) {
