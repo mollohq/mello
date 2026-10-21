@@ -105,7 +105,7 @@ protected:
         return std::vector<uint8_t>(payload, payload + std::max(n, 0));
     }
 
-    // The P2P voice frame (spec 10 section 4.2): 32-bit sequence and 32-bit
+    // The loopback voice frame (spec 10 section 4.2): 32-bit sequence and 32-bit
     // RTP timestamp, little-endian, then Opus.
     std::vector<uint8_t> voice_frame(uint32_t seq, uint32_t ts) {
         const auto opus = opus_frame(seq);
@@ -136,9 +136,9 @@ protected:
         std::vector<uint8_t> bytes;
     };
 
-    // `count` P2P frames sent every 20 ms with a 20 ms one-way delay,
+    // `count` loopback frames sent every 20 ms with a 20 ms one-way delay,
     // except the `lost` ones.
-    std::vector<Arrival> p2p_stream(uint32_t count, const std::set<uint32_t>& lost = {}) {
+    std::vector<Arrival> frame_stream(uint32_t count, const std::set<uint32_t>& lost = {}) {
         std::vector<Arrival> out;
         for (uint32_t seq = 0; seq < count; ++seq) {
             auto f = voice_frame(seq, 960 * seq);
@@ -177,10 +177,10 @@ protected:
     PlayoutStats stats() const { return pipeline.receive_stats().playout; }
 };
 
-// The P2P and loopback framing (8-byte header) decodes through NetEQ.
-TEST_F(VoiceReceiveTest, P2PFrameDecodesThroughNetEq) {
+// The loopback framing (8-byte header) decodes through NetEQ.
+TEST_F(VoiceReceiveTest, LoopbackFrameDecodesThroughNetEq) {
     int audible = 0;
-    play(p2p_stream(150), 150 * 20 + 200, [&](int64_t t, const std::vector<int16_t>& pcm) {
+    play(frame_stream(150), 150 * 20 + 200, [&](int64_t t, const std::vector<int16_t>& pcm) {
         if (t > 300 && t < 2900 && rms(pcm) > 2000.0) ++audible;
     });
     const auto s = stats();
@@ -193,7 +193,7 @@ TEST_F(VoiceReceiveTest, P2PFrameDecodesThroughNetEq) {
 }
 
 // A frame with no payload behind the 8-byte header is not a frame.
-TEST_F(VoiceReceiveTest, ShortP2PFrameIsIgnored) {
+TEST_F(VoiceReceiveTest, ShortLoopbackFrameIsIgnored) {
     const auto f = voice_frame(0, 0);
     pipeline.feed_packet(kPeer, f.data(), VOICE_FRAME_HEADER_SIZE);
     EXPECT_EQ(stats().packets_inserted, 0u);
@@ -228,7 +228,7 @@ TEST_F(VoiceReceiveTest, LossesAddNoDelay) {
     float after = -1.0f;
     uint64_t concealed_before = 0;
     uint64_t concealed_after = 0;
-    play(p2p_stream(200, lost), 200 * 20 + 300, [&](int64_t t, const std::vector<int16_t>&) {
+    play(frame_stream(200, lost), 200 * 20 + 300, [&](int64_t t, const std::vector<int16_t>&) {
         if (t == 1150) {
             before = stats().filtered_delay_ms;
             concealed_before = stats().concealed_samples;
@@ -290,7 +290,7 @@ TEST_F(VoiceReceiveTest, OutageRecoversToThePreOutageDelay) {
     float before = -1.0f;
     float after = -1.0f;
     const int64_t outage_end_ms = 350 * 20 + 20;
-    play(p2p_stream(500, lost), 500 * 20 + 300, [&](int64_t t, const std::vector<int16_t>&) {
+    play(frame_stream(500, lost), 500 * 20 + 300, [&](int64_t t, const std::vector<int16_t>&) {
         if (t == 1900) before = stats().filtered_delay_ms;
         if (t == outage_end_ms + 2000 - (outage_end_ms + 2000) % 10) after = stats().filtered_delay_ms;
     });
@@ -302,7 +302,7 @@ TEST_F(VoiceReceiveTest, OutageRecoversToThePreOutageDelay) {
 // Late audio reaches the underrun health. A 200 ms stall delays packets
 // 50..59 and one of them is lost, so NetEQ expands while packets wait.
 TEST_F(VoiceReceiveTest, StallWithPacketsWaitingCountsAsLateUnderrun) {
-    auto arrivals = p2p_stream(100, {53});
+    auto arrivals = frame_stream(100, {53});
     for (auto& a : arrivals) {
         if (a.arrival_ms >= 1020 && a.arrival_ms <= 1200) a.arrival_ms = 1220;
     }
@@ -312,7 +312,7 @@ TEST_F(VoiceReceiveTest, StallWithPacketsWaitingCountsAsLateUnderrun) {
 
 // A talk pause is not an underrun: nothing waits in the buffer.
 TEST_F(VoiceReceiveTest, TalkPauseIsNotALateUnderrun) {
-    play(p2p_stream(50), 50 * 20 + 2000);
+    play(frame_stream(50), 50 * 20 + 2000);
     const auto s = stats();
     EXPECT_GT(s.concealed_samples, 0u) << "NetEQ must have expanded into the pause";
     EXPECT_EQ(s.late_frames, 0u);
@@ -323,7 +323,7 @@ TEST_F(VoiceReceiveTest, TalkPauseIsNotALateUnderrun) {
 TEST_F(VoiceReceiveTest, DeafenSilencesOutputAndKeepsTheStream) {
     double deaf_rms = 0.0;
     int audible_after = 0;
-    play(p2p_stream(200), 200 * 20 + 200, [&](int64_t t, const std::vector<int16_t>& pcm) {
+    play(frame_stream(200), 200 * 20 + 200, [&](int64_t t, const std::vector<int16_t>& pcm) {
         if (t == 1000) pipeline.set_deafen(true);
         if (t > 1000 && t < 2000) deaf_rms = std::max(deaf_rms, rms(pcm));
         if (t == 2000) pipeline.set_deafen(false);
@@ -338,7 +338,7 @@ TEST_F(VoiceReceiveTest, DeafenSilencesOutputAndKeepsTheStream) {
 TEST_F(VoiceReceiveTest, PeerVolumeAndOutputVolumeScaleThePeer) {
     std::vector<double> levels;
     pipeline.set_peer_volume(kPeer, 0.5f);
-    play(p2p_stream(100), 100 * 20, [&](int64_t t, const std::vector<int16_t>& pcm) {
+    play(frame_stream(100), 100 * 20, [&](int64_t t, const std::vector<int16_t>& pcm) {
         if (t == 1000) pipeline.set_output_volume(0.5f);
         if ((t > 400 && t < 900) || (t > 1100 && t < 1900)) levels.push_back(rms(pcm));
     });
@@ -352,7 +352,7 @@ TEST_F(VoiceReceiveTest, PeerVolumeAndOutputVolumeScaleThePeer) {
 
 // Leaving voice destroys every NetEQ; removing a peer destroys its own.
 TEST_F(VoiceReceiveTest, LeaveAndPeerRemovalDestroyStreams) {
-    play(p2p_stream(20), 500);
+    play(frame_stream(20), 500);
     EXPECT_EQ(pipeline.active_streams(), 1);
     pipeline.remove_peer(kPeer);
     EXPECT_EQ(pipeline.active_streams(), 0);

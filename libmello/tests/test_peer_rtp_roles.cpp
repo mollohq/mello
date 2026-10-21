@@ -448,7 +448,8 @@ TEST_F(PeerRtpRolesTest, VoiceOfferCarriesRecvSlots) {
     mello_peer_destroy(peer);
 }
 
-// P2P voice peers keep the default: no receive slots.
+// A voice peer without mello_peer_set_voice_recv_slots keeps the default:
+// no receive slots.
 TEST_F(PeerRtpRolesTest, VoiceOfferWithoutSlotsHasOneAudioLine) {
     auto* peer = mello_peer_create(nullptr, "voice-peer");
     ASSERT_NE(peer, nullptr);

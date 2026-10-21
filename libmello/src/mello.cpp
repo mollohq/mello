@@ -653,7 +653,7 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
 }
 
 /* ============================================================================
- * P2P Transport
+ * Peer Transport
  * ============================================================================ */
 
 MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id) {
@@ -778,30 +778,12 @@ void mello_peer_set_data_callback(MelloPeerConnection* peer, MelloPeerDataCallba
     } catch (...) {}
 }
 
-void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
-    if (!peer) return;
-    try {
-        auto* pc = peer_cast(peer);
-        pc->set_audio_track_callback(callback, user_data);
-    } catch (...) {}
-}
-
 void mello_peer_set_audio_rtp_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
     if (!peer) return;
     try {
         auto* pc = peer_cast(peer);
         pc->set_audio_rtp_callback(callback, user_data);
     } catch (...) {}
-}
-
-MelloResult mello_peer_send_unreliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
-    if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
-    try {
-        auto* pc = peer_cast(peer);
-        return pc->send_unreliable(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
-    } catch (...) {
-        return MELLO_ERROR_TRANSPORT_FAILED;
-    }
 }
 
 MelloResult mello_peer_send_reliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
@@ -988,16 +970,6 @@ bool mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* 
         return peer_cast(peer)->get_send_feedback(out);
     } catch (...) {
         return false;
-    }
-}
-
-int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
-    if (!peer || !buffer || buffer_size <= 0) return 0;
-    try {
-        auto* pc = peer_cast(peer);
-        return pc->recv(buffer, buffer_size);
-    } catch (...) {
-        return 0;
     }
 }
 

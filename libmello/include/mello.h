@@ -1,6 +1,6 @@
 /**
  * @file mello.h
- * @brief Mello C API - Audio, Video, and P2P Transport
+ * @brief Mello C API - Audio, Video, and Peer Transport
  */
 
 #ifndef MELLO_H
@@ -263,9 +263,8 @@ MELLO_API void mello_voice_report_send_feedback(MelloContext* ctx, const MelloSe
  *  at the next frame. Any thread. */
 MELLO_API void mello_voice_set_max_bitrate(MelloContext* ctx, int kbps);
 
-/** Feed one voice frame received from a peer on the P2P data channel, or
- *  from the local mic test (loopback). Spec 10 section 4.2. The frame is an
- *  8-byte header, then the Opus payload:
+/** Feed one voice frame from the local mic test (loopback). Spec 10
+ *  section 4.2. The frame is an 8-byte header, then the Opus payload:
  *    bytes 0..3  the 32-bit sender sequence (mello_voice_get_packet header),
  *                little-endian
  *    bytes 4..7  the RTP timestamp (mello_voice_get_packet_with_timestamp),
@@ -403,7 +402,7 @@ MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_sampl
 MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
 
 /* ============================================================================
- * P2P Transport
+ * Peer Transport (the client side of an SFU connection)
  * ============================================================================ */
 
 typedef enum MelloPeerMediaRole {
@@ -602,31 +601,14 @@ MELLO_API void mello_peer_set_transport_callback(
     void* user_data
 );
 
-/** Incoming audio for stream viewers and tools: `data` is the Opus payload
- *  behind a 4-byte header [seq_lo, seq_hi, 0, 0] (the 16-bit RTP sequence,
- *  little-endian). The RTP timestamp is not carried. Voice uses
- *  mello_peer_set_audio_rtp_callback. */
-MELLO_API void mello_peer_set_audio_track_callback(
-    MelloPeerConnection* peer,
-    MelloAudioTrackCallback callback,
-    void* user_data
-);
-
 /** Incoming audio as complete RTP packets (header and Opus payload), for
- *  mello_voice_feed_rtp. Same callback type as the audio track callback:
- *  `data` and `size` are the whole RTP packet, valid only during the call.
- *  Only payload type 111 (Opus) is delivered. Both callbacks may be set;
- *  each gets every packet. Called on the libdatachannel track thread. */
+ *  mello_voice_feed_rtp and stream viewers: `data` and `size` are the whole
+ *  RTP packet, valid only during the call. Only payload type 111 (Opus) is
+ *  delivered. Called on the libdatachannel track thread. */
 MELLO_API void mello_peer_set_audio_rtp_callback(
     MelloPeerConnection* peer,
     MelloAudioTrackCallback callback,
     void* user_data
-);
-
-MELLO_API MelloResult mello_peer_send_unreliable(
-    MelloPeerConnection* peer,
-    const uint8_t* data,
-    int size
 );
 
 MELLO_API MelloResult mello_peer_send_reliable(
@@ -658,9 +640,6 @@ MELLO_API MelloResult mello_peer_send_audio_frame(
 /** Handle a server-initiated SDP renegotiation offer. Returns answer SDP. */
 MELLO_API const char* mello_peer_handle_remote_offer(MelloPeerConnection* peer, const char* offer_sdp);
 
-/** Poll next received unreliable packet. Returns bytes copied, 0 if empty. */
-MELLO_API int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size);
-
 /** Send a ping on the reliable DataChannel for RTT measurement. */
 MELLO_API void mello_peer_send_ping(MelloPeerConnection* peer);
 
@@ -684,7 +663,7 @@ MELLO_API int mello_peer_recv_track_count(MelloPeerConnection* peer);
  *  peer carries `count` recvonly audio m-lines (mids "s0", "s1", ...) after
  *  its sendrecv mic m-line. The SFU forwards one member on each and names
  *  the member with a `slot` control message (mello_peer_set_audio_mid_sender).
- *  Default 0, for P2P. Clamped to 0..64. Ignored for stream roles. */
+ *  Default 0. Clamped to 0..64. Ignored for stream roles. */
 MELLO_API void mello_peer_set_voice_recv_slots(MelloPeerConnection* peer, int count);
 
 /** Voice: incoming RTP on m-line `mid` is from `sender_id` from now on. NULL
