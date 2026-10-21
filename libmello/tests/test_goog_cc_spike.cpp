@@ -292,6 +292,8 @@ public:
                              int64_t now_us,
                              int64_t in_flight_bytes) = 0;
     virtual void on_process(int64_t now_us, int64_t pacer_queue_bytes) = 0;
+    // Called when feedback resumes after a gap (see set_reset_after_gap).
+    virtual void on_feedback_resumed(int64_t /*now_us*/) {}
 
     // Outputs, read by the simulator after each call.
     int64_t target_bps = 0;
@@ -402,6 +404,18 @@ public:
     }
 
     void reset_controller() { controller_.reset(); }
+
+    // After an outage: the libwebrtc route-change reset. The estimators
+    // restart from the acknowledged rate and the initial probes run again.
+    void on_feedback_resumed(int64_t now_us) override {
+        webrtc::NetworkRouteChange change;
+        change.at_time = to_ts(now_us);
+        change.constraints.at_time = to_ts(now_us);
+        change.constraints.min_data_rate = DataRate::BitsPerSec(kMinBps);
+        change.constraints.max_data_rate = DataRate::BitsPerSec(kMaxBps);
+        change.constraints.starting_rate = DataRate::BitsPerSec(target_bps);
+        apply(controller_->OnNetworkRouteChange(change));
+    }
 
     // The stage 4 QualityController analog of a new encoder allocation:
     // OnStreamsConfig with a new max total allocated bitrate. goog_cc probes
@@ -520,6 +534,9 @@ public:
     Simulation(const LinkProfile& profile, SimController& controller, double encoder_fill = 1.0)
         : link_(profile), controller_(controller), encoder_fill_(encoder_fill) {}
 
+    void set_feedback_timeout(int64_t timeout_us) { feedback_timeout_us_ = timeout_us; }
+    void set_reset_after_gap(int64_t gap_us) { reset_after_gap_us_ = gap_us; }
+
     // Calls `hook` once, at the first process interval at or after `at_us`.
     void set_hook(int64_t at_us, std::function<void(int64_t)> hook) {
         hook_at_us_ = at_us;
@@ -563,7 +580,7 @@ public:
                 continue;
             }
             if (next_frame == now) {
-                encode_frame(result);
+                encode_frame(result, now);
                 ++frame_index;
                 next_frame = frame_index * 1'000'000 / kFramesPerSecond;
                 continue;
@@ -595,7 +612,11 @@ private:
         controller_.new_probes.clear();
     }
 
-    void encode_frame(TraceResult& result) {
+    void encode_frame(TraceResult& result, int64_t now) {
+        if (paused(now)) {
+            result.encoder_dropped_bytes += static_cast<int64_t>(encoder_bps() / 8 / kFramesPerSecond);
+            return;
+        }
         frame_carry_bytes_ += encoder_fill_ * static_cast<double>(encoder_bps()) / 8.0 / kFramesPerSecond;
         while (frame_carry_bytes_ >= kPacketBytes) {
             frame_carry_bytes_ -= kPacketBytes;
@@ -611,8 +632,16 @@ private:
         return controller_.congestion_window_bytes && in_flight_bytes_ >= *controller_.congestion_window_bytes;
     }
 
+    // Feedback timeout (stage 4 plan, "Pacer"): with no feedback for
+    // `feedback_timeout_us_`, the sender stops media and sends one keepalive
+    // packet every 500 ms, as the libwebrtc pacer does when it is paused.
+    bool paused(int64_t now) const {
+        return feedback_timeout_us_ > 0 && last_feedback_us_ >= 0 && now - last_feedback_us_ > feedback_timeout_us_;
+    }
+
     int64_t pacer_ready_time(int64_t now) const {
         constexpr int64_t kNever = std::numeric_limits<int64_t>::max();
+        if (paused(now)) return std::max(next_keepalive_us_, now);
         if (window_blocks()) return kNever;
         const bool has_work = !probes_.empty() || queued_bytes_ >= kPacketBytes || controller_.padding_bps > 0;
         if (!has_work) return kNever;
@@ -625,7 +654,14 @@ private:
         record.send_us = now;
         record.bytes = kPacketBytes;
         int64_t rate = 0;
-        if (!probes_.empty()) {
+        if (paused(now)) {
+            // Keepalive. The stale media queue and the probes are dropped.
+            result.encoder_dropped_bytes += queued_bytes_;
+            queued_bytes_ = 0;
+            probes_.clear();
+            next_keepalive_us_ = now + 500'000;
+            rate = controller_.pacing_bps;
+        } else if (!probes_.empty()) {
             ProbeCluster& cluster = probes_.front();
             rate = cluster.rate_bps;
             record.pacing_info = webrtc::PacedPacketInfo(cluster.id, cluster.min_probes,
@@ -670,6 +706,16 @@ private:
                 in_flight_bytes_ -= record.bytes;
             }
         }
+        const bool resumed = reset_after_gap_us_ > 0 && last_feedback_us_ >= 0 &&
+                             now - last_feedback_us_ > reset_after_gap_us_;
+        last_feedback_us_ = now;
+        if (resumed) {
+            // The first report after the gap holds the packets lost in the
+            // outage. It is not given to the controller; the reset replaces it.
+            controller_.on_feedback_resumed(now);
+            take_probes();
+            return;
+        }
         controller_.on_feedback(feedback, history_, unwrapped, now, in_flight_bytes_);
         take_probes();
     }
@@ -678,6 +724,10 @@ private:
     Receiver receiver_;
     SimController& controller_;
     double encoder_fill_;
+    int64_t feedback_timeout_us_ = 0;
+    int64_t reset_after_gap_us_ = 0;
+    int64_t last_feedback_us_ = -1;
+    int64_t next_keepalive_us_ = 0;
     int64_t hook_at_us_ = 0;
     std::function<void(int64_t)> hook_;
     std::vector<SentRecord> history_;
@@ -955,12 +1005,24 @@ TEST(GoogCcSpike, Outage3s) {
     const TraceResult g = run_trace(profile, goog, duration);
     CurrentController current(kCurrentProductionStartBps);
     const TraceResult c = run_trace(profile, current, duration);
+    // The same with the feedback timeout of the stage 4 plan: the sender
+    // stops media when feedback stops for 1 s.
+    GoogCcController goog_pause;
+    Simulation pause_sim(profile, goog_pause);
+    pause_sim.set_feedback_timeout(sec(1));
+    const TraceResult gp = pause_sim.run(duration);
+    // The same, plus a route-change reset when feedback resumes after the gap.
+    GoogCcController goog_reset;
+    Simulation reset_sim(profile, goog_reset);
+    reset_sim.set_feedback_timeout(sec(1));
+    reset_sim.set_reset_after_gap(sec(1));
+    const TraceResult gr = reset_sim.run(duration);
 
     struct Row {
         const char* name;
         const TraceResult* r;
     };
-    for (const Row& row : {Row{"goog_cc", &g}, Row{"current(5.4)", &c}}) {
+    for (const Row& row : {Row{"goog_cc", &g}, Row{"current(5.4)", &c}, Row{"goog_cc+1s", &gp}, Row{"goog_cc+1s+reset", &gr}}) {
         const TraceResult& r = *row.r;
         std::printf("[goog-cc-spike] outage %-12s: target 9.9 s %.2f, 11 s %.2f, 12.9 s %.2f, 13.2 s %.2f, 14 s %.2f, "
                     "min 13-16 s %.2f Mbps; encoder 12.9 s %.2f Mbps; sent into outage %.0f kB; back to 90%% after %s; "
@@ -978,6 +1040,11 @@ TEST(GoogCcSpike, Outage3s) {
     const double g_back = time_to_recover(g, sec(13), ninety);
     ASSERT_GE(g_back, 0.0) << "goog_cc never came back after the outage";
     EXPECT_LT(g_back, 25.0);
+    // The stage 4 design: stop media after 1 s without feedback, and reset
+    // goog_cc (OnNetworkRouteChange) when feedback comes back.
+    const double gr_back = time_to_recover(gr, sec(13), ninety);
+    ASSERT_GE(gr_back, 0.0);
+    EXPECT_LT(gr_back, 2.0) << "the reset on resume should restore the rate with the initial probes";
     EXPECT_LT(bytes_sent(g, sec(10), sec(13)), bytes_sent(c, sec(10), sec(13)))
         << "goog_cc should send less into the outage than the current estimator";
 }
@@ -1042,7 +1109,7 @@ GroupCount count_groups(int64_t gap_us, int64_t duration_us) {
     constexpr uint64_t kCurrentStart = 3'000'000;
     GccEstimator current(GccEstimator::Config{}, kCurrentStart);
     // Copy of the grouping rule of GccEstimator::on_packet (twcc.cpp:15 and
-    // 524-533): a group closes when a received packet is sent more than 5 ms
+    // 509-511): a group closes when a received packet is sent more than 5 ms
     // after the LAST packet of the open group. GccEstimator has no group
     // counter, so the test counts with this copy and confirms through the
     // target, which moves on every closed group once ten have closed.
