@@ -4315,6 +4315,33 @@ fn recent_games_feed() -> mello_core::crew_events::FeedResponse {
     }
 }
 
+/// The stats strip names a game from the catalogue. An id that nothing can
+/// resolve shows a readable fallback, never the raw id.
+#[test]
+fn stats_strip_names_a_game_from_the_catalogue_and_never_shows_a_raw_id() {
+    let stats = |id: &str| mello_core::crew_events::UserGameStats {
+        game_id: id.into(),
+        ..Default::default()
+    };
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+
+    h.emit(Event::UserGameStatsLoaded {
+        games: vec![stats("counter-strike-2")],
+    });
+    assert_eq!(
+        h.app().get_you_strip().game_name.as_str(),
+        "Counter-Strike 2"
+    );
+
+    h.emit(Event::UserGameStatsLoaded {
+        games: vec![stats("steam-4999999")],
+    });
+    let strip = h.app().get_you_strip();
+    assert_eq!(strip.game_name.as_str(), "Unknown game");
+    assert!(!strip.short_name.as_str().contains("4999999"));
+}
+
 /// The Crew play rollup is gone. Its session count and total time are the
 /// header of the recent games card, which lists the games as tiles.
 #[test]
@@ -5139,6 +5166,54 @@ fn the_deciding_chip_is_the_title_with_the_largest_gap() {
     assert_eq!(row.chip.value.as_str(), "4,171");
     assert_eq!(row.chip.holder_id.as_str(), "u2");
     assert_eq!(count_of(&h, "TitleChip"), 1, "one chip on the one row");
+}
+
+/// Two pairs that share the same widest gap do not wear the same chip: the
+/// lower row takes the next contested title.
+#[test]
+fn a_deciding_chip_already_used_above_gives_way_in_the_next_row() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Max"),
+            ("u4", "Sara"),
+            ("u5", "Leo"),
+        ],
+    );
+    let values = || {
+        vec![
+            ("the_collector", serde_json::json!(6), serde_json::json!(1)),
+            ("locked_in", serde_json::json!(9.0), serde_json::json!(6.0)),
+        ]
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            5,
+            vec![
+                h2h_title("the_collector", "user-1", serde_json::json!(6), "installed"),
+                h2h_title("locked_in", "user-1", serde_json::json!(9.0), "h"),
+            ],
+            vec![
+                h2h_pair_values("u2", 1, 1, values()),
+                h2h_pair_values("u3", 1, 1, values()),
+            ],
+            None,
+        )]),
+    });
+    let pairs = first_card(&h).head2head.pairs;
+    assert_eq!(pairs.row_count(), 2);
+    assert_eq!(
+        pairs.row_data(0).expect("row").chip.title.as_str(),
+        "The Collector"
+    );
+    assert_eq!(
+        pairs.row_data(1).expect("row").chip.title.as_str(),
+        "Locked In"
+    );
 }
 
 /// The text of every `Text` the window draws.

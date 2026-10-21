@@ -408,16 +408,37 @@ export component Head2headCardWide inherits Rectangle {
     }
 }
 
+/// Sizes of the head2head cell that the feed grid needs to size its row.
+export global H2hCellSize {
+    /// A row of the four-row cell: 5px, name line, tally line, 5px (frame D).
+    out property <length> dense-row: 50px;
+    /// Card height for `rows` pairs and a "+N more" line. 232px is the grid
+    /// row. Four rows do not fit it at the mockup spacing, so the card grows.
+    public pure function height(rows: int, more: int) -> length {
+        return 54px + rows * root.dense-row + (more > 0 ? 22px : 0px);
+    }
+}
+
 /// One row of the cell: "You vs Name", the tally between two octagons, and
 /// the title that decides the pair.
 component PairRow inherits Rectangle {
     in property <H2hPairRow> pair;
     /// Four rows share the cell: a shorter row, and no held label.
     in property <bool> dense: false;
-    height: root.dense ? 36px : root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
+    /// The first row has no keyline above it.
+    in property <bool> first: false;
+    height: root.dense ? H2hCellSize.dense-row : root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
     background: transparent;
 
+    // Frame D: a keyline between rows, 5px of air on both sides of it.
+    if root.dense && !root.first: Rectangle {
+        y: 0px; height: Theme.keyline; width: parent.width;
+        background: Theme.card-border;
+    }
+
     HorizontalLayout {
+        padding-top: root.dense ? 5px : 0px;
+        padding-bottom: root.dense ? 5px : 0px;
         spacing: 6px;
         cross-axis-alignment: center;
 
@@ -441,7 +462,7 @@ component PairRow inherits Rectangle {
                 Text {
                     text: root.pair.you-count + " : " + root.pair.them-count;
                     font-family: Theme.font-display;
-                    font-size: 13px;
+                    font-size: root.dense ? 20px : 13px;
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-value;
                 }
@@ -507,9 +528,9 @@ export component Head2headCell inherits Rectangle {
         VerticalLayout {
             vertical-stretch: 1;
             alignment: start;
-            spacing: root.pairs.length >= 4 ? 3px : 6px;
+            spacing: root.pairs.length >= 4 ? 0px : 6px;
 
-            for p in root.pairs: PairRow { pair: p; dense: root.pairs.length >= 4; }
+            for p[i] in root.pairs: PairRow { pair: p; first: i == 0; dense: root.pairs.length >= 4; }
 
             // The line stands for the opened view, which does not exist yet.
             // It is a control that opens nothing.

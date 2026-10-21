@@ -5,7 +5,7 @@ import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../t
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { SkeletonTrio } from "../components/skeleton_trio.slint";
-import { Head2headCardWide, Head2headCell, VersusHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
+import { Head2headCardWide, Head2headCell, H2hCellSize, VersusHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 
@@ -2532,9 +2532,13 @@ export component CrewFeed inherits Rectangle {
                     }
                 }
 
-                // Row 2: Three 1x cards
+                // Row 2: Three 1x cards. The four-row head2head cell grows the
+                // row when its rows do not fit the grid height.
                 if cards.length > root.row2-base: HorizontalLayout {
-                    height: Theme.feed-row;
+                    height: cards[root.row2-base].card-type == "head2head" && cards[root.row2-base].head2head.variant == "cell-full"
+                        && cards[root.row2-base].head2head.pairs.length >= 4
+                        ? max(Theme.feed-row, H2hCellSize.height(cards[root.row2-base].head2head.pairs.length, cards[root.row2-base].head2head.more-pairs))
+                        : Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1, 2]: FeedSlot {

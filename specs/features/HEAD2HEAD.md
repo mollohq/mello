@@ -198,6 +198,7 @@ Each pair row in the cell shows one chip: the title that decides the pair. The c
 
 - The gap of a title is `abs(a_value - b_value) / max(a_value, b_value)`. For `night_owl` the values are minutes after 18:00.
 - The title with the largest gap wins. A tie goes to the title that comes first in the display order.
+- Rows pick from the top down. A title that is the deciding chip of a higher row is skipped when the pair has another contested title. When every contested title of the pair is used, the largest gap wins. This keeps a count title with small values (6 against 1) from deciding every row.
 - The chip shows the value of the member who would hold the title in the pair. Held days come from the crew holder, only when the crew holder is that member.
 - A pair with no `values` shows no chip.
 

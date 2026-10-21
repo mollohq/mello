@@ -20,7 +20,13 @@ const BASIC = `Basic ${Buffer.from(`${SERVER_KEY}:`).toString("base64")}`;
 /** The seed of every generated profile. Fixed, so a run repeats the same crew. */
 const PROFILE_SEED = 0x6d33_6c6c;
 
-export type SeedGame = { id: string; name: string; playtimeMin: number };
+/**
+ * A game has two ids, as in the client. `id` is the launcher id that
+ * `library_report` carries. `catalogueId` is the id that the game sensor
+ * resolves from the bundled catalogue and sends in `game_session_end`
+ * (specs/17-GAME-SENSING.md, identity reconciliation).
+ */
+export type SeedGame = { id: string; catalogueId: string; name: string; playtimeMin: number };
 
 export type SeedSession = {
   game: SeedGame;
@@ -45,22 +51,22 @@ export type SeededMember = { name: string; userId: string; token: string };
 // ── the pool ─────────────────────────────────────────────────────────
 
 /**
- * Twelve Steam games. The ids are Steam app ids, which the client's catalogue
- * resolves to capsule art (client/assets/catalogue).
+ * Twelve Steam games. `id` is the launcher id (Steam app id). `catalogueId` is
+ * the id of the same game in the client's catalogue (client/assets/catalogue).
  */
 export const GAME_POOL: Omit<SeedGame, "playtimeMin">[] = [
-  { id: "steam-730", name: "Counter-Strike 2" },
-  { id: "steam-252950", name: "Rocket League" },
-  { id: "steam-291550", name: "Brawlhalla" },
-  { id: "steam-1097150", name: "Fall Guys" },
-  { id: "steam-570", name: "Dota 2" },
-  { id: "steam-1172470", name: "Apex Legends" },
-  { id: "steam-1245620", name: "Elden Ring" },
-  { id: "steam-892970", name: "Valheim" },
-  { id: "steam-105600", name: "Terraria" },
-  { id: "steam-359550", name: "Tom Clancy's Rainbow Six Siege" },
-  { id: "steam-440", name: "Team Fortress 2" },
-  { id: "steam-578080", name: "PUBG: BATTLEGROUNDS" },
+  { id: "steam-730", catalogueId: "counter-strike-2", name: "Counter-Strike 2" },
+  { id: "steam-252950", catalogueId: "rocket-league", name: "Rocket League" },
+  { id: "steam-291550", catalogueId: "brawlhalla", name: "Brawlhalla" },
+  { id: "steam-1097150", catalogueId: "fall-guys", name: "Fall Guys" },
+  { id: "steam-570", catalogueId: "dota-2", name: "Dota 2" },
+  { id: "steam-1172470", catalogueId: "apex-legends", name: "Apex Legends" },
+  { id: "steam-1245620", catalogueId: "elden-ring", name: "Elden Ring" },
+  { id: "steam-892970", catalogueId: "valheim", name: "Valheim" },
+  { id: "steam-105600", catalogueId: "terraria", name: "Terraria" },
+  { id: "steam-359550", catalogueId: "rainbow-six-siege", name: "Tom Clancy's Rainbow Six Siege" },
+  { id: "steam-440", catalogueId: "team-fortress-2", name: "Team Fortress 2" },
+  { id: "steam-578080", catalogueId: "pubg-battlegrounds", name: "PUBG: BATTLEGROUNDS" },
 ];
 
 /** The game that almost every member owns, so the top shared game is contested. */
@@ -202,6 +208,11 @@ function tzForLocalMinute(localMin: number, nowMs = Date.now()): number {
 
 export type LibraryEntry = { id: string; name: string; playtimeMin: number };
 
+/** The catalogue id of a launcher id. A game outside the pool keeps its launcher id, as an uncatalogued game does in the client. */
+export function catalogueIdOf(launcherId: string): string {
+  return GAME_POOL.find((g) => g.id === launcherId)?.catalogueId ?? launcherId;
+}
+
 /** `library_report`: replaces the library of the account that owns `token`. */
 export async function reportLibrary(token: string, games: LibraryEntry[]): Promise<void> {
   await rpc(token, "library_report", {
@@ -235,7 +246,8 @@ export async function endSession(
   await rpc(token, "game_session_end", {
     crew_id: crewId,
     game_name: game.name,
-    game_id: game.id,
+    // The sensor sends the catalogue id. A caller may pass either id of a pool game.
+    game_id: (game as { catalogueId?: string }).catalogueId ?? catalogueIdOf(game.id),
     duration_min: durationMin,
     active_min: durationMin,
     session_id: sessionId,

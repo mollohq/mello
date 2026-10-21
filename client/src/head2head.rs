@@ -408,6 +408,10 @@ fn higher_wins(id: &str) -> bool {
 /// go to the title that comes first in the display order. The chip carries
 /// the value of the member who would hold the title in the pair, and the
 /// held days of the crew holder when that is the same member.
+///
+/// Variety: a title in `used`, already the chip of a row above, is skipped
+/// when the pair has another contested title. When every title of the pair is
+/// used, the largest gap wins as before.
 fn deciding_chip(
     pair: &WirePair,
     titles: &[&WireTitle],
@@ -415,9 +419,19 @@ fn deciding_chip(
     roster: &dyn Fn(&str) -> Person,
     now_ms: i64,
     moved_id: Option<&str>,
+    used: &[String],
 ) -> Option<Chip> {
+    let contested = |v: &&WirePairValue| titles.iter().any(|t| t.title_id == v.title_id);
+    let fresh = pair
+        .values
+        .iter()
+        .filter(contested)
+        .any(|v| !used.contains(&v.title_id));
     let mut best: Option<(f64, &WirePairValue, &WireTitle)> = None;
     for v in &pair.values {
+        if fresh && used.contains(&v.title_id) {
+            continue;
+        }
         let Some(crew) = titles.iter().find(|t| t.title_id == v.title_id) else {
             continue;
         };
@@ -485,15 +499,20 @@ pub fn build(
         .collect();
 
     // The viewer is A in every pair. Rows keep the payload order.
-    let mut pairs: Vec<PairRow> = wire
+    let mut pairs: Vec<(PairRow, &WirePair)> = wire
         .pairs
         .iter()
         .filter(|p| p.a == viewer.id)
-        .map(|p| PairRow {
-            opponent: roster(&p.b),
-            you_count: p.a_count,
-            them_count: p.b_count,
-            deciding: deciding_chip(p, &known, &viewer.id, roster, now_ms, moved_id.as_deref()),
+        .map(|p| {
+            (
+                PairRow {
+                    opponent: roster(&p.b),
+                    you_count: p.a_count,
+                    them_count: p.b_count,
+                    deciding: None,
+                },
+                p,
+            )
         })
         .collect();
 
@@ -549,7 +568,7 @@ pub fn build(
         } else if !moved.previous_holder_user_id.is_empty() {
             Some(moved.previous_holder_user_id.clone())
         } else {
-            pairs.first().map(|p| p.opponent.id.clone())
+            pairs.first().map(|p| p.0.opponent.id.clone())
         };
         let pair = other_id
             .as_ref()
@@ -576,7 +595,7 @@ pub fn build(
 
     // Closest tallies first: the pairs that are still open to a move lead.
     // The sort is stable, so equal gaps keep the payload order.
-    pairs.sort_by_key(|p| (p.you_count - p.them_count).abs());
+    pairs.sort_by_key(|(p, _)| (p.you_count - p.them_count).abs());
     if wire.member_count >= SEATS {
         model.placement = Placement::CellFull;
         model.open_seats = 0;
@@ -584,7 +603,24 @@ pub fn build(
     } else {
         pairs.truncate(ROWS_WITH_SEATS);
     }
-    model.pairs = pairs;
+    // The chips are picked row by row, top down, so a title that decided a
+    // higher row gives way to another contested title in the rows below.
+    let mut used: Vec<String> = Vec::new();
+    for (mut row, wire_pair) in pairs {
+        row.deciding = deciding_chip(
+            wire_pair,
+            &known,
+            &viewer.id,
+            roster,
+            now_ms,
+            moved_id.as_deref(),
+            &used,
+        );
+        if let Some(c) = &row.deciding {
+            used.push(c.id.clone());
+        }
+        model.pairs.push(row);
+    }
     Some(model)
 }
 
@@ -1069,6 +1105,40 @@ mod tests {
         let m = build(&data, &me(), &roster, NOW).unwrap();
         // the_collector comes before locked_in in the table.
         assert_eq!(m.pairs[0].deciding.as_ref().unwrap().id, "the_collector");
+    }
+
+    #[test]
+    fn a_title_that_decided_a_higher_row_is_skipped_below() {
+        // The Collector (6 against 1) has the widest gap in all three pairs.
+        // Row one takes it. Row two takes the next widest, Locked In. Row
+        // three has only the_collector and locked_in left to take, both used,
+        // so the widest gap wins again.
+        let vals = |c: (i32, i32), l: (f64, f64)| {
+            vec![
+                pv("the_collector", json!(c.0), json!(c.1)),
+                pv("locked_in", json!(l.0), json!(l.1)),
+            ]
+        };
+        let data = feed(
+            5,
+            vec![
+                title("the_collector", "me", json!(6), "installed"),
+                title("locked_in", "me", json!(9.0), "h"),
+            ],
+            vec![
+                pair_v("u2", 1, 1, vals((6, 1), (9.0, 6.0))),
+                pair_v("u3", 1, 1, vals((6, 1), (9.0, 6.0))),
+                pair_v("u4", 1, 1, vals((6, 1), (9.0, 6.0))),
+            ],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let ids: Vec<&str> = m
+            .pairs
+            .iter()
+            .map(|p| p.deciding.as_ref().unwrap().id.as_str())
+            .collect();
+        assert_eq!(ids, ["the_collector", "locked_in", "the_collector"]);
     }
 
     #[test]
