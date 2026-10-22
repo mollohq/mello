@@ -73,6 +73,7 @@ impl GameStateManager {
                     color: game.color.clone(),
                     pid,
                     exe_path: game.exe_path.clone(),
+                    started_at_ms: game.started_at,
                 });
                 self.sessions.insert(
                     game.game_id.clone(),
@@ -346,6 +347,16 @@ mod tests {
         );
         assert!(session_end.is_none());
         assert!(mgr.current_game().is_some());
+    }
+
+    #[test]
+    fn detected_carries_the_process_start_for_the_live_card() {
+        let mut mgr = GameStateManager::new();
+        let game = game_at(7, "rocket-league", START);
+        let (events, _) = mgr.handle_event(GameEvent::Started(game));
+        assert!(
+            matches!(&events[0], Event::GameDetected { started_at_ms, .. } if *started_at_ms == START)
+        );
     }
 
     #[test]

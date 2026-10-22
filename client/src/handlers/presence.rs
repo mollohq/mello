@@ -180,6 +180,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             let active_id = ctx.app.get_active_crew_id();
             if active_id == change.crew_id.as_str() {
+                ctx.live_games.borrow_mut().set_presence(
+                    &change.user_id,
+                    &change.presence.status,
+                    change.presence.game.as_ref(),
+                );
                 let current = ctx.app.get_members();
                 let is_online =
                     change.presence.status != mello_core::presence::PresenceStatus::Offline;
@@ -397,6 +402,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
+                if let Some(members) = state.members.as_ref() {
+                    ctx.live_games
+                        .borrow_mut()
+                        .replace_others(members.iter().filter_map(|cm| {
+                            let p = cm.presence.as_ref()?;
+                            Some((cm.user_id.as_str(), &p.status, p.game.as_ref()))
+                        }));
+                }
                 let now_ms = current_time_ms();
                 let game_lines: std::collections::HashMap<String, String> = state
                     .members

@@ -33,6 +33,7 @@ mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
+mod live_session;
 mod member_audio;
 mod notifications;
 mod onboarding;
@@ -595,6 +596,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         last_feed: Rc::new(RefCell::new(None)),
+        live_games: Rc::new(RefCell::new(Default::default())),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,

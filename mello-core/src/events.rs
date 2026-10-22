@@ -615,6 +615,10 @@ pub enum Event {
         /// game's own icon (spec: assets §8.2 — the exe icon is what the user
         /// already recognises, and it needs no catalogue entry or network).
         exe_path: String,
+        /// When the game process started (Unix ms). The same value that the
+        /// presence `started_at` carries, so the live session card counts the
+        /// viewer's own game from the same moment as the crew sees it.
+        started_at_ms: i64,
     },
     /// A game process exited.
     GameEnded {
