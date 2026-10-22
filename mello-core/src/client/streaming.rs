@@ -10,6 +10,18 @@ use crate::transport::sfu_connection::{SfuConnection, SfuEvent, StreamPeerRole};
 #[cfg(not(target_os = "windows"))]
 use super::stream_ffi::on_viewer_frame;
 
+/// The reason the viewer stops watching on `event`, or `None` to go on.
+/// `host_reconnecting` stops the viewer as a disconnect does, as before the
+/// SFU held the session; `host_reconnected` is ignored.
+fn viewer_stop_reason(event: &SfuEvent) -> Option<String> {
+    match event {
+        SfuEvent::Disconnected { reason } => Some(reason.clone()),
+        // Stage 6 replaces this with the reconnecting state.
+        SfuEvent::HostReconnecting { .. } => Some("host_reconnecting".into()),
+        _ => None,
+    }
+}
+
 /// The viewer's step for one SFU membership event: apply it to the member
 /// list and return the UI event when the list changed. A `member_joined`
 /// with the host role, for a viewer that joined before the host, sets the
@@ -89,8 +101,25 @@ use super::stream_ffi::{
 use super::FRAME_STATE_PRESENTED;
 
 const STREAM_DEBUG_EVENT_INTERVAL_SECS: f32 = 1.0;
-/// Longest wait for the SFU leave message when a viewer stops watching.
+/// Longest wait for the SFU leave message when a host stops its stream or a
+/// viewer stops watching.
 const SFU_LEAVE_DEADLINE: std::time::Duration = std::time::Duration::from_millis(1500);
+
+/// Send `leave` to the SFU, bounded by [`SFU_LEAVE_DEADLINE`]. For a host the
+/// leave ends the stream for the viewers at once; without it the SFU holds
+/// the session for a rejoin (mello-sfu 01-SFU.md section 4.1).
+async fn leave_sfu_bounded(conn: &SfuConnection, role: &str) {
+    if tokio::time::timeout(SFU_LEAVE_DEADLINE, conn.leave())
+        .await
+        .is_err()
+    {
+        log::warn!(
+            "SFU {} leave did not finish within {} ms; dropping the connection",
+            role,
+            SFU_LEAVE_DEADLINE.as_millis()
+        );
+    }
+}
 /// Viewer report cadence to the SFU. Above the server's 5s rate limit so a
 /// message is never dropped for arriving too soon.
 const VIEWER_STATS_INTERVAL_SECS: u64 = 10;
@@ -345,13 +374,16 @@ impl super::Client {
         // Poll SFU events for session lifecycle only — stream video uses native RTP.
         if let Some(ref conn) = vs.sfu_connection {
             for event in conn.poll_events() {
+                if let Some(reason) = viewer_stop_reason(&event) {
+                    log::info!("Stream SFU disconnected: {}", reason);
+                    let _ = self.event_tx.send(Event::StreamWatchingStopped);
+                    self.viewer_state.take();
+                    return;
+                }
                 match event {
-                    crate::transport::SfuEvent::Disconnected { reason } => {
-                        log::info!("Stream SFU disconnected: {}", reason);
-                        let _ = self.event_tx.send(Event::StreamWatchingStopped);
-                        self.viewer_state.take();
-                        return;
-                    }
+                    crate::transport::SfuEvent::Disconnected { .. }
+                    | crate::transport::SfuEvent::HostReconnecting { .. }
+                    | crate::transport::SfuEvent::HostReconnected { .. } => {}
                     crate::transport::SfuEvent::MediaPacket { .. } => {
                         log::debug!("Ignoring SFU MediaPacket — stream video uses native RTP");
                     }
@@ -529,6 +561,7 @@ impl super::Client {
                 }
                 SfuEvent::MediaPacket { .. } | SfuEvent::ControlPacket { .. } => {}
                 SfuEvent::AudioRtp { .. } | SfuEvent::SlotReleased { .. } => {}
+                SfuEvent::HostReconnecting { .. } | SfuEvent::HostReconnected { .. } => {}
             }
         }
     }
@@ -1243,6 +1276,8 @@ impl super::Client {
             return;
         };
         log::info!("Stopping stream session {}", session.session_id);
+        // Kept for the leave at the end: the fields below are cleared first.
+        let leave_conn = self.stream_sfu_connection.clone();
 
         // The UI is told first. Nothing below may delay END STREAM: the manager
         // join is bounded, native teardown runs on its own thread, and the RPC
@@ -1272,6 +1307,14 @@ impl super::Client {
             if let Err(e) = self.nakama.rpc("stop_stream", &payload).await {
                 log::warn!("stop_stream RPC failed: {}", e);
             }
+        }
+
+        // A leave tells the SFU that the stream ended: the viewers get
+        // session_ended at once. A host that only drops the socket looks like
+        // a crash, and the SFU holds the session for a rejoin. It runs after
+        // the UI event and the stop_stream RPC, and is bounded.
+        if let Some(conn) = leave_conn {
+            leave_sfu_bounded(&conn, "host").await;
         }
     }
 
@@ -1607,15 +1650,7 @@ impl super::Client {
             // or off-loop and must not delay it.
             let _ = self.event_tx.send(Event::StreamWatchingStopped);
             if let Some(ref conn) = vs.sfu_connection {
-                if tokio::time::timeout(SFU_LEAVE_DEADLINE, conn.leave())
-                    .await
-                    .is_err()
-                {
-                    log::warn!(
-                        "SFU viewer leave did not finish within {} ms; dropping the connection",
-                        SFU_LEAVE_DEADLINE.as_millis()
-                    );
-                }
+                leave_sfu_bounded(conn, "viewer").await;
             }
             // Native stop runs on the teardown thread (ViewerState::drop).
             drop(vs);
@@ -1736,7 +1771,7 @@ mod stream_members_tests {
     use futures::{SinkExt, StreamExt};
     use tokio_tungstenite::tungstenite::Message;
 
-    use super::viewer_membership_event;
+    use super::{leave_sfu_bounded, viewer_membership_event, viewer_stop_reason};
     use crate::events::{Event, StreamMember};
     use crate::stream::StreamMembers;
     use crate::transport::sfu_connection::{SfuConnection, SfuEvent, StreamPeerRole};
@@ -1916,6 +1951,109 @@ mod stream_members_tests {
         );
         assert_eq!(list.host(), Some("host-1"));
         drop(conn);
+    }
+
+    /// mello-sfu holds a stream session when the host drops: the viewer gets
+    /// `host_reconnecting`, and later `host_reconnected` if the host comes
+    /// back. Until stage 6 the viewer stops watching on `host_reconnecting`,
+    /// as on `session_ended` before, and ignores `host_reconnected`.
+    #[tokio::test]
+    async fn host_reconnecting_stops_the_viewer() {
+        let endpoint = stream_sfu(
+            serde_json::json!([{ "user_id": "host-1", "role": "host" }]),
+            vec![
+                serde_json::json!({
+                    "type": "host_reconnecting",
+                    "data": { "user_id": "host-1", "reason": "host_disconnected", "hold_ms": 30000 }
+                }),
+                serde_json::json!({
+                    "type": "host_reconnected",
+                    "data": { "user_id": "host-1", "role": "host" }
+                }),
+            ],
+        )
+        .await;
+        let (conn, _) = join_as_viewer(&endpoint).await;
+
+        let ev = tokio::time::timeout(LIMIT, conn.recv_event())
+            .await
+            .expect("host_reconnecting in time")
+            .expect("event channel open");
+        assert!(
+            matches!(
+                ev,
+                SfuEvent::HostReconnecting { ref user_id, hold_ms: 30000 } if user_id == "host-1"
+            ),
+            "unexpected event {ev:?}"
+        );
+        assert_eq!(
+            viewer_stop_reason(&ev).as_deref(),
+            Some("host_reconnecting")
+        );
+
+        let ev = tokio::time::timeout(LIMIT, conn.recv_event())
+            .await
+            .expect("host_reconnected in time")
+            .expect("event channel open");
+        assert!(
+            matches!(ev, SfuEvent::HostReconnected { ref user_id } if user_id == "host-1"),
+            "unexpected event {ev:?}"
+        );
+        assert_eq!(viewer_stop_reason(&ev), None);
+        assert_eq!(
+            viewer_stop_reason(&SfuEvent::Disconnected {
+                reason: "session_ended".into()
+            })
+            .as_deref(),
+            Some("session_ended")
+        );
+        drop(conn);
+    }
+
+    /// The bounded leave that a host sends on END STREAM reaches the SFU as
+    /// `leave`, so mello-sfu ends the stream for the viewers at once instead
+    /// of holding the session (01-SFU.md section 4.1).
+    #[tokio::test]
+    async fn the_bounded_leave_reaches_the_sfu() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        let (got_leave, leave_seen) = tokio::sync::oneshot::channel();
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            let mut got_leave = Some(got_leave);
+            while let Some(Ok(msg)) = ws.next().await {
+                let Message::Text(t) = msg else { continue };
+                let v: serde_json::Value = serde_json::from_str(&t).expect("client sends JSON");
+                if v["type"] == "leave" {
+                    if let Some(tx) = got_leave.take() {
+                        let _ = tx.send(());
+                    }
+                }
+            }
+        });
+        let conn = tokio::time::timeout(LIMIT, SfuConnection::connect(&endpoint, "token"))
+            .await
+            .expect("connect in time")
+            .expect("connect");
+        leave_sfu_bounded(&conn, "host").await;
+        tokio::time::timeout(LIMIT, leave_seen)
+            .await
+            .expect("the SFU got leave in time")
+            .expect("leave signal");
     }
 
     /// An SFU that sends no membership events to viewers (the contract

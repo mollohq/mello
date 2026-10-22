@@ -146,6 +146,18 @@ pub enum SfuEvent {
     Disconnected {
         reason: String,
     },
+    /// Stream viewer: the host disconnected without a leave. The SFU holds
+    /// the session for `hold_ms` for a host rejoin; the viewer keeps its
+    /// connection (mello-sfu 01-SFU.md section 4.1, session hold).
+    HostReconnecting {
+        user_id: String,
+        hold_ms: u64,
+    },
+    /// Stream viewer: a host joined during the hold. Its media comes on the
+    /// viewer's existing connection.
+    HostReconnected {
+        user_id: String,
+    },
 }
 
 type WsStream =
@@ -1855,6 +1867,42 @@ impl SignalListener {
                     })
                     .await;
                 return false;
+            }
+            "host_reconnecting" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let hold_ms = sig
+                    .data
+                    .get("hold_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                log::info!(
+                    "SFU: host {} reconnecting, session held for {} ms",
+                    user_id,
+                    hold_ms
+                );
+                // The connection stays: the session is held, not ended.
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::HostReconnecting { user_id, hold_ms })
+                    .await;
+            }
+            "host_reconnected" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                log::info!("SFU: host {} reconnected", user_id);
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::HostReconnected { user_id })
+                    .await;
             }
             "left" => {
                 // The SFU acknowledged our `leave` and closes the socket.
