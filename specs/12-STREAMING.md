@@ -394,20 +394,21 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 ## 5. Video Transport (H.264 RTP)
 
-Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking. **ULPFEC** (RFC 5109 XOR parity, PT 127) is optional when negotiated in SDP.
+Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking.
+
+**FEC is off.** The stream offers carry no `ulpfec` payload type, and the SFU does not negotiate ULPFEC (mello-sfu 01-SFU.md §6.1). The stage 4 measurement decides if FEC comes back, end to end. Before, the host sent one parity packet per 10 media packets: no viewer received them (the SFU FEC track had no binding), and the parity plus RTP overhead (about 1.13×) was over the 1.08× pacing ceiling, so the AU queue overflowed. The sender and receiver FEC code stays; it runs only when an answer negotiates PT 127.
 
 | Parameter | Value |
 |-----------|-------|
 | Payload type | 96 (H.264 media) |
-| FEC payload type | 127 (`ulpfec/90000`, RFC 5109 level-0 XOR parity) |
-| FEC SSRC | `media_ssrc + 1` (parallel RTP stream; host offer includes `a=ssrc-group:FEC-FR`; SFU viewer leg uses separate FEC m-line/track) |
+| FEC | Off (no `ulpfec` payload type in the offers) |
 | Clock rate | 90 kHz |
 | Packetization | RFC 6184 mode 1, max payload 1100 bytes |
 | Host output | Annex-B access units (SPS/PPS on every IDR, no B-frames) |
 | RTCP feedback | `nack`, `nack pli`, `goog-remb`, `transport-cc` |
 | Header extension | TWCC (`transport-wide-cc`, id 3) |
 
-**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When ULPFEC is negotiated (`ulpfec/90000` PT 127 in SDP), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). The host offer SDP advertises `a=ssrc-group:FEC-FR media_ssrc (media_ssrc+1)` so intermediaries (SFU/Pion) bind the repair SSRC.
+**Sender (libmello):** bounded AU queue, per-packet leaky-bucket pacing (fragments of a frame are spread across their wire time, with a two-packet-interval lag allowance), a caching NACK responder whose retransmits drain through a priority RTX queue on the pacing worker (rate-accounted, 512-packet cache with 1 s TTL), PLI/REMB RTCP callbacks. Rust sets pacing ceilings via `PacketSink::set_pacing_kbps`. When an answer negotiates ULPFEC (`ulpfec/90000` PT 127), the sender emits one parity packet per group of 10 consecutive media RTP packets (XOR over pre-TWCC-stamp bytes; parity rides PT 127 on `media_ssrc + 1`). No offer negotiates it now.
 
 **TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at `min(manager ceiling, estimator target)`. The estimator target is the host's own estimate for the host-to-SFU hop. It is forwarded to Rust as `GCC_TARGET` feedback, and the stream manager does not apply it to the encoder: the SFU sends the viewer-path capacity as REMB.
 
@@ -437,7 +438,7 @@ The sink exposes `native_rtp_telemetry()`, `poll_video_feedback()` (PLI/REMB), a
 
 When the RTP video track or control channel closes, send attempts return errors that flow through `video_send_fail_total` telemetry counters.
 
-Stream peers use active ICE-TCP like voice peers: a network that blocks UDP can reach the SFU's passive ICE-TCP port. Spec 10 section 7.6 lists the libjuice limits of that path.
+Stream peers use active ICE-TCP like voice peers: a network that blocks UDP can reach the SFU's passive ICE-TCP port. Stream peers also get the same STUN and TURN servers as the voice peer (`get_ice_servers`, `create_stream_peer`'s `ice_servers`); the probe tools pass none. Spec 10 section 7.6 lists the libjuice limits of that path.
 
 ### 6.2.1 Stream membership
 
@@ -445,7 +446,7 @@ The SFU lists the other members of the session in `joined.members`. It then send
 
 | Side | What the client does |
 |---|---|
-| Host | `MemberJoined` with role `viewer` and `MemberLeft` go to the `PacketSink` (`on_viewer_joined`, `on_viewer_left`). |
+| Host | `MemberJoined` with role `viewer` and `MemberLeft` go to the `PacketSink` (`on_viewer_joined`, `on_viewer_left`). A join requests no IDR: `member_joined` comes before the viewer's ICE and DTLS are up. |
 | Viewer | `ViewerState.members` (`stream::StreamMembers`) starts from `joined.members`. Each `MemberJoined` and `MemberLeft` updates it. A change emits `Event::StreamMembersChanged` with the whole list. |
 
 Rules of the viewer list (`mello-core/src/stream/members.rs`):
@@ -454,7 +455,7 @@ Rules of the viewer list (`mello-core/src/stream/members.rs`):
 - The list holds at most one host. A viewer that joined before the host gets `member_joined {role: host}`; that sets the host. A second host entry replaces the first.
 - An SFU that sends no events to viewers leaves the `joined.members` snapshot.
 
-No UI shows the list. The UI viewer count comes from crew state (`viewer_count`). The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
+No UI shows the list. The UI viewer count comes from crew state (`viewer_count`), the length of `stream_meta.viewer_ids`: `watch_stream` adds the viewer, and the host calls `stream_viewer_left {crew_id, viewer_id}` on each `MemberLeft` (`report_stream_viewer_left`). The SFU sends `member_left` only for a viewer that left, not for one that reconnected. The e2e state port reports the list as `stream_members` (`client/src/e2e_state.rs`); `StreamWatchingStopped` clears it.
 
 ### 6.3 Topology
 
@@ -466,7 +467,7 @@ The SFU is the only stream topology. `start_stream` and `watch_stream` always re
 | The crew metadata has `"sfu_enabled": false` (operator kill switch) | `start_stream` returns `SFU_UNAVAILABLE`. |
 | A `watch_stream` session has no SFU endpoint (a record from before the SFU was the only transport) | `SFU_UNAVAILABLE`. |
 
-The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host stops the native host and reports a stream error.
+The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host, or a failed session creation, stops the native host, retracts the advertised stream (`stop_stream` for the crew of the start) and reports a stream error.
 
 ---
 
@@ -484,7 +485,7 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 ### 7.2 Viewer recovery policy
 
 - **Pre-keyframe gating:** All access units before the first keyframe are dropped.
-- **PLI/IDR:** Native receiver sends PLI when gated; host manager also honors viewer-join and queue-pressure keyframe requests.
+- **PLI/IDR:** Native receiver sends PLI when gated; host manager also honors queue-pressure keyframe requests. A late joiner gets the SFU's cached IDR when its PeerConnection connects (mello-sfu 01-SFU.md §6.1), then its own PLI asks for a fresh IDR.
 - **H.264 IDR detection:** Scans all NALs in the access unit for type 5 (IDR), not just the first.
 - **REMB uplink:** Viewer congestion controller drives receive targets; host steps down immediately on severe loss, ramps up slowly (5%/s cap in SFU aggregate mode).
 
@@ -601,9 +602,9 @@ See `plans/STREAM-CAPTURE-QUALITY.md`.
 
 **Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%) or jitter >20 ms steps down 15%; ten consecutive good samples increase by max(100 kbps, 5%). Emits REMB at significant changes or every 2 s heartbeat.
 
-**Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Decreases apply immediately; increases are rate-limited to 5%/s. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale or missing (lost RTCP), the host **holds** the current target — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. A last-viewer-leave is an explicit signal and does restore the configured ceiling for the next viewer. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
+**Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Encoder bitrate changes are coalesced: a target within 5 % of the current bitrate changes nothing (the dead band); a decrease over the dead band applies immediately; an increase waits until 250 ms after the last change, is rate-limited to 5%/s, and applies only over the dead band (the last step to the preset ceiling can be smaller). REMB is polled every 10 ms, so before this the encoder got up to 100 changes per second during a ramp. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale or missing (lost RTCP), the host **holds** the current target — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. A last-viewer-leave is an explicit signal and does restore the configured ceiling for the next viewer. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
 
-In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg), stamps per-leg transport-wide sequences toward viewers, and runs a per-viewer GCC estimator from each viewer's TWCC feedback. Each viewer leg has a token-bucket egress pacer tracking that estimate, and the aggregated minimum (GCC estimates, superseding client REMBs) is forwarded upstream as REMB on the ~1 s tick. The SFU also caches the last complete IDR access unit and replays it to newly wired viewers for instant late-join start.
+In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg) and stamps per-leg transport-wide sequences toward viewers. It runs no estimator and no pacer of its own: the minimum of the fresh viewer REMB values goes upstream as REMB, on arrival and on the ~1 s tick. The SFU caches the last complete IDR access unit and sends it to a viewer when the viewer's PeerConnection connects.
 
 ---
 
@@ -622,7 +623,7 @@ Game audio is wired end-to-end on Windows and macOS:
 | Viewer RTP receive | `RtcpReceivingSession` on the recvonly audio track before `onMessage` (libdatachannel media-receiver pattern) |
 | SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
 | Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS), on the output device chosen for voice (`mello_set_audio_output`; the default device when none is set or the chosen one fails) |
-| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` closes the output device, which drops the queued audio, and drops packets until unmute. Unmute opens the device at the next packet with a fresh decoder. mello-core mutes on `StreamPaused` |
+| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` closes the output device, which drops the queued audio, and drops packets until unmute. Unmute opens the device at the next packet with a fresh decoder. The viewer tick (`client/streaming.rs`) mutes when the pause slot turns paused and unmutes when it turns live, once per change (`pause_audio_mute_change`). A viewer that joins a paused stream gets the pause state from the host and mutes on its first tick |
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path: `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header) → the decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 
@@ -709,7 +710,12 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid.
 2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint, and the `capture` block. For a process target, `hook_allowed_for_game` turns the block and `igdb_id` into `allow_hook` (§3.1.1).
 3. `start_host` creates the libmello video pipeline (capture + preprocess + encoder) and sets up mpsc channels for encoded packets.
-4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop.
+4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop. The `StreamSession` keeps the crew id of the start (`PendingStreamStart.crew_id`).
+5. `start_stream` advertises the stream before the host has started. Every start failure after it (encoder check, native start, SFU connect, join, transport, session creation) calls `stop_stream` for that crew, so no viewer sees a stream that does not exist.
+
+### Nakama reconnect
+
+The backend removes the stream records when the host's realtime socket ends (`OnSessionEnd` → `StreamCleanupUser`). The SFU session and the encoder keep running. After the reconnect, `resync_after_reconnect` calls `start_stream` with `crew_id` and `resume_session_id` (the live session). The backend restores the same session (specs/04-BACKEND.md §5). When it cannot, no viewer can find the stream, so the host ends it and reports a stream error. A start still on its thread during the reconnect is not re-advertised.
 
 ### Viewer start
 
@@ -723,7 +729,7 @@ The host captures cursor state (position, visibility, shape RGBA) alongside vide
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
+Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. `stop_stream` goes to the crew in `StreamSession.crew_id`, not to the crew the UI shows. The backend accepts it only from the host. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
 
 ---
 
@@ -782,6 +788,16 @@ Four of these carry more weight than the rest:
 - **`freeze_n` / `freeze_ms`.** A freeze is a present gap over 150 ms, counted
   once per stall and extended rather than re-counted per tick. Every other
   viewer metric is a proxy; this is the thing the user actually experiences.
+  A present counts as a frame only when a frame callback delivered a new
+  frame (`delivered_frames`); a present of an unchanged frame does not end a
+  gap and does not count in `present_fps`. Gaps while the host is paused or
+  idle do not count. Idle: the pipeline re-encodes the last picture at
+  2 fps (500 ms gaps) because the capture delivers nothing new. The host
+  reads `idle_repeat_frames` on the 1 s manager tick and sends
+  `[0x04, 0x04, idle]` on the reliable control channel on each change, and
+  to a viewer that joins while idle. The flag arrives up to about 1 s after
+  the keepalive starts, so the first keepalive gap of a static scene can
+  still count as one freeze.
 
 Payload keys are abbreviated to stay inside the cap as the field set grows; a
 unit test sizes the worst-case host payload against it.

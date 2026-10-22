@@ -160,6 +160,13 @@ const VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS: u64 = 500;
 const FEEDBACK_POLL_INTERVAL_MS: u64 = 10;
 const REMB_STALE_SECS: u64 = 3;
 const REMB_INCREASE_MAX_PER_SEC: f32 = 0.05;
+/// At most one encoder bitrate increase per window. A decrease over the dead
+/// band applies at once. REMB arrives on a 10 ms poll, and each encoder
+/// reconfigure costs the encoder control path, so per-tick changes are not
+/// wanted.
+const BITRATE_CHANGE_MIN_INTERVAL: Duration = Duration::from_millis(250);
+/// A target within this fraction of the current bitrate changes nothing.
+const BITRATE_DEAD_BAND_PERCENT: u64 = 5;
 
 #[derive(Clone, Copy)]
 struct ViewerRembState {
@@ -212,6 +219,10 @@ pub fn capture_state_reason(state: u32) -> &'static str {
 pub struct StreamSession {
     pub session_id: String,
     pub mode: String,
+    /// The crew the stream is advertised in. END STREAM and the re-advertise
+    /// after a Nakama reconnect use it, not the crew the UI shows now.
+    /// Empty for sessions that no crew advertises (tools).
+    pub crew_id: String,
     stop_tx: Option<oneshot::Sender<()>>,
     manager_task: Option<tokio::task::JoinHandle<()>>,
     /// Set by the manager when every capture method failed. Taken by the
@@ -229,6 +240,7 @@ impl StreamSession {
         Self {
             session_id,
             mode,
+            crew_id: String::new(),
             stop_tx: Some(stop_tx),
             manager_task: Some(manager_task),
             capture_failed: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -246,6 +258,12 @@ impl StreamSession {
         let mut session = Self::new(session_id, mode, stop_tx, manager_task);
         session.capture_failed = capture_failed;
         session
+    }
+
+    /// Set the crew the stream is advertised in.
+    pub fn with_crew_id(mut self, crew_id: impl Into<String>) -> Self {
+        self.crew_id = crew_id.into();
+        self
     }
 
     /// The flag the manager sets when every capture method failed.
@@ -320,6 +338,9 @@ pub struct StreamManager {
     max_bitrate_kbps: u32,
     viewer_remb: HashMap<String, ViewerRembState>,
     remb_increase_last_at: Instant,
+    /// The last encoder bitrate change. Increases wait
+    /// `BITRATE_CHANGE_MIN_INTERVAL` after it.
+    last_bitrate_change_at: Instant,
     audio_seq: AtomicU16,
     last_queue_keyframe_request: Instant,
     // Separate cooldown clocks per request class: a 2s queue-pressure
@@ -375,6 +396,14 @@ pub struct StreamManager {
     last_manager_sample: ManagerTelemetrySnapshot,
     last_manager_sample_at: Instant,
     drop_delta_until_keyframe: bool,
+    /// The capture delivers nothing new and the pipeline re-encodes the last
+    /// picture at 2 fps (idle keepalive). Viewers learn it on the control
+    /// channel and do not count the keepalive gaps as freezes.
+    host_idle: bool,
+    /// `idle_repeat_frames` at the last 1 s tick.
+    idle_tick_last_repeats: u64,
+    /// `idle_repeat_frames` as `check_capture_state` last read it.
+    idle_repeats_seen: u64,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -419,6 +448,7 @@ impl StreamManager {
             max_bitrate_kbps,
             viewer_remb: HashMap::new(),
             remb_increase_last_at: Instant::now(),
+            last_bitrate_change_at: Instant::now() - BITRATE_CHANGE_MIN_INTERVAL,
             config,
             input: Arc::new(InputPassthroughStub),
             video_rx,
@@ -462,6 +492,9 @@ impl StreamManager {
             last_manager_sample: ManagerTelemetrySnapshot::default(),
             last_manager_sample_at: Instant::now(),
             drop_delta_until_keyframe: false,
+            host_idle: false,
+            idle_tick_last_repeats: 0,
+            idle_repeats_seen: 0,
         }
     }
 
@@ -515,6 +548,14 @@ impl StreamManager {
         Some(self.clamp_bitrate_kbps((min_bps / 1_000).max(1)))
     }
 
+    /// True when `target_kbps` differs from the current bitrate by at least
+    /// the dead band.
+    fn outside_dead_band(&self, target_kbps: u32) -> bool {
+        let current = u64::from(self.current_bitrate_kbps);
+        let diff = u64::from(target_kbps.abs_diff(self.current_bitrate_kbps));
+        diff * 100 >= current * BITRATE_DEAD_BAND_PERCENT
+    }
+
     async fn apply_remb_aggregate(&mut self, now: Instant) {
         self.expire_stale_remb(now);
         let Some(desired_kbps) = self.aggregate_remb_target_kbps(now) else {
@@ -527,13 +568,21 @@ impl StreamManager {
 
         let current_kbps = self.current_bitrate_kbps;
         if desired_kbps <= current_kbps {
-            if self.apply_bitrate_kbps(desired_kbps) {
+            // A decrease over the dead band applies at once: the viewers
+            // lose packets now. A smaller one changes nothing.
+            if self.outside_dead_band(desired_kbps) && self.apply_bitrate_kbps(desired_kbps) {
+                self.last_bitrate_change_at = now;
                 self.refresh_pacing_target().await;
             }
             self.remb_increase_last_at = now;
             return;
         }
 
+        // An increase waits for the window. The increase clock is not reset
+        // while it waits, so the allowed step grows with the wait (5 %/s).
+        if now.duration_since(self.last_bitrate_change_at) < BITRATE_CHANGE_MIN_INTERVAL {
+            return;
+        }
         let elapsed_secs = now
             .duration_since(self.remb_increase_last_at)
             .as_secs_f32()
@@ -542,7 +591,13 @@ impl StreamManager {
             .round()
             .max(1.0) as u32;
         let capped_kbps = current_kbps.saturating_add(max_step_kbps).min(desired_kbps);
+        // The last step to the preset ceiling can be smaller than the dead
+        // band; without it the stream stays up to 5 % under the ceiling.
+        if !self.outside_dead_band(capped_kbps) && capped_kbps != self.max_bitrate_kbps {
+            return;
+        }
         if self.apply_bitrate_kbps(capped_kbps) {
+            self.last_bitrate_change_at = now;
             self.refresh_pacing_target().await;
         }
         self.remb_increase_last_at = now;
@@ -701,6 +756,7 @@ impl StreamManager {
         // Sticky in the capture layer; kept sticky here so a later read can
         // never walk it back.
         self.target_exited_seen |= stats.target_exited != 0;
+        self.idle_repeats_seen = stats.idle_repeat_frames;
 
         if stats.capture_state != self.capture_state_last {
             log::info!(
@@ -760,6 +816,34 @@ impl StreamManager {
                 "headroom recovered, restoring"
             }
         );
+    }
+
+    /// The idle state from the keepalive counter, read on the 1 s tick.
+    /// Returns the new state on a change. No FFI, so tests drive it.
+    fn observe_idle(&mut self, idle_repeats_total: u64) -> Option<bool> {
+        let idle = idle_repeats_total > self.idle_tick_last_repeats;
+        self.idle_tick_last_repeats = idle_repeats_total;
+        if idle == self.host_idle {
+            return None;
+        }
+        self.host_idle = idle;
+        Some(idle)
+    }
+
+    /// Tell viewers when the idle keepalive starts and stops, on change
+    /// only, like the pause state.
+    async fn tick_host_idle(&mut self) {
+        let Some(idle) = self.observe_idle(self.idle_repeats_seen) else {
+            return;
+        };
+        log::info!(
+            "Stream host idle: {} (the capture {} new frames)",
+            idle,
+            if idle { "delivers no" } else { "delivers" }
+        );
+        self.sink
+            .send_control(&super::pause::idle_message(idle))
+            .await;
     }
 
     /// Broadcast the pause state on the reliable control channel, both wire
@@ -979,6 +1063,7 @@ impl StreamManager {
                     self.tick_framerate_ladder();
                     self.check_capture_state();
                     self.tick_stream_pause().await;
+                    self.tick_host_idle().await;
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
@@ -1012,20 +1097,21 @@ impl StreamManager {
     async fn handle_viewer_joined(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
         self.sink.on_viewer_joined(viewer_id).await;
-        self.manager_keyframe_req_viewer_total =
-            self.manager_keyframe_req_viewer_total.saturating_add(1);
-        log::info!(
-            "Stream manager viewer joined: {} — requesting IDR",
-            viewer_id
-        );
-        self.request_host_keyframe_with_cooldown(
-            "viewer_join",
-            Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
-        );
+        // No IDR here. `member_joined` comes before the viewer's ICE and DTLS
+        // are up, so an IDR now does not reach the viewer, and its cooldown
+        // delays the viewer's own PLI. The SFU sends its cached IDR when the
+        // viewer connects, and the viewer's PLI asks for a fresh one.
+        log::info!("Stream manager viewer joined: {}", viewer_id);
         // Late join into a paused stream: tell the newcomer at once, or they
         // stare at a black frame instead of the pause card.
         if self.pause.is_paused() {
             self.send_pause_state(true).await;
+        }
+        // Same for the idle keepalive: the newcomer must not count its gaps.
+        if self.host_idle {
+            self.sink
+                .send_control(&super::pause::idle_message(true))
+                .await;
         }
     }
 
@@ -1037,6 +1123,7 @@ impl StreamManager {
             // viewer starts at full quality. Distinct from stale-REMB hold:
             // an empty map after an explicit leave is real, not packet loss.
             if self.apply_bitrate_kbps(self.max_bitrate_kbps) {
+                self.last_bitrate_change_at = Instant::now();
                 self.refresh_pacing_target().await;
             }
             return;
@@ -2065,6 +2152,112 @@ mod tests {
         std::mem::forget(mgr);
     }
 
+    fn remb_test_manager(sink: Arc<FakeSink>) -> StreamManager {
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink,
+            config,
+            video_rx,
+            audio_rx,
+        )
+    }
+
+    fn set_remb(mgr: &mut StreamManager, bitrate_bps: u32, at: Instant) {
+        mgr.viewer_remb.insert(
+            "viewer".to_string(),
+            ViewerRembState {
+                bitrate_bps,
+                updated_at: at,
+            },
+        );
+    }
+
+    /// REMB arrives on the 10 ms feedback poll. The encoder used to get a
+    /// new bitrate on every poll during a ramp (up to 100 per second).
+    #[test]
+    fn remb_ramp_changes_the_encoder_at_most_once_per_250_ms() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let start = Instant::now();
+        let mut changes: Vec<(Duration, u32, u32)> = Vec::new();
+        for tick in 0..=300u64 {
+            let now = start + Duration::from_millis(tick * 10);
+            set_remb(&mut mgr, 8_000_000, now);
+            let before = mgr.current_bitrate_kbps;
+            rt.block_on(mgr.apply_remb_aggregate(now));
+            if mgr.current_bitrate_kbps != before {
+                changes.push((now - start, before, mgr.current_bitrate_kbps));
+            }
+        }
+
+        assert!(
+            mgr.current_bitrate_kbps > 3_000,
+            "the ramp must still go up: {changes:?}"
+        );
+        assert!(
+            changes.len() <= 12,
+            "{} encoder changes in 3 s: {changes:?}",
+            changes.len()
+        );
+        for pair in changes.windows(2) {
+            assert!(
+                pair[1].0 - pair[0].0 >= Duration::from_millis(250),
+                "two changes under 250 ms apart: {changes:?}"
+            );
+        }
+        for (_, before, after) in &changes {
+            assert!(
+                u64::from(after - before) * 100 >= u64::from(*before) * 5
+                    || *after == mgr.max_bitrate_kbps,
+                "a change inside the 5 % dead band: {changes:?}"
+            );
+        }
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn remb_decrease_inside_the_dead_band_changes_nothing() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let now = Instant::now();
+        set_remb(&mut mgr, 2_900_000, now);
+
+        rt.block_on(mgr.apply_remb_aggregate(now));
+
+        assert_eq!(mgr.current_bitrate_kbps, 3_000);
+        std::mem::forget(mgr);
+    }
+
+    #[test]
+    fn remb_decrease_over_the_dead_band_applies_right_after_an_increase() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        mgr.current_bitrate_kbps = 3_000;
+        let now = Instant::now();
+        mgr.last_bitrate_change_at = now;
+        set_remb(&mut mgr, 2_000_000, now);
+
+        rt.block_on(mgr.apply_remb_aggregate(now));
+
+        assert_eq!(mgr.current_bitrate_kbps, 2_000);
+        std::mem::forget(mgr);
+    }
+
     #[test]
     fn remb_table_driven_aggregation() {
         struct Case {
@@ -2229,6 +2422,66 @@ mod tests {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
         ));
+        std::mem::forget(mgr);
+    }
+
+    /// The host tells viewers when the idle keepalive starts and stops, once
+    /// per change, and tells a viewer that joins during it.
+    #[test]
+    fn idle_keepalive_is_sent_on_change_and_to_a_late_joiner() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let sink = Arc::new(FakeSink::new());
+        let mut mgr = remb_test_manager(sink.clone());
+
+        for total in [0u64, 0, 2, 4, 6] {
+            mgr.idle_repeats_seen = total;
+            rt.block_on(mgr.tick_host_idle());
+        }
+        rt.block_on(mgr.handle_viewer_joined("late-viewer"));
+        for total in [6u64, 6] {
+            mgr.idle_repeats_seen = total;
+            rt.block_on(mgr.tick_host_idle());
+        }
+
+        let control = sink.control.lock().expect("lock").clone();
+        assert_eq!(
+            control,
+            vec![
+                vec![0x04, 0x04, 0x01],
+                vec![0x04, 0x04, 0x01],
+                vec![0x04, 0x04, 0x00]
+            ],
+            "idle on, the late joiner's copy, idle off"
+        );
+        std::mem::forget(mgr);
+    }
+
+    /// `member_joined` comes before the viewer's ICE and DTLS are up. An IDR
+    /// on it does not reach the viewer, and its cooldown used to swallow the
+    /// viewer's own PLI that came right after.
+    #[test]
+    fn a_viewer_join_alone_forces_no_idr() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        let cooldown_before = mgr.last_viewer_keyframe_request;
+
+        rt.block_on(mgr.handle_viewer_joined("viewer"));
+
+        assert_eq!(mgr.last_viewer_keyframe_request, cooldown_before);
+        assert_eq!(mgr.manager_keyframe_req_viewer_total, 0);
+        assert!(
+            mgr.request_host_keyframe_with_cooldown(
+                "native_pli",
+                Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
+            ),
+            "the viewer's PLI right after its join must reach the encoder"
+        );
         std::mem::forget(mgr);
     }
 

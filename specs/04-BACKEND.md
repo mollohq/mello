@@ -117,8 +117,9 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `change_crew_role` | Yes | Promotes/demotes a member between admin (1) and member (2). Requires owner role (state 0). |
 | `kick_crew_member` | Yes | Removes a member from the crew. Admins can kick members; owner can kick anyone except self. |
 | `get_ice_servers` | Yes | Returns STUN server URLs + TURN server URLs with time-limited HMAC credentials (24h TTL). |
-| `start_stream` | Yes | Announces stream start to crew members via crew state stream. The response carries the `capture` block: the hook policy (§4.2). |
-| `stop_stream` | Yes | Announces stream end. |
+| `start_stream` | Yes | Announces stream start to crew members via crew state stream. The response carries the `capture` block: the hook policy (§4.2). With `resume_session_id`, it re-advertises a stream that the host's SFU session still carries after a Nakama realtime reconnect: the records are still there, or `StreamCleanupUser` removed them less than 10 min ago and the `stream_resume` record restores them (same session id and endpoint; the cleanup's `stream_session` ledger event is removed). The response then has `resumed: true`. Any other resume returns NOT_FOUND (5). |
+| `stop_stream` | Yes | Announces stream end. Only the host of the crew's stream can stop it; another caller gets PERMISSION_DENIED (7) and nothing changes. The `stream_session` ledger event takes `peak_viewers` and every viewer that watched (`stream_meta.peak_viewers`, `watched_ids`). |
+| `stream_viewer_left` | Yes | `{crew_id, viewer_id}`. The host calls it on the SFU `member_left` of a viewer. Removes the viewer from `stream_meta.viewer_ids`, which `watch_stream` fills; crew state `viewer_count` is its length. Only the host can call it (PERMISSION_DENIED otherwise). |
 | `upload_thumbnail` | Yes | Stores stream thumbnail (base64) in Nakama storage. |
 | `post_clip` | Yes | Stores clip metadata in the durable per-crew `crew_clips` document (capped, outside the 7-day ledger trim). Pushes notification to crew. |
 | `crew_feed` | Yes | Server-curated primary feed: merges ledger + durable clips/recaps, returns `this_week` + `memory` sections with per-entry `role`/`size` and a server-emitted `locked` card for non-premium users. |
@@ -331,6 +332,7 @@ Nakama's key-value storage is used for data that doesn't fit built-in models:
 | `crew_clips` | `{crew_id}` | System user (`""`) | Durable capped list of clip metadata (outside ledger trim) | `post_clip`, `crew_clips`, `crew_feed`, `clip_upload_complete` |
 | `crew_recaps` | `{crew_id}` | System user (`""`) | Durable list of weekly recaps | `WeeklyRecapJob`, `crew_recaps`, `crew_feed` |
 | `crew_stream_sessions` | `{crew_id}` | System user (`""`) | Durable capped list of stream replays (outside ledger trim) | `stop_stream`, snapshot backfill, `crew_feed` |
+| `stream_resume` | `{host user_id}` | System user (`""`) | The stream records that `StreamCleanupUser` removed, the ledger event id and the time. Read 0, write 0. | `StreamCleanupUser` writes, `start_stream` with `resume_session_id` reads and deletes |
 | `discover` | `curation` | System user | Featured and hidden crew lists (§4.3). Read 0, write 0. | `discover_crews`, `admin_discover_curation_get`, `admin_discover_curation_set` |
 
 **Cloud object storage (S3/R2):** Clip media files (MP4/AAC) are stored in an S3-compatible bucket (`mello-clips`). Clients upload directly via presigned PUT URLs — no data passes through Nakama. See [CLIPS.md §6](./features/CLIPS.md) for the full flow.

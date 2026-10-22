@@ -499,12 +499,10 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
 ) const {
     rtc::Description::Video video(mid, direction);
     video.addH264Codec(kVideoPayloadType, kVideoFmtp);
-    // libdatachannel 0.24.1 has no addUlpfecCodec; mirror addH264Codec's
-    // mechanics (RtpMap from "PT format/rate", no rtcp-fb on the FEC PT).
-    video.addRtpMap(rtc::Description::Media::RtpMap(
-        std::to_string(kUlpfecPayloadType) + " " + kUlpfecFormatName
-        + "/90000"
-    ));
+    // No ulpfec payload type: FEC is off until the stage 4 measurement
+    // (specs/12-STREAMING.md section 5). The SFU answered ulpfec, so the
+    // host sent 10 % parity that no viewer received and that overflowed the
+    // pacer. Without ulpfec in the answer, fec_supported_ stays false.
     if (auto* map = video.rtpMap(kVideoPayloadType)) {
         map->addFeedback("nack");
         map->addFeedback("nack pli");
@@ -519,14 +517,6 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
         const uint32_t ssrc = video_ssrc_ != 0 ? video_ssrc_ : generate_ssrc();
         const std::string cname = video_cname_.empty() ? generate_cname() : video_cname_;
         video.addSSRC(ssrc, cname, peer_id_, "video");
-        // ULPFEC parity uses SSRC+1 on the same m-line. Advertise FEC-FR so
-        // Pion (SFU) binds the repair SSRC instead of logging it as unhandled.
-        const uint32_t fec_ssrc = ssrc + 1;
-        video.addSSRC(fec_ssrc, cname, peer_id_, "video");
-        video.addAttribute(
-            "ssrc-group:FEC-FR " + std::to_string(ssrc) + " "
-            + std::to_string(fec_ssrc)
-        );
     }
     return video;
 }

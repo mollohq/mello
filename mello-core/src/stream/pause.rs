@@ -16,6 +16,24 @@
 pub const PAUSE_MESSAGE_TYPE: u8 = 0x04;
 /// Control-message subtype for stream pause.
 pub const PAUSE_MESSAGE_SUBTYPE: u8 = 0x03;
+/// Control-message subtype for the host idle keepalive: `[0x04, 0x04, idle]`,
+/// idle 1 when the capture delivers no new frames and the pipeline re-encodes
+/// the last picture at 2 fps. The viewer does not count those gaps as
+/// freezes. Sent on change, and to a viewer that joins while idle.
+pub const IDLE_MESSAGE_SUBTYPE: u8 = 0x04;
+
+/// Encode the host idle state for the reliable control channel.
+pub fn idle_message(idle: bool) -> [u8; 3] {
+    [PAUSE_MESSAGE_TYPE, IDLE_MESSAGE_SUBTYPE, u8::from(idle)]
+}
+
+/// Parse a host idle datagram. Anything else is not an idle message.
+pub fn parse_idle_message(data: &[u8]) -> Option<bool> {
+    match data {
+        [t, s, idle] if *t == PAUSE_MESSAGE_TYPE && *s == IDLE_MESSAGE_SUBTYPE => Some(*idle != 0),
+        _ => None,
+    }
+}
 
 /// Consecutive 1 Hz manager ticks with an unavailable capture target before
 /// viewers are told the stream paused. Hides quick ALT-Tabs; a real tab-out

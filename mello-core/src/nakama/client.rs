@@ -100,6 +100,13 @@ impl NakamaClient {
         self.set_token(Some(token.to_string()));
     }
 
+    /// Tests: a signed-in client with an active crew, without a server.
+    #[cfg(test)]
+    pub(crate) fn set_test_session(&mut self, token: &str, active_crew_id: Option<&str>) {
+        self.set_token(Some(token.to_string()));
+        self.active_crew_id = active_crew_id.map(String::from);
+    }
+
     fn bearer(&self) -> Result<String> {
         self.token().ok_or(Error::NotConnected)
     }

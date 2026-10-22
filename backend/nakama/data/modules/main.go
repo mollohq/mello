@@ -284,6 +284,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("update_stream_resolution", UpdateStreamResolutionRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("stream_viewer_left", StreamViewerLeftRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — crew events (event ledger, catch-up, moments)

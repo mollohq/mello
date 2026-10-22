@@ -519,6 +519,27 @@ TEST_F(PeerRtpRolesTest, StreamViewerOfferContainsRecvonlyH264) {
     mello_peer_destroy(viewer);
 }
 
+// FEC is off until the stage 4 measurement (specs/12-STREAMING.md section
+// 5). An offer without ulpfec gets an answer without it, so the host sends
+// no parity.
+TEST_F(PeerRtpRolesTest, StreamOffersCarryNoUlpfec) {
+    const MelloPeerMediaRole roles[] = {
+        MELLO_PEER_MEDIA_ROLE_STREAM_HOST,
+        MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER,
+    };
+    for (const auto role : roles) {
+        auto* peer = mello_peer_create_for_role(nullptr, "peer", role);
+        ASSERT_NE(peer, nullptr);
+        mello_peer_set_ice_servers(peer, nullptr, 0);
+        const char* offer_ptr = mello_peer_create_offer(peer);
+        ASSERT_NE(offer_ptr, nullptr);
+        const std::string offer(offer_ptr);
+        EXPECT_EQ(offer.find("ulpfec"), std::string::npos) << offer;
+        EXPECT_EQ(offer.find("FEC-FR"), std::string::npos) << offer;
+        mello_peer_destroy(peer);
+    }
+}
+
 TEST_F(PeerRtpRolesTest, HostOfferViewerAnswerNegotiates) {
     auto pair = negotiate_host_offer();
     ASSERT_NE(pair.host, nullptr);

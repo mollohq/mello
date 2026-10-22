@@ -27,6 +27,9 @@ pub(super) struct FrameCallbackData {
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     pub frame_lifecycle: Arc<std::sync::atomic::AtomicU8>,
     pub surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// One count per frame a frame callback delivered (native or CPU). A
+    /// present that leaves it unchanged delivered no new frame.
+    pub delivered_frames: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// State for the viewer-side streaming pipeline.
@@ -101,6 +104,13 @@ pub(super) struct ViewerState {
     pub stats_last_frames_presented: u64,
     pub stats_last_freeze_count: u64,
     pub stats_last_freeze_ms: u64,
+    /// Shared with the frame callbacks (`FrameCallbackData::delivered_frames`).
+    pub delivered_frames: Arc<std::sync::atomic::AtomicU64>,
+    /// `delivered_frames` at the last present that counted as a frame.
+    pub last_delivered_frames: u64,
+    /// The game audio playout is muted for the host's pause
+    /// (`mello_stream_viewer_set_audio_muted`).
+    pub audio_muted: bool,
 }
 
 /// A present gap longer than this counts as a visible freeze. Two 60fps frame
@@ -108,6 +118,63 @@ pub(super) struct ViewerState {
 /// still well under the 600ms AU hard-age cap, so it fires before the receiver
 /// gives up on an access unit rather than after.
 pub(super) const FREEZE_THRESHOLD_MS: u64 = 150;
+
+/// The mute call the viewer makes for the host's pause state: `Some(true)`
+/// when the stream pauses, `Some(false)` when it resumes, `None` when the
+/// playout already matches.
+pub(super) fn pause_audio_mute_change(paused: bool, audio_muted: &mut bool) -> Option<bool> {
+    if paused == *audio_muted {
+        return None;
+    }
+    *audio_muted = paused;
+    Some(paused)
+}
+
+/// True when a present delivered a new frame: the present returned true and
+/// a frame callback ran since the last counted frame. A present of an
+/// unchanged frame is not a frame and does not end a freeze.
+pub(super) fn present_is_new_frame(
+    presented: bool,
+    delivered: u64,
+    last_delivered: &mut u64,
+) -> bool {
+    if !presented || delivered == *last_delivered {
+        return false;
+    }
+    *last_delivered = delivered;
+    true
+}
+
+/// One stream tick of the freeze clock. `held` is true while the host holds
+/// the picture on purpose: paused, or idle (the capture delivers no new
+/// frames and the 2 fps keepalive gives 500 ms gaps). A held picture is not
+/// a stall: the clock restarts and nothing accrues. Returns true when the
+/// caller must restart its last-frame time.
+pub(super) fn freeze_clock_tick(
+    held: bool,
+    first_frame_seen: bool,
+    gap_ms: u64,
+    in_freeze: &mut bool,
+    freeze_count: &mut u64,
+    freeze_ms_total: &mut u64,
+    accounted_ms: &mut u64,
+) -> bool {
+    if held {
+        *in_freeze = false;
+        *accounted_ms = 0;
+        return true;
+    }
+    if first_frame_seen {
+        note_present_gap(
+            gap_ms,
+            in_freeze,
+            freeze_count,
+            freeze_ms_total,
+            accounted_ms,
+        );
+    }
+    false
+}
 
 /// Fold a present-loop observation into the freeze counters.
 ///
@@ -193,6 +260,8 @@ impl Drop for ViewerState {
 pub(super) struct PauseSlot {
     paused: std::sync::atomic::AtomicU8,
     reason: std::sync::atomic::AtomicU8,
+    /// The host's idle keepalive state (`[0x04, 0x04, idle]`).
+    host_idle: std::sync::atomic::AtomicU8,
 }
 
 impl PauseSlot {
@@ -200,7 +269,13 @@ impl PauseSlot {
         Self {
             paused: std::sync::atomic::AtomicU8::new(0),
             reason: std::sync::atomic::AtomicU8::new(0),
+            host_idle: std::sync::atomic::AtomicU8::new(0),
         }
+    }
+
+    /// True while the host re-encodes the last picture (idle keepalive).
+    pub fn is_host_idle(&self) -> bool {
+        self.host_idle.load(std::sync::atomic::Ordering::Acquire) != 0
     }
 
     pub fn is_paused(&self) -> bool {
@@ -217,8 +292,8 @@ impl PauseSlot {
     }
 }
 
-/// Reliable-control data callback. Only pause messages (`0x04/0x03`) are
-/// handled; everything else (cursor future use, stray binary pongs) is
+/// Reliable-control data callback. Only pause (`0x04/0x03`) and host idle
+/// (`0x04/0x04`) messages are handled; everything else (cursor future use, stray binary pongs) is
 /// ignored fast so the hot data path never blocks here.
 pub(super) unsafe extern "C" fn stream_control_data_callback(
     user_data: *mut std::ffi::c_void,
@@ -230,6 +305,12 @@ pub(super) unsafe extern "C" fn stream_control_data_callback(
         return;
     }
     let bytes = std::slice::from_raw_parts(data, size as usize);
+    if let Some(idle) = crate::stream::pause::parse_idle_message(bytes) {
+        let slot = &*(user_data as *const PauseSlot);
+        slot.host_idle
+            .store(u8::from(idle), std::sync::atomic::Ordering::Release);
+        return;
+    }
     if let Some((paused, reason)) = crate::stream::pause::parse_pause_message_full(bytes) {
         let slot = &*(user_data as *const PauseSlot);
         slot.paused
@@ -507,6 +588,8 @@ pub(super) unsafe extern "C" fn on_viewer_frame(
             .store(false, std::sync::atomic::Ordering::Release);
         data.frame_lifecycle
             .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
+        data.delivered_frames
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -545,6 +628,8 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
             .store(false, std::sync::atomic::Ordering::Release);
         data.frame_lifecycle
             .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
+        data.delivered_frames
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -555,6 +640,78 @@ mod tests {
     #[test]
     fn max_au_polls_per_tick_is_bounded() {
         assert_eq!(MAX_AU_POLLS_PER_TICK, 32);
+    }
+
+    /// A pause message on the control channel mutes the game audio once; the
+    /// resume unmutes it once. This is the state change that drives
+    /// `mello_stream_viewer_set_audio_muted` in the viewer tick; libmello has
+    /// no getter, so the C call itself is not observed here.
+    #[test]
+    fn the_pause_message_mutes_and_the_resume_unmutes_the_game_audio() {
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        let mut audio_muted = false;
+        let mut deliver = |msg: &[u8]| {
+            // SAFETY: the slot outlives the call.
+            unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+            pause_audio_mute_change(slot.is_paused(), &mut audio_muted)
+        };
+
+        // Paused, as the host sends it to a viewer that joins late: v2 with
+        // the reason, then v1.
+        assert_eq!(deliver(&[0x04, 0x03, 0x01, 0x01]), Some(true));
+        assert_eq!(deliver(&[0x04, 0x03, 0x01]), None, "already muted");
+        assert_eq!(deliver(&[0x04, 0x04, 0x01]), None, "idle is not a pause");
+        assert_eq!(deliver(&[0x04, 0x03, 0x00, 0x00]), Some(false));
+        assert_eq!(deliver(&[0x04, 0x03, 0x00]), None, "already unmuted");
+    }
+
+    /// The host's idle message sets the slot's idle flag and leaves the
+    /// pause state alone.
+    #[test]
+    fn the_idle_control_message_sets_the_host_idle_flag() {
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        for (msg, idle) in [([0x04u8, 0x04, 0x01], true), ([0x04, 0x04, 0x00], false)] {
+            // SAFETY: the slot outlives the call.
+            unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+            assert_eq!(slot.is_host_idle(), idle);
+            assert!(!slot.is_paused());
+        }
+    }
+
+    /// The 2 fps idle keepalive gives 500 ms present gaps. While the host is
+    /// idle they are not freezes; the same gaps from a live host are.
+    #[test]
+    fn idle_keepalive_gaps_are_not_freezes() {
+        for (held, want) in [(true, 0u64), (false, 1)] {
+            let (mut in_freeze, mut count, mut total, mut accounted) = (false, 0u64, 0u64, 0u64);
+            let restart = freeze_clock_tick(
+                held,
+                true,
+                500,
+                &mut in_freeze,
+                &mut count,
+                &mut total,
+                &mut accounted,
+            );
+            assert_eq!(restart, held);
+            assert_eq!(count, want, "held={held}");
+        }
+    }
+
+    /// A present that delivered no new frame (no frame callback ran) is not
+    /// a frame: it must not reset the freeze clock or count in present_fps.
+    #[test]
+    fn a_present_of_an_unchanged_frame_is_not_a_frame() {
+        let mut last = 0u64;
+        assert!(present_is_new_frame(true, 1, &mut last));
+        assert!(
+            !present_is_new_frame(true, 1, &mut last),
+            "same frame again"
+        );
+        assert!(!present_is_new_frame(false, 2, &mut last), "no present");
+        assert!(present_is_new_frame(true, 2, &mut last));
     }
 
     /// Normal inter-frame jitter must not register as a freeze, or the metric

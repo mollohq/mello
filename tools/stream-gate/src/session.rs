@@ -147,8 +147,9 @@ impl Host {
                 .await
                 .map_err(|e| format!("host connect: {e}"))?;
             // SAFETY: ctx is live.
-            let peer = unsafe { SfuConnection::create_stream_peer(ctx.0, StreamPeerRole::Host) }
-                .map_err(|e| format!("host peer: {e}"))?;
+            let peer =
+                unsafe { SfuConnection::create_stream_peer(ctx.0, StreamPeerRole::Host, &[]) }
+                    .map_err(|e| format!("host peer: {e}"))?;
             conn.join_stream(peer, session_id, "host")
                 .await
                 .map_err(|e| format!("host join: {e}"))?;
@@ -501,7 +502,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
             .await
             .map_err(|e| format!("{} connect: {e}", spec.role))?;
         // SAFETY: ctx is live.
-        let peer = unsafe { SfuConnection::create_stream_peer(ctx.0, StreamPeerRole::Viewer) }
+        let peer = unsafe { SfuConnection::create_stream_peer(ctx.0, StreamPeerRole::Viewer, &[]) }
             .map_err(|e| format!("{} peer: {e}", spec.role))?;
         conn.join_stream(peer, &spec.session_id, "viewer")
             .await

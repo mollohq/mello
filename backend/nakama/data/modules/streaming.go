@@ -33,6 +33,11 @@ type StartStreamRequest struct {
 	// host's session. Viewers join the host's region (watch_stream). An empty
 	// or unknown value falls back (selectSFURegion).
 	PreferredRegion string `json:"preferred_region,omitempty"`
+	// ResumeSessionID re-advertises a stream that the host's SFU session
+	// still carries, after a Nakama realtime reconnect removed its records
+	// (OnSessionEnd). The server restores only what it recorded for this
+	// host and this session; it does not start a new session.
+	ResumeSessionID string `json:"resume_session_id,omitempty"`
 }
 
 // CapturePolicy is the backend `capture` block in the start_stream response
@@ -116,7 +121,22 @@ func loadCapturePolicy(ctx context.Context, nk runtime.NakamaModule) CapturePoli
 const (
 	MaxSFUViewers    = 100
 	StreamSessionCol = "stream_sessions"
+	// StreamResumeCollection holds, per host user, the records that the
+	// session-end cleanup removed, so the host can re-advertise the same
+	// stream after a Nakama reconnect. Server-only.
+	StreamResumeCollection = "stream_resume"
+	// streamResumeWindow is how long after the cleanup a host can
+	// re-advertise its stream.
+	streamResumeWindow = 10 * time.Minute
 )
+
+// streamResumeRecord is what cleanupStreamIfHost removed for one stream.
+type streamResumeRecord struct {
+	Meta          StreamMeta        `json:"meta"`
+	Session       StreamSessionMeta `json:"session"`
+	LedgerEventID string            `json:"ledger_event_id"`
+	EndedAt       int64             `json:"ended_at"`
+}
 
 type StopStreamRequest struct {
 	CrewID string `json:"crew_id"`
@@ -134,18 +154,124 @@ type ActiveStream struct {
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
 type StreamMeta struct {
-	StreamID           string   `json:"stream_id"`
-	CrewID             string   `json:"crew_id"`
-	StreamerID         string   `json:"streamer_id"`
-	StreamerUsername   string   `json:"streamer_username"`
-	Title              string   `json:"title"`
-	StartedAt          string   `json:"started_at"`
-	ThumbnailURL       string   `json:"thumbnail_url,omitempty"`
-	ThumbnailUpdatedAt string   `json:"thumbnail_updated_at,omitempty"`
-	ViewerIDs          []string `json:"viewer_ids,omitempty"`
-	Width              uint32   `json:"width,omitempty"`
-	Height             uint32   `json:"height,omitempty"`
-	BitrateKbps        uint32   `json:"bitrate_kbps,omitempty"`
+	StreamID           string `json:"stream_id"`
+	CrewID             string `json:"crew_id"`
+	StreamerID         string `json:"streamer_id"`
+	StreamerUsername   string `json:"streamer_username"`
+	Title              string `json:"title"`
+	StartedAt          string `json:"started_at"`
+	ThumbnailURL       string `json:"thumbnail_url,omitempty"`
+	ThumbnailUpdatedAt string `json:"thumbnail_updated_at,omitempty"`
+	// ViewerIDs are the viewers that watch now: watch_stream adds one,
+	// stream_viewer_left (from the host, on the SFU member_left) removes it.
+	// crew_state viewer_count is its length.
+	ViewerIDs []string `json:"viewer_ids,omitempty"`
+	// WatchedIDs are all the viewers that watched, for the session ledger.
+	WatchedIDs []string `json:"watched_ids,omitempty"`
+	// PeakViewers is the largest len(ViewerIDs) so far.
+	PeakViewers int    `json:"peak_viewers,omitempty"`
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+}
+
+// peakViewers is the largest number of viewers at one time.
+func (m *StreamMeta) peakViewers() int {
+	if len(m.ViewerIDs) > m.PeakViewers {
+		return len(m.ViewerIDs)
+	}
+	return m.PeakViewers
+}
+
+// allViewers is every viewer that watched: WatchedIDs, plus any current
+// viewer missing from it (records written before WatchedIDs existed).
+func (m *StreamMeta) allViewers() []string {
+	out := append([]string(nil), m.WatchedIDs...)
+	for _, id := range m.ViewerIDs {
+		if !containsString(out, id) {
+			out = append(out, id)
+		}
+	}
+	return out
+}
+
+// addViewer counts viewerID in. It reports whether anything changed.
+func (m *StreamMeta) addViewer(viewerID string) bool {
+	changed := false
+	if !containsString(m.ViewerIDs, viewerID) {
+		m.ViewerIDs = append(m.ViewerIDs, viewerID)
+		changed = true
+	}
+	if !containsString(m.WatchedIDs, viewerID) {
+		m.WatchedIDs = append(m.WatchedIDs, viewerID)
+		changed = true
+	}
+	if len(m.ViewerIDs) > m.PeakViewers {
+		m.PeakViewers = len(m.ViewerIDs)
+		changed = true
+	}
+	return changed
+}
+
+// removeViewer counts viewerID out. It reports whether it was counted.
+func (m *StreamMeta) removeViewer(viewerID string) bool {
+	for i, id := range m.ViewerIDs {
+		if id == viewerID {
+			m.ViewerIDs = append(m.ViewerIDs[:i], m.ViewerIDs[i+1:]...)
+			return true
+		}
+	}
+	return false
+}
+
+func containsString(list []string, s string) bool {
+	for _, v := range list {
+		if v == s {
+			return true
+		}
+	}
+	return false
+}
+
+// updateStreamMeta applies change to stream_meta/{crewID} with optimistic
+// concurrency: viewers join and leave at the same time. change returns
+// false when nothing must be written. A missing record is not an error.
+func updateStreamMeta(ctx context.Context, nk runtime.NakamaModule, crewID string, change func(*StreamMeta) bool) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+			{Collection: StreamMetaCollection, Key: crewID, UserID: SystemUserID},
+		})
+		if err != nil {
+			return err
+		}
+		if len(objects) == 0 {
+			return nil
+		}
+		var meta StreamMeta
+		if err := json.Unmarshal([]byte(objects[0].GetValue()), &meta); err != nil {
+			return err
+		}
+		if !change(&meta) {
+			return nil
+		}
+		data, _ := json.Marshal(meta)
+		if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+			{
+				Collection:      StreamMetaCollection,
+				Key:             crewID,
+				UserID:          SystemUserID,
+				Value:           string(data),
+				Version:         objects[0].GetVersion(),
+				PermissionRead:  2,
+				PermissionWrite: 0,
+			},
+		}); err == nil {
+			InvalidateCrewState(crewID)
+			return nil
+		}
+		time.Sleep(time.Duration(20*(attempt+1)) * time.Millisecond)
+	}
+	return fmt.Errorf("stream_meta write for crew %s failed after 3 retries", crewID)
 }
 
 const (
@@ -198,6 +324,10 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	if !sfuAvailableForCrew(ctx, nk, req.CrewID) {
 		logger.Warn("start_stream: SFU unavailable for crew %s (auth=%v)", req.CrewID, sfuAuthEnabled())
 		return "", errSFUUnavailable
+	}
+
+	if req.ResumeSessionID != "" {
+		return resumeStream(ctx, logger, nk, userID, users[0].GetDisplayName(), req)
 	}
 
 	now := time.Now()
@@ -335,6 +465,13 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			streamMeta = &m
 		}
 	}
+	// Only the host stops a stream. Without this check any crew member
+	// could end the stream of another member.
+	if streamMeta != nil && streamMeta.StreamerID != userID {
+		logger.Warn("stop_stream: user %s is not the host of stream %s in crew %s",
+			userID, streamMeta.StreamID, req.CrewID)
+		return "", runtime.NewError("not the host of this stream", 7)
+	}
 
 	// Delete active stream record
 	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{
@@ -385,8 +522,8 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 			StreamerName: streamMeta.StreamerUsername,
 			Title:        streamMeta.Title,
 			DurationMin:  durationMin,
-			PeakViewers:  len(streamMeta.ViewerIDs),
-			ViewerIDs:    streamMeta.ViewerIDs,
+			PeakViewers:  streamMeta.peakViewers(),
+			ViewerIDs:    streamMeta.allViewers(),
 			SnapshotURLs: snapshotURLs,
 		}
 		event := CrewEvent{
@@ -592,6 +729,16 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return "", errSFUUnavailable
 	}
 
+	// Count the viewer in. crew_state viewer_count reads this list; the
+	// host takes the viewer out again with stream_viewer_left.
+	if userID != meta.HostUserID {
+		if err := updateStreamMeta(ctx, nk, meta.CrewID, func(m *StreamMeta) bool {
+			return m.StreamID == req.SessionID && m.addViewer(userID)
+		}); err != nil {
+			logger.Warn("watch_stream: viewer count not updated for %s: %v", req.SessionID, err)
+		}
+	}
+
 	resp, _ := json.Marshal(map[string]interface{}{
 		"mode":         "sfu",
 		"sfu_endpoint": meta.SFUEndpoint,
@@ -601,6 +748,40 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		"bitrate_kbps": streamBitrateKbps,
 	})
 	return string(resp), nil
+}
+
+// StreamViewerLeftRPC takes a viewer out of the crew's viewer count. The
+// host calls it on the SFU member_left for a viewer (the SFU sends none for
+// a viewer that reconnects). Only the host of the crew's stream can call it.
+func StreamViewerLeftRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	var req struct {
+		CrewID   string `json:"crew_id"`
+		ViewerID string `json:"viewer_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" || req.ViewerID == "" {
+		return "", runtime.NewError("crew_id and viewer_id required", 3)
+	}
+	meta := readStreamMeta(ctx, nk, req.CrewID)
+	if meta == nil {
+		return "{}", nil
+	}
+	if meta.StreamerID != userID {
+		return "", runtime.NewError("not the host of this stream", 7)
+	}
+	if err := updateStreamMeta(ctx, nk, req.CrewID, func(m *StreamMeta) bool {
+		return m.StreamerID == userID && m.removeViewer(req.ViewerID)
+	}); err != nil {
+		logger.Warn("stream_viewer_left: %v", err)
+		return "", runtime.NewError("failed to update the viewer count", 13)
+	}
+	return "{}", nil
 }
 
 // ---------------------------------------------------------------------------
@@ -771,6 +952,8 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 	}
 
 	logger.Info("StreamCleanupUser: cleaning orphaned stream %s for host %s in crew %s", meta.StreamID, userID, crewID)
+	// Read before the delete: the host can re-advertise this session.
+	sessionMeta := loadStreamSession(ctx, nk, meta.StreamID)
 
 	// Delete active_streams (owned by host user)
 	if err := nk.StorageDelete(ctx, []*runtime.StorageDelete{
@@ -808,8 +991,8 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		StreamerName: meta.StreamerUsername,
 		Title:        meta.Title,
 		DurationMin:  durationMin,
-		PeakViewers:  len(meta.ViewerIDs),
-		ViewerIDs:    meta.ViewerIDs,
+		PeakViewers:  meta.peakViewers(),
+		ViewerIDs:    meta.allViewers(),
 		SnapshotURLs: snapshotURLs,
 	}
 	event := CrewEvent{
@@ -824,6 +1007,17 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 	if appendErr := AppendCrewEvent(ctx, nk, crewID, event); appendErr != nil {
 		logger.Warn("StreamCleanupUser: failed to write stream_session event for crew %s: %v", crewID, appendErr)
 	}
+	// A Nakama socket drop also ends here, while the host's SFU session and
+	// encoder keep running. Keep what was removed, so the host can
+	// re-advertise the same stream (resumeStream).
+	if sessionMeta != nil {
+		writeStreamResumeRecord(ctx, nk, userID, streamResumeRecord{
+			Meta:          meta,
+			Session:       *sessionMeta,
+			LedgerEventID: event.ID,
+			EndedAt:       time.Now().Unix(),
+		})
+	}
 	// Mirror into the durable store so the replay survives the ledger trim.
 	if upsertErr := UpsertStreamSession(ctx, nk, crewID,
 		storedStreamSessionFrom(event.ID, event.Timestamp, event.Score, sessionData)); upsertErr != nil {
@@ -836,6 +1030,194 @@ func cleanupStreamIfHost(ctx context.Context, logger runtime.Logger, nk runtime.
 		"crew_id": crewID,
 		"host_id": userID,
 	})
+}
+
+func writeStreamResumeRecord(ctx context.Context, nk runtime.NakamaModule, hostID string, rec streamResumeRecord) {
+	data, _ := json.Marshal(rec)
+	nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      StreamResumeCollection,
+			Key:             hostID,
+			UserID:          SystemUserID,
+			Value:           string(data),
+			PermissionRead:  0,
+			PermissionWrite: 0,
+		},
+	})
+}
+
+func readStreamResumeRecord(ctx context.Context, nk runtime.NakamaModule, hostID string) *streamResumeRecord {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: StreamResumeCollection, Key: hostID, UserID: SystemUserID},
+	})
+	if err != nil || len(objects) == 0 {
+		return nil
+	}
+	var rec streamResumeRecord
+	if json.Unmarshal([]byte(objects[0].GetValue()), &rec) != nil {
+		return nil
+	}
+	return &rec
+}
+
+func readStreamMeta(ctx context.Context, nk runtime.NakamaModule, crewID string) *StreamMeta {
+	objects, err := nk.StorageRead(ctx, []*runtime.StorageRead{
+		{Collection: StreamMetaCollection, Key: crewID, UserID: SystemUserID},
+	})
+	if err != nil || len(objects) == 0 {
+		return nil
+	}
+	var meta StreamMeta
+	if json.Unmarshal([]byte(objects[0].GetValue()), &meta) != nil {
+		return nil
+	}
+	return &meta
+}
+
+// resumeStream re-advertises the stream req.ResumeSessionID of userID in
+// req.CrewID. The host's SFU session still carries it; only the backend
+// records went away with the Nakama socket. Two cases succeed:
+//   - The records are still there (the old socket ended while a newer one
+//     was open, so no cleanup ran). Nothing is written.
+//   - cleanupStreamIfHost removed them less than streamResumeWindow ago.
+//     The records are written back from the resume record, and the
+//     stream_session ledger event of the cleanup is removed (the real stop
+//     writes it).
+//
+// Anything else returns NOT_FOUND (5). The client then ends the stream.
+func resumeStream(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID, displayName string, req StartStreamRequest) (string, error) {
+	sessionID := req.ResumeSessionID
+	if live := readStreamMeta(ctx, nk, req.CrewID); live != nil &&
+		live.StreamID == sessionID && live.StreamerID == userID {
+		if session := loadStreamSession(ctx, nk, sessionID); session != nil {
+			logger.Info("start_stream resume: stream %s of %s in crew %s is still advertised", sessionID, userID, req.CrewID)
+			return resumeStreamResponse(userID, displayName, sessionID, req.CrewID, *session)
+		}
+	}
+
+	rec := readStreamResumeRecord(ctx, nk, userID)
+	if rec == nil || rec.Meta.StreamID != sessionID || rec.Meta.CrewID != req.CrewID ||
+		rec.Meta.StreamerID != userID ||
+		time.Since(time.Unix(rec.EndedAt, 0)) > streamResumeWindow {
+		logger.Warn("start_stream resume: stream %s of %s in crew %s is not resumable", sessionID, userID, req.CrewID)
+		return "", runtime.NewError("stream not resumable", 5)
+	}
+
+	startedAt := time.Now().Unix()
+	if t, err := time.Parse(time.RFC3339, rec.Meta.StartedAt); err == nil {
+		startedAt = t.Unix()
+	}
+	streamJSON, _ := json.Marshal(ActiveStream{
+		HostID:      userID,
+		HostName:    rec.Meta.StreamerUsername,
+		Title:       rec.Meta.Title,
+		StartedAt:   startedAt,
+		Width:       rec.Meta.Width,
+		Height:      rec.Meta.Height,
+		BitrateKbps: rec.Meta.BitrateKbps,
+	})
+	metaJSON, _ := json.Marshal(rec.Meta)
+	if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
+		{
+			Collection:      StreamCollection,
+			Key:             req.CrewID,
+			UserID:          userID,
+			Value:           string(streamJSON),
+			PermissionRead:  2,
+			PermissionWrite: 0,
+		},
+		{
+			Collection:      StreamMetaCollection,
+			Key:             req.CrewID,
+			UserID:          SystemUserID,
+			Value:           string(metaJSON),
+			PermissionRead:  2,
+			PermissionWrite: 0,
+		},
+	}); err != nil {
+		logger.Error("start_stream resume: failed to write stream state: %v", err)
+		return "", runtime.NewError("failed to resume stream", 13)
+	}
+	storeStreamSession(ctx, nk, sessionID, rec.Session)
+	nk.StorageDelete(ctx, []*runtime.StorageDelete{
+		{Collection: StreamResumeCollection, Key: userID, UserID: SystemUserID},
+	})
+	if rec.LedgerEventID != "" {
+		if err := removeCrewEvent(ctx, nk, req.CrewID, rec.LedgerEventID); err != nil {
+			logger.Warn("start_stream resume: %v", err)
+		}
+	}
+
+	now := time.Now().UTC().Format(time.RFC3339)
+	_ = WritePresence(ctx, nk, &UserPresence{
+		UserID:   userID,
+		Status:   StatusOnline,
+		LastSeen: now,
+		Activity: &Activity{
+			Type:        ActivityStreaming,
+			CrewID:      req.CrewID,
+			StreamID:    sessionID,
+			StreamTitle: rec.Meta.Title,
+		},
+		UpdatedAt: now,
+	})
+	InvalidateCrewState(req.CrewID)
+	PushCrewEvent(ctx, logger, nk, req.CrewID, "stream_started", map[string]interface{}{
+		"stream_id":         sessionID,
+		"streamer_id":       userID,
+		"streamer_username": rec.Meta.StreamerUsername,
+		"title":             rec.Meta.Title,
+	})
+	logger.Info("start_stream resume: stream %s of %s advertised again in crew %s", sessionID, userID, req.CrewID)
+	return resumeStreamResponse(userID, displayName, sessionID, req.CrewID, rec.Session)
+}
+
+func resumeStreamResponse(userID, displayName, sessionID, crewID string, session StreamSessionMeta) (string, error) {
+	token, err := signSFUToken(SFUTokenClaims{
+		UserID:    userID,
+		Username:  displayName,
+		SessionID: sessionID,
+		Type:      "stream",
+		Role:      "host",
+		CrewID:    crewID,
+		Region:    session.SFURegion,
+	})
+	if err != nil {
+		return "", errSFUUnavailable
+	}
+	resp, _ := json.Marshal(map[string]interface{}{
+		"stream_id":    sessionID,
+		"session_id":   sessionID,
+		"mode":         "sfu",
+		"sfu_endpoint": session.SFUEndpoint,
+		"sfu_token":    token,
+		"resumed":      true,
+	})
+	return string(resp), nil
+}
+
+// removeCrewEvent deletes one event from the ledger of a crew, with the same
+// optimistic-concurrency retry as AppendCrewEvent.
+func removeCrewEvent(ctx context.Context, nk runtime.NakamaModule, crewID, eventID string) error {
+	for attempt := 0; attempt < 3; attempt++ {
+		ledger, version := readLedger(ctx, nk, crewID)
+		kept := make([]CrewEvent, 0, len(ledger.Events))
+		for _, e := range ledger.Events {
+			if e.ID != eventID {
+				kept = append(kept, e)
+			}
+		}
+		if len(kept) == len(ledger.Events) {
+			return nil
+		}
+		ledger.Events = kept
+		ledger.UpdatedAt = time.Now().UnixMilli()
+		if err := writeLedger(ctx, nk, crewID, ledger, version); err == nil {
+			return nil
+		}
+		time.Sleep(time.Duration(50*(attempt+1)) * time.Millisecond)
+	}
+	return fmt.Errorf("removing ledger event %s of crew %s failed after 3 retries", eventID, crewID)
 }
 
 // StartStreamGC runs a background loop that cleans up orphaned stream records
