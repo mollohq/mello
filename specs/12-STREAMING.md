@@ -450,7 +450,22 @@ into `base_config_`, so a later bitrate reconfigure does not resurrect the
 features that were given up.
 
 Driven by measurement rather than a GPU allowlist, so it covers hardware that
-has never been tested. Non-NVENC backends inherit a default no-op.
+has never been tested. AMF and QSV have their own tiers, driven by the same
+overload signal; the pipeline stops at each backend's `max_cost_tier()`:
+
+| Tier | AMF (H.264) | QSV (oneVPL) |
+|------|-------------|--------------|
+| 0 | init: ultra-low-latency usage, pre-analysis off, the usage's quality preset | TargetUsage 4 (balanced) |
+| 1 | quality preset speed | TargetUsage 6 |
+| 2 | also VBAQ, high motion quality boost and pre-analysis off | TargetUsage 7 (best speed) |
+
+AMF sets the properties and calls `ReInit` (some are static on some drivers);
+a step that changes nothing (the usage default was already the cheaper one)
+goes on to the next. QSV applies TargetUsage with `MFXVideoENCODE_Reset` and
+keeps it in its parameters, so a later bitrate Reset does not take it back.
+Both force an IDR. A step the driver refuses ends the tiers for the session,
+as on NVENC. VideoToolbox has no tiers. The AMF and QSV tiers are compiled and
+unit tested only: there is no AMD or Intel host in the lab.
 
 ### 3.5 Encoded Packet Handoff
 

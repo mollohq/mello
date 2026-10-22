@@ -29,6 +29,8 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     codec_  = config.codec;
     stats_  = {};
     frame_seq_ = 0;
+    cost_tier_ = 0;
+    cost_tier_unavailable_ = false;
 
     dll_ = load_amf_dll();
     if (!dll_) {
@@ -160,6 +162,15 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
             FreeLibrary(dll_); dll_ = nullptr;
             return false;
         }
+        // What the usage chose for the features the cost tiers give up, so a
+        // field log shows tier 0.
+        amf_int64 preset = -1;
+        bool vbaq = false, boost = false;
+        encoder_->GetProperty(AMF_VIDEO_ENCODER_QUALITY_PRESET, &preset);
+        encoder_->GetProperty(AMF_VIDEO_ENCODER_ENABLE_VBAQ, &vbaq);
+        encoder_->GetProperty(AMF_VIDEO_ENCODER_HIGH_MOTION_QUALITY_BOOST_ENABLE, &boost);
+        MELLO_LOG_INFO(TAG, "AMF: tier 0 quality preset=%lld vbaq=%d high-motion-boost=%d",
+                       static_cast<long long>(preset), vbaq ? 1 : 0, boost ? 1 : 0);
         MELLO_LOG_INFO(TAG,
             "AMF: effective H264 profile=High level=4.2 usage=ULL low-latency=on preencode=off vbv=%lld B-frames=disabled",
             static_cast<long long>(std::max<amf_int64>(
@@ -254,6 +265,77 @@ bool AmfEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     }
 
     return true;
+}
+
+AmfEncoder::TierSettings AmfEncoder::tier_settings(int tier) {
+    TierSettings t{};
+    if (tier >= 1) t.quality_preset = AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED;
+    if (tier >= 2) t.adaptive_off = true;
+    return t;
+}
+
+// Runs on the encode thread, through EncoderControl. Each step gives up the
+// most expensive feature left, as NVENC's tiers do. A step that changes
+// nothing (the driver's usage default was already that) goes on to the next.
+// The properties are set and the encoder re-initialised (ReInit), because
+// some of them are static on some drivers; the next frame is an IDR.
+bool AmfEncoder::reduce_cost_tier() {
+    if (!encoder_ || codec_ != VideoCodec::H264 || cost_tier_ >= kMaxCostTier ||
+        cost_tier_unavailable_) {
+        return false;
+    }
+    const int previous = cost_tier_;
+    for (int next = cost_tier_ + 1; next <= kMaxCostTier; ++next) {
+        const TierSettings t = tier_settings(next);
+        bool changed = false;
+        bool ok = true;
+        auto set_if_different = [&](const wchar_t* property, amf_int64 value) {
+            amf_int64 current = -1;
+            if (encoder_->GetProperty(property, &current) == AMF_OK && current == value) return;
+            ok = ok && encoder_->SetProperty(property, value) == AMF_OK;
+            changed = true;
+        };
+        auto turn_off = [&](const wchar_t* property) {
+            bool current = true;
+            if (encoder_->GetProperty(property, &current) == AMF_OK && !current) return;
+            // Not every driver has every property: a refused "off" for a
+            // feature the driver does not have is no failure.
+            if (encoder_->SetProperty(property, false) == AMF_OK) changed = true;
+        };
+        if (t.quality_preset >= 0) {
+            set_if_different(AMF_VIDEO_ENCODER_QUALITY_PRESET, t.quality_preset);
+        }
+        if (t.adaptive_off) {
+            turn_off(AMF_VIDEO_ENCODER_ENABLE_VBAQ);
+            turn_off(AMF_VIDEO_ENCODER_HIGH_MOTION_QUALITY_BOOST_ENABLE);
+            turn_off(AMF_VIDEO_ENCODER_PRE_ANALYSIS_ENABLE);
+        }
+        if (!ok) {
+            cost_tier_ = previous;
+            cost_tier_unavailable_ = true;
+            MELLO_LOG_ERROR(TAG, "AMF: cost tier %d->%d refused by the driver (quality downgrade "
+                                 "unavailable for this session)", previous, next);
+            return false;
+        }
+        cost_tier_ = next;
+        if (!changed) continue;
+        const AMF_RESULT res = encoder_->ReInit(config_.width, config_.height);
+        if (res != AMF_OK) {
+            cost_tier_unavailable_ = true;
+            MELLO_LOG_ERROR(TAG, "AMF: ReInit for cost tier %d failed: %d (quality downgrade "
+                                 "unavailable for this session)", next, res);
+            return true;
+        }
+        force_idr_ = true;
+        MELLO_LOG_WARN(TAG, "AMF: encoder cannot hold the frame budget: cost tier %d -> %d "
+                            "(preset=%s adaptive=%s)", previous, next,
+                       t.quality_preset == AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED ? "speed" : "init",
+                       t.adaptive_off ? "off" : "init");
+        return true;
+    }
+    MELLO_LOG_INFO(TAG, "AMF: cost tier %d -> %d changed nothing (the usage defaults were "
+                        "already the cheaper settings)", previous, cost_tier_);
+    return cost_tier_ != previous;
 }
 
 void AmfEncoder::request_keyframe() {

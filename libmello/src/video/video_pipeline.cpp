@@ -794,7 +794,7 @@ void VideoPipeline::encode_thread_func() {
 // Runs on the encode thread, immediately after a frame is encoded, so the
 // measurement and the reconfigure share one thread and no extra locking.
 void VideoPipeline::maybe_reduce_encoder_cost() {
-    if (!encoder_ || encoder_->cost_tier() >= 2) {
+    if (!encoder_ || encoder_->cost_tier() >= encoder_->max_cost_tier()) {
         return;
     }
 

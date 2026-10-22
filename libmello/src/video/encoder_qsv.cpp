@@ -102,7 +102,9 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     video_params_.mfx.CodecId                  = MFX_CODEC_AVC;
     video_params_.mfx.CodecProfile             = MFX_PROFILE_AVC_HIGH;
     video_params_.mfx.CodecLevel               = MFX_LEVEL_AVC_42;
-    video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BALANCED;
+    cost_tier_ = 0;
+    cost_tier_unavailable_ = false;
+    video_params_.mfx.TargetUsage              = target_usage_for_tier(0);
     // VBR with moderate headroom (1.25x max) for a smooth uplink to the SFU.
     video_params_.mfx.TargetKbps               = static_cast<mfxU16>(config.bitrate_kbps);
     video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps + config.bitrate_kbps / 4);
@@ -264,6 +266,41 @@ bool QsvEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     stats_.bitrate_kbps = config_.bitrate_kbps;
     if (out.is_keyframe) stats_.keyframes_sent++;
 
+    return true;
+}
+
+mfxU16 QsvEncoder::target_usage_for_tier(int tier) {
+    if (tier <= 0) return MFX_TARGETUSAGE_BALANCED;  // 4
+    if (tier == 1) return 6;
+    return MFX_TARGETUSAGE_BEST_SPEED;               // 7
+}
+
+// Runs on the encode thread, through EncoderControl. TargetUsage goes up one
+// tier at a time with an encoder Reset; video_params_ keeps it, so a later
+// bitrate Reset does not take it back. The next frame is an IDR.
+bool QsvEncoder::reduce_cost_tier() {
+    if (!session_ || !fn_.EncReset || cost_tier_ >= kMaxCostTier || cost_tier_unavailable_) {
+        return false;
+    }
+    const int previous = cost_tier_;
+    const mfxU16 old_usage = video_params_.mfx.TargetUsage;
+    video_params_.mfx.TargetUsage = target_usage_for_tier(previous + 1);
+    mfxExtBuffer* ext_params[] = { &opt2_.Header, &opt3_.Header };
+    video_params_.ExtParam = ext_params;
+    video_params_.NumExtParam = 2;
+    const mfxStatus sts = fn_.EncReset(session_, &video_params_);
+    if (sts != MFX_ERR_NONE && sts != MFX_WRN_INCOMPATIBLE_VIDEO_PARAM) {
+        video_params_.mfx.TargetUsage = old_usage;
+        cost_tier_unavailable_ = true;
+        MELLO_LOG_ERROR(TAG, "QSV: cost tier %d->%d Reset failed: %d (quality downgrade "
+                             "unavailable for this session)", previous, previous + 1, sts);
+        return false;
+    }
+    cost_tier_ = previous + 1;
+    force_idr_ = true;
+    MELLO_LOG_WARN(TAG, "QSV: encoder cannot hold the frame budget: cost tier %d -> %d "
+                        "(TargetUsage %u -> %u)", previous, cost_tier_, old_usage,
+                   video_params_.mfx.TargetUsage);
     return true;
 }
 

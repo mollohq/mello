@@ -1517,3 +1517,54 @@ TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
     EXPECT_TRUE(ladder::should_report_failure(true));
 }
 #endif // _WIN32 ladder tests
+
+#ifdef _WIN32
+#include "video/encoder_amf.hpp"
+#include "video/encoder_nvenc.hpp"
+#include "video/encoder_qsv.hpp"
+
+// The cost tiers ran on NVENC only: an AMD or Intel host that could not hold
+// the frame budget dropped frames with no quality feature given up. AMF and
+// QSV now have tiers driven by the same overload signal, and the pipeline stops
+// at each backend's own last tier.
+TEST(EncoderCostTier, EveryHardwareBackendHasTwoTiers) {
+    EXPECT_EQ(NvencEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(AmfEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(QsvEncoder().max_cost_tier(), 2);
+}
+
+TEST(EncoderCostTier, AmfTakesThePresetDownThenTheAdaptiveFeaturesOff) {
+    const auto t0 = AmfEncoder::tier_settings(0);
+    EXPECT_EQ(t0.quality_preset, -1) << "tier 0 is the init configuration";
+    EXPECT_FALSE(t0.adaptive_off);
+
+    const auto t1 = AmfEncoder::tier_settings(1);
+    EXPECT_EQ(t1.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED);
+    EXPECT_FALSE(t1.adaptive_off) << "one feature at a time";
+
+    const auto t2 = AmfEncoder::tier_settings(2);
+    EXPECT_EQ(t2.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED)
+        << "a later tier keeps what an earlier one gave up";
+    EXPECT_TRUE(t2.adaptive_off);
+}
+
+TEST(EncoderCostTier, QsvTargetUsageOnlyGoesTowardsSpeed) {
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(0), MFX_TARGETUSAGE_BALANCED);
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(2), MFX_TARGETUSAGE_BEST_SPEED);
+    for (int tier = 0; tier < QsvEncoder::kMaxCostTier; ++tier) {
+        EXPECT_GT(QsvEncoder::target_usage_for_tier(tier + 1),
+                  QsvEncoder::target_usage_for_tier(tier));
+    }
+}
+
+// An encoder without a session refuses a tier and stays at 0: the pipeline
+// may ask before the first encode.
+TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {
+    AmfEncoder amf;
+    EXPECT_FALSE(amf.reduce_cost_tier());
+    EXPECT_EQ(amf.cost_tier(), 0);
+    QsvEncoder qsv;
+    EXPECT_FALSE(qsv.reduce_cost_tier());
+    EXPECT_EQ(qsv.cost_tier(), 0);
+}
+#endif // _WIN32
