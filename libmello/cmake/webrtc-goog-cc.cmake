@@ -8,9 +8,12 @@
 # commit 79aff54b0fa9238ce3518dd9eaf9610cd6f22e82, the same milestone as the
 # APM submodule and the NetEQ overlay. The files live in their own overlay
 # tree, third_party/webrtc-goog-cc/webrtc, with the upstream path layout. The
-# overlay holds only files that the APM submodule and the NetEQ overlay do not
-# have: rtc_base, api/units, the field trial parser, the environment and the
-# RTC event log interface come from those trees (byte-identical at M131).
+# overlay holds only files that the APM submodule, the NetEQ overlay and the
+# video timing overlay do not have: rtc_base, api/units, the field trial
+# parser, the environment and the RTC event log interface come from the first
+# two, and five video codec headers (api/video_codecs/video_codec.h and the
+# headers it includes) from the video timing tree. All are byte-identical at
+# M131.
 # Upstream files are not edited. The RTC event log encoder is not vendored:
 # the goog_cc event classes are stubs in cmake/webrtc-goog-cc/compat.
 #
@@ -18,9 +21,9 @@
 # pieces it uses (AIMD rate control, inter arrival, overuse detector),
 # modules/pacing/interval_budget (the ALR detector budget, not the pacer),
 # api/transport network types and the NetworkControllerInterface, and the
-# rate control and ALR experiment parsers. The video codec headers under
-# api/video_codecs and video/config are header-only inputs of
-# rate_control_settings.h; none of their sources are compiled.
+# rate control and ALR experiment parsers. The video codec headers are
+# header-only inputs of rate_control_settings.h; none of their sources are
+# compiled.
 #
 # Stage 4 spike: only tests/test_goog_cc_spike.cpp links this target.
 # Apple clang is unverified: OFF on Apple until a Mac build runs, then stage 4 turns it on.
@@ -85,7 +88,12 @@ if(MELLO_WEBRTC_GOOG_CC)
         ${CMAKE_CURRENT_LIST_DIR}/webrtc-goog-cc/compat
         ${CMAKE_CURRENT_SOURCE_DIR}/compat
     )
-    target_include_directories(webrtc_goog_cc PUBLIC ${GOOG_CC_ROOT}/webrtc)
+    # The video timing tree is an include root only (its headers, not its
+    # target): rate_control_settings.h includes api/video_codecs/video_codec.h.
+    target_include_directories(webrtc_goog_cc PUBLIC
+        ${GOOG_CC_ROOT}/webrtc
+        ${CMAKE_CURRENT_LIST_DIR}/../third_party/webrtc-video-timing/webrtc
+    )
     # webrtc_neteq carries the platform macros (PUBLIC) and links the APM
     # target, which holds rtc_base, api/units and system_wrappers.
     target_link_libraries(webrtc_goog_cc PUBLIC webrtc_neteq)
