@@ -110,6 +110,16 @@ since the method it settles on keeps delivering. When the game enters exclusive
 fullscreen, the best method becomes possible again, so the ladder restarts from
 the top.
 
+**A move starts the next method before it stops the current one.** Only one
+method reaches the pipeline at a time. A walk back up (exclusive fullscreen,
+and the 30 s retry while the game stays there) keeps the current method on the
+stream until the next one delivers its first frame, for at most 2 s. When the
+next method delivers nothing in that time, it stops, and the current method
+never stopped. A hook attempt takes seconds (injection, then the game's next
+present), and stopping first showed viewers no frames for all of that time.
+A move down the ladder (the current method failed) swaps as soon as the next
+method starts, because the current one has nothing to keep.
+
 Every ladder move forces a keyframe. When every method has delivered nothing,
 the ladder goes back to the first method, waits 30 s, and tries them all again.
 The user sees an error only with proof that the game is rendering: the game is

@@ -370,6 +370,12 @@ not swap to DXGI: no screen method sees exclusive fullscreen. It rebuilds the
 current method and restarts the ladder from the top, so the hook gets another
 chance.
 
+A method change starts the next backend before it stops the old one. Each
+backend delivers through a callback with its own token, and only the active
+token reaches the pipeline. A walk back up keeps the old backend until the next
+one delivers its first frame (2 s at most); on failure the next backend stops
+and the old one keeps the stream. `ProcessCapture::activate` has the rules.
+
 Every method change raises `consume_swap_event()`, and the pipeline forces a
 keyframe so the viewer can resync. `state()` reports what the capture is doing
 for the pause card, and `target_exited()` ends the stream when the game quits.
