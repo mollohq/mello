@@ -275,4 +275,20 @@ TEST(HookLoopback, ADirect3D12GameArrivesAtTheViewer) {
     EXPECT_NEAR(decoded.b, 191, 12);
 }
 
+// The same, for an OpenGL game.
+TEST(HookLoopback, AnOpenGLGameArrivesAtTheViewer) {
+    if (under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    const Decoded decoded = run_loopback(directory, "--opengl", "hook_loopback_opengl.bmp");
+    ASSERT_GT(decoded.packets, 0u) << "the host encoded nothing";
+    ASSERT_GT(decoded.keyframes, 0u) << "the host sent no keyframe";
+    ASSERT_TRUE(decoded.ok) << "nothing decoded: a viewer would see black";
+
+    EXPECT_NEAR(decoded.r, 64, 12);
+    EXPECT_NEAR(decoded.g, 128, 12);
+    EXPECT_NEAR(decoded.b, 191, 12);
+}
+
 #endif // _WIN32

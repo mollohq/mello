@@ -164,7 +164,7 @@ as x64 and links the static CRT):
 
 | Binary | Runs where | Does what |
 |---|---|---|
-| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present (and D3D12 `ExecuteCommandLists`), copies, signals |
+| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI, D3D9 and OpenGL present (and D3D12 `ExecuteCommandLists`), copies, signals |
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
@@ -307,10 +307,38 @@ each read waits on the GPU (`ID3D11DeviceContext4::Wait`) for
 (`--d3d12`, 640x360): the pixels arrive, 60 delivered a second at 144
 presents, and the loopback decodes the colour.
 
-**What works today:** DXGI swap chains, which covers Direct3D 12, 11 and 10,
-and Direct3D 9: shared textures for a D3D9Ex game on the client's adapter,
-memory for every other D3D9 game. Both for 32-bit and 64-bit games. OpenGL is
-the next step in the plan. Vulkan games use the WGC steps by decision
+**OpenGL.** The hook detours `wglSwapBuffers`, an export of `opengl32.dll`
+that it resolves by name, only when the game has loaded `opengl32.dll` (the
+hook links no GL library). Inside the detour the game's context is current.
+With `WGL_NV_DX_interop2`, the hook makes a D3D11 device on the client's
+adapter (its LUID is in the block), two legacy-shared BGRA textures, registers
+them with GL, and blits the default framebuffer into one (flipped: GL rows go
+bottom up), then unlocks and flushes. The client opens them as it opens a
+DXGI game's textures. Without the interop (or with
+`MELLO_HOOK_GL_READBACK=1`, which sets `MELLO_HOOK_OPTION_GL_READBACK`, protocol
+version 6), the back buffer is read into one of two pixel buffer objects and
+the one read a due frame earlier is mapped and copied, flipped, into the
+memory frame block (`MELLO_HOOK_FLAG_CPU_COPY`): the read is asynchronous, so
+the game's thread does not wait, and a frame arrives one due frame late. Every
+piece of GL state the copy touches (framebuffer bindings, the default
+framebuffer's read buffer, scissor test, sRGB write, pack buffer and pack
+state) is put back, and the hook leaves no GL error behind.
+
+Measured on the game's thread with the fakegame (`--opengl`, 60 copies a
+second, this NVIDIA machine shared with other builds):
+
+| Path | 640x360, game at 144 fps | 640x360, game uncapped | 1920x1080, game uncapped |
+|---|---|---|---|
+| Interop | 0.26 ms a copy | 1.1 ms | 1.0 ms |
+| Memory | 0.18 ms | 0.36 ms | 1.1 ms |
+
+The interop lock waits for the GPU when the game keeps it busy; the memory
+path's cost is the copy of the mapped pixels.
+
+**What works today:** DXGI swap chains, which covers Direct3D 12, 11 and 10;
+Direct3D 9: shared textures for a D3D9Ex game on the client's adapter,
+memory for every other D3D9 game; and OpenGL. Both for 32-bit and 64-bit
+games. Vulkan games use the WGC steps by decision
 (streaming-reliability plan §9).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.

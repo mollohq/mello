@@ -23,6 +23,8 @@
 // `--d3d12` presents through a Direct3D 12 swap chain on its command queue,
 // the API of most new games.
 //
+// `--opengl` presents through OpenGL (SwapBuffers on a WGL context).
+//
 // `--fps N` presents N times a second with no vertical sync, paced by the
 // clock, so a test can show a fast game (144 fps) on any display.
 //
@@ -36,6 +38,7 @@
 #include <d3d11.h>
 #include <d3d12.h>
 #include <dxgi1_4.h>
+#include <GL/gl.h>
 
 #include <cstdint>
 #include <cstdio>
@@ -47,6 +50,7 @@
 #pragma comment(lib, "winmm.lib")
 #pragma comment(lib, "d3d12.lib")
 #pragma comment(lib, "dxgi.lib")
+#pragma comment(lib, "opengl32.lib")
 
 namespace {
 
@@ -404,6 +408,57 @@ int run_d3d12(HWND window, int width, int height, int seconds, int fps) {
     return 0;
 }
 
+// The OpenGL build: a double-buffered WGL context, a clear to the same colour,
+// and SwapBuffers every frame.
+int run_opengl(HWND window, int seconds, int fps) {
+    HDC dc = GetDC(window);
+    PIXELFORMATDESCRIPTOR pfd{};
+    pfd.nSize = sizeof(pfd);
+    pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = PFD_TYPE_RGBA;
+    pfd.cColorBits = 32;
+    pfd.cAlphaBits = 8;
+    pfd.cDepthBits = 24;
+    const int format = ChoosePixelFormat(dc, &pfd);
+    if (format == 0 || !SetPixelFormat(dc, format, &pfd)) {
+        std::fprintf(stderr, "no OpenGL pixel format\n");
+        return 1;
+    }
+    HGLRC context = wglCreateContext(dc);
+    if (!context || !wglMakeCurrent(dc, context)) {
+        std::fprintf(stderr, "no OpenGL context\n");
+        return 1;
+    }
+    // With --fps, no vertical sync: the clock sets the rate.
+    using SwapIntervalFn = BOOL(WINAPI*)(int);
+    auto swap_interval =
+        reinterpret_cast<SwapIntervalFn>(wglGetProcAddress("wglSwapIntervalEXT"));
+    if (swap_interval) swap_interval(fps > 0 ? 0 : 1);
+
+    std::printf("ready pid=%lu api=opengl\n", GetCurrentProcessId());
+    std::fflush(stdout);
+
+    Pacer pacer(fps);
+    const DWORD deadline = GetTickCount() + static_cast<DWORD>(seconds) * 1000;
+    while (g_running && GetTickCount() < deadline) {
+        MSG message;
+        while (PeekMessageW(&message, nullptr, 0, 0, PM_REMOVE)) {
+            TranslateMessage(&message);
+            DispatchMessageW(&message);
+        }
+        glClearColor(kClearColour[0], kClearColour[1], kClearColour[2], kClearColour[3]);
+        glClear(GL_COLOR_BUFFER_BIT);
+        SwapBuffers(dc);
+        pacer.wait();
+    }
+
+    wglMakeCurrent(nullptr, nullptr);
+    wglDeleteContext(context);
+    ReleaseDC(window, dc);
+    return 0;
+}
+
 }  // namespace
 
 int wmain(int argc, wchar_t** argv) {
@@ -412,6 +467,7 @@ int wmain(int argc, wchar_t** argv) {
     const int height = argument(argc, argv, L"--height", 360);
     const bool use_d3d9 = flag(argc, argv, L"--d3d9");
     const bool use_d3d12 = flag(argc, argv, L"--d3d12");
+    const bool use_opengl = flag(argc, argv, L"--opengl");
     const bool fullscreen = flag(argc, argv, L"--fullscreen");
     const int start_delay = argument(argc, argv, L"--start-delay", 0);
     const int stop_after = argument(argc, argv, L"--stop-drawing-after", 0);
@@ -444,6 +500,12 @@ int wmain(int argc, wchar_t** argv) {
         }
         const int result = run_d3d9(window, width, height, seconds, fullscreen, start_delay,
                                     stop_after, stop_for, second_device, fps);
+        DestroyWindow(window);
+        return result;
+    }
+
+    if (use_opengl) {
+        const int result = run_opengl(window, seconds, fps);
         DestroyWindow(window);
         return result;
     }

@@ -43,9 +43,10 @@
 // Version 5: Direct3D 12. fence_handle, frame_fence_value and
 // MELLO_HOOK_FLAG_NT_HANDLES: the textures and a fence travel as NT handles of
 // the game's process, and the client waits on the fence before it reads.
+// Version 6: OpenGL (wglSwapBuffers) and client_options.
 // A hook and a client on different versions refuse each other outright,
 // which is what must happen after a half-applied update.
-#define MELLO_HOOK_PROTOCOL_VERSION 5u
+#define MELLO_HOOK_PROTOCOL_VERSION 6u
 
 // Two textures, used one after the other. The hook writes the one the client is
 // not reading, so a slow client cannot see a half-written frame.
@@ -107,6 +108,11 @@ static inline int mello_hook_error_is_transient(uint32_t error) {
 // Direct3D 12 sets it: a D3D12 resource has no legacy shared handle.
 #define MELLO_HOOK_FLAG_NT_HANDLES 0x8u
 
+// `client_options`
+// OpenGL: take the read-back path even when WGL_NV_DX_interop2 is there. For
+// tests and for a driver whose interop misbehaves (MELLO_HOOK_GL_READBACK=1).
+#define MELLO_HOOK_OPTION_GL_READBACK 0x1u
+
 #pragma pack(push, 8)
 // The shared memory block. Fixed layout, checked by the static assertions below.
 typedef struct MelloHookInfo {
@@ -167,7 +173,9 @@ typedef struct MelloHookInfo {
     uint64_t off_d3d9_swapchain_present;       // IDirect3DSwapChain9::Present
     uint64_t off_d3d9_reset;                   // IDirect3DDevice9::Reset
     uint64_t off_d3d9_reset_ex;                // IDirect3DDevice9Ex::ResetEx
-    uint64_t off_opengl_swap_buffers;          // wglSwapBuffers, from opengl32.dll
+    // Not used: wglSwapBuffers is an export of opengl32.dll, which the hook
+    // resolves by name in the game.
+    uint64_t off_opengl_swap_buffers;
 
     // --- Frames through memory. Written by the hook, and only when it sets
     // MELLO_HOOK_FLAG_CPU_COPY. A Direct3D 9 game reads back its own render
@@ -189,7 +197,8 @@ typedef struct MelloHookInfo {
     // `frame_cadence.hpp`), so a 144 fps game pays for 60 copies a second on a
     // 60 fps stream, not 144. Zero copies on every present. ---
     uint32_t target_fps;
-    uint32_t cadence_reserved;
+    // MELLO_HOOK_OPTION_*, written by the client before it injects.
+    uint32_t client_options;
     // Copies the hook made (written by the hook). With `presents_seen`, this
     // is how a test and the client log see the copy rate.
     uint64_t frames_copied;

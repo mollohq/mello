@@ -267,6 +267,11 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     info_->off_d3d9_swapchain_present = offsets.d3d9_swapchain_present;
     info_->off_d3d9_reset = offsets.d3d9_reset;
     info_->off_d3d9_reset_ex = offsets.d3d9_reset_ex;
+    // A diagnostic and test switch: an OpenGL game sends its frames through
+    // memory even when its driver has the D3D11 interop.
+    info_->client_options = GetEnvironmentVariableA("MELLO_HOOK_GL_READBACK", nullptr, 0) > 0
+                                ? MELLO_HOOK_OPTION_GL_READBACK
+                                : 0;
     // Capture is on from the start: the hook publishes the frame size with its
     // first frame, and the stream needs that size to size its encoder.
     as_atomic_u32(&info_->capture_enabled)->store(1, std::memory_order_relaxed);
