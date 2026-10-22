@@ -2680,7 +2680,7 @@ dependencies = [
  "libc",
  "percent-encoding",
  "pin-project-lite",
- "socket2 0.6.3",
+ "socket2",
  "system-configuration",
  "tokio",
  "tower-service",
@@ -6430,16 +6430,6 @@ dependencies = [
 
 [[package]]
 name = "socket2"
-version = "0.5.10"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e22376abed350d73dd1cd119b57ffccad95b4e585a7cda43e286245ce23c0678"
-dependencies = [
- "libc",
- "windows-sys 0.52.0",
-]
-
-[[package]]
-name = "socket2"
 version = "0.6.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "3a766e1110788c36f4fa1c2b71b387a7815aa65f88ce0229841826633d93723e"
@@ -6511,6 +6501,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a2eb9349b6444b326872e140eb1cf5e7c522154d69e7a0ffb0fb81c06b37543f"
 
 [[package]]
+name = "stream-gate"
+version = "0.0.0-DEV"
+dependencies = [
+ "env_logger",
+ "log",
+ "mello-core",
+ "mello-sys",
+ "serde_json",
+ "tokio",
+ "voice-gate",
+]
+
+[[package]]
 name = "stream-host"
 version = "0.0.0-DEV"
 dependencies = [
@@ -6522,17 +6525,6 @@ dependencies = [
  "reqwest",
  "serde_json",
  "tokio",
-]
-
-[[package]]
-name = "stream-viewer"
-version = "0.0.0-DEV"
-dependencies = [
- "env_logger",
- "log",
- "mello-sys",
- "minifb",
- "socket2 0.5.10",
 ]
 
 [[package]]
@@ -6970,7 +6962,7 @@ dependencies = [
  "parking_lot",
  "pin-project-lite",
  "signal-hook-registry",
- "socket2 0.6.3",
+ "socket2",
  "tokio-macros",
  "windows-sys 0.61.2",
 ]

@@ -1,6 +1,6 @@
 // VOICE-01, VOICE-02, VOICE-04: two members join the same voice channel, see
 // each other, one mutes, then leaves. Each side checks what the other sees.
-// Both calls run through the local SFU. A P2P call fails the journey.
+// Both calls run through the local SFU. Any other call fails the journey.
 
 import { voiceMembers } from "../../tools/mello-driver/src/app.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";

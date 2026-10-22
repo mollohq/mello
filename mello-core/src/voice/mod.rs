@@ -1,5 +1,4 @@
 pub(crate) mod frame;
-mod mesh;
 pub(crate) mod send_sink;
 #[cfg(test)]
 mod slots_live_tests;
@@ -17,8 +16,6 @@ use crate::transport::{SfuConnection, SfuEvent};
 use send_sink::SfuPacketSink;
 use serde::{Deserialize, Serialize};
 use speaking::InbandSpeaking;
-
-pub use mesh::{SignalEnvelope, SignalMessage, SignalPurpose, VoiceMesh};
 
 const PACKET_BUF_SIZE: usize = 4000;
 const MAX_DEVICES: usize = 32;
@@ -46,15 +43,14 @@ const SFU_STALL_PONG_AGE_MS: i64 = 700;
 /// would look alive and carry no audio.
 const SFU_STALL_REBUILD_MS: i64 = 5_000;
 
-/// How voice is carried: through the SFU, over P2P, or not at all.
-/// `VoiceStateChanged` reports it. Serialized as `"sfu"`, `"p2p"` or
+/// How voice is carried: through the SFU, or not at all.
+/// `VoiceStateChanged` reports it. Serialized as `"sfu"` or
 /// `"disconnected"`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum VoiceMode {
     #[default]
     Disconnected,
-    P2P,
     SFU,
 }
 
@@ -97,7 +93,6 @@ pub struct AudioDevice {
 pub struct VoiceManager {
     ctx: *mut mello_sys::MelloContext,
     event_tx: std_mpsc::Sender<Event>,
-    mesh: VoiceMesh,
     muted: bool,
     deafened: bool,
     push_to_talk: bool,
@@ -236,7 +231,6 @@ impl VoiceManager {
         Self {
             ctx,
             event_tx,
-            mesh: VoiceMesh::new(),
             muted: false,
             deafened: false,
             push_to_talk: false,
@@ -266,35 +260,8 @@ impl VoiceManager {
         self.ctx
     }
 
-    pub fn join_voice(&mut self, local_id: &str, members: &[String]) {
-        if self.ctx.is_null() {
-            return;
-        }
-
-        self.mesh.init(local_id, members);
-        self.setup_vad_callback(local_id);
-
-        let result = unsafe { mello_sys::mello_voice_start_capture(self.ctx) };
-        if result != mello_sys::MelloResult_MELLO_OK {
-            log::error!("Failed to start voice capture: {}", result);
-            return;
-        }
-
-        self.active = true;
-        self.mode = VoiceMode::P2P;
-        self.apply_push_to_talk();
-        log::info!(
-            "Voice capture started (P2P), {} peers to connect",
-            members.len()
-        );
-
-        for member_id in members {
-            self.mesh.create_peer(self.ctx, local_id, member_id);
-        }
-    }
-
-    /// Join voice via SFU. Called from the client when mode is "sfu".
-    /// The SfuConnection is already established and joined.
+    /// Join voice via the SFU. The SfuConnection is already established and
+    /// joined.
     pub fn join_voice_sfu(
         &mut self,
         local_id: &str,
@@ -346,9 +313,6 @@ impl VoiceManager {
         self.stop_capture();
 
         match self.mode {
-            VoiceMode::P2P => {
-                self.mesh.destroy_all_peers();
-            }
             VoiceMode::SFU => {
                 self.detach_sfu_send_sink();
                 self.inband_speaking.detach();
@@ -1026,49 +990,11 @@ impl VoiceManager {
         self.active || self.loopback
     }
 
-    pub fn set_ice_servers(&mut self, urls: Vec<String>) {
-        self.mesh.set_ice_servers(urls);
-    }
-
-    /// Get pending signal messages that need to be sent via Nakama
-    pub fn drain_signals(&mut self) -> Vec<(String, SignalMessage)> {
-        self.mesh.drain_signals()
-    }
-
-    /// Handle an incoming signal from Nakama
-    pub fn handle_signal(&mut self, from: &str, signal: SignalMessage) {
-        if self.mode == VoiceMode::SFU {
-            log::debug!("Ignoring P2P voice signal in SFU mode from {}", from);
-            return;
-        }
-        self.mesh.handle_signal(self.ctx, from, signal);
-    }
-
-    /// Called when a new member joins the crew while voice is active
-    pub fn on_member_joined(&mut self, local_id: &str, member_id: &str) {
-        if !self.active {
-            return;
-        }
-        if self.mode == VoiceMode::SFU {
-            return;
-        }
-        self.mesh.create_peer(self.ctx, local_id, member_id);
-    }
-
-    /// Called when a member leaves the crew
-    pub fn on_member_left(&mut self, member_id: &str) {
-        self.mesh.destroy_peer(member_id);
-        self.remove_receive_peer(member_id);
-        let _ = self.event_tx.send(Event::VoiceDisconnected {
-            peer_id: member_id.to_string(),
-        });
-    }
-
-    /// The 20 ms voice tick: liveness, stats and events. In P2P mode and for
-    /// the mic test it also sends the encoded packets from capture. In SFU
-    /// mode the packet sink sends them from the capture thread, and received
-    /// SFU voice goes to the decoder from the track callback, so no audio
-    /// waits for this tick. `steps` times each step for the loop watchdog.
+    /// The 20 ms voice tick: liveness, stats and events. For the mic test it
+    /// also sends the encoded packets from capture. In a call the packet sink
+    /// sends them from the capture thread, and received SFU voice goes to the
+    /// decoder from the track callback, so no audio waits for this tick.
+    /// `steps` times each step for the loop watchdog.
     pub fn tick(&mut self, steps: &mut TickSteps) {
         if self.ctx.is_null() {
             return;
@@ -1248,15 +1174,11 @@ impl VoiceManager {
             self.inband_speaking.poll();
         }
         self.receive_and_poll_events();
-        steps.mark(if self.mode == VoiceMode::P2P {
-            "p2p_receive"
-        } else {
-            "sfu_events"
-        });
+        steps.mark("sfu_events");
     }
 
-    /// Send the packets libmello queued since the last tick: P2P, the mic
-    /// test, and SFU only when the packet sink could not be set.
+    /// Send the packets libmello queued since the last tick: the mic test,
+    /// and SFU only when the packet sink could not be set.
     fn send_queued_packets(&mut self) {
         let mut buf = [0u8; PACKET_BUF_SIZE];
         let loopback_id = c"loopback";
@@ -1278,17 +1200,12 @@ impl VoiceManager {
             }
 
             let pkt = &buf[..size as usize];
-            // P2P and the mic test carry the voice frame: sequence and RTP
+            // The mic test carries the voice frame: sequence and RTP
             // timestamp, then Opus (spec 10 section 4.2).
             let voice_frame = frame::from_get_packet(pkt, timestamp);
 
             if self.active {
                 match self.mode {
-                    VoiceMode::P2P => {
-                        if let Some(f) = &voice_frame {
-                            self.mesh.broadcast_audio(f);
-                        }
-                    }
                     VoiceMode::SFU => {
                         // Only when the packet sink could not be set.
                         if let Some(ref conn) = self.sfu_connection {
@@ -1321,15 +1238,11 @@ impl VoiceManager {
         }
     }
 
-    /// Feed P2P audio to the decoder and handle SFU events (membership,
-    /// disconnect, and SFU audio when the direct voice sink is not set).
+    /// Handle SFU events (membership, disconnect, and SFU audio when the
+    /// direct voice sink is not set).
     fn receive_and_poll_events(&mut self) {
-        // Read incoming audio from peers / SFU
         if self.active {
             match self.mode {
-                VoiceMode::P2P => {
-                    self.mesh.poll_incoming(self.ctx);
-                }
                 VoiceMode::SFU => {
                     // Audio arrives via AudioRtp events (RTP track callback)
                     // only while the direct voice sink is not set. Signaling

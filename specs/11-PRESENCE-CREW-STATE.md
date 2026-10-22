@@ -706,7 +706,7 @@ and thin typed wrappers for each call. See Section 4 for payloads.
 
 | Action | RPC ID | Called when |
 |--------|--------|------------|
-| Update presence | `presence_update` | Login, logout, activity change |
+| Update presence | `presence_update` | Logout, activity change. Not login: the session-start hook sets online (§8.3) |
 | Get presence | `presence_get` | On demand |
 | Set active crew | `set_active_crew` | Crew focused in UI |
 | Subscribe sidebar | `subscribe_sidebar` | After crews loaded |
@@ -1249,8 +1249,12 @@ Implemented in `mello-core/src/client.rs`:
 ```rust
 // Called after successful auth + WS connect (handle_device_auth, handle_login, handle_restore)
 async fn on_connected(&self) {
-    // Set online presence via RPC
-    self.nakama.presence_update(&PresenceStatus::Online, None).await;
+    // No presence write. OnSessionStart sets the account online when the
+    // socket registers, and keeps the stored activity when another session
+    // of the same account is up. A presence_update here wrote the same row
+    // at the same moment, and on a fresh account Nakama refused the second
+    // insert (code 13, "failed to update presence").
+    self.check_protocol_version().await;
 }
 
 // load_crews() — called after login/restore — subscribes sidebar for all crews
@@ -1450,7 +1454,7 @@ The voice roster is push-based and best-effort; these additions keep it from dri
 - **Sequenced `voice_update`.** Each `voice_update` (notification code 114) carries a per-crew monotonic `seq`. Clients drop any update with a `seq` ≤ the last applied for that crew, eliminating out-of-order/duplicate flicker (e.g. during reconnect storms).
 - **Coalesced pushes.** `PushVoiceUpdate` is debounced/coalesced backend-side so VAD churn (speaking on/off) can't produce a push storm.
 - **Presence heartbeat + GC hysteresis.** Clients send a periodic lightweight heartbeat so the backend can detect dead sessions faster than generic presence TTLs. `voiceRoomGC` then applies offline/stale thresholds with consecutive-miss hysteresis (`30s` offline grace, `5m` stale-online cutoff, `2` consecutive detections) before pruning.
-- **SFU reconcile oracle (Nakama-authoritative).** For SFU crews, Nakama periodically/triggered-pulls the SFU admin session API to correct `voiceRooms` drift (ghost/missing members), then re-pushes a sequenced `voice_update`. Reconcile pruning uses `45s` post-join grace and `2` consecutive SFU misses; unknown session lookups are treated as transient/P2P and do not prune. See [04-BACKEND.md](./04-BACKEND.md).
+- **SFU reconcile oracle (Nakama-authoritative).** For SFU crews, Nakama periodically/triggered-pulls the SFU admin session API to correct `voiceRooms` drift (ghost/missing members), then re-pushes a sequenced `voice_update`. Reconcile pruning uses `45s` post-join grace and `2` consecutive SFU misses. A session that no SFU has counts as a miss; a failed lookup does not prune. See [04-BACKEND.md](./04-BACKEND.md).
 - **Self-healing UI.** Speaking indicators auto-clear on a TTL if a "stopped" push is lost; connection-degraded state is surfaced in the UI/debug panel rather than silently showing `in_voice`.
 
 ---

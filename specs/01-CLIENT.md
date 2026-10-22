@@ -146,7 +146,7 @@ Only your local mute dims the row (avatar and name). The green name of a member 
 | Apply | `Command::SetPeerVolume { peer_id: user_id, volume }`, `volume = 0.0` when muted, else `percent / 100`. |
 | Apply again | `handlers::voice::sync_member_audio` runs after each event that changes the voice channel models. It sends the stored value for each member who appears in the joined channel: a join, a rejoin, a reconnect. |
 
-libmello names the receive state of a member after the user id, for P2P and for SFU (the SFU slot maps a mid to the user id). libmello keeps the gain of a peer for the life of its context, also across `remove_peer` and a slot release. The client sends the value again so that it does not depend on that.
+libmello names the receive state of a member after the user id (the SFU slot maps a mid to the user id). libmello keeps the gain of a peer for the life of its context, also across `remove_peer` and a slot release. The client sends the value again so that it does not depend on that.
 
 Stream audio has its own volume. This slider does not change it.
 
@@ -184,15 +184,22 @@ A restart on step 3 sends `DeviceAuth` with the stored device id. Linking needs 
 
 ### 6.1 Sign-in Entry Points
 
-"Has a device account" means `Settings::device_id` is set. Onboarding writes it when the user continues from step 2.
+Step 1 always shows a way into an existing account. The sign-in entry is the right column of the step 1 header.
 
 | Case | Step 1 shows |
 |------|--------------|
-| No device account (fresh install) | "I already have an account" (top right). It opens the sign-in panel. |
-| Device account, the user logged out | The returning-user control ("DEVICE USER … \| SIGN IN") after `DeviceAuthed { created: false }`. It opens the app as the device account. |
-| Device account, any other case | No sign-in control. |
+| Device auth found the device account (`DeviceAuthed { created: false }`), for example after a logout | The device card: the avatar, "ON THIS DEVICE", the name and a red "Sign in". "Sign in" opens the app as the device account. Under the card, "Use another account" opens the sign-in panel. |
+| Any other case | "I already have an account". It opens the sign-in panel. |
 
-Step 1 never shows two sign-in controls.
+"Any other case" includes:
+
+- A fresh install, with no `Settings::device_id`.
+- A device id whose account is not on the server. Device auth then creates a new account (`created: true`).
+- Device auth that is still running, or that failed.
+
+Logout clears the device card. The card shows again when device auth answers. A card that arrives late does not move the link: the link keeps its place.
+
+The two controls have different labels. Step 1 never shows two controls labelled "Sign in" (#70).
 
 The sign-in panel:
 

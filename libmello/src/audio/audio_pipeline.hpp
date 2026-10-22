@@ -175,8 +175,8 @@ public:
     /// thread, but never from inside the sink (it would wait for itself).
     void set_packet_sink(PacketSink sink);
 
-    /// Receive one voice frame of the P2P and loopback paths (spec 10
-    /// section 4.2): VOICE_FRAME_HEADER_SIZE bytes of header, then Opus.
+    /// Receive one voice frame of the loopback path (spec 10 section
+    /// 4.2): VOICE_FRAME_HEADER_SIZE bytes of header, then Opus.
     /// Builds the RTP fields from the header (payload type 111, the low 16
     /// bits of the sequence, the timestamp, SSRC 0) and inserts the frame
     /// into the peer's NetEQ. Any thread.
@@ -225,6 +225,13 @@ public:
     // Returns: 0 = failed, 1 = ok, 2 = fell back to default device
     int set_capture_device(const char* device_id);
     int set_playback_device(const char* device_id);
+    /// The chosen output device ("" = default), copied under a lock. The
+    /// stream audio playout reads it on its own thread and opens the same
+    /// device as voice.
+    std::string playback_device_id() const {
+        std::lock_guard<std::mutex> lock(device_id_mutex_);
+        return playback_device_id_;
+    }
 
     void start_clip_buffer();
     void stop_clip_buffer();
@@ -396,6 +403,9 @@ private:
     // switches re-open the stored pair.
     std::string capture_device_id_;
     std::string playback_device_id_;
+    // Guards the writes of playback_device_id_ and playback_device_id(). The
+    // pipeline's own readers run on the writing thread.
+    mutable std::mutex device_id_mutex_;
     float noise_floor_rms_ = 0.001f;
     std::atomic<bool> sensitivity_auto_{true};
     std::atomic<float> sensitivity_db_{-40.0f};

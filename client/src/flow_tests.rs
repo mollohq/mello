@@ -1100,18 +1100,6 @@ fn a_stale_backend_update_does_not_flicker_the_sfu_speaking_ring() {
     );
 }
 
-/// Outside an SFU call (P2P) the backend stays the source of remote rings.
-#[test]
-fn in_p2p_the_backend_speaking_state_applies() {
-    let mut h = Harness::new();
-    in_squad_with_bob(&mut h, VoiceMode::P2P);
-
-    h.emit(squad_update_with_bob_speaking(true));
-    assert!(squad_member_speaking(&h, "u-bob"));
-    h.emit(squad_update_with_bob_speaking(false));
-    assert!(!squad_member_speaking(&h, "u-bob"));
-}
-
 /// ★ A join that fails after `VoiceJoined` ends with
 /// `VoiceStateChanged { in_call: false }`. The active mark goes, and a later
 /// crew update does not put it back on a channel the user is not in.
@@ -2702,7 +2690,7 @@ fn after_a_logout_the_card_joins_the_crew_into_the_device_account() {
         cursor: None,
     });
     assert_eq!(h.app().get_onboarding_step(), 1);
-    assert!(h.app().get_has_device_account());
+    assert!(h.settings().borrow().has_device_account());
     h.commands();
 
     type_in_card(&mut h, "nite-0001");
@@ -3371,6 +3359,7 @@ fn failed_restore_stops_the_spinner() {
 // ── Sign-in entry points on step 1 (#67, #70) and a lost session (#71) ──────
 
 const HAVE_ACCOUNT: &str = "I already have an account";
+const OTHER_ACCOUNT: &str = "Use another account";
 const RETURNING_SIGN_IN: &str = "Sign in";
 
 fn with_device_account(h: &Harness) {
@@ -3379,7 +3368,7 @@ fn with_device_account(h: &Harness) {
 
 /// The sign-in controls on screen, by label.
 fn sign_in_controls(h: &Harness) -> Vec<&'static str> {
-    [HAVE_ACCOUNT, RETURNING_SIGN_IN]
+    [HAVE_ACCOUNT, OTHER_ACCOUNT, RETURNING_SIGN_IN]
         .into_iter()
         .flat_map(|label| std::iter::repeat_n(label, h.controls_labelled(label).len()))
         .collect()
@@ -3393,30 +3382,26 @@ fn fresh_install_step_one_offers_i_already_have_an_account() {
 
     resume(h.ctx(), OnboardingState::PickCrew);
 
-    assert!(!h.app().get_has_device_account());
     assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
 }
 
-/// ★ Regression (#67, R1): a machine with a device account shows no
-/// "I already have an account" on step 1.
+/// ★ Regression: a device id on disk does not hide "I already have an
+/// account". Before device auth answers, or when it does not find the
+/// account, it is the only way into an existing account.
 #[test]
-fn a_device_account_hides_i_already_have_an_account() {
+fn a_device_account_still_offers_i_already_have_an_account() {
     let h = Harness::new();
     with_device_account(&h);
 
     resume(h.ctx(), OnboardingState::PickCrew);
 
-    assert!(h.app().get_has_device_account());
-    assert!(
-        h.controls_labelled(HAVE_ACCOUNT).is_empty(),
-        "this machine has a device account"
-    );
+    assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
 }
 
-/// ★ Regression (#70, R5): a returning user who logged out sees exactly one
-/// sign-in control, the returning-user one.
+/// ★ Regression (#70, R5): a returning user who logged out sees the device
+/// card's "Sign in" and "Use another account": two controls, two labels.
 #[test]
-fn a_returning_user_sees_exactly_one_sign_in_control() {
+fn a_returning_user_sees_the_device_card_and_another_account() {
     let mut h = Harness::new();
     with_device_account(&h);
     h.emit(Event::LoggedIn {
@@ -3427,7 +3412,7 @@ fn a_returning_user_sees_exactly_one_sign_in_control() {
     let cmds = h.commands();
     assert!(
         cmds.iter().any(|c| matches!(c, Command::DeviceAuth { .. })),
-        "logout authenticates the device account for the returning-user control, got {cmds:?}"
+        "logout authenticates the device account for the device card, got {cmds:?}"
     );
     h.emit(Event::DeviceAuthed {
         user: sample_user(),
@@ -3435,7 +3420,34 @@ fn a_returning_user_sees_exactly_one_sign_in_control() {
     });
 
     assert_eq!(h.app().get_onboarding_step(), 1);
-    assert_eq!(sign_in_controls(&h), vec![RETURNING_SIGN_IN]);
+    assert_eq!(sign_in_controls(&h), vec![OTHER_ACCOUNT, RETURNING_SIGN_IN]);
+
+    h.click_label(OTHER_ACCOUNT);
+    assert_eq!(visible_screens(&h), vec![Screen::SignIn]);
+}
+
+/// ★ Regression: the device card's "Sign in" opens the app on core's
+/// session. A logout ends that session, so a card from an earlier device
+/// auth must not show again until device auth answers.
+#[test]
+fn a_second_logout_shows_no_device_card_before_device_auth_answers() {
+    let mut h = Harness::new();
+    with_device_account(&h);
+    h.emit(Event::LoggedIn {
+        user: sample_user(),
+    });
+    h.app().invoke_logout();
+    h.emit(Event::DeviceAuthed {
+        user: sample_user(),
+        created: false,
+    });
+    h.click_label(RETURNING_SIGN_IN);
+    assert!(h.app().get_logged_in());
+
+    h.app().invoke_logout();
+
+    assert_eq!(h.app().get_onboarding_step(), 1);
+    assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
 }
 
 /// ★ Regression (#67, R2): an unknown account gets a plain message and a way
@@ -3548,6 +3560,9 @@ fn a_lost_session_with_a_new_device_account_goes_to_step_one() {
     assert!(!h.app().get_logged_in());
     assert_eq!(h.app().get_onboarding_step(), 1);
     h.assert_not_blank();
+    // The old account is not on this server, but it may be on another:
+    // step 1 still offers a way into it.
+    assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
 }
 
 /// Device auth after a lost session can fail too (the server is down). The
@@ -3569,6 +3584,7 @@ fn a_lost_session_whose_device_auth_fails_goes_to_step_one() {
     assert_eq!(h.app().get_onboarding_step(), 1);
     assert_eq!(h.app().get_login_error().as_str(), "");
     h.assert_not_blank();
+    assert_eq!(sign_in_controls(&h), vec![HAVE_ACCOUNT]);
 }
 
 /// ★ Regression (R3): step 3 has no skip. A restart at step 3 has no session

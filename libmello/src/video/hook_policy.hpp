@@ -19,7 +19,7 @@ namespace mello::video::hook {
 enum class PolicyVerdict {
     Allowed,
     NotAllowedByCaller,   // the catalogue or the backend said no
-    ProcessUnreadable,    // OpenProcess was refused: a protected process
+    ProcessUnreadable,    // OpenProcess or the module list was refused: a protected process
     AntiCheatModule,      // an anti-cheat DLL is loaded in the game
     AntiCheatProcess,     // an anti-cheat service or launcher is running
     StorePackaged,        // installed under WindowsApps

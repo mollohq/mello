@@ -402,7 +402,7 @@ This review found these items. They are not part of this plan.
 | 5 | Session restore blocks the core command loop while the keychain prompt waits. The window stays blank. | P1 | Open |
 | 6 | A returning device user with a lost session goes back to "Discover your crew". The account already owns a crew. | P2 | Fixed (#71): the app opens directly |
 | 7 | Step 1 for a returning user shows two "Sign in" controls: the pill and the old link. | P2 | Fixed (#70) |
-| 8 | The returning-user pill and its round avatar break the design system shapes. A person is an octagon. A button cuts two corners. | P3 | Open |
+| 8 | The returning-user pill and its round avatar break the design system shapes. A person is an octagon. A button cuts two corners. | P3 | Fixed: the device card replaces the pill |
 | 9 | Loading history for a new crew logs `400 Invalid channel ID`. | P3 | Open |
 | 10 | Step 3 shows an Apple button. Desktop Apple sign-in is not implemented. | P3 | Open |
 

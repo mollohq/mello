@@ -2,6 +2,7 @@
 #include "graphics_device.hpp"
 #include "capture_source.hpp"
 #include "encoder.hpp"
+#include "encoder_control.hpp"
 #include "decoder.hpp"
 #include "cursor.hpp"
 #include <memory>
@@ -51,6 +52,22 @@ public:
     bool start_host(const CaptureSourceDesc& source, const PipelineConfig& config, PacketCallback on_packet);
     void stop_host();
     void get_host_resolution(uint32_t& w, uint32_t& h) const;
+
+    /// The encode size for a capture size and a preset height.
+    ///
+    /// The height is the preset height, the width follows the source aspect
+    /// and is rounded to a multiple of 16. The size never goes above the
+    /// capture size. When the size is over H.264 level 4.2 (8704 macroblocks
+    /// per frame, 522240 per second), the height goes down until it fits and
+    /// `level_capped` is set. Pure, so it is testable without a GPU.
+    struct EncodeSize {
+        uint32_t width = 0;
+        uint32_t height = 0;
+        bool     level_capped = false;
+    };
+    static EncodeSize encode_size_for(uint32_t capture_w, uint32_t capture_h,
+                                      uint32_t preset_h, uint32_t fps);
+
     void request_keyframe();
     void set_bitrate(uint32_t kbps);
     /// Evidence gathered over one observation window, used to decide whether the
@@ -204,6 +221,9 @@ private:
     GraphicsDevice                       device_{};
     std::unique_ptr<CaptureSource>       capture_;
     std::unique_ptr<Encoder>             encoder_;
+    // Every call into encoder_ that can run beside the encode path goes
+    // through this: encode, cost tiers, bitrate, framerate, keyframes.
+    EncoderControl                       encoder_control_;
     std::unique_ptr<Decoder>             decoder_;
 #ifdef _WIN32
     std::unique_ptr<VideoPreprocessor>   preprocessor_;

@@ -6,9 +6,11 @@
 #include <wrl/client.h>
 #include <vector>
 
-struct ISVCDecoder;
-
 namespace mello::video {
+
+namespace wels_abi {
+class ISVCDecoder;
+}
 
 class OpenH264Decoder : public Decoder {
 public:
@@ -22,7 +24,7 @@ public:
     const char*      name() const override { return "OpenH264"; }
 
 private:
-    ISVCDecoder* decoder_ = nullptr;
+    wels_abi::ISVCDecoder* decoder_ = nullptr;
     DecoderConfig config_{};
 
     Microsoft::WRL::ComPtr<ID3D11Texture2D>    upload_tex_;

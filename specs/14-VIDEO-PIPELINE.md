@@ -180,6 +180,14 @@ enum class CaptureMode {
     Monitor,    // Full display output   → DXGI DDI (WGC with prefer_wgc)
     Window,     // Specific HWND         → WGC backend
     Process,    // Game / app by PID     → ProcessCapture, the capture ladder
+    Reference,  // Test only: a YUV clip → ReferenceCapture (§4.7)
+};
+
+struct ReferenceClip {          // Reference mode only
+    std::string path;           // raw YUV 4:2:0, frames back to back, no header
+    uint32_t    width, height;  // even
+    uint32_t    fps = 60;
+    bool        nv12 = false;   // false: I420
 };
 
 struct CaptureSourceDesc {
@@ -191,6 +199,7 @@ struct CaptureSourceDesc {
     };
     bool prefer_wgc = false;    // Monitor mode: WGC instead of DXGI (benchmark)
     bool allow_hook = false;    // Process mode: the backend policy allows the hook
+    ReferenceClip reference{};  // Reference mode: the clip to play
 };
 
 class CaptureSource {
@@ -217,7 +226,8 @@ public:
     virtual bool captures_while_minimized() const;  // true for the hook only
 };
 
-/// Factory — DXGI or WGC for Monitor and Window, ProcessCapture for Process.
+/// Factory — DXGI or WGC for Monitor and Window, ProcessCapture for Process,
+/// ReferenceCapture for Reference (Windows only; nullptr on macOS).
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc);
 
 } // namespace mello::video
@@ -232,6 +242,7 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& de
 | `Window` | Always | WGC on the HWND |
 | `Process` | `allow_hook` true | Ladder: Hook, WGC window, WGC monitor, DXGI DDI |
 | `Process` | `allow_hook` false | Ladder: WGC window, WGC monitor, DXGI DDI |
+| `Reference` | Test only (`MELLO_CAPTURE_REFERENCE`) | ReferenceCapture: plays the clip of `mello_test_set_reference_clip` (§4.7) |
 
 `Process` mode runs the capture ladder (`capture_process.cpp`): the first
 method that delivers a frame keeps the stream. `allow_hook` is the backend hook
@@ -405,6 +416,22 @@ See `17-GAME-SENSING.md` §2.
 
 ---
 
+### 4.7 Reference Clip Backend (test only)
+
+`capture_reference.{hpp,cpp}`. The capture-less source of the streaming
+quality gate (`tools/stream-gate`, `TESTING.md` "Streaming quality gate").
+Nothing in the product selects it.
+
+| Item | Rule |
+|---|---|
+| Selection | `MelloCaptureSource.mode = MELLO_CAPTURE_REFERENCE`. The clip comes from the context: `mello_test_set_reference_clip(ctx, path, width, height, fps, format)`. A host without a clip fails to start. |
+| Input | Raw YUV 4:2:0, I420 or NV12, 8 bit, BT.709 studio range, frames back to back. The file size must be a whole number of frames. |
+| Thread | One source thread. Frame n is due at start + n × 10⁶ / fps µs. The thread waits on a high-resolution waitable timer to 1 ms before the due time, then yields. It never skips a frame: every clip frame reaches the pipeline in order, and the clip loops at its end. |
+| Upload | The thread reads frame n, packs it as NV12 in memory, `UpdateSubresource` into a default-usage NV12 texture (bind flag render target: the video processor refuses an input view on a shader-resource NV12 texture with `E_INVALIDARG`), and a D3D11 video processor converts it to BGRA (input BT.709 studio range, output full-range RGB). |
+| Callback | The same contract as DXGI and WGC: a BGRA `ID3D11Texture2D` (two slots, used in turn) and the due time in µs of the steady clock. The preprocessor then converts it back to NV12, so the encoder sees the clip's values up to rounding. |
+| Late frames | A frame handed over more than 2 ms after its due time counts as late (`mello_stream_reference_info`). The timestamp stays the due time. |
+| Clock | `mello_clock_now_us()` is the clock of the due times and of the viewer frame callback (`ts`), so a harness in the same process measures glass-to-glass. |
+
 ## 5. Color Conversion
 
 Capture produces BGRA textures. Hardware encoders expect NV12 (YUV 4:2:0 planar). Conversion runs as a compute shader on the GPU — no CPU involvement, no texture copy to system memory.
@@ -467,9 +494,9 @@ bool initialize(const GraphicsDevice& device,
 
 The D3D11 Video Processor handles scaling automatically when `content_desc.InputWidth/Height` differs from `OutputWidth/Height`. Source and destination rectangles are set explicitly to ensure correct sampling.
 
-In `VideoPipeline::start_host()`, the target encode resolution is determined from `PipelineConfig::width/height` (passed from the Rust preset). If the config resolution is smaller than the capture resolution, the pipeline uses the config resolution for encoding; otherwise it uses the capture resolution. All dimensions are even-aligned for NV12 compatibility.
+In `VideoPipeline::start_host()`, `encode_size_for` sets the encode size from the capture size and `PipelineConfig::height` (the preset height). The width follows the source aspect, so the scale never stretches the picture. The rules are in `12-STREAMING.md` §3.2. All dimensions are even-aligned for NV12 compatibility.
 
-This reduces encoded pixel count significantly (e.g. 2036×1392 → 1920×1080 = 27% fewer pixels), improving quality per bit and lowering bandwidth.
+This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 = 40% fewer pixels), improving quality per bit and lowering bandwidth.
 
 ---
 
@@ -558,9 +585,11 @@ public:
 
 namespace mello::video {
 
-/// Priority order: NVENC → AMF → QSV (oneVPL)
+/// Priority order: NVENC → AMF → QSV (oneVPL) → OpenH264 (§6.7)
 /// Probes each in order; returns first that initialises successfully.
-/// If none are available, returns Err — streaming requires hardware encode.
+/// OpenH264 is the only candidate when MELLO_SOFT_ENCODER=1, and never one
+/// without it. If none initialises, returns Err — streaming requires hardware
+/// encode.
 std::unique_ptr<Encoder> create_best_encoder(
     const GraphicsDevice& device,
     const EncoderConfig&  config
@@ -694,9 +723,29 @@ private:
 } // namespace mello::video
 ```
 
-### 6.7 No Software Encoder
+### 6.7 No Software Encoder in the Product
 
-There is no software encoder fallback. Streaming requires a hardware encoder. This is an intentional product and licensing decision — GPL-licensed software encoders (x264, x265) are incompatible with Mello's Apache 2.0 licence, and AV1 software encoders are too slow for real-time use.
+The test lane of the streaming quality gate has one software encoder,
+`encoder_openh264.{hpp,cpp}`: Cisco's prebuilt OpenH264 DLL, the same DLL
+that `openh264_dynload.cpp` loads for decode (`WelsCreateSVCEncoder`). It is
+the last entry of the factory and the only entry when the process environment
+has `MELLO_SOFT_ENCODER=1` (read with `GetEnvironmentVariableA`, so a harness
+can set it after start). Without the variable the factory never tries it.
+
+| Setting | Value |
+|---|---|
+| Usage | `CAMERA_VIDEO_REAL_TIME`, low complexity, one spatial and one temporal layer, one slice, one thread |
+| Rate control | `RC_BITRATE_MODE`, maximum 1.25 × target (NVENC's VBR headroom), no frame skip |
+| GOP | IDR every `keyframe_interval` frames and on `request_keyframe()`; constant SPS/PPS ids |
+| Colour | BT.709 studio range in the VUI, as NVENC |
+| Input | NV12 texture → staging copy → `Map` → I420 on the encode thread |
+| Controls | `set_bitrate`, `set_framerate` and `request_keyframe` store atomics on any thread; the encode thread applies them before the next frame |
+
+The API headers are vendored in `third_party/openh264/include/wels` (v2.6.0,
+BSD-2, the version of the DLL); nothing links the library. The same switch
+for the viewer is `MELLO_SOFT_DECODER=1` (§7.2).
+
+There is no software encoder fallback in the product. Streaming requires a hardware encoder. This is an intentional product and licensing decision — GPL-licensed software encoders (x264, x265) are incompatible with Mello's Apache 2.0 licence, and AV1 software encoders are too slow for real-time use.
 
 If `EncoderFactory` exhausts all hardware candidates without success, it returns `Err`. The stream cannot start and the user is shown a clear error message. In practice this affects only machines with no GPU at all — any system with NVIDIA, AMD, or Intel graphics from the last decade has hardware H.264 encode capability.
 
@@ -756,6 +805,7 @@ public:
 namespace mello::video {
 
 /// Priority order: NVDEC → AMF → D3D11VA → OpenH264 (H.264 SW) / dav1d (AV1 SW)
+/// MELLO_SOFT_DECODER=1 (test lane): OpenH264 only.
 std::unique_ptr<Decoder> create_best_decoder(
     const GraphicsDevice& device,
     const DecoderConfig&  config

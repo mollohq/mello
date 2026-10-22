@@ -102,8 +102,8 @@ flows:
     title: A returning user whose session is lost, or who logged out, gets back in
     priority: P0
     users: 1
-    harness: [session_restore_failure_ends_somewhere_usable, failed_restore_stops_the_spinner, empty_login_failure_reason_means_restore_failed, a_lost_session_with_a_device_account_opens_the_app, a_lost_session_with_a_new_device_account_goes_to_step_one, a_lost_session_whose_device_auth_fails_goes_to_step_one, a_returning_user_sees_exactly_one_sign_in_control, a_device_account_hides_i_already_have_an_account]
-    journeys: [qa/journeys/session-lost.ts, qa/journeys/signout-returning-user.ts]
+    harness: [session_restore_failure_ends_somewhere_usable, failed_restore_stops_the_spinner, empty_login_failure_reason_means_restore_failed, a_lost_session_with_a_device_account_opens_the_app, a_lost_session_with_a_new_device_account_goes_to_step_one, a_lost_session_whose_device_auth_fails_goes_to_step_one, a_returning_user_sees_the_device_card_and_another_account, a_second_logout_shows_no_device_card_before_device_auth_answers, a_device_account_still_offers_i_already_have_an_account]
+    journeys: [qa/journeys/session-lost.ts, qa/journeys/session-lost-unknown-device.ts, qa/journeys/signout-returning-user.ts]
     protocol: []
     issues: []
 

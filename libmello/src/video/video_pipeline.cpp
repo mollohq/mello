@@ -3,11 +3,13 @@
 #include <future>
 #include "encoder_factory.hpp"
 #include "decoder_factory.hpp"
+#include "frame_cadence.hpp"
 #include "../util/log.hpp"
 #include <chrono>
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -175,12 +177,16 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     uint32_t cap_w = capture_->width()  & ~1u;
     uint32_t cap_h = capture_->height() & ~1u;
 
-    // If the config specifies a target resolution smaller than the capture,
-    // the color converter will downscale in the same GPU pass as BGRA→NV12.
-    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
-    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
-    encode_w_ = target_w;
-    encode_h_ = target_h;
+    // The color converter downscales in the same GPU pass as BGRA→NV12. The
+    // encode size keeps the source aspect, so the converter never stretches.
+    const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
+    if (target.level_capped) {
+        MELLO_LOG_WARN(TAG,
+            "Encode size for %ux%u at %u fps is over H.264 level 4.2; reduced to %ux%u",
+            cap_w, cap_h, config.fps, target.width, target.height);
+    }
+    encode_w_ = target.width;
+    encode_h_ = target.height;
     uint32_t enc_w = encode_w_;
     uint32_t enc_h = encode_h_;
 
@@ -222,6 +228,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "No encoder available");
         return false;
     }
+    encoder_control_.attach(encoder_.get());
 
     // 4. Start encode thread + capture — frames flow: capture -> preprocess -> queue -> encode thread
     host_running_    = true;
@@ -259,10 +266,9 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly
     uint32_t cap_w = capture_->width()  & ~1u;
     uint32_t cap_h = capture_->height() & ~1u;
-    uint32_t target_w = (config.width  > 0 && config.width  < cap_w) ? (config.width  & ~1u) : cap_w;
-    uint32_t target_h = (config.height > 0 && config.height < cap_h) ? (config.height & ~1u) : cap_h;
-    encode_w_ = target_w;
-    encode_h_ = target_h;
+    const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
+    encode_w_ = target.width;
+    encode_h_ = target.height;
 
     EncoderConfig enc_config{};
     enc_config.width         = encode_w_;
@@ -277,6 +283,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "No encoder available");
         return false;
     }
+    encoder_control_.attach(encoder_.get());
 
     host_running_    = true;
     host_start_time_ = now_us();
@@ -365,6 +372,7 @@ void VideoPipeline::stop_host() {
         return;
     }
 
+    encoder_control_.attach(nullptr);
     MELLO_LOG_INFO(TAG, "stop_host: encoder shutdown (%s)", encoder_ ? encoder_->name() : "none");
     if (encoder_)   encoder_->shutdown();
 #ifdef _WIN32
@@ -398,7 +406,7 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_->encode(cv_pixel_buffer, packet)) {
+    if (encoder_control_.encode(cv_pixel_buffer, packet)) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {
@@ -427,8 +435,47 @@ void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     h = encode_h_;
 }
 
+// H.264 level 4.2, the level every encoder backend configures.
+static constexpr uint64_t kLevel42MaxFrameMbs  = 8704;
+static constexpr uint64_t kLevel42MaxMbsPerSec = 522240;
+
+VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uint32_t capture_h,
+                                                         uint32_t preset_h, uint32_t fps) {
+    EncodeSize out{};
+    const uint32_t cap_w = capture_w & ~1u;
+    const uint32_t cap_h = capture_h & ~1u;
+    if (cap_w == 0 || cap_h == 0) return out;
+
+    // The width that keeps the source aspect at height `h`, a multiple of 16
+    // and never wider than the capture. Without a vertical scale there is no
+    // horizontal scale either.
+    auto width_for = [&](uint32_t h) -> uint32_t {
+        if (h >= cap_h) return cap_w;
+        const double exact = static_cast<double>(cap_w) * h / cap_h;
+        uint32_t w = static_cast<uint32_t>(std::lround(exact / 16.0)) * 16;
+        if (w > cap_w) w = cap_w & ~15u;
+        if (w < 16) w = std::min<uint32_t>(16, cap_w);
+        return w;
+    };
+    auto fits_level = [&](uint32_t w, uint32_t h) {
+        const uint64_t mbs = static_cast<uint64_t>((w + 15) / 16) * ((h + 15) / 16);
+        return mbs <= kLevel42MaxFrameMbs && mbs * fps <= kLevel42MaxMbsPerSec;
+    };
+
+    uint32_t h = (preset_h > 0 && preset_h < cap_h) ? (preset_h & ~1u) : cap_h;
+    uint32_t w = width_for(h);
+    while (h > 2 && !fits_level(w, h)) {
+        out.level_capped = true;
+        h -= 2;
+        w = width_for(h);
+    }
+    out.width = w;
+    out.height = h;
+    return out;
+}
+
 void VideoPipeline::request_keyframe() {
-    if (encoder_) encoder_->request_keyframe();
+    encoder_control_.request_keyframe();
     // An idle stream has no next frame to carry the IDR. Wake the encode
     // thread so it re-encodes the last picture now.
     keepalive_kick_.store(true, std::memory_order_relaxed);
@@ -457,7 +504,7 @@ bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
 // keep the target FPS constant and leave headroom between target and actual
 // bitrate so the encoder naturally recovers after transient drops.
 void VideoPipeline::set_bitrate(uint32_t kbps) {
-    if (encoder_) encoder_->set_bitrate(kbps);
+    encoder_control_.set_bitrate(kbps);
 }
 
 void VideoPipeline::get_stats(EncoderStats& out) const {
@@ -484,9 +531,7 @@ void VideoPipeline::set_output_fps(uint32_t fps) {
 
     // Rate control budgets bits per frame from the framerate, so the encoder has
     // to be told or a 30fps stream gets 60fps-sized frames.
-    if (encoder_) {
-        encoder_->set_framerate(target == 0 ? capture_fps : target);
-    }
+    encoder_control_.set_framerate(target == 0 ? capture_fps : target);
     MELLO_LOG_INFO(TAG, "output framerate %u -> %u fps (capture %u)",
                    previous == 0 ? capture_fps : previous,
                    target == 0 ? capture_fps : target,
@@ -494,46 +539,12 @@ void VideoPipeline::set_output_fps(uint32_t fps) {
 }
 
 // True when this captured frame should be passed downstream under the current
-// decimation target. Uses a half-interval tolerance for the same reason the DXGI
-// throttle does: capture lands on vsync boundaries, so demanding a full interval
-// would systematically reject the frame that is closest to the deadline and
-// deliver 20fps when 30 was asked for.
+// decimation target. The rule is shared with the capture backend throttles
+// (frame_cadence.hpp), so a frame a backend passes is a frame this passes.
 bool VideoPipeline::decimation_accepts(uint64_t timestamp_us,
                                        uint64_t& next_deadline_us,
                                        uint32_t output_fps) {
-    if (output_fps == 0) {
-        return true;
-    }
-
-    const uint64_t interval_us = 1'000'000ULL / output_fps;
-
-    if (next_deadline_us == 0 || timestamp_us + interval_us < next_deadline_us) {
-        // First frame, or the clock went backwards. Start a fresh cadence here.
-        next_deadline_us = timestamp_us + interval_us;
-        return true;
-    }
-
-    // Small tolerance so an arrival landing a hair before the deadline still
-    // counts. It is a fixed fraction of the *target* interval, deliberately: an
-    // earlier version used half a *source* interval, and when the source rate
-    // approached twice the target that tolerance swallowed an entire target
-    // interval, so every frame cleared the deadline and nothing was decimated.
-    const uint64_t tolerance_us = interval_us / 8;
-    if (timestamp_us + tolerance_us < next_deadline_us) {
-        return false;
-    }
-
-    // Advance by exactly one interval rather than resetting to now. Resetting is
-    // what collapses the output back onto the source's quantisation — with a
-    // 12 ms source and a 16.7 ms target it can only ever emit every source frame
-    // or every other one, never the 60 of 83 that actually equals 60fps.
-    next_deadline_us += interval_us;
-    // If capture stalled we may be many intervals behind; catching up would emit
-    // a burst the encoder and pacer then have to absorb. Resync instead.
-    if (next_deadline_us < timestamp_us) {
-        next_deadline_us = timestamp_us + interval_us;
-    }
-    return true;
+    return frame_cadence_accepts(timestamp_us, next_deadline_us, output_fps);
 }
 
 bool VideoPipeline::encoder_is_overloaded(const EncoderLoadSample& sample) {
@@ -661,6 +672,9 @@ void VideoPipeline::encode_thread_func() {
     static constexpr auto kIdlePoll = std::chrono::milliseconds(100);
 
     while (true) {
+        // A control value that met a running encode waits here (EncoderControl).
+        encoder_control_.apply_pending();
+
         EncodeJob job{};
         bool idle_repeat = false;
         {
@@ -694,7 +708,7 @@ void VideoPipeline::encode_thread_func() {
 
         auto t0 = std::chrono::steady_clock::now();
         EncodedPacket packet{};
-        if (encoder_->encode(job.texture, packet)) {
+        if (encoder_control_.encode(job.texture, packet)) {
             auto t1 = std::chrono::steady_clock::now();
             last_encode_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
             // Exponential mean, ~1s of history at 60fps. Cheap, and unlike the
@@ -760,7 +774,7 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     }
 
     if (encoder_is_overloaded(sample)) {
-        encoder_->reduce_cost_tier();
+        encoder_control_.reduce_cost_tier();
     }
     // Reset the window either way: after a downgrade so the next decision
     // measures the new configuration, and after a healthy window so old drops

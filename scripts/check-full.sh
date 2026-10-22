@@ -39,6 +39,15 @@ run cargo test --workspace
 step "voice quality gate (delta against benchmarks/baselines/voice/baseline-2.9-slot.json)"
 run ./scripts/voice-gate.sh
 
+# Off by default (lean CI: the full streaming gate runs from the QA harness).
+# STREAM_GATE_SMOKE=1 adds one profile of the CPU lane (about 60 s once the
+# release build is cached): it fails only on a setup or run error, never on a
+# metric. Windows only, needs Go and a free UDP port 10000.
+if [ "${STREAM_GATE_SMOKE:-0}" = "1" ]; then
+    step "streaming quality gate smoke (CPU lane, clean, report only)"
+    run ./scripts/stream-gate.sh --only clean --no-vmaf --report-only
+fi
+
 # MELLO_BUILD_TESTS defaults to OFF: mello-sys/build.rs configures libmello on
 # every cargo build and we do not want the gtest suite compiled into every dev
 # build. CMAKE_TOOLCHAIN_FILE must be absolute — CMake resolves a relative

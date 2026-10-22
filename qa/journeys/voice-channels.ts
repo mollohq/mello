@@ -8,7 +8,7 @@
 //   clicks join one after another, seconds later; the cause was a social
 //   sign-in wait that blocked the core command loop (#88, fixed in 0.5.8).
 //
-// Every join runs through the local SFU. A P2P call fails the journey.
+// Every join runs through the local SFU. Any other call fails the journey.
 
 import { voiceMembers, type App, type AppState } from "../../tools/mello-driver/src/app.ts";
 import { journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";

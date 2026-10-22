@@ -5,9 +5,8 @@
 //! to the settings file: a restart sets every member back to 100 % and not
 //! muted (spec 01 section 4.1).
 //!
-//! libmello names the receive state of a member after the user id, for SFU
-//! and for P2P, so the user id is also the `peer_id` of
-//! `Command::SetPeerVolume`.
+//! libmello names the receive state of a member after the user id, so the
+//! user id is also the `peer_id` of `Command::SetPeerVolume`.
 
 use std::collections::{HashMap, HashSet};
 

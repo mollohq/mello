@@ -99,14 +99,22 @@ std::string executable_path_of(HANDLE process) {
     return out;
 }
 
-// Reads the loaded module list. A denial here is itself a reason to stop.
-bool find_anticheat_module(HANDLE process, std::string* out_name) {
+enum class ModuleScan {
+    Clean,        // the module list was read and has no anti-cheat module
+    AntiCheat,    // an anti-cheat module is loaded
+    Unreadable,   // the module list could not be read
+};
+
+// Reads the loaded module list. A denial here is itself a reason to stop: a
+// list that cannot be read is not proof that no anti-cheat module is loaded.
+ModuleScan scan_modules(HANDLE process, std::string* out_name) {
     std::array<HMODULE, 1024> modules{};
     DWORD needed = 0;
     if (!EnumProcessModulesEx(process, modules.data(),
                               static_cast<DWORD>(modules.size() * sizeof(HMODULE)), &needed,
                               LIST_MODULES_ALL)) {
-        return false;
+        *out_name = "module list: error " + std::to_string(GetLastError());
+        return ModuleScan::Unreadable;
     }
     const size_t count = std::min<size_t>(modules.size(), needed / sizeof(HMODULE));
     for (size_t i = 0; i < count; ++i) {
@@ -114,10 +122,10 @@ bool find_anticheat_module(HANDLE process, std::string* out_name) {
         if (GetModuleBaseNameA(process, modules[i], name, MAX_PATH) == 0) continue;
         if (is_anticheat_module(name)) {
             *out_name = name;
-            return true;
+            return ModuleScan::AntiCheat;
         }
     }
-    return false;
+    return ModuleScan::Clean;
 }
 
 bool find_anticheat_process(std::string* out_name) {
@@ -264,10 +272,18 @@ PolicyResult check_process(uint32_t pid, bool allowed_by_caller) {
     }
 
     std::string module_name;
-    if (find_anticheat_module(process, &module_name)) {
-        result.verdict = PolicyVerdict::AntiCheatModule;
-        result.detail = module_name;
-        return result;
+    switch (scan_modules(process, &module_name)) {
+        case ModuleScan::AntiCheat:
+            result.verdict = PolicyVerdict::AntiCheatModule;
+            result.detail = module_name;
+            return result;
+        case ModuleScan::Unreadable:
+            // Fail closed. Any doubt means no hook.
+            result.verdict = PolicyVerdict::ProcessUnreadable;
+            result.detail = module_name;
+            return result;
+        case ModuleScan::Clean:
+            break;
     }
 
     std::string process_name;

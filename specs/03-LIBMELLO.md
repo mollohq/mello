@@ -9,12 +9,12 @@
 
 ## 1. Overview
 
-libmello is the C++ library that handles all low-level audio/video capture, encoding, decoding, and P2P transport. It exposes a pure C API for FFI compatibility with Rust and future mobile platforms.
+libmello is the C++ library that handles all low-level audio/video capture, encoding, decoding, and the peer transport to the SFU. It exposes a pure C API for FFI compatibility with Rust and future mobile platforms.
 
 **Key Responsibilities:**
 - Audio capture (WASAPI), processing (WebRTC AEC3 + AGC2, RNNoise, Silero VAD), and encoding (Opus)
 - Video capture (the capture ladder: game capture hook, WGC, DXGI; ScreenCaptureKit on macOS), encoding (NVENC/AMF/QSV), and decoding
-- P2P transport (libdatachannel)
+- Peer transport to the SFU (libdatachannel)
 - ICE/STUN/TURN connectivity
 
 ---
@@ -74,6 +74,9 @@ libmello/
 │   ├── opus/
 │   ├── rnnoise/
 │   ├── webrtc-audio-processing/    # Submodule: github.com/helloooideeeeea/webrtc-audio-processing (WebRTC APM)
+│   ├── webrtc-neteq/               # Overlay: WebRTC NetEQ + audio mixer (M131)
+│   ├── webrtc-video-timing/        # Overlay: WebRTC video receive timing + frame buffer (M131)
+│   ├── webrtc-goog-cc/             # Overlay: WebRTC goog_cc send-side congestion controller (M131)
 │   └── silero-vad/                 # ONNX model + runtime
 │
 ├── models/                         # ML model files (Silero VAD .onnx)
@@ -83,6 +86,25 @@ libmello/
     ├── test_video_pipeline.cpp
     └── test_peer_connection.cpp
 ```
+
+### Vendored WebRTC overlays
+
+The APM submodule points at a repository that mello cannot push to. Other
+WebRTC code lives in mello-owned overlay trees under `third_party/`, with the
+upstream path layout, LICENSE and PATENTS. An overlay holds only files that
+the submodule and the other overlays do not have. Upstream files are
+byte-identical; shims go in a `compat` directory under `cmake/`. Every overlay
+comes from `https://webrtc.googlesource.com/src`, `refs/branch-heads/6778`
+(M131), commit `79aff54b0fa9238ce3518dd9eaf9610cd6f22e82`. Each build file is
+included from the end of `cmake/webrtc-audio-processing/CMakeLists.txt`, and
+the video timing and goog_cc targets link `webrtc_neteq` for the shared base
+(rtc_base, api/units, field trials, environment).
+
+| Overlay | Target and option | Contents | Users |
+|---|---|---|---|
+| `third_party/webrtc-neteq/` | `webrtc_neteq`, `MELLO_WEBRTC_NETEQ`: ON on every platform | NetEQ, the audio mixer, the Opus and CNG decoders, and the shared WebRTC base | Voice playout (section 4) |
+| `third_party/webrtc-video-timing/` | `webrtc_video_timing` (`cmake/webrtc-video-timing.cmake`), `MELLO_WEBRTC_VIDEO_TIMING`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers` and the `EncodedFrame` types. No depacketizer, decoder or transport | Nothing in libmello yet. `tests/test_video_timing_spike.cpp` (`mello_video_timing_spike_tests`) proves it as the viewer jitter buffer; the stage 3 viewer timeline builds on it |
+| `third_party/webrtc-goog-cc/` | `webrtc_goog_cc` (`cmake/webrtc-goog-cc.cmake`), `MELLO_WEBRTC_GOOG_CC`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/congestion_controller/goog_cc`, the `remote_bitrate_estimator` parts it uses, `api/transport` network control and the rate control parsers. No pacer, RTCP or RTC event log encoder: the logged event classes are stubs in `cmake/webrtc-goog-cc/compat/mello_rtc_event_stubs.h` | Nothing in libmello yet. `tests/test_goog_cc_spike.cpp` (`mello_goog_cc_spike_tests`); the stream sender uses it from streaming-quality stage 4 |
 
 ---
 
@@ -98,7 +120,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | `MelloVoiceSession` | Active voice session |
 | `MelloStreamHost` | Active stream hosting session |
 | `MelloStreamView` | Active stream viewing session |
-| `MelloPeerConnection` | Single P2P peer connection |
+| `MelloPeerConnection` | One peer connection: the client side of an SFU session |
 
 ### API surface groups
 
@@ -107,8 +129,8 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
 | **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet`, `feed_rtp`, `remove_peer`, `set_peer_volume`, `set_peer_pan`, `report_send_feedback`, `set_max_bitrate` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet`. Received audio plays through one NetEQ per peer (spec 10 section 5) |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
-| **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame` | Caller must free frames after use |
-| **P2P Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `add_ice_candidate`, `send_unreliable`, `send_reliable`, `recv`, `send_ping`, `rtt_ms`, `pong_age_ms` | Two data channels per peer: reliable (control) + unreliable (media), plus control-plane liveness/RTT probes |
+| **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame`, `feed_audio_packet`, `viewer_set_audio_muted` | Caller must free frames after use. Game audio plays on the voice output device; mute drops the queued audio |
+| **Peer Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `handle_remote_offer`, `add_ice_candidate`, `send_reliable`, `send_ping`, `rtt_ms`, `pong_age_ms` | The client side of an SFU session (§6), plus control-plane liveness/RTT probes. `create_answer` stays for the in-process tests, where a libmello peer stands in for the SFU |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
 
 ### Callbacks
@@ -177,7 +199,7 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 │                                                                         │
 │  PLAYBACK PATH:                                                         │
 │  ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   ┌─────────┐   │
-│  │RTP / P2P│──▶│ NetEQ   │──▶│  Mixer  │──▶│ Output  │──▶│ WASAPI  │   │
+│  │ SFU RTP │──▶│ NetEQ   │──▶│  Mixer  │──▶│ Output  │──▶│ WASAPI  │   │
 │  │ frames  │   │per peer │   │(stereo, │   │  ring   │   │ Playback│   │
 │  │   In    │   │decode,  │   │ limiter)│   │ 10 ms → │   │ (sinc   │   │
 │  │         │   │FEC, PLC │   │         │   │ device  │   │resample)│   │
@@ -200,7 +222,7 @@ All functions return `MelloResult` enum. On failure, `mello_get_error()` returns
 - **Downward expander (AGC pump control):** `SpeechExpander` runs after AGC2, before encode. A quiet mic forces AGC2 to a large gain (field: ~+23 dB), which then blasts the noise floor in speech gaps and transmits crackle. AGC config cannot separate the speech gain from the floor gain. The expander attenuates the live frame toward a floor gain when the raw Silero probability is below threshold (not `is_speaking()`, which latches through the gaps), with fast attack and smoothed release. It does not touch the pre-roll, and it starts at unity when the gate opens. AGC2 also starts at `initial_gain_db = 0` (not the M131 default +15). See spec 10 §4.4.
 - **RNNoise over alternatives:** Real-time, small model (<100KB), no GPU needed, well-tested in voice comms. It remains the default quality path, but now only runs during active speech/pre-roll/hangover windows.
 - **Silero VAD:** ONNX-based neural VAD with hysteresis. It confirms candidate speech windows instead of running as the only gate for every frame forever.
-- **Opus at 64kbps mono:** Good quality for voice, well within P2P bandwidth budget. Frame size is 20ms (960 samples at 48kHz). In-band FEC and DTX on.
+- **Opus at 64kbps mono:** Good quality for voice, well within the bandwidth budget of one SFU uplink. Frame size is 20ms (960 samples at 48kHz). In-band FEC and DTX on.
 - **NetEQ playout (WebRTC M131):** One `NetEq` per remote peer decodes, conceals (expand, in-band FEC), plays comfort noise, and time-stretches (accelerate, preemptive expand) to follow network jitter and clock drift. It replaces the custom jitter buffer, the per-peer Opus decoders and the fill PLC. The vendored code lives in the overlay `third_party/webrtc-neteq/` and builds as `webrtc_neteq` (option `MELLO_WEBRTC_NETEQ`, ON on every platform). Spec 10 section 5.
 - **Delay manager tuning:** NetEQ reads the field trial `WebRTC-Audio-NetEqDelayManagerConfig` from a mello `FieldTrialsView`. The shipped value shortens the memory of a jitter burst so the delay returns within 5 s (upstream: 26 s). `VoicePlayout::default_delay_manager_config()`.
 - **AudioMixerImpl with limiter:** One mixer `Source` per peer. Volume, pan and output gain apply in the source, before the AGC2 limiter of the mixer. The mix is stereo, 10 ms frames; a small output ring adapts them to the device callback size.
@@ -316,25 +338,27 @@ Without this, the WASAPI playback thread falls through to `ring_.read()` (always
 
 ## 6. Transport Layer
 
-Each P2P connection uses libdatachannel and creates two data channels:
+Each peer connection is the client side of one SFU session (`EXTERNAL-SFU.md`, mello-sfu `01-SFU.md`). It uses libdatachannel. The SFU is the only media transport.
 
 | Channel | Ordered | Reliable | Used for |
 |---------|---------|----------|----------|
-| `reliable` | Yes | Yes | Control messages, signaling, chat relay |
-| `unreliable` | No | No | Audio packets, video packets |
+| `control` | Yes | Yes | Control messages (voice slot map, speaking, stream pause), ping/pong |
+| `audio` (voice peers only) | No | No | No media. The SFU voice join waits until it opens |
+
+Media goes on RTP tracks: voice (Opus: the mic m-line and the receive slots), stream video (H.264) and stream audio (Opus). Incoming audio reaches mello-core as complete RTP packets (`mello_peer_set_audio_rtp_callback`).
 
 ### ICE/NAT traversal
 
-- STUN servers for reflexive candidates (>90% of typical NATs)
+- STUN servers for reflexive candidates
 - TURN servers as fallback relay (time-limited credentials from Nakama `get_ice_servers` RPC)
-- ICE trickle: candidates sent as they're discovered, via Nakama channel messages
+- ICE trickle: candidates go through the SFU WebSocket signaling
 
 ### Signaling flow
 
-1. Lower user ID creates offer → sends via Nakama channel
-2. Higher user ID receives offer → creates answer → sends via Nakama channel
-3. Both sides trickle ICE candidates via Nakama channel
-4. Connection established → switch to direct P2P
+1. The client gets an SFU endpoint and a token from Nakama (`voice_join`, `start_stream`, `watch_stream`).
+2. The client opens the SFU WebSocket and joins the session.
+3. The client creates the offer and the SFU answers. A later SFU offer goes to `mello_peer_handle_remote_offer`.
+4. Both sides trickle ICE candidates on the WebSocket.
 
 ---
 
@@ -404,7 +428,7 @@ Each P2P connection uses libdatachannel and creates two data channels:
 
 | Question | Answer |
 |---|---|
-| Who inserts | The network thread: the libdatachannel track thread calls `mello_voice_feed_rtp` (SFU). The command loop calls `mello_voice_feed_packet` (P2P, mic test). The capture thread calls it for the mic test in an SFU call (inside the packet sink). |
+| Who inserts | The network thread: the libdatachannel track thread calls `mello_voice_feed_rtp` (SFU). The command loop calls `mello_voice_feed_packet` (mic test). The capture thread calls it for the mic test in an SFU call (inside the packet sink). |
 | Who mixes | The audio device thread, in the render source (`mix_output`). It calls `AudioMixerImpl::Mix`, which calls `NetEq::GetAudio` once per peer every 10 ms. On the test backend: the thread that calls `mello_voice_test_pull_output`. |
 | Locks | `VoicePlayout` guards its peer map with one mutex. The device thread never takes it. `NetEqImpl` locks itself, so an insert and a `GetAudio` on the same peer may overlap. The mixer locks its source list in `Mix`, `AddSource` and `RemoveSource`. |
 | Lock order | The capture lock (`accum_mutex_`), then the peer map mutex, then the mixer lock, then a NetEQ lock. The device thread takes only the mixer lock, then NetEQ locks. Nothing takes them in another order. |
@@ -427,7 +451,7 @@ libmello is **synchronous C++ by design** — no async runtimes. Threads are cre
 | Video capture (DXGI) | <2ms |
 | Video encode (NVENC) | <5ms |
 | Video decode (DXVA2) | <5ms |
-| P2P round-trip | <5ms (local) |
+| Peer round-trip to a local SFU | <5ms |
 | Library size | <5MB |
 
 ---

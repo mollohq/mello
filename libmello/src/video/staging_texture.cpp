@@ -11,9 +11,15 @@ namespace mello::video {
 
 static constexpr const char* TAG = "video/staging";
 
-// HLSL compute shader: reads NV12-layout R8 texture, writes RGBA
+// HLSL compute shader, two entry points with one conversion:
+// - CSMain reads an NV12-layout R8 texture (NVDEC): Y rows, then UV rows from
+//   row uv_y.
+// - CSMainNv12 reads a DXGI_FORMAT_NV12 texture (AMF, D3D11VA, OpenH264)
+//   through two views: R8 on the luma plane, R8G8 on the chroma plane.
 static const char* CS_SOURCE = R"(
-Texture2D<float> nv12 : register(t0);
+Texture2D<float>  nv12   : register(t0);
+Texture2D<float>  luma   : register(t1);
+Texture2D<float2> chroma : register(t2);
 RWTexture2D<float4> rgba : register(u0);
 
 cbuffer CB : register(b0) {
@@ -21,6 +27,18 @@ cbuffer CB : register(b0) {
     uint vid_h;
     uint uv_y;  // UV plane row offset (coded_height, may differ from vid_h due to macroblock alignment)
 };
+
+float4 yuv_to_rgba(float y_raw, float u_raw, float v_raw) {
+    float c = y_raw - 16.0;
+    float d = u_raw - 128.0;
+    float e = v_raw - 128.0;
+
+    // BT.709 studio-swing
+    float r = (298.0 * c + 459.0 * e + 128.0) / 256.0 / 255.0;
+    float g = (298.0 * c -  55.0 * d - 136.0 * e + 128.0) / 256.0 / 255.0;
+    float b = (298.0 * c + 541.0 * d + 128.0) / 256.0 / 255.0;
+    return float4(saturate(r), saturate(g), saturate(b), 1.0);
+}
 
 [numthreads(16, 16, 1)]
 void CSMain(uint3 id : SV_DispatchThreadID) {
@@ -33,16 +51,17 @@ void CSMain(uint3 id : SV_DispatchThreadID) {
     float u_raw = nv12[uint2(uv_col,     uv_row)].r * 255.0;
     float v_raw = nv12[uint2(uv_col + 1, uv_row)].r * 255.0;
 
-    float c = y_raw - 16.0;
-    float d = u_raw - 128.0;
-    float e = v_raw - 128.0;
+    rgba[id.xy] = yuv_to_rgba(y_raw, u_raw, v_raw);
+}
 
-    // BT.709 studio-swing
-    float r = (298.0 * c + 459.0 * e + 128.0) / 256.0 / 255.0;
-    float g = (298.0 * c -  55.0 * d - 136.0 * e + 128.0) / 256.0 / 255.0;
-    float b = (298.0 * c + 541.0 * d + 128.0) / 256.0 / 255.0;
+[numthreads(16, 16, 1)]
+void CSMainNv12(uint3 id : SV_DispatchThreadID) {
+    if (id.x >= vid_w || id.y >= vid_h) return;
 
-    rgba[id.xy] = float4(saturate(r), saturate(g), saturate(b), 1.0);
+    float  y_raw = luma[id.xy] * 255.0;
+    float2 uv    = chroma[id.xy / 2] * 255.0;
+
+    rgba[id.xy] = yuv_to_rgba(y_raw, uv.x, uv.y);
 }
 )";
 
@@ -67,9 +86,10 @@ bool StagingTexture::init_gpu_converter() {
 
     ID3DBlob* blob_raw = nullptr;
     ID3DBlob* errors_raw = nullptr;
+    const char* entry = format_ == DXGI_FORMAT_NV12 ? "CSMainNv12" : "CSMain";
     HRESULT hr = compile_fn(
         CS_SOURCE, strlen(CS_SOURCE), "nv12_to_rgba.hlsl", nullptr, nullptr,
-        "CSMain", "cs_5_0", 0, 0, &blob_raw, &errors_raw);
+        entry, "cs_5_0", 0, 0, &blob_raw, &errors_raw);
 
     if (FAILED(hr)) {
         if (errors_raw) {
@@ -179,8 +199,11 @@ bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, ui
     format_       = format;
     cpu_readback_enabled_ = enable_cpu_readback;
 
-    // For R8 sources, try GPU compute shader path
-    if (format == DXGI_FORMAT_R8_UNORM) {
+    // GPU compute shader path for both decoder layouts. It also creates the
+    // shared RGBA texture, which is the only native present path for a
+    // decoder that has no shared handle of its own: without it, a viewer with
+    // a non-NVIDIA GPU gets no picture.
+    if (format == DXGI_FORMAT_R8_UNORM || format == DXGI_FORMAT_NV12) {
         gpu_convert_ = init_gpu_converter();
     }
 
@@ -276,28 +299,46 @@ void StagingTexture::debug_trace_source(ID3D11Texture2D* source) {
 
 void StagingTexture::copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging) {
     if (gpu_convert_) {
-        if (read_count_ < 3) {
+        const bool nv12_source = format_ == DXGI_FORMAT_NV12;
+        if (read_count_ < 3 && !nv12_source) {
             debug_trace_source(source);
         }
 
-        // Create/cache SRV for the source R8 texture
+        // Create/cache the source views: one R8 view for the R8 layout, or an
+        // R8 view of the luma plane and an R8G8 view of the chroma plane.
         if (source != src_tex_cached_) {
             src_srv_.Reset();
+            chroma_srv_.Reset();
             D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
             srv_desc.Format = DXGI_FORMAT_R8_UNORM;
             srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
             srv_desc.Texture2D.MipLevels = 1;
-            device_->CreateShaderResourceView(source, &srv_desc, &src_srv_);
+            HRESULT hr = device_->CreateShaderResourceView(source, &srv_desc, &src_srv_);
+            if (SUCCEEDED(hr) && nv12_source) {
+                srv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+                hr = device_->CreateShaderResourceView(source, &srv_desc, &chroma_srv_);
+            }
+            if (FAILED(hr)) {
+                MELLO_LOG_ERROR(TAG, "Source view for the GPU convert failed: 0x%08X", hr);
+                src_srv_.Reset();
+                chroma_srv_.Reset();
+            }
             src_tex_cached_ = source;
         }
+        if (!src_srv_) return;
 
-        // Dispatch compute shader: R8 (NV12 layout) → RGBA
-        ID3D11ShaderResourceView* srvs[] = { src_srv_.Get() };
+        // Dispatch compute shader: decoded frame → RGBA
         ID3D11UnorderedAccessView* uavs[] = { rgba_uav_.Get() };
         ID3D11Buffer* cbs[] = { cb_.Get() };
 
         context_->CSSetShader(cs_.Get(), nullptr, 0);
-        context_->CSSetShaderResources(0, 1, srvs);
+        if (nv12_source) {
+            ID3D11ShaderResourceView* srvs[] = { src_srv_.Get(), chroma_srv_.Get() };
+            context_->CSSetShaderResources(1, 2, srvs);
+        } else {
+            ID3D11ShaderResourceView* srvs[] = { src_srv_.Get() };
+            context_->CSSetShaderResources(0, 1, srvs);
+        }
         context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
         context_->CSSetConstantBuffers(0, 1, cbs);
 
@@ -306,9 +347,9 @@ void StagingTexture::copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging
         context_->Dispatch(gx, gy, 1);
 
         // Unbind
-        ID3D11ShaderResourceView* null_srv[] = { nullptr };
+        ID3D11ShaderResourceView* null_srv[] = { nullptr, nullptr, nullptr };
         ID3D11UnorderedAccessView* null_uav[] = { nullptr };
-        context_->CSSetShaderResources(0, 1, null_srv);
+        context_->CSSetShaderResources(0, 3, null_srv);
         context_->CSSetUnorderedAccessViews(0, 1, null_uav, nullptr);
 
         // Mirror RGBA output into shared GPU texture for native presenter when
@@ -422,6 +463,8 @@ void StagingTexture::shutdown() {
     shared_rgba_handle_ = nullptr;
     shared_rgba_tex_.Reset();
     src_srv_.Reset();
+    chroma_srv_.Reset();
+    src_tex_cached_ = nullptr;
     cb_.Reset();
     rgba_uav_.Reset();
     rgba_tex_.Reset();

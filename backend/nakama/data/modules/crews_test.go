@@ -5,11 +5,8 @@ import (
 	"testing"
 )
 
-// readSfuEnabled mirrors exactly how hasPremiumCrew (sfu_entitlement.go) reads
-// the flag back off a group: unmarshal the stored JSON into a generic map and
-// type-assert to bool. Asserting through this shape rather than on the Go map
-// directly is the point — the original bug was that creation and the
-// entitlement gate disagreed about what was on the group.
+// readSfuEnabled reads the flag back off a group the way sfuEnabledForCrew
+// (sfu_entitlement.go) does: from the stored JSON, not from the Go map.
 func readSfuEnabled(t *testing.T, metadata map[string]interface{}) bool {
 	t.Helper()
 
@@ -17,24 +14,36 @@ func readSfuEnabled(t *testing.T, metadata map[string]interface{}) bool {
 	if err != nil {
 		t.Fatalf("marshal crew metadata: %v", err)
 	}
-	var decoded map[string]interface{}
-	if err := json.Unmarshal(raw, &decoded); err != nil {
-		t.Fatalf("unmarshal crew metadata: %v", err)
-	}
-	enabled, _ := decoded["sfu_enabled"].(bool)
-	return enabled
+	return sfuEnabledInMetadata(string(raw))
 }
 
-// A crew created without sfu_enabled silently runs P2P voice and streaming:
-// hasPremiumCrew returns false, voice_join answers mode "p2p", and the client
-// joins the mesh without logging anything. Two users hit exactly that and left.
 func TestNewCrewMetadataEnablesSFU(t *testing.T) {
 	if !readSfuEnabled(t, newCrewMetadata("user-123", true)) {
-		t.Error("newly created crews must have sfu_enabled=true, " +
-			"otherwise voice and streaming silently fall back to P2P")
+		t.Error("newly created crews must have the SFU on")
 	}
 	if !readSfuEnabled(t, newCrewMetadata("user-123", false)) {
 		t.Error("sfu_enabled must not depend on invite_only")
+	}
+}
+
+// The SFU is on unless an operator sets "sfu_enabled": false on the crew.
+func TestSfuEnabledInMetadataDefaultsOn(t *testing.T) {
+	cases := []struct {
+		name string
+		meta string
+		want bool
+	}{
+		{"no metadata", "", true},
+		{"no flag", `{"invite_only":true}`, true},
+		{"flag true", `{"sfu_enabled":true}`, true},
+		{"kill switch", `{"sfu_enabled":false}`, false},
+		{"flag not a bool", `{"sfu_enabled":"no"}`, true},
+		{"corrupt metadata", `{`, true},
+	}
+	for _, c := range cases {
+		if got := sfuEnabledInMetadata(c.meta); got != c.want {
+			t.Errorf("%s: sfuEnabledInMetadata(%q) = %v, want %v", c.name, c.meta, got, c.want)
+		}
 	}
 }
 

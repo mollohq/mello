@@ -78,11 +78,11 @@ export type AppState = {
     }[];
   }[];
   /**
-   * The transport of the current voice call: "sfu", or "p2p" after an SFU
-   * join fell back. null when not in a call. A channel switch keeps the old
-   * value until the new call starts: see voice.ts, expectSfuVoice.
+   * The transport of the current voice call: "sfu". null when not in a
+   * call. A channel switch keeps the old value until the new call starts:
+   * see voice.ts, expectSfuVoice.
    */
-  voice_transport: "sfu" | "p2p" | null;
+  voice_transport: "sfu" | null;
   /**
    * The other members of the watched SFU stream: the host and the other
    * viewers, in join order. Empty when not watching.
@@ -245,7 +245,7 @@ export type AppEvent = {
   /** Only on Error events. */
   message?: string;
   /** Only on VoiceStateChanged: the transport the call started on, or "disconnected". */
-  transport?: "sfu" | "p2p" | "disconnected";
+  transport?: "sfu" | "disconnected";
   /** Only on ConnectionStateChanged: the realtime socket is up. */
   connected?: boolean;
   /** Only on ConnectionStateChanged: a reconnect attempt is in flight. */

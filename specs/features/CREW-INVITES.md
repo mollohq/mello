@@ -143,10 +143,10 @@ Auth: a device session. Crew membership is **not** required.
 
 **No membership check.** Holding a valid invite code is the authorization.
 
-**The SFU is mandatory.** A browser cannot join the native P2P mesh, so the
-premium-crew check does not apply to guests and there is no P2P fallback. When
-the SFU cannot issue a token, the RPC fails. It does not seat a guest who can
-neither speak nor hear.
+**No crew kill switch.** The SFU is the only voice transport, for members
+and guests. `voice_join` also checks the crew flag `"sfu_enabled": false`;
+the guest join does not. When the SFU cannot issue a token, the RPC fails. It
+does not seat a guest who can neither speak nor hear.
 
 Both paths call the same `resolveVoiceChannel`, `joinVoiceRoom` and
 `issueVoiceSFUToken` in `voice_state.go`. Do not fork them. A second copy will

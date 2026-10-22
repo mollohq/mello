@@ -34,6 +34,10 @@ pub fn wire(ctx: &AppContext) {
                 app.set_user_name("".into());
                 app.set_user_initials("".into());
                 app.set_user_tag("".into());
+                // The device card on step 1 waits for the device auth below.
+                // Its "Sign in" opens the app on core's session, which logout
+                // just ended, so a card from an earlier answer must not show.
+                app.set_is_returning_user(false);
                 app.set_user_avatar(slint::Image::default());
                 app.set_has_user_avatar(false);
                 crate::converters::set_active_crew(&app, "");

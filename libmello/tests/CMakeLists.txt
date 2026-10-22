@@ -108,6 +108,21 @@ gtest_discover_tests(mello_tests)
 gtest_discover_tests(mello_rtp_tests)
 gtest_discover_tests(mello_procenum_tests)
 
+# The reference source and the software encoder of the streaming quality
+# gate are Windows only (D3D11). The loopback needs the Cisco OpenH264 DLL,
+# which scripts/stream-gate.sh fetches into third_party/openh264; it is
+# copied next to the tests when present, else the loopback skips.
+if(WIN32 AND NOT IOS)
+    target_sources(mello_tests PRIVATE test_capture_reference.cpp)
+    set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
+    if(EXISTS "${_oh264_dll}")
+        add_custom_command(TARGET mello_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${_oh264_dll}" "$<TARGET_FILE_DIR:mello_tests>/openh264-2.6.0-win64.dll"
+            COMMENT "Copying the OpenH264 DLL next to mello_tests")
+    endif()
+endif()
+
 # Windows: ORT loads onnxruntime.dll at runtime via LoadLibrary. Copy it
 # next to the test binaries so ctest passes without manual PATH setup.
 # Desktop-only: iOS links ORT statically and has no DLLs.
@@ -151,4 +166,52 @@ if(MELLO_WEBRTC_NETEQ)
         target_compile_definitions(mello_neteq_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     endif()
     gtest_discover_tests(mello_neteq_spike_tests)
+endif()
+
+# Stage 3 streaming spike: vendored video receive timing and frame buffer
+# (option MELLO_WEBRTC_VIDEO_TIMING, cmake/webrtc-video-timing.cmake). Own
+# executable: it replaces the global operator new to count heap per timeline,
+# and it does not link the mello library.
+if(MELLO_WEBRTC_VIDEO_TIMING)
+    add_executable(mello_video_timing_spike_tests test_video_timing_spike.cpp)
+    set_target_properties(mello_video_timing_spike_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(mello_video_timing_spike_tests PRIVATE
+        webrtc_video_timing
+        GTest::gtest
+        GTest::gtest_main
+    )
+    target_include_directories(mello_video_timing_spike_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
+    )
+    if(WIN32)
+        # rtc_base headers include winsock2.h; windows.h must not pull winsock.h.
+        target_compile_definitions(mello_video_timing_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    gtest_discover_tests(mello_video_timing_spike_tests)
+endif()
+
+# Stage 4 spike: vendored goog_cc against the current estimator
+# (option MELLO_WEBRTC_GOOG_CC, cmake/webrtc-goog-cc.cmake). Own executable:
+# it replaces the global operator new to count heap per controller, and it
+# does not link the mello library. It compiles twcc.cpp for GccEstimator.
+if(MELLO_WEBRTC_GOOG_CC)
+    add_executable(mello_goog_cc_spike_tests
+        test_goog_cc_spike.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src/transport/twcc.cpp
+    )
+    set_target_properties(mello_goog_cc_spike_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
+    target_link_libraries(mello_goog_cc_spike_tests PRIVATE
+        webrtc_goog_cc
+        GTest::gtest
+        GTest::gtest_main
+    )
+    target_include_directories(mello_goog_cc_spike_tests PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
+    )
+    if(WIN32)
+        # rtc_base headers include winsock2.h; windows.h must not pull winsock.h.
+        target_compile_definitions(mello_goog_cc_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    endif()
+    gtest_discover_tests(mello_goog_cc_spike_tests)
 endif()

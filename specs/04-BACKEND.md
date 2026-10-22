@@ -9,14 +9,14 @@
 
 ## 1. Overview
 
-Mello's backend is built on Nakama, an open-source game server. Nakama handles authentication, presence, groups (crews), real-time chat, and P2P signaling. This keeps backend complexity minimal while providing battle-tested infrastructure.
+Mello's backend is built on Nakama, an open-source game server. Nakama handles authentication, presence, groups (crews), real-time chat, and the SFU tokens for voice and streams. This keeps backend complexity minimal while providing battle-tested infrastructure.
 
 **Key Responsibilities:**
 - User authentication (device, email, Discord/Steam/Google/Apple/Twitch OAuth)
 - Presence tracking (online/idle/offline)
 - Groups (Crews) with membership management
 - Real-time chat (persistent, per-crew)
-- P2P signaling (ICE candidate exchange)
+- SFU tokens and endpoints for voice and streams (`voice_join`, `start_stream`, `watch_stream`). The SFU is the only media transport. Without a signing key these RPCs return `SFU_UNAVAILABLE`. The crew metadata flag `"sfu_enabled": false` is an operator kill switch; the default is on.
 - TURN relay configuration
 - Crew discovery, avatars, invite codes, user search
 
@@ -60,7 +60,7 @@ Mello's backend is built on Nakama, an open-source game server. Nakama handles a
 └─────────────────────────────────────────────────────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────────────┐
-│                         P2P INFRASTRUCTURE                              │
+│                  ICE INFRASTRUCTURE (client to SFU)                     │
 │                                                                         │
 │  ┌─────────────────────────┐       ┌─────────────────────────────────┐  │
 │  │      STUN SERVERS       │       │         TURN SERVERS            │  │
@@ -400,49 +400,9 @@ Storage writes use `PermissionRead: 2` (public read) and `PermissionWrite: 0` (s
     │ 5. Receive chat messages (broadcast)  │
     │◀──────────────────────────────────────│
     │                                       │
-    │ 6. Send signaling message             │
-    │   channel_message_send(signal)        │
-    │──────────────────────────────────────▶│
-    │                                       │
-    │ 7. Receive signaling (to specific)    │
-    │◀──────────────────────────────────────│
-    │                                       │
 ```
 
-### P2P Signaling Flow
-
-```
-┌─────────┐              ┌────────┐              ┌─────────┐
-│  Peer A │              │ Nakama │              │  Peer B │
-└────┬────┘              └───┬────┘              └────┬────┘
-     │                       │                       │
-     │ 1. Create offer       │                       │
-     │ (local SDP)           │                       │
-     │                       │                       │
-     │ 2. Send offer via     │                       │
-     │    channel message    │                       │
-     │──────────────────────▶│                       │
-     │                       │                       │
-     │                       │ 3. Forward to Peer B  │
-     │                       │──────────────────────▶│
-     │                       │                       │
-     │                       │                       │ 4. Create answer
-     │                       │                       │    (local SDP)
-     │                       │                       │
-     │                       │ 5. Send answer        │
-     │                       │◀──────────────────────│
-     │                       │                       │
-     │ 6. Forward to Peer A  │                       │
-     │◀──────────────────────│                       │
-     │                       │                       │
-     │ 7. Exchange ICE candidates (both directions) │
-     │◀─────────────────────▶│◀─────────────────────▶│
-     │                       │                       │
-     │═══════════════════════════════════════════════│
-     │              P2P Connection Established       │
-     │═══════════════════════════════════════════════│
-     │                       │                       │
-```
+Media signaling (SDP offer and answer, ICE candidates) goes to the SFU on its own WebSocket, not through Nakama. The chat channel carries no signaling. `OnChatMessage` and the chat validation still skip `"signal": true` messages, which older clients wrote into chat history.
 
 ---
 
@@ -527,7 +487,7 @@ Estimated cost: ~$2,000-5,000/mo
 |--------|--------|-----------------|
 | WebSocket connections | Nakama | >90% capacity |
 | Message throughput | Nakama | >10k/s per instance |
-| P2P success rate | Application | <85% |
+| SFU connection success rate | Application | <85% |
 | TURN relay usage | Coturn | >30% of connections |
 | TURN bandwidth | Coturn | >80% capacity |
 | Database connections | PostgreSQL | >80% pool |
@@ -590,7 +550,7 @@ Backend changes that make the Nakama-authoritative voice roster correct and dura
 - **Voice cleanup on kick / leave-crew.** Kick and `AfterLeaveCrew` paths now evict the user from any voice room (previously left ghosts).
 - **Sequenced + coalesced `voice_update`.** Pushes carry a per-crew monotonic `seq` and are debounced to avoid VAD push storms.
 - **Tighter GC with grace + consecutive detections.** `voiceRoomGC` now combines: offline grace (`30s`), stale-online threshold (`5m`), and `2` consecutive stale detections before pruning. This reduces false-prune churn during transient reconnects while still removing ghosts.
-- **SFU reconcile oracle with miss hysteresis.** For SFU crews, Nakama pulls the SFU admin session API (`/admin/api/session/{id}`, `SFU_ADMIN_PASSWORD`) to correct membership drift, then re-pushes a sequenced update. Pruning requires `2` consecutive SFU misses and respects a `45s` post-join grace; unknown SFU session lookups do not prune (treat as P2P/transient).
+- **SFU reconcile oracle with miss hysteresis.** For SFU crews, Nakama pulls the SFU admin session API (`/admin/api/session/{id}`, `SFU_ADMIN_PASSWORD`) to correct membership drift, then re-pushes a sequenced update. Pruning requires `2` consecutive SFU misses and respects a `45s` post-join grace. A session that no SFU has counts as a miss: every voice room uses the SFU. A failed lookup does not prune.
 - **`dev_fault` RPC (dev/test only).** Alongside `dev_seed_state`, injects drift for testing: force a ghost voice member, force `voice_leave`, drop the next push. Used by the reconcile/resync tests.
 - **Diagnostic upload URL RPC.** Issues a short-lived presigned PUT URL so production clients can upload a captured diagnostic log bundle (see [15-DEBUG-TELEMETRY.md](./15-DEBUG-TELEMETRY.md)).
 

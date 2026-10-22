@@ -95,7 +95,8 @@ private:
     int64_t  qpc_frequency_ = 0;
 
     uint32_t target_fps_ = 60;
-    uint64_t last_delivered_us_ = 0;
+    // When the next frame is due (frame_cadence.hpp). Capture thread only.
+    uint64_t cadence_deadline_us_ = 0;
 
     // The game's own present count, sampled by the capture thread. A count that
     // stops moving is a game that stopped drawing: minimized, alt-tabbed out of

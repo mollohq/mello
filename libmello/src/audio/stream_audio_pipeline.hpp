@@ -6,6 +6,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <string>
 #include <vector>
 
 namespace mello::audio {
@@ -60,28 +61,57 @@ private:
     bool warned_sample_rate_ = false;
 };
 
+/// Viewer playout of the game audio of one stream.
+///
+/// Threads: feed_packet runs on the audio RTP thread, set_muted and stop on
+/// the caller's thread. One mutex serialises them.
 class StreamAudioPlayout {
 public:
-    StreamAudioPlayout();
+    /// The output device to open ("" = the default device). Called when the
+    /// playout opens the device: at the first packet and after an unmute.
+    using DeviceIdFn = std::function<std::string()>;
+    /// Makes the playback backend. Default: create_audio_playback().
+    using PlaybackFactory = std::function<std::unique_ptr<AudioPlayback>()>;
+
+    explicit StreamAudioPlayout(DeviceIdFn device_id = {}, PlaybackFactory factory = {});
     ~StreamAudioPlayout();
 
+    /// Decodes and plays one Opus packet. While muted the packet is dropped
+    /// and true is returned.
     bool feed_packet(const uint8_t* data, int size);
+
+    /// Mute flushes: it closes the device, which drops the samples already
+    /// queued for it, so a paused stream goes silent at once. Packets that
+    /// arrive while muted are dropped. Unmute opens the device again at the
+    /// next packet, with a fresh decoder.
+    void set_muted(bool muted);
+    bool muted() const;
+
     void stop();
 
-    uint64_t packets_fed() const { return packets_fed_; }
-    uint64_t underruns() const { return underruns_; }
+    uint64_t packets_fed() const;
+    uint64_t packets_dropped_muted() const;
+    uint64_t underruns() const;
 
 private:
-    bool ensure_started();
+    bool ensure_started_locked();
+    void stop_locked();
 
-    OpusDec decoder_;
+    DeviceIdFn      device_id_fn_;
+    PlaybackFactory playback_factory_;
+
+    mutable std::mutex mutex_;
+    // Recreated at every start: OpusDec cannot initialize twice.
+    std::unique_ptr<OpusDec> decoder_;
     // Platform backend from create_audio_playback(): WASAPI on Windows,
     // CoreAudio on macOS. Held by interface so the playout path is
     // platform-neutral.
     std::unique_ptr<AudioPlayback> playback_;
     std::vector<int16_t> decode_pcm_;
     bool started_ = false;
+    bool muted_ = false;
     uint64_t packets_fed_ = 0;
+    uint64_t packets_dropped_muted_ = 0;
     uint64_t underruns_ = 0;
 };
 

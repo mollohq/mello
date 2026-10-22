@@ -164,44 +164,67 @@ void StreamAudioHostPipeline::on_pcm(const int16_t* samples, size_t count) {
     }
 }
 
-StreamAudioPlayout::StreamAudioPlayout() = default;
+StreamAudioPlayout::StreamAudioPlayout(DeviceIdFn device_id, PlaybackFactory factory)
+    : device_id_fn_(std::move(device_id)), playback_factory_(std::move(factory)) {
+    if (!playback_factory_) playback_factory_ = [] { return create_audio_playback(); };
+}
 
 StreamAudioPlayout::~StreamAudioPlayout() {
     stop();
 }
 
-bool StreamAudioPlayout::ensure_started() {
+bool StreamAudioPlayout::ensure_started_locked() {
     if (started_) return true;
 
-    if (!decoder_.initialize(STREAM_AUDIO_SAMPLE_RATE, STREAM_AUDIO_CHANNELS)) {
+    decoder_ = std::make_unique<OpusDec>();
+    if (!decoder_->initialize(STREAM_AUDIO_SAMPLE_RATE, STREAM_AUDIO_CHANNELS)) {
         MELLO_LOG_ERROR("stream_audio", "Opus decoder init failed");
+        decoder_.reset();
         return false;
     }
 
-    playback_ = create_audio_playback();
-    if (!playback_) {
-        MELLO_LOG_WARN("stream_audio", "no audio playback backend on this platform");
-        return false;
+    // The device the user chose for voice output, the same setting as voice.
+    const std::string device_id = device_id_fn_ ? device_id_fn_() : std::string();
+    auto open = [this](const char* id) -> std::unique_ptr<AudioPlayback> {
+        auto playback = playback_factory_();
+        if (!playback) return nullptr;
+        // Before initialize(): backends bake the channel count into their
+        // output format. Game audio is stereo; downmixing would lose the
+        // spatial mix.
+        playback->set_input_channels(STREAM_AUDIO_CHANNELS);
+        if (!playback->initialize(id) || !playback->start()) return nullptr;
+        return playback;
+    };
+    playback_ = open(device_id.empty() ? nullptr : device_id.c_str());
+    if (!playback_ && !device_id.empty()) {
+        // Same rule as the voice device switch: the default device is better
+        // than no game audio.
+        MELLO_LOG_WARN("stream_audio", "output device %s failed, falling back to default",
+                       device_id.c_str());
+        playback_ = open(nullptr);
     }
-    // Before initialize(): backends bake the channel count into their output
-    // format. Game audio is stereo; downmixing would lose the spatial mix.
-    playback_->set_input_channels(STREAM_AUDIO_CHANNELS);
-    if (!playback_->initialize() || !playback_->start()) {
+    if (!playback_) {
         MELLO_LOG_ERROR("stream_audio", "playback init/start failed");
-        playback_.reset();
+        decoder_.reset();
         return false;
     }
     started_ = true;
-    MELLO_LOG_INFO("stream_audio", "viewer playout started");
+    MELLO_LOG_INFO("stream_audio", "viewer playout started on %s",
+                   device_id.empty() ? "the default device" : device_id.c_str());
     return true;
 }
 
 bool StreamAudioPlayout::feed_packet(const uint8_t* data, int size) {
     if (!data || size <= 0) return false;
-    if (!ensure_started()) return false;
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (muted_) {
+        ++packets_dropped_muted_;
+        return true;
+    }
+    if (!ensure_started_locked()) return false;
 
     decode_pcm_.resize(static_cast<size_t>(STREAM_AUDIO_FRAME_SAMPLES) * STREAM_AUDIO_CHANNELS);
-    const int decoded = decoder_.decode(
+    const int decoded = decoder_->decode(
         data,
         size,
         decode_pcm_.data(),
@@ -220,11 +243,45 @@ bool StreamAudioPlayout::feed_packet(const uint8_t* data, int size) {
     return true;
 }
 
+void StreamAudioPlayout::set_muted(bool muted) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (muted_ == muted) return;
+    muted_ = muted;
+    if (muted) stop_locked();
+    MELLO_LOG_INFO("stream_audio", "viewer playout %s", muted ? "muted (flushed)" : "unmuted");
+}
+
+bool StreamAudioPlayout::muted() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return muted_;
+}
+
+uint64_t StreamAudioPlayout::packets_fed() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return packets_fed_;
+}
+
+uint64_t StreamAudioPlayout::packets_dropped_muted() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return packets_dropped_muted_;
+}
+
+uint64_t StreamAudioPlayout::underruns() const {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return underruns_;
+}
+
 void StreamAudioPlayout::stop() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stop_locked();
+}
+
+void StreamAudioPlayout::stop_locked() {
     if (playback_) {
         playback_->stop();
         playback_.reset();
     }
+    decoder_.reset();
     started_ = false;
 }
 

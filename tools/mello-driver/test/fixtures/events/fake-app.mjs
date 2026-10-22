@@ -4,7 +4,7 @@
 // one button labelled "Go", and writes one line per MCP request to the file
 // in FAKE_APP_LOG: "<ms> <start|end> <tool>".
 //
-// With FAKE_APP_VOICE_TRANSPORT ("sfu", "p2p" or "disconnected") the app is in
+// With FAKE_APP_VOICE_TRANSPORT ("sfu" or "disconnected") the app is in
 // a voice call that started on that transport: the state port reports it, and
 // the event tail has the VoiceJoined and VoiceStateChanged of the join.
 //

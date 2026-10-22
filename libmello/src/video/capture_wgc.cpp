@@ -1,6 +1,7 @@
 #ifdef _WIN32
 #include "capture_wgc.hpp"
 #include "../util/log.hpp"
+#include "frame_cadence.hpp"
 
 #include <winrt/Windows.Foundation.h>
 #include <winrt/Windows.Foundation.Metadata.h>
@@ -208,9 +209,7 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
     {
         std::lock_guard<std::mutex> lock(throttle_mutex_);
         target_fps_ = target_fps > 0 ? target_fps : 60;
-        frame_credit_us_ = 0.0;
-        last_frame_us_ = 0;
-        throttle_primed_ = false;
+        cadence_deadline_us_ = 0;
     }
 
     callback_ = std::move(callback);
@@ -327,29 +326,19 @@ void WgcCapture::on_frame_arrived(
     HRESULT hr = access->GetInterface(IID_PPV_ARGS(&texture));
     if (FAILED(hr)) return;
 
-    // Throttle compositor-rate delivery down to target_fps. Without this the
-    // encode queue absorbs a permanent 2x+ arrival rate on high-refresh
-    // desktops and churns drop-oldest frames instead of encoding useful ones.
+    // Throttle compositor-rate delivery down to target_fps, with the same rule
+    // as the pipeline decimator. The old accumulator added the time since the
+    // last delivered frame on every arrival, so a dropped frame's time counted
+    // twice and a 144 Hz desktop delivered 72 fps for a 60 fps target.
     const uint64_t now = static_cast<uint64_t>(
         std::chrono::duration_cast<std::chrono::microseconds>(
             std::chrono::steady_clock::now().time_since_epoch()).count());
     {
         std::lock_guard<std::mutex> lock(throttle_mutex_);
-        const double target_interval_us = 1'000'000.0 / target_fps_;
-        if (!throttle_primed_) {
-            throttle_primed_ = true;
-        } else {
-            frame_credit_us_ += static_cast<double>(now - last_frame_us_);
-            if (frame_credit_us_ < target_interval_us) {
-                frame.Close();
-                return;
-            }
-            frame_credit_us_ -= target_interval_us;
-            // Clamp runaway credit after stalls so we never burst-catch-up.
-            const double max_credit = 2.0 * target_interval_us;
-            if (frame_credit_us_ > max_credit) frame_credit_us_ = max_credit;
+        if (!frame_cadence_accepts(now, cadence_deadline_us_, target_fps_)) {
+            frame.Close();
+            return;
         }
-        last_frame_us_ = now;
     }
 
     if (delay_hist_) {

@@ -1,21 +1,19 @@
 use crate::events::Event;
-use crate::presence::PresenceStatus;
 use crate::session;
 
 impl super::Client {
-    /// Called after successful auth + WS connect. Sets online presence and fetches ICE config.
+    /// Called after successful auth + WS connect. Checks the protocol, starts
+    /// the game services and fetches the ICE config.
+    ///
+    /// Presence is not written here. The server's session-start hook sets the
+    /// account online when the socket registers (spec 11 section 8.3), and it
+    /// keeps the stored activity when another session of the same account is
+    /// already up. A `presence_update` from here wrote the same row at the
+    /// same moment; on a fresh account Nakama refused the second insert.
     pub(super) async fn on_connected(&mut self) {
         // Every login path ends here. It may be another account than the last
         // one, so the first scan after it sends in full.
         self.library_reporter.reset_for_account();
-        if let Err(e) = self
-            .nakama
-            .presence_update(&PresenceStatus::Online, None)
-            .await
-        {
-            log::warn!("Failed to set online presence: {}", e);
-        }
-
         self.check_protocol_version().await;
 
         self.ensure_game_services();
@@ -25,8 +23,7 @@ impl super::Client {
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {
                 log::info!("Fetched {} ICE server(s) from backend", urls.len());
-                self.ice_servers = urls.clone();
-                self.voice.set_ice_servers(urls);
+                self.ice_servers = urls;
             }
             Err(e) => {
                 log::warn!("Failed to fetch ICE servers, using defaults: {}", e);
@@ -208,7 +205,7 @@ impl super::Client {
     /// Re-register our voice membership with Nakama after a realtime reconnect,
     /// WITHOUT tearing down or rebuilding the media session.
     ///
-    /// A Nakama WS blip does not imply the SFU/P2P media leg died — that has its
+    /// A Nakama WS blip does not imply the SFU media leg died — that has its
     /// own liveness detection (`SfuEvent::Disconnected` -> `mark_disconnected`),
     /// and the voice tick is the sole owner of media rebuilds. Rebuilding here on
     /// every reconnect (the old behaviour) churned the SFU and, combined with a

@@ -103,7 +103,7 @@ bool QsvEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
     video_params_.mfx.CodecProfile             = MFX_PROFILE_AVC_HIGH;
     video_params_.mfx.CodecLevel               = MFX_LEVEL_AVC_42;
     video_params_.mfx.TargetUsage              = MFX_TARGETUSAGE_BALANCED;
-    // VBR with moderate headroom (1.25x max) for smooth P2P bandwidth.
+    // VBR with moderate headroom (1.25x max) for a smooth uplink to the SFU.
     video_params_.mfx.TargetKbps               = static_cast<mfxU16>(config.bitrate_kbps);
     video_params_.mfx.MaxKbps                  = static_cast<mfxU16>(config.bitrate_kbps + config.bitrate_kbps / 4);
     video_params_.mfx.RateControlMethod        = MFX_RATECONTROL_VBR;
@@ -288,8 +288,12 @@ void QsvEncoder::set_bitrate(uint32_t kbps) {
         if (sts != MFX_ERR_NONE) {
             MELLO_LOG_ERROR(TAG, "QSV: EncReset after bitrate change failed: %d (kbps=%u)", sts, kbps);
         } else {
-            force_idr_ = true;
-            MELLO_LOG_DEBUG(TAG, "QSV: reconfigured bitrate=%ukbps vbv=%uKB forceIDR=1", kbps, vbv_kb);
+            // IDR only on a large down-step, as NVENC does. Every step was an
+            // IDR before, and the host steps the bitrate many times a second.
+            const bool idr = bitrate_step_forces_idr(config_.bitrate_kbps, kbps);
+            if (idr) force_idr_ = true;
+            MELLO_LOG_DEBUG(TAG, "QSV: reconfigured bitrate=%ukbps vbv=%uKB forceIDR=%d", kbps,
+                vbv_kb, idr ? 1 : 0);
         }
     }
     config_.bitrate_kbps = kbps;

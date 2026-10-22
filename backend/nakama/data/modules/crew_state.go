@@ -312,7 +312,7 @@ func ComputeCrewState(ctx context.Context, logger runtime.Logger, nk runtime.Nak
 		MyRole:         callerRole,
 		Open:           group.GetOpen().GetValue(),
 		InvitePolicy:   invitePolicy,
-		SFUEnabled:     hasPremiumCrew(ctx, nk, crewID),
+		SFUEnabled:     sfuEnabledForCrew(ctx, nk, crewID),
 	}
 
 	// Cache it (without members to keep cache light)
@@ -617,7 +617,7 @@ func OnChatMessage(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 
 	content := send.GetContent()
 
-	// Skip P2P signaling messages — they are not real chat.
+	// Skip signaling messages — they are not real chat.
 	if strings.Contains(content, `"signal":true`) {
 		return nil
 	}

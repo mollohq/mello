@@ -42,7 +42,8 @@ export type Journey = {
   /**
    * The journey joins voice. Voice runs only through the local SFU: `run`
    * stops before it starts when the SFU does not answer (config.ts,
-   * checkSfu), and each join fails on a P2P call (voice.ts, expectSfuVoice).
+   * checkSfu), and each join fails when its call does not start on the SFU
+   * (voice.ts, expectSfuVoice).
    */
   voice?: boolean;
   /**

@@ -114,7 +114,6 @@ func loadCapturePolicy(ctx context.Context, nk runtime.NakamaModule) CapturePoli
 }
 
 const (
-	MaxP2PViewers    = 5
 	MaxSFUViewers    = 100
 	StreamSessionCol = "stream_sessions"
 )
@@ -194,8 +193,31 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return "", runtime.NewError("user not found", 13)
 	}
 
+	// The SFU is the only stream transport. Sign the host token before any
+	// state is written, so a failure leaves no stream behind.
+	if !sfuAvailableForCrew(ctx, nk, req.CrewID) {
+		logger.Warn("start_stream: SFU unavailable for crew %s (auth=%v)", req.CrewID, sfuAuthEnabled())
+		return "", errSFUUnavailable
+	}
+
 	now := time.Now()
 	streamID := fmt.Sprintf("stream_%s_%d", userID[:8], now.UnixMilli())
+
+	region := selectSFURegion(req.PreferredRegion)
+	endpoint := sfuEndpointForRegion(region)
+	token, err := signSFUToken(SFUTokenClaims{
+		UserID:    userID,
+		Username:  users[0].GetDisplayName(),
+		SessionID: streamID,
+		Type:      "stream",
+		Role:      "host",
+		CrewID:    req.CrewID,
+		Region:    region,
+	})
+	if err != nil {
+		logger.Error("start_stream: failed to sign SFU token: %v", err)
+		return "", errSFUUnavailable
+	}
 
 	stream := ActiveStream{
 		HostID:      userID,
@@ -271,59 +293,22 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		"title":             req.Title,
 	})
 
-	// SFU path: premium crews get server-relayed streaming
-	if sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID) {
-		region := selectSFURegion(req.PreferredRegion)
-		endpoint := sfuEndpointForRegion(region)
-
-		token, err := signSFUToken(SFUTokenClaims{
-			UserID:    userID,
-			Username:  users[0].GetDisplayName(),
-			SessionID: streamID,
-			Type:      "stream",
-			Role:      "host",
-			CrewID:    req.CrewID,
-			Region:    region,
-		})
-		if err != nil {
-			logger.Error("Failed to sign SFU token: %v", err)
-			// Fall through to P2P below
-		} else {
-			storeStreamSession(ctx, nk, streamID, StreamSessionMeta{
-				CrewID:      req.CrewID,
-				HostUserID:  userID,
-				Mode:        "sfu",
-				SFURegion:   region,
-				SFUEndpoint: endpoint,
-			})
-
-			logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
-			resp, _ := json.Marshal(map[string]interface{}{
-				"stream_id":    streamID,
-				"session_id":   streamID,
-				"mode":         "sfu",
-				"sfu_endpoint": endpoint,
-				"sfu_token":    token,
-				"capture":      loadCapturePolicy(ctx, nk),
-			})
-			return string(resp), nil
-		}
-	}
-
-	// P2P path (free crews or SFU auth not configured)
 	storeStreamSession(ctx, nk, streamID, StreamSessionMeta{
-		CrewID:     req.CrewID,
-		HostUserID: userID,
-		Mode:       "p2p",
+		CrewID:      req.CrewID,
+		HostUserID:  userID,
+		Mode:        "sfu",
+		SFURegion:   region,
+		SFUEndpoint: endpoint,
 	})
 
-	logger.Info("User %s started stream %s (P2P) in crew %s", userID, streamID, req.CrewID)
+	logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
 	resp, _ := json.Marshal(map[string]interface{}{
-		"stream_id":   streamID,
-		"session_id":  streamID,
-		"mode":        "p2p",
-		"max_viewers": MaxP2PViewers,
-		"capture":     loadCapturePolicy(ctx, nk),
+		"stream_id":    streamID,
+		"session_id":   streamID,
+		"mode":         "sfu",
+		"sfu_endpoint": endpoint,
+		"sfu_token":    token,
+		"capture":      loadCapturePolicy(ctx, nk),
 	})
 	return string(resp), nil
 }
@@ -586,34 +571,31 @@ func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		}
 	}
 
-	if meta.Mode == "sfu" {
-		token, err := signSFUToken(SFUTokenClaims{
-			UserID:    userID,
-			Username:  resolveUsername(ctx, nk, userID),
-			SessionID: req.SessionID,
-			Type:      "stream",
-			Role:      "viewer",
-			CrewID:    meta.CrewID,
-			Region:    meta.SFURegion,
-		})
-		if err != nil {
-			return "", runtime.NewError("token signing failed", 13)
-		}
-
-		resp, _ := json.Marshal(map[string]interface{}{
-			"mode":         "sfu",
-			"sfu_endpoint": meta.SFUEndpoint,
-			"sfu_token":    token,
-			"width":        streamWidth,
-			"height":       streamHeight,
-			"bitrate_kbps": streamBitrateKbps,
-		})
-		return string(resp), nil
+	// A session without an SFU endpoint is a record from before the SFU was
+	// the only transport. No viewer can join it.
+	if meta.SFUEndpoint == "" {
+		logger.Warn("watch_stream: session %s has no SFU endpoint", req.SessionID)
+		return "", errSFUUnavailable
 	}
 
-	// P2P mode: viewer connects directly via signaling
+	token, err := signSFUToken(SFUTokenClaims{
+		UserID:    userID,
+		Username:  resolveUsername(ctx, nk, userID),
+		SessionID: req.SessionID,
+		Type:      "stream",
+		Role:      "viewer",
+		CrewID:    meta.CrewID,
+		Region:    meta.SFURegion,
+	})
+	if err != nil {
+		logger.Error("watch_stream: failed to sign SFU token: %v", err)
+		return "", errSFUUnavailable
+	}
+
 	resp, _ := json.Marshal(map[string]interface{}{
-		"mode":         "p2p",
+		"mode":         "sfu",
+		"sfu_endpoint": meta.SFUEndpoint,
+		"sfu_token":    token,
 		"width":        streamWidth,
 		"height":       streamHeight,
 		"bitrate_kbps": streamBitrateKbps,
@@ -708,7 +690,7 @@ func UpdateStreamResolutionRPC(ctx context.Context, logger runtime.Logger, db *s
 }
 
 // ---------------------------------------------------------------------------
-// Stream session storage — tracks SFU vs P2P mode for active streams
+// Stream session storage — the SFU region and endpoint of each active stream
 // ---------------------------------------------------------------------------
 
 type StreamSessionMeta struct {

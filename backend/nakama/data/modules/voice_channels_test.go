@@ -55,8 +55,8 @@ func TestMaxChannelsPerCrew(t *testing.T) {
 }
 
 func TestMaxVoiceChannelMembers(t *testing.T) {
-	if MaxVoiceChannelMembers != 6 {
-		t.Errorf("expected max 6 members per channel, got %d", MaxVoiceChannelMembers)
+	if MaxVoiceChannelMembers != 50 {
+		t.Errorf("expected max 50 members per channel, got %d", MaxVoiceChannelMembers)
 	}
 }
 

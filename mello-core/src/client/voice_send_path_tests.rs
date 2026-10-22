@@ -74,12 +74,12 @@ unsafe extern "C" fn on_sfu_audio(
     size: i32,
 ) {
     let at = Instant::now();
-    if user_data.is_null() || data.is_null() || size < 4 {
+    if user_data.is_null() || data.is_null() || size < 12 {
         return;
     }
     let arrivals = &*(user_data as *const Mutex<Vec<(u16, Instant)>>);
-    // libmello writes the 16-bit RTP sequence little endian into the header.
-    let seq = u16::from_le_bytes([*data, *data.add(1)]);
+    // A whole RTP packet: the 16-bit sequence is big endian at byte 2.
+    let seq = u16::from_be_bytes([*data.add(2), *data.add(3)]);
     if let Ok(mut a) = arrivals.lock() {
         a.push((seq, at));
     }
@@ -177,7 +177,7 @@ async fn media_sfu() -> MediaSfu {
                 Some(on_sfu_candidate),
                 candidates_ptr as *mut std::ffi::c_void,
             );
-            mello_sys::mello_peer_set_audio_track_callback(
+            mello_sys::mello_peer_set_audio_rtp_callback(
                 peer,
                 Some(on_sfu_audio),
                 arrivals_ptr as *mut std::ffi::c_void,
@@ -565,7 +565,7 @@ async fn with_sfu_voice<T: Send + 'static>(
     assert_eq!(
         client.voice.voice_mode(),
         VoiceMode::SFU,
-        "voice must run over the fake SFU, not the P2P fallback"
+        "voice must run over the fake SFU"
     );
     drop(client);
     if let Ok(peer) = sfu.peer.await {

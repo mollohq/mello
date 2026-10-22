@@ -12,9 +12,9 @@
 mello-core is the Rust crate that contains all application logic. It sits between the UI layer (Slint client) and the low-level C++ library (libmello). It handles Nakama communication, crew/voice/stream orchestration, and all state management.
 
 **Key Responsibilities:**
-- Nakama client (auth, presence, chat, groups, signaling, RPCs)
+- Nakama client (auth, presence, chat, groups, RPCs)
 - Crew lifecycle (create, join, select, leave, discover)
-- Voice mesh coordination via libmello FFI
+- Voice sessions through the SFU, via libmello FFI
 - Stream session management (host/viewer, REMB congestion, native RTP)
 - Presence and crew state tracking
 
@@ -49,17 +49,17 @@ mello-core/src/
 │   └── types.rs            # Request/response structs for RPCs
 │
 ├── voice/
-│   ├── mod.rs              # VoiceManager (mute/deafen/VAD state)
-│   └── mesh.rs             # P2P mesh coordination, signaling
+│   ├── mod.rs              # VoiceManager (mute/deafen/VAD state, SFU session)
+│   ├── frame.rs            # Mic test voice frame
+│   └── send_sink.rs        # SFU packet sink on the capture thread
 │
 ├── stream/
 │   ├── mod.rs
 │   ├── config.rs           # Presets (Potato/Low/Medium/High/Ultra)
 │   ├── congestion.rs       # Viewer REMB controller (native RTP stats)
-│   ├── rtp_peer.rs         # Native RTP send/recv FFI wrappers
+│   ├── rtp_peer.rs         # Native RTP receive FFI wrappers
 │   ├── pacer.rs            # Pacing target + telemetry
 │   ├── sink.rs             # PacketSink trait (RTP video + feedback)
-│   ├── sink_p2p.rs         # Per-viewer RTP fan-out
 │   ├── sink_sfu.rs         # SFU host RTP + control DC
 │   ├── host.rs             # Stream host pipeline
 │   └── manager.rs          # Host stream manager (REMB aggregate, keyframes)
@@ -127,7 +127,7 @@ app.set_crews(...)
 | Channel | Transport | Used for |
 |---------|-----------|----------|
 | REST | HTTP/HTTPS | Authentication, account updates, storage reads/writes, RPC calls |
-| WebSocket | WSS | Real-time presence, chat messages, P2P signaling, notifications |
+| WebSocket | WSS | Real-time presence, chat messages, notifications |
 
 ### Custom RPCs
 
@@ -181,9 +181,8 @@ DiscoverCrews ──▶ browse public crews (paginated, bento grid)
 
 Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 
-- **Mesh topology (P2P):** Full mesh for ≤6 users. Each pair exchanges SDP offers/answers via Nakama channel messages. Lower user ID initiates the offer (deterministic).
-- **SFU topology:** For crews with SFU enabled, voice goes through the SFU server via **RTP audio tracks** (Opus, PT 111). The client's offer carries its mic m-line and 16 recvonly **receive slots** (mids `s0`..`s15`). The SFU puts one member on each slot with `ReplaceTrack`, so a join or a leave within 16 members needs no renegotiation; past 16 it adds an own `sendonly` m-line per extra member and renegotiates. The SFU names the member on each mid in `slot` messages on the control DataChannel; libmello routes each packet by its track's mid (`VoiceSlotMap`), filters RTCP (PT != 111), and gives the whole RTP packet to the audio RTP callback, which calls `mello_voice_feed_rtp(sender_id, rtp_packet)` (spec 10 section 7.1). This routes audio to one NetEQ per sender (decode, FEC, concealment, time stretch) and a stereo mixer with a limiter (spec 10 section 5). The `mix_output` render callback pulls 10 ms mixes through a small output ring. Phantom transceivers (from Pion's undeclared-SSRC handler) never get a slot message, so their packets drop; stream viewer tracks use session-scoped msids (`stream_…`).
-- **Audio pipeline:** Mic → CoreAudio/WASAPI capture → WebRTC APM → adaptive RMS/noise-floor gate → Silero VAD on candidate speech → RNNoise/Opus only during speech/pre-roll/hangover → send via RTP audio track (SFU) or unreliable DataChannel (P2P mesh). Receive path (SFU): `onTrack` → audio RTP callback → `mello_voice_feed_rtp` → NetEQ per sender → `AudioMixerImpl` (volume, pan, limiter) → output ring → `mix_output` render callback → speaker. P2P: the voice frame (sequence, RTP timestamp, Opus; spec 10 section 4.2) → `mello_voice_feed_packet` → the same NetEQ path.
+- **SFU topology:** The SFU is the only voice transport. Voice goes through the SFU server via **RTP audio tracks** (Opus, PT 111). The client's offer carries its mic m-line and 16 recvonly **receive slots** (mids `s0`..`s15`). The SFU puts one member on each slot with `ReplaceTrack`, so a join or a leave within 16 members needs no renegotiation; past 16 it adds an own `sendonly` m-line per extra member and renegotiates. The SFU names the member on each mid in `slot` messages on the control DataChannel; libmello routes each packet by its track's mid (`VoiceSlotMap`), filters RTCP (PT != 111), and gives the whole RTP packet to the audio RTP callback, which calls `mello_voice_feed_rtp(sender_id, rtp_packet)` (spec 10 section 7.1). This routes audio to one NetEQ per sender (decode, FEC, concealment, time stretch) and a stereo mixer with a limiter (spec 10 section 5). The `mix_output` render callback pulls 10 ms mixes through a small output ring. Phantom transceivers (from Pion's undeclared-SSRC handler) never get a slot message, so their packets drop; stream viewer tracks use session-scoped msids (`stream_…`).
+- **Audio pipeline:** Mic → CoreAudio/WASAPI capture → WebRTC APM → adaptive RMS/noise-floor gate → Silero VAD on candidate speech → RNNoise/Opus only during speech/pre-roll/hangover → send via the RTP audio track. Receive path: `onTrack` → audio RTP callback → `mello_voice_feed_rtp` → NetEQ per sender → `AudioMixerImpl` (volume, pan, limiter) → output ring → `mix_output` render callback → speaker. The mic test: the voice frame (sequence, RTP timestamp, Opus; spec 10 section 4.2) → `mello_voice_feed_packet` → the same NetEQ path.
 - **Mute/Deafen:** `SetMute` stops sending audio (capture continues for local VAD). `SetDeafen` stops playback.
 - **Microphone permission (`client/mic_permission.rs`):** The UI shows Mute, Deafen and the join buttons only when the permission is granted. Otherwise the control bar asks for it.
   - The client sends `CheckMicPermission` at startup. The core reads the OS state through libmello (`mello_mic_permission_status`) and sends `MicPermissionChanged { granted, denied }`. Both are false when the user was not asked yet.
@@ -195,10 +194,10 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
   - Step 1 (task): WebSocket connect and welcome.
   - Step 2 (loop): create the native peer. Only the loop owns the libmello context.
   - Step 3 (task): join the voice session and wait for the DataChannels.
-  - A failed step falls back to P2P on the loop. `VoiceStateChanged { in_call: true }` follows the SFU start or the fallback.
-  - `VoiceStateChanged.transport` is the `VoiceMode` that started: `SFU`, or `P2P` after the fallback. It is `Disconnected` when the call ends or voice capture did not start. The e2e state port reports it (plans/E2E-QA.md §16.6).
+  - A failed step leaves voice disconnected. `VoiceStateChanged { in_call: true }` follows the SFU start or the failure, and the reconnect scheduler tries again after a failure.
+  - `VoiceStateChanged.transport` is the `VoiceMode` that started: `SFU`. It is `Disconnected` when the call ends, voice capture did not start, or the SFU join failed. The e2e state port reports it (plans/E2E-QA.md §16.6).
+  - `voice_join` returns `SFU_UNAVAILABLE` when the backend cannot sign an SFU token or the crew kill switch is set. The client logs the error; no call starts.
   - A new join, a leave, a crew change or a logout cancels the running join.
-  - While a join runs, the loop holds Nakama signals and presence in their channels. The P2P fallback then gets them in order.
   - While a join runs, the voice tick schedules no reconnect.
 - **SFU reconnect + unified teardown:** SFU disconnects (signaling disconnect, liveness timeout, sleep/wake fault) go through `mark_disconnected_with_reason(...)`: stop capture first, best-effort `leave` handshake, clear SFU state, emit `VoiceSfuDisconnected { reason }`. The client's `voice_tick` then auto-reconnects with exponential backoff (2s base, max 5 attempts). On terminal failure, it emits `VoiceStateChanged { in_call: false }`.
 
@@ -206,14 +205,14 @@ Voice is managed by `VoiceManager` which wraps libmello's C FFI:
 
 ## 7. Stream System
 
-Streaming uses a host/viewer model over **native H.264 RTP** (P2P and SFU):
+Streaming uses a host/viewer model over **native H.264 RTP** through the SFU:
 
-- **Host pipeline:** DXGI capture → GPU color convert → hardware encode (NVENC/AMF/QSV) → complete Annex-B access unit → `StreamManager` → per-viewer (P2P) or single (SFU) native RTP sender with bounded pacing.
+- **Host pipeline:** DXGI capture → GPU color convert → hardware encode (NVENC/AMF/QSV) → complete Annex-B access unit → `StreamManager` → one native RTP sender to the SFU with bounded pacing.
 - **Viewer pipeline:** RTP receive → reorder/NACK/PLI/REMB (libmello) → complete-AU gate (**120 ms** assembly deadline) → hardware decode → native surface / DComp present.
 - **Congestion:** `ViewerCongestionController` drives REMB from native RTP stats; host `StreamManager` applies minimum fresh viewer target (SFU aggregates via relay under viewer id `sfu`).
 - **Transport:** Stream SFU peers use **control DataChannel only** for reliable metadata; video is always on the RTP track. No DataChannel video chunking or XOR FEC.
-- **Game audio:** Host system-audio capture (WASAPI loopback on Windows, ScreenCaptureKit on macOS) → Opus on the stream peer sendonly audio m-line. Viewer recvonly audio uses `RtcpReceivingSession` + RTP `onMessage` (not the voice `onTrack` path). SFU: `AudioRtp` (the whole RTP packet; mello-core strips the header) → `mello_stream_feed_audio_packet`; P2P: `stream_audio_track_callback` → same feed.
-- **Topology and failure policy:** Nakama chooses P2P or SFU in `start_stream` / `watch_stream`. It may return P2P when SFU auth/token creation is unavailable. Once it returns SFU, client connect/join/control-channel setup is fail-closed and surfaces an explicit stream error instead of switching that session to P2P.
+- **Game audio:** Host system-audio capture (WASAPI loopback on Windows, ScreenCaptureKit on macOS) → Opus on the stream peer sendonly audio m-line. Viewer recvonly audio uses `RtcpReceivingSession` + RTP `onMessage` (not the voice `onTrack` path). `AudioRtp` (the whole RTP packet; mello-core strips the header) → `mello_stream_feed_audio_packet`.
+- **Topology and failure policy:** The SFU is the only stream topology. `start_stream` / `watch_stream` return `SFU_UNAVAILABLE` when the backend cannot sign an SFU token (or, for `start_stream`, the crew kill switch is set). Client connect/join/control-channel setup is fail-closed and surfaces an explicit stream error.
 - **Reference-chain recovery:** Native queue overflow or a failed accepted AU enters an IDR gate, drops dependent deltas, and emits a rate-limited keyframe request. Sending resumes only after a complete IDR.
 
 **Shutdown order:** signal manager stop → wait for manager task (drains sinks/peers) → tear down libmello host/viewer pipelines. Do not drop `SfuConnection` while the manager may still send.

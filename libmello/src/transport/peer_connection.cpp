@@ -282,7 +282,7 @@ PeerConnectionImpl::PeerConnectionImpl(const std::string& peer_id,
     // candidate and connects out to a remote passive TCP candidate, such as
     // the SFU's ICE-TCP port. A network that blocks UDP then still connects.
     // libjuice ranks TCP candidates below UDP, so UDP stays preferred. It
-    // ignores remote active candidates, so a P2P pair keeps UDP only.
+    // ignores remote active candidates, so two libmello peers keep UDP only.
     // Needs libjuice's poll mode: enableIceUdpMux must stay off.
     config_.enableIceTcp = true;
 }
@@ -300,11 +300,16 @@ void PeerConnectionImpl::apply_loopback_ice_config() {
         return;
     }
 
+    // No ICE servers means an in-process test pair. Bind to loopback and let
+    // the OS pick the ports. A fixed port range (this used 50000 + 100 per
+    // peer) fails on a Windows machine where Hyper-V or WSL has reserved
+    // those ports: libjuice cannot bind inside the range, gathering fails,
+    // and the offer is null. The reserved ranges change on every boot, so
+    // which peers fail changes with them. `netsh interface ipv4 show
+    // excludedportrange protocol=udp` lists them.
     config_.bindAddress = "127.0.0.1";
-    static std::atomic<uint16_t> port_base{50000};
-    const uint16_t base = port_base.fetch_add(100, std::memory_order_relaxed);
-    config_.portRangeBegin = base;
-    config_.portRangeEnd = static_cast<uint16_t>(base + 99);
+    config_.portRangeBegin = 1024;
+    config_.portRangeEnd = 65535;
 }
 
 void PeerConnectionImpl::set_ice_servers(const std::vector<std::string>& urls) {
@@ -1144,8 +1149,6 @@ void PeerConnectionImpl::deliver_incoming_audio(
     int total,
     uint64_t generation
 ) {
-    MelloAudioTrackCallback callback = nullptr;
-    void* user_data = nullptr;
     MelloAudioTrackCallback rtp_callback = nullptr;
     void* rtp_user_data = nullptr;
     {
@@ -1153,60 +1156,15 @@ void PeerConnectionImpl::deliver_incoming_audio(
         if (!is_current_pc_generation(generation)) {
             return;
         }
-        callback = audio_track_cb_;
-        user_data = audio_track_ud_;
         rtp_callback = audio_rtp_cb_;
         rtp_user_data = audio_rtp_ud_;
     }
 
-    // Voice: the whole RTP packet, so NetEQ sees the real sequence,
-    // timestamp and SSRC (spec 10 section 5.1).
+    // The whole RTP packet, so NetEQ sees the real sequence, timestamp and
+    // SSRC (spec 10 section 5.1).
     if (rtp_callback) {
         rtp_callback(rtp_user_data, sender.c_str(), bytes, total);
     }
-    if (!callback) {
-        return;
-    }
-
-    const uint16_t seq = static_cast<uint16_t>(
-        (static_cast<uint16_t>(bytes[2]) << 8)
-        | static_cast<uint16_t>(bytes[3])
-    );
-
-    int cc = bytes[0] & 0x0F;
-    int header_len = 12 + cc * 4;
-
-    const bool has_ext = (bytes[0] & 0x10) != 0;
-    if (has_ext && header_len + 4 <= total) {
-        const uint16_t ext_len = static_cast<uint16_t>(
-            (static_cast<uint16_t>(bytes[header_len + 2]) << 8)
-            | static_cast<uint16_t>(bytes[header_len + 3])
-        );
-        header_len += 4 + ext_len * 4;
-    }
-
-    if (header_len >= total) {
-        return;
-    }
-
-    const uint8_t* opus = bytes + header_len;
-    const int opus_len = total - header_len;
-
-    std::vector<uint8_t> pkt(4 + opus_len);
-    pkt[0] = static_cast<uint8_t>(seq);
-    pkt[1] = static_cast<uint8_t>(seq >> 8);
-    pkt[2] = 0;
-    pkt[3] = 0;
-    std::memcpy(pkt.data() + 4, opus, opus_len);
-
-    // Stream audio and tools: the Opus payload behind a 4-byte header
-    // with the 16-bit RTP sequence.
-    callback(
-        user_data,
-        sender.c_str(),
-        pkt.data(),
-        static_cast<int>(pkt.size())
-    );
 }
 
 void PeerConnectionImpl::setup_incoming_track(
@@ -1367,12 +1325,6 @@ void PeerConnectionImpl::setup_dc_handlers(
                 }
             }
 
-            if (!reliable) {
-                std::lock_guard<std::mutex> lock(self->recv_mutex_);
-                if (self->recv_queue_.size() < MAX_RECV_QUEUE) {
-                    self->recv_queue_.emplace(bytes, bytes + size);
-                }
-            }
             MelloPeerDataCallback callback = nullptr;
             void* user_data = nullptr;
             {
@@ -1793,15 +1745,6 @@ void PeerConnectionImpl::set_data_callback(MelloPeerDataCallback cb, void* user_
     data_ud_ = user_data;
 }
 
-void PeerConnectionImpl::set_audio_track_callback(
-    MelloAudioTrackCallback cb,
-    void* user_data
-) {
-    std::lock_guard<std::mutex> lock(mutex_);
-    audio_track_cb_ = cb;
-    audio_track_ud_ = user_data;
-}
-
 void PeerConnectionImpl::set_audio_rtp_callback(
     MelloAudioTrackCallback cb,
     void* user_data
@@ -1960,26 +1903,6 @@ bool PeerConnectionImpl::send_control_text(const std::string& text) {
     }
 }
 
-bool PeerConnectionImpl::send_unreliable(const uint8_t* data, int size) {
-    std::shared_ptr<rtc::DataChannel> channel;
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        channel = unreliable_dc_;
-    }
-    if (!channel || !channel->isOpen()) {
-        return false;
-    }
-    try {
-        channel->send(
-            reinterpret_cast<const std::byte*>(data),
-            static_cast<size_t>(size)
-        );
-        return true;
-    } catch (...) {
-        return false;
-    }
-}
-
 bool PeerConnectionImpl::send_reliable(const uint8_t* data, int size) {
     std::shared_ptr<rtc::DataChannel> channel;
     {
@@ -2066,19 +1989,6 @@ bool PeerConnectionImpl::is_unreliable_open() const {
 
 bool PeerConnectionImpl::is_reliable_open() const {
     return reliable_open_.load(std::memory_order_acquire);
-}
-
-int PeerConnectionImpl::recv(uint8_t* buffer, int buffer_size) {
-    std::lock_guard<std::mutex> lock(recv_mutex_);
-    if (recv_queue_.empty()) {
-        return 0;
-    }
-
-    auto& front = recv_queue_.front();
-    const int copy_size = std::min(static_cast<int>(front.size()), buffer_size);
-    std::memcpy(buffer, front.data(), copy_size);
-    recv_queue_.pop();
-    return copy_size;
 }
 
 void PeerConnectionImpl::send_ping() {

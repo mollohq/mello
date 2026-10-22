@@ -1,5 +1,7 @@
 #include "mello.h"
 #include "context.hpp"
+#include <chrono>
+#include "video/capture_reference.hpp"
 #include "transport/peer_connection_impl.hpp"
 #include "video/video_pipeline.hpp"
 #include "video/encoder_factory.hpp"
@@ -653,7 +655,7 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
 }
 
 /* ============================================================================
- * P2P Transport
+ * Peer Transport
  * ============================================================================ */
 
 MelloPeerConnection* mello_peer_create(MelloContext* ctx, const char* peer_id) {
@@ -778,30 +780,12 @@ void mello_peer_set_data_callback(MelloPeerConnection* peer, MelloPeerDataCallba
     } catch (...) {}
 }
 
-void mello_peer_set_audio_track_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
-    if (!peer) return;
-    try {
-        auto* pc = peer_cast(peer);
-        pc->set_audio_track_callback(callback, user_data);
-    } catch (...) {}
-}
-
 void mello_peer_set_audio_rtp_callback(MelloPeerConnection* peer, MelloAudioTrackCallback callback, void* user_data) {
     if (!peer) return;
     try {
         auto* pc = peer_cast(peer);
         pc->set_audio_rtp_callback(callback, user_data);
     } catch (...) {}
-}
-
-MelloResult mello_peer_send_unreliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
-    if (!peer || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
-    try {
-        auto* pc = peer_cast(peer);
-        return pc->send_unreliable(data, size) ? MELLO_OK : MELLO_ERROR_TRANSPORT_FAILED;
-    } catch (...) {
-        return MELLO_ERROR_TRANSPORT_FAILED;
-    }
 }
 
 MelloResult mello_peer_send_reliable(MelloPeerConnection* peer, const uint8_t* data, int size) {
@@ -988,16 +972,6 @@ bool mello_peer_get_send_feedback(MelloPeerConnection* peer, MelloSendFeedback* 
         return peer_cast(peer)->get_send_feedback(out);
     } catch (...) {
         return false;
-    }
-}
-
-int mello_peer_recv(MelloPeerConnection* peer, uint8_t* buffer, int buffer_size) {
-    if (!peer || !buffer || buffer_size <= 0) return 0;
-    try {
-        auto* pc = peer_cast(peer);
-        return pc->recv(buffer, buffer_size);
-    } catch (...) {
-        return 0;
     }
 }
 
@@ -1449,6 +1423,14 @@ MelloStreamHost* mello_stream_start_host(
                 desc.monitor_index = source->monitor_index;
                 desc.prefer_wgc = true;
                 break;
+            case MELLO_CAPTURE_REFERENCE:
+                desc.mode = mello::video::CaptureMode::Reference;
+                desc.reference = c->reference_clip();
+                if (desc.reference.path.empty()) {
+                    MELLO_LOG_ERROR("stream", "MELLO_CAPTURE_REFERENCE without a reference clip");
+                    return nullptr;
+                }
+                break;
         }
         // The hook permission belongs to the request, not to the mode a caller
         // happened to pick. A window that cannot carry a stream becomes its
@@ -1506,6 +1488,50 @@ void mello_stream_stop_host(MelloStreamHost* host) {
         MELLO_LOG_INFO("stream", "stop_host: done");
     } catch (...) {}
     stream_timer_resolution_release();
+}
+
+MelloResult mello_test_set_reference_clip(MelloContext* ctx,
+                                          const char* path_utf8,
+                                          uint32_t width,
+                                          uint32_t height,
+                                          uint32_t fps,
+                                          MelloReferencePixelFormat format) {
+    if (!ctx || !path_utf8 || width == 0 || height == 0 || (width & 1u) || (height & 1u)) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    mello::video::ReferenceClip clip{};
+    clip.path = path_utf8;
+    clip.width = width;
+    clip.height = height;
+    clip.fps = fps == 0 ? 60 : fps;
+    clip.nv12 = (format == MELLO_REFERENCE_NV12);
+    ctx_cast(ctx)->set_reference_clip(clip);
+    return MELLO_OK;
+}
+
+bool mello_stream_reference_info(MelloStreamHost* host, MelloReferenceInfo* out) {
+    if (!host || !out || !host->video) return false;
+#ifdef _WIN32
+    auto* ref = dynamic_cast<mello::video::ReferenceCapture*>(host->video->capture());
+    if (!ref) return false;
+    const mello::video::ReferenceInfo info = ref->info();
+    out->start_us = info.start_us;
+    out->frames_delivered = info.frames_delivered;
+    out->late_frames = info.late_frames;
+    out->max_late_us = info.max_late_us;
+    out->clip_frames = info.clip_frames;
+    out->fps = info.fps;
+    out->loops = info.loops;
+    return true;
+#else
+    return false;
+#endif
+}
+
+uint64_t mello_clock_now_us(void) {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
 }
 
 uint32_t mello_stream_abandoned_pipelines(void) {
@@ -1613,6 +1639,10 @@ MelloStreamView* mello_stream_start_viewer(
 
         auto* view = new MelloStreamView{
             c, std::make_unique<mello::video::VideoPipeline>(), on_frame, user_data, nullptr, nullptr};
+        // Game audio plays on the output device the user chose for voice. The
+        // device opens at the first audio packet, not here.
+        view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>(
+            [c] { return c->audio().playback_device_id(); });
 
         mello::video::VideoPipeline::FrameCallback cb{};
         if (on_frame) {
@@ -1713,10 +1743,19 @@ void mello_stream_set_native_frame_callback(
 MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {
     if (!view || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        if (!view->audio_playout) {
-            view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>();
-        }
+        if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
         return view->audio_playout->feed_packet(data, size) ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_stream_viewer_set_audio_muted(MelloStreamView* view, bool muted) {
+    if (!view) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
+        view->audio_playout->set_muted(muted);
+        return MELLO_OK;
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }

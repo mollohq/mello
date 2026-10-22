@@ -75,18 +75,15 @@ func TestAbsentFromSFU(t *testing.T) {
 		name          string
 		state         sfuLookup
 		uid           string
-		guest         bool
 		absent, known bool
 	}{
-		{"in the session", sfuSessionFound, "here", false, false, true},
-		{"missing from a live session", sfuSessionFound, "gone", false, true, true},
-		{"guest, session gone", sfuSessionAbsent, "g", true, true, true},
-		// A member's room may be P2P, which no SFU knows: never prune on 404.
-		{"member, session gone", sfuSessionAbsent, "m", false, false, false},
-		{"lookup failed", sfuLookupFailed, "g", true, false, false},
+		{"in the session", sfuSessionFound, "here", false, true},
+		{"missing from a live session", sfuSessionFound, "gone", true, true},
+		{"session gone", sfuSessionAbsent, "m", true, true},
+		{"lookup failed", sfuLookupFailed, "g", false, false},
 	}
 	for _, c := range cases {
-		absent, known := absentFromSFU(c.state, members, c.uid, c.guest)
+		absent, known := absentFromSFU(c.state, members, c.uid)
 		if absent != c.absent || known != c.known {
 			t.Errorf("%s: got absent=%v known=%v, want %v %v", c.name, absent, known, c.absent, c.known)
 		}

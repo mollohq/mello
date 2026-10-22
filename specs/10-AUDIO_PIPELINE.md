@@ -21,7 +21,7 @@ The target is Discord-grade continuity and intelligibility under realistic jitte
 ```
 ┌──────────────┐    ┌──────────────────────────┐    ┌──────────────┐
 │ Audio Input  │───▶│ DSP + VAD + Opus Encode │───▶│ Transport     │
-│ WASAPI/CA    │    │ AEC/AGC/NS + seq header │    │ P2P or SFU    │
+│ WASAPI/CA    │    │ AEC/AGC/NS + seq header │    │ SFU           │
 └──────────────┘    └──────────────────────────┘    └──────────────┘
 ```
 
@@ -29,8 +29,8 @@ The target is Discord-grade continuity and intelligibility under realistic jitte
 ```
 ┌──────────────┐    ┌──────────────────────────┐    ┌──────────────┐
 │ Transport    │───▶│ NetEQ per peer: decode,  │───▶│ Audio Output │
-│ RTP or P2P   │    │ FEC, PLC, time stretch;  │    │ WASAPI/CA    │
-│ frames       │    │ stereo mixer + limiter;  │    │ (stereo)     │
+│ SFU RTP      │    │ FEC, PLC, time stretch;  │    │ WASAPI/CA    │
+│              │    │ stereo mixer + limiter;  │    │ (stereo)     │
 │              │    │ AEC render reference     │    │              │
 └──────────────┘    └──────────────────────────┘    └──────────────┘
 ```
@@ -198,13 +198,13 @@ This design was validated with:
 [seq0 seq1 seq2 seq3][opus_payload...]
 ```
 
-The voice frame of the P2P data channel and of the mic test (`mello_voice_feed_packet`) adds the RTP timestamp, so NetEQ gets real media time on every path:
+The voice frame of the mic test (`mello_voice_feed_packet`) adds the RTP timestamp, so NetEQ gets real media time on every path:
 
 ```
 [seq0 seq1 seq2 seq3][ts0 ts1 ts2 ts3][opus_payload...]     (both little-endian)
 ```
 
-mello-core builds it from `mello_voice_get_packet_with_timestamp` (`voice/frame.rs`). A peer that runs a build before stage 3 sends the 4-byte form, which this receiver reads as a wrong timestamp; P2P is the backup path and both ends update together.
+mello-core builds it from `mello_voice_get_packet_with_timestamp` (`voice/frame.rs`).
 
 RTP timestamp (media time):
 
@@ -214,12 +214,11 @@ RTP timestamp (media time):
 - In SFU RTP mode, the packet sink (§4.5) calls `mello_peer_send_audio_frame(peer, opus, size, timestamp)` with the Opus payload, without the 4-byte sequence. libmello sends the frame with a libdatachannel `FrameInfo`: RTP timestamp = the packetizer's random start timestamp + media time, modulo 2^32. The RTP sequence comes from the packetizer.
 - `mello_peer_send_audio()` does not advance the RTP timestamp (libdatachannel takes it only from a `FrameInfo`). No caller in the repo uses it.
 - Stream game audio uses the same packetizer. Its capture clock counts every 20 ms frame (`ts_us`); mello-core converts it to 48 kHz samples for `mello_peer_send_audio_frame`.
-- The P2P data-channel path carries the voice frame above: sequence and media time.
 
 Receive side (section 5.1):
 
 - The SFU path gives the whole RTP packet to `mello_voice_feed_rtp`: NetEQ sees the real 16-bit sequence, the timestamp, the payload type and the SSRC.
-- The P2P and mic test paths give the voice frame to `mello_voice_feed_packet`. libmello takes the low 16 bits of the sequence and the timestamp as the RTP fields.
+- The mic test path gives the voice frame to `mello_voice_feed_packet`. libmello takes the low 16 bits of the sequence and the timestamp as the RTP fields.
 - NetEQ handles the 16-bit sequence wrap and the 32-bit timestamp wrap. The wrap is one ordinary step: no discard, no reset (voice gate `wrap`).
 
 ### 4.3 Push-to-Talk Mode
@@ -263,7 +262,6 @@ Who uses which path:
 | Mode | Send path | Thread |
 |---|---|---|
 | SFU voice | Packet sink -> `mello_peer_send_audio_frame` | Audio capture thread |
-| P2P mesh | `get_packet` on the 20 ms voice tick -> data channel | Command loop |
 | Mic test (loopback), no call | `get_packet` on the voice tick -> voice frame -> `mello_voice_feed_packet` | Command loop |
 | Mic test in an SFU call | The packet sink also feeds the voice frame as the `loopback` peer | Audio capture thread |
 | Voice quality gate | Packet sink collects the trace (§9) | Caller thread |
@@ -339,7 +337,7 @@ Received voice plays through WebRTC NetEQ (M131), one instance per remote peer, 
 
 ```
 SFU RTP packet ──▶ mello_voice_feed_rtp ──┐
-P2P / mic test frame ──▶ mello_voice_feed_packet ──┤  (network, command loop, capture threads)
+mic test frame ──▶ mello_voice_feed_packet ──┤  (network, command loop, capture threads)
                                           ▼
                     VoicePlayout: peer map ──▶ NetEq per peer (InsertPacket)
                                                    │
@@ -358,20 +356,19 @@ Code: `libmello/src/audio/voice_playout.{hpp,cpp}` (NetEQ, controller, mixer), `
 |---|---|---|---|
 | SFU voice | The whole RTP packet from the track (`mello_peer_set_audio_rtp_callback`). The sender is the member that the SFU's slot map names for the track's mid (section 7.1), not an SDP attribute | `mello_voice_feed_rtp(ctx, sender, rtp, size, -1)` | libdatachannel track thread |
 | SFU voice, fallback | `SfuEvent::AudioRtp` from the event queue, only while the direct sink is not set | `mello_voice_feed_rtp` | Command loop |
-| P2P mesh | The voice frame from the data channel (section 4.2) | `mello_voice_feed_packet` | Command loop |
 | Mic test | The voice frame of the local encoder | `mello_voice_feed_packet` as peer `loopback` | Command loop, or the capture thread in an SFU call |
 
 - `feed_rtp` parses the RTP header (RFC 3550: CSRC list, header extension, padding). Payload types other than 111 (Opus) and 13 (CN) count as rejected and do not reach NetEQ.
 - `feed_packet` builds the RTP fields from the 8-byte voice frame header: payload type 111, the low 16 bits of the sequence, the timestamp, SSRC 0. Both paths enter the same NetEQ code.
 - Receive time: `receive_time_ms < 0` stamps the packet with `util::steady_now_ms()`: the steady clock in production, the test clock under the voice gate. NetEQ times arrivals with its own tick (one per `GetAudio`) and uses the receive time only for its statistics.
 - NetEQ's clock is a `webrtc::Clock` subclass on `util::steady_now_ms()`, never `Clock::GetRealTimeClock()`, so the test clock drives it.
-- The legacy audio track callback (`mello_peer_set_audio_track_callback`) still delivers the Opus payload behind a 4-byte sequence header. Stream audio (P2P) and tools use it. An SFU stream viewer strips the RTP header in mello-core (`feed_viewer_audio_rtp`).
+- Stream audio uses the same RTP callback. A stream viewer strips the RTP header in mello-core (`feed_viewer_audio_rtp`).
 
 ### 5.2 NetEQ per Peer
 
 - A peer's NetEQ is created on its first packet: 48 kHz, `enable_muted_state` on, payload 111 = `opus/48000/2` with `stereo=0` (mono decode), payload 13 = `CN/48000`. The decoder factory has Opus only.
 - One `webrtc::Environment` per pipeline carries the clock and a mello `FieldTrialsView`. It answers one key, `WebRTC-Audio-NetEqDelayManagerConfig`, with `VoicePlayout::default_delay_manager_config()` (the tuning in section 5.5).
-- A new SSRC for the same peer rebuilds its NetEQ (a member that moves to another receive slot or m-line). A timestamp more than 2 s behind the newest one also rebuilds it (a sender restart; P2P keeps SSRC 0). `rx_stream_resets` counts both.
+- A new SSRC for the same peer rebuilds its NetEQ (a member that moves to another receive slot or m-line). A timestamp more than 2 s behind the newest one also rebuilds it (a sender restart; the mic test keeps SSRC 0). `rx_stream_resets` counts both.
 - A receive slot keeps its SSRC when the SFU gives it to another member. NetEQ is keyed by member, so the new member gets a new NetEQ; the old member's NetEQ is destroyed when the slot message releases its last mid (section 7.1). No state carries over between members on one SSRC.
 - Insert runs on the inserting thread. `NetEqImpl` locks itself, so an insert and the device thread's `GetAudio` may overlap. The peer map has its own mutex, which the device thread never takes. Thread and lock rules: spec 03 section 7.
 - Lifetime: `clear_remote_streams` (voice leave, `mello_voice_stop_capture`) destroys every NetEQ. `mello_voice_remove_peer` destroys one (mello-core calls it when a member leaves). Removal takes the source out of the mixer first and waits for a running mix. Lifetime counters of destroyed instances stay in the totals.
@@ -456,10 +453,7 @@ Voice path: one VoiceProcessingIO duplex unit carries capture input and render o
 
 ## 7. Transport and SFU Lifecycle
 
-Voice transport has two modes:
-
-- P2P mesh (legacy/backup)
-- SFU voice (`mello-sfu`) with RTP audio tracks and websocket signaling
+Voice transport has one mode: SFU voice (`mello-sfu`) with RTP audio tracks and websocket signaling. `voice_join` returns `SFU_UNAVAILABLE` when the server cannot sign an SFU token or the crew kill switch (`"sfu_enabled": false`) is set; the client logs the error and stays out of the call.
 
 ### 7.1 SFU Join/Negotiation
 
@@ -473,7 +467,7 @@ Voice transport has two modes:
 
 Server flow is serialized via per-peer renegotiation mutex to avoid offer/answer races.
 
-**Receive slots** (mello-sfu `01-SFU.md` sections 5.4, 5.5, 6.2). The SFU voice offer carries the sendrecv mic m-line (mid `audio`, with `a=ssrc`) and `MELLO_VOICE_RECV_SLOTS` (16) recvonly audio m-lines with mids `s0` to `s15` (`mello_peer_set_voice_recv_slots`, set by `SfuConnection::create_peer`; P2P peers offer none). The SFU forwards one member on each slot and changes members with `ReplaceTrack`: a join or a leave within 16 members sends no `offer`. Past 16, the SFU adds an own m-line per extra member and renegotiates, as before.
+**Receive slots** (mello-sfu `01-SFU.md` sections 5.4, 5.5, 6.2). The SFU voice offer carries the sendrecv mic m-line (mid `audio`, with `a=ssrc`) and `MELLO_VOICE_RECV_SLOTS` (16) recvonly audio m-lines with mids `s0` to `s15` (`mello_peer_set_voice_recv_slots`, set by `SfuConnection::create_peer`). The SFU forwards one member on each slot and changes members with `ReplaceTrack`: a join or a leave within 16 members sends no `offer`. Past 16, the SFU adds an own m-line per extra member and renegotiates, as before.
 
 The SFU names the member on each mid in JSON text on the control DataChannel:
 
@@ -541,7 +535,7 @@ In an SFU call the speaking ring travels in-band, one SFU hop:
 - Mute sends `on:false`: a muted microphone stops the VAD where it is.
 - A member that leaves gets `VoiceActivity { speaking: false }` from the `member_left` handler; the SFU sends no `on:false` for it.
 - The SFU sends the members that speak now when the control channel opens. `SfuConnection` keeps them until voice attaches (`set_activity_sink`), so a ring that started before the join completed is not lost.
-- The `voice_speaking` Nakama RPC stays for crew members outside the channel (spec 13 section 4.4). In an SFU call it goes at most once per second (`PRESENCE_MIN_CHANGE_INTERVAL`); in P2P at once. Only the local member's own state goes to it.
+- The `voice_speaking` Nakama RPC stays for crew members outside the channel (spec 13 section 4.4). In an SFU call it goes at most once per second (`PRESENCE_MIN_CHANGE_INTERVAL`); outside one at once. Only the local member's own state goes to it.
 - The UI keeps the call's speaking states (`AppContext::call_speaking`). In an SFU call they win over the backend's `voice_update` for the members of the joined channel, which lags and can carry a state that already changed.
 
 Measured 2026-10-07 on localhost (control-channel RTT 0 to 1.6 ms), a member joining a channel of 7 talking members on a real SFU (`slots_live_join_and_speaking_latency`, 10 runs):
@@ -603,7 +597,7 @@ The voice SFU does not get the send-leg values in `client_stats`: that message i
 | Schedule | Attempt 1 at 500 ms after the drop, attempt 2 at 1 s after attempt 1, then one attempt every 2 s (the gap is never more than 2 s). The first attempt that is due 30 s or more after the drop gives up instead: the client leaves the call (`VoiceStateChanged { in_call: false }`). That is 16 attempts. Each attempt keeps its step limits (below). |
 | Voice token | The SFU token from `voice_join` lives 5 minutes. The client keeps the last answer and the time it received it (`VoiceJoinGrant`). An attempt reuses the endpoint and token while the token has more than 15 s left, with no backend round trip. Else it calls `voice_join` again. |
 | Membership | A realtime (Nakama) reconnect sends `voice_join` also while a voice reconnect waits, so the room keeps the member, and the fresh token replaces the kept one. |
-| Failure | A failed reconnect attempt leaves voice disconnected for the next attempt. It does not fall back to P2P: the other members are on the SFU. A first join still falls back to P2P. |
+| Failure | A failed attempt leaves voice disconnected for the next attempt. A first join that fails reports the call with no transport (`VoiceStateChanged { in_call: true, transport: Disconnected }`), and the reconnect scheduler tries again. |
 | Step limits | The WebSocket connect may take 5 s, the voice join step (join, offer, answer, DataChannels) 10 s. A link that drops packets never refuses a connection; without the limit an attempt would wait for the OS TCP timeout and block the next one. |
 
 **Drop detection.**
@@ -626,7 +620,7 @@ The voice SFU does not get the send-leg values in `client_stats`: that message i
 | Fact | Effect |
 |---|---|
 | libjuice lowers a TCP candidate's priority by 50 type-preference points | A working UDP pair wins. Measured: 8 of 8 voice peers select `prflx/udp` against the local SFU. |
-| libjuice pairs a remote TCP candidate only when it is passive or simultaneous-open, one per address family | A P2P pair (libjuice on both sides) stays on UDP. Pion ignores the client's active candidate. |
+| libjuice pairs a remote TCP candidate only when it is passive or simultaneous-open, one per address family | Two libmello peers (libjuice on both sides, as in the tests) stay on UDP. Pion ignores the client's active candidate. |
 | ICE-TCP works only in libjuice's poll mode | `enableIceUdpMux` must stay off. |
 | With UDP blocked, the TCP pair is nominated after the UDP checks time out | Join to DataChannel open: about 2 s. |
 | libjuice keeps one framed datagram in its TCP send buffer and drops the next ones while it waits | Loss under load on a TCP pair. |
@@ -787,7 +781,7 @@ libmello/third_party/webrtc-neteq/  # vendored NetEQ, Opus decoder, CNG, mixer (
 
 mello-core/src/
 ├── voice/mod.rs
-├── voice/frame.rs              # P2P and mic test voice frame (§4.2)
+├── voice/frame.rs              # mic test voice frame (§4.2)
 ├── voice/send_sink.rs          # SFU packet sink on the capture thread (§7.3)
 ├── client/voice.rs             # SFU reconnect scheduler and voice token reuse (§7.6)
 ├── transport/sfu_region.rs     # SFU region measurement (§7.6)

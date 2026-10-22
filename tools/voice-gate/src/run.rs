@@ -276,7 +276,7 @@ pub enum SendModel {
     /// At encode time, from the capture thread (the SFU path since stage 2).
     Direct,
     /// On the 20 ms voice tick of the command loop (the SFU path before
-    /// stage 2, and the P2P path).
+    /// stage 2, and the fallback when the packet sink is not set).
     Tick,
 }
 

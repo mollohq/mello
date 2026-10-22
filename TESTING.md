@@ -127,7 +127,6 @@ gtest suite and the Nakama Go modules.
 | Stream certification | SFU soak + LAN client gates | Yes (local Nakama + SFU) | No (manual) | `scripts/run-stream-certification.ps1` |
 | `stream-host` probe | Client host RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-host.ps1` |
 | `sfu-stream-viewer-probe` | Client viewer RTP path + telemetry | Yes (live Nakama + SFU) | No (manual) | `scripts/run-stream-viewer.ps1` |
-| `mello_rtp_tests` | Native RTP AU send/receive + P2P roles | No | No (manual) | `scripts/run-p2p-stream-probe.ps1` |
 | `voice-test-client` (GUI) | Client DSP A/B | Yes (live backend) | No (manual) | `cargo run` in `tools/voice-test-client` |
 | `voice-test-client` (headless) | Client reconnect/resync E2E | Yes (live backend) | 🔧 integration job | `cargo run -- --scenario scenarios/<f>.json` |
 | `scripts/voice/voice-local-gate.sh` | Cross-repo local RED/GREEN gate + artifacts | Yes (local Nakama + SFU) | 🔧 integration job | `../scripts/voice/voice-local-gate.sh` |
@@ -288,7 +287,7 @@ Voice receive and playout (no device, no sleep, deterministic):
 |---|---|---|
 | `VoicePlayout` | `test_voice_playout.cpp` | One NetEQ per peer: clean playout, a new SSRC and a sender restart start a new stream, reorder is not a restart, late frames count a stall and not a talk pause, a long gate gap leaves no delay, the pre-roll burst is held and not learned as jitter, real jitter still raises the target, a target jump does not stretch speech, volume and pan per peer, two peers mix, removal keeps lifetime counts, junk is rejected. |
 | `ParseRtp`, `StreamResampler` | `test_voice_playout.cpp` | The RTP parser (CSRC, extension, padding) and the sinc resampler of the WASAPI edges (rate, level, frequency, channel order, block sizes). |
-| `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the P2P voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
+| `VoiceReceiveTest` | `test_voice_receive.cpp` | Through a real `AudioPipeline` on the test backend: the loopback voice frame and SFU RTP packets decode through NetEQ, losses add no delay, single losses use in-band FEC (speech corpus), an outage recovers, late underruns, deafen, volume, leave and peer removal. |
 | `NetEqSpike` | `test_neteq_spike.cpp` | The stage 3 spike: NetEQ and the mixer driven directly (clean, loss, burst tuning, drift, gap, limiter, cost). |
 
 Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
@@ -300,16 +299,102 @@ Voice send-leg adaptation (spec 10 sections 4.6 and 7.5):
 | `VoiceSendFeedback` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | The RTCP parser with crafted receiver and sender reports (compound, signed 24-bit loss, malformed lengths), the round trip from LSR and DLSR, the per-report interval of the tracker. |
 | `VoiceSendFeedbackWire` | `test_voice_send_feedback.cpp` (`mello_rtp_tests`) | A plain libdatachannel peer answers our sender reports with crafted receiver reports; they reach the voice peer's send track and its callback with the right loss, jitter and a real round trip. |
 
-RTP transport (sender, receiver, P2P peer roles) — release gate for stream PRs:
+RTP transport (sender, receiver, peer roles) — release gate for stream PRs:
 
 ```powershell
 cmake --build libmello/build --config Release --target mello_rtp_tests
 libmello/build/tests/Release/mello_rtp_tests.exe
-# or: .\scripts\run-p2p-stream-probe.ps1
 ```
 
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
 (read `specs/03-LIBMELLO.md` first — threading/COM/callback invariants).
+
+### Streaming quality gate
+
+`tools/stream-gate` plays a deterministic reference clip through the real
+stream path and scores what the viewer presents against a frozen baseline
+(plans/streaming-quality.md stage 1). Every change to the stream path
+reports its delta per profile and per metric. Windows only: the reference
+source is D3D11.
+
+```bash
+./scripts/stream-gate.sh                       # CPU lane, all 7 profiles, about 3 minutes
+./scripts/stream-gate.sh --lane hw             # hardware lane (NVENC/AMF/QSV and their decoders)
+./scripts/stream-gate.sh --only clean,mobile   # some profiles
+./scripts/stream-gate.sh --no-vmaf             # PSNR and SSIM only
+./scripts/stream-gate.sh --repeat 3            # every profile 3 times, prints the spread
+./scripts/stream-gate.sh --report-only         # print every gate, enforce none
+./scripts/stream-gate.sh --clip game.yuv --clip-size 1920x1080   # a real I420 clip: transport metrics only, no baseline
+```
+
+The exit code is 1 when VMAF drops by more than 1 point on any profile
+with a VMAF floor (more where `gates.json` `vmaf_max_drop_profile` records a
+wider measured spread), when freeze time rises by more than the profile's
+spread (`freeze_ms_max_rise`), or when a gate of `gates.json` fails. It is 2
+for a setup error and for a run on a busy machine.
+
+| Part | Where | What it does |
+|---|---|---|
+| Path | `tools/stream-gate/src/session.rs` | Reference source → D3D11 video processor (NV12 to BGRA) → preprocessor → encoder → mello-core `StreamManager` and `SfuSink` → RTP sender → shim → mello-sfu in test mode → shim → RTP receiver session → the client's viewer tick (16 ms: receive target, up to 32 AUs, backlog guard, one present) → decoder → `mello_stream_present_frame` → CPU frame callback. Host and viewers run in one process, each on its own `MelloContext`, in the client's order (native host start, then SFU connect and join). |
+| Clip | `tools/stream-gate/src/clip.rs` | 20 s at 60 fps, 1920x1080 and a 1280x720 cut: a panning textured background, six bouncing textured sprites, two scrolling text lines, a scene cut at 10 s, a static section from 14 s to 17 s. Integer arithmetic and a frozen generator: rendered on first use into `benchmarks/clips/` (git-ignored, 1.7 and 3.7 GB) and checked against the FNV-1a hashes in `profiles.json`. |
+| Burned-in code | `tools/stream-gate/src/code.rs` | Top-left 512x48 px: the frame index, the clip clock in ms and a CRC-16, as 16x16 blocks. The viewer reads it from every presented frame. |
+| Reference source | `libmello/src/video/capture_reference.cpp` | `MELLO_CAPTURE_REFERENCE` with `mello_test_set_reference_clip`: plays the clip at a fixed rate, frame n due at start + n/fps, never skipped, looped (spec 14 §4.7). |
+| Lanes | `profiles.json` `lanes` | `cpu`: 720p60 at 5000 kbps (preset medium), OpenH264 encode and decode in software (`MELLO_SOFT_ENCODER=1`, `MELLO_SOFT_DECODER=1`). `hw`: 1080p60 at 8000 kbps (preset ultra), the machine's encoder and decoder. |
+| Shim | `tools/stream-gate/src/shim.rs`, `netmodel.rs` | A UDP proxy on `127.0.0.2:10000`, the SFU's one ICE-lite candidate (`SFU_PUBLIC_IP=127.0.0.2`); the SFU's mux listens on `0.0.0.0:10000`. One flow per client. Forward direction of a leg: every impairment; reverse direction: base delay and outage. Loss per packet, jitter and the Gilbert-Elliott state per 10 ms slot, seeded (shim version 1). It reads the clear SRTP headers to count video, FEC (PT 127), retransmissions (a repeated SSRC and sequence) and RTCP per direction. |
+| SFU | `tools/stream-gate/src/sfu.rs` | `go build ./cmd/sfu` from `MELLO_SFU_DIR` (default `../mello-sfu`) with `GOTOOLCHAIN=go1.24.9` (the production Go), run with a random `SFU_ADMIN_PASSWORD`, `SFU_ICE_TCP_PORT=0`, loopback ports, no metering, R2 or TLS. Test-mode join (01-SFU.md §5.1). Log: `target/stream-gate/<lane>/sfu.log`. |
+| Scores | `score.rs`, `scripts/stream-gate-score.py` | PSNR and SSIM on luma per new presented frame against the clip frame of the same index. VMAF: `vmaf` 3.0.0 CLI (Netflix release `vmaf.exe`, SHA-256 pinned in `stream-gate.sh`, fetched into `target/stream-gate/tools/`), model `vmaf_v0.6.1`, luma. |
+| Profiles | `benchmarks/baselines/stream/profiles.json` | `clean`, `home-wifi` (viewer leg 2 % loss, 20 ms jitter), `mobile` (5 %, 40 ms, 250 ms spikes, reorder, 300 ppm drift), `bad` (10 % with bursts, 30 ms), `congested` (host uplink capped at 60 % of the preset with a 150 ms tail-drop queue, 5 s to 25 s), `outage` (host leg down 3 s from 8 s), `late-join` (a second viewer at 5 s, measured). 10 ms each way on every leg. |
+| Baselines | `baseline-2.1-cpu.json`, `baseline-2.1-hw.json` | Taken once, never edited. Commit, machine, GPU, driver, encoder, decoder, clip hash, seeds, SFU commit and Go, scorer versions. Both were taken on commit `c8a4bc7`, before the rebase onto the P2P removal (`f562f90`): the rebased tree is that tree minus the P2P deletions, which change no media path. |
+| Gates | `benchmarks/baselines/stream/gates.json` | Per lane and profile: VMAF floor, freeze-time ceiling, time-to-first-frame ceiling, glass-to-glass p95 ceiling, fps floor, send rate within the cap. Made by `tools/stream-gate/make_gates.py` from the baseline and repeat runs on the same commit: the baseline value minus or plus the largest of a fixed margin, a share of the value and 1.1 x the spread of the runs. A metric missing in any run (no frame presented) has no gate. |
+
+Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
+
+- **New frame**: a present whose burned-in frame differs from the one
+  before. **Dropped**: clip frames between the first and the last presented
+  frame that never reached the screen. **Delivered fps**: new frames per
+  second.
+- **Freeze**: a gap over 150 ms between new frames, after the first frame,
+  including a gap that runs to the end. Freeze time is the whole gap.
+- **Time to first frame**: first present minus the viewer's join start.
+- **Glass-to-glass**: present time minus the capture time of the frame
+  (the source's start time plus the burned-in clock), same clock
+  (`mello_clock_now_us`).
+- **Wire**: host uplink rate, FEC bytes and retransmitted bytes per video
+  byte, SFU-to-viewer retransmissions; on `congested` the send rate in the
+  cap, its overshoot, the queue drops and the time until the send rate is
+  at or under the cap.
+
+Rules:
+
+- **Frozen inputs.** The clip version and hashes, the shim version, the
+  lanes, the profiles and seeds are in `inputs_fingerprint`. The harness
+  refuses to compare across a change. Re-take the baselines on the commit
+  they came from to change one.
+- **The clock is real.** The gate runs in real time, through real sockets
+  and a real SFU, so a run varies. `--repeat N` measures the spread; the
+  freeze rule allows the spread at the baseline, nothing more.
+- **Keep the machine quiet.** A build, a game or a soak on the same machine
+  moves every number (two `cargo clippy` runs of other worktrees took the
+  CPU lane's clean profile from 48 to 13-26 fps). The load guard
+  (`load.rs`) measures the CPU that other processes use during each run;
+  over 10 % of the machine, the run is INVALID (exit code 2) and nothing is
+  compared or written. The run also stops at setup when UDP port 10000 is
+  taken.
+- **Median of three on a failure.** A profile outside a gate runs twice
+  more, and the gates read the median of its three runs (`--no-confirm`
+  turns this off). A profile that passes only on a lucky run does not pass.
+- **Setup on first run**: Go (fetches go1.24.9), Python 3 (standard library
+  only), network for the OpenH264 2.6.0 DLL (Cisco, into
+  `libmello/third_party/openh264/`) and `vmaf.exe` 3.0.0, both checked
+  against a pinned SHA-256.
+- `check-full.sh` runs a 60 s smoke of the CPU lane (`clean`, report only)
+  only with `STREAM_GATE_SMOKE=1`. The full gate runs from the QA harness.
+
+Output (`results.json`, and per profile `presents.csv`, `host.csv`,
+`wire.csv`) lands in `target/stream-gate/<lane>/`.
+
+`--write-fixture FILE` encodes the first 2 s of the 720p clip with the
+OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
 
 ---
 
@@ -919,7 +1004,7 @@ Unit tests run in `cargo test --workspace` and in libmello `ctest`:
 |---|---|
 | Region ranking: the median of three probes, 2xx only, 2 s timeout, fastest first | `mello-core/src/transport/sfu_region.rs` |
 | `get_sfu_regions` lists both regions with their health URLs | `backend/nakama/data/modules/sfu_routing_test.go` |
-| First reconnect attempt after 500 ms, then 1 s, then every 2 s; no gap over 2 s, and the give-up 30 s after the drop; a valid voice token is reused, an expired one is not; a failed reconnect does not fall back to P2P | `mello-core/src/client/voice.rs` |
+| First reconnect attempt after 500 ms, then 1 s, then every 2 s; no gap over 2 s, and the give-up 30 s after the drop; a valid voice token is reused, an expired one is not | `mello-core/src/client/voice.rs` |
 | A server close of the signaling socket is a disconnect; the close after `left` is not; a connect without an answer fails at its 5 s limit | `mello-core/src/client/sfu_voice_join.rs` |
 | No local ICE candidate before the offer; a candidate found after the answer still reaches the SFU (a fake SFU and a fake STUN server that answers late) | `mello-core/src/client/sfu_voice_join.rs`, `transport/sfu_connection.rs` |
 | The ICE servers reach libdatachannel: a TURN server on a local UDP port gets the Allocate request | `transport/sfu_connection.rs` |
@@ -1148,8 +1233,6 @@ Host (SFU RTP via Nakama `start_stream` — default path):
 # logs: host_probe_tick ... tx_aus_sent tx_rtp_packets tx_remb
 ```
 
-Legacy UDP chunked mode is diagnostic-only: pass `--legacy-udp-chunks` to `stream-host` / `stream-viewer` binaries directly (not used by the probe scripts).
-
 Viewer (auto-detects session from host log):
 
 ```powershell
@@ -1252,7 +1335,6 @@ unset CARGO_TARGET_DIR
 Key guards baked into the gate:
 
 - Fails on SFU liveness regression markers (`liveness_timeout`, repeated unhealthy checks).
-- Fails if voice scenarios silently fell back to P2P (`SFU peer creation failed ... falling back to P2P`).
 - Collects per-step artifacts (`command.log`, Nakama/SFU logs, health/overview API snapshots).
 
 Desktop + mobile LAN testing:

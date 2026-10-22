@@ -60,7 +60,7 @@ struct EventRecord {
     /// Only for `Error`: the UI never shows these, so the driver must see them.
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
-    /// Only for `VoiceStateChanged`: `"sfu"`, `"p2p"` or `"disconnected"`.
+    /// Only for `VoiceStateChanged`: `"sfu"` or `"disconnected"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     transport: Option<&'static str>,
     /// Only for `ConnectionStateChanged`: the realtime socket is up.
@@ -125,11 +125,11 @@ struct Snapshot {
     /// The last 20 chat messages in the active crew, oldest first.
     messages: Vec<MessageSnap>,
     voice_channels: Vec<VoiceChannelSnap>,
-    /// The transport of the current voice call: `"sfu"` or `"p2p"`. `None`
-    /// (JSON `null`) when not in a call. See [`transport_after`].
+    /// The transport of the current voice call: `"sfu"`. `None` (JSON
+    /// `null`) when not in a call. See [`transport_after`].
     voice_transport: Option<&'static str>,
     /// The other members of the watched SFU stream: the host and the other
-    /// viewers, in join order. Empty when not watching, and in P2P mode.
+    /// viewers, in join order. Empty when not watching.
     /// See [`stream_members_after`].
     stream_members: Vec<StreamMemberSnap>,
     /// Onboarding step 1: why the crew list did not load. Empty when it loaded.
@@ -594,7 +594,6 @@ fn first_rows<T: Clone + 'static, U>(model: &slint::ModelRc<T>, f: impl Fn(&T) -
 fn transport_name(mode: VoiceMode) -> &'static str {
     match mode {
         VoiceMode::SFU => "sfu",
-        VoiceMode::P2P => "p2p",
         VoiceMode::Disconnected => "disconnected",
     }
 }
@@ -602,8 +601,7 @@ fn transport_name(mode: VoiceMode) -> &'static str {
 /// The transport of the current voice call after `ev`, from `prev`.
 ///
 /// The core reports the transport in `VoiceStateChanged` when a call starts
-/// on the SFU or on P2P (an SFU join that failed and fell back), and when the
-/// call ends. `VoiceSfuDisconnected` means the SFU call dropped: there is no
+/// on the SFU, and when the call ends or its SFU join failed. `VoiceSfuDisconnected` means the SFU call dropped: there is no
 /// transport until the core joins again. A channel switch keeps the old value
 /// until the new call starts: the core reports no event when it stops the old
 /// media. The driver therefore waits on the first `VoiceStateChanged` after
@@ -1486,11 +1484,6 @@ mod tests {
     fn the_transport_follows_the_core_voice_events() {
         let sfu = transport_after(None, &state_changed(true, VoiceMode::SFU));
         assert_eq!(sfu, Some("sfu"));
-        assert_eq!(
-            transport_after(None, &state_changed(true, VoiceMode::P2P)),
-            Some("p2p"),
-            "an SFU join that fell back to P2P must show as p2p"
-        );
         assert_eq!(
             transport_after(sfu, &state_changed(true, VoiceMode::Disconnected)),
             None,

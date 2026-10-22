@@ -16,11 +16,10 @@ This spec covers the integration work needed to connect the existing SFU server 
 |---|---|
 | SFU server (Go, Pion WebRTC) | Built; stream video = H.264 RTP relay, voice = Opus RTP |
 | `PacketSink` trait in mello-core | RTP sinks ([12-STREAMING.md §6](./12-STREAMING.md)) |
-| `P2PFanoutSink` | Per-viewer native RTP senders |
 | `SfuSink` | Native host RTP AU sender + control/feedback through `SfuConnection` |
 | `SfuConnection` | Role-based peers; stream = control DC + RTP video track |
-| `start_stream` / `watch_stream` RPCs | SFU mode with endpoint + JWT for premium crews |
-| `voice_join` RPC | Crew-level SFU branch for premium crews |
+| `start_stream` / `watch_stream` RPCs | Always SFU mode with endpoint + JWT, or `SFU_UNAVAILABLE` |
+| `voice_join` RPC | Always SFU mode with endpoint + JWT, or `SFU_UNAVAILABLE` |
 | TURN server (coturn) | Deployed on GCP, working |
 
 ### Completed integration record
@@ -33,10 +32,10 @@ The table below records the completed integration. For current stream behavior
 |---|---|
 | `SfuSink` | `send_video_access_unit` over host RTP track; `send_control` on reliable DC |
 | `SfuConnection` | Stream peers: one `control` DC + H.264 RTP track (no stream `media` DC) |
-| `start_stream` RPC | SFU mode branch (premium crews get SFU endpoint + JWT) |
+| `start_stream` RPC | SFU endpoint + JWT for every crew |
 | `watch_stream` RPC | Viewers request their own SFU token |
-| `voice_join` RPC | Crew-level mode check, return SFU endpoint + JWT when applicable |
-| `VoiceManager` | SFU branch in `join_channel()` |
+| `voice_join` RPC | Return SFU endpoint + JWT |
+| `VoiceManager` | Joins every voice channel through the SFU |
 | JWT signing | Nakama module: sign RS256 tokens for SFU auth |
 | SFU routing | Nakama module: region selection |
 
@@ -225,371 +224,51 @@ func sfuEndpointForRegion(region string) string {
 
 **Local multi-device note:** when testing desktop + mobile against local Nakama/SFU, `SFU_ENDPOINT_EU` must be a LAN-reachable host (`ws://<lan-ip>:8443/ws`), not `localhost`. The SFU itself must also advertise a non-loopback ICE host candidate (`SFU_PUBLIC_IP=<lan-ip>`), or remote devices will connect signaling but fail media.
 
-### 2.3 `sfu_entitlement.go` - Premium Crew Check
+### 2.3 `sfu_entitlement.go` - Crew Kill Switch and the Typed Error
 
-For beta, this is a simple flag in crew metadata. No credits system, no Stripe integration yet. When that ships, this function gets a real implementation.
+The SFU is the only media transport. The file holds:
 
-```go
-// backend/nakama/data/modules/sfu_entitlement.go
+| Name | What it does |
+|---|---|
+| `errSFUUnavailable` | The typed error `SFU_UNAVAILABLE` (code 14, gRPC UNAVAILABLE) |
+| `sfuEnabledForCrew` | True unless the crew metadata has `"sfu_enabled": false`. The flag is an operator kill switch; the default is on. A crew that cannot be read is on |
+| `sfuEnabledInMetadata` | The same rule on the stored metadata JSON. Only an explicit boolean `false` turns the SFU off |
+| `sfuAvailableForCrew` | `sfuAuthEnabled() && sfuEnabledForCrew(...)` |
 
-package main
-
-import (
-    "context"
-    "encoding/json"
-
-    "github.com/heroiclabs/nakama-common/runtime"
-)
-
-// hasPremiumCrew checks if a crew has SFU access.
-// Beta: checks a flag in crew metadata.
-// Production: checks credits/subscription system.
-func hasPremiumCrew(ctx context.Context, nk runtime.NakamaModule, crewID string) bool {
-    // Load crew group metadata
-    groups, err := nk.GroupsGetId(ctx, []string{crewID})
-    if err != nil || len(groups) == 0 {
-        return false
-    }
-
-    var meta CrewMetadata
-    if err := json.Unmarshal([]byte(groups[0].GetMetadata()), &meta); err != nil {
-        return false
-    }
-
-    return meta.SFUEnabled
-}
-
-// Add to CrewMetadata (in crews.go):
-// SFUEnabled bool `json:"sfu_enabled"`
-//
-// For beta testing, set this manually via Nakama console:
-//   Group → Edit Metadata → add "sfu_enabled": true
-```
+New crews store `"sfu_enabled": true` (`newCrewMetadata` in `crews.go`). To turn the SFU off for one crew, an operator sets `"sfu_enabled": false` in the Nakama console (Group → Edit Metadata).
 
 ---
 
 ## 3. Backend: Modified Files
 
-### 3.1 `streaming.go` - Updated `start_stream`, New `watch_stream`
+### 3.1 `streaming.go` - `start_stream` and `watch_stream`
 
-**Changes to existing `StartStreamRPC`:**
+`start_stream`:
 
-The current function only handles P2P. Add an SFU branch before the P2P path. The response struct gains new fields.
+1. Validate the request and the crew membership.
+2. If `sfuAvailableForCrew` is false, return `SFU_UNAVAILABLE`. Nothing is written.
+3. Select the region (`preferred_region`, else the default) and sign the host token. A signing failure returns `SFU_UNAVAILABLE`. Nothing is written.
+4. Write the stream state, the stream metadata, the presence, and the `stream_sessions` record (crew, host, `mode: "sfu"`, region, endpoint). Push `stream_started`.
+5. Return `{stream_id, session_id, mode: "sfu", sfu_endpoint, sfu_token, capture}`.
 
-```go
-// backend/nakama/data/modules/streaming.go
+`watch_stream`:
 
-// Updated response type
-type StartStreamResponse struct {
-    SessionID string `json:"session_id"`
-    Mode      string `json:"mode"` // "p2p" or "sfu"
+1. Load the `stream_sessions` record and check the crew membership.
+2. A record without an SFU endpoint (from before the SFU was the only transport) returns `SFU_UNAVAILABLE`.
+3. Sign the viewer token. A signing failure returns `SFU_UNAVAILABLE`.
+4. Return `{mode: "sfu", sfu_endpoint, sfu_token, width, height, bitrate_kbps}`.
 
-    // P2P fields
-    MaxViewers int `json:"max_viewers,omitempty"`
+### 3.2 `voice_state.go` - `voice_join`
 
-    // SFU fields
-    SFUEndpoint string `json:"sfu_endpoint,omitempty"`
-    SFUToken    string `json:"sfu_token,omitempty"`
-}
+1. Resolve the channel and check the crew membership.
+2. If `sfuAvailableForCrew` is false, return `SFU_UNAVAILABLE`. Nobody is seated.
+3. Seat the member (`joinVoiceRoom`, capacity `MaxVoiceChannelMembers` = 50).
+4. Sign the voice token for the room's region. A signing failure undoes the seat (`voiceLeaveInternal`) and returns `SFU_UNAVAILABLE`.
+5. Return `{success, channel_id, voice_state, mode: "sfu", sfu_endpoint, sfu_token, bitrate_kbps}`.
 
-func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+### 3.3 `crews.go` - Crew Metadata
 
-    var req StartStreamRequest
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3)
-    }
-
-    // Existing validation: verify crew membership
-    if !isCrewMember(ctx, nk, userID, req.CrewID) {
-        return "", runtime.NewError("not a crew member", 7)
-    }
-
-    sessionID := generateSessionID()
-    var resp StartStreamResponse
-
-    // SFU path: premium crews get server-relayed streaming
-    if sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID) {
-        region := selectSFURegion("") // TODO: pass user region
-        endpoint := sfuEndpointForRegion(region)
-
-        token, err := signSFUToken(SFUTokenClaims{
-            UserID:    userID,
-            SessionID: sessionID,
-            Type:      "stream",
-            Role:      "host",
-            CrewID:    req.CrewID,
-            Region:    region,
-        })
-        if err != nil {
-            logger.Error("Failed to sign SFU token: %v", err)
-            // Fall through to P2P
-        } else {
-            // Store session so viewers can look it up
-            storeStreamSession(ctx, nk, sessionID, StreamSessionMeta{
-                CrewID:      req.CrewID,
-                HostUserID:  userID,
-                Mode:        "sfu",
-                SFURegion:   region,
-                SFUEndpoint: endpoint,
-            })
-
-            resp = StartStreamResponse{
-                SessionID:   sessionID,
-                Mode:        "sfu",
-                SFUEndpoint: endpoint,
-                SFUToken:    token,
-            }
-
-            logger.Info("Stream started (SFU): session=%s crew=%s host=%s region=%s", sessionID, req.CrewID, userID, region)
-            respJSON, _ := json.Marshal(resp)
-            return string(respJSON), nil
-        }
-    }
-
-    // P2P path (free crews or SFU auth not configured)
-    storeStreamSession(ctx, nk, sessionID, StreamSessionMeta{
-        CrewID:     req.CrewID,
-        HostUserID: userID,
-        Mode:       "p2p",
-    })
-
-    resp = StartStreamResponse{
-        SessionID:  sessionID,
-        Mode:       "p2p",
-        MaxViewers: 5,
-    }
-
-    logger.Info("Stream started (P2P): session=%s crew=%s host=%s", sessionID, req.CrewID, userID)
-
-    // Existing: broadcast "X is streaming" to crew
-    broadcastStreamStart(ctx, nk, userID, req.CrewID, sessionID)
-
-    respJSON, _ := json.Marshal(resp)
-    return string(respJSON), nil
-}
-
-// --- Session storage helpers ---
-
-type StreamSessionMeta struct {
-    CrewID      string `json:"crew_id"`
-    HostUserID  string `json:"host_user_id"`
-    Mode        string `json:"mode"` // "p2p" or "sfu"
-    SFURegion   string `json:"sfu_region,omitempty"`
-    SFUEndpoint string `json:"sfu_endpoint,omitempty"`
-}
-
-func storeStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID string, meta StreamSessionMeta) {
-    data, _ := json.Marshal(meta)
-    nk.StorageWrite(ctx, []*runtime.StorageWrite{{
-        Collection:      "stream_sessions",
-        Key:             sessionID,
-        UserID:          "",
-        Value:           string(data),
-        PermissionRead:  1, // owner-read (server counts as owner for system-owned)
-        PermissionWrite: 0, // server-only write
-    }})
-}
-
-func loadStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID string) *StreamSessionMeta {
-    records, err := nk.StorageRead(ctx, []*runtime.StorageRead{{
-        Collection: "stream_sessions",
-        Key:        sessionID,
-        UserID:     "",
-    }})
-    if err != nil || len(records) == 0 {
-        return nil
-    }
-    var meta StreamSessionMeta
-    if err := json.Unmarshal([]byte(records[0].Value), &meta); err != nil {
-        return nil
-    }
-    return &meta
-}
-
-func generateSessionID() string {
-    // "str_" prefix + 12 random alphanumeric chars
-    return "str_" + randomAlphanumeric(12)
-}
-```
-
-**New `WatchStreamRPC`:**
-
-```go
-// backend/nakama/data/modules/streaming.go (continued)
-
-type WatchStreamRequest struct {
-    SessionID string `json:"session_id"`
-}
-
-type WatchStreamResponse struct {
-    Mode        string `json:"mode"` // "p2p" or "sfu"
-    SFUEndpoint string `json:"sfu_endpoint,omitempty"`
-    SFUToken    string `json:"sfu_token,omitempty"`
-}
-
-func WatchStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-
-    var req WatchStreamRequest
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3)
-    }
-
-    meta := loadStreamSession(ctx, nk, req.SessionID)
-    if meta == nil {
-        return "", runtime.NewError("stream not found", 5)
-    }
-
-    // Verify viewer is in the same crew
-    if !isCrewMember(ctx, nk, userID, meta.CrewID) {
-        return "", runtime.NewError("not a crew member", 7)
-    }
-
-    if meta.Mode == "sfu" {
-        token, err := signSFUToken(SFUTokenClaims{
-            UserID:    userID,
-            SessionID: req.SessionID,
-            Type:      "stream",
-            Role:      "viewer",
-            CrewID:    meta.CrewID,
-            Region:    meta.SFURegion,
-        })
-        if err != nil {
-            return "", runtime.NewError("token signing failed", 13)
-        }
-
-        resp := WatchStreamResponse{
-            Mode:        "sfu",
-            SFUEndpoint: meta.SFUEndpoint,
-            SFUToken:    token,
-        }
-        respJSON, _ := json.Marshal(resp)
-        return string(respJSON), nil
-    }
-
-    // P2P mode: viewer connects directly to host via signaling
-    resp := WatchStreamResponse{Mode: "p2p"}
-    respJSON, _ := json.Marshal(resp)
-    return string(respJSON), nil
-}
-```
-
-**Register both RPCs in `main.go`:**
-
-```go
-// In InitModule()
-initializer.RegisterRpc("start_stream", StartStreamRPC)
-initializer.RegisterRpc("watch_stream", WatchStreamRPC)
-```
-
-### 3.2 `voice_state.go` - Updated `voice_join`
-
-The existing `VoiceJoinRPC` only handles P2P. Add a crew-level mode check at the top.
-
-**Changes to existing `VoiceJoinRPC`:**
-
-```go
-// backend/nakama/data/modules/voice_state.go
-
-// Updated response type
-type VoiceJoinResponse struct {
-    Mode        string             `json:"mode"` // "p2p" or "sfu"
-    Members     []VoiceMemberState `json:"members"`
-
-    // SFU fields (mode == "sfu")
-    SFUEndpoint string `json:"sfu_endpoint,omitempty"`
-    SFUToken    string `json:"sfu_token,omitempty"`
-}
-
-func VoiceJoinRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-    userID := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
-
-    var req VoiceJoinRequest
-    if err := json.Unmarshal([]byte(payload), &req); err != nil {
-        return "", runtime.NewError("invalid request", 3)
-    }
-
-    // Existing validation: crew membership, channel exists, user not already in channel, etc.
-    // ... (unchanged) ...
-
-    room := getOrCreateVoiceRoom(req.ChannelID, req.CrewID)
-
-    // --- NEW: Crew-level voice mode check ---
-    if sfuAuthEnabled() && hasPremiumCrew(ctx, nk, req.CrewID) {
-        // SFU mode: route through Mello's SFU
-        if len(room.Members) >= 50 {
-            return "", runtime.NewError("channel full", 8)
-        }
-
-        region := selectSFURegion("")
-        endpoint := sfuEndpointForRegion(region)
-        voiceSessionKey := fmt.Sprintf("voice:%s:%s", req.CrewID, req.ChannelID)
-
-        token, err := signSFUToken(SFUTokenClaims{
-            UserID:    userID,
-            SessionID: voiceSessionKey,
-            Type:      "voice",
-            Role:      "member",
-            CrewID:    req.CrewID,
-            ChannelID: req.ChannelID,
-            Region:    region,
-        })
-        if err != nil {
-            logger.Error("Failed to sign SFU token for voice: %v", err)
-            // Fall through to P2P
-        } else {
-            // Add user to room (existing logic)
-            addMemberToRoom(room, userID)
-            broadcastVoiceUpdate(ctx, nk, req.CrewID, req.ChannelID, room)
-
-            resp := VoiceJoinResponse{
-                Mode:        "sfu",
-                Members:     room.MemberList(),
-                SFUEndpoint: endpoint,
-                SFUToken:    token,
-            }
-            logger.Info("Voice join (SFU): user=%s crew=%s channel=%s region=%s", userID, req.CrewID, req.ChannelID, region)
-            respJSON, _ := json.Marshal(resp)
-            return string(respJSON), nil
-        }
-    }
-
-    // P2P mode: existing behaviour
-    if len(room.Members) >= 6 {
-        return "", runtime.NewError("channel full", 8)
-    }
-
-    // Existing P2P join logic (add member, broadcast, return member list)
-    addMemberToRoom(room, userID)
-    broadcastVoiceUpdate(ctx, nk, req.CrewID, req.ChannelID, room)
-
-    resp := VoiceJoinResponse{
-        Mode:    "p2p",
-        Members: room.MemberList(),
-    }
-    logger.Info("Voice join (P2P): user=%s crew=%s channel=%s", userID, req.CrewID, req.ChannelID)
-    respJSON, _ := json.Marshal(resp)
-    return string(respJSON), nil
-}
-```
-
-### 3.3 `crews.go` - Updated `CrewMetadata`
-
-Add the `SFUEnabled` field:
-
-```go
-// In CrewMetadata struct (crews.go)
-type CrewMetadata struct {
-    MaxMembers    int    `json:"max_members"`
-    InviteOnly    bool   `json:"invite_only"`
-    CreatedBy     string `json:"created_by"`
-    ChannelManage string `json:"channel_manage"`
-    SFUEnabled    bool   `json:"sfu_enabled"` // NEW: enables SFU for this crew
-}
-```
-
-For beta testing, set `sfu_enabled: true` manually on test crews via the Nakama admin console (Group -> Edit Metadata).
+`newCrewMetadata` stores `"sfu_enabled": true` on every new crew. `sfuEnabledForCrew` reads the same key; an absent key also means on.
 
 ### 3.4 `main.go` - Register New RPCs
 
@@ -620,10 +299,10 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 > pre-RTP rollout shape and retain references to `StreamPacket`, `send_media`,
 > and a stream `media` DataChannel. Current wiring is:
 >
-> - `client/streaming.rs`: topology selection, SFU connect/join, fail-closed setup;
+> - `client/streaming.rs`: SFU connect/join, fail-closed setup;
 > - `stream/sink_sfu.rs`: complete Annex-B AU send through native RTP;
 > - `transport/sfu_connection.rs`: WebSocket signaling, control DC, role-based RTP peer;
-> - `stream/rtp_peer.rs`: safe native RTP wrappers.
+> - `stream/rtp_peer.rs`: safe native RTP receive wrappers.
 
 ### 4.1 `sfu_connection.rs` - WebSocket + WebRTC to SFU
 
@@ -873,18 +552,7 @@ impl PacketSink for SfuSink {
 
 ### 5.1 `stream/host.rs` - Updated `start_stream`
 
-The existing `start_stream` function already handles the `mode` field. The only change: when mode is `"sfu"`, the `SfuSink::new()` now works instead of returning `SfuNotImplemented`.
-
-```rust
-// mello-core/src/stream/host.rs - NO CHANGES NEEDED
-// The existing code from spec 12 §9.2 already handles this:
-
-let sink: Arc<dyn PacketSink> = match resp.mode.as_str() {
-    "p2p"  => Arc::new(P2PFanoutSink::new()),
-    "sfu"  => Arc::new(SfuSink::new(&resp.sfu_endpoint, &resp.sfu_token).await?),
-    other  => return Err(StreamError::UnknownMode(other.to_string())),
-};
-```
+The host always builds an `SfuSink` from the `sfu_endpoint` and `sfu_token` of the `start_stream` response. A failed SFU connect, join or control channel ends the start with a stream error (`client/streaming.rs`, `finish_stream_start`).
 
 Verify this code exists and that it passes `sfu_endpoint` and `sfu_token` from the RPC response. The `StartStreamResponse` deserialization needs to include the new fields:
 
@@ -894,13 +562,8 @@ Verify this code exists and that it passes `sfu_endpoint` and `sfu_token` from t
 #[derive(Debug, Deserialize)]
 pub struct StartStreamResponse {
     pub session_id: String,
-    pub mode: String,
+    pub mode: String, // always "sfu"
 
-    // P2P fields
-    #[serde(default)]
-    pub max_viewers: Option<i32>,
-
-    // SFU fields
     #[serde(default)]
     pub sfu_endpoint: Option<String>,
     #[serde(default)]
@@ -919,147 +582,9 @@ Obsolete sketch referenced `stream/viewer.rs` and `SfuEvent::MediaPacket` on Dat
 
 </details>
 
-### 5.3 `voice/mod.rs` - SFU Branch in `join_channel`
+### 5.3 `voice/mod.rs` - SFU Voice
 
-The `VoiceManager` already tracks `connected_crew`, `connected_channel`, and `peers`. Add `mode` and `sfu_connection` fields, and branch in `join_channel()` based on the RPC response.
-
-**Fields to add:**
-
-```rust
-pub struct VoiceManager {
-    // ... existing fields ...
-
-    mode: VoiceMode,                               // NEW
-    sfu_connection: Option<Arc<SfuConnection>>,     // NEW
-}
-
-enum VoiceMode {
-    Disconnected,
-    P2P,
-    SFU,
-}
-```
-
-**Updated `join_channel`:**
-
-The `voice_join` RPC response now has a `mode` field. Branch on it:
-
-```rust
-pub async fn join_channel(&mut self, nakama: &NakamaClient, crew_id: &str, channel_id: &str) -> Result<(), Error> {
-    if self.connected_channel.is_some() {
-        self.leave_current(nakama).await?;
-    }
-
-    let resp: VoiceJoinResponse = nakama.rpc("voice_join", &VoiceJoinRequest {
-        crew_id: crew_id.to_string(),
-        channel_id: channel_id.to_string(),
-    }).await?;
-
-    self.connected_crew = Some(crew_id.to_string());
-    self.connected_channel = Some(channel_id.to_string());
-
-    match resp.mode.as_str() {
-        "sfu" => {
-            let conn = SfuConnection::connect(
-                &resp.sfu_endpoint.unwrap(),
-                &resp.sfu_token.unwrap(),
-            ).await?;
-            conn.join_voice(crew_id, channel_id).await?;
-
-            // Voice receive: SFU forwards other members' audio with a sender-id prefix.
-            // Wire format per packet: [1-byte len][sender_id][opus_payload]
-            // The client strips the prefix and uses sender_id as peer_id so
-            // libmello routes to per-sender jitter buffers and Opus decoders.
-            let conn = Arc::new(conn);
-            let conn_clone = conn.clone();
-            let libmello = self.libmello;
-            tokio::spawn(async move {
-                loop {
-                    match conn_clone.recv_event().await {
-                        Some(SfuEvent::MediaPacket { data }) => {
-                            if data.len() < 2 { continue; }
-                            let id_len = data[0] as usize;
-                            if data.len() < 1 + id_len + 1 { continue; }
-                            let sender_id = &data[1..1 + id_len]; // UTF-8 user_id
-                            let media = &data[1 + id_len..];
-                            let peer_id = CString::new(sender_id).unwrap_or_default();
-                            unsafe {
-                                mello_voice_feed_packet(
-                                    libmello,
-                                    peer_id.as_ptr(),
-                                    media.as_ptr(),
-                                    media.len() as i32,
-                                );
-                            }
-                        }
-                        Some(SfuEvent::Disconnected { reason }) => {
-                            log::warn!("Voice SFU disconnected: {}", reason);
-                            // Emits VoiceSfuDisconnected event; client auto-reconnects
-                            // with exponential backoff (2s base, max 5 attempts).
-                            break;
-                        }
-                        _ => {}
-                    }
-                }
-            });
-
-            // Voice send loop: capture mic audio, send via SFU connection
-            // Reuses the existing WASAPI capture -> Opus encode -> send pipeline.
-            // Only difference: packets go to conn.send_media() instead of per-peer DataChannels.
-            self.start_voice_send_loop_sfu(conn.clone());
-
-            self.sfu_connection = Some(conn);
-            self.mode = VoiceMode::SFU;
-        }
-        _ => {
-            // Existing P2P path (unchanged from spec 13)
-            self.mode = VoiceMode::P2P;
-            for member in &resp.members {
-                self.connect_peer(nakama, &member.user_id).await?;
-            }
-        }
-    }
-
-    self.event_tx.send(Event::VoiceConnected {
-        crew_id: crew_id.to_string(),
-        channel_id: channel_id.to_string(),
-    }).await.ok();
-
-    Ok(())
-}
-```
-
-**Updated `leave_current`:**
-
-```rust
-pub async fn leave_current(&mut self, nakama: &NakamaClient) -> Result<(), Error> {
-    match self.mode {
-        VoiceMode::SFU => {
-            if let Some(conn) = self.sfu_connection.take() {
-                conn.leave().await.ok();
-            }
-        }
-        VoiceMode::P2P => {
-            for (_, peer) in self.peers.drain() {
-                peer.close().await;
-            }
-        }
-        VoiceMode::Disconnected => {}
-    }
-
-    // Existing: call voice_leave RPC
-    if let Some(crew_id) = &self.connected_crew {
-        nakama.rpc("voice_leave", &VoiceLeaveRequest {
-            crew_id: crew_id.clone(),
-        }).await.ok();
-    }
-
-    self.mode = VoiceMode::Disconnected;
-    self.connected_crew = None;
-    self.connected_channel = None;
-    Ok(())
-}
-```
+The client joins every voice channel through the SFU: `voice_join`, then the SFU connect and join off the command loop (`client/sfu_voice_join.rs`), then `VoiceManager::join_voice_sfu`. A failed join leaves voice disconnected, and the reconnect scheduler tries again (spec 10 section 7.6).
 
 **Updated `VoiceJoinResponse` type:**
 
@@ -1105,7 +630,7 @@ pub mod sfu_connection;
 backend/nakama/data/modules/
   sfu_auth.go              # JWT RS256 signing
   sfu_routing.go           # Region selection, endpoint config
-  sfu_entitlement.go       # hasPremiumCrew() check
+  sfu_entitlement.go       # sfuEnabledForCrew() kill switch, SFU_UNAVAILABLE
 
 mello-core/src/
   transport/sfu_connection.rs   # WebSocket + WebRTC connection to SFU
@@ -1116,21 +641,21 @@ mello-core/src/
 ```
 backend/nakama/data/modules/
   main.go                  # Register watch_stream, init SFU auth
-  streaming.go             # Add SFU branch to start_stream, add watch_stream RPC
-  voice_state.go           # Add SFU branch to voice_join
-  crews.go                 # Add SFUEnabled to CrewMetadata
+  streaming.go             # start_stream and watch_stream answer SFU only
+  voice_state.go           # voice_join answers SFU only
+  crews.go                 # sfu_enabled on new crews
 
 mello-core/src/
   stream/sink_sfu.rs       # SfuSink — native RTP AU send + control DC
-  stream/rtp_peer.rs       # libmello RTP peer wrappers (host/viewer)
+  stream/rtp_peer.rs       # libmello RTP receive wrappers
   client/streaming.rs      # SFU viewer receive + presentation path
   stream/mod.rs            # StreamError variants
-  voice/mod.rs             # VoiceManager and SFU branch
+  voice/mod.rs             # VoiceManager, SFU voice
   transport/mod.rs         # Export sfu_connection
   nakama/types.rs          # Add sfu_endpoint, sfu_token to response types
 
 libmello/src/transport/
-  rtp_video_sender.cpp     # Host P2P/SFU RTP send with pacing + IDR gate
+  rtp_video_sender.cpp     # Host RTP send to the SFU with pacing + IDR gate
   rtp_video_receiver_session.cpp  # Viewer AU assembly + decode feed
 ```
 
@@ -1143,14 +668,14 @@ libmello/src/transport/
 > `scripts/run-stream-certification.ps1`.
 
 ### Backend RPCs
-- [ ] `start_stream` on free crew -> returns `mode: "p2p"`
-- [ ] `start_stream` on SFU-enabled crew -> returns `mode: "sfu"` with endpoint + token
-- [ ] `start_stream` with no `SFU_JWT_PRIVATE_KEY` -> falls back to P2P
+- [ ] `start_stream` -> returns `mode: "sfu"` with endpoint + token
+- [ ] `start_stream` with no `SFU_JWT_PRIVATE_KEY` -> `SFU_UNAVAILABLE`, no stream state written
+- [ ] `start_stream` on a crew with `"sfu_enabled": false` -> `SFU_UNAVAILABLE`
 - [ ] `watch_stream` with valid session -> returns viewer token
 - [ ] `watch_stream` with wrong crew -> returns `NOT_CREW_MEMBER`
-- [ ] `watch_stream` for P2P session -> returns `mode: "p2p"`
-- [ ] `voice_join` on free crew -> returns `mode: "p2p"`, cap at 6
-- [ ] `voice_join` on SFU crew -> returns `mode: "sfu"` with endpoint + token, cap at 50
+- [ ] `watch_stream` for a session without an SFU endpoint -> `SFU_UNAVAILABLE`
+- [ ] `voice_join` -> returns `mode: "sfu"` with endpoint + token, cap at 50
+- [ ] `voice_join` with no `SFU_JWT_PRIVATE_KEY` -> `SFU_UNAVAILABLE`, nobody seated
 - [ ] JWT token is valid RS256, SFU can verify it
 
 ### Client SfuSink
@@ -1163,7 +688,6 @@ libmello/src/transport/
 - [ ] Host receives aggregated PLI/REMB via `poll_video_feedback`
 
 ### Client VoiceManager
-- [ ] P2P join still works (unchanged)
 - [ ] SFU join: connects to SFU, joins voice session
 - [ ] SFU voice: outgoing audio sent via SfuConnection
 - [ ] SFU voice: incoming audio from SFU fed to libmello
@@ -1190,7 +714,7 @@ The original `SfuConnection` sketch above is augmented with liveness and lifecyc
 - **`SfuConnection` task lifecycle.** The signaling-listener and `client_stats`-reporter tasks are tracked and **aborted on `Drop`** so a replaced/stale connection's tasks stop immediately instead of ticking against a dead socket.
 - **Reconnect decoupled from Nakama.** A Nakama WS reconnect re-asserts roster membership only; SFU media rebuild is owned solely by the voice tick, so Nakama blips don't churn the SFU peer.
 - **Renegotiation-tolerant track reads.** The SFU raises/pauses its consecutive-EOF inbound-track cutoff during active renegotiation so transient read errors don't kill healthy audio tracks.
-- **Join failure policy.** Stream sessions are fail-closed after `start_stream` / `watch_stream` returns SFU: connect, join, or control-channel failure surfaces a stream error. Voice retains its separately documented reconnect/fallback behavior. Before a stream RPC returns SFU, Nakama may select P2P if SFU auth/token creation is unavailable.
+- **Join failure policy.** Stream sessions are fail-closed: connect, join, or control-channel failure surfaces a stream error. Voice retains its separately documented reconnect behavior. When Nakama cannot sign an SFU token, the RPC returns `SFU_UNAVAILABLE`.
 - **Diagnostics.** The SFU logs `peer_close_called` (with a compact caller stack) and `pc_closed` at INFO so every peer teardown is attributable to a concrete cause.
 
 Reconcile-oracle (Nakama → SFU admin API) is covered in [04-BACKEND.md](../04-BACKEND.md). Soak/fault harnesses are in [`TESTING.md`](../../TESTING.md).
