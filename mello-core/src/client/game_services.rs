@@ -144,13 +144,17 @@ impl Client {
     }
 
     pub(super) fn drain_game_events(&self) -> Vec<GameEvent> {
+        // A journey's fake game goes through the same loop as a real one.
+        #[cfg(feature = "e2e-game")]
+        let mut out = crate::e2e_game::take();
+        #[cfg(not(feature = "e2e-game"))]
+        let mut out = Vec::new();
         let Ok(guard) = self.game_event_rx.lock() else {
-            return Vec::new();
+            return out;
         };
         let Some(rx) = guard.as_ref() else {
-            return Vec::new();
+            return out;
         };
-        let mut out = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             out.push(ev);
         }

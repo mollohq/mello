@@ -298,7 +298,9 @@ pub(crate) fn skeleton_trio_for<'a>(
     for t in card_types {
         // Head2head and its invite card are not real cards: frame B2 keeps the
         // trio next to a versus hero.
-        if t.is_empty() || t == "locked" || t == "head2head" || t == "invite" {
+        // A live session is a game in progress, not a record of the crew.
+        if t.is_empty() || t == "locked" || t == "head2head" || t == "invite" || t == "live-session"
+        {
             continue;
         }
         any_real = true;
@@ -464,7 +466,9 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
     if !section.entries.iter().any(|e| e.entry_type == "head2head") {
         return;
     }
-    let cards = arranged(ctx, build_this_week(ctx, &section.entries));
+    let mut cards = build_this_week(ctx, &section.entries);
+    cards.extend(live_session_cards(ctx));
+    let cards = arranged(ctx, cards);
     ctx.app
         .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
     refresh_feed_skeletons(ctx);
@@ -528,6 +532,180 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
         feed.set_row_data(row, card);
     }
+}
+
+/// The octagon of a user: the loaded avatar, else the initials.
+fn live_person(ctx: &AppContext, person: &Person) -> crate::H2hPerson {
+    let cache = ctx.avatar_cache.borrow();
+    let mut avatar = cache.get(&person.id).cloned();
+    if avatar.is_none()
+        && person.id == ctx.app.get_user_id().as_str()
+        && ctx.app.get_has_user_avatar()
+    {
+        avatar = Some(ctx.app.get_user_avatar());
+    }
+    crate::H2hPerson {
+        id: person.id.as_str().into(),
+        name: person.name.as_str().into(),
+        initials: person.initials.as_str().into(),
+        hue_index: person.hue,
+        has_avatar: avatar.is_some(),
+        avatar: avatar.unwrap_or_default(),
+    }
+}
+
+/// "Bob", "Bob and Jonas", "Bob, Jonas and Sara", "Bob, Jonas, Sara +2".
+fn names_line(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, c, rest @ ..] => format!("{a}, {b}, {c} +{}", rest.len()),
+    }
+}
+
+/// The most octagons a live session card draws before the "+N".
+const LIVE_OCTAGONS: usize = 5;
+
+/// One card for each game that the viewer or a crewmate plays now. Built from
+/// the presence state (`live_session`), not from the ledger.
+pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
+    let viewer_id = ctx.app.get_user_id().to_string();
+    let groups = ctx.live_games.borrow().groups(&viewer_id);
+    if groups.is_empty() || ctx.app.get_active_crew_id().is_empty() {
+        return Vec::new();
+    }
+    let (viewer, members) = h2h_roster(ctx);
+    let now_ms = crate::converters::current_time_ms();
+    groups
+        .into_iter()
+        .map(|g| {
+            let people: Vec<Person> = g
+                .user_ids
+                .iter()
+                .map(|id| {
+                    if *id == viewer.id {
+                        viewer.clone()
+                    } else {
+                        members
+                            .iter()
+                            .find(|m| m.id == *id)
+                            .cloned()
+                            .unwrap_or_else(|| Person::unknown(id))
+                    }
+                })
+                .collect();
+            let names: Vec<String> = people.iter().map(|p| p.name.clone()).collect();
+            let shown: Vec<crate::H2hPerson> = people
+                .iter()
+                .take(LIVE_OCTAGONS)
+                .map(|p| live_person(ctx, p))
+                .collect();
+            let min = crate::live_session::since_min(g.started_ms, now_ms);
+
+            let (game_id, _, _) = resolve_game_meta(ctx, &g.game_id, &g.game_name);
+            let (game_icon, game_has_icon) =
+                match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
+                    Some(img) => (img, true),
+                    None => (slint::Image::default(), false),
+                };
+            // The art ladder of the recent games tiles. The local Steam header
+            // is keyed by the launcher id, which the installed list knows by name.
+            let launcher_id = ctx
+                .installed_games
+                .borrow()
+                .iter()
+                .find(|i| i.name.eq_ignore_ascii_case(&g.game_name))
+                .map(|i| i.game_id.clone());
+            let (game_capsule, game_has_capsule) = if game_has_icon {
+                (slint::Image::default(), false)
+            } else {
+                launcher_id
+                    .iter()
+                    .map(String::as_str)
+                    .chain(std::iter::once(game_id.as_str()))
+                    .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
+                    .map_or((slint::Image::default(), false), |img| (img, true))
+            };
+            FeedCardData {
+                id: format!(
+                    "live-{}",
+                    if g.game_id.is_empty() {
+                        &g.game_name
+                    } else {
+                        &g.game_id
+                    }
+                )
+                .into(),
+                card_type: "live-session".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                game_name: g.game_name.as_str().into(),
+                game_id: game_id.as_str().into(),
+                game_icon,
+                game_has_icon,
+                game_capsule,
+                game_has_capsule,
+                game_monogram: crate::recent_games::monogram(&g.game_name).into(),
+                game_hue_index: crate::recent_games::hue_index(&game_id, &g.game_name),
+                live: crate::LiveSessionData {
+                    since_min: min as i32,
+                    since_text: crate::live_session::since_text(min).into(),
+                    names_line: names_line(&names).into(),
+                    member_names: Rc::new(VecModel::from(
+                        names
+                            .iter()
+                            .map(|n| slint::SharedString::from(n.as_str()))
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                    more_players: people.len().saturating_sub(LIVE_OCTAGONS) as i32,
+                    players: Rc::new(VecModel::from(shown)).into(),
+                },
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// What a live card shows, for telling a card that changed from one that did
+/// not. A model reset costs a rebuild of every slot.
+fn live_signature(cards: &[FeedCardData]) -> Vec<String> {
+    cards
+        .iter()
+        .map(|c| {
+            format!(
+                "{}|{}|{}|{}|{}",
+                c.id,
+                c.live.since_text,
+                c.live.names_line,
+                c.live.players.iter().filter(|p| p.has_avatar).count(),
+                c.game_has_capsule || c.game_has_icon,
+            )
+        })
+        .collect()
+}
+
+/// Put the live session cards on screen again from the presence state. Call
+/// after anything that changes who plays what, the roster or an avatar. Does
+/// nothing when the live cards did not change.
+pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
+    let model = ctx.app.get_feed_cards();
+    let all: Vec<FeedCardData> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect();
+    let (old, mut cards): (Vec<_>, Vec<_>) =
+        all.into_iter().partition(|c| c.card_type == "live-session");
+    let new = live_session_cards(ctx);
+    if live_signature(&old) == live_signature(&new) {
+        return;
+    }
+    cards.extend(new);
+    let cards = arranged(ctx, cards);
+    ctx.app
+        .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+    refresh_feed_skeletons(ctx);
 }
 
 /// Put the cards where the grid wants them: recent games on the first screen
@@ -1654,6 +1832,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .iter()
                 .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
                 && !has_real_memory;
+            let mut this_week = this_week;
+            this_week.extend(live_session_cards(ctx));
             let cards = arranged(ctx, this_week);
 
             ctx.app

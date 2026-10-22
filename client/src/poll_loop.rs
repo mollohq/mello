@@ -25,6 +25,8 @@ pub struct PollState {
     update_event_rx: std::sync::mpsc::Receiver<UpdateEvent>,
     saved_timer: Rc<slint::Timer>,
     saved_app_weak: slint::Weak<MainWindow>,
+    /// The last time the live session cards counted their minutes again.
+    live_cards_at: std::cell::Cell<std::time::Instant>,
 }
 
 impl PollState {
@@ -38,6 +40,7 @@ impl PollState {
             event_rx,
             update_event_rx,
             saved_timer: Rc::new(slint::Timer::default()),
+            live_cards_at: std::cell::Cell::new(std::time::Instant::now()),
             saved_app_weak: ctx.app.as_weak(),
         }
     }
@@ -66,6 +69,11 @@ impl PollState {
     /// deep links, tray/menu/hotkey/HUD input, and push resulting UI state.
     pub fn tick(&self) {
         let poll_ctx = &self.ctx;
+        // "since 12 min" counts on. Twice a minute is enough for a minute value.
+        if self.live_cards_at.get().elapsed() >= Duration::from_secs(30) {
+            self.live_cards_at.set(std::time::Instant::now());
+            crate::handlers::refresh_live_session_cards(poll_ctx);
+        }
         let update_event_rx = &self.update_event_rx;
         let event_rx = &self.event_rx;
         let saved_timer_ref = &self.saved_timer;

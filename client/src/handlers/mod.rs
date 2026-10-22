@@ -16,9 +16,25 @@ pub(crate) use crew::{invite_join_error_message, invite_resolve_error_message, I
 
 use crate::app_context::AppContext;
 
+/// Count the minutes of the live session cards again.
+pub(crate) fn refresh_live_session_cards(ctx: &AppContext) {
+    clip::refresh_live_session_cards(ctx);
+}
+
 pub fn handle_event(ctx: &AppContext, event: Event) {
     // These events change the voice channel models. See
     // voice::sync_member_audio.
+    // A change of who plays what, of the roster or of an avatar moves the
+    // live session cards.
+    let live_cards_change = matches!(
+        event,
+        Event::PresenceChanged { .. }
+            | Event::CrewStateLoaded { .. }
+            | Event::GameDetected { .. }
+            | Event::GameEnded { .. }
+            | Event::UserAvatarLoaded { .. }
+            | Event::CrewJoined { .. }
+    );
     let voice_models_change = matches!(
         event,
         Event::VoiceStateChanged { .. }
@@ -31,6 +47,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
             | Event::CrewJoined { .. }
     );
     dispatch(ctx, event);
+    if live_cards_change {
+        clip::refresh_live_session_cards(ctx);
+    }
     if voice_models_change {
         voice::sync_member_audio(ctx);
     }

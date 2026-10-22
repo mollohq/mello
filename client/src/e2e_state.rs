@@ -7,6 +7,9 @@
 //!
 //! - `GET /state`  — a snapshot read on the UI thread.
 //! - `GET /events` — the last [`EVENT_TAIL`] core events, oldest first.
+//! - `POST /fake-game` — `{"action":"start"|"end","game_id":"rocket-league",
+//!   "ago_min":12}` feeds a game sensor event for a catalogue game into the
+//!   core loop (`mello_core::e2e_game`). `ago_min` moves a start into the past.
 //! - `GET /disabled` — the controls on screen that declare
 //!   `accessible-enabled: false`. Slint MCP drops a `false` value from its
 //!   answer, so the driver cannot tell a disabled control from one that does
@@ -159,6 +162,8 @@ struct Snapshot {
     invite_card: InviteCardSnap,
     /// The recent games card of the feed, if any.
     recent_games: RecentGamesSnap,
+    /// The live session cards of the feed, in screen order.
+    live_sessions: Vec<LiveSessionSnap>,
     /// The skeleton trio cells that show (0 to 3).
     skeleton_trio: usize,
     /// The audio page of the settings.
@@ -286,6 +291,20 @@ struct Head2headSnap {
     own_avatar_key: String,
     /// The opponent octagons of the pair rows, in row order. "" for initials.
     pair_avatar_keys: Vec<String>,
+}
+
+/// A live session card (a game in progress).
+#[derive(Serialize)]
+struct LiveSessionSnap {
+    game_name: String,
+    /// Every player, the viewer first.
+    member_names: Vec<String>,
+    since_min: i32,
+    /// The place in the feed card list. 0 is the first card.
+    index: usize,
+    /// The octagons drawn, and how many wear an avatar.
+    octagons: usize,
+    with_avatar: usize,
 }
 
 /// The invite card of the feed. `present` is false when the feed has none.
@@ -707,12 +726,32 @@ pub fn start(app: &MainWindow) {
 }
 
 fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
+    let mut reader = BufReader::new(&stream);
     let mut line = String::new();
-    if BufReader::new(&stream).read_line(&mut line).is_err() {
+    if reader.read_line(&mut line).is_err() {
         return;
     }
+    // Headers up to the blank line, then a body of `Content-Length` bytes.
+    let mut length = 0usize;
+    loop {
+        let mut header = String::new();
+        if reader.read_line(&mut header).is_err() || header.trim().is_empty() {
+            break;
+        }
+        if let Some((name, value)) = header.split_once(':') {
+            if name.eq_ignore_ascii_case("content-length") {
+                length = value.trim().parse().unwrap_or(0).min(4096);
+            }
+        }
+    }
+    let mut body_bytes = vec![0u8; length];
+    if std::io::Read::read_exact(&mut reader, &mut body_bytes).is_err() {
+        body_bytes.clear();
+    }
+    let method = line.split_whitespace().next().unwrap_or("GET");
     let path = line.split_whitespace().nth(1).unwrap_or("/");
     let (status, body) = match path {
+        "/fake-game" if method == "POST" => fake_game(&body_bytes),
         "/state" => match snapshot(weak) {
             Some(json) => ("200 OK", json),
             None => (
@@ -741,6 +780,37 @@ fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
     );
+}
+
+/// `POST /fake-game`: queue a sensor event for a catalogue game.
+fn fake_game(body: &[u8]) -> (&'static str, String) {
+    #[derive(serde::Deserialize)]
+    struct Req {
+        action: String,
+        game_id: String,
+        #[serde(default)]
+        ago_min: i64,
+    }
+    let Ok(req) = serde_json::from_slice::<Req>(body) else {
+        return ("400 Bad Request", r#"{"error":"bad body"}"#.into());
+    };
+    let action = match req.action.as_str() {
+        "start" => mello_core::e2e_game::Action::Start,
+        "end" => mello_core::e2e_game::Action::End,
+        _ => {
+            return (
+                "400 Bad Request",
+                r#"{"error":"action is start or end"}"#.into(),
+            )
+        }
+    };
+    match mello_core::e2e_game::inject(action, &req.game_id, req.ago_min) {
+        Ok(()) => ("200 OK", r#"{"ok":true}"#.into()),
+        Err(e) => (
+            "400 Bad Request",
+            serde_json::json!({ "error": e }).to_string(),
+        ),
+    }
 }
 
 /// Read the snapshot on the UI thread: Slint components are not `Send`.
@@ -992,6 +1062,20 @@ fn read(app: &MainWindow) -> Snapshot {
         head2head: read_head2head(app),
         invite_card: read_invite_card(app),
         recent_games: read_recent_games(app),
+        live_sessions: app
+            .get_feed_cards()
+            .iter()
+            .enumerate()
+            .filter(|(_, c)| c.card_type == "live-session")
+            .map(|(index, c)| LiveSessionSnap {
+                game_name: c.game_name.to_string(),
+                member_names: c.live.member_names.iter().map(|n| n.to_string()).collect(),
+                since_min: c.live.since_min,
+                index,
+                octagons: c.live.players.row_count(),
+                with_avatar: c.live.players.iter().filter(|p| p.has_avatar).count(),
+            })
+            .collect(),
         skeleton_trio: [
             app.get_feed_skeleton_stream(),
             app.get_feed_skeleton_voice_clip(),

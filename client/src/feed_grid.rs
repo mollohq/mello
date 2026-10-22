@@ -7,6 +7,10 @@
 //!
 //! - A voice clip never takes a wide slot (CLIPS 7.1, plans/next-gen-feed.md
 //!   section 2).
+//! - A live session (a game in progress) takes the wide slot of the first row,
+//!   and the head2head card sits beside it as the cell. When a hero leads the
+//!   feed (a versus card, a hero clip), the live session takes the first cell
+//!   of the side column. A live stream is above all of it.
 //! - The recent games card is on the first screen for every crew size. In the
 //!   plain layout (head2head cell and invite card lead) it takes the wide slot
 //!   of the second row. Next to a hero or a wide head2head it takes the first
@@ -73,6 +77,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         .unwrap_or("");
     let lead = match first {
         None => Lead::Hero,
+        Some(c) if c.card_type == "live-session" => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
         Some(_) if variant == "wide" => Lead::Wide,
@@ -127,7 +132,7 @@ pub fn wide_slot_indices(cards: &[CardInfo], start: usize) -> Vec<usize> {
 fn is_fixed(t: &str) -> bool {
     matches!(
         t,
-        "clip" | "head2head" | "invite" | "recap" | "recent-games" | "locked"
+        "clip" | "head2head" | "invite" | "recap" | "recent-games" | "locked" | "live-session"
     )
 }
 
@@ -136,6 +141,42 @@ fn is_fixed(t: &str) -> bool {
 /// `start` is the first card of the grid: the live stream beside the feed takes
 /// two cards when exactly one stream is live (`stream-side-consumed`).
 pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
+    let Some(live) = cards.iter().position(|c| c.card_type == "live-session") else {
+        return arrange_core(cards, start);
+    };
+    let rest: Vec<usize> = (0..cards.len()).filter(|&i| i != live).collect();
+    let hero = rest.get(start).is_some_and(|&i| {
+        cards[i].is_hero || (cards[i].card_type == "head2head" && cards[i].variant == "versus")
+    });
+    if hero {
+        // The hero keeps its place. The live session is the first side cell.
+        let infos: Vec<CardInfo> = rest.iter().map(|&i| cards[i].clone()).collect();
+        let mut out: Vec<usize> = arrange_core(&infos, start)
+            .into_iter()
+            .map(|j| rest[j])
+            .collect();
+        out.insert((start + 1).min(out.len()), live);
+        return out;
+    }
+    // The live session leads and the head2head card is the cell beside it.
+    let mut seq = rest;
+    seq.insert(start.min(seq.len()), live);
+    if let Some(p) = seq
+        .iter()
+        .position(|&i| cards[i].card_type == "head2head")
+        .filter(|&p| p > start + 1)
+    {
+        let id = seq.remove(p);
+        seq.insert(start + 1, id);
+    }
+    let infos: Vec<CardInfo> = seq.iter().map(|&i| cards[i].clone()).collect();
+    arrange_core(&infos, start)
+        .into_iter()
+        .map(|j| seq[j])
+        .collect()
+}
+
+fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
     let mut order: Vec<usize> = (0..cards.len()).collect();
     if cards.len() <= start {
         return order;
@@ -153,6 +194,17 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
             // invite card in the first.
             Lead::Plain => l.row2_base + 4,
             // Next to the lead, in the side column.
+            // Beside a live session, behind the head2head cell that sits there.
+            Lead::Wide
+                if infos(&order)
+                    .get(start)
+                    .is_some_and(|c| c.card_type == "live-session")
+                    && infos(&order)
+                        .get(start + 1)
+                        .is_some_and(|c| c.card_type == "head2head") =>
+            {
+                start + 2
+            }
             Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
         };
         let target = target.min(order.len() - 1);
@@ -316,5 +368,66 @@ mod tests {
         assert_eq!(grid_start(1, 5), 2);
         assert_eq!(grid_start(0, 5), 0);
         assert_eq!(grid_start(2, 5), 0);
+    }
+
+    fn live() -> CardInfo {
+        card("live-session")
+    }
+
+    #[test]
+    fn a_live_session_takes_the_wide_slot_and_the_head2head_cell_sits_beside_it() {
+        let cards = vec![
+            h2h("wide"),
+            card("recent-games"),
+            card("game-session"),
+            live(),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t[0], "live-session", "{t:?}");
+        assert_eq!(t[1], "head2head", "{t:?}");
+        assert_eq!(t[2], "recent-games", "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(wide_slots(&layout(&infos, 0), infos.len())[0], 0);
+    }
+
+    #[test]
+    fn a_live_session_leads_a_crew_whose_cell_leads() {
+        let cards = vec![h2h("cell"), card("invite"), card("game-session"), live()];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(&t[..3], ["live-session", "head2head", "invite"], "{t:?}");
+    }
+
+    #[test]
+    fn a_hero_keeps_its_place_and_the_live_session_is_the_first_side_cell() {
+        let mut hero = card("recap");
+        hero.is_hero = true;
+        let cards = vec![hero, card("recent-games"), card("game-session"), live()];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(&t[..3], ["recap", "live-session", "recent-games"], "{t:?}");
+        let cards = vec![h2h("versus"), card("game-session"), live()];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(&t[..2], ["head2head", "live-session"], "{t:?}");
+    }
+
+    #[test]
+    fn a_live_stream_keeps_the_side_column_and_the_live_session_leads_the_grid() {
+        let cards = vec![card("game-session"), card("clip"), h2h("wide"), live()];
+        let t = types(&cards, &arrange(&cards, 2));
+        assert_eq!(t[2], "live-session", "{t:?}");
+    }
+
+    #[test]
+    fn arranging_twice_gives_the_same_order() {
+        let cards = vec![
+            h2h("wide"),
+            card("recent-games"),
+            card("game-session"),
+            live(),
+        ];
+        let once = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = once.iter().map(|&i| cards[i].clone()).collect();
+        let twice = arrange(&infos, 0);
+        assert_eq!(twice, (0..cards.len()).collect::<Vec<_>>());
     }
 }

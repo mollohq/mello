@@ -1066,9 +1066,12 @@ component RecapCard inherits Rectangle {
 component GameArt inherits Rectangle {
     in property <FeedCardData> card;
     in property <length> size: 36px;
+    /// A header-shaped tile. Both stay at `size` when they are not set.
+    in property <length> art-width: 0px;
+    in property <length> art-height: 0px;
 
-    width: size;
-    height: size;
+    width: art-width > 0px ? art-width : size;
+    height: art-height > 0px ? art-height : size;
     background: transparent;
 
     if card.game-has-icon: GameIcon {
@@ -1818,6 +1821,143 @@ component RecentGamesCard inherits Rectangle {
     }
 }
 
+
+component LiveSessionText inherits VerticalLayout {
+    in property <FeedCardData> card;
+    in property <bool> centered: false;
+
+    spacing: 6px;
+    alignment: centered ? center : start;
+
+    Text {
+        text: card.game-name;
+        font-family: Theme.font-display;
+        font-size: 14px;
+        font-weight: Theme.weight-display;
+        color: Theme.text-primary;
+        overflow: elide;
+    }
+    HorizontalLayout {
+        height: 20px;
+        spacing: 4px;
+        alignment: start;
+        for p in card.live.players: UserAvatar {
+            initials: p.initials;
+            avatar: p.avatar;
+            has-avatar: p.has-avatar;
+            color-index: p.hue-index;
+            size: 20px;
+        }
+        if card.live.more-players > 0: AvatarOverflow {
+            count: card.live.more-players;
+            size: 20px;
+        }
+    }
+    Text {
+        text: card.live.names-line;
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
+        font-size: 12px;
+        color: Theme.text-sub;
+        overflow: elide;
+    }
+    Text {
+        text: card.live.since-text;
+        font-weight: Theme.weight-sentence;
+        font-family: Theme.font-body;
+        font-size: 12px;
+        color: Theme.text-value;
+    }
+}
+
+// The red dot of a live card. Red is only this.
+component LivePip inherits Rectangle {
+    width: 6px;
+    Rectangle {
+        width: 6px;
+        height: 6px;
+        y: (parent.height - self.height) / 2;
+        border-radius: 3px;
+        background: Theme.live;
+    }
+}
+
+// Live session card: a game in progress (mockup cold-start frames 5 and 8).
+// Red is only the pip. A cell stacks art, name and players; the wide slot lays
+// the art beside them.
+component LiveSessionCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    property <bool> wide: root.width > 420px;
+
+    background: transparent;
+    border-width: 0px;
+    clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "br";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
+        spacing: 10px;
+        alignment: start;
+
+        HorizontalLayout {
+            height: 16px;
+            spacing: 6px;
+            LivePip { }
+            Text {
+                horizontal-stretch: 1;
+                text: "NOW PLAYING";
+                font-family: Theme.font-label;
+                font-size: 10px;
+                font-weight: Theme.weight-label;
+                letter-spacing: Theme.track-label;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+            }
+        }
+
+        if !root.wide: VerticalLayout {
+            spacing: 10px;
+            GameArt {
+                card: root.card;
+                size: 112px;
+                art-width: root.width - 32px;
+                art-height: 112px;
+            }
+            LiveSessionText { card: root.card; }
+        }
+
+        if root.wide: HorizontalLayout {
+            spacing: 16px;
+            height: 156px;
+            GameArt {
+                card: root.card;
+                size: 156px;
+                art-width: 292px;
+                art-height: 156px;
+            }
+            LiveSessionText { card: root.card; centered: true; horizontal-stretch: 1; }
+        }
+    }
+}
+
 // Catch-up card
 component CatchupCard inherits Rectangle {
     in property <FeedCardData> card;
@@ -2010,8 +2150,9 @@ component FeedSlot inherits Rectangle {
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
     in property <int> clip-duration-ms: 0;
-    /// The slot is one column of the side column beside a live stream, not
-    /// the wide slot. A wide head2head card does not fit there.
+    /// The slot is one column, not the wide slot: the side column beside a
+    /// live stream, or the cell beside a live session. A wide head2head card
+    /// does not fit there.
     in property <bool> side-column: false;
     callback play-clicked(string);
     callback seek-clip-ms(int);
@@ -2079,6 +2220,9 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "recent-games": RecentGamesCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "live-session": LiveSessionCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "catchup": CatchupCard {
@@ -2204,7 +2348,10 @@ export component CrewFeed inherits Rectangle {
         && cards[feed-start-index].card-type == "head2head"
         ? cards[feed-start-index].head2head.variant : "";
     property <bool> hero-is-full-row: hero-is-clip || lead-h2h == "versus";
-    property <bool> lead-is-wide: lead-h2h == "wide";
+    property <bool> lead-is-live: cards.length > feed-start-index
+        && cards[feed-start-index].card-type == "live-session";
+    // A live session takes the wide slot as well as the wide head2head card.
+    property <bool> lead-is-wide: lead-h2h == "wide" || lead-is-live;
     property <bool> lead-is-plain: lead-h2h == "cell" || lead-h2h == "cell-full"
         || (cards.length > feed-start-index && cards[feed-start-index].card-type == "invite");
     // The recap carries a header, a stat block, an MVP and the games table.
@@ -2452,6 +2599,8 @@ export component CrewFeed inherits Rectangle {
 
                     if cards.length > root.feed-start-index + 1: FeedSlot {
                         horizontal-stretch: 1;
+                        // One column: a wide head2head card gives way to the cell.
+                        side-column: true;
                         card: cards[root.feed-start-index + 1];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
@@ -3382,6 +3531,44 @@ export component PreviewFeedLiveStreamSolo inherits Rectangle {
                 recent-games: [
                     { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
                 ],
+            },
+        ];
+    }
+}
+
+// A game in progress (mockup cold-start frames 5 and 8): the live card holds the
+// wide slot and the head2head card of a crew of one is the cell beside it.
+export component PreviewFeedLiveSession inherits Rectangle {
+    width: 1000px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "live-rl", card-type: "live-session", role: "standard", size: "md",
+                game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
+                live: {
+                    since-min: 20, since-text: "since 20 min", names-line: "Bob and Jonas",
+                    players: [
+                        { name: "Bob", initials: "B", hue-index: 0 },
+                        { name: "Jonas", initials: "J", hue-index: 1 },
+                    ],
+                },
+            },
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: { variant: "wide", member-count: 1, open-seats: 4, left-name: "Bob", left-initials: "B" },
+            },
+            {
+                id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
+                duration-human: "2h 05m", timestamp: "5h ago",
+                actor-name: "Bob", actor-initials: "B",
             },
         ];
     }

@@ -6863,3 +6863,276 @@ fn the_feed_member_count_hides_the_skeleton_trio_before_the_crew_list_catches_up
         "two members and a real card: no trio"
     );
 }
+
+// ── live session card ───────────────────────────────────────────────
+
+fn game_detected(game_id: &str, name: &str, started_at_ms: i64) -> Event {
+    Event::GameDetected {
+        game_id: game_id.into(),
+        game_name: name.into(),
+        short_name: "G".into(),
+        color: "#2A2A30".into(),
+        pid: 42,
+        exe_path: String::new(),
+        started_at_ms,
+    }
+}
+
+fn game_ended(game_id: &str, name: &str, minutes: u32) -> Event {
+    Event::GameEnded {
+        game_id: game_id.into(),
+        game_name: name.into(),
+        short_name: "G".into(),
+        duration_min: minutes,
+    }
+}
+
+/// A crewmate's presence push, as the server sends it.
+fn mate_plays(user: &str, game_id: &str, name: &str, ago_min: i64) -> Event {
+    Event::PresenceChanged {
+        change: mello_core::crew_state::PresenceChange {
+            crew_id: "crew-0".into(),
+            user_id: user.into(),
+            presence: mello_core::crew_state::PresenceInfo {
+                status: mello_core::presence::PresenceStatus::Online,
+                activity: None,
+                game: Some(mello_core::presence::GamePresence {
+                    game_name: name.into(),
+                    game_id: game_id.into(),
+                    started_at: mello_core::presence::to_rfc3339(now_ms() - ago_min * 60_000),
+                }),
+            },
+        },
+    }
+}
+
+fn live_cards(h: &Harness) -> Vec<FeedCardData> {
+    h.app()
+        .get_feed_cards()
+        .iter()
+        .filter(|c| c.card_type.as_str() == "live-session")
+        .collect()
+}
+
+/// A game in progress for the viewer is a card with the red pip, the game and
+/// "since N min", counted from the start the sensor reports.
+#[test]
+fn a_live_session_for_the_viewer_shows_the_pip_and_since_n_min() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+    assert_eq!(count_of(&h, "LiveSessionCard"), 0, "nothing plays");
+
+    h.emit(game_detected(
+        "counter-strike-2",
+        "Counter-Strike 2",
+        now_ms() - 12 * 60_000 - 5_000,
+    ));
+
+    assert_eq!(count_of(&h, "LiveSessionCard"), 1);
+    assert_eq!(count_of(&h, "LivePip"), 1, "the one red pip");
+    let texts = drawn_texts(&h);
+    for want in ["NOW PLAYING", "Counter-Strike 2", "since 12 min"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+    let card = live_cards(&h).remove(0);
+    assert_eq!(card.live.since_min, 12);
+    assert_eq!(card.live.players.row_count(), 1);
+    assert_eq!(
+        first_card(&h).card_type.as_str(),
+        "live-session",
+        "no hero leads, so it takes the first place"
+    );
+}
+
+/// Two crewmates in one game are one card, with both octagons.
+#[test]
+fn two_crewmates_in_the_same_game_share_one_card() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 3);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Sara")],
+    );
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            3,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1), h2h_pair("u3", 1, 1)],
+            None,
+        )]),
+    });
+    h.emit(mate_plays("u2", "rocket-league", "Rocket League", 20));
+    h.emit(mate_plays("u3", "rocket-league", "Rocket League", 8));
+
+    assert_eq!(count_of(&h, "LiveSessionCard"), 1, "one card for one game");
+    let card = live_cards(&h).remove(0);
+    assert_eq!(card.live.players.row_count(), 2);
+    assert_eq!(card.live.names_line.as_str(), "Jonas and Sara");
+    assert_eq!(card.live.since_min, 20, "counts from the earliest start");
+
+    // A third game makes a second card. A cleared game leaves its card.
+    h.emit(mate_plays("u3", "dota-2", "Dota 2", 3));
+    assert_eq!(live_cards(&h).len(), 2);
+    h.emit(Event::PresenceChanged {
+        change: mello_core::crew_state::PresenceChange {
+            crew_id: "crew-0".into(),
+            user_id: "u3".into(),
+            presence: mello_core::crew_state::PresenceInfo {
+                status: mello_core::presence::PresenceStatus::Online,
+                activity: None,
+                game: None,
+            },
+        },
+    });
+    let left = live_cards(&h);
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].live.names_line.as_str(), "Jonas");
+}
+
+/// A live session holds the wide slot, so the wide head2head card of a crew of
+/// one becomes the cell beside it. When the game ends the wide card is back.
+#[test]
+fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    set_roster(&h, &[("user-1", "Test User")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            1,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![],
+            None,
+        )]),
+    });
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
+
+    h.emit(game_detected(
+        "counter-strike-2",
+        "Counter-Strike 2",
+        now_ms(),
+    ));
+    assert_eq!(count_of(&h, "Head2headCardWide"), 0, "the slot is taken");
+    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "LiveSessionCard"), 1);
+    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
+    assert_eq!(cards[0].card_type.as_str(), "live-session");
+    assert_eq!(cards[1].card_type.as_str(), "head2head");
+    assert_eq!(
+        cards[1].head2head.variant.as_str(),
+        "wide",
+        "the entry is the same, only the slot differs"
+    );
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+
+    h.emit(game_ended("counter-strike-2", "Counter-Strike 2", 1));
+    assert_eq!(count_of(&h, "LiveSessionCard"), 0);
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "wide again");
+    assert_eq!(count_of(&h, "Head2headCell"), 0);
+}
+
+/// The session end removes the live card, and the session card from the ledger
+/// is the only card of that game. No duplicate.
+#[test]
+fn the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_once() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+    h.emit(game_detected(
+        "rocket-league",
+        "Rocket League",
+        now_ms() - 30 * 60_000,
+    ));
+    assert_eq!(live_cards(&h).len(), 1);
+
+    h.emit(game_ended("rocket-league", "Rocket League", 30));
+    assert!(live_cards(&h).is_empty(), "the live card leaves at once");
+
+    // The server pushes "feed changed" and the feed loads with the session.
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            h2h_entry(
+                2,
+                vec![h2h_title(
+                    "the_carry",
+                    "user-1",
+                    serde_json::json!(4167.0),
+                    "h",
+                )],
+                vec![h2h_pair("u2", 1, 1)],
+                None,
+            ),
+            feed_entry(
+                "gs-1",
+                "session",
+                serde_json::json!({
+                    "game_name": "Rocket League", "game_id": "rocket-league",
+                    "player_names": ["Test User"], "player_ids": ["user-1"],
+                    "duration_min": 30, "wins": 0, "losses": 0, "draws": 0,
+                }),
+            ),
+        ]),
+    });
+    assert_eq!(count_of(&h, "LiveSessionCard"), 0);
+    assert_eq!(count_of(&h, "GameSessionCard"), 1, "one session card");
+}
+
+/// A fresh feed load keeps the live card: it is presence state, not a feed entry.
+#[test]
+fn a_feed_that_loads_while_a_game_runs_keeps_the_live_card() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(game_detected("rocket-league", "Rocket League", now_ms()));
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+    assert_eq!(live_cards(&h).len(), 1);
+    assert_eq!(count_of(&h, "LiveSessionCard"), 1);
+}

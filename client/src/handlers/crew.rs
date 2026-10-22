@@ -364,6 +364,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 ctx.app.set_has_more_history(false);
                 ctx.app.set_has_new_messages(false);
             }
+            ctx.live_games.borrow_mut().clear_others();
             let empty_feed: Vec<FeedCardData> = vec![];
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(empty_feed.clone())).into());

@@ -193,6 +193,20 @@ export struct Head2headData {
     more-members: int,
 }
 
+// A game in progress (card-type "live-session"): the crewmates who play it
+// now. The game itself rides on the FeedCardData game fields.
+export struct LiveSessionData {
+    // Whole minutes since the earliest start of the group.
+    since-min: int,
+    since-text: string,
+    // "Bob and Jonas", "Bob, Jonas +1".
+    names-line: string,
+    // Every player, for the state port and a screen reader.
+    member-names: [string],
+    players: [H2hPerson],
+    more-players: int,
+}
+
 export struct FeedCardData {
     id: string,
     card-type: string,
@@ -284,6 +298,9 @@ export struct FeedCardData {
 
     // Head2head card and invite card (card-type "head2head" / "invite").
     head2head: Head2headData,
+
+    // Live session card (card-type "live-session").
+    live: LiveSessionData,
 }
 
 // One per-game card in the personal stats profile (spec 19 A2).
