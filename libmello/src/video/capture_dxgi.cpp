@@ -23,7 +23,7 @@ bool DxgiCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     }
 
     MELLO_LOG_INFO(TAG, "Source: Monitor(%u) backend=DXGI-DDI resolution=%ux%u",
-        monitor_index_, width_, height_);
+        monitor_index_, width_.load(), height_.load());
     return true;
 }
 
@@ -55,8 +55,10 @@ bool DxgiCapture::recreate_duplication() {
 
     DXGI_OUTPUT_DESC output_desc{};
     output->GetDesc(&output_desc);
-    width_  = output_desc.DesktopCoordinates.right - output_desc.DesktopCoordinates.left;
-    height_ = output_desc.DesktopCoordinates.bottom - output_desc.DesktopCoordinates.top;
+    const uint32_t new_w = static_cast<uint32_t>(output_desc.DesktopCoordinates.right -
+                                                 output_desc.DesktopCoordinates.left);
+    const uint32_t new_h = static_cast<uint32_t>(output_desc.DesktopCoordinates.bottom -
+                                                 output_desc.DesktopCoordinates.top);
 
     ComPtr<IDXGIOutput1> output1;
     hr = output.As(&output1);
@@ -65,20 +67,16 @@ bool DxgiCapture::recreate_duplication() {
         return false;
     }
 
-    // A display-mode change also revokes duplication, so a rebuild can come back
-    // with different dimensions. The preprocessor and encoder were sized at
-    // start_host and cannot be retargeted mid-stream, so feeding them the new
-    // size would be worse than stopping. Refuse, loudly — the previous silent
-    // death is what this whole change exists to remove.
-    if (previous_w != 0 && previous_h != 0 && (width_ != previous_w || height_ != previous_h)) {
-        MELLO_LOG_ERROR(TAG,
-            "Display %u changed resolution %ux%u -> %ux%u mid-stream; "
-            "capture cannot retarget, restart the stream",
-            monitor_index_, previous_w, previous_h, width_, height_);
-        width_ = previous_w;
-        height_ = previous_h;
-        return false;
+    // A display mode change also revokes duplication, and the rebuild comes
+    // back at the new size. The preprocessor scales the whole new desktop into
+    // the encode size, which stays fixed for the stream. Refusing the new size
+    // here gave up on the stream after about 10 s of failed rebuilds.
+    if (previous_w != 0 && previous_h != 0 && (new_w != previous_w || new_h != previous_h)) {
+        MELLO_LOG_INFO(TAG, "Display %u changed resolution %ux%u -> %ux%u; capturing the new size",
+                       monitor_index_, previous_w, previous_h, new_w, new_h);
     }
+    width_.store(new_w, std::memory_order_relaxed);
+    height_.store(new_h, std::memory_order_relaxed);
 
     hr = output1->DuplicateOutput(device_.Get(), &duplication_);
     if (FAILED(hr)) {

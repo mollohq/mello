@@ -207,9 +207,15 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale
+    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale.
+    // It gets the capture size as it is, odd or not: the source is BGRA and
+    // the whole of it scales into the even NV12 encode size.
     preprocessor_ = std::make_unique<VideoPreprocessor>();
-    if (!preprocessor_->initialize(device_, cap_w, cap_h, enc_w, enc_h)) {
+    source_w_.store(capture_->width(), std::memory_order_relaxed);
+    source_h_.store(capture_->height(), std::memory_order_relaxed);
+    source_size_changes_.store(0, std::memory_order_relaxed);
+    source_size_known_ = false;
+    if (!preprocessor_->initialize(device_, capture_->width(), capture_->height(), enc_w, enc_h)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
@@ -601,6 +607,9 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     }
     out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
     out.idle_repeat_frames = idle_repeat_frames_.load(std::memory_order_relaxed);
+    out.source_width = source_w_.load(std::memory_order_relaxed);
+    out.source_height = source_h_.load(std::memory_order_relaxed);
+    out.source_size_changes = source_size_changes_.load(std::memory_order_relaxed);
     out.gpu_name = device_.adapter_name;
 }
 
@@ -645,6 +654,23 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;
     }
+
+    // A source of a new size (window resize, display mode change, a ladder
+    // move to a method of another size). The preprocessor already scales the
+    // whole new picture into the encode size; this records the change for
+    // the stats, where the bitrate and geometry controller reads it. The first
+    // frame only sets the size: a capture can report its window size before
+    // its first frame.
+    if (result.source_resized && source_size_known_) {
+        const uint32_t changes =
+            source_size_changes_.fetch_add(1, std::memory_order_relaxed) + 1;
+        MELLO_LOG_INFO(TAG, "source size %ux%u (change %u); encode size stays %ux%u",
+                       preprocessor_->source_width(), preprocessor_->source_height(), changes,
+                       encode_w_, encode_h_);
+    }
+    source_size_known_ = true;
+    source_w_.store(preprocessor_->source_width(), std::memory_order_relaxed);
+    source_h_.store(preprocessor_->source_height(), std::memory_order_relaxed);
 
     // Enqueue for the encode thread (bounded, drop oldest on overflow)
     {

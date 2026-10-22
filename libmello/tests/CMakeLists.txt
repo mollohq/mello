@@ -23,6 +23,7 @@ add_executable(mello_tests
     test_graphics_device.cpp
     test_process_liveness.cpp
     test_capture_wgc_restart.cpp
+    test_video_preprocessor.cpp
 )
 
 # Separate target: process enumeration coverage, independent of mello_tests.

@@ -169,6 +169,13 @@ public:
         std::string capture_history;
         // Cumulative present-to-capture delay, 1 ms buckets.
         std::array<uint32_t, PresentDelayHistogram::kBuckets> present_delay_hist{};
+        // The source size of the latest captured frame, and how many times it
+        // changed after the first frame. The encode size stays fixed: the
+        // whole source scales into it. The counter is the signal for a
+        // geometry change (streaming-quality stage 4 reacts to it).
+        uint32_t    source_width        = 0;
+        uint32_t    source_height       = 0;
+        uint32_t    source_size_changes = 0;
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -312,6 +319,12 @@ private:
     // caller; keeping the time math out of here avoids a second clock policy.
     std::atomic<uint64_t> frames_captured_{0};
     std::atomic<uint64_t> last_capture_us_{0};
+    // Source size of the latest converted frame and the count of changes after
+    // the first one. Written on the capture thread, read by the stats caller.
+    std::atomic<uint32_t> source_w_{0};
+    std::atomic<uint32_t> source_h_{0};
+    std::atomic<uint32_t> source_size_changes_{0};
+    bool                  source_size_known_ = false;  // capture thread only
 
     // Decimation target. 0 means "no decimation" (encode every captured frame).
     // Read on the capture thread, written from the control thread.

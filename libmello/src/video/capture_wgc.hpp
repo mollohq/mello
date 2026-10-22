@@ -22,8 +22,8 @@ public:
     bool start(uint32_t target_fps, FrameCallback callback) override;
     void stop() override;
 
-    uint32_t width()  const override { return width_; }
-    uint32_t height() const override { return height_; }
+    uint32_t width()  const override { return width_.load(std::memory_order_relaxed); }
+    uint32_t height() const override { return height_.load(std::memory_order_relaxed); }
     const char* backend_name() const override { return monitor_ ? "WGC-Monitor" : "WGC"; }
 
     bool get_cursor(CursorData& out) override;
@@ -53,8 +53,10 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Device>        device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
 
-    uint32_t          width_  = 0;
-    uint32_t          height_ = 0;
+    // The frame pool size. A window resize changes it on the frame thread
+    // (`on_frame_arrived` recreates the pool), so other threads read atomics.
+    std::atomic<uint32_t> width_{0};
+    std::atomic<uint32_t> height_{0};
     bool              monitor_ = false;
     // What the capture item was made from, kept so start() can make it again.
     // stop() closes the item, and the capture ladder stops a backend and

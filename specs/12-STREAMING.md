@@ -337,6 +337,18 @@ The encode size keeps the source aspect (`VideoPipeline::encode_size_for`):
 
 The host reports the size through `mello_stream_get_host_resolution`.
 
+**The source size can change mid-stream; the encode size does not.** A window
+resize, a display mode change, or a ladder move to a method of another size
+gives frames of a new size. Every backend follows it: WGC makes its frame pool
+again at the new content size (the frame of the change is dropped), DXGI
+rebuilds duplication at the new mode, the hook publishes new textures. The
+preprocessor scales the whole new source into the fixed encode size with the
+aspect kept: black bars (studio black) fill the rest, nothing is cropped. An
+aspect within 1 % of the encode aspect fills the output, because that is the
+rounding of `encode_size_for`. `MelloStreamStats` carries `source_width`,
+`source_height` and `source_size_changes` (changes after the first frame); a
+change of the counter is the signal for the stage 4 geometry controller.
+
 ### 3.3 Encode Queue
 
 A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins). This decouples the capture callback thread from the potentially-blocking encode path.
