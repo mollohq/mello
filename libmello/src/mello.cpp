@@ -1639,6 +1639,10 @@ MelloStreamView* mello_stream_start_viewer(
 
         auto* view = new MelloStreamView{
             c, std::make_unique<mello::video::VideoPipeline>(), on_frame, user_data, nullptr, nullptr};
+        // Game audio plays on the output device the user chose for voice. The
+        // device opens at the first audio packet, not here.
+        view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>(
+            [c] { return c->audio().playback_device_id(); });
 
         mello::video::VideoPipeline::FrameCallback cb{};
         if (on_frame) {
@@ -1739,10 +1743,19 @@ void mello_stream_set_native_frame_callback(
 MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {
     if (!view || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
-        if (!view->audio_playout) {
-            view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>();
-        }
+        if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
         return view->audio_playout->feed_packet(data, size) ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_stream_viewer_set_audio_muted(MelloStreamView* view, bool muted) {
+    if (!view) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
+        view->audio_playout->set_muted(muted);
+        return MELLO_OK;
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }

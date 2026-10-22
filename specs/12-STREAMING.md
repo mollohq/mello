@@ -317,6 +317,16 @@ waited for a frame that never came. Counted as `idle_rep_hz` in host stats.
 
 BGRA→NV12 conversion via a D3D11 compute shader. Uses a 3-slot NV12 ring buffer so the convert output doesn't alias with an in-flight encode input. Typical `convert_ms` is 0.1–0.3ms. Also handles GPU downscale when the capture resolution exceeds the target encode resolution.
 
+The encode size keeps the source aspect (`VideoPipeline::encode_size_for`):
+
+| Rule | Example |
+|---|---|
+| The height is the preset height. The width follows the source aspect, rounded to a multiple of 16. | 1920x1200 on 1080p gives 1728x1080. 1440x1080 on 720p gives 960x720. |
+| The size never goes above the capture size. | 1280x720 on 1080p stays 1280x720. |
+| Over H.264 level 4.2 (8704 macroblocks per frame, 522240 per second), the height goes down until the size fits. The host logs a warning. | 3440x1440 on 1080p60 gives 2288x960, not 2560x1080 (10880 macroblocks). |
+
+The host reports the size through `mello_stream_get_host_resolution`.
+
 ### 3.3 Encode Queue
 
 A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins). This decouples the capture callback thread from the potentially-blocking encode path.
@@ -480,7 +490,16 @@ RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurf
 
 ### 7.3 Hardware Decode
 
-NVDEC (CUDA↔D3D11 interop, zero-copy R8 layout), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+NVDEC (R8 layout: CUDA to host on the decode worker, host to GPU on the present thread), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+
+Every Windows decoder has a native present path. `StagingTexture` converts the decoded frame to RGBA in a compute shader, into the shared RGBA texture of §7.5:
+
+| Decoder output | Shader entry | Source views |
+|---|---|---|
+| R8, NV12 layout (NVDEC) | `CSMain` | one R8 view; chroma from row `uv_y` |
+| `DXGI_FORMAT_NV12` (AMF, D3D11VA, OpenH264) | `CSMainNv12` | R8 view of the luma plane, R8G8 view of the chroma plane |
+
+The CPU conversion runs only when the shader cannot be built. `MELLO_SOFT_DECODER=1` forces OpenH264 for tests.
 
 ### 7.4 Decoded-Frame Ring
 
@@ -602,7 +621,8 @@ Game audio is wired end-to-end on Windows and macOS:
 | Viewer SDP | recvonly audio m-line alongside recvonly H.264 |
 | Viewer RTP receive | `RtcpReceivingSession` on the recvonly audio track before `onMessage` (libdatachannel media-receiver pattern) |
 | SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
-| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS) |
+| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS), on the output device chosen for voice (`mello_set_audio_output`; the default device when none is set or the chosen one fails) |
+| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` closes the output device, which drops the queued audio, and drops packets until unmute. Unmute opens the device at the next packet with a fresh decoder. mello-core mutes on `StreamPaused` |
 
 Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path: `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header) → the decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 

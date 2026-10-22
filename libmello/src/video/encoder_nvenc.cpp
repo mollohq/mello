@@ -495,8 +495,7 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         // IDR only on large down-steps: congestion events can leave damaged
         // reference chains, so a forced keyframe helps resync. Routine REMB
         // adjustments must not keyframe-storm the stream.
-        const bool big_down_step =
-            config_.bitrate_kbps > 0 && kbps * 4 < config_.bitrate_kbps * 3;
+        const bool big_down_step = bitrate_step_forces_idr(config_.bitrate_kbps, kbps);
         reconfig.forceIDR = big_down_step ? 1 : 0;
 
         const NVENCSTATUS reconfig_status =

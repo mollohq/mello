@@ -494,9 +494,9 @@ bool initialize(const GraphicsDevice& device,
 
 The D3D11 Video Processor handles scaling automatically when `content_desc.InputWidth/Height` differs from `OutputWidth/Height`. Source and destination rectangles are set explicitly to ensure correct sampling.
 
-In `VideoPipeline::start_host()`, the target encode resolution is determined from `PipelineConfig::width/height` (passed from the Rust preset). If the config resolution is smaller than the capture resolution, the pipeline uses the config resolution for encoding; otherwise it uses the capture resolution. All dimensions are even-aligned for NV12 compatibility.
+In `VideoPipeline::start_host()`, `encode_size_for` sets the encode size from the capture size and `PipelineConfig::height` (the preset height). The width follows the source aspect, so the scale never stretches the picture. The rules are in `12-STREAMING.md` §3.2. All dimensions are even-aligned for NV12 compatibility.
 
-This reduces encoded pixel count significantly (e.g. 2036×1392 → 1920×1080 = 27% fewer pixels), improving quality per bit and lowering bandwidth.
+This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 = 40% fewer pixels), improving quality per bit and lowering bandwidth.
 
 ---
 

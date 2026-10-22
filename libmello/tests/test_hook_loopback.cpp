@@ -175,6 +175,8 @@ Decoded run_loopback(const std::string& directory, bool d3d9, const char* bmp_pa
     }
     if (out.packets == 0) return out;
 
+    // The viewer decodes at the size the host encoded, as the client does.
+    pipeline.get_host_resolution(config.width, config.height);
     std::vector<uint8_t> frame;
     uint32_t frame_width = 0;
     uint32_t frame_height = 0;

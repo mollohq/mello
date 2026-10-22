@@ -7,6 +7,7 @@
 #include <chrono>
 
 #include "../util/log.hpp"
+#include "frame_cadence.hpp"
 #include "hook_launcher.hpp"
 
 using Microsoft::WRL::ComPtr;
@@ -492,7 +493,7 @@ bool HookCapture::start(uint32_t target_fps, FrameCallback callback) {
 
 void HookCapture::capture_thread() {
     MELLO_LOG_INFO(TAG, "hook capture thread started for pid=%u", pid_);
-    const uint64_t interval_us = 1'000'000ull / target_fps_;
+    cadence_deadline_us_ = 0;
 
     last_presents_change_us_.store(now_us(), std::memory_order_relaxed);
 
@@ -537,10 +538,12 @@ void HookCapture::capture_thread() {
         if (!refresh_textures()) break;
 
         // Deliver at the target rate. The game presents at its own rate, which
-        // can be several times the stream's.
+        // can be several times the stream's. The decision comes before the
+        // copy, so a present that is not delivered costs no copy. The rule is
+        // the pipeline's: a reset to the arrival time gave 48 fps from a
+        // 144 fps game for a 60 fps target.
         const uint64_t now = now_us();
-        if (last_delivered_us_ != 0 && now - last_delivered_us_ + 500 < interval_us) continue;
-        last_delivered_us_ = now;
+        if (!frame_cadence_accepts(now, cadence_deadline_us_, target_fps_)) continue;
 
         const uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
         if (frames_) {

@@ -1,5 +1,9 @@
 #include <gtest/gtest.h>
 #include "video/video_pipeline.hpp"
+#include "video/frame_cadence.hpp"
+#include "video/encoder_control.hpp"
+#include "video/nvdec_host_layout.hpp"
+#include <future>
 #include <vector>
 #include <algorithm>
 #include <mutex>
@@ -118,7 +122,10 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
         ASSERT_GT(packets.size(), 0u) << "No packets to feed to viewer";
     }
 
-    // Phase 2: decode
+    // Phase 2: decode, at the size the host encoded (the client does the same
+    // through mello_stream_get_host_resolution). It keeps the source aspect,
+    // so it is not the preset size on every monitor.
+    pipeline.get_host_resolution(config.width, config.height);
     std::atomic<uint32_t> frames_decoded{0};
     uint32_t last_w = 0, last_h = 0;
 
@@ -157,6 +164,73 @@ TEST_F(VideoPipelineTest, HostToViewerLoopback) {
     EXPECT_EQ(last_h, config.height);
 }
 
+#ifdef _WIN32
+// The viewer of a Windows client without an NVIDIA GPU: a decoder that emits
+// NV12 (here OpenH264, forced with MELLO_SOFT_DECODER=1) and only a native
+// frame callback, no CPU callback. Every presented frame must reach the
+// native callback with a shared RGBA handle. Before stage 2 present_frame
+// returned false on every frame of this path.
+TEST_F(VideoPipelineTest, AnNv12DecoderReachesTheNativeCallback) {
+    // The Cisco DLL is fetched by scripts/stream-gate.sh (stage 1), not built.
+    bool openh264 = false;
+    for (const char* name : {"openh264-2.6.0-win64.dll", "openh264-2.5.0-win64.dll", "openh264.dll"}) {
+        if (HMODULE dll = LoadLibraryA(name)) {
+            FreeLibrary(dll);
+            openh264 = true;
+            break;
+        }
+    }
+    if (!openh264) GTEST_SKIP() << "the Cisco OpenH264 DLL is not next to the tests";
+
+    std::vector<CapturedPacket> packets;
+    std::mutex pkt_mtx;
+    auto config = default_config();
+    ASSERT_TRUE(pipeline.start_host(monitor_source(), config,
+        [&](const uint8_t* data, size_t size, bool is_keyframe, uint64_t ts) {
+            std::lock_guard<std::mutex> lock(pkt_mtx);
+            packets.push_back({std::vector<uint8_t>(data, data + size), is_keyframe, ts});
+        }));
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    pipeline.stop_host();
+    ASSERT_FALSE(packets.empty()) << "No packets to feed to viewer";
+    pipeline.get_host_resolution(config.width, config.height);
+
+    struct SoftDecoder {
+        SoftDecoder() { SetEnvironmentVariableA("MELLO_SOFT_DECODER", "1"); }
+        ~SoftDecoder() { SetEnvironmentVariableA("MELLO_SOFT_DECODER", nullptr); }
+    } soft_decoder;
+
+    std::atomic<uint32_t> native_frames{0};
+    std::atomic<bool> null_handle{false};
+    std::atomic<uint32_t> native_format{0};
+    pipeline.set_native_frame_callback(
+        [&](void* handle, uint32_t, uint32_t, uint32_t format, uint32_t, uint64_t) {
+            if (!handle) null_handle = true;
+            native_format = format;
+            native_frames++;
+        });
+    ASSERT_TRUE(pipeline.start_viewer(config, nullptr));
+
+    bool seen_keyframe = false;
+    for (auto& p : packets) {
+        if (!seen_keyframe) {
+            if (!p.is_keyframe) continue;
+            seen_keyframe = true;
+        }
+        pipeline.feed_packet(p.data.data(), p.data.size(), p.is_keyframe);
+    }
+    for (int i = 0; i < 400 && native_frames.load() == 0; ++i) {
+        pipeline.present_frame();
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    pipeline.stop_viewer();
+
+    EXPECT_GT(native_frames.load(), 0u) << "no frame reached the native callback";
+    EXPECT_FALSE(null_handle.load());
+    EXPECT_EQ(native_format.load(), 1u) << "RGBA8";
+}
+#endif
+
 TEST_F(VideoPipelineTest, SaveDecodedFrame) {
     // Capture a couple seconds, decode, save one frame as BMP for visual inspection.
     // This test always passes — check the output file manually.
@@ -184,6 +258,7 @@ TEST_F(VideoPipelineTest, SaveDecodedFrame) {
         return;
     }
 
+    pipeline.get_host_resolution(config.width, config.height);
     std::vector<uint8_t> saved_rgba;
     uint32_t saved_w = 0, saved_h = 0;
 
@@ -415,6 +490,385 @@ TEST(FramerateDecimation, ClockResetDoesNotWedgeTheStream) {
     EXPECT_TRUE(VideoPipeline::decimation_accepts(5, deadline, 30));
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+// The capture backend throttles (hook, WGC, DXGI) and the pipeline decimator
+// share one rule, frame_cadence_accepts. Before stage 2 each backend had its
+// own: the hook gave 48 fps from a 144 fps game for a 60 fps target (50 from
+// 100, 37.5 from 75), WGC counted a dropped frame's time twice, and DXGI reset
+// to the arrival time.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Deterministic jitter in [-amplitude, +amplitude] microseconds.
+struct Jitter {
+    uint32_t state = 12345;
+    int64_t next(int64_t amplitude) {
+        if (amplitude == 0) return 0;
+        state = state * 1103515245u + 12345u;
+        return static_cast<int64_t>((state >> 8) % (2 * amplitude + 1)) - amplitude;
+    }
+};
+
+uint64_t present_time_us(double source_fps, int frame, uint64_t offset_us, Jitter& jitter,
+                         int64_t jitter_us) {
+    return 1'000'000ULL + offset_us +
+           static_cast<uint64_t>(static_cast<double>(frame) * 1'000'000.0 / source_fps) +
+           static_cast<uint64_t>(jitter.next(jitter_us));
+}
+
+} // namespace
+
+TEST(FrameCadence, EveryGameRateGivesTheTarget) {
+    for (const double source_fps : {144.0, 100.0, 75.0, 60.0}) {
+        uint64_t deadline = 0;
+        Jitter jitter;
+        int delivered = 0;
+        const int frames = static_cast<int>(source_fps * 10);  // 10 s
+        for (int i = 0; i < frames; ++i) {
+            if (frame_cadence_accepts(present_time_us(source_fps, i, 0, jitter, 0), deadline, 60)) {
+                ++delivered;
+            }
+        }
+        const double fps = delivered / 10.0;
+        EXPECT_NEAR(fps, 60.0, 1.0) << "source " << source_fps << " fps";
+    }
+}
+
+// A backend throttle feeds the pipeline decimator, and the two cadences start
+// at different times (the ladder swaps backends during a stream). The second
+// stage must pass what the first passes, at every phase. With the old pipeline
+// rule (a hard reset after a late frame) a 75 fps game with a 7 ms phase gave
+// 45 fps here.
+TEST(FrameCadence, ABackendThrottleIntoThePipelineKeepsTheRate) {
+    for (const double source_fps : {144.0, 100.0, 75.0, 60.0}) {
+        for (uint64_t offset_ms = 0; offset_ms < 17; ++offset_ms) {
+            for (const int64_t jitter_us : {0, 500, 1000}) {
+                uint64_t backend_deadline = 0;
+                uint64_t pipeline_deadline = 0;
+                // The pipeline cadence started with an earlier backend.
+                ASSERT_TRUE(VideoPipeline::decimation_accepts(1'000'000, pipeline_deadline, 60));
+                Jitter jitter;
+                int delivered = 0;
+                const int frames = static_cast<int>(source_fps * 10);
+                for (int i = 0; i < frames; ++i) {
+                    const uint64_t ts =
+                        present_time_us(source_fps, i, offset_ms * 1000, jitter, jitter_us);
+                    if (!frame_cadence_accepts(ts, backend_deadline, 60)) continue;
+                    if (VideoPipeline::decimation_accepts(ts, pipeline_deadline, 60)) ++delivered;
+                }
+                EXPECT_NEAR(delivered / 10.0, 60.0, 1.0)
+                    << "source " << source_fps << " fps, phase " << offset_ms << " ms, jitter "
+                    << jitter_us << " us";
+            }
+        }
+    }
+}
+
+// Lateness is kept as credit up to 3/4 of an interval and no more. After a
+// stall the cadence gives one frame now and the next no sooner than 1/8 of an
+// interval later: never a burst of frames to catch up.
+TEST(FrameCadence, AStallGivesNoBurst) {
+    uint64_t deadline = 0;
+    ASSERT_TRUE(frame_cadence_accepts(0, deadline, 60));
+    const uint64_t after_stall = 2'000'000;
+    ASSERT_TRUE(frame_cadence_accepts(after_stall, deadline, 60));
+    int burst = 0;
+    for (uint64_t t = after_stall + 1'000; t < after_stall + 16'666; t += 1'000) {
+        if (frame_cadence_accepts(t, deadline, 60)) ++burst;
+    }
+    EXPECT_LE(burst, 1) << "a stall must not be caught up";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encode size. Before stage 2 each axis was clamped on its own and the
+// preprocessor stretched the source to it: 3440x1440 on the 1080p preset was
+// encoded at 1920x1080, a squashed picture.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+double aspect(uint32_t w, uint32_t h) { return static_cast<double>(w) / h; }
+} // namespace
+
+TEST(EncodeSize, KeepsThePresetHeightAndTheSourceAspect) {
+    auto s = VideoPipeline::encode_size_for(1920, 1200, 1080, 60);
+    EXPECT_EQ(s.width, 1728u);
+    EXPECT_EQ(s.height, 1080u);
+    EXPECT_FALSE(s.level_capped);
+
+    s = VideoPipeline::encode_size_for(1440, 1080, 720, 60);  // 4:3
+    EXPECT_EQ(s.width, 960u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(1920, 1080, 720, 60);
+    EXPECT_EQ(s.width, 1280u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(2560, 1440, 1080, 60);
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+
+    s = VideoPipeline::encode_size_for(3440, 1440, 720, 60);  // ultrawide, 720p
+    EXPECT_EQ(s.width, 1728u);
+    EXPECT_EQ(s.height, 720u);
+}
+
+// 2560x1080 is 10880 macroblocks, over the 8704 of level 4.2, which every
+// encoder backend configures. The height goes down, the aspect stays.
+TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+    const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 60);
+    EXPECT_TRUE(s.level_capped);
+    EXPECT_EQ(s.width, 2288u);
+    EXPECT_EQ(s.height, 960u);
+    EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
+    const uint32_t mbs = ((s.width + 15) / 16) * ((s.height + 15) / 16);
+    EXPECT_LE(mbs, 8704u);
+    EXPECT_LE(mbs * 60u, 522240u);
+}
+
+TEST(EncodeSize, NeverUpscales) {
+    auto s = VideoPipeline::encode_size_for(1280, 720, 1080, 60);
+    EXPECT_EQ(s.width, 1280u);
+    EXPECT_EQ(s.height, 720u);
+
+    s = VideoPipeline::encode_size_for(1921, 1081, 1080, 60);  // odd: NV12 needs even
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+
+    s = VideoPipeline::encode_size_for(1920, 1080, 0, 60);  // no preset height
+    EXPECT_EQ(s.width, 1920u);
+    EXPECT_EQ(s.height, 1080u);
+}
+
+TEST(EncodeSize, AWidthIsAMultipleOf16WhenScaled) {
+    for (const uint32_t cap_w : {1366u, 1600u, 1680u, 2560u, 3440u, 3840u, 5120u}) {
+        for (const uint32_t cap_h : {768u, 900u, 1050u, 1080u, 1440u, 1600u, 2160u}) {
+            for (const uint32_t preset_h : {480u, 720u, 1080u}) {
+                const auto s = VideoPipeline::encode_size_for(cap_w, cap_h, preset_h, 60);
+                if (s.height < cap_h) {
+                    EXPECT_EQ(s.width % 16, 0u) << cap_w << "x" << cap_h << " on " << preset_h;
+                    EXPECT_NEAR(aspect(s.width, s.height), aspect(cap_w, cap_h), 0.02)
+                        << cap_w << "x" << cap_h << " on " << preset_h;
+                }
+                EXPECT_LE(s.width, cap_w);
+                EXPECT_LE(s.height, cap_h);
+                EXPECT_EQ(s.height % 2, 0u);
+            }
+        }
+    }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Encoder control. The Rust threads set the bitrate and the framerate and ask
+// for keyframes while the encode thread encodes and changes cost tiers. Before
+// stage 2 nothing serialised them, and no encoder backend is thread safe.
+// ─────────────────────────────────────────────────────────────────────────────
+
+namespace {
+
+// Counts any two calls that run at the same time, and any encode that sees a
+// bitrate half written. Its two rate fields are written one after the other.
+class TornStateEncoder : public Encoder {
+public:
+    std::atomic<int>      inside{0};
+    std::atomic<int>      overlaps{0};
+    std::atomic<int>      torn{0};
+    std::atomic<int>      encodes{0};
+    std::atomic<int>      keyframes{0};
+    std::atomic<uint32_t> rate_a{1000};
+    std::atomic<uint32_t> rate_b{1000};
+    std::atomic<uint32_t> fps{60};
+    // When set, encode() waits here until it is cleared.
+    std::atomic<bool>     hold_encode{false};
+    std::atomic<bool>     in_held_encode{false};
+
+    bool initialize(const GraphicsDevice&, const EncoderConfig&) override { return true; }
+    void shutdown() override {}
+#ifdef _WIN32
+    bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
+#elif defined(__APPLE__)
+    bool encode(void*, EncodedPacket& out) override { return run_encode(out); }
+#endif
+    void request_keyframe() override {
+        enter();
+        keyframes.fetch_add(1);
+        leave();
+    }
+    void set_bitrate(uint32_t kbps) override {
+        enter();
+        rate_a.store(kbps);
+        for (int i = 0; i < 4; ++i) std::this_thread::yield();
+        rate_b.store(kbps);
+        leave();
+    }
+    void set_framerate(uint32_t value) override {
+        enter();
+        fps.store(value);
+        leave();
+    }
+    bool reduce_cost_tier() override {
+        enter();
+        std::this_thread::yield();
+        leave();
+        return false;
+    }
+    void get_stats(EncoderStats& out) const override { out = EncoderStats{}; }
+    bool supports_codec(VideoCodec) const override { return true; }
+    const char* name() const override { return "torn-state"; }
+
+private:
+    void enter() {
+        if (inside.fetch_add(1) != 0) overlaps.fetch_add(1);
+    }
+    void leave() { inside.fetch_sub(1); }
+    bool run_encode(EncodedPacket& out) {
+        enter();
+        in_held_encode.store(hold_encode.load());
+        while (hold_encode.load()) std::this_thread::yield();
+        in_held_encode.store(false);
+        const uint32_t a = rate_a.load();
+        std::this_thread::yield();
+        const uint32_t b = rate_b.load();
+        if (a != b) torn.fetch_add(1);
+        encodes.fetch_add(1);
+        leave();
+        out.data.assign(4, 0);
+        return true;
+    }
+};
+
+} // namespace
+
+TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+
+    std::atomic<bool> setters_done{false};
+    std::thread encode_thread([&] {
+        EncodedPacket packet;
+        int frames = 0;
+        while (!setters_done.load() || frames < 1000) {
+            control.encode(nullptr, packet);
+            if (frames % 50 == 0) control.reduce_cost_tier();
+            ++frames;
+        }
+    });
+    // Both threads run at the same time from here.
+    while (encoder.encodes.load() == 0) std::this_thread::yield();
+    for (uint32_t i = 0; i < 1000; ++i) {
+        control.set_bitrate(1000 + i);
+        if (i % 100 == 0) control.set_framerate(i % 200 == 0 ? 30 : 60);
+        if (i % 10 == 0) control.request_keyframe();
+    }
+    setters_done.store(true);
+    encode_thread.join();
+    control.apply_pending();
+
+    EXPECT_EQ(encoder.overlaps.load(), 0) << "a setter ran beside the encode path";
+    EXPECT_EQ(encoder.torn.load(), 0) << "an encode saw a half-written bitrate";
+    EXPECT_EQ(encoder.rate_a.load(), 1999u) << "the last bitrate wins";
+    EXPECT_EQ(encoder.fps.load(), 60u);
+    EXPECT_GE(encoder.keyframes.load(), 1);
+    EXPECT_FALSE(control.has_pending());
+}
+
+// A setter must never wait for an encode: an encode can be stuck in the display
+// driver for minutes (2026-09-16), and the caller is a Rust stream thread.
+TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+
+    encoder.hold_encode.store(true);
+    std::thread encode_thread([&] {
+        EncodedPacket packet;
+        control.encode(nullptr, packet);
+    });
+    while (!encoder.in_held_encode.load()) std::this_thread::yield();
+
+    auto setter = std::async(std::launch::async, [&] {
+        control.set_bitrate(4000);
+        control.request_keyframe();
+    });
+    const bool returned = setter.wait_for(std::chrono::seconds(5)) == std::future_status::ready;
+    EXPECT_TRUE(returned) << "set_bitrate waited for the encode";
+    EXPECT_EQ(encoder.rate_a.load(), 1000u) << "applied beside a running encode";
+    EXPECT_TRUE(control.has_pending());
+
+    encoder.hold_encode.store(false);
+    encode_thread.join();
+    setter.wait();
+
+    // The encode thread applies the value on its next wake.
+    control.apply_pending();
+    EXPECT_EQ(encoder.rate_a.load(), 4000u);
+    EXPECT_EQ(encoder.keyframes.load(), 1);
+    EXPECT_FALSE(control.has_pending());
+    EXPECT_EQ(encoder.overlaps.load(), 0);
+}
+
+TEST(EncoderControl, AnIdleEncoderTakesTheValueAtOnce) {
+    TornStateEncoder encoder;
+    EncoderControl control;
+    control.attach(&encoder);
+    control.set_bitrate(2500);
+    EXPECT_EQ(encoder.rate_a.load(), 2500u);
+    EXPECT_FALSE(control.has_pending());
+
+    control.attach(nullptr);
+    control.set_bitrate(800);  // no encoder: nothing to call
+    EXPECT_EQ(encoder.rate_a.load(), 2500u);
+}
+
+// AMF and QSV forced an IDR on every bitrate change; NVENC only on a down-step
+// of more than 25 %. All three now share the rule.
+TEST(EncoderControl, OnlyALargeDownStepForcesAKeyframe) {
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 1100)) << "an up-step";
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 950)) << "a routine estimator step";
+    EXPECT_FALSE(bitrate_step_forces_idr(1000, 750)) << "exactly 25 %";
+    EXPECT_TRUE(bitrate_step_forces_idr(1000, 749));
+    EXPECT_TRUE(bitrate_step_forces_idr(8000, 2000));
+    EXPECT_FALSE(bitrate_step_forces_idr(0, 2000)) << "no previous bitrate";
+    EXPECT_TRUE(bitrate_step_forces_idr(4'000'000'000u, 1)) << "no overflow";
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// NVDEC host copy. Before stage 2 the NV12 fallback buffer was w*h*3/2 and the
+// copy wrote w*coded_h*3/2 bytes: 1920 * 8 * 1.5 = 23040 bytes past the end at
+// 1080p. The R8 buffer was sized at start, so a stream with a larger coded
+// height also wrote past it.
+// ─────────────────────────────────────────────────────────────────────────────
+
+TEST(NvdecHostCopy, TheNv12FallbackStaysInsideItsBufferAt1080p) {
+    const auto plan = plan_nvdec_host_copy(1920, 1080, 1088);
+    EXPECT_EQ(plan.buffer_bytes, 1920u * 1080u * 3u / 2u);
+    EXPECT_LE(plan.bytes_written(1920), plan.buffer_bytes);
+    EXPECT_EQ(plan.luma_rows, 1080u);
+    EXPECT_EQ(plan.chroma_src_row, 1088u) << "the CUDA surface has its chroma at the coded height";
+    EXPECT_EQ(plan.chroma_dst_row, 1080u) << "an NV12 texture has its chroma after the last row";
+    EXPECT_EQ(plan.chroma_rows, 540u);
+}
+
+TEST(NvdecHostCopy, TheR8LayoutKeepsItsChromaRow) {
+    const auto plan = plan_nvdec_host_copy(1920, 1088, 1088);
+    EXPECT_EQ(plan.buffer_bytes, 1920u * 1632u);
+    EXPECT_EQ(plan.bytes_written(1920), plan.buffer_bytes);
+    EXPECT_EQ(plan.chroma_dst_row, 1088u) << "the shader reads the chroma at the start uv offset";
+}
+
+TEST(NvdecHostCopy, ALargerStreamCannotWritePastTheBuffer) {
+    for (const uint32_t coded_h : {720u, 1088u, 1440u, 2160u}) {
+        for (const uint32_t layout : {720u, 1080u, 1088u}) {
+            const auto plan = plan_nvdec_host_copy(1920, layout, coded_h);
+            EXPECT_LE(plan.bytes_written(1920), plan.buffer_bytes)
+                << "coded " << coded_h << " layout " << layout;
+            EXPECT_EQ(plan.chroma_src_row, coded_h);
+            EXPECT_LE(plan.luma_rows, layout);
+        }
+    }
+}
+
 // Idle keepalive: a quiet capture still needs video, or a viewer who joins a
 // static stream waits for a keyframe that never comes.
 TEST(IdleKeepalive, NothingToRepeatBeforeTheFirstFrame) {
@@ -606,6 +1060,8 @@ TEST(CaptureState, ABlindMethodInExclusiveFullscreenIsFailedWithProof) {
 }
 
 #include "video/hook_policy.hpp"
+#include <windows.h>
+#include <psapi.h>
 
 // Choosing what to capture from what the user picked. A window picker lists
 // every window a game has, including ones that can never carry a stream.
@@ -691,7 +1147,142 @@ TEST(HookPolicy, NothingIsHookedWithoutTheCallersPermission) {
     EXPECT_FALSE(result.allowed());
     EXPECT_EQ(result.verdict, PolicyVerdict::NotAllowedByCaller);
 }
+
+// A module list that cannot be read is not proof that no anti-cheat module is
+// loaded. The policy must refuse the hook, not allow it (it did until stage 2).
+// A process created suspended has no loader data yet, so EnumProcessModulesEx
+// fails on it with ERROR_PARTIAL_COPY. Every other check passes for it.
+TEST(HookPolicy, AnUnreadableModuleListIsRefused) {
+    using namespace mello::video::hook;
+    wchar_t command[] = L"cmd.exe /c exit 0";
+    STARTUPINFOW startup{};
+    startup.cb = sizeof(startup);
+    PROCESS_INFORMATION child{};
+    ASSERT_TRUE(CreateProcessW(nullptr, command, nullptr, nullptr, FALSE,
+                               CREATE_SUSPENDED | CREATE_NO_WINDOW, nullptr, nullptr, &startup,
+                               &child))
+        << "CreateProcessW failed: " << GetLastError();
+    struct Reaper {
+        PROCESS_INFORMATION& info;
+        ~Reaper() {
+            TerminateProcess(info.hProcess, 0);
+            WaitForSingleObject(info.hProcess, 5000);
+            CloseHandle(info.hThread);
+            CloseHandle(info.hProcess);
+        }
+    } reaper{child};
+
+    HMODULE first = nullptr;
+    DWORD needed = 0;
+    if (EnumProcessModulesEx(child.hProcess, &first, sizeof(first), &needed, LIST_MODULES_ALL)) {
+        GTEST_SKIP() << "this Windows build reads the module list of a suspended process";
+    }
+
+    const PolicyResult result = check_process(child.dwProcessId, true);
+    EXPECT_FALSE(result.allowed());
+    EXPECT_EQ(result.verdict, PolicyVerdict::ProcessUnreadable) << verdict_name(result.verdict);
+}
 #endif
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Native present for NV12 decoders. The Windows client registers no CPU frame
+// callback, so a viewer sees only what reaches the native callback, through
+// StagingTexture::shared_rgba_handle(). Before stage 2 that handle existed only
+// for the R8 layout of NVDEC. AMF, D3D11VA and OpenH264 emit NV12, so
+// present_frame returned false on every frame: no picture on any viewer
+// without an NVIDIA GPU. No hardware decoder here: an NV12 texture with a
+// known colour stands in for the decoded frame.
+// ─────────────────────────────────────────────────────────────────────────────
+#ifdef _WIN32
+#include "video/staging_texture.hpp"
+#include <wrl/client.h>
+
+namespace {
+
+struct TestDevice {
+    GraphicsDevice device = create_d3d11_device();
+    ~TestDevice() {
+        if (device.handle) device.d3d11()->Release();
+    }
+};
+
+Microsoft::WRL::ComPtr<ID3D11Texture2D> make_nv12(ID3D11Device* device, uint32_t w, uint32_t h,
+                                                  uint8_t y, uint8_t u, uint8_t v) {
+    std::vector<uint8_t> data(static_cast<size_t>(w) * h * 3 / 2);
+    std::fill(data.begin(), data.begin() + static_cast<size_t>(w) * h, y);
+    for (size_t i = static_cast<size_t>(w) * h; i + 1 < data.size(); i += 2) {
+        data[i] = u;
+        data[i + 1] = v;
+    }
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = w;
+    desc.Height = h;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_NV12;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;  // as every NV12 decoder creates it
+    D3D11_SUBRESOURCE_DATA init{data.data(), w, 0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    device->CreateTexture2D(&desc, &init, &texture);
+    return texture;
+}
+
+// The integer BT.709 studio-swing conversion of the CPU path.
+uint8_t expected_channel(int value) { return static_cast<uint8_t>(std::clamp(value, 0, 255)); }
+
+bool nv12_shader_input_supported(ID3D11Device* device) {
+    UINT support = 0;
+    if (FAILED(device->CheckFormatSupport(DXGI_FORMAT_NV12, &support))) return false;
+    return (support & D3D11_FORMAT_SUPPORT_TEXTURE2D) && (support & D3D11_FORMAT_SUPPORT_SHADER_LOAD);
+}
+
+} // namespace
+
+TEST(NativePresent, AnNv12DecoderGetsASharedRgbaFrame) {
+    TestDevice test;
+    if (!test.device.handle) GTEST_SKIP() << "no D3D11 device";
+    if (!nv12_shader_input_supported(test.device.d3d11())) {
+        GTEST_SKIP() << "this adapter cannot read NV12 in a shader";
+    }
+
+    constexpr uint32_t kW = 64, kH = 32;
+    const uint8_t y = 63, u = 102, v = 240;  // a red, studio swing
+    auto texture = make_nv12(test.device.d3d11(), kW, kH, y, u, v);
+    ASSERT_TRUE(texture);
+
+    // The Windows client: a native callback and no CPU readback.
+    StagingTexture native_only;
+    ASSERT_TRUE(native_only.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, false));
+    EXPECT_NE(native_only.shared_rgba_handle(), nullptr)
+        << "an NV12 decoder has no native present path";
+    native_only.copy_from(texture.Get(), false);
+    native_only.shutdown();
+
+    // The same conversion, read back to check the picture.
+    StagingTexture staging;
+    ASSERT_TRUE(staging.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, true));
+    ASSERT_NE(staging.shared_rgba_handle(), nullptr);
+    staging.copy_from(texture.Get(), true);
+    std::vector<uint8_t> rgba(static_cast<size_t>(kW) * kH * 4);
+    staging.read_rgba(rgba.data());
+    staging.shutdown();
+
+    const int c = y - 16, d = u - 128, e = v - 128;
+    const uint8_t r = expected_channel((298 * c + 459 * e + 128) >> 8);
+    const uint8_t g = expected_channel((298 * c - 55 * d - 136 * e + 128) >> 8);
+    const uint8_t b = expected_channel((298 * c + 541 * d + 128) >> 8);
+    for (const auto [px, py] : {std::pair<uint32_t, uint32_t>{0, 0}, {kW / 2, kH / 2},
+                                {kW - 1, kH - 1}, {kW - 1, 0}}) {
+        const size_t at = (static_cast<size_t>(py) * kW + px) * 4;
+        EXPECT_NEAR(rgba[at + 0], r, 2) << "red at " << px << "," << py;
+        EXPECT_NEAR(rgba[at + 1], g, 2) << "green at " << px << "," << py;
+        EXPECT_NEAR(rgba[at + 2], b, 2) << "blue at " << px << "," << py;
+        EXPECT_EQ(rgba[at + 3], 255);
+    }
+}
+#endif // _WIN32
 
 // Present-to-capture delay histogram used by the DXGI vs WGC benchmark.
 TEST(PresentDelayHistogram, BucketsAreOneMillisecondWide) {

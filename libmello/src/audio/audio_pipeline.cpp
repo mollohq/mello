@@ -475,7 +475,10 @@ void AudioPipeline::switch_audio_backend(bool voice_processing) {
         !playback_->initialize(current_playback_device_id())) {
         MELLO_LOG_WARN("pipeline", "backend switch failed on stored devices, retrying defaults");
         capture_device_id_.clear();
-        playback_device_id_.clear();
+        {
+            std::lock_guard<std::mutex> lock(device_id_mutex_);
+            playback_device_id_.clear();
+        }
 #ifdef MELLO_HAS_VPIO_DUPLEX
         activate_plain_pair();
 #else
@@ -1258,7 +1261,10 @@ int AudioPipeline::set_capture_device(const char* device_id) {
 
 int AudioPipeline::set_playback_device(const char* device_id) {
     MELLO_LOG_INFO("pipeline", "switching playback device");
-    playback_device_id_ = device_id ? device_id : "";
+    {
+        std::lock_guard<std::mutex> lock(device_id_mutex_);
+        playback_device_id_ = device_id ? device_id : "";
+    }
 
 #ifdef MELLO_HAS_VPIO_DUPLEX
     // Duplex mode rebuilds the whole pair (the unit spans both directions),
