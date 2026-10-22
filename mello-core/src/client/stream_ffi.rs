@@ -108,6 +108,9 @@ pub(super) struct ViewerState {
     pub delivered_frames: Arc<std::sync::atomic::AtomicU64>,
     /// `delivered_frames` at the last present that counted as a frame.
     pub last_delivered_frames: u64,
+    /// The game audio playout is muted for the host's pause
+    /// (`mello_stream_viewer_set_audio_muted`).
+    pub audio_muted: bool,
 }
 
 /// A present gap longer than this counts as a visible freeze. Two 60fps frame
@@ -115,6 +118,17 @@ pub(super) struct ViewerState {
 /// still well under the 600ms AU hard-age cap, so it fires before the receiver
 /// gives up on an access unit rather than after.
 pub(super) const FREEZE_THRESHOLD_MS: u64 = 150;
+
+/// The mute call the viewer makes for the host's pause state: `Some(true)`
+/// when the stream pauses, `Some(false)` when it resumes, `None` when the
+/// playout already matches.
+pub(super) fn pause_audio_mute_change(paused: bool, audio_muted: &mut bool) -> Option<bool> {
+    if paused == *audio_muted {
+        return None;
+    }
+    *audio_muted = paused;
+    Some(paused)
+}
 
 /// True when a present delivered a new frame: the present returned true and
 /// a frame callback ran since the last counted frame. A present of an
@@ -626,6 +640,30 @@ mod tests {
     #[test]
     fn max_au_polls_per_tick_is_bounded() {
         assert_eq!(MAX_AU_POLLS_PER_TICK, 32);
+    }
+
+    /// A pause message on the control channel mutes the game audio once; the
+    /// resume unmutes it once. This is the state change that drives
+    /// `mello_stream_viewer_set_audio_muted` in the viewer tick; libmello has
+    /// no getter, so the C call itself is not observed here.
+    #[test]
+    fn the_pause_message_mutes_and_the_resume_unmutes_the_game_audio() {
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        let mut audio_muted = false;
+        let mut deliver = |msg: &[u8]| {
+            // SAFETY: the slot outlives the call.
+            unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+            pause_audio_mute_change(slot.is_paused(), &mut audio_muted)
+        };
+
+        // Paused, as the host sends it to a viewer that joins late: v2 with
+        // the reason, then v1.
+        assert_eq!(deliver(&[0x04, 0x03, 0x01, 0x01]), Some(true));
+        assert_eq!(deliver(&[0x04, 0x03, 0x01]), None, "already muted");
+        assert_eq!(deliver(&[0x04, 0x04, 0x01]), None, "idle is not a pause");
+        assert_eq!(deliver(&[0x04, 0x03, 0x00, 0x00]), Some(false));
+        assert_eq!(deliver(&[0x04, 0x03, 0x00]), None, "already unmuted");
     }
 
     /// The host's idle message sets the slot's idle flag and leaves the

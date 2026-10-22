@@ -259,6 +259,20 @@ impl super::Client {
                 reason: reason_now,
             });
         }
+        // Game audio follows the pause: the host stops sending it, and the
+        // playout must not keep playing what it had queued. This also covers
+        // a viewer that joins a paused stream: the host sends it the pause
+        // state, and the slot turns paused on this tick.
+        if let Some(muted) =
+            super::stream_ffi::pause_audio_mute_change(paused_now, &mut vs.audio_muted)
+        {
+            let result = unsafe { mello_sys::mello_stream_viewer_set_audio_muted(viewer, muted) };
+            log::info!(
+                "Stream game audio {} for the host's pause (result {})",
+                if muted { "muted" } else { "unmuted" },
+                result
+            );
+        }
         // The host's idle keepalive (2 fps re-encodes of a static picture)
         // holds the freeze clock the same way: those gaps are not stalls.
         let held_now = paused_now || vs.pause_slot.is_host_idle();
@@ -1582,6 +1596,7 @@ impl super::Client {
             stats_last_freeze_ms: 0,
             delivered_frames,
             last_delivered_frames: 0,
+            audio_muted: false,
         });
     }
 
