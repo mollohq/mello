@@ -38,9 +38,11 @@
 // MELLO_HOOK_ERR_DEVICE_LOST.
 // Version 3: client_adapter_luid, so a Direct3D 9 game on a D3D9Ex device can
 // share textures with the client's adapter instead of reading them back.
+// Version 4: target_fps and frames_copied. The hook copies a frame only at
+// the stream's cadence, not on every present.
 // A hook and a client on different versions refuse each other outright,
 // which is what must happen after a half-applied update.
-#define MELLO_HOOK_PROTOCOL_VERSION 3u
+#define MELLO_HOOK_PROTOCOL_VERSION 4u
 
 // Two textures, used one after the other. The hook writes the one the client is
 // not reading, so a slow client cannot see a half-written frame.
@@ -169,7 +171,17 @@ typedef struct MelloHookInfo {
     // one that sees none is a game with nothing on screen.
     uint64_t presents_seen;
 
-    uint64_t reserved[4];
+    // --- Cadence. `target_fps` is written by the client; the hook copies a
+    // frame only when one is due at that rate (the rule of libmello
+    // `frame_cadence.hpp`), so a 144 fps game pays for 60 copies a second on a
+    // 60 fps stream, not 144. Zero copies on every present. ---
+    uint32_t target_fps;
+    uint32_t cadence_reserved;
+    // Copies the hook made (written by the hook). With `presents_seen`, this
+    // is how a test and the client log see the copy rate.
+    uint64_t frames_copied;
+
+    uint64_t reserved[2];
 } MelloHookInfo;
 #pragma pack(pop)
 

@@ -304,6 +304,16 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     return true;
 }
 
+HookCapture::Counters HookCapture::counters() const {
+    Counters out;
+    if (!info_) return out;
+    auto* info = const_cast<MelloHookInfo*>(info_);
+    out.presents_seen = as_atomic_u64(&info->presents_seen)->load(std::memory_order_relaxed);
+    out.frames_copied = as_atomic_u64(&info->frames_copied)->load(std::memory_order_relaxed);
+    out.frames_dropped = as_atomic_u64(&info->frames_dropped)->load(std::memory_order_relaxed);
+    return out;
+}
+
 uint32_t HookCapture::texture_generation() const {
     if (!info_) return 0;
     return as_atomic_u32(const_cast<uint32_t*>(&info_->texture_generation))
@@ -484,6 +494,10 @@ bool HookCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return true;
 
     target_fps_ = target_fps == 0 ? 60 : target_fps;
+    // The hook copies at this rate, not at the game's: a present between two
+    // due frames costs the game no copy (and on the Direct3D 9 memory path,
+    // no read-back stall).
+    as_atomic_u32(&info_->target_fps)->store(target_fps_, std::memory_order_relaxed);
     callback_ = std::move(callback);
     running_.store(true);
 

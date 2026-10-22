@@ -168,7 +168,7 @@ as x64 and links the static CRT):
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
-**The shared block** (`hook/include/mello_hook_protocol.h`, protocol version 3)
+**The shared block** (`hook/include/mello_hook_protocol.h`, protocol version 4)
 is the whole contract. The client creates it, the events and the keepalive
 before it injects; the hook only opens them. Each field has one writer. The
 client writes the LUID of its adapter into `client_adapter_luid`, so a Direct3D
@@ -176,6 +176,17 @@ client writes the LUID of its adapter into `client_adapter_luid`, so a Direct3D
 handles (`D3D11_RESOURCE_MISC_SHARED`, `GetSharedHandle`), stored as
 `uint32_t`, so a 32-bit game's texture opens in the 64-bit client with no
 `DuplicateHandle`.
+
+**The hook copies at the stream's rate, not the game's.** The client writes
+its `target_fps` into the block, and the hook copies a frame only when one is
+due by libmello's cadence rule (`frame_cadence.hpp`, compiled into the hook
+too). A present between two due frames costs the game one check. A 144 fps
+game on a 60 fps stream gives 60 copies a second (measured with the fakegame
+at `--fps 144`: 144 presents, 60 copies, 60 delivered, Direct3D 11 and 9);
+before, every present was copied, and on the Direct3D 9 memory path every
+present stalled the game's render thread for a read-back. `frames_copied`
+counts the copies. The client keeps its own throttle with the same rule; two
+throttles with the rule in series pass every frame.
 
 **Offsets, not probes.** The hook never creates a device inside a game to find
 `Present`. The offsets helper builds a throwaway D3D11 swap chain in its own

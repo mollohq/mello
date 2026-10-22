@@ -242,6 +242,10 @@ void capture_present(IDXGISwapChain* swap) {
         return;
     }
 
+    // Copy at the stream's rate, not the game's. A present between two due
+    // frames costs the game nothing more than this check.
+    if (!state.copy_due(qpc_now())) return;
+
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swap->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                reinterpret_cast<void**>(&back))) ||
@@ -264,6 +268,7 @@ void capture_present(IDXGISwapChain* swap) {
     g_res.context->Flush();
 
     g_res.next = (index + 1) % MELLO_HOOK_TEXTURE_COUNT;
+    state.count_copy();
     state.publish_frame(index, static_cast<uint64_t>(qpc_now()));
     state.signal_frame();
 }

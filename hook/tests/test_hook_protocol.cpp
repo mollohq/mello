@@ -82,7 +82,7 @@ TEST(HookProtocol, LayoutIsFixed) {
     // and an older hook then leaves it at zero while a newer client reads that
     // zero as an answer: on 2026-09-18 a client waited fifteen seconds for a
     // game that was drawing, because the hook in it predated presents_seen.
-    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 3u);
+    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 4u);
     EXPECT_EQ(sizeof(MelloHookInfo), 256u);
     EXPECT_EQ(offsetof(MelloHookInfo, protocol_version), 0u);
     EXPECT_EQ(offsetof(MelloHookInfo, struct_size), 4u);
@@ -97,6 +97,10 @@ TEST(HookProtocol, LayoutIsFixed) {
     EXPECT_EQ(offsetof(MelloHookInfo, heartbeat_qpc), 96u);
     EXPECT_EQ(offsetof(MelloHookInfo, offsets_valid), 120u);
     EXPECT_EQ(offsetof(MelloHookInfo, off_dxgi_present), 128u);
+    // Version 4: the cadence fields, taken from the reserved area.
+    EXPECT_EQ(offsetof(MelloHookInfo, presents_seen), 216u);
+    EXPECT_EQ(offsetof(MelloHookInfo, target_fps), 224u);
+    EXPECT_EQ(offsetof(MelloHookInfo, frames_copied), 232u);
 }
 
 // A lost device is the state Direct3D 9 enters whenever the display mode
@@ -217,6 +221,55 @@ TEST(HookState, PublishingAFrameMovesTheCounterAndSignals) {
     state.publish_frame(0, 12400);
     EXPECT_EQ(client.info()->frame_index, 2u);
     EXPECT_EQ(client.info()->texture_index, 0u);
+    state.close();
+}
+
+// The hook copied the back buffer on every present, whatever the stream's
+// rate: a 144 fps game paid for 144 copies a second on a 60 fps stream, and on
+// the Direct3D 9 memory path for 144 read-back stalls. It now copies at the
+// client's target_fps, with libmello's cadence rule.
+TEST(HookState, CopiesFollowTheStreamRateNotTheGameRate) {
+    ClientSide client;
+    ASSERT_TRUE(client.create());
+
+    HookState& state = HookState::instance();
+    state.close();
+    ASSERT_TRUE(state.open());
+
+    LARGE_INTEGER freq{};
+    QueryPerformanceFrequency(&freq);
+    const int64_t start = qpc_now();
+    auto copies_in_one_second = [&](int game_fps, int64_t offset_s) {
+        int copies = 0;
+        for (int i = 0; i < game_fps; ++i) {
+            const int64_t qpc =
+                start + offset_s * freq.QuadPart + freq.QuadPart * i / game_fps;
+            if (state.copy_due(qpc)) ++copies;
+        }
+        return copies;
+    };
+
+    // No target: every present is copied, as an older client expects.
+    EXPECT_EQ(copies_in_one_second(144, 0), 144);
+
+    client.info()->target_fps = 60;
+    for (int game_fps : {144, 100, 75}) {
+        // The first second settles the cadence; the next one is measured.
+        copies_in_one_second(game_fps, 10);
+        const int copies = copies_in_one_second(game_fps, 11);
+        EXPECT_NEAR(copies, 60, 1) << "a " << game_fps << " fps game";
+        client.info()->target_fps = 0;   // restart the cadence for the next rate
+        state.copy_due(start);
+        client.info()->target_fps = 60;
+    }
+
+    // A game slower than the stream gives every frame.
+    client.info()->target_fps = 60;
+    copies_in_one_second(30, 20);
+    EXPECT_EQ(copies_in_one_second(30, 21), 30);
+
+    state.count_copy();
+    EXPECT_EQ(client.info()->frames_copied, 1u);
     state.close();
 }
 

@@ -20,10 +20,14 @@
 // `--d3d9` presents through Direct3D 9 instead, which is the other path the
 // hook covers and the one a 2012-era game uses.
 //
+// `--fps N` presents N times a second with no vertical sync, paced by the
+// clock, so a test can show a fast game (144 fps) on any display.
+//
 // It prints `ready pid=<pid>` when the swap chain is up, so a test can wait for
 // that line instead of sleeping.
 
 #include <windows.h>
+#include <timeapi.h>
 
 #include <d3d9.h>
 #include <d3d11.h>
@@ -36,8 +40,50 @@
 
 #pragma comment(lib, "d3d11.lib")
 #pragma comment(lib, "d3d9.lib")
+#pragma comment(lib, "winmm.lib")
 
 namespace {
+
+// Presents at a fixed rate when `--fps` is given: sleeps in 1 ms steps, then
+// waits the last part, so the rate holds within a few frames a second.
+class Pacer {
+public:
+    explicit Pacer(int fps) : fps_(fps) {
+        if (fps_ <= 0) return;
+        timeBeginPeriod(1);
+        QueryPerformanceFrequency(&freq_);
+        QueryPerformanceCounter(&next_);
+    }
+    ~Pacer() {
+        if (fps_ > 0) timeEndPeriod(1);
+    }
+    bool active() const { return fps_ > 0; }
+    void wait() {
+        if (fps_ <= 0) return;
+        next_.QuadPart += freq_.QuadPart / fps_;
+        LARGE_INTEGER now{};
+        QueryPerformanceCounter(&now);
+        if (now.QuadPart > next_.QuadPart + freq_.QuadPart / 10) {
+            next_ = now;  // far behind (the window was dragged): start again
+            return;
+        }
+        for (;;) {
+            QueryPerformanceCounter(&now);
+            const int64_t left = next_.QuadPart - now.QuadPart;
+            if (left <= 0) return;
+            if (left * 1000 > freq_.QuadPart * 2) {
+                Sleep(1);
+            } else {
+                YieldProcessor();
+            }
+        }
+    }
+
+private:
+    int           fps_ = 0;
+    LARGE_INTEGER freq_{};
+    LARGE_INTEGER next_{};
+};
 
 // The colour the test looks for. Chosen so each channel is different: a test
 // that passes cannot have channels swapped.
@@ -127,7 +173,8 @@ struct SecondDevice {
 };
 
 int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
-             int start_delay_seconds, int stop_after, int stop_for, bool second_device) {
+             int start_delay_seconds, int stop_after, int stop_for, bool second_device,
+             int fps) {
     // Nothing is rendered and no device exists yet: the window is up and the
     // process is alive, and that is all a capture method can find.
     const DWORD start_at = GetTickCount() + static_cast<DWORD>(start_delay_seconds) * 1000;
@@ -158,7 +205,7 @@ int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
     pp.BackBufferWidth = static_cast<UINT>(width);
     pp.BackBufferHeight = static_cast<UINT>(height);
     pp.hDeviceWindow = window;
-    pp.PresentationInterval = D3DPRESENT_INTERVAL_ONE;
+    pp.PresentationInterval = fps > 0 ? D3DPRESENT_INTERVAL_IMMEDIATE : D3DPRESENT_INTERVAL_ONE;
 
     // D3D9Ex takes the display mode for a fullscreen device. It refuses the
     // call with D3DERR_INVALIDCALL when this is missing.
@@ -193,6 +240,7 @@ int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
     }
 
     uint64_t frames = 0;
+    Pacer pacer(fps);
     DWORD last_overlay_present = 0;
     const DWORD started_at = GetTickCount();
     const DWORD deadline = started_at + static_cast<DWORD>(seconds) * 1000;
@@ -223,6 +271,7 @@ int run_d3d9(HWND window, int width, int height, int seconds, bool fullscreen,
         } else {
             device->PresentEx(nullptr, nullptr, nullptr, nullptr, 0);
         }
+        pacer.wait();
         // The small device presents about nine times a second, which is what
         // Heaven's second window did.
         if (second_device && GetTickCount() - last_overlay_present >= 110) {
@@ -248,6 +297,7 @@ int wmain(int argc, wchar_t** argv) {
     const int stop_after = argument(argc, argv, L"--stop-drawing-after", 0);
     const int stop_for = argument(argc, argv, L"--stop-drawing-for", 0);
     const bool second_device = flag(argc, argv, L"--second-device");
+    const int fps = argument(argc, argv, L"--fps", 0);
 
     WNDCLASSEXW wc{};
     wc.cbSize = sizeof(wc);
@@ -273,7 +323,7 @@ int wmain(int argc, wchar_t** argv) {
             SetWindowPos(window, HWND_TOP, 0, 0, width, height, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         }
         const int result = run_d3d9(window, width, height, seconds, fullscreen, start_delay,
-                                    stop_after, stop_for, second_device);
+                                    stop_after, stop_for, second_device, fps);
         DestroyWindow(window);
         return result;
     }
@@ -309,6 +359,7 @@ int wmain(int argc, wchar_t** argv) {
     std::printf("ready pid=%lu\n", GetCurrentProcessId());
     std::fflush(stdout);
 
+    Pacer pacer(fps);
     const DWORD deadline = GetTickCount() + static_cast<DWORD>(seconds) * 1000;
     while (g_running && GetTickCount() < deadline) {
         MSG message;
@@ -317,8 +368,10 @@ int wmain(int argc, wchar_t** argv) {
             DispatchMessageW(&message);
         }
         context->ClearRenderTargetView(view, kClearColour);
-        // Vertical sync: presents at the display rate, like a game does.
-        swap->Present(1, 0);
+        // Vertical sync: presents at the display rate, like a game does. With
+        // --fps, no sync and the clock sets the rate.
+        swap->Present(pacer.active() ? 0 : 1, 0);
+        pacer.wait();
     }
 
     if (view) view->Release();

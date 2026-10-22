@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
@@ -52,10 +53,11 @@ struct FakeGame {
     HWND                window = nullptr;
 
     bool start(const std::string& directory, int seconds, bool d3d9 = false,
-               bool second_device = false) {
+               bool second_device = false, const std::string& extra = "") {
         std::string command = "\"" + directory + "\\mello-fakegame64.exe\" --seconds " +
                               std::to_string(seconds) + (d3d9 ? " --d3d9" : "") +
-                              (second_device ? " --second-device" : "");
+                              (second_device ? " --second-device" : "") +
+                              (extra.empty() ? "" : " " + extra);
         std::wstring wide(command.begin(), command.end());
         wide.push_back(L'\0');
 
@@ -236,6 +238,77 @@ TEST(HookCapture, CapturesADirect3D9Game) {
     capture.stop();
     EXPECT_FALSE(capture.stop_timed_out());
     EXPECT_FALSE(capture.failed());
+}
+
+// The hook copied the back buffer on every present, whatever the stream's
+// rate. A 144 fps game on a 60 fps stream paid for 144 copies a second, and
+// a Direct3D 9 game on the memory path for 144 read-back stalls on its render
+// thread. The hook now copies only at the stream's cadence.
+namespace {
+
+struct RateResult {
+    double presents_per_s = 0;
+    double copies_per_s = 0;
+    double delivered_per_s = 0;
+};
+
+RateResult measure_hook_rates(const std::string& directory, const std::string& api_flag) {
+    RateResult out;
+    FakeGame game;
+    if (!game.start(directory, 30, false, false, api_flag + " --fps 144")) return out;
+
+    const GraphicsDevice device = create_d3d11_device();
+    if (!device.d3d11()) return out;
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+    HookCapture capture;
+    if (!capture.initialize(device, desc)) return out;
+    std::atomic<int> delivered{0};
+    if (!capture.start(60, [&](ID3D11Texture2D*, uint64_t) { delivered.fetch_add(1); })) return out;
+
+    // Let the cadence settle, then measure two seconds.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto before = capture.counters();
+    const int delivered_before = delivered.load();
+    const auto t0 = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const auto after = capture.counters();
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    capture.stop();
+
+    out.presents_per_s = (after.presents_seen - before.presents_seen) / seconds;
+    out.copies_per_s = (after.frames_copied - before.frames_copied) / seconds;
+    out.delivered_per_s = (delivered.load() - delivered_before) / seconds;
+    return out;
+}
+
+void expect_stream_rate(const char* api, const RateResult& r) {
+    std::printf("%s at 144 fps: presents %.1f/s, copies %.1f/s, delivered %.1f/s\n", api,
+                r.presents_per_s, r.copies_per_s, r.delivered_per_s);
+    ASSERT_GT(r.presents_per_s, 120.0) << api << ": the test game did not present at 144 fps";
+    EXPECT_NEAR(r.copies_per_s, 60.0, 3.0) << api << ": the hook copies at the game's rate";
+    EXPECT_NEAR(r.delivered_per_s, 60.0, 3.0) << api;
+}
+
+}  // namespace
+
+TEST(HookCapture, AFastGameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D11", measure_hook_rates(directory, ""));
+}
+
+// The Direct3D 9 path (shared textures on the client's adapter, or the
+// read-back when the game cannot share) copies at the same rate.
+TEST(HookCapture, AFastDirect3D9GameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D9", measure_hook_rates(directory, "--d3d9"));
 }
 
 // A game that presents through both Present and PresentEx hands the hook two

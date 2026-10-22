@@ -60,6 +60,14 @@ public:
     /// rebuilding, which costs the game frames and the client its textures.
     uint32_t texture_generation() const;
 
+    /// The hook's own counters, read from the shared block.
+    struct Counters {
+        uint64_t presents_seen = 0;  ///< every present of the game
+        uint64_t frames_copied = 0;  ///< copies made, at the stream's cadence
+        uint64_t frames_dropped = 0;
+    };
+    Counters counters() const;
+
     /// Bitness of the target process, 32 or 64. The helpers and the hook must
     /// match it.
     static int process_bitness(uint32_t pid);

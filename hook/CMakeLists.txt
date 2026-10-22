@@ -37,7 +37,10 @@ add_library(mello_hook SHARED
     src/hook_log.cpp
 )
 set_target_properties(mello_hook PROPERTIES OUTPUT_NAME "mello-hook${MELLO_HOOK_BITS}")
-target_include_directories(mello_hook PRIVATE include ${DETOURS_INCLUDE_DIRS})
+# frame_cadence.hpp: the one frame-rate rule, shared with libmello. Header
+# only, no dependency.
+target_include_directories(mello_hook PRIVATE include ${DETOURS_INCLUDE_DIRS}
+    ${CMAKE_CURRENT_SOURCE_DIR}/../libmello/src/video)
 target_compile_definitions(mello_hook PRIVATE
     WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
 target_link_libraries(mello_hook PRIVATE ${DETOURS_LIBRARY} d3d11 d3d9 dxgi dxguid)
@@ -86,7 +89,8 @@ if(MELLO_HOOK_TESTS)
     find_package(GTest CONFIG QUIET)
     if(GTest_FOUND)
         add_executable(mello_hook_tests tests/test_hook_protocol.cpp src/hook_state.cpp src/hook_log.cpp)
-        target_include_directories(mello_hook_tests PRIVATE include src ${DETOURS_INCLUDE_DIRS})
+        target_include_directories(mello_hook_tests PRIVATE include src ${DETOURS_INCLUDE_DIRS}
+            ${CMAKE_CURRENT_SOURCE_DIR}/../libmello/src/video)
         target_compile_definitions(mello_hook_tests PRIVATE
             WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
         target_link_libraries(mello_hook_tests PRIVATE GTest::gtest GTest::gtest_main d3d11 dxgi dxguid)
