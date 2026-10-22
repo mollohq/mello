@@ -93,6 +93,13 @@ impl NakamaClient {
         *self.token.write().unwrap_or_else(|e| e.into_inner()) = token;
     }
 
+    /// Give the client a session token without an authenticate call, so a
+    /// test can drive the post-auth sequence against a local stand-in.
+    #[cfg(test)]
+    pub(crate) fn install_session_for_tests(&self, token: &str) {
+        self.set_token(Some(token.to_string()));
+    }
+
     fn bearer(&self) -> Result<String> {
         self.token().ok_or(Error::NotConnected)
     }
