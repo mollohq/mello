@@ -15,7 +15,10 @@ use windows::Win32::Graphics::Direct3D11::{
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
 };
-use windows::Win32::Graphics::Dxgi::Common::{DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC};
+use windows::Win32::Graphics::Dxgi::Common::{
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
+    DXGI_SAMPLE_DESC,
+};
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT,
     DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
@@ -42,6 +45,18 @@ pub struct DCompPresenter {
     // events around it, so the same message is logged once and then counted.
     last_present_error: String,
     repeated_present_errors: u64,
+    /// The host's pointer, drawn over the video from cursor packets (the
+    /// game capture hook's frames have none; `mello_core::stream::cursor`).
+    /// A child of the video visual, so the video's scale and clip apply and
+    /// its offset is in stream pixels.
+    cursor_visual: IDCompositionVisual,
+    cursor_swap: Option<IDXGISwapChain1>,
+    cursor_swap_size: (u32, u32),
+    cursor_shape: Option<std::sync::Arc<mello_core::stream::cursor::CursorShape>>,
+    cursor_serial: u64,
+    cursor_shown: bool,
+    /// Set by `set_content_visible` (the pause card), which takes `&self`.
+    content_visible: std::cell::Cell<bool>,
 }
 
 impl DCompPresenter {
@@ -64,6 +79,10 @@ impl DCompPresenter {
         let swap_chain = Self::create_swap_chain(&device, stream_width, stream_height)?;
         let (dcomp_device, dcomp_target, dcomp_visual) =
             Self::create_dcomp_tree(&device, hwnd, &swap_chain, offset_x, offset_y)?;
+        let cursor_visual = unsafe { dcomp_device.CreateVisual() }
+            .map_err(|e| format!("CreateVisual (cursor): {e}"))?;
+        unsafe { dcomp_visual.AddVisual(&cursor_visual, true, None::<&IDCompositionVisual>) }
+            .map_err(|e| format!("AddVisual (cursor): {e}"))?;
 
         log::info!(
             "DComp presenter initialised: {}x{} at ({:.0},{:.0}) under HWND {:?}",
@@ -89,6 +108,13 @@ impl DCompPresenter {
             cached_shared_tex: None,
             last_present_error: String::new(),
             repeated_present_errors: 0,
+            cursor_visual,
+            cursor_swap: None,
+            cursor_swap_size: (0, 0),
+            cursor_shape: None,
+            cursor_serial: 0,
+            cursor_shown: false,
+            content_visible: std::cell::Cell::new(true),
         })
     }
 
@@ -145,14 +171,124 @@ impl DCompPresenter {
     /// alone would hide behind the frozen frame). Presenting resumes into
     /// the same swap chain — no re-init, no geometry replay.
     pub fn set_content_visible(&self, visible: bool) {
+        self.content_visible.set(visible);
         unsafe {
             if visible {
                 let _ = self.dcomp_visual.SetContent(&self.swap_chain);
             } else {
                 let _ = self.dcomp_visual.SetContent(None);
             }
+            // The pointer is a child visual: it stays on screen unless it
+            // goes with the video.
+            self.apply_cursor_content(visible);
             let _ = self.dcomp_device.Commit();
         }
+    }
+
+    /// Draw the host's pointer over the video, or hide it. Cheap when nothing
+    /// changed (`serial`); a move only sets the visual offset; a new shape is
+    /// uploaded into a small premultiplied swap chain once.
+    pub fn update_cursor(&mut self, cursor: &mello_core::stream::cursor::ViewerCursor) {
+        if cursor.serial == self.cursor_serial {
+            return;
+        }
+        self.cursor_serial = cursor.serial;
+        let shape = match (&cursor.shape, cursor.visible) {
+            (Some(shape), true) if shape.width > 0 && shape.height > 0 => shape.clone(),
+            _ => {
+                if self.cursor_shown {
+                    self.cursor_shown = false;
+                    unsafe {
+                        let _ = self.cursor_visual.SetContent(None);
+                        let _ = self.dcomp_device.Commit();
+                    }
+                }
+                return;
+            }
+        };
+        let new_shape = !self
+            .cursor_shape
+            .as_ref()
+            .is_some_and(|current| std::sync::Arc::ptr_eq(current, &shape));
+        if new_shape {
+            if let Err(e) = unsafe { self.upload_cursor(&shape) } {
+                log::warn!("DComp cursor upload failed: {e}");
+                return;
+            }
+            self.cursor_shape = Some(shape);
+        }
+        unsafe {
+            let _ = self.cursor_visual.SetOffsetX2(cursor.x as f32);
+            let _ = self.cursor_visual.SetOffsetY2(cursor.y as f32);
+            self.cursor_shown = true;
+            self.apply_cursor_content(self.content_visible.get());
+            let _ = self.dcomp_device.Commit();
+        }
+    }
+
+    unsafe fn apply_cursor_content(&self, video_visible: bool) {
+        match (&self.cursor_swap, self.cursor_shown && video_visible) {
+            (Some(swap), true) => {
+                let _ = self.cursor_visual.SetContent(swap);
+            }
+            _ => {
+                let _ = self.cursor_visual.SetContent(None);
+            }
+        }
+    }
+
+    unsafe fn upload_cursor(
+        &mut self,
+        shape: &mello_core::stream::cursor::CursorShape,
+    ) -> Result<(), String> {
+        let (w, h) = (u32::from(shape.width), u32::from(shape.height));
+        let expected = w as usize * h as usize * 4;
+        if shape.rgba.len() < expected {
+            return Err("short shape".into());
+        }
+        if self.cursor_swap.is_none() || self.cursor_swap_size != (w, h) {
+            let factory: IDXGIFactory2 =
+                CreateDXGIFactory1().map_err(|e| format!("CreateDXGIFactory1: {e}"))?;
+            let desc = DXGI_SWAP_CHAIN_DESC1 {
+                Width: w,
+                Height: h,
+                Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+                BufferCount: 2,
+                BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+                SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+                SampleDesc: DXGI_SAMPLE_DESC {
+                    Count: 1,
+                    ..Default::default()
+                },
+                AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+                ..Default::default()
+            };
+            let swap = factory
+                .CreateSwapChainForComposition(&self._device, &desc, None)
+                .map_err(|e| format!("CreateSwapChainForComposition (cursor): {e}"))?;
+            self.cursor_swap = Some(swap);
+            self.cursor_swap_size = (w, h);
+        }
+        // RGBA straight alpha in, BGRA premultiplied out: what a composition
+        // swap chain with premultiplied alpha takes.
+        let mut bgra = vec![0u8; expected];
+        for (out, px) in bgra.chunks_exact_mut(4).zip(shape.rgba.chunks_exact(4)) {
+            let a = u16::from(px[3]);
+            out[0] = ((u16::from(px[2]) * a + 127) / 255) as u8;
+            out[1] = ((u16::from(px[1]) * a + 127) / 255) as u8;
+            out[2] = ((u16::from(px[0]) * a + 127) / 255) as u8;
+            out[3] = px[3];
+        }
+        let swap = self.cursor_swap.as_ref().ok_or("no cursor swap chain")?;
+        let back: ID3D11Texture2D = swap
+            .GetBuffer(0)
+            .map_err(|e| format!("GetBuffer (cursor): {e}"))?;
+        self.device_ctx
+            .UpdateSubresource(&back, 0, None, bgra.as_ptr().cast(), w * 4, 0);
+        swap.Present(0, DXGI_PRESENT(0))
+            .ok()
+            .map_err(|e| format!("Present (cursor): {e}"))?;
+        Ok(())
     }
 
     /// Update the DComp visual position, scale, and clip to fit the card area.
@@ -189,11 +325,13 @@ impl DCompPresenter {
         unsafe {
             if !visible {
                 let _ = self.dcomp_visual.SetContent(None);
+                self.apply_cursor_content(false);
                 let _ = self.dcomp_device.Commit();
                 return true;
             }
 
             let _ = self.dcomp_visual.SetContent(&self.swap_chain);
+            self.apply_cursor_content(self.content_visible.get());
 
             // Uniform scale preserving aspect ratio (contain-fit).
             let sw = self.stream_width as f32;

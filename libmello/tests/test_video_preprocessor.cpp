@@ -22,6 +22,7 @@
 #include <string>
 #include <vector>
 
+#include "video/cursor.hpp"
 #include "video/graphics_device.hpp"
 #include "video/video_preprocessor.hpp"
 
@@ -217,6 +218,119 @@ TEST_F(VideoPipelinePreprocessor, ASourceOfAnotherAspectIsPillarboxed) {
     EXPECT_NEAR(luma.at(310, 90), 16, 3) << "no black bar on the right";
     EXPECT_NEAR(luma.at(120, 90), luma_of(128), 4) << "the picture is not in the middle";
     EXPECT_NEAR(luma.at(272, 90), luma_of(255), 4) << "the right edge of the source was lost";
+}
+
+// --- The pointer -----------------------------------------------------------
+
+// Desktop duplication gives the pointer apart from the desktop image, and
+// nothing drew it: viewers of a screen share saw no pointer (scorecard 4.1).
+// A white 16x16 pointer at (100, 50) over a black frame must land in the luma
+// plane at that place, and nowhere else.
+TEST_F(VideoPipelinePreprocessor, APointerIsDrawnIntoTheFrameAtItsPlace) {
+    VideoPreprocessor pre;
+    ASSERT_TRUE(pre.initialize(device, 256, 256, 256, 256));
+
+    std::vector<uint8_t> black(256 * 256 * 4, 0);
+    for (size_t i = 3; i < black.size(); i += 4) black[i] = 255;
+    auto source = make_source(device.d3d11(), 256, 256, black);
+    ASSERT_TRUE(source);
+
+    // Opaque white, with a transparent last column: the alpha must hold.
+    std::vector<uint8_t> shape(16 * 16 * 4, 255);
+    for (uint32_t y = 0; y < 16; ++y) shape[(y * 16 + 15) * 4 + 3] = 0;
+    CursorOverlay cursor{};
+    cursor.x = 100;
+    cursor.y = 50;
+    cursor.width = 16;
+    cursor.height = 16;
+    cursor.bgra = shape.data();
+    cursor.serial = 1;
+
+    const ConvertResult r = pre.convert(source.Get(), &cursor);
+    ASSERT_NE(r.texture, nullptr);
+    Luma luma;
+    ASSERT_TRUE(read_luma(device.d3d11(), context.Get(), r.texture, &luma));
+    EXPECT_NEAR(luma.at(107, 57), 235, 3) << "the pointer is not in the frame";
+    EXPECT_NEAR(luma.at(100, 50), 235, 3) << "the pointer's top-left corner is off";
+    EXPECT_NEAR(luma.at(114, 65), 235, 3) << "the pointer's bottom-right is off";
+    EXPECT_NEAR(luma.at(115, 57), 16, 3) << "a transparent pointer pixel was drawn";
+    EXPECT_NEAR(luma.at(99, 57), 16, 3);
+    EXPECT_NEAR(luma.at(107, 66), 16, 3);
+    EXPECT_NEAR(luma.at(10, 10), 16, 3);
+
+    // The capture's own texture is never written: the next frame from the
+    // same duplication surface must not carry an old pointer.
+    const ConvertResult plain = pre.convert(source.Get());
+    ASSERT_NE(plain.texture, nullptr);
+    ASSERT_TRUE(read_luma(device.d3d11(), context.Get(), plain.texture, &luma));
+    EXPECT_NEAR(luma.at(107, 57), 16, 3) << "the pointer was drawn into the capture's texture";
+}
+
+// A pointer half outside the frame is clipped, not dropped.
+TEST_F(VideoPipelinePreprocessor, APointerAtTheEdgeIsClipped) {
+    VideoPreprocessor pre;
+    ASSERT_TRUE(pre.initialize(device, 256, 256, 256, 256));
+    std::vector<uint8_t> black(256 * 256 * 4, 0);
+    auto source = make_source(device.d3d11(), 256, 256, black);
+    ASSERT_TRUE(source);
+    std::vector<uint8_t> shape(16 * 16 * 4, 255);
+    CursorOverlay cursor{};
+    cursor.x = 248;
+    cursor.y = -8;
+    cursor.width = 16;
+    cursor.height = 16;
+    cursor.bgra = shape.data();
+    cursor.serial = 7;
+    const ConvertResult r = pre.convert(source.Get(), &cursor);
+    ASSERT_NE(r.texture, nullptr);
+    Luma luma;
+    ASSERT_TRUE(read_luma(device.d3d11(), context.Get(), r.texture, &luma));
+    EXPECT_NEAR(luma.at(252, 4), 235, 3);
+    EXPECT_NEAR(luma.at(244, 4), 16, 3);
+}
+
+// The three shape kinds of desktop duplication, as straight-alpha BGRA.
+TEST(VideoPipelineCursorShape, AMonochromePointerKeepsItsMasks) {
+    // 8x1: AND 1 XOR 0 transparent; AND 0 XOR 0 black; AND 0 XOR 1 white;
+    // AND 1 XOR 1 inverts, shown black.
+    const uint8_t data[] = {
+        0b10010000,  // AND row
+        0b00110000,  // XOR row
+    };
+    std::vector<uint8_t> out;
+    ASSERT_TRUE(pointer_shape_to_bgra(PointerShapeKind::Monochrome, 4, 1, 1, data, sizeof(data), out));
+    ASSERT_EQ(out.size(), 16u);
+    EXPECT_EQ(out[3], 0) << "AND 1, XOR 0 is transparent";
+    EXPECT_EQ(out[4 + 3], 255);
+    EXPECT_EQ(out[4 + 0], 0) << "AND 0, XOR 0 is black";
+    EXPECT_EQ(out[8 + 0], 255) << "AND 0, XOR 1 is white";
+    EXPECT_EQ(out[12 + 0], 0) << "AND 1, XOR 1 inverts: shown black";
+    EXPECT_EQ(out[12 + 3], 255);
+}
+
+TEST(VideoPipelineCursorShape, AMaskedColourPointerReplacesOrInverts) {
+    const uint8_t data[] = {
+        10, 20, 30, 0,      // mask 0: replaces, opaque
+        0, 0, 0, 255,       // XOR with 0: transparent
+        200, 200, 200, 255  // XOR with a colour: shown black
+    };
+    std::vector<uint8_t> out;
+    ASSERT_TRUE(pointer_shape_to_bgra(PointerShapeKind::MaskedColor, 3, 1, 12, data, sizeof(data), out));
+    EXPECT_EQ(out[0], 10);
+    EXPECT_EQ(out[2], 30);
+    EXPECT_EQ(out[3], 255);
+    EXPECT_EQ(out[4 + 3], 0);
+    EXPECT_EQ(out[8 + 0], 0);
+    EXPECT_EQ(out[8 + 3], 255);
+}
+
+TEST(VideoPipelineCursorShape, AScaledPointerKeepsItsTransparentEdge) {
+    // 2x1: opaque red, transparent black. Halved, the colour stays red.
+    const std::vector<uint8_t> src = {0, 0, 255, 255, 0, 0, 0, 0};
+    const std::vector<uint8_t> out = scale_bgra(src, 2, 1, 1, 1);
+    ASSERT_EQ(out.size(), 4u);
+    EXPECT_EQ(out[2], 255) << "the transparent pixel darkened the colour";
+    EXPECT_NEAR(out[3], 128, 2);
 }
 
 #endif  // _WIN32

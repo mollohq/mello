@@ -27,6 +27,7 @@ public:
     const char* backend_name() const override { return monitor_ ? "WGC-Monitor" : "WGC"; }
 
     bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override { return CursorMode::InFrame; }
     bool failed() const override { return closed_.load(std::memory_order_relaxed); }
 
     // No monitor thread here, so the owning process is polled lazily on the

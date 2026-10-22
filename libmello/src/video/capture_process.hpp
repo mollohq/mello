@@ -131,6 +131,7 @@ public:
     const char* backend_name() const override;
 
     bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override;
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
     CaptureState state() const override;

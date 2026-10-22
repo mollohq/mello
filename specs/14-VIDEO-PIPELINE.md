@@ -302,7 +302,7 @@ the preprocessor scales the new desktop into the fixed encode size. The rebuild
 refused a new size until streaming-quality stage 8, and the stream gave up
 after about 10 s.
 
-**Cursor handling in DXGI:** `IDXGIOutputDuplication::AcquireNextFrame()` returns cursor shape and position separately from the desktop texture in `DXGI_OUTDUPL_FRAME_INFO`. The cursor data is extracted and forwarded as a cursor packet (§6) — it is never composited into the captured texture.
+**Cursor handling in DXGI:** `AcquireNextFrame` gives the pointer position and shape apart from the desktop image, which has no pointer. The backend turns every shape kind into straight-alpha BGRA (`pointer_shape_to_bgra`, `cursor.cpp`) and reports `CursorMode::Composite`; the preprocessor draws it into a copy of the frame (`VideoPreprocessor::convert` with a `CursorOverlay`). See `12-STREAMING.md` §10.
 
 ### 4.4 Windows Graphics Capture (WGC) Backend
 
@@ -357,7 +357,7 @@ private:
 dropped, and the pool is made again (`Recreate`) at the new size. The next
 frame has the whole window.
 
-**WGC and cursor:** WGC composites the cursor into the captured texture by default. To match the DXGI path (cursor as separate channel), WGC capture must disable cursor capture via `GraphicsCaptureSession::IsCursorCaptureEnabled = false` and read cursor position via `GetCursorInfo()` instead.
+**WGC and cursor:** `IsCursorCaptureEnabled(true)`. WGC draws the pointer into the captured texture where it is over the window or monitor (`CursorMode::InFrame`). Until streaming-quality stage 8 it was off, and no viewer saw a pointer.
 
 ### 4.5 ProcessCapture and the Capture Ladder
 

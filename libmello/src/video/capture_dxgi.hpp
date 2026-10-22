@@ -24,6 +24,7 @@ public:
     const char* backend_name() const override { return "DXGI-DDI"; }
 
     bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override { return CursorMode::Composite; }
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
 

@@ -761,6 +761,11 @@ bool ProcessCapture::get_cursor(CursorData& out) {
     return active_ ? active_->get_cursor(out) : false;
 }
 
+CursorMode ProcessCapture::cursor_mode() const {
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    return active_ ? active_->cursor_mode() : CursorMode::None;
+}
+
 bool ProcessCapture::consume_swap_event() {
     return swap_occurred_.exchange(false, std::memory_order_acq_rel);
 }

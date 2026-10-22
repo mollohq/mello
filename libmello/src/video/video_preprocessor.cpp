@@ -3,6 +3,7 @@
 #include "../util/log.hpp"
 #include <cstdio>
 #include <cstring>
+#include <d3dcommon.h>
 
 namespace mello::video {
 
@@ -224,7 +225,209 @@ bool VideoPreprocessor::create_nv12_slot(size_t idx, uint32_t w, uint32_t h) {
     return true;
 }
 
-ConvertResult VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
+namespace {
+
+// The pointer quad: four vertices from SV_VertexID, placed by a rectangle in
+// clip space, sampling the pointer texture with point filtering.
+constexpr const char* kCursorShader = R"(
+cbuffer Rect : register(b0) { float4 rect; };
+struct VsOut { float4 pos : SV_Position; float2 uv : TEXCOORD0; };
+VsOut VSMain(uint id : SV_VertexID) {
+    float2 t = float2(id & 1, id >> 1);
+    VsOut o;
+    o.pos = float4(lerp(rect.x, rect.z, t.x), lerp(rect.y, rect.w, t.y), 0.0, 1.0);
+    o.uv = t;
+    return o;
+}
+Texture2D shape : register(t0);
+SamplerState point_sampler : register(s0);
+float4 PSMain(VsOut i) : SV_Target { return shape.Sample(point_sampler, i.uv); }
+)";
+
+using D3DCompileFn = HRESULT(WINAPI*)(const void*, SIZE_T, const char*, const void*, void*,
+                                      const char*, const char*, UINT, UINT, ID3DBlob**,
+                                      ID3DBlob**);
+
+}  // namespace
+
+bool VideoPreprocessor::ensure_cursor_pipeline() {
+    if (cursor_ps_) return true;
+    if (cursor_pipeline_failed_) return false;
+    cursor_pipeline_failed_ = true;  // cleared at the end on success
+
+    // Loaded at run time, as the viewer's converter does (staging_texture.cpp).
+    HMODULE dll = LoadLibraryA("d3dcompiler_47.dll");
+    if (!dll) {
+        MELLO_LOG_WARN(TAG, "d3dcompiler_47.dll not found; the pointer is not drawn");
+        return false;
+    }
+    auto compile = reinterpret_cast<D3DCompileFn>(GetProcAddress(dll, "D3DCompile"));
+    ComPtr<ID3DBlob> vs_blob, ps_blob, errors;
+    bool ok = compile &&
+              SUCCEEDED(compile(kCursorShader, strlen(kCursorShader), "cursor.hlsl", nullptr,
+                                nullptr, "VSMain", "vs_4_0", 0, 0, &vs_blob, &errors)) &&
+              SUCCEEDED(compile(kCursorShader, strlen(kCursorShader), "cursor.hlsl", nullptr,
+                                nullptr, "PSMain", "ps_4_0", 0, 0, &ps_blob, &errors));
+    if (!ok && errors) {
+        MELLO_LOG_ERROR(TAG, "pointer shader: %s", static_cast<const char*>(errors->GetBufferPointer()));
+    }
+    if (ok) {
+        ok = SUCCEEDED(device_->CreateVertexShader(vs_blob->GetBufferPointer(),
+                                                   vs_blob->GetBufferSize(), nullptr, &cursor_vs_)) &&
+             SUCCEEDED(device_->CreatePixelShader(ps_blob->GetBufferPointer(),
+                                                  ps_blob->GetBufferSize(), nullptr, &cursor_ps_));
+    }
+    // The blobs' code lives in the compiler DLL: release them before it goes.
+    vs_blob.Reset();
+    ps_blob.Reset();
+    errors.Reset();
+    FreeLibrary(dll);
+    if (!ok) {
+        cursor_vs_.Reset();
+        cursor_ps_.Reset();
+        return false;
+    }
+
+    D3D11_BUFFER_DESC cb{};
+    cb.ByteWidth = 16;
+    cb.Usage = D3D11_USAGE_DEFAULT;
+    cb.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    D3D11_BLEND_DESC blend{};
+    blend.RenderTarget[0].BlendEnable = TRUE;
+    blend.RenderTarget[0].SrcBlend = D3D11_BLEND_SRC_ALPHA;
+    blend.RenderTarget[0].DestBlend = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOp = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].SrcBlendAlpha = D3D11_BLEND_ONE;
+    blend.RenderTarget[0].DestBlendAlpha = D3D11_BLEND_INV_SRC_ALPHA;
+    blend.RenderTarget[0].BlendOpAlpha = D3D11_BLEND_OP_ADD;
+    blend.RenderTarget[0].RenderTargetWriteMask = D3D11_COLOR_WRITE_ENABLE_ALL;
+    D3D11_RASTERIZER_DESC raster{};
+    raster.FillMode = D3D11_FILL_SOLID;
+    raster.CullMode = D3D11_CULL_NONE;
+    raster.DepthClipEnable = TRUE;
+    D3D11_SAMPLER_DESC sampler{};
+    sampler.Filter = D3D11_FILTER_MIN_MAG_MIP_POINT;
+    sampler.AddressU = sampler.AddressV = sampler.AddressW = D3D11_TEXTURE_ADDRESS_CLAMP;
+    sampler.MaxLOD = D3D11_FLOAT32_MAX;
+    if (FAILED(device_->CreateBuffer(&cb, nullptr, &cursor_cb_)) ||
+        FAILED(device_->CreateBlendState(&blend, &cursor_blend_)) ||
+        FAILED(device_->CreateRasterizerState(&raster, &cursor_raster_)) ||
+        FAILED(device_->CreateSamplerState(&sampler, &cursor_sampler_))) {
+        MELLO_LOG_ERROR(TAG, "pointer draw states failed; the pointer is not drawn");
+        cursor_ps_.Reset();
+        return false;
+    }
+    cursor_pipeline_failed_ = false;
+    return true;
+}
+
+ID3D11Texture2D* VideoPreprocessor::composite_cursor(ID3D11Texture2D* source,
+                                                     const D3D11_TEXTURE2D_DESC& desc,
+                                                     const CursorOverlay& cursor) {
+    if (!cursor.bgra || cursor.width == 0 || cursor.height == 0) return source;
+    const int64_t right = static_cast<int64_t>(cursor.x) + cursor.width;
+    const int64_t bottom = static_cast<int64_t>(cursor.y) + cursor.height;
+    if (cursor.x >= static_cast<int64_t>(desc.Width) || cursor.y >= static_cast<int64_t>(desc.Height) ||
+        right <= 0 || bottom <= 0) {
+        return source;  // outside the frame: nothing to draw, no copy
+    }
+    if (desc.SampleDesc.Count != 1 || desc.ArraySize != 1 ||
+        (desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM && desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM_SRGB &&
+         desc.Format != DXGI_FORMAT_R8G8B8A8_UNORM)) {
+        return source;
+    }
+    if (!ensure_cursor_pipeline()) return source;
+
+    // The copy the pointer is drawn into, at the source size and format.
+    if (!scratch_ || scratch_desc_.Width != desc.Width || scratch_desc_.Height != desc.Height ||
+        scratch_desc_.Format != desc.Format) {
+        scratch_rtv_.Reset();
+        scratch_.Reset();
+        D3D11_TEXTURE2D_DESC sd{};
+        sd.Width = desc.Width;
+        sd.Height = desc.Height;
+        sd.MipLevels = 1;
+        sd.ArraySize = 1;
+        sd.Format = desc.Format;
+        sd.SampleDesc.Count = 1;
+        sd.Usage = D3D11_USAGE_DEFAULT;
+        sd.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+        if (FAILED(device_->CreateTexture2D(&sd, nullptr, &scratch_)) ||
+            FAILED(device_->CreateRenderTargetView(scratch_.Get(), nullptr, &scratch_rtv_))) {
+            scratch_.Reset();
+            scratch_rtv_.Reset();
+            return source;
+        }
+        scratch_desc_ = sd;
+    }
+
+    // The pointer texture, uploaded when the shape changes.
+    if (!cursor_srv_ || cursor_serial_ != cursor.serial || cursor_w_ != cursor.width ||
+        cursor_h_ != cursor.height) {
+        cursor_srv_.Reset();
+        cursor_tex_.Reset();
+        D3D11_TEXTURE2D_DESC td{};
+        td.Width = cursor.width;
+        td.Height = cursor.height;
+        td.MipLevels = 1;
+        td.ArraySize = 1;
+        td.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+        td.SampleDesc.Count = 1;
+        td.Usage = D3D11_USAGE_DEFAULT;
+        td.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        D3D11_SUBRESOURCE_DATA init{};
+        init.pSysMem = cursor.bgra;
+        init.SysMemPitch = cursor.width * 4;
+        if (FAILED(device_->CreateTexture2D(&td, &init, &cursor_tex_)) ||
+            FAILED(device_->CreateShaderResourceView(cursor_tex_.Get(), nullptr, &cursor_srv_))) {
+            cursor_tex_.Reset();
+            cursor_srv_.Reset();
+            return source;
+        }
+        cursor_serial_ = cursor.serial;
+        cursor_w_ = cursor.width;
+        cursor_h_ = cursor.height;
+    }
+
+    context_->CopyResource(scratch_.Get(), source);
+
+    const float w = static_cast<float>(desc.Width);
+    const float h = static_cast<float>(desc.Height);
+    const float rect[4] = {
+        2.0f * cursor.x / w - 1.0f,
+        1.0f - 2.0f * cursor.y / h,
+        2.0f * static_cast<float>(right) / w - 1.0f,
+        1.0f - 2.0f * static_cast<float>(bottom) / h,
+    };
+    context_->UpdateSubresource(cursor_cb_.Get(), 0, nullptr, rect, 0, 0);
+
+    D3D11_VIEWPORT viewport{0.0f, 0.0f, w, h, 0.0f, 1.0f};
+    ID3D11RenderTargetView* rtv = scratch_rtv_.Get();
+    ID3D11ShaderResourceView* srv = cursor_srv_.Get();
+    ID3D11SamplerState* sampler = cursor_sampler_.Get();
+    ID3D11Buffer* cb = cursor_cb_.Get();
+    const float blend_factor[4] = {0, 0, 0, 0};
+    context_->IASetInputLayout(nullptr);
+    context_->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+    context_->VSSetShader(cursor_vs_.Get(), nullptr, 0);
+    context_->VSSetConstantBuffers(0, 1, &cb);
+    context_->PSSetShader(cursor_ps_.Get(), nullptr, 0);
+    context_->PSSetShaderResources(0, 1, &srv);
+    context_->PSSetSamplers(0, 1, &sampler);
+    context_->RSSetState(cursor_raster_.Get());
+    context_->RSSetViewports(1, &viewport);
+    context_->OMSetBlendState(cursor_blend_.Get(), blend_factor, 0xFFFFFFFF);
+    context_->OMSetRenderTargets(1, &rtv, nullptr);
+    context_->Draw(4, 0);
+    // Unbind, so the copy can be the video processor's input.
+    ID3D11RenderTargetView* no_rtv = nullptr;
+    ID3D11ShaderResourceView* no_srv = nullptr;
+    context_->OMSetRenderTargets(1, &no_rtv, nullptr);
+    context_->PSSetShaderResources(0, 1, &no_srv);
+    return scratch_.Get();
+}
+
+ConvertResult VideoPreprocessor::convert(ID3D11Texture2D* bgra_source, const CursorOverlay* cursor) {
     D3D11_TEXTURE2D_DESC src_desc{};
     bgra_source->GetDesc(&src_desc);
 
@@ -258,6 +461,10 @@ ConvertResult VideoPreprocessor::convert(ID3D11Texture2D* bgra_source) {
     in_desc.FourCC = 0;
     in_desc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
     in_desc.Texture2D.MipSlice = 0;
+
+    // The pointer goes into a copy of the source (desktop duplication: the
+    // desktop image has no pointer).
+    if (cursor) bgra_source = composite_cursor(bgra_source, src_desc, *cursor);
 
     ComPtr<ID3D11VideoProcessorInputView> input_view;
     HRESULT hr = video_device_->CreateVideoProcessorInputView(
@@ -382,6 +589,16 @@ void VideoPreprocessor::verify_nv12_output(ID3D11Texture2D* bgra_source, size_t 
 }
 
 void VideoPreprocessor::shutdown() {
+    scratch_rtv_.Reset();
+    scratch_.Reset();
+    cursor_srv_.Reset();
+    cursor_tex_.Reset();
+    cursor_sampler_.Reset();
+    cursor_raster_.Reset();
+    cursor_blend_.Reset();
+    cursor_cb_.Reset();
+    cursor_ps_.Reset();
+    cursor_vs_.Reset();
     for (auto& s : nv12_slots_) {
         s.output_view.Reset();
         s.texture.Reset();

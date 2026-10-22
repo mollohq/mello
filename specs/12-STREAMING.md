@@ -721,7 +721,34 @@ only part of each frame.
 
 ## 10. Cursor Streaming
 
-The host captures cursor state (position, visibility, shape RGBA) alongside video frames. Cursor data is serialized into a compact binary packet and sent via the control channel. The viewer deserializes and renders the cursor overlay independently of video frames.
+Each capture backend says who puts the pointer in front of the viewer
+(`CaptureSource::cursor_mode`):
+
+| Backend | Mode | What happens |
+|---|---|---|
+| WGC (window and monitor) | in frame | `IsCursorCaptureEnabled(true)`: WGC draws the pointer into the frames itself. |
+| DXGI desktop duplication | composite | The desktop image has no pointer. The preprocessor draws the duplication pointer shape (colour, monochrome and masked colour, as straight-alpha BGRA) into a copy of the frame before the colour conversion. The capture's own texture is never written. |
+| Game capture hook | packet | The back buffer never has the system pointer, and drawing it in would double the pointer a game draws itself. The viewer draws it from cursor packets. |
+
+**Cursor packets** (hook only). The host manager polls
+`mello_stream_get_cursor_packet` 30 times a second and sends what it returns on
+the reliable control channel as `[0x04, 0x02, x i32, y i32, visible, has_shape,
+(w u16, h u16, RGBA)]` (`mello-core/src/stream/cursor.rs`, libmello
+`cursor.cpp`). libmello returns a packet only on a change. The position is the
+top-left of the shape in encode pixels; the shape is scaled as the frame is, at
+most 128 a side. A shape travels only when it changes; the manager keeps the
+last shape packet and the last packet and sends both to a viewer that joins.
+The hook takes the system pointer (`GetCursorInfo`) when it is over the game's
+window and the game is the window under it, and maps the window's client area
+onto the back buffer size. When the stream moves to a backend with another
+mode, one hidden packet tells the viewer to stop drawing.
+
+**Viewer.** The control-channel callback parses the packet into the watched
+stream's pointer (one presenter, one pointer). The DComp presenter draws it as
+a child visual of the video visual, so the video's scale and clip apply and the
+offset is in stream pixels. A new shape is uploaded once into a small
+premultiplied-alpha composition swap chain; a move only sets the offset. The
+pointer hides with the video for the pause card.
 
 ---
 

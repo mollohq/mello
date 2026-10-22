@@ -37,8 +37,8 @@ public:
     bool start(uint32_t target_fps, FrameCallback callback) override;
     void stop() override;
 
-    uint32_t width() const override { return width_; }
-    uint32_t height() const override { return height_; }
+    uint32_t width() const override { return width_.load(std::memory_order_relaxed); }
+    uint32_t height() const override { return height_.load(std::memory_order_relaxed); }
     const char* backend_name() const override { return "Hook"; }
 
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
@@ -47,6 +47,13 @@ public:
     bool captures_while_minimized() const override { return true; }
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
     void set_present_delay_histogram(PresentDelayHistogram* hist) override { delay_hist_ = hist; }
+
+    /// The system pointer over the game's window, in the pixels of the hook's
+    /// frames. The hook copies the back buffer, which never has the system
+    /// pointer, and drawing it into the frame would double the pointer a game
+    /// draws itself. So the viewer draws it, from cursor packets. Any thread.
+    bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override { return CursorMode::Packet; }
 
     /// How many times the hook has published a new set of frame buffers. One
     /// build per stream is normal; a number that climbs means the hook is
@@ -88,8 +95,19 @@ private:
 
     uint32_t pid_ = 0;
     int      bits_ = 64;
-    uint32_t width_ = 0;
-    uint32_t height_ = 0;
+    // Written by the capture thread when the hook publishes a new size, read
+    // by the pipeline and the cursor caller.
+    std::atomic<uint32_t> width_{0};
+    std::atomic<uint32_t> height_{0};
+
+    // The pointer (get_cursor). Guarded by cursor_mutex_.
+    std::mutex   cursor_mutex_;
+    HWND         cursor_window_ = nullptr;
+    uint64_t     cursor_window_checked_us_ = 0;
+    HCURSOR      cursor_handle_ = nullptr;
+    int32_t      cursor_hotspot_x_ = 0;
+    int32_t      cursor_hotspot_y_ = 0;
+    CursorData   cursor_shape_;
     uint32_t texture_generation_ = 0;
     uint64_t last_frame_index_ = 0;
     int64_t  qpc_frequency_ = 0;

@@ -231,8 +231,10 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
 
     session_ = frame_pool_.CreateCaptureSession(item_);
 
-    // Disable cursor compositing — we handle cursor as a separate channel
-    session_.IsCursorCaptureEnabled(false);
+    // WGC draws the pointer into the frames itself, where the pointer is over
+    // the captured window or monitor (CursorMode::InFrame). With it off, no
+    // viewer saw a pointer at all: nothing drew it anywhere else.
+    session_.IsCursorCaptureEnabled(true);
 
     // No yellow capture border on Windows 11. Every WGC stream showed it,
     // which also made WGC look worse than DXGI in side-by-side tests.

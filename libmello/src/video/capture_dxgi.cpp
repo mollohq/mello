@@ -2,6 +2,7 @@
 #include "capture_dxgi.hpp"
 #include "../util/log.hpp"
 #include "frame_cadence.hpp"
+#include "cursor.hpp"
 #include <dxgi1_2.h>
 #include <chrono>
 #include <cassert>
@@ -121,7 +122,16 @@ void DxgiCapture::stop() {
 
 bool DxgiCapture::get_cursor(CursorData& out) {
     std::lock_guard<std::mutex> lock(cursor_mutex_);
-    out = cursor_;
+    out.x = cursor_.x;
+    out.y = cursor_.y;
+    out.visible = cursor_.visible;
+    out.shape_changed = cursor_.shape_changed;
+    if (out.shape_serial != cursor_.shape_serial) {
+        out.shape_serial = cursor_.shape_serial;
+        out.shape_w = cursor_.shape_w;
+        out.shape_h = cursor_.shape_h;
+        out.shape_bgra = cursor_.shape_bgra;
+    }
     return true;
 }
 
@@ -208,7 +218,9 @@ void DxgiCapture::capture_thread() {
             break;
         }
 
-        // Extract cursor info before releasing the frame
+        // Extract cursor info before releasing the frame. Duplication gives
+        // the pointer apart from the desktop image, which has none; the
+        // preprocessor draws it into the frame (CursorMode::Composite).
         if (frame_info.LastMouseUpdateTime.QuadPart != 0) {
             std::lock_guard<std::mutex> lock(cursor_mutex_);
             cursor_.x = frame_info.PointerPosition.Position.x;
@@ -225,14 +237,21 @@ void DxgiCapture::capture_thread() {
                     &required,
                     &shape_info);
 
-                if (SUCCEEDED(hr) && shape_info.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_COLOR) {
+                // A monochrome shape holds two masks, so its height is twice
+                // the pointer's.
+                const uint32_t shape_h = shape_info.Type == DXGI_OUTDUPL_POINTER_SHAPE_TYPE_MONOCHROME
+                                             ? shape_info.Height / 2
+                                             : shape_info.Height;
+                std::vector<uint8_t> bgra;
+                if (SUCCEEDED(hr) && shape_info.Width <= 0xFFFF && shape_h <= 0xFFFF &&
+                    pointer_shape_to_bgra(static_cast<PointerShapeKind>(shape_info.Type),
+                                          shape_info.Width, shape_h, shape_info.Pitch,
+                                          cursor_shape_buf_.data(), required, bgra)) {
                     cursor_.shape_changed = true;
                     cursor_.shape_w = static_cast<uint16_t>(shape_info.Width);
-                    cursor_.shape_h = static_cast<uint16_t>(shape_info.Height);
-                    size_t pixel_bytes = static_cast<size_t>(cursor_.shape_w) * cursor_.shape_h * 4;
-                    cursor_.shape_rgba.assign(
-                        cursor_shape_buf_.data(),
-                        cursor_shape_buf_.data() + std::min(pixel_bytes, cursor_shape_buf_.size()));
+                    cursor_.shape_h = static_cast<uint16_t>(shape_h);
+                    cursor_.shape_bgra = std::move(bgra);
+                    ++cursor_.shape_serial;
                 } else {
                     cursor_.shape_changed = false;
                 }

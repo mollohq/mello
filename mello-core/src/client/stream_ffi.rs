@@ -225,6 +225,9 @@ impl Drop for ViewerState {
                 }
                 self._pause_cb_data = std::ptr::null_mut();
             }
+            // After the callback is gone, so no packet in flight comes back:
+            // the next stream must not start with this one's pointer.
+            crate::stream::cursor::reset_viewer_cursor();
         }
 
         // Native viewer stop joins decode threads. It runs on the teardown
@@ -292,9 +295,11 @@ impl PauseSlot {
     }
 }
 
-/// Reliable-control data callback. Only pause (`0x04/0x03`) and host idle
-/// (`0x04/0x04`) messages are handled; everything else (cursor future use, stray binary pongs) is
-/// ignored fast so the hot data path never blocks here.
+/// Reliable-control data callback. Pause (`0x04/0x03`) and host idle
+/// (`0x04/0x04`) messages go to the slot, cursor messages (`0x04/0x02`, the
+/// hook's pointer) to the viewer pointer the presenter draws
+/// (`stream::cursor`); everything else (stray binary pongs) is ignored fast so
+/// the hot data path never blocks here.
 pub(super) unsafe extern "C" fn stream_control_data_callback(
     user_data: *mut std::ffi::c_void,
     data: *const u8,
@@ -317,6 +322,8 @@ pub(super) unsafe extern "C" fn stream_control_data_callback(
             .store(u8::from(paused), std::sync::atomic::Ordering::Release);
         slot.reason
             .store(reason as u8, std::sync::atomic::Ordering::Release);
+    } else if let Some(cursor) = crate::stream::cursor::parse_cursor_message(bytes) {
+        crate::stream::cursor::apply_viewer_cursor(cursor);
     }
 }
 
