@@ -1,5 +1,6 @@
 #ifdef _WIN32
 #include "capture_process.hpp"
+#include "capture_reference.hpp"
 #include "capture_dxgi.hpp"
 #include "capture_hook.hpp"
 #include "hook_policy.hpp"
@@ -940,6 +941,8 @@ std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& de
             return std::make_unique<WgcCapture>();
         case CaptureMode::Process:
             return std::make_unique<ProcessCapture>();
+        case CaptureMode::Reference:
+            return std::make_unique<ReferenceCapture>();
     }
     return nullptr;
 }

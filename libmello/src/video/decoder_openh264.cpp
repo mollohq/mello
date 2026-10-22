@@ -4,93 +4,20 @@
 #include "../util/log.hpp"
 #include <cstring>
 
-// Minimal OpenH264 ABI definitions for ISVCDecoder.
-// These match the Cisco prebuilt DLL's vtable layout.
-// We define them here instead of #including wels/codec_api.h because
-// we runtime-load the DLL and don't link against it.
-
-enum DECODING_STATE {
-    dsErrorFree       = 0x00,
-    dsFramePending    = 0x01,
-    dsRefLost         = 0x02,
-    dsBitstreamError  = 0x04,
-    dsDepLayerLost    = 0x08,
-    dsNoParamSets     = 0x10,
-    dsDataErrorConcealed = 0x20,
-    dsRefListNullPtrs = 0x40,
-    dsInvalidArgument = 0x1000,
-    dsInitialOpt      = 0x2000,
-    dsOutOfMemory     = 0x4000,
-    dsDstBufNeedExpan = 0x8000,
-};
-
-enum VIDEO_BITSTREAM_TYPE {
-    VIDEO_BITSTREAM_DEFAULT = 0,
-    VIDEO_BITSTREAM_SVC     = 1,
-    VIDEO_BITSTREAM_AVC     = 2,
-};
-
-enum EVideoFormatType {
-    videoFormatRGB     = 1,
-    videoFormatRGBA    = 2,
-    videoFormatRGB555  = 3,
-    videoFormatRGB565  = 4,
-    videoFormatBGR     = 5,
-    videoFormatBGRA    = 6,
-    videoFormatABGR    = 7,
-    videoFormatARGB    = 8,
-    videoFormatYUY2    = 20,
-    videoFormatYVYU    = 21,
-    videoFormatUYVY    = 22,
-    videoFormatI420    = 23,
-    videoFormatYV12    = 24,
-    videoFormatInternal = 25,
-    videoFormatNV12    = 26,
-};
-
-struct SDecodingParam {
-    char*    pFileRecPath;
-    unsigned uiCpuLoad;
-    unsigned char uiTargetDqLayer;
-    unsigned char eEcActiveIdc;
-    bool     bParseOnly;
-    int      sVideoProperty_size;
-    unsigned sVideoProperty_eVideoBsType;
-};
-
-struct SSysMEMBuffer {
-    int iWidth;
-    int iHeight;
-    int iFormat;
-    int iStride[2];
-};
-
-struct SBufferInfo {
-    int iBufferStatus;
-    unsigned long long uiInBsTimeStamp;
-    unsigned long long uiOutYuvTimeStamp;
-    union {
-        SSysMEMBuffer sSystemBuffer;
-    } UsrData;
-};
-
-// ISVCDecoder vtable layout (COM-like, matches the Cisco DLL)
-struct ISVCDecoderVtbl {
-    long (*Initialize)(ISVCDecoder*, const SDecodingParam*);
-    long (*Uninitialize)(ISVCDecoder*);
-    int  (*DecodeFrame2)(ISVCDecoder*, const unsigned char*, int, unsigned char*[3], SBufferInfo*);
-    int  (*DecodeFrameNoDelay)(ISVCDecoder*, const unsigned char*, int, unsigned char*[3], SBufferInfo*);
-    int  (*DecodeParser)(ISVCDecoder*, const unsigned char*, int, SBufferInfo*);
-    long (*SetOption)(ISVCDecoder*, int, void*);
-    long (*GetOption)(ISVCDecoder*, int, void*);
-};
-
-struct ISVCDecoder {
-    ISVCDecoderVtbl* pVtbl;
-};
+// The OpenH264 v2.6.0 API headers (third_party/openh264/include/wels, the
+// version of the Cisco DLL), in their own namespace as in
+// encoder_openh264.cpp. They replace a hand-written copy of the ABI whose
+// SDecodingParam put the bitstream type (AVC = 2) on bParseOnly, so the DLL
+// decoded nothing ("bParseOnly should be false"), and whose SBufferInfo
+// lacked pDst[3], so the DLL wrote 24 bytes past it on the stack.
+#include <stdbool.h>
+namespace mello::video::wels_abi {
+#include "wels/codec_api.h"
+}
 
 namespace mello::video {
 
+namespace wa = wels_abi;
 static constexpr const char* TAG = "video/decoder";
 
 bool OpenH264Decoder::is_available() {
@@ -126,17 +53,19 @@ bool OpenH264Decoder::initialize(const GraphicsDevice& device, const DecoderConf
     }
 
     auto& dll = openh264::api();
-    long rv = dll.create_decoder(&decoder_);
+    long rv = dll.create_decoder(reinterpret_cast<void**>(&decoder_));
     if (rv != 0 || !decoder_) {
         MELLO_LOG_ERROR(TAG, "OpenH264: WelsCreateDecoder failed: %ld", rv);
         return false;
     }
 
-    SDecodingParam param{};
+    wa::SDecodingParam param{};
     memset(&param, 0, sizeof(param));
-    param.sVideoProperty_eVideoBsType = VIDEO_BITSTREAM_AVC;
+    param.sVideoProperty.size = sizeof(param.sVideoProperty);
+    param.sVideoProperty.eVideoBsType = wa::VIDEO_BITSTREAM_AVC;
+    param.bParseOnly = false;
 
-    rv = decoder_->pVtbl->Initialize(decoder_, &param);
+    rv = decoder_->Initialize(&param);
     if (rv != 0) {
         MELLO_LOG_ERROR(TAG, "OpenH264: Initialize failed: %ld", rv);
         dll.destroy_decoder(decoder_);
@@ -151,7 +80,7 @@ bool OpenH264Decoder::initialize(const GraphicsDevice& device, const DecoderConf
 
 void OpenH264Decoder::shutdown() {
     if (decoder_) {
-        decoder_->pVtbl->Uninitialize(decoder_);
+        decoder_->Uninitialize();
         if (openh264::is_loaded()) {
             openh264::api().destroy_decoder(decoder_);
         }
@@ -168,13 +97,12 @@ DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool 
     if (!decoder_) return DecodeFeedResult::Error;
 
     unsigned char* yuv[3] = { nullptr, nullptr, nullptr };
-    SBufferInfo buf_info{};
+    wa::SBufferInfo buf_info{};
     memset(&buf_info, 0, sizeof(buf_info));
 
-    int rv = decoder_->pVtbl->DecodeFrameNoDelay(
-        decoder_, data, static_cast<int>(size), yuv, &buf_info);
+    const int rv = decoder_->DecodeFrameNoDelay(data, static_cast<int>(size), yuv, &buf_info);
 
-    if (rv != dsErrorFree) {
+    if (rv != wa::dsErrorFree) {
         MELLO_LOG_ERROR(TAG, "OpenH264: DecodeFrameNoDelay failed: state=0x%X", rv);
         return DecodeFeedResult::Error;
     }

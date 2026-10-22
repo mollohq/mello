@@ -1,0 +1,58 @@
+{
+  "_comment": "Streaming quality gate (plans/streaming-quality.md stage 1, tools/stream-gate). Frozen inputs: everything here except descriptions and _comments. A change re-takes the baselines on the commit they came from. Legs: the host leg is host<->SFU (forward = host to SFU), a viewer leg is SFU<->viewer (forward = SFU to viewer). The forward direction gets every impairment; the reverse direction gets the base delay and the outage. Times are profile time: 0 = the first viewer joins.",
+  "shim": 1,
+  "clip_version": 1,
+  "base_delay_ms": 10,
+  "clips": {
+    "720p60": { "width": 1280, "height": 720, "fps": 60, "frames": 1200, "seed": 20261021, "fnv1a": "1005db54bb331c6e" },
+    "1080p60": { "width": 1920, "height": 1080, "fps": 60, "frames": 1200, "seed": 20261021, "fnv1a": "d5991cfa6d21a048" }
+  },
+  "lanes": {
+    "cpu": { "clip": "720p60", "soft": true, "bitrate_kbps": 5000, "fps": 60, "preset": "medium" },
+    "hw": { "clip": "1080p60", "soft": false, "bitrate_kbps": 8000, "fps": 60, "preset": "ultra" }
+  },
+  "analysis": { "freeze_gap_ms": 150, "vmaf_subsample": 1 },
+  "profiles": [
+    {
+      "name": "clean",
+      "description": "10 ms each way on both legs, nothing else.",
+      "duration_s": 20, "seed": 101
+    },
+    {
+      "name": "home-wifi",
+      "description": "Viewer on Wi-Fi: 2 % random loss, 20 ms jitter on the SFU to viewer leg.",
+      "duration_s": 20, "seed": 202,
+      "viewer_leg": { "loss_random": 0.02, "jitter_sigma_ms": 20 }
+    },
+    {
+      "name": "mobile",
+      "description": "Viewer on a mobile link: 5 % loss, 40 ms jitter, 250 ms delay spikes about 6 per minute, light reorder, 300 ppm clock drift.",
+      "duration_s": 20, "seed": 303,
+      "viewer_leg": { "loss_random": 0.05, "jitter_sigma_ms": 40, "spikes_per_min": 6, "spike_ms": 250, "reorder_prob": 0.005, "reorder_extra_ms": 30, "drift_ppm": 300 }
+    },
+    {
+      "name": "bad",
+      "description": "Viewer on a bad link: 5 % random loss plus Gilbert-Elliott bursts (about 5 % more), 10 % in total, 30 ms jitter.",
+      "duration_s": 20, "seed": 404,
+      "viewer_leg": { "loss_random": 0.05, "jitter_sigma_ms": 30, "burst": { "p_enter": 0.02, "p_exit": 0.3, "loss_in_bad": 0.8 } }
+    },
+    {
+      "name": "congested",
+      "description": "Host uplink capped at 60 % of the lane preset with a 150 ms tail-drop queue from 5 s for 20 s, then released.",
+      "duration_s": 30, "seed": 505,
+      "host_leg": { "cap": { "start_s": 5, "dur_s": 20, "rate_fraction": 0.6, "queue_ms": 150, "overhead_bytes": 28 } }
+    },
+    {
+      "name": "outage",
+      "description": "Host leg down in both directions for 3 s from 8 s.",
+      "duration_s": 20, "seed": 606,
+      "host_leg": { "outage": { "start_s": 8, "dur_s": 3 } }
+    },
+    {
+      "name": "late-join",
+      "description": "A second viewer joins at 5 s on clean legs. Measured on that viewer; the first viewer's freeze time is other_viewer_freeze_ms.",
+      "duration_s": 20, "seed": 707,
+      "late_viewer_s": 5
+    }
+  ]
+}

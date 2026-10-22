@@ -17,6 +17,19 @@ enum class CaptureMode {
     Monitor,
     Window,
     Process,
+    /// Test only: play a YUV clip from a file (capture_reference.hpp). The
+    /// streaming quality gate uses it; nothing in the product selects it.
+    Reference,
+};
+
+/// A raw YUV 4:2:0 clip for CaptureMode::Reference: frames back to back,
+/// 8 bits per sample, no header.
+struct ReferenceClip {
+    std::string path;           ///< UTF-8 file path
+    uint32_t    width  = 0;     ///< even
+    uint32_t    height = 0;     ///< even
+    uint32_t    fps    = 60;    ///< the rate the source plays the clip at
+    bool        nv12   = false; ///< false: I420 (Y, U, V planes); true: NV12
 };
 
 struct CaptureSourceDesc {
@@ -32,6 +45,8 @@ struct CaptureSourceDesc {
     /// Process mode only: the caller allows the game capture hook for this
     /// game. False keeps the ladder on screen capture, whatever the game is.
     bool allow_hook = false;
+    /// Reference mode only: the clip to play.
+    ReferenceClip reference{};
 };
 
 struct CursorData {
