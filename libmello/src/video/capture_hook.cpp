@@ -60,7 +60,7 @@ bool error_is_transient(uint32_t error) { return mello_hook_error_is_transient(e
 const char* error_name(uint32_t error) {
     switch (error) {
         case MELLO_HOOK_OK:                 return "ok";
-        case MELLO_HOOK_ERR_NO_DEVICE:      return "no D3D11 device on the swap chain";
+        case MELLO_HOOK_ERR_NO_DEVICE:      return "no device or command queue for the swap chain";
         case MELLO_HOOK_ERR_SHARED_TEXTURE: return "shared texture failed";
         case MELLO_HOOK_ERR_FORMAT:         return "back buffer format cannot be shared";
         case MELLO_HOOK_ERR_COPY:           return "the copy failed";
@@ -195,6 +195,11 @@ bool HookCapture::create_shared_block(uint32_t pid) {
 }
 
 void HookCapture::release_shared_block() {
+    fence_.Reset();
+    if (game_process_) {
+        CloseHandle(game_process_);
+        game_process_ = nullptr;
+    }
     if (frames_) {
         UnmapViewOfFile(const_cast<uint8_t*>(frames_));
         frames_ = nullptr;
@@ -429,6 +434,98 @@ bool HookCapture::upload_memory_frame(uint32_t slot) {
     return true;
 }
 
+HANDLE HookCapture::duplicate_from_game(uint32_t value) {
+    if (!game_process_) {
+        game_process_ = OpenProcess(PROCESS_DUP_HANDLE, FALSE, pid_);
+        if (!game_process_) {
+            MELLO_LOG_ERROR(TAG, "cannot open pid=%u to take its shared handles: %lu", pid_,
+                            GetLastError());
+            return nullptr;
+        }
+    }
+    HANDLE local = nullptr;
+    if (!DuplicateHandle(game_process_, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(value)),
+                         GetCurrentProcess(), &local, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        return nullptr;
+    }
+    return local;
+}
+
+// A Direct3D 12 game: two shared textures and a shared fence, as NT handles
+// of the game's process. The local duplicates are closed once opened; the
+// opened objects keep the resources alive.
+bool HookCapture::refresh_nt_textures(uint32_t generation) {
+    for (auto& texture : shared_) texture.Reset();
+    copy_.Reset();
+    fence_.Reset();
+
+    Microsoft::WRL::ComPtr<ID3D11Device1> device1;
+    Microsoft::WRL::ComPtr<ID3D11Device5> device5;
+    if (FAILED(device_.As(&device1)) || FAILED(device_.As(&device5)) ||
+        (!context4_ && FAILED(context_.As(&context4_)))) {
+        MELLO_LOG_ERROR(TAG, "this D3D11 runtime cannot open a Direct3D 12 game's frames "
+                             "(ID3D11Device5 and ID3D11DeviceContext4 are needed)");
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    auto still_this_generation = [&] {
+        return as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire) ==
+               generation;
+    };
+    for (uint32_t i = 0; i < MELLO_HOOK_TEXTURE_COUNT; ++i) {
+        HANDLE local = duplicate_from_game(info_->shared_handles[i]);
+        HRESULT hr = E_HANDLE;
+        if (local) {
+            hr = device1->OpenSharedResource1(local, __uuidof(ID3D11Texture2D),
+                                              reinterpret_cast<void**>(shared_[i].GetAddressOf()));
+            CloseHandle(local);
+        }
+        if (FAILED(hr) || !shared_[i]) {
+            // The hook may have rebuilt (a resize) and closed these handles
+            // while this ran: try the new set at the next frame.
+            if (!still_this_generation()) return false;
+            MELLO_LOG_ERROR(TAG, "cannot open the D3D12 game's texture %u (handle=%08x): "
+                                 "hr=0x%08lx. The game is probably on another GPU.",
+                            i, info_->shared_handles[i], static_cast<unsigned long>(hr));
+            failed_.store(true, std::memory_order_relaxed);
+            return false;
+        }
+    }
+    HANDLE fence_local = duplicate_from_game(info_->fence_handle);
+    HRESULT hr = E_HANDLE;
+    if (fence_local) {
+        hr = device5->OpenSharedFence(fence_local, __uuidof(ID3D11Fence),
+                                      reinterpret_cast<void**>(fence_.GetAddressOf()));
+        CloseHandle(fence_local);
+    }
+    if (FAILED(hr) || !fence_) {
+        if (!still_this_generation()) return false;
+        MELLO_LOG_ERROR(TAG, "cannot open the D3D12 game's fence (handle=%08x): hr=0x%08lx",
+                        info_->fence_handle, static_cast<unsigned long>(hr));
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    shared_[0]->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = 0;
+    desc.CPUAccessFlags = 0;
+    if (FAILED(device_->CreateTexture2D(&desc, nullptr, copy_.GetAddressOf()))) {
+        MELLO_LOG_ERROR(TAG, "cannot create the frame texture %ux%u", desc.Width, desc.Height);
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+    width_.store(desc.Width);
+    height_.store(desc.Height);
+    texture_generation_ = generation;
+    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u from Direct3D 12 (generation %u)",
+                   desc.Width, desc.Height, static_cast<unsigned>(desc.Format), generation);
+    return true;
+}
+
 // Opens the textures the hook published. Called when the generation changes:
 // at the first frame, and after a resize.
 bool HookCapture::refresh_textures() {
@@ -442,6 +539,9 @@ bool HookCapture::refresh_textures() {
     const uint32_t generation =
         as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
     if (generation == texture_generation_ && shared_[0]) return true;
+
+    if ((info_->flags & MELLO_HOOK_FLAG_NT_HANDLES) != 0) return refresh_nt_textures(generation);
+    fence_.Reset();
 
     for (auto& texture : shared_) texture.Reset();
     copy_.Reset();
@@ -554,7 +654,10 @@ void HookCapture::capture_thread() {
             break;
         }
 
-        if (!refresh_textures()) break;
+        if (!refresh_textures()) {
+            if (failed_.load(std::memory_order_relaxed)) break;
+            continue;  // a Direct3D 12 rebuild raced the open: the next frame retries
+        }
 
         // Deliver at the target rate. The game presents at its own rate, which
         // can be several times the stream's. The decision comes before the
@@ -564,10 +667,19 @@ void HookCapture::capture_thread() {
         const uint64_t now = now_us();
         if (!frame_cadence_accepts(now, cadence_deadline_us_, target_fps_)) continue;
 
-        const uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
+        uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
         if (frames_) {
             if (!upload_memory_frame(slot)) continue;
         } else {
+            if (fence_ && context4_) {
+                // Direct3D 12: one number names the copy and its slot. Wait for
+                // that copy on the GPU, never on this thread.
+                const uint64_t value = as_atomic_u64(&info_->frame_fence_value)
+                                           ->load(std::memory_order_acquire);
+                if (value == 0) continue;
+                slot = static_cast<uint32_t>((value - 1) % MELLO_HOOK_TEXTURE_COUNT);
+                context4_->Wait(fence_.Get(), value);
+            }
             if (!shared_[slot] || !copy_) continue;
             // The copy takes the frame away from the hook's pair, so the game
             // can keep presenting into them while the pipeline reads this one.

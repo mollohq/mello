@@ -82,7 +82,7 @@ TEST(HookProtocol, LayoutIsFixed) {
     // and an older hook then leaves it at zero while a newer client reads that
     // zero as an answer: on 2026-09-18 a client waited fifteen seconds for a
     // game that was drawing, because the hook in it predated presents_seen.
-    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 4u);
+    EXPECT_EQ(MELLO_HOOK_PROTOCOL_VERSION, 5u);
     EXPECT_EQ(sizeof(MelloHookInfo), 256u);
     EXPECT_EQ(offsetof(MelloHookInfo, protocol_version), 0u);
     EXPECT_EQ(offsetof(MelloHookInfo, struct_size), 4u);
@@ -101,6 +101,9 @@ TEST(HookProtocol, LayoutIsFixed) {
     EXPECT_EQ(offsetof(MelloHookInfo, presents_seen), 216u);
     EXPECT_EQ(offsetof(MelloHookInfo, target_fps), 224u);
     EXPECT_EQ(offsetof(MelloHookInfo, frames_copied), 232u);
+    // Version 5: Direct3D 12, the last of the reserved area.
+    EXPECT_EQ(offsetof(MelloHookInfo, fence_handle), 240u);
+    EXPECT_EQ(offsetof(MelloHookInfo, frame_fence_value), 248u);
 }
 
 // A lost device is the state Direct3D 9 enters whenever the display mode

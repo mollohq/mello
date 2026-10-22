@@ -34,6 +34,7 @@ add_library(mello_hook SHARED
     src/hook_state.cpp
     src/hook_dxgi.cpp
     src/hook_d3d9.cpp
+    src/hook_d3d12.cpp
     src/hook_log.cpp
 )
 set_target_properties(mello_hook PROPERTIES OUTPUT_NAME "mello-hook${MELLO_HOOK_BITS}")
@@ -77,7 +78,7 @@ if(MELLO_HOOK_TEST_APP)
     target_include_directories(mello_fakegame PRIVATE include)
     target_compile_definitions(mello_fakegame PRIVATE
         WIN32_LEAN_AND_MEAN NOMINMAX MELLO_HOOK_BITS=${MELLO_HOOK_BITS})
-    target_link_libraries(mello_fakegame PRIVATE d3d11 d3d9 dxgi dxguid)
+    target_link_libraries(mello_fakegame PRIVATE d3d11 d3d9 d3d12 dxgi dxguid)
 endif()
 
 # --- Tests -------------------------------------------------------------------

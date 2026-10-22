@@ -40,9 +40,12 @@
 // share textures with the client's adapter instead of reading them back.
 // Version 4: target_fps and frames_copied. The hook copies a frame only at
 // the stream's cadence, not on every present.
+// Version 5: Direct3D 12. fence_handle, frame_fence_value and
+// MELLO_HOOK_FLAG_NT_HANDLES: the textures and a fence travel as NT handles of
+// the game's process, and the client waits on the fence before it reads.
 // A hook and a client on different versions refuse each other outright,
 // which is what must happen after a half-applied update.
-#define MELLO_HOOK_PROTOCOL_VERSION 4u
+#define MELLO_HOOK_PROTOCOL_VERSION 5u
 
 // Two textures, used one after the other. The hook writes the one the client is
 // not reading, so a slow client cannot see a half-written frame.
@@ -96,6 +99,13 @@ static inline int mello_hook_error_is_transient(uint32_t error) {
 #define MELLO_HOOK_FLAG_HDR      0x1u  // the back buffer format is HDR
 #define MELLO_HOOK_FLAG_CPU_COPY 0x2u  // GPU sharing failed; frames come through memory
 #define MELLO_HOOK_FLAG_SRGB     0x4u  // the back buffer view is sRGB
+// `shared_handles` and `fence_handle` are NT handles in the game's process
+// (`hook_pid`), not legacy DXGI handles: the client duplicates them with
+// DuplicateHandle and opens them with OpenSharedResource1 and OpenSharedFence.
+// Before it reads a frame, the client waits on the GPU for the fence to reach
+// `frame_fence_value`; the frame is in slot (frame_fence_value - 1) % 2.
+// Direct3D 12 sets it: a D3D12 resource has no legacy shared handle.
+#define MELLO_HOOK_FLAG_NT_HANDLES 0x8u
 
 #pragma pack(push, 8)
 // The shared memory block. Fixed layout, checked by the static assertions below.
@@ -148,7 +158,10 @@ typedef struct MelloHookInfo {
     uint64_t off_dxgi_present;                 // IDXGISwapChain::Present, from dxgi.dll
     uint64_t off_dxgi_present1;                // IDXGISwapChain1::Present1
     uint64_t off_dxgi_resize_buffers;          // IDXGISwapChain::ResizeBuffers
-    uint64_t off_d3d12_execute_command_lists;  // from d3d12.dll
+    // Not used. The D3D12 path reads ExecuteCommandLists from a command
+    // queue made on the game's own device: a game that ships the Agility SDK
+    // runs its own D3D12Core.dll, where a system offset points anywhere.
+    uint64_t off_d3d12_execute_command_lists;
     uint64_t off_d3d9_present;                 // IDirect3DDevice9::Present, from d3d9.dll
     uint64_t off_d3d9_present_ex;              // IDirect3DDevice9Ex::PresentEx
     uint64_t off_d3d9_swapchain_present;       // IDirect3DSwapChain9::Present
@@ -181,7 +194,13 @@ typedef struct MelloHookInfo {
     // is how a test and the client log see the copy rate.
     uint64_t frames_copied;
 
-    uint64_t reserved[2];
+    // --- Direct3D 12 (MELLO_HOOK_FLAG_NT_HANDLES). Written by the hook. ---
+    uint32_t fence_handle;       // NT handle of the shared fence, in the game's process
+    uint32_t fence_reserved;
+    // The fence value of the newest frame, written before frame_index with a
+    // release. One number gives both the wait and the slot, so the client can
+    // never pair a slot with the wrong copy.
+    uint64_t frame_fence_value;
 } MelloHookInfo;
 #pragma pack(pop)
 

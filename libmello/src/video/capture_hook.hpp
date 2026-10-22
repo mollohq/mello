@@ -3,6 +3,7 @@
 
 #ifdef _WIN32
 
+#include <d3d11_4.h>
 #include <wrl/client.h>
 
 #include <atomic>
@@ -83,12 +84,22 @@ private:
     bool refresh_memory_frames();
     /// Copies one frame from that block into the texture the pipeline reads.
     bool upload_memory_frame(uint32_t slot);
+    /// Opens a Direct3D 12 game's textures and fence: NT handles of the game's
+    /// process (MELLO_HOOK_FLAG_NT_HANDLES), duplicated into this one.
+    bool refresh_nt_textures(uint32_t generation);
+    /// Duplicates one NT handle of the game's process. Null on failure.
+    HANDLE duplicate_from_game(uint32_t value);
     void beat();
 
     Microsoft::WRL::ComPtr<ID3D11Device>        device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D>     shared_[MELLO_HOOK_TEXTURE_COUNT];
     Microsoft::WRL::ComPtr<ID3D11Texture2D>     copy_;
+    // Direct3D 12 games: the shared fence the hook signals after each copy,
+    // and the context that waits on it on the GPU. Empty for other APIs.
+    Microsoft::WRL::ComPtr<ID3D11Fence>          fence_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext4> context4_;
+    HANDLE                                       game_process_ = nullptr;
 
     HANDLE         mapping_     = nullptr;
     MelloHookInfo* info_        = nullptr;

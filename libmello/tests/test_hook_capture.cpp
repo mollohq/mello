@@ -311,6 +311,72 @@ TEST(HookCapture, AFastDirect3D9GameIsCopiedAtTheStreamRate) {
     expect_stream_rate("D3D9", measure_hook_rates(directory, "--d3d9"));
 }
 
+// A Direct3D 12 game. The DXGI Present detour fired for its swap chain, but the
+// copy needed a D3D11 device and failed with ERR_NO_DEVICE (scorecard 4.1).
+// The hook now copies on the game's own command queue into shared D3D12
+// textures, and the client waits on a shared fence before it reads.
+TEST(HookCapture, CapturesADirect3D12Game) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    FakeGame game;
+    ASSERT_TRUE(game.start(directory, 30, false, false, "--d3d12"))
+        << "the D3D12 test program did not start";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+
+    HookCapture capture;
+    ASSERT_TRUE(capture.initialize(device, desc)) << "the hook did not load into the D3D12 program";
+
+    std::atomic<int> frames{0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> last;
+    std::mutex last_mutex;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        last = texture;
+        frames.fetch_add(1);
+    }));
+    for (int i = 0; i < 60 && frames.load() < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_GE(frames.load(), 10) << "the hook delivered no D3D12 frames";
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frame;
+    {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        frame = last;
+    }
+    ASSERT_TRUE(frame) << "no frame texture";
+    EXPECT_EQ(capture.width(), 640u);
+    EXPECT_EQ(capture.height(), 360u);
+
+    Pixel pixel;
+    ASSERT_TRUE(middle_pixel(device.d3d11(), context.Get(), frame.Get(), &pixel));
+    EXPECT_NEAR(pixel.r, 64, 2);
+    EXPECT_NEAR(pixel.g, 128, 2);
+    EXPECT_NEAR(pixel.b, 191, 2);
+
+    capture.stop();
+    EXPECT_FALSE(capture.stop_timed_out());
+    EXPECT_FALSE(capture.failed());
+}
+
+TEST(HookCapture, AFastDirect3D12GameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D12", measure_hook_rates(directory, "--d3d12"));
+}
+
 // A game that presents through both Present and PresentEx hands the hook two
 // interface pointers for one device. Comparing them directly made the hook
 // tear down and rebuild its capture on almost every frame: measured against

@@ -164,7 +164,7 @@ as x64 and links the static CRT):
 
 | Binary | Runs where | Does what |
 |---|---|---|
-| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present, copies, signals |
+| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present (and D3D12 `ExecuteCommandLists`), copies, signals |
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
@@ -281,10 +281,36 @@ is one. `Reset` and
 `ResetEx` are detoured as well: a reset changes the back buffer, so the
 read-back surfaces are dropped and the next present rebuilds them.
 
-**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, and
-Direct3D 9: shared textures for a D3D9Ex game on the client's adapter, memory
-for every other D3D9 game. Both for 32-bit and 64-bit games. D3D12 and OpenGL
-are later steps in the plan. Vulkan games use the WGC steps by decision
+**Direct3D 12.** The DXGI `Present` detour fires for a D3D12 swap chain too,
+but the copy needs the command queue the game presents on, and a D3D12 swap
+chain does not give it out (`GetDevice` answers the `ID3D12Device`, and
+`E_NOINTERFACE` for `ID3D12CommandQueue`). So the hook detours
+`ID3D12CommandQueue::ExecuteCommandLists`. Its address comes from a command
+queue made once on the game's own device and released at once: a game that
+ships the Agility SDK runs its own `D3D12Core.dll`, where an offset of the
+system DLL points anywhere. The detour keeps the direct queues the game
+submits to (at most 8, each referenced once and never released, so the
+present path reads them with no lock). DXGI submits on the swap chain's own
+queue inside `Present`, so a queue seen on the presenting thread during
+`Present` is the right one; else the last direct queue of the same device.
+
+On each due present, before the real `Present`, the hook records a copy of the
+back buffer (barriers present to copy source and back) into one of two
+committed textures with `D3D12_HEAP_FLAG_SHARED`, executes it on that queue,
+and signals a shared fence. A slot is reused only when its last copy has
+retired; else the frame is skipped, never waited for. The textures and the
+fence travel as NT handles of the game's process (`MELLO_HOOK_FLAG_NT_HANDLES`,
+protocol version 5). The client duplicates them (`PROCESS_DUP_HANDLE` on the
+game), opens them with `OpenSharedResource1` and `OpenSharedFence`, and before
+each read waits on the GPU (`ID3D11DeviceContext4::Wait`) for
+`frame_fence_value`, which also names the slot. Measured with the fakegame
+(`--d3d12`, 640x360): the pixels arrive, 60 delivered a second at 144
+presents, and the loopback decodes the colour.
+
+**What works today:** DXGI swap chains, which covers Direct3D 12, 11 and 10,
+and Direct3D 9: shared textures for a D3D9Ex game on the client's adapter,
+memory for every other D3D9 game. Both for 32-bit and 64-bit games. OpenGL is
+the next step in the plan. Vulkan games use the WGC steps by decision
 (streaming-reliability plan §9).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
