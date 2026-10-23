@@ -236,7 +236,14 @@ Card types in the bento grid:
 - **Live stream card** — one person streaming now, drawn by `StreamCard`. A live stream is client state (`crew_state`), not a feed entry. The client shows it above the `this_week` cards, so it is always first.
 - **Session card** — "Your crew played Valorant for 3 hours." Game icon, participant avatars, duration, clip count. From event ledger.
 - **Catch-up card** — "ostkatt and FaiL hung out in General for 45m while you were away." Green label. Promoted from sidebar to center stage.
-- **Now playing card** — real-time game sensing. Game icon, who's playing, duration. Live data.
+- **Live session card** (`live-session`, `LiveSessionCard`) — a game in progress. Label NOW PLAYING with the red live pip. Red is only the pip. It shows the game art, the game name, the member octagons and "since N min". The client builds it from presence (game id, name, `started_at`) and the sensor of the viewer. It is not a ledger event.
+  - One card for each game. Crewmates in the same game share one card and count from the earliest start.
+  - A live stream is above the feed and comes first.
+  - With no hero, the live card takes the wide slot of the first row. A wide head2head card then becomes the cell beside it. A voice clip is never wide.
+  - A hero (a versus card or a hero clip) keeps its place. The live card is the first cell of the side column.
+  - More games are cells behind the first row.
+  - When the game ends, the live card leaves. The session card from the ledger replaces it. The two never show together.
+  - The skeleton trio does not count it as a real card.
 - **Recent games card** — the games the crew played this week, as three to six tiles keyed by game id. The header carries the session count and the total time: "14 sessions, 31 h this week". It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4).
 - **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
 - **Skeleton trio** — three dashed placeholders for an empty crew (see section 8).

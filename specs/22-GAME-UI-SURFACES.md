@@ -146,6 +146,19 @@ the presence heartbeat. No dedicated timer is needed.
 The line is empty when the member does not play a game, or when the member
 disabled activity sharing. See section 5.
 
+### 3.3a Live session card
+
+The crew feed shows a game in progress as a `LiveSessionCard`. See
+[CLIPS.md](./features/CLIPS.md) section 7.1 for the placement rule.
+
+| Source | Data |
+|---|---|
+| `presence.game` of a crewmate | Game id, game name, `started_at` |
+| `GameDetected` of the viewer | Same three values from the local sensor |
+
+The `presence_change` push carries `game`, so the card needs no crew state load.
+The client sends no new data. The card is never a ledger event.
+
 ### 3.4 Recent games data
 
 The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
@@ -311,6 +324,7 @@ badge on the game colour when extraction fails.
 | `RecentGamesCard` | `crew_feed.slint` | Recent games: header line and tiles |
 | `RecentGameTileCell` | `crew_feed.slint` | One game tile |
 | `PlayingBadge` | `crew_feed.slint` | Live playing marker |
+| `LiveSessionCard` | `crew_feed.slint` | NOW PLAYING card of the crew feed: pip, game art, game name, octagons, "since N min" |
 
 `client/ui/types.slint` declares the types. Both member row structs carry
 `game-line`.
