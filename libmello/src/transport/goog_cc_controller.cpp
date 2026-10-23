@@ -11,6 +11,7 @@
 #if defined(MELLO_HAS_GOOG_CC)
 
 #include <algorithm>
+#include <cstdlib>
 #include <deque>
 #include <map>
 #include <optional>
@@ -45,11 +46,36 @@ constexpr size_t kMaxHistoryPackets = 32'768;
 // One wrap of the 24-bit reference time (64 ms units).
 constexpr int64_t kReferenceWrapUs = (int64_t{1} << 24) * 64'000;
 
-// No field trials: the upstream M131 defaults (loss-based v2 on, initial
-// probes at 3x and 6x the start rate, congestion window pushback on).
+// The upstream M131 defaults (loss-based v2 on, initial probes at 3x and 6x
+// the start rate, the congestion window in drop-frame mode). For the
+// streaming gate's measurements MELLO_GOOG_CC_FIELD_TRIALS can set trials in
+// the libwebrtc format, "Key1/Value1/Key2/Value2/".
 class NoFieldTrials final : public webrtc::FieldTrialsView {
 public:
-    std::string Lookup(absl::string_view /*key*/) const override { return {}; }
+    NoFieldTrials() {
+        const char* env = std::getenv("MELLO_GOOG_CC_FIELD_TRIALS");
+        if (env == nullptr) return;
+        const std::string all(env);
+        size_t at = 0;
+        while (at < all.size()) {
+            const size_t key_end = all.find('/', at);
+            if (key_end == std::string::npos) break;
+            const size_t value_end = all.find('/', key_end + 1);
+            const std::string key = all.substr(at, key_end - at);
+            const std::string value = all.substr(
+                key_end + 1, (value_end == std::string::npos ? all.size() : value_end) - key_end - 1);
+            trials_.emplace(key, value);
+            if (value_end == std::string::npos) break;
+            at = value_end + 1;
+        }
+    }
+    std::string Lookup(absl::string_view key) const override {
+        const auto it = trials_.find(std::string(key));
+        return it == trials_.end() ? std::string() : it->second;
+    }
+
+private:
+    std::map<std::string, std::string> trials_;
 };
 
 Timestamp at_us(int64_t us) { return Timestamp::Micros(us); }
