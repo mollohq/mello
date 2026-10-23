@@ -320,12 +320,15 @@ pub struct PresentRec {
 /// a worker thread; the worker reads the code, converts to luma and writes
 /// the file. `ts` is the present thread's present time.
 /// One presented frame on its way to the worker: present time and RGBA.
-type FrameMsg = (u64, Vec<u8>);
+/// (present time, RGBA pixels, width, height).
+type FrameMsg = (u64, Vec<u8>, u32, u32);
 
 struct FrameSink {
     tx: Mutex<Option<std::sync::mpsc::Sender<FrameMsg>>>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
-    wrong_size: AtomicU64,
+    /// Frames at another size than the clip (a resolution rung): scaled to
+    /// the clip size before the code is read.
+    scaled: AtomicU64,
     /// Longest callback, us: the harness's own cost inside the present.
     callback_max_us: AtomicU64,
     width: u32,
@@ -341,9 +344,11 @@ unsafe extern "C" fn on_frame(
 ) {
     // SAFETY: user is the FrameSink the viewer owns until it stops.
     let sink = unsafe { &*(user as *const FrameSink) };
-    if rgba.is_null() || w != sink.width || h != sink.height {
-        sink.wrong_size.fetch_add(1, Ordering::Relaxed);
+    if rgba.is_null() || w == 0 || h == 0 {
         return;
+    }
+    if w != sink.width || h != sink.height {
+        sink.scaled.fetch_add(1, Ordering::Relaxed);
     }
     let started = Instant::now();
     let n = (w as usize) * (h as usize) * 4;
@@ -358,7 +363,7 @@ unsafe extern "C" fn on_frame(
     buf.clear();
     buf.extend_from_slice(px);
     if let Some(tx) = sink.tx.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
-        let _ = tx.send((ts, buf));
+        let _ = tx.send((ts, buf, w, h));
     }
     sink.callback_max_us
         .fetch_max(started.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -377,8 +382,18 @@ fn frame_worker(
     let mut presents = Vec::with_capacity(4096);
     let mut last: Option<FrameCode> = None;
     let mut slots = 0u64;
-    for (ts, px) in rx {
-        let code = code::read_rgba(&px, width as usize);
+    let mut scaled = Vec::new();
+    for (ts, frame, fw, fh) in rx {
+        // A frame at another size (the host stepped its resolution) is
+        // scaled to the clip size: the code and the scores read the clip
+        // size.
+        let px: &[u8] = if fw == width && fh == height {
+            &frame
+        } else {
+            scale_rgba(&frame, fw, fh, width, height, &mut scaled);
+            &scaled
+        };
+        let code = code::read_rgba(px, width as usize);
         let mut slot = None;
         if code.is_some() && code != last {
             for (i, y) in luma.iter_mut().enumerate() {
@@ -395,10 +410,34 @@ fn frame_worker(
             code,
             slot,
         });
-        pool.lock().unwrap_or_else(|p| p.into_inner()).push(px);
+        pool.lock().unwrap_or_else(|p| p.into_inner()).push(frame);
     }
     let _ = writer.flush();
     presents
+}
+
+/// Bilinear scale of a `sw` x `sh` RGBA frame to `dw` x `dh` into `out`.
+fn scale_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, out: &mut Vec<u8>) {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    out.resize(dw * dh * 4, 0);
+    for y in 0..dh {
+        let fy = ((y as f32 + 0.5) * sh as f32 / dh as f32 - 0.5).max(0.0);
+        let y0 = (fy as usize).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - y0 as f32;
+        for x in 0..dw {
+            let fx = ((x as f32 + 0.5) * sw as f32 / dw as f32 - 0.5).max(0.0);
+            let x0 = (fx as usize).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - x0 as f32;
+            for c in 0..4 {
+                let p = |xx: usize, yy: usize| f32::from(src[(yy * sw + xx) * 4 + c]);
+                let top = p(x0, y0) * (1.0 - wx) + p(x1, y0) * wx;
+                let bottom = p(x0, y1) * (1.0 - wx) + p(x1, y1) * wx;
+                out[(y * dw + x) * 4 + c] = (top * (1.0 - wy) + bottom * wy + 0.5) as u8;
+            }
+        }
+    }
 }
 
 /// What a viewer recorded.
@@ -414,7 +453,8 @@ pub struct ViewerRecord {
     pub feed_failures: u64,
     pub aus_fed: u64,
     pub aus_idr: u64,
-    pub wrong_size: u64,
+    /// Frames at another size than the clip, scaled before the code was read.
+    pub scaled_frames: u64,
     /// Longest tick of the viewer loop, and ticks over 30 ms: the loop's own
     /// stalls (the receive session flushes after a 3-AU backlog).
     pub tick_max_ms: f64,
@@ -479,7 +519,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         feed_failures: 0,
         aus_fed: 0,
         aus_idr: 0,
-        wrong_size: 0,
+        scaled_frames: 0,
         tick_max_ms: 0.0,
         ticks_over_30ms: 0,
         present_max_ms: 0.0,
@@ -506,7 +546,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
     let sink = Box::new(FrameSink {
         tx: Mutex::new(Some(tx)),
         pool,
-        wrong_size: AtomicU64::new(0),
+        scaled: AtomicU64::new(0),
         callback_max_us: AtomicU64::new(0),
         width: spec.width,
         height: spec.height,
@@ -630,7 +670,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
     // SAFETY: stop before the sink goes; no callback after it returns.
     unsafe { mello_sys::mello_stream_stop_viewer(viewer) };
     rt.block_on(conn.leave());
-    rec.wrong_size = sink.wrong_size.load(Ordering::Relaxed);
+    rec.scaled_frames = sink.scaled.load(Ordering::Relaxed);
     rec.callback_max_ms = sink.callback_max_us.load(Ordering::Relaxed) as f64 / 1000.0;
     // Closing the channel ends the worker once it has written every frame.
     sink.tx.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -648,4 +688,39 @@ pub fn read_luma(path: &Path, slot: u64, w: u32, h: u32) -> Result<Vec<u8>, Stri
     let mut buf = vec![0u8; n];
     f.read_exact(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Stage 3: after a resolution rung (1080p to 540p) the viewer shows
+    // 960x540 frames. The sink dropped every one of them as the wrong size;
+    // now it scales them to the clip size and the code still reads.
+    #[test]
+    fn a_frame_at_half_the_clip_size_still_reads_its_code() {
+        let (w, h) = (1920usize, 1080usize);
+        let mut y = vec![90u8; w * h];
+        let mut u = vec![128u8; w * h / 4];
+        let mut v = vec![128u8; w * h / 4];
+        let want = code::FrameCode {
+            index: 4321,
+            clock_ms: 72_015,
+        };
+        code::paint(want, &mut y, w, &mut u, &mut v, w / 2);
+        let full: Vec<u8> = y
+            .iter()
+            .flat_map(|&l| {
+                let g = (((i32::from(l) - 16) * 298 + 128) >> 8).clamp(0, 255) as u8;
+                [g, g, g, 255]
+            })
+            .collect();
+        // What the viewer shows after the rung, then what the sink reads.
+        let mut half = Vec::new();
+        scale_rgba(&full, 1920, 1080, 960, 540, &mut half);
+        assert_eq!(half.len(), 960 * 540 * 4);
+        let mut back = Vec::new();
+        scale_rgba(&half, 960, 540, 1920, 1080, &mut back);
+        assert_eq!(code::read_rgba(&back, w), Some(want));
+    }
 }

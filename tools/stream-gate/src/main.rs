@@ -701,7 +701,7 @@ fn run_profile(
                     "wrong_ssrc": x.rx_core_wrong_ssrc_packets,
                     "invalid_h264": x.rx_core_invalid_h264_packets,
                 })),
-                "wrong_size_frames": v.wrong_size,
+                "scaled_frames": v.scaled_frames,
             })
         })
         .collect();
