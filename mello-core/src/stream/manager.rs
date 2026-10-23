@@ -158,6 +158,9 @@ const QUEUE_RECOVERY_COALESCE_THRESHOLD: usize = 10;
 const QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS: u64 = 2;
 const VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS: u64 = 500;
 const FEEDBACK_POLL_INTERVAL_MS: u64 = 10;
+/// Pointer poll for the hook's cursor packets: 30 a second, the rate a
+/// pointer looks smooth at and a control channel carries without effort.
+const CURSOR_POLL_INTERVAL_MS: u64 = 33;
 const REMB_STALE_SECS: u64 = 3;
 const REMB_INCREASE_MAX_PER_SEC: f32 = 0.05;
 /// At most one encoder bitrate increase per window. A decrease over the dead
@@ -404,6 +407,12 @@ pub struct StreamManager {
     idle_tick_last_repeats: u64,
     /// `idle_repeat_frames` as `check_capture_state` last read it.
     idle_repeats_seen: u64,
+    /// Buffer for `mello_stream_get_cursor_packet`, allocated once.
+    cursor_buf: Vec<u8>,
+    /// The last cursor message with a shape, and the last one sent. A viewer
+    /// that joins later gets both: shapes are only sent when they change.
+    cursor_shape_msg: Option<Vec<u8>>,
+    cursor_last_msg: Option<Vec<u8>>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -495,6 +504,9 @@ impl StreamManager {
             host_idle: false,
             idle_tick_last_repeats: 0,
             idle_repeats_seen: 0,
+            cursor_buf: vec![0; super::cursor::MAX_CURSOR_PACKET_BYTES],
+            cursor_shape_msg: None,
+            cursor_last_msg: None,
         }
     }
 
@@ -1022,6 +1034,34 @@ impl StreamManager {
         }
     }
 
+    /// Send the game capture hook's pointer to the viewers (`stream::cursor`).
+    /// libmello answers with nothing new for every other capture method.
+    async fn poll_cursor(&mut self) {
+        if self.host.is_null() {
+            return;
+        }
+        let capacity = i32::try_from(self.cursor_buf.len()).unwrap_or(i32::MAX);
+        let size = unsafe {
+            mello_sys::mello_stream_get_cursor_packet(
+                self.host,
+                self.cursor_buf.as_mut_ptr(),
+                capacity,
+            )
+        };
+        let Ok(size) = usize::try_from(size) else {
+            return;
+        };
+        if size == 0 || size > self.cursor_buf.len() {
+            return;
+        }
+        let msg = super::cursor::control_message_from_native(&self.cursor_buf[..size]);
+        self.sink.send_control(&msg).await;
+        if super::cursor::message_has_shape(&msg) {
+            self.cursor_shape_msg = Some(msg.clone());
+        }
+        self.cursor_last_msg = Some(msg);
+    }
+
     /// Main run loop — called from a dedicated tokio task after stream start.
     pub async fn run(&mut self, mut stop: oneshot::Receiver<()>) {
         log::info!("Stream manager run loop started");
@@ -1039,6 +1079,8 @@ impl StreamManager {
         let mut stats_tick =
             tokio::time::interval(Duration::from_secs(STREAM_STATS_REPORT_INTERVAL_SECS));
         stats_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+        let mut cursor_tick = tokio::time::interval(Duration::from_millis(CURSOR_POLL_INTERVAL_MS));
+        cursor_tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
 
         loop {
             tokio::select! {
@@ -1067,6 +1109,9 @@ impl StreamManager {
                 }
                 _ = stats_tick.tick() => {
                     self.report_stream_stats().await;
+                }
+                _ = cursor_tick.tick() => {
+                    self.poll_cursor().await;
                 }
                 else => {
                     log::info!("Stream manager: packet channels closed");
@@ -1112,6 +1157,14 @@ impl StreamManager {
             self.sink
                 .send_control(&super::pause::idle_message(true))
                 .await;
+        }
+        // The pointer shape is sent only when it changes: give it to the
+        // newcomer, then the latest position.
+        if let Some(shape) = &self.cursor_shape_msg {
+            self.sink.send_control(shape).await;
+            if let Some(last) = self.cursor_last_msg.as_ref().filter(|m| *m != shape) {
+                self.sink.send_control(last).await;
+            }
         }
     }
 
@@ -2054,6 +2107,54 @@ mod tests {
             control.iter().any(|m| *m == vec![0x04, 0x03, 0x01]),
             "late joiner into a paused stream must be told it is paused"
         );
+        std::mem::forget(mgr);
+    }
+
+    /// A pointer shape goes out only when it changes, so a viewer that joins
+    /// later gets the last shape and then the last position.
+    #[test]
+    fn viewer_join_gets_the_cursor_shape_and_position() {
+        use crate::stream::cursor::{encode_cursor_message, CursorPacket, CursorShape};
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
+        let sink = Arc::new(FakeSink::new());
+        let (_video_tx, video_rx) = mpsc::channel(4);
+        let (_audio_tx, audio_rx) = mpsc::channel(4);
+        let mut mgr = StreamManager::new(
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            sink.clone(),
+            config,
+            video_rx,
+            audio_rx,
+        );
+        let shape = encode_cursor_message(&CursorPacket {
+            x: 10,
+            y: 20,
+            visible: true,
+            shape: Some(CursorShape {
+                width: 1,
+                height: 1,
+                rgba: vec![1, 2, 3, 4],
+            }),
+        });
+        let moved = encode_cursor_message(&CursorPacket {
+            x: 11,
+            y: 21,
+            visible: true,
+            shape: None,
+        });
+        mgr.cursor_shape_msg = Some(shape.clone());
+        mgr.cursor_last_msg = Some(moved.clone());
+        rt.block_on(mgr.handle_viewer_joined("late-viewer"));
+        let control = sink.control.lock().expect("lock");
+        let shape_at = control.iter().position(|m| *m == shape);
+        let moved_at = control.iter().position(|m| *m == moved);
+        assert!(shape_at.is_some(), "the late joiner got no pointer shape");
+        assert!(moved_at > shape_at, "the position must follow the shape");
         std::mem::forget(mgr);
     }
 

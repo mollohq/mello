@@ -169,6 +169,13 @@ public:
         std::string capture_history;
         // Cumulative present-to-capture delay, 1 ms buckets.
         std::array<uint32_t, PresentDelayHistogram::kBuckets> present_delay_hist{};
+        // The source size of the latest captured frame, and how many times it
+        // changed after the first frame. The encode size stays fixed: the
+        // whole source scales into it. The counter is the signal for a
+        // geometry change (streaming-quality stage 4 reacts to it).
+        uint32_t    source_width        = 0;
+        uint32_t    source_height       = 0;
+        uint32_t    source_size_changes = 0;
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -197,6 +204,15 @@ public:
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
 
     // CURSOR
+    /// The next cursor packet for the viewers, or false when there is nothing
+    /// new. Only a backend whose frames have no pointer and must not get one
+    /// (CursorMode::Packet, the hook) sends position and shape. The position
+    /// is in encode pixels, and the shape is scaled as the frame is (at most
+    /// kMaxCursorPacketSide a side), so the viewer draws it over the decoded
+    /// picture as it is. When the stream moves to a backend that has the
+    /// pointer in its frames, one hidden packet tells the viewer to stop
+    /// drawing. A packet with a shape follows every shape change. Any one
+    /// thread (the stream manager polls it).
     bool get_cursor_packet(uint8_t* buf, size_t* size);
     void apply_cursor_packet(const uint8_t* buf, size_t size);
     void get_cursor_state(CursorState& out) const;
@@ -241,6 +257,21 @@ private:
 
     mutable std::mutex cursor_mutex_;
     CursorState        viewer_cursor_;
+
+    // Host pointer. `cursor_frame_` belongs to the capture thread (drawn into
+    // the frame for CursorMode::Composite). The packet state below belongs to
+    // the get_cursor_packet caller, under `cursor_packet_mutex_`.
+    CursorData           cursor_frame_;
+    std::mutex           cursor_packet_mutex_;
+    CursorData           cursor_packet_src_;
+    CursorState          cursor_packet_shape_;      // RGBA, scaled to encode pixels
+    uint32_t             cursor_packet_serial_ = 0;  // source serial of that shape
+    uint32_t             cursor_packet_scale_milli_ = 0;
+    uint32_t             cursor_shape_version_ = 0;  // bumps when the scaled shape changes
+    uint32_t             cursor_sent_version_ = 0;
+    bool                 cursor_sent_visible_ = false;
+    int32_t              cursor_sent_x_ = 0;
+    int32_t              cursor_sent_y_ = 0;
 
     // Encode dimensions (even-aligned from capture)
     uint32_t encode_w_ = 0;
@@ -312,6 +343,12 @@ private:
     // caller; keeping the time math out of here avoids a second clock policy.
     std::atomic<uint64_t> frames_captured_{0};
     std::atomic<uint64_t> last_capture_us_{0};
+    // Source size of the latest converted frame and the count of changes after
+    // the first one. Written on the capture thread, read by the stats caller.
+    std::atomic<uint32_t> source_w_{0};
+    std::atomic<uint32_t> source_h_{0};
+    std::atomic<uint32_t> source_size_changes_{0};
+    bool                  source_size_known_ = false;  // capture thread only
 
     // Decimation target. 0 means "no decimation" (encode every captured frame).
     // Read on the capture thread, written from the control thread.

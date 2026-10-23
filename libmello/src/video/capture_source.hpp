@@ -49,14 +49,34 @@ struct CaptureSourceDesc {
     ReferenceClip reference{};
 };
 
+/// The pointer as a backend sees it, in the pixels of the frames it delivers.
 struct CursorData {
-    int32_t  x = 0;
+    int32_t  x = 0;              ///< top-left of the shape (the hotspot already subtracted)
     int32_t  y = 0;
     bool     visible = true;
     bool     shape_changed = false;
+    /// Changes whenever the shape changes. `get_cursor` copies the shape only
+    /// when the caller's value differs, so a caller that keeps one CursorData
+    /// pays for the bitmap once per shape, not once per frame.
+    uint32_t shape_serial = 0;
     uint16_t shape_w = 0;
     uint16_t shape_h = 0;
-    std::vector<uint8_t> shape_rgba;
+    std::vector<uint8_t> shape_bgra;  ///< shape_w * shape_h * 4, straight alpha
+};
+
+/// Who puts the pointer in front of the viewer.
+enum class CursorMode {
+    /// Nobody: the backend has no pointer to give.
+    None,
+    /// The backend gives the pointer, and the preprocessor draws it into the
+    /// frame (desktop duplication: the desktop image has no pointer).
+    Composite,
+    /// The captured frames already have the pointer (WGC with cursor capture on).
+    InFrame,
+    /// The frames have no pointer and must not get one: the viewer draws it
+    /// from cursor packets (the hook: a game draws its own pointer, or hides
+    /// the system one, and drawing it into the frame would double it).
+    Packet,
 };
 
 /// What the capture is doing right now, for the person streaming and for the
@@ -101,6 +121,8 @@ public:
     virtual const char* backend_name() const = 0;
 
     virtual bool get_cursor(CursorData& out) { (void)out; return false; }
+    /// How the pointer reaches the viewer for this backend. See CursorMode.
+    virtual CursorMode cursor_mode() const { return CursorMode::None; }
 
     /// Route system audio captured alongside video to `cb`, replacing any
     /// previous callback. Safe to call before or after `start()`.

@@ -110,6 +110,16 @@ since the method it settles on keeps delivering. When the game enters exclusive
 fullscreen, the best method becomes possible again, so the ladder restarts from
 the top.
 
+**A move starts the next method before it stops the current one.** Only one
+method reaches the pipeline at a time. A walk back up (exclusive fullscreen,
+and the 30 s retry while the game stays there) keeps the current method on the
+stream until the next one delivers its first frame, for at most 2 s. When the
+next method delivers nothing in that time, it stops, and the current method
+never stopped. A hook attempt takes seconds (injection, then the game's next
+present), and stopping first showed viewers no frames for all of that time.
+A move down the ladder (the current method failed) swaps as soon as the next
+method starts, because the current one has nothing to keep.
+
 Every ladder move forces a keyframe. When every method has delivered nothing,
 the ladder goes back to the first method, waits 30 s, and tries them all again.
 The user sees an error only with proof that the game is rendering: the game is
@@ -154,11 +164,11 @@ as x64 and links the static CRT):
 
 | Binary | Runs where | Does what |
 |---|---|---|
-| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI and D3D9 present, copies, signals |
+| `mello-hook{32,64}.dll` | Inside the game | Detours DXGI, D3D9 and OpenGL present (and D3D12 `ExecuteCommandLists`), copies, signals |
 | `mello-inject{32,64}.exe` | Its own process | `SetWindowsHookEx(WH_GETMESSAGE)` on the game's window thread |
 | `mello-offsets{32,64}.exe` | Its own process | Prints present-function offsets |
 
-**The shared block** (`hook/include/mello_hook_protocol.h`, protocol version 3)
+**The shared block** (`hook/include/mello_hook_protocol.h`, protocol version 4)
 is the whole contract. The client creates it, the events and the keepalive
 before it injects; the hook only opens them. Each field has one writer. The
 client writes the LUID of its adapter into `client_adapter_luid`, so a Direct3D
@@ -166,6 +176,17 @@ client writes the LUID of its adapter into `client_adapter_luid`, so a Direct3D
 handles (`D3D11_RESOURCE_MISC_SHARED`, `GetSharedHandle`), stored as
 `uint32_t`, so a 32-bit game's texture opens in the 64-bit client with no
 `DuplicateHandle`.
+
+**The hook copies at the stream's rate, not the game's.** The client writes
+its `target_fps` into the block, and the hook copies a frame only when one is
+due by libmello's cadence rule (`frame_cadence.hpp`, compiled into the hook
+too). A present between two due frames costs the game one check. A 144 fps
+game on a 60 fps stream gives 60 copies a second (measured with the fakegame
+at `--fps 144`: 144 presents, 60 copies, 60 delivered, Direct3D 11 and 9);
+before, every present was copied, and on the Direct3D 9 memory path every
+present stalled the game's render thread for a read-back. `frames_copied`
+counts the copies. The client keeps its own throttle with the same rule; two
+throttles with the rule in series pass every frame.
 
 **Offsets, not probes.** The hook never creates a device inside a game to find
 `Present`. The offsets helper builds a throwaway D3D11 swap chain in its own
@@ -260,10 +281,64 @@ is one. `Reset` and
 `ResetEx` are detoured as well: a reset changes the back buffer, so the
 read-back surfaces are dropped and the next present rebuilds them.
 
-**What works today:** DXGI swap chains, which covers Direct3D 11 and 10, and
-Direct3D 9: shared textures for a D3D9Ex game on the client's adapter, memory
-for every other D3D9 game. Both for 32-bit and 64-bit games. D3D12 and OpenGL
-are later steps in the plan. Vulkan games use the WGC steps by decision
+**Direct3D 12.** The DXGI `Present` detour fires for a D3D12 swap chain too,
+but the copy needs the command queue the game presents on, and a D3D12 swap
+chain does not give it out (`GetDevice` answers the `ID3D12Device`, and
+`E_NOINTERFACE` for `ID3D12CommandQueue`). So the hook detours
+`ID3D12CommandQueue::ExecuteCommandLists`. Its address comes from a command
+queue made once on the game's own device and released at once: a game that
+ships the Agility SDK runs its own `D3D12Core.dll`, where an offset of the
+system DLL points anywhere. The detour keeps the direct queues the game
+submits to (at most 8, each referenced once and never released, so the
+present path reads them with no lock). DXGI submits on the swap chain's own
+queue inside `Present`, so a queue seen on the presenting thread during
+`Present` is the right one; else the last direct queue of the same device.
+
+On each due present, before the real `Present`, the hook records a copy of the
+back buffer (barriers present to copy source and back) into one of two
+committed textures with `D3D12_HEAP_FLAG_SHARED`, executes it on that queue,
+and signals a shared fence. A slot is reused only when its last copy has
+retired; else the frame is skipped, never waited for. The textures and the
+fence travel as NT handles of the game's process (`MELLO_HOOK_FLAG_NT_HANDLES`,
+protocol version 5). The client duplicates them (`PROCESS_DUP_HANDLE` on the
+game), opens them with `OpenSharedResource1` and `OpenSharedFence`, and before
+each read waits on the GPU (`ID3D11DeviceContext4::Wait`) for
+`frame_fence_value`, which also names the slot. Measured with the fakegame
+(`--d3d12`, 640x360): the pixels arrive, 60 delivered a second at 144
+presents, and the loopback decodes the colour.
+
+**OpenGL.** The hook detours `wglSwapBuffers`, an export of `opengl32.dll`
+that it resolves by name, only when the game has loaded `opengl32.dll` (the
+hook links no GL library). Inside the detour the game's context is current.
+With `WGL_NV_DX_interop2`, the hook makes a D3D11 device on the client's
+adapter (its LUID is in the block), two legacy-shared BGRA textures, registers
+them with GL, and blits the default framebuffer into one (flipped: GL rows go
+bottom up), then unlocks and flushes. The client opens them as it opens a
+DXGI game's textures. Without the interop (or with
+`MELLO_HOOK_GL_READBACK=1`, which sets `MELLO_HOOK_OPTION_GL_READBACK`, protocol
+version 6), the back buffer is read into one of two pixel buffer objects and
+the one read a due frame earlier is mapped and copied, flipped, into the
+memory frame block (`MELLO_HOOK_FLAG_CPU_COPY`): the read is asynchronous, so
+the game's thread does not wait, and a frame arrives one due frame late. Every
+piece of GL state the copy touches (framebuffer bindings, the default
+framebuffer's read buffer, scissor test, sRGB write, pack buffer and pack
+state) is put back, and the hook leaves no GL error behind.
+
+Measured on the game's thread with the fakegame (`--opengl`, 60 copies a
+second, this NVIDIA machine shared with other builds):
+
+| Path | 640x360, game at 144 fps | 640x360, game uncapped | 1920x1080, game uncapped |
+|---|---|---|---|
+| Interop | 0.26 ms a copy | 1.1 ms | 1.0 ms |
+| Memory | 0.18 ms | 0.36 ms | 1.1 ms |
+
+The interop lock waits for the GPU when the game keeps it busy; the memory
+path's cost is the copy of the mapped pixels.
+
+**What works today:** DXGI swap chains, which covers Direct3D 12, 11 and 10;
+Direct3D 9: shared textures for a D3D9Ex game on the client's adapter,
+memory for every other D3D9 game; and OpenGL. Both for 32-bit and 64-bit
+games. Vulkan games use the WGC steps by decision
 (streaming-reliability plan §9).
 
 **Deferred start:** If the target window is minimized at stream start (user tabbed out to launch the stream), capture waits. The monitor thread polls until the window is restored, then initializes the backend. Width/height return restored dimensions during the wait so the encoder can pre-initialize. This matches Discord's behaviour.
@@ -327,6 +402,18 @@ The encode size keeps the source aspect (`VideoPipeline::encode_size_for`):
 
 The host reports the size through `mello_stream_get_host_resolution`.
 
+**The source size can change mid-stream; the encode size does not.** A window
+resize, a display mode change, or a ladder move to a method of another size
+gives frames of a new size. Every backend follows it: WGC makes its frame pool
+again at the new content size (the frame of the change is dropped), DXGI
+rebuilds duplication at the new mode, the hook publishes new textures. The
+preprocessor scales the whole new source into the fixed encode size with the
+aspect kept: black bars (studio black) fill the rest, nothing is cropped. An
+aspect within 1 % of the encode aspect fills the output, because that is the
+rounding of `encode_size_for`. `MelloStreamStats` carries `source_width`,
+`source_height` and `source_size_changes` (changes after the first frame); a
+change of the counter is the signal for the stage 4 geometry controller.
+
 ### 3.3 Encode Queue
 
 A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP = 2`). When the queue is full, the oldest job is evicted (newest-wins). This decouples the capture callback thread from the potentially-blocking encode path.
@@ -363,7 +450,22 @@ into `base_config_`, so a later bitrate reconfigure does not resurrect the
 features that were given up.
 
 Driven by measurement rather than a GPU allowlist, so it covers hardware that
-has never been tested. Non-NVENC backends inherit a default no-op.
+has never been tested. AMF and QSV have their own tiers, driven by the same
+overload signal; the pipeline stops at each backend's `max_cost_tier()`:
+
+| Tier | AMF (H.264) | QSV (oneVPL) |
+|------|-------------|--------------|
+| 0 | init: ultra-low-latency usage, pre-analysis off, the usage's quality preset | TargetUsage 4 (balanced) |
+| 1 | quality preset speed | TargetUsage 6 |
+| 2 | also VBAQ, high motion quality boost and pre-analysis off | TargetUsage 7 (best speed) |
+
+AMF sets the properties and calls `ReInit` (some are static on some drivers);
+a step that changes nothing (the usage default was already the cheaper one)
+goes on to the next. QSV applies TargetUsage with `MFXVideoENCODE_Reset` and
+keeps it in its parameters, so a later bitrate Reset does not take it back.
+Both force an IDR. A step the driver refuses ends the tiers for the session,
+as on NVENC. VideoToolbox has no tiers. The AMF and QSV tiers are compiled and
+unit tested only: there is no AMD or Intel host in the lab.
 
 ### 3.5 Encoded Packet Handoff
 
@@ -699,7 +801,34 @@ only part of each frame.
 
 ## 10. Cursor Streaming
 
-The host captures cursor state (position, visibility, shape RGBA) alongside video frames. Cursor data is serialized into a compact binary packet and sent via the control channel. The viewer deserializes and renders the cursor overlay independently of video frames.
+Each capture backend says who puts the pointer in front of the viewer
+(`CaptureSource::cursor_mode`):
+
+| Backend | Mode | What happens |
+|---|---|---|
+| WGC (window and monitor) | in frame | `IsCursorCaptureEnabled(true)`: WGC draws the pointer into the frames itself. |
+| DXGI desktop duplication | composite | The desktop image has no pointer. The preprocessor draws the duplication pointer shape (colour, monochrome and masked colour, as straight-alpha BGRA) into a copy of the frame before the colour conversion. The capture's own texture is never written. |
+| Game capture hook | packet | The back buffer never has the system pointer, and drawing it in would double the pointer a game draws itself. The viewer draws it from cursor packets. |
+
+**Cursor packets** (hook only). The host manager polls
+`mello_stream_get_cursor_packet` 30 times a second and sends what it returns on
+the reliable control channel as `[0x04, 0x02, x i32, y i32, visible, has_shape,
+(w u16, h u16, RGBA)]` (`mello-core/src/stream/cursor.rs`, libmello
+`cursor.cpp`). libmello returns a packet only on a change. The position is the
+top-left of the shape in encode pixels; the shape is scaled as the frame is, at
+most 128 a side. A shape travels only when it changes; the manager keeps the
+last shape packet and the last packet and sends both to a viewer that joins.
+The hook takes the system pointer (`GetCursorInfo`) when it is over the game's
+window and the game is the window under it, and maps the window's client area
+onto the back buffer size. When the stream moves to a backend with another
+mode, one hidden packet tells the viewer to stop drawing.
+
+**Viewer.** The control-channel callback parses the packet into the watched
+stream's pointer (one presenter, one pointer). The DComp presenter draws it as
+a child visual of the video visual, so the video's scale and clip apply and the
+offset is in stream pixels. A new shape is uploaded once into a small
+premultiplied-alpha composition swap chain; a move only sets the offset. The
+pointer hides with the video for the pause card.
 
 ---
 

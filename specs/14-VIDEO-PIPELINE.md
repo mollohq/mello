@@ -297,7 +297,12 @@ private:
 } // namespace mello::video
 ```
 
-**Cursor handling in DXGI:** `IDXGIOutputDuplication::AcquireNextFrame()` returns cursor shape and position separately from the desktop texture in `DXGI_OUTDUPL_FRAME_INFO`. The cursor data is extracted and forwarded as a cursor packet (§6) — it is never composited into the captured texture.
+**Display mode change:** duplication is revoked and rebuilt at the new size;
+the preprocessor scales the new desktop into the fixed encode size. The rebuild
+refused a new size until streaming-quality stage 8, and the stream gave up
+after about 10 s.
+
+**Cursor handling in DXGI:** `AcquireNextFrame` gives the pointer position and shape apart from the desktop image, which has no pointer. The backend turns every shape kind into straight-alpha BGRA (`pointer_shape_to_bgra`, `cursor.cpp`) and reports `CursorMode::Composite`; the preprocessor draws it into a copy of the frame (`VideoPreprocessor::convert` with a `CursorOverlay`). See `12-STREAMING.md` §10.
 
 ### 4.4 Windows Graphics Capture (WGC) Backend
 
@@ -348,7 +353,11 @@ private:
 } // namespace mello::video
 ```
 
-**WGC and cursor:** WGC composites the cursor into the captured texture by default. To match the DXGI path (cursor as separate channel), WGC capture must disable cursor capture via `GraphicsCaptureSession::IsCursorCaptureEnabled = false` and read cursor position via `GetCursorInfo()` instead.
+**Window resize:** a frame whose `ContentSize` differs from the pool size is
+dropped, and the pool is made again (`Recreate`) at the new size. The next
+frame has the whole window.
+
+**WGC and cursor:** `IsCursorCaptureEnabled(true)`. WGC draws the pointer into the captured texture where it is over the window or monitor (`CursorMode::InFrame`). Until streaming-quality stage 8 it was off, and no viewer saw a pointer.
 
 ### 4.5 ProcessCapture and the Capture Ladder
 
@@ -369,6 +378,12 @@ Exclusive fullscreen is detected with `SHQueryUserNotificationState`. It does
 not swap to DXGI: no screen method sees exclusive fullscreen. It rebuilds the
 current method and restarts the ladder from the top, so the hook gets another
 chance.
+
+A method change starts the next backend before it stops the old one. Each
+backend delivers through a callback with its own token, and only the active
+token reaches the pipeline. A walk back up keeps the old backend until the next
+one delivers its first frame (2 s at most); on failure the next backend stops
+and the old one keeps the stream. `ProcessCapture::activate` has the rules.
 
 Every method change raises `consume_swap_event()`, and the pipeline forces a
 keyframe so the viewer can resync. `state()` reports what the capture is doing
@@ -495,6 +510,15 @@ bool initialize(const GraphicsDevice& device,
 The D3D11 Video Processor handles scaling automatically when `content_desc.InputWidth/Height` differs from `OutputWidth/Height`. Source and destination rectangles are set explicitly to ensure correct sampling.
 
 In `VideoPipeline::start_host()`, `encode_size_for` sets the encode size from the capture size and `PipelineConfig::height` (the preset height). The width follows the source aspect, so the scale never stretches the picture. The rules are in `12-STREAMING.md` §3.2. All dimensions are even-aligned for NV12 compatibility.
+
+The rectangles are always explicit (`VideoPreprocessor::fit`): the source
+rectangle is the whole source, the destination rectangle keeps its aspect
+inside the output, and the output background is studio black (Y 16, Cb and
+Cr 128, given in YCbCr: given as RGB black the NVIDIA driver wrote Y 0). When a
+frame arrives at a new size, `convert` makes the video processor again for the
+new input size and keeps the NV12 ring textures, which the encoder registered.
+`ConvertResult::source_resized` tells the pipeline, which counts the change in
+`source_size_changes`.
 
 This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 = 40% fewer pixels), improving quality per bit and lowering bandwidth.
 

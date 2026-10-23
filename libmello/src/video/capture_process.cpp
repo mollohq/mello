@@ -374,89 +374,172 @@ std::string ProcessCapture::method_history() const {
     return history_;
 }
 
-bool ProcessCapture::activate(size_t index, const char* reason) {
+std::unique_ptr<CaptureSource> ProcessCapture::build_step(LadderStep step) const {
+    if (test_factory_) return test_factory_(step);
+    return make_step(step, find_main_window(pid_));
+}
+
+CaptureSource::FrameCallback ProcessCapture::delivery_for(uint64_t token) {
+    return [this, token](ID3D11Texture2D* tex, uint64_t ts) {
+        {
+            std::lock_guard<std::mutex> lock(candidate_mutex_);
+            if (token == candidate_token_ && !candidate_delivered_) {
+                candidate_delivered_ = true;
+                candidate_cv_.notify_all();
+            }
+        }
+        // One backend at a time reaches the pipeline. A candidate that is
+        // still proving itself, and a backend on its way out, are dropped
+        // here: their frames are real, but the stream belongs to the other.
+        std::lock_guard<std::mutex> lock(deliver_mutex_);
+        if (token != active_token_) return;
+        step_frames_.fetch_add(1, std::memory_order_relaxed);
+        if (exhausted_.load(std::memory_order_relaxed)) {
+            exhausted_.store(false, std::memory_order_relaxed);
+            MELLO_LOG_INFO(TAG, "ladder: frames arrived for pid=%u, capture recovered", pid_);
+        }
+        if (callback_) callback_(tex, ts);
+    };
+}
+
+bool ProcessCapture::activate(size_t index, const char* reason,
+                              bool keep_old_until_first_frame) {
     std::lock_guard<std::mutex> op(ladder_op_mutex_);
     if (index >= ladder_.size()) return false;
     if (device_poisoned_.load(std::memory_order_relaxed)) return false;
     const LadderStep step = ladder_[index];
 
-    // Take the old backend out under the short lock, then work on it without
-    // holding it: stop() can block for up to its own deadline.
-    std::unique_ptr<CaptureSource> old;
-    std::string old_name;
+    std::string old_name = "none";
     uint32_t old_w = 0, old_h = 0;
+    bool has_old = false;
     {
         std::lock_guard<std::mutex> lock(swap_mutex_);
-        old = std::move(active_);
-        if (old) {
-            old_name = old->backend_name();
-            old_w = old->width();
-            old_h = old->height();
-        }
-    }
-    if (old_name.empty()) old_name = "none";
-
-    if (old) {
-        old->stop();
-        if (old->stop_timed_out()) {
-            // Abandoned, not stopped: leak it rather than destroy it under a
-            // thread that still runs. That thread also keeps the D3D11 device
-            // busy in the driver, so no further method can start on it.
-            MELLO_LOG_ERROR(TAG,
-                "ladder: %s abandoned during a swap; it is leaked and the capture device "
-                "is unusable for the rest of this stream", old_name.c_str());
-            (void)old.release();
-            device_poisoned_ = true;
-            stop_timed_out_ = true;
-            return false;
+        if (active_) {
+            has_old = true;
+            old_name = active_->backend_name();
+            old_w = active_->width();
+            old_h = active_->height();
         }
     }
 
-    HWND hwnd = find_main_window(pid_);
-    auto next = make_step(step, hwnd);
+    // 1. Start the next backend while the old one keeps the stream. A hook
+    // attempt takes seconds (injection, then the game's first present), and
+    // stopping first left the viewer with no frames for all of that time,
+    // every 30 s while a game sat in exclusive fullscreen.
+    const uint64_t token = next_token_++;
+    {
+        std::lock_guard<std::mutex> lock(candidate_mutex_);
+        candidate_token_ = token;
+        candidate_delivered_ = false;
+    }
+    auto next = build_step(step);
     if (!next) {
         MELLO_LOG_WARN(TAG, "ladder: %s unavailable for pid=%u", ladder_step_name(step), pid_);
     } else {
         next->set_present_delay_histogram(delay_hist_);
-        if (!next->start(target_fps_, counting_callback_)) {
+        if (!next->start(target_fps_, delivery_for(token))) {
             MELLO_LOG_ERROR(TAG, "ladder: %s failed to start for pid=%u",
                             ladder_step_name(step), pid_);
             next.reset();
         }
     }
 
-    if (!next) {
-        // Put the old backend back so the stream keeps whatever it had.
-        if (old) {
-            if (!old->start(target_fps_, counting_callback_)) {
-                MELLO_LOG_ERROR(TAG, "ladder: previous backend %s did not restart",
-                                old_name.c_str());
-            }
-            std::lock_guard<std::mutex> lock(swap_mutex_);
-            active_ = std::move(old);
+    // 2. Wait for its first frame while the old backend still delivers.
+    if (next && has_old && keep_old_until_first_frame) {
+        bool delivered = false;
+        {
+            std::unique_lock<std::mutex> lock(candidate_mutex_);
+            delivered = candidate_cv_.wait_for(
+                lock, std::chrono::microseconds(ladder::kFirstFrameDeadlineUs), [this] {
+                    // A stop ends the wait: the stream is going away.
+                    return candidate_delivered_ || !running_.load();
+                });
+            delivered = delivered && candidate_delivered_;
         }
-        return false;
+        if (!delivered) {
+            MELLO_LOG_INFO(TAG,
+                "ladder: %s delivered no frame in %llu ms for pid=%u; %s keeps the stream",
+                ladder_step_name(step),
+                (unsigned long long)(ladder::kFirstFrameDeadlineUs / 1000), pid_,
+                old_name.c_str());
+            next->stop();
+            if (next->stop_timed_out()) {
+                // Abandoned, not stopped: leak it rather than destroy it under
+                // a thread that still runs. That thread also keeps the D3D11
+                // device busy in the driver, so no further method can start.
+                MELLO_LOG_ERROR(TAG,
+                    "ladder: %s abandoned while it started; it is leaked and the capture "
+                    "device is unusable for the rest of this stream", ladder_step_name(step));
+                (void)next.release();
+                device_poisoned_ = true;
+                stop_timed_out_ = true;
+            }
+            next.reset();
+        }
     }
+    {
+        std::lock_guard<std::mutex> lock(candidate_mutex_);
+        candidate_token_ = 0;
+    }
+    // The old backend never stopped, so a failed step leaves the stream as it
+    // was.
+    if (!next) return false;
 
     if (old_w != 0 && (next->width() != old_w || next->height() != old_h)) {
-        // The preprocessor and encoder keep their start size. A different size
-        // may scale or crop; the probation rule moves on if it delivers
-        // nothing.
+        // The preprocessor scales the whole new source into the encode size,
+        // which stays fixed (VideoPreprocessor::convert).
         MELLO_LOG_WARN(TAG, "ladder: %s is %ux%u, stream started at %ux%u",
                        ladder_step_name(step), next->width(), next->height(), old_w, old_h);
     }
 
+    // 3. Swap. From here the next backend's frames reach the pipeline, and the
+    // old backend's are dropped.
+    std::unique_ptr<CaptureSource> old;
     {
         std::lock_guard<std::mutex> lock(swap_mutex_);
-        step_frames_.store(0, std::memory_order_relaxed);
+        old = std::move(active_);
         active_ = std::move(next);
         step_index_ = index;
         step_started_us_ = ladder_now_us();
         note_history(std::string(ladder_step_name(step)) + ":" + reason);
     }
+    {
+        std::lock_guard<std::mutex> lock(deliver_mutex_);
+        active_token_ = token;
+        step_frames_.store(0, std::memory_order_relaxed);
+    }
     swap_occurred_.store(true, std::memory_order_release);
     MELLO_LOG_WARN(TAG, "ladder: pid=%u %s -> %s (%s)", pid_, old_name.c_str(),
                    ladder_step_name(step), reason);
+
+    // 4. Stop the old backend.
+    if (old) {
+        old->stop();
+        if (old->stop_timed_out()) {
+            // Abandoned, not stopped: leak it. Its thread keeps the D3D11
+            // device busy in the driver, so no further method can start on it.
+            MELLO_LOG_ERROR(TAG,
+                "ladder: %s abandoned during a swap; it is leaked and the capture device "
+                "is unusable for the rest of this stream", old_name.c_str());
+            (void)old.release();
+            device_poisoned_ = true;
+            stop_timed_out_ = true;
+        }
+    }
+    return true;
+}
+
+bool ProcessCapture::use_steps_for_test(std::vector<LadderStep> ladder, StepFactory factory,
+                                        size_t start_index) {
+    if (start_index >= ladder.size() || !factory) return false;
+    test_factory_ = std::move(factory);
+    ladder_ = std::move(ladder);
+    auto backend = test_factory_(ladder_[start_index]);
+    if (!backend) return false;
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    active_ = std::move(backend);
+    step_index_ = start_index;
+    note_history(std::string(ladder_step_name(ladder_[start_index])) + ":initial");
     return true;
 }
 
@@ -465,7 +548,8 @@ bool ProcessCapture::activate(size_t index, const char* reason) {
 // downwards on its own, because the method it is on keeps delivering.
 void ProcessCapture::restart_from_best(const char* reason) {
     if (ladder_.empty()) return;
-    if (activate(0, reason)) return;
+    // The current method keeps the stream until the best one delivers.
+    if (activate(0, reason, /*keep_old_until_first_frame=*/true)) return;
     // The best method still refuses. Whatever is running now keeps the stream;
     // rule 1 moves the ladder on if that stops delivering.
     MELLO_LOG_INFO(TAG, "ladder: %s is still unavailable for pid=%u", ladder_step_name(ladder_[0]),
@@ -481,7 +565,8 @@ void ProcessCapture::advance(const char* reason) {
         from = step_index_;
     }
     for (size_t i = from + 1; i < ladder_.size(); ++i) {
-        if (activate(i, reason)) {
+        // The current method has failed, so there is nothing to keep.
+        if (activate(i, reason, /*keep_old_until_first_frame=*/false)) {
             pass_failed_.store(false, std::memory_order_relaxed);
             exhausted_.store(false, std::memory_order_relaxed);
             return;
@@ -524,7 +609,10 @@ void ProcessCapture::advance(const char* reason) {
         back_at_top = step_index_ == 0;
     }
     if (!back_at_top && !poisoned) {
-        activate(0, report ? "retry best method" : "game is quiet");
+        // Nothing delivers, so the best method takes over at once: when the
+        // game draws again, it must be the one that receives those frames.
+        activate(0, report ? "retry best method" : "game is quiet",
+                 /*keep_old_until_first_frame=*/false);
     }
 
     std::lock_guard<std::mutex> lock(swap_mutex_);
@@ -595,16 +683,6 @@ bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return false;
     target_fps_ = target_fps;
     callback_ = callback;
-    // Every backend delivers through this wrapper, so the ladder counts frames
-    // per method without the backends knowing about it.
-    counting_callback_ = [this](auto* tex, uint64_t ts) {
-        step_frames_.fetch_add(1, std::memory_order_relaxed);
-        if (exhausted_.load(std::memory_order_relaxed)) {
-            exhausted_.store(false, std::memory_order_relaxed);
-            MELLO_LOG_INFO(TAG, "ladder: frames arrived for pid=%u, capture recovered", pid_);
-        }
-        callback_(tex, ts);
-    };
     swap_occurred_.store(false, std::memory_order_release);
 
     // Deferred mode: no active backend yet, monitor thread will start capture
@@ -614,15 +692,25 @@ bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
         return true;
     }
 
+    // Every backend delivers through a callback with its own token, so the
+    // ladder counts frames per method without the backends knowing about it.
+    const uint64_t token = next_token_++;
+    {
+        std::lock_guard<std::mutex> lock(deliver_mutex_);
+        active_token_ = token;
+    }
     {
         std::lock_guard<std::mutex> lock(swap_mutex_);
         step_frames_.store(0, std::memory_order_relaxed);
-        if (!active_ || !active_->start(target_fps, counting_callback_)) return false;
+        if (!active_ || !active_->start(target_fps, delivery_for(token))) return false;
         step_started_us_ = ladder_now_us();
     }
 
     running_ = true;
-    monitor_thread_ = std::thread(&ProcessCapture::monitor_thread, this);
+    // Tests make every ladder move themselves (use_steps_for_test).
+    if (!test_factory_) {
+        monitor_thread_ = std::thread(&ProcessCapture::monitor_thread, this);
+    }
     return true;
 }
 
@@ -673,6 +761,11 @@ bool ProcessCapture::get_cursor(CursorData& out) {
     return active_ ? active_->get_cursor(out) : false;
 }
 
+CursorMode ProcessCapture::cursor_mode() const {
+    std::lock_guard<std::mutex> lock(swap_mutex_);
+    return active_ ? active_->cursor_mode() : CursorMode::None;
+}
+
 bool ProcessCapture::consume_swap_event() {
     return swap_occurred_.exchange(false, std::memory_order_acq_rel);
 }
@@ -691,7 +784,7 @@ bool ProcessCapture::start_deferred() {
     ladder_ = ladder::initial_order(
         allow_hook_ || GetEnvironmentVariableA(hook::kDeveloperAllowVariable, nullptr, 0) > 0);
     for (size_t i = 0; i < ladder_.size(); ++i) {
-        if (activate(i, "deferred start")) {
+        if (activate(i, "deferred start", /*keep_old_until_first_frame=*/false)) {
             deferred_hwnd_ = nullptr;
             return true;
         }

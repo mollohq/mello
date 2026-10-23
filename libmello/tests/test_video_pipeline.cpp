@@ -1012,6 +1012,191 @@ TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
     EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::Hook));
 }
 
+namespace {
+
+// A capture backend with no device. It delivers a frame every few
+// milliseconds on its own thread, after a first-frame delay, the way the hook
+// delivers after its injection and the game's next present.
+class FakeLadderBackend : public CaptureSource {
+public:
+    struct Shared {
+        std::atomic<bool> running{false};
+        std::atomic<int>  starts{0};
+    };
+
+    FakeLadderBackend(uintptr_t id, int first_frame_delay_ms, bool delivers, Shared* shared)
+        : id_(id), delay_ms_(first_frame_delay_ms), delivers_(delivers), shared_(shared) {}
+    ~FakeLadderBackend() override { stop(); }
+
+    bool initialize(const GraphicsDevice&, const CaptureSourceDesc&) override { return true; }
+    bool start(uint32_t, FrameCallback callback) override {
+        running_ = true;
+        shared_->running = true;
+        shared_->starts.fetch_add(1);
+        thread_ = std::thread([this, callback] {
+            const auto first = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(delay_ms_);
+            while (running_.load() && std::chrono::steady_clock::now() < first) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            while (running_.load()) {
+                if (delivers_) {
+                    const uint64_t now = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
+                    callback(reinterpret_cast<ID3D11Texture2D*>(id_), now);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+        });
+        return true;
+    }
+    void stop() override {
+        running_ = false;
+        if (thread_.joinable()) thread_.join();
+        shared_->running = false;
+    }
+    uint32_t width() const override { return 640; }
+    uint32_t height() const override { return 360; }
+    const char* backend_name() const override { return id_ == 1 ? "Fake-old" : "Fake-next"; }
+
+private:
+    uintptr_t         id_;
+    int               delay_ms_;
+    bool              delivers_;
+    Shared*           shared_;
+    std::atomic<bool> running_{false};
+    std::thread       thread_;
+};
+
+struct Delivery {
+    uintptr_t id;
+    std::chrono::steady_clock::time_point at;
+};
+
+// Records what reached the pipeline, and whether two backends ever reached it
+// at the same time.
+struct DeliveryLog {
+    std::mutex            mutex;
+    std::vector<Delivery> frames;
+    std::atomic<int>      inside{0};
+    std::atomic<bool>     overlapped{false};
+
+    CaptureSource::FrameCallback callback() {
+        return [this](ID3D11Texture2D* texture, uint64_t) {
+            if (inside.fetch_add(1) != 0) overlapped = true;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                frames.push_back({reinterpret_cast<uintptr_t>(texture),
+                                  std::chrono::steady_clock::now()});
+            }
+            inside.fetch_sub(1);
+        };
+    }
+
+    // The longest time with no frame at all, between `from` and `to`.
+    std::chrono::milliseconds longest_gap(std::chrono::steady_clock::time_point from,
+                                          std::chrono::steady_clock::time_point to) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto last = from;
+        std::chrono::steady_clock::duration longest{0};
+        for (const Delivery& d : frames) {
+            if (d.at < from || d.at > to) continue;
+            longest = (std::max)(longest, d.at - last);
+            last = d.at;
+        }
+        longest = (std::max)(longest, to - last);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(longest);
+    }
+
+    size_t count_from(uintptr_t id, std::chrono::steady_clock::time_point after) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return static_cast<size_t>(std::count_if(frames.begin(), frames.end(), [&](const Delivery& d) {
+            return d.id == id && d.at > after;
+        }));
+    }
+};
+
+}  // namespace
+
+// A hook attempt takes seconds before its first frame: the injection, then the
+// game's next present. The ladder stopped the running method first, so the
+// viewer saw no frames for all that time, every 30 s while a game sat in
+// exclusive fullscreen (scorecard 4.1). The next method now starts beside the
+// old one, which keeps the stream until the next one delivers.
+TEST(CaptureLadder, ASwapToASlowMethodLeavesNoGap) {
+    FakeLadderBackend::Shared old_state, next_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::Hook, LadderStep::WgcWindow},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &old_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 400, true, &next_state);
+        },
+        /*start_index=*/1));
+
+    DeliveryLog log;
+    ASSERT_TRUE(capture.start(60, log.callback()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    const auto moved_at = std::chrono::steady_clock::now();
+    ASSERT_TRUE(capture.move_for_test(0, /*keep_old_until_first_frame=*/true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto checked_at = std::chrono::steady_clock::now();
+
+    // The fakes deliver every 4 ms (16 ms with a coarse timer). The next
+    // method takes 400 ms for its first frame; stopping the old one first
+    // shows that whole wait as a gap.
+    EXPECT_LT(log.longest_gap(moved_at - std::chrono::milliseconds(100), checked_at).count(), 100)
+        << "the stream had no frames while the next method started";
+    EXPECT_STREQ(capture.backend_name(), "Fake-next");
+    EXPECT_GT(log.count_from(2, moved_at), 0u) << "the next method never reached the pipeline";
+    EXPECT_FALSE(old_state.running.load()) << "the old method kept running after the swap";
+    EXPECT_FALSE(log.overlapped.load()) << "two methods reached the pipeline at once";
+    EXPECT_TRUE(capture.consume_swap_event());
+
+    capture.stop();
+}
+
+// A better method that never delivers costs nothing: the method that has the
+// stream keeps delivering through the whole attempt and after it.
+TEST(CaptureLadder, AFailedSwapKeepsTheOldMethodDelivering) {
+    FakeLadderBackend::Shared old_state, next_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::Hook, LadderStep::WgcWindow},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &old_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 0, /*delivers=*/false, &next_state);
+        },
+        /*start_index=*/1));
+
+    DeliveryLog log;
+    ASSERT_TRUE(capture.start(60, log.callback()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    const auto moved_at = std::chrono::steady_clock::now();
+    EXPECT_FALSE(capture.move_for_test(0, /*keep_old_until_first_frame=*/true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto checked_at = std::chrono::steady_clock::now();
+
+    EXPECT_LT(log.longest_gap(moved_at, checked_at).count(), 100)
+        << "the old method stopped delivering during the attempt";
+    EXPECT_EQ(next_state.starts.load(), 1) << "the next method was not tried";
+    EXPECT_FALSE(next_state.running.load()) << "the failed method was left running";
+    EXPECT_TRUE(old_state.running.load());
+    EXPECT_EQ(old_state.starts.load(), 1) << "the old method was stopped and started again";
+    EXPECT_STREQ(capture.backend_name(), "Fake-old");
+    EXPECT_FALSE(capture.consume_swap_event());
+
+    capture.stop();
+}
+
 // What a still stream tells the person watching. A wrong answer here shows a
 // pause card over a live game, or leaves a frozen picture unexplained.
 TEST(CaptureState, TheHookKeepsStreamingAMinimizedGame) {
@@ -1332,3 +1517,54 @@ TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
     EXPECT_TRUE(ladder::should_report_failure(true));
 }
 #endif // _WIN32 ladder tests
+
+#ifdef _WIN32
+#include "video/encoder_amf.hpp"
+#include "video/encoder_nvenc.hpp"
+#include "video/encoder_qsv.hpp"
+
+// The cost tiers ran on NVENC only: an AMD or Intel host that could not hold
+// the frame budget dropped frames with no quality feature given up. AMF and
+// QSV now have tiers driven by the same overload signal, and the pipeline stops
+// at each backend's own last tier.
+TEST(EncoderCostTier, EveryHardwareBackendHasTwoTiers) {
+    EXPECT_EQ(NvencEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(AmfEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(QsvEncoder().max_cost_tier(), 2);
+}
+
+TEST(EncoderCostTier, AmfTakesThePresetDownThenTheAdaptiveFeaturesOff) {
+    const auto t0 = AmfEncoder::tier_settings(0);
+    EXPECT_EQ(t0.quality_preset, -1) << "tier 0 is the init configuration";
+    EXPECT_FALSE(t0.adaptive_off);
+
+    const auto t1 = AmfEncoder::tier_settings(1);
+    EXPECT_EQ(t1.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED);
+    EXPECT_FALSE(t1.adaptive_off) << "one feature at a time";
+
+    const auto t2 = AmfEncoder::tier_settings(2);
+    EXPECT_EQ(t2.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED)
+        << "a later tier keeps what an earlier one gave up";
+    EXPECT_TRUE(t2.adaptive_off);
+}
+
+TEST(EncoderCostTier, QsvTargetUsageOnlyGoesTowardsSpeed) {
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(0), MFX_TARGETUSAGE_BALANCED);
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(2), MFX_TARGETUSAGE_BEST_SPEED);
+    for (int tier = 0; tier < QsvEncoder::kMaxCostTier; ++tier) {
+        EXPECT_GT(QsvEncoder::target_usage_for_tier(tier + 1),
+                  QsvEncoder::target_usage_for_tier(tier));
+    }
+}
+
+// An encoder without a session refuses a tier and stays at 0: the pipeline
+// may ask before the first encode.
+TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {
+    AmfEncoder amf;
+    EXPECT_FALSE(amf.reduce_cost_tier());
+    EXPECT_EQ(amf.cost_tier(), 0);
+    QsvEncoder qsv;
+    EXPECT_FALSE(qsv.reduce_cost_tier());
+    EXPECT_EQ(qsv.cost_tier(), 0);
+}
+#endif // _WIN32

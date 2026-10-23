@@ -20,6 +20,7 @@
 
 #include <atomic>
 #include <chrono>
+#include <cstdio>
 #include <cstdlib>
 #include <mutex>
 #include <string>
@@ -52,10 +53,11 @@ struct FakeGame {
     HWND                window = nullptr;
 
     bool start(const std::string& directory, int seconds, bool d3d9 = false,
-               bool second_device = false) {
+               bool second_device = false, const std::string& extra = "") {
         std::string command = "\"" + directory + "\\mello-fakegame64.exe\" --seconds " +
                               std::to_string(seconds) + (d3d9 ? " --d3d9" : "") +
-                              (second_device ? " --second-device" : "");
+                              (second_device ? " --second-device" : "") +
+                              (extra.empty() ? "" : " " + extra);
         std::wstring wide(command.begin(), command.end());
         wide.push_back(L'\0');
 
@@ -236,6 +238,285 @@ TEST(HookCapture, CapturesADirect3D9Game) {
     capture.stop();
     EXPECT_FALSE(capture.stop_timed_out());
     EXPECT_FALSE(capture.failed());
+}
+
+// The hook copied the back buffer on every present, whatever the stream's
+// rate. A 144 fps game on a 60 fps stream paid for 144 copies a second, and
+// a Direct3D 9 game on the memory path for 144 read-back stalls on its render
+// thread. The hook now copies only at the stream's cadence.
+namespace {
+
+struct RateResult {
+    double presents_per_s = 0;
+    double copies_per_s = 0;
+    double delivered_per_s = 0;
+};
+
+RateResult measure_hook_rates(const std::string& directory, const std::string& api_flag,
+                              int game_fps = 144, uint32_t stream_fps = 60) {
+    RateResult out;
+    FakeGame game;
+    if (!game.start(directory, 30, false, false,
+                    api_flag + " --fps " + std::to_string(game_fps))) {
+        return out;
+    }
+
+    const GraphicsDevice device = create_d3d11_device();
+    if (!device.d3d11()) return out;
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+    HookCapture capture;
+    if (!capture.initialize(device, desc)) return out;
+    std::atomic<int> delivered{0};
+    if (!capture.start(stream_fps, [&](ID3D11Texture2D*, uint64_t) { delivered.fetch_add(1); })) {
+        return out;
+    }
+
+    // Let the cadence settle, then measure two seconds.
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const auto before = capture.counters();
+    const int delivered_before = delivered.load();
+    const auto t0 = std::chrono::steady_clock::now();
+    std::this_thread::sleep_for(std::chrono::seconds(2));
+    const auto after = capture.counters();
+    const double seconds =
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+    capture.stop();
+
+    out.presents_per_s = (after.presents_seen - before.presents_seen) / seconds;
+    out.copies_per_s = (after.frames_copied - before.frames_copied) / seconds;
+    out.delivered_per_s = (delivered.load() - delivered_before) / seconds;
+    return out;
+}
+
+void expect_stream_rate(const char* api, const RateResult& r) {
+    std::printf("%s at 144 fps: presents %.1f/s, copies %.1f/s, delivered %.1f/s\n", api,
+                r.presents_per_s, r.copies_per_s, r.delivered_per_s);
+    ASSERT_GT(r.presents_per_s, 120.0) << api << ": the test game did not present at 144 fps";
+    EXPECT_NEAR(r.copies_per_s, 60.0, 3.0) << api << ": the hook copies at the game's rate";
+    EXPECT_NEAR(r.delivered_per_s, 60.0, 3.0) << api;
+}
+
+}  // namespace
+
+TEST(HookCapture, AFastGameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D11", measure_hook_rates(directory, ""));
+}
+
+// The Direct3D 9 path (shared textures on the client's adapter, or the
+// read-back when the game cannot share) copies at the same rate.
+TEST(HookCapture, AFastDirect3D9GameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D9", measure_hook_rates(directory, "--d3d9"));
+}
+
+// A Direct3D 12 game. The DXGI Present detour fired for its swap chain, but the
+// copy needed a D3D11 device and failed with ERR_NO_DEVICE (scorecard 4.1).
+// The hook now copies on the game's own command queue into shared D3D12
+// textures, and the client waits on a shared fence before it reads.
+TEST(HookCapture, CapturesADirect3D12Game) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    FakeGame game;
+    ASSERT_TRUE(game.start(directory, 30, false, false, "--d3d12"))
+        << "the D3D12 test program did not start";
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.d3d11(), nullptr) << "no D3D11 device on this machine";
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+
+    HookCapture capture;
+    ASSERT_TRUE(capture.initialize(device, desc)) << "the hook did not load into the D3D12 program";
+
+    std::atomic<int> frames{0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> last;
+    std::mutex last_mutex;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        last = texture;
+        frames.fetch_add(1);
+    }));
+    for (int i = 0; i < 60 && frames.load() < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    EXPECT_GE(frames.load(), 10) << "the hook delivered no D3D12 frames";
+
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frame;
+    {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        frame = last;
+    }
+    ASSERT_TRUE(frame) << "no frame texture";
+    EXPECT_EQ(capture.width(), 640u);
+    EXPECT_EQ(capture.height(), 360u);
+
+    Pixel pixel;
+    ASSERT_TRUE(middle_pixel(device.d3d11(), context.Get(), frame.Get(), &pixel));
+    EXPECT_NEAR(pixel.r, 64, 2);
+    EXPECT_NEAR(pixel.g, 128, 2);
+    EXPECT_NEAR(pixel.b, 191, 2);
+
+    capture.stop();
+    EXPECT_FALSE(capture.stop_timed_out());
+    EXPECT_FALSE(capture.failed());
+}
+
+TEST(HookCapture, AFastDirect3D12GameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("D3D12", measure_hook_rates(directory, "--d3d12"));
+}
+
+// An OpenGL game. The hook detours wglSwapBuffers and copies the back buffer
+// into a D3D11 texture through WGL_NV_DX_interop2 when the driver has it, or
+// reads it back into memory when it does not.
+namespace {
+
+struct GlCapture {
+    bool  started = false;
+    int   frames = 0;
+    Pixel pixel;
+    bool  have_pixel = false;
+    bool  failed = false;
+};
+
+GlCapture capture_gl_game(const std::string& directory) {
+    GlCapture out;
+    FakeGame game;
+    if (!game.start(directory, 30, false, false, "--opengl")) return out;
+    out.started = true;
+
+    const GraphicsDevice device = create_d3d11_device();
+    if (!device.d3d11()) return out;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Process;
+    desc.pid = game.pid();
+    desc.allow_hook = true;
+    HookCapture capture;
+    if (!capture.initialize(device, desc)) return out;
+
+    std::atomic<int> frames{0};
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> last;
+    std::mutex last_mutex;
+    if (!capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+            std::lock_guard<std::mutex> lock(last_mutex);
+            last = texture;
+            frames.fetch_add(1);
+        })) {
+        return out;
+    }
+    for (int i = 0; i < 60 && frames.load() < 10; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    }
+    out.frames = frames.load();
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> frame;
+    {
+        std::lock_guard<std::mutex> lock(last_mutex);
+        frame = last;
+    }
+    if (frame) {
+        out.have_pixel = middle_pixel(device.d3d11(), context.Get(), frame.Get(), &out.pixel);
+    }
+    capture.stop();
+    out.failed = capture.failed();
+    return out;
+}
+
+}  // namespace
+
+TEST(HookCapture, CapturesAnOpenGLGame) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    const GlCapture r = capture_gl_game(directory);
+    ASSERT_TRUE(r.started) << "the OpenGL test program did not start";
+    EXPECT_GE(r.frames, 10) << "the hook delivered no OpenGL frames";
+    ASSERT_TRUE(r.have_pixel) << "no frame texture";
+    EXPECT_NEAR(r.pixel.r, 64, 2);
+    EXPECT_NEAR(r.pixel.g, 128, 2);
+    EXPECT_NEAR(r.pixel.b, 191, 2);
+    EXPECT_FALSE(r.failed);
+}
+
+// The memory path, forced: what a driver without the D3D11 interop gives.
+// The read goes bottom up; the frame must still arrive the right way up and
+// in the right colour.
+TEST(HookCapture, CapturesAnOpenGLGameThroughMemory) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    _putenv_s("MELLO_HOOK_GL_READBACK", "1");
+    const GlCapture r = capture_gl_game(directory);
+    _putenv_s("MELLO_HOOK_GL_READBACK", "");
+    ASSERT_TRUE(r.started) << "the OpenGL test program did not start";
+    EXPECT_GE(r.frames, 10) << "the hook delivered no OpenGL frames through memory";
+    ASSERT_TRUE(r.have_pixel) << "no frame texture";
+    EXPECT_NEAR(r.pixel.r, 64, 2);
+    EXPECT_NEAR(r.pixel.g, 128, 2);
+    EXPECT_NEAR(r.pixel.b, 191, 2);
+    EXPECT_FALSE(r.failed);
+}
+
+TEST(HookCapture, AFastOpenGLGameIsCopiedAtTheStreamRate) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    expect_stream_rate("OpenGL", measure_hook_rates(directory, "--opengl"));
+}
+
+// What one copy costs the game's thread, per path. Not a gate: a measurement
+// for the record (run it by name). The game runs as fast as it can (--fps 100000: no wait); the
+// stream asks for 1 frame a second (about no copies), then 60. The time each
+// present got longer, divided by the copies per present, is one copy.
+TEST(HookCapture, DISABLED_CopyCostPerPath) {
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+    struct Path {
+        const char* name;
+        const char* flag;
+        bool        gl_readback;
+    };
+    const Path paths[] = {{"D3D11", "", false},
+                          {"D3D12", "--d3d12", false},
+                          {"OpenGL interop", "--opengl", false},
+                          {"OpenGL memory", "--opengl", true},
+                          {"OpenGL interop 1080p", "--opengl --width 1920 --height 1080", false},
+                          {"OpenGL memory 1080p", "--opengl --width 1920 --height 1080", true},
+                          {"D3D9", "--d3d9", false}};
+    for (const Path& path : paths) {
+        if (path.gl_readback) _putenv_s("MELLO_HOOK_GL_READBACK", "1");
+        const RateResult idle = measure_hook_rates(directory, path.flag, 100000, 1);
+        const RateResult busy = measure_hook_rates(directory, path.flag, 100000, 60);
+        if (path.gl_readback) _putenv_s("MELLO_HOOK_GL_READBACK", "");
+        const double per_present_idle_ms = 1000.0 / idle.presents_per_s;
+        const double per_present_busy_ms = 1000.0 / busy.presents_per_s;
+        const double copies_per_present = busy.copies_per_s / busy.presents_per_s;
+        std::printf("%-15s presents %.0f/s (1 fps stream) and %.0f/s (60 fps stream, %.1f copies/s): "
+                    "%.3f ms a copy\n",
+                    path.name, idle.presents_per_s, busy.presents_per_s, busy.copies_per_s,
+                    (per_present_busy_ms - per_present_idle_ms) / copies_per_present);
+    }
 }
 
 // A game that presents through both Present and PresentEx hands the hook two

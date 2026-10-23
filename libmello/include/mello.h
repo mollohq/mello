@@ -1122,6 +1122,15 @@ typedef struct MelloStreamStats {
      * 0 for monitor capture, which has no process behind it. Appended field:
      * existing offsets unchanged. */
     uint8_t  target_exited;
+    /* The capture source size of the latest frame, and how many times it
+     * changed after the first frame: a window resize, a display mode change,
+     * or a capture method of another size. The encode size stays fixed and
+     * the whole source scales into it with its aspect kept (black bars when
+     * the aspect differs). A change of the counter is the signal for a
+     * geometry change. Appended fields: existing offsets unchanged. */
+    uint32_t source_width;
+    uint32_t source_height;
+    uint32_t source_size_changes;
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);

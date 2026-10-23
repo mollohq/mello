@@ -17,6 +17,7 @@
 
 #include "hook_d3d9.hpp"
 #include "hook_dxgi.hpp"
+#include "hook_gl.hpp"
 #include "hook_log.hpp"
 #include "hook_state.hpp"
 #include "mello_hook_protocol.h"
@@ -76,7 +77,8 @@ DWORD WINAPI hook_thread(LPVOID) {
     // nothing.
     const bool dxgi = install_dxgi_hooks(*state.info());
     const bool d3d9 = install_d3d9_hooks(*state.info());
-    if (!dxgi && !d3d9) {
+    const bool gl = install_gl_hooks(*state.info());
+    if (!dxgi && !d3d9 && !gl) {
         // `last_error` already says why. The client reads it and moves the
         // capture ladder on.
         state.signal_ready();
@@ -89,7 +91,7 @@ DWORD WINAPI hook_thread(LPVOID) {
     // must not be left in `last_error`: the client reads that field to decide
     // whether the hook can deliver at all.
     state.set_error(MELLO_HOOK_OK);
-    log_line("hooked %s%s%s", dxgi ? "DXGI" : "", dxgi && d3d9 ? " and " : "", d3d9 ? "D3D9" : "");
+    log_line("hooked%s%s%s", dxgi ? " DXGI" : "", d3d9 ? " D3D9" : "", gl ? " OpenGL" : "");
 
     // From here the present path does the work. This thread only watches, for
     // as long as the game runs.

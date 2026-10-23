@@ -14,7 +14,7 @@ State of the work: `mello-backlog/plans/streaming-reliability-handoff.md`.
 | `mello-hook64.dll` | Loads into the game, detours the present functions, copies each back buffer into a shared texture. |
 | `mello-inject64.exe` | Loads the hook into one game with `SetWindowsHookEx(WH_GETMESSAGE)`. |
 | `mello-offsets64.exe` | Prints the present-function offsets for this machine. Run outside the game, never inside it. |
-| `mello-fakegame64.exe` | A D3D11 program that presents, for tests. Not shipped. |
+| `mello-fakegame64.exe` | A program that presents, for tests. Not shipped. Direct3D 11 by default, `--d3d9` for Direct3D 9, `--d3d12` for Direct3D 12, `--opengl` for OpenGL; `--fps N` presents N times a second with no vertical sync. |
 
 The 32-bit set has the same names with `32`. It is for 32-bit games, which is
 most pre-2012 titles and every Direct3D 9 game that matters here.
@@ -47,6 +47,14 @@ protocol tests need neither:
 ```
 hook/build/x64/Debug/mello_hook_tests.exe
 ```
+
+`MELLO_HOOK_GL_READBACK=1` on the client sends an OpenGL game's frames
+through memory even when the driver has `WGL_NV_DX_interop2`. The memory path
+test sets it.
+
+`HookCapture.DISABLED_CopyCostPerPath` measures what a copy costs the game,
+per path; run it by name with `--gtest_also_run_disabled_tests`. The OpenGL
+path also logs its mean copy time on the game's thread when a stream stops.
 
 ## Try it against a real game
 

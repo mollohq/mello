@@ -207,9 +207,15 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale
+    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale.
+    // It gets the capture size as it is, odd or not: the source is BGRA and
+    // the whole of it scales into the even NV12 encode size.
     preprocessor_ = std::make_unique<VideoPreprocessor>();
-    if (!preprocessor_->initialize(device_, cap_w, cap_h, enc_w, enc_h)) {
+    source_w_.store(capture_->width(), std::memory_order_relaxed);
+    source_h_.store(capture_->height(), std::memory_order_relaxed);
+    source_size_changes_.store(0, std::memory_order_relaxed);
+    source_size_known_ = false;
+    if (!preprocessor_->initialize(device_, capture_->width(), capture_->height(), enc_w, enc_h)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
@@ -601,6 +607,9 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     }
     out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
     out.idle_repeat_frames = idle_repeat_frames_.load(std::memory_order_relaxed);
+    out.source_width = source_w_.load(std::memory_order_relaxed);
+    out.source_height = source_h_.load(std::memory_order_relaxed);
+    out.source_size_changes = source_size_changes_.load(std::memory_order_relaxed);
     out.gpu_name = device_.adapter_name;
 }
 
@@ -635,9 +644,26 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         request_keyframe();
     }
 
+    // Desktop duplication gives the pointer apart from the desktop image: draw
+    // it into the frame. The other backends have it in their frames already
+    // (WGC), or the viewer draws it from cursor packets (the hook).
+    CursorOverlay overlay{};
+    const CursorOverlay* cursor = nullptr;
+    if (capture_ && capture_->cursor_mode() == CursorMode::Composite &&
+        capture_->get_cursor(cursor_frame_) && cursor_frame_.visible &&
+        !cursor_frame_.shape_bgra.empty()) {
+        overlay.x = cursor_frame_.x;
+        overlay.y = cursor_frame_.y;
+        overlay.width = cursor_frame_.shape_w;
+        overlay.height = cursor_frame_.shape_h;
+        overlay.bgra = cursor_frame_.shape_bgra.data();
+        overlay.serial = cursor_frame_.shape_serial;
+        cursor = &overlay;
+    }
+
     // Preprocess on the capture thread (fast GPU blit), then enqueue for encode
     auto t0 = std::chrono::steady_clock::now();
-    auto result = preprocessor_->convert(texture);
+    auto result = preprocessor_->convert(texture, cursor);
     auto t1 = std::chrono::steady_clock::now();
     last_convert_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -645,6 +671,23 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;
     }
+
+    // A source of a new size (window resize, display mode change, a ladder
+    // move to a method of another size). The preprocessor already scales the
+    // whole new picture into the encode size; this records the change for
+    // the stats, where the bitrate and geometry controller reads it. The first
+    // frame only sets the size: a capture can report its window size before
+    // its first frame.
+    if (result.source_resized && source_size_known_) {
+        const uint32_t changes =
+            source_size_changes_.fetch_add(1, std::memory_order_relaxed) + 1;
+        MELLO_LOG_INFO(TAG, "source size %ux%u (change %u); encode size stays %ux%u",
+                       preprocessor_->source_width(), preprocessor_->source_height(), changes,
+                       encode_w_, encode_h_);
+    }
+    source_size_known_ = true;
+    source_w_.store(preprocessor_->source_width(), std::memory_order_relaxed);
+    source_h_.store(preprocessor_->source_height(), std::memory_order_relaxed);
 
     // Enqueue for the encode thread (bounded, drop oldest on overflow)
     {
@@ -751,7 +794,7 @@ void VideoPipeline::encode_thread_func() {
 // Runs on the encode thread, immediately after a frame is encoded, so the
 // measurement and the reconfigure share one thread and no extra locking.
 void VideoPipeline::maybe_reduce_encoder_cost() {
-    if (!encoder_ || encoder_->cost_tier() >= 2) {
+    if (!encoder_ || encoder_->cost_tier() >= encoder_->max_cost_tier()) {
         return;
     }
 
@@ -1138,23 +1181,90 @@ bool VideoPipeline::present_frame() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool VideoPipeline::get_cursor_packet(uint8_t* buf, size_t* size) {
-    if (!capture_) return false;
-
-    CursorData cd{};
-    if (!capture_->get_cursor(cd)) return false;
+#ifdef _WIN32
+    if (!capture_ || !host_running_.load() || !buf || !size) return false;
+    std::lock_guard<std::mutex> lock(cursor_packet_mutex_);
 
     CursorState cs{};
-    cs.x       = cd.x;
-    cs.y       = cd.y;
-    cs.visible = cd.visible;
-    cs.shape_w = cd.shape_w;
-    cs.shape_h = cd.shape_h;
-    cs.shape_rgba = std::move(cd.shape_rgba);
+    bool include_shape = false;
+    if (capture_->cursor_mode() != CursorMode::Packet) {
+        // The frames have the pointer, or nothing does. A viewer that drew it
+        // from packets must stop: tell it once.
+        if (!cursor_sent_visible_) return false;
+        cs.visible = false;
+        cs.x = cursor_sent_x_;
+        cs.y = cursor_sent_y_;
+    } else {
+        if (!capture_->get_cursor(cursor_packet_src_)) return false;
 
-    size_t written = serialize_cursor_packet(cs, cd.shape_changed, buf, *size);
+        // Source pixels to encode pixels: the preprocessor's rule.
+        uint32_t src_w = source_w_.load(std::memory_order_relaxed);
+        uint32_t src_h = source_h_.load(std::memory_order_relaxed);
+        if (src_w == 0 || src_h == 0) {
+            src_w = capture_->width();
+            src_h = capture_->height();
+        }
+        if (src_w == 0 || src_h == 0 || encode_w_ == 0) return false;
+        const FitRect fit = VideoPreprocessor::fit(src_w, src_h, encode_w_, encode_h_);
+        const double scale = static_cast<double>(fit.width) / src_w;
+        const uint32_t scale_milli = static_cast<uint32_t>(scale * 1000.0 + 0.5);
+
+        // The shape is scaled as the frame is, never up, at most
+        // kMaxCursorPacketSide a side. Only when it or the scale changes.
+        const CursorData& src = cursor_packet_src_;
+        if (src.shape_serial != cursor_packet_serial_ ||
+            scale_milli != cursor_packet_scale_milli_) {
+            cursor_packet_serial_ = src.shape_serial;
+            cursor_packet_scale_milli_ = scale_milli;
+            CursorState shape{};
+            if (src.shape_w > 0 && src.shape_h > 0 && !src.shape_bgra.empty()) {
+                double f = std::min(1.0, scale);
+                const uint32_t longest = std::max<uint32_t>(src.shape_w, src.shape_h);
+                if (longest * f > kMaxCursorPacketSide) f = static_cast<double>(kMaxCursorPacketSide) / longest;
+                const uint32_t w = std::max<uint32_t>(1, static_cast<uint32_t>(src.shape_w * f + 0.5));
+                const uint32_t h = std::max<uint32_t>(1, static_cast<uint32_t>(src.shape_h * f + 0.5));
+                std::vector<uint8_t> bgra = (w == src.shape_w && h == src.shape_h)
+                                                ? src.shape_bgra
+                                                : scale_bgra(src.shape_bgra, src.shape_w, src.shape_h, w, h);
+                // The packet carries RGBA.
+                for (size_t i = 0; i + 3 < bgra.size(); i += 4) std::swap(bgra[i], bgra[i + 2]);
+                shape.shape_w = static_cast<uint16_t>(w);
+                shape.shape_h = static_cast<uint16_t>(h);
+                shape.shape_rgba = std::move(bgra);
+            }
+            cursor_packet_shape_ = std::move(shape);
+            ++cursor_shape_version_;
+        }
+
+        cs.visible = src.visible && !cursor_packet_shape_.shape_rgba.empty();
+        cs.x = static_cast<int32_t>(fit.x) + static_cast<int32_t>(std::floor(src.x * scale));
+        cs.y = static_cast<int32_t>(fit.y) + static_cast<int32_t>(std::floor(src.y * scale));
+        include_shape = cs.visible && cursor_sent_version_ != cursor_shape_version_;
+        if (!include_shape && cs.visible == cursor_sent_visible_ &&
+            (!cs.visible || (cs.x == cursor_sent_x_ && cs.y == cursor_sent_y_))) {
+            return false;  // nothing new
+        }
+        if (include_shape) {
+            cs.shape_w = cursor_packet_shape_.shape_w;
+            cs.shape_h = cursor_packet_shape_.shape_h;
+            cs.shape_rgba = cursor_packet_shape_.shape_rgba;
+        }
+    }
+
+    const size_t written = serialize_cursor_packet(cs, include_shape, buf, *size);
     if (written == 0) return false;
     *size = written;
+    cursor_sent_visible_ = cs.visible;
+    cursor_sent_x_ = cs.x;
+    cursor_sent_y_ = cs.y;
+    if (include_shape) cursor_sent_version_ = cursor_shape_version_;
     return true;
+#else
+    // ScreenCaptureKit draws the pointer into its frames.
+    (void)buf;
+    (void)size;
+    return false;
+#endif
 }
 
 void VideoPipeline::apply_cursor_packet(const uint8_t* buf, size_t size) {

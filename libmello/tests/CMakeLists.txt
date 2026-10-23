@@ -23,6 +23,7 @@ add_executable(mello_tests
     test_graphics_device.cpp
     test_process_liveness.cpp
     test_capture_wgc_restart.cpp
+    test_video_preprocessor.cpp
 )
 
 # Separate target: process enumeration coverage, independent of mello_tests.
@@ -51,6 +52,12 @@ target_link_libraries(mello_tests PRIVATE
 target_compile_definitions(mello_tests PRIVATE
     MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
 )
+
+# The NVENC, AMF and oneVPL headers, for the cost-tier tables of the encoders
+# (test_video_pipeline.cpp). Headers only: nothing links.
+if(WIN32 AND NOT IOS)
+    target_include_directories(mello_tests PRIVATE ${MELLO_NV_CODEC_DIR} ${MELLO_AMF_DIR} ${MELLO_VPL_DIR})
+endif()
 
 # The D3D9Ex share spike links d3d9 directly. Test-only: production code
 # opens the shared handle from D3D11 and never touches D3D9.

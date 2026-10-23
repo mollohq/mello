@@ -2,6 +2,7 @@
 
 #include <atomic>
 
+#include "frame_cadence.hpp"
 #include "hook_log.hpp"
 
 namespace mello_hook {
@@ -160,6 +161,28 @@ void HookState::count_drop() {
 void HookState::count_present() {
     if (!info_) return;
     as_atomic_u64(&info_->presents_seen)->fetch_add(1, std::memory_order_relaxed);
+}
+
+bool HookState::copy_due(int64_t qpc) {
+    if (!info_ || qpc_frequency_ <= 0) return true;
+    const uint32_t fps =
+        as_atomic_u32(&info_->target_fps)->load(std::memory_order_relaxed);
+    if (fps != copy_fps_) {
+        // A new target starts a new cadence.
+        copy_fps_ = fps;
+        copy_deadline_us_ = 0;
+    }
+    if (fps == 0) return true;
+    // Split the conversion so the multiply cannot overflow on a long uptime.
+    const uint64_t ticks = static_cast<uint64_t>(qpc);
+    const uint64_t freq = static_cast<uint64_t>(qpc_frequency_);
+    const uint64_t now_us = (ticks / freq) * 1000000ULL + (ticks % freq) * 1000000ULL / freq;
+    return mello::video::frame_cadence_accepts(now_us, copy_deadline_us_, fps);
+}
+
+void HookState::count_copy() {
+    if (!info_) return;
+    as_atomic_u64(&info_->frames_copied)->fetch_add(1, std::memory_order_relaxed);
 }
 
 void HookState::count_fault() {

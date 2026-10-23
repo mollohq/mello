@@ -22,8 +22,11 @@
 
 #include <windows.h>
 
+#include <chrono>
 #include <cstdlib>
+#include <mutex>
 #include <string>
+#include <thread>
 
 #include <d3d11.h>
 
@@ -49,6 +52,7 @@ public:
         wc.lpfnWndProc = DefWindowProcW;
         wc.hInstance = GetModuleHandleW(nullptr);
         wc.lpszClassName = L"MelloWgcRestartTestWindow";
+        wc.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
         RegisterClassExW(&wc);
         hwnd_ = CreateWindowExW(0, wc.lpszClassName, L"Mello WGC restart test",
                                 WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, 640, 480,
@@ -134,6 +138,71 @@ TEST(WgcCaptureRestart, RestartWithoutATargetFailsQuietly) {
         EXPECT_FALSE(capture.start(60, [](ID3D11Texture2D*, uint64_t) {}));
     });
     capture.stop();
+}
+
+// A window resized mid-stream. The frame pool kept the start size, so every
+// later frame was the old size: a larger window was cropped, a smaller one
+// padded (scorecard 4.1). The pool is now made again at the new size.
+TEST(WgcCaptureRestart, AWindowResizeRecreatesTheFramePool) {
+    if (running_under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+
+    TestWindow window;
+    ASSERT_NE(window.get(), nullptr) << "could not create a test window";
+    SetWindowPos(window.get(), nullptr, 100, 100, 400, 300, SWP_NOZORDER | SWP_NOACTIVATE);
+    window.pump();
+
+    const GraphicsDevice device = create_d3d11_device();
+    ASSERT_NE(device.handle, nullptr);
+
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Window;
+    desc.hwnd = window.get();
+
+    WgcCapture capture;
+    ASSERT_TRUE(capture.initialize(device, desc));
+    const uint32_t start_w = capture.width();
+    const uint32_t start_h = capture.height();
+
+    std::mutex mutex;
+    uint32_t last_w = 0, last_h = 0;
+    int frames = 0;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        D3D11_TEXTURE2D_DESC d{};
+        texture->GetDesc(&d);
+        std::lock_guard<std::mutex> lock(mutex);
+        last_w = d.Width;
+        last_h = d.Height;
+        ++frames;
+    }));
+
+    auto run_for = [&](int ms) {
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(ms);
+        while (std::chrono::steady_clock::now() < until) {
+            InvalidateRect(window.get(), nullptr, TRUE);
+            window.pump();
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
+    };
+    run_for(1000);
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (frames == 0) {
+            capture.stop();
+            GTEST_SKIP() << "WGC delivered no frame at all: the desktop is locked or asleep";
+        }
+        EXPECT_EQ(last_w, start_w);
+        EXPECT_EQ(last_h, start_h);
+    }
+
+    SetWindowPos(window.get(), nullptr, 100, 100, 700, 500, SWP_NOZORDER | SWP_NOACTIVATE);
+    run_for(1500);
+    capture.stop();
+
+    std::lock_guard<std::mutex> lock(mutex);
+    EXPECT_GT(last_w, start_w) << "frames after the resize still have the old width";
+    EXPECT_GT(last_h, start_h) << "frames after the resize still have the old height";
+    EXPECT_EQ(last_w, capture.width());
+    EXPECT_EQ(last_h, capture.height());
 }
 
 #endif  // _WIN32

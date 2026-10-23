@@ -5,6 +5,8 @@
 #ifdef _WIN32
 #include <thread>
 #include <atomic>
+#include <condition_variable>
+#include <functional>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -100,8 +102,9 @@ bool startup_failed(bool continuous, uint64_t frames_since_step_start,
 /// The ladder only walks down by itself, because whatever it settles on keeps
 /// delivering. That is the wrong outcome for a fullscreen game: screen capture
 /// can deliver the desktop with the game as a small window inside it, forever.
-/// A failed attempt costs nothing, because the current method keeps the stream
-/// until a better one is running (2026-09-16).
+/// A failed attempt costs nothing: the better method starts beside the current
+/// one, and the current one keeps the stream until the better one delivers its
+/// first frame (`ProcessCapture::activate`).
 static constexpr uint64_t kBestMethodRetryUs = 30'000'000;
 
 /// Wait between ladder passes when no method delivered. A visible game that
@@ -128,6 +131,7 @@ public:
     const char* backend_name() const override;
 
     bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override;
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
     CaptureState state() const override;
@@ -135,6 +139,20 @@ public:
     bool stop_timed_out() const override { return stop_timed_out_.load(std::memory_order_relaxed); }
     std::string method_history() const override;
     void set_present_delay_histogram(PresentDelayHistogram* hist) override;
+
+    // --- Test seams. Production code does not call these. ---
+
+    /// Builds and initializes (not starts) the backend for one ladder step.
+    using StepFactory = std::function<std::unique_ptr<CaptureSource>(LadderStep step)>;
+    /// Tests only. Uses `factory` instead of the real backends and the window
+    /// lookup, makes `ladder[start_index]` the active backend, and runs no
+    /// monitor thread, so the test makes every ladder move itself.
+    bool use_steps_for_test(std::vector<LadderStep> ladder, StepFactory factory,
+                            size_t start_index);
+    /// Tests only. One ladder move, as the monitor thread makes it.
+    bool move_for_test(size_t index, bool keep_old_until_first_frame) {
+        return activate(index, "test", keep_old_until_first_frame);
+    }
 
 private:
     void monitor_thread();
@@ -144,17 +162,31 @@ private:
 
     /// Build and initialize (not start) the backend for one ladder step.
     std::unique_ptr<CaptureSource> make_step(LadderStep step, HWND hwnd) const;
+    /// The test factory when there is one, else `make_step` on the game window.
+    std::unique_ptr<CaptureSource> build_step(LadderStep step) const;
     /// Goes back to the first method in the ladder, on evidence that it can
     /// work now. The ladder never walks back up by itself.
     void restart_from_best(const char* reason);
-    /// Replace the active backend with ladder step `index` and start it.
+    /// Replace the active backend with ladder step `index`.
+    ///
+    /// The next backend starts before the old one stops. With
+    /// `keep_old_until_first_frame`, the old backend keeps the stream until
+    /// the next one delivers its first frame (bounded by
+    /// `ladder::kFirstFrameDeadlineUs`); when it does not, the next backend
+    /// stops and the old one never stopped. Without it, the swap happens as
+    /// soon as the next backend starts: the old backend is not delivering, so
+    /// there is nothing to keep.
     ///
     /// Runs backend calls without `swap_mutex_` held: starting or stopping a
     /// backend can block for seconds inside the display driver, and telemetry
     /// callers (`backend_name`, `method_history`) must never wait for that.
     /// Serialized by `ladder_op_mutex_`. Returns false when the step cannot
-    /// initialize or start.
-    bool activate(size_t index, const char* reason);
+    /// initialize or start, or delivers no first frame in time.
+    bool activate(size_t index, const char* reason, bool keep_old_until_first_frame);
+    /// The callback a backend started with `token` delivers through. Only the
+    /// active token reaches the pipeline; a candidate's frames only count
+    /// towards its first frame.
+    FrameCallback delivery_for(uint64_t token);
     /// Move to the next ladder step that starts. Marks the ladder exhausted
     /// when none does.
     void advance(const char* reason);
@@ -171,8 +203,24 @@ private:
     ProcessLiveness                  target_liveness_;
     GraphicsDevice                   device_{};
     FrameCallback                    callback_;
-    FrameCallback                    counting_callback_;
     PresentDelayHistogram*           delay_hist_ = nullptr;
+
+    // Frame delivery during a swap. Two backends run at the same time while
+    // the next one starts, and only one of them may reach the pipeline: the
+    // pipeline's frame path is single-threaded. `deliver_mutex_` serializes
+    // delivery and guards `active_token_`. It is taken before `swap_mutex_`
+    // (the pipeline reads the cursor inside a delivery), never after it.
+    std::mutex                       deliver_mutex_;
+    uint64_t                         active_token_ = 0;
+    std::atomic<uint64_t>            next_token_{1};
+    // The candidate of a swap in progress, and whether it has delivered.
+    std::mutex                       candidate_mutex_;
+    std::condition_variable          candidate_cv_;
+    uint64_t                         candidate_token_ = 0;
+    bool                             candidate_delivered_ = false;
+
+    // Tests only (use_steps_for_test).
+    StepFactory                      test_factory_;
     uint32_t                         target_fps_ = 60;
 
     std::unique_ptr<CaptureSource>   active_;

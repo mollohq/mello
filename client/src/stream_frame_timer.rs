@@ -55,6 +55,12 @@ fn on_frame_tick(ctx: &TickCtx) {
         }
     }
 
+    // The host's pointer, when the host sends one (the game capture hook).
+    #[cfg(target_os = "windows")]
+    if let Some(ref mut presenter) = *ctx.dcomp_presenter.borrow_mut() {
+        presenter.update_cursor(&mello_core::stream::cursor::viewer_cursor());
+    }
+
     #[cfg(not(target_os = "windows"))]
     {
         let frame_data = ctx.frame_slot.lock().ok().and_then(|mut s| s.take());

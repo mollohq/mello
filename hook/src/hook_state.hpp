@@ -53,6 +53,15 @@ public:
     /// between a hook that cannot see and a game that is not drawing.
     void count_present();
 
+    /// True when a frame is due at the client's `target_fps`, at QPC time
+    /// `qpc`. The rule is libmello's `frame_cadence_accepts`: a credit
+    /// accumulator, so a 144 fps game gives 60 copies for a 60 fps stream.
+    /// Present thread only (the callers' reentrancy guard serializes it). Two
+    /// loads and some arithmetic: nothing that allocates, locks or logs.
+    bool copy_due(int64_t qpc);
+    /// Counts one copy in `frames_copied`.
+    void count_copy();
+
     void signal_ready();
     void signal_frame();
 
@@ -75,6 +84,9 @@ private:
     HANDLE         frame_event_ = nullptr;
     HANDLE         stop_event_  = nullptr;
     int64_t        qpc_frequency_ = 0;
+    // When the next copy is due, in microseconds of QPC. Present thread only.
+    uint64_t       copy_deadline_us_ = 0;
+    uint32_t       copy_fps_ = 0;
 };
 
 // QueryPerformanceCounter, for the frame timestamps.

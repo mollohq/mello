@@ -92,6 +92,10 @@ public:
     /// 0 = full quality. Higher means features have been given up.
     virtual int  cost_tier() const { return 0; }
 
+    /// The last tier `reduce_cost_tier` can reach. 0 for a backend with no
+    /// tiers. The pipeline stops asking at this tier (`video_pipeline.cpp`).
+    virtual int  max_cost_tier() const { return 0; }
+
     /// Phase breakdown of the most recent encode. Default zeroed for backends
     /// that do not instrument it.
     virtual void get_phase_timing(EncodePhaseTiming& out) const { out = {}; }
