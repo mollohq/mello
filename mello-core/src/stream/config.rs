@@ -173,9 +173,11 @@ impl StreamConfig {
         }
     }
 
-    /// Minimum bitrate floor (Potato preset).
-    pub fn min_bitrate_kbps(codec: Codec) -> u32 {
-        QualityPreset::Potato.params(codec).bitrate_kbps
+    /// The encoder bitrate floor: 300 kbps on every codec (streaming-quality
+    /// stage 4; the geometry rungs make it usable). It was the Potato
+    /// preset, 1.5 Mbps, so a link under it lost packets instead.
+    pub fn min_bitrate_kbps(_codec: Codec) -> u32 {
+        super::controller::FLOOR_KBPS
     }
 }
 

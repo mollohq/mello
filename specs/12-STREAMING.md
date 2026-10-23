@@ -499,8 +499,8 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 1. **Drain video packets** from the mpsc channel (bounded coalescing to avoid starvation).
 2. **Send** complete access units via `PacketSink::send_video` (native RTP packetization in libmello).
-3. **Poll RTCP feedback** (PLI, REMB) from sinks and request host keyframes or adjust bitrate.
-4. **Apply REMB** — the SFU forwards one aggregated target from the relay path, under the synthetic viewer id `sfu`.
+3. **Poll RTCP feedback** (PLI, REMB, the goog_cc target) from sinks and request host keyframes or adjust bitrate through the quality controller (section 8.1.1).
+4. **Apply REMB** as a ceiling: the SFU forwards one aggregated target from the relay path, under the synthetic viewer id `sfu`.
 5. **Send game audio** — Opus packets from loopback capture via `PacketSink::send_audio`.
 6. **Emit telemetry** every second: `video_in_hz`, `audio_in_hz`, `audio_out_hz`, `send_fail_*_delta`, `recovery_mode`, queue depths, `bitrate_kbps`.
 
@@ -844,47 +844,58 @@ host's `stream_viewer_left` RPC run on their own tasks.
 | **Low** | 1280×720 | 30 | 2.5 Mbps |
 | **Potato** | 854×480 | 30 | 1.5 Mbps |
 
-Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution. Preset `fec_n` fields remain in config for schema compatibility but are unused on the RTP path.
+Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution, and the quality controller moves the stream down and up the rungs under it (section 8.1.1). Preset `fec_n` fields remain in config for schema compatibility but are unused on the RTP path.
 
-### 8.1.1 Adaptive framerate ladder (Stage 1)
+### 8.1.1 The quality controller (streaming-quality stage 4)
 
-The preset fixes geometry and framerate at stream start; §8.2 then moves only
-bitrate inside it. When throughput falls that starves the picture rather than
-simplifying it — 720p60 at 1.5 Mbps is ~0.027 bits per pixel per frame, about a
-third of what the format needs, which is how a stream reaches single-digit
-delivered fps. §1 already commits to the opposite: *favor visible quality loss
-over lag or stalling*.
+`QualityController` (`stream/controller.rs`) is the one owner of the host's
+`(bitrate, fps, resolution)`. It replaces the framerate ladder of `ladder.rs`.
 
-`FramerateLadder` (`stream/ladder.rs`) owns the encoder's framerate target and
-trades in **bits per pixel per frame**, `bitrate / (w × h × fps)` — preset-
-agnostic, so one threshold pair covers Ultra through Potato:
+| Input | Source |
+|---|---|
+| goog_cc target of the host-to-SFU leg | `GCC_TARGET` feedback (section 5), less the RTP overhead (1.08) |
+| REMB ceiling | the minimum fresh viewer REMB (section 8.2) |
+| Encoder overload | 1 s windows of `MelloStreamStats`: more than 2 % of the offered frames dropped by the encode queue, or a mean encode time at or over 80 % of the frame interval |
+| Source size | `source_width`, `source_height`, `source_size_changes` (stage 8): the top rung follows the source aspect at the preset height (the Rust copy of `encode_size_for`) |
+| Viewer count | the last viewer leave clears the REMB ceiling, the synthetic `sfu` entry included |
 
-| Transition | Condition | Dwell |
+**Bitrate:** the goog_cc share under the REMB ceiling and the preset, over a
+300 kbps floor. It starts at 60 % of the preset; goog_cc's start probes take it
+to the target (on the first IDR). Coalescing (stage 2b): a change inside a 5 %
+dead band does nothing, a decrease over it applies at once, an increase waits
+250 ms after the last change. The old 5 %/s increase cap is gone: goog_cc paces
+increases, and the cap held the start ramp for 10 s.
+
+**Rungs**, judged in bits per pixel per frame, `bitrate / (w × h × fps)`:
+
+| Rung | Geometry |
+|---|---|
+| 0 | the preset: the encode size at the preset height (source aspect), the preset fps |
+| 1 | the same size at 30 fps (a 60 fps preset only) |
+| 2, 3, 4 | 540p, 480p, 360p at 30 fps, the width from the aspect, a multiple of 16 |
+
+| Move | Condition | Dwell |
 |---|---|---|
-| full → half rate | bpp at full rate **< 0.055** | 2 s |
-| half → full rate | bpp at full rate **> 0.075** | 15 s |
+| down one rung | bitrate under 0.055 bpp of the current rung, or encoder overload | 2 s |
+| up one rung | no overload, and bitrate over the restore point of the rung above: 0.075 bpp, or 95 % of the preset bitrate when that is lower (1080p60 at 8 Mbps is 0.064 bpp; without it a stream that dropped to 30 fps would never go back), at least 10 % over its floor | 15 s |
 
-10 s cooldown between switches, and no rung below 30fps. Both directions are
-judged **at full framerate**: dropping to 30fps instantly doubles the measured
-bpp, so judging at the current rung would argue for climbing straight back into
-the starvation just escaped.
-
-Reduction is by **decimation before GPU colour conversion**
-(`VideoPipeline::set_output_fps`), so convert *and* encode cost fall and no
-capture backend needs reconfiguring. The encoder is retargeted too
-(`Encoder::set_framerate`) because rate control budgets bits per frame from the
-framerate — an encoder still told 60 while fed 30 hands out half the bits each
-frame deserves. Each switch forces an IDR.
-
-Stage 2 (geometry rungs: 540p/480p/360p) needs viewer-side work — mid-stream SPS
-geometry change and a `DCompPresenter` swap-chain resize — and is not built.
-See `plans/STREAM-CAPTURE-QUALITY.md`.
+10 s between two switches; no wait before the first switch. A frame rate
+change is decimation before the colour convert (`mello_stream_set_framerate`,
+section 3.2); a geometry change is `mello_stream_set_resolution` (section 3.2).
+Each switch sends the rung message `[0x04, 0x05, width u16 BE, height u16 BE,
+fps]` on the control channel (also to a viewer that joins), and gives the
+sender the rung's allocation (`mello_peer_video_set_max_allocated`: the preset
+on the top rung, else the restore point of the rung above, with the RTP
+overhead). A raise of the allocation, a step up, makes the sender re-probe
+(section 5). At the start the manager gives the sender the goog_cc limits
+(floor, start and preset, with the RTP overhead). The host stats (`w`, `h`,
+`fps_out`) show the current rung.
 
 ### 8.2 REMB congestion control
 
-**Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%) or jitter >20 ms steps down 15%; ten consecutive good samples increase by max(100 kbps, 5%). Emits REMB at significant changes or every 2 s heartbeat.
+**Viewer (`ViewerCongestionController`):** Samples native RTP receiver stats every 500 ms. Loss is counted after repair: a sequence that went missing and came back (NACK, reorder) is not loss. Severe loss (>5%), incomplete AUs, or gate pressure step the receive target down 25%; mild loss (2–5%), or jitter >20 ms in two samples in a row, steps down 15% (the receiver's RFC 3550 jitter counts every fragment, and one IDR's spread lifts it for one sample; a per-frame jitter of the receiver is stage 3's). Ten consecutive good samples increase by max(100 kbps, 5%). Floor 300 kbps. Emits REMB at significant changes or every 2 s heartbeat.
 
-**Host (`StreamManager`):** Applies the minimum fresh REMB target across active viewers (3 s stale expiry). Encoder bitrate changes are coalesced: a target within 5 % of the current bitrate changes nothing (the dead band); a decrease over the dead band applies immediately; an increase waits until 250 ms after the last change, is rate-limited to 5%/s, and applies only over the dead band (the last step to the preset ceiling can be smaller). REMB is polled every 10 ms, so before this the encoder got up to 100 changes per second during a ramp. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale or missing (lost RTCP), the host **holds** the current target — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. A last-viewer-leave is an explicit signal and does restore the configured ceiling for the next viewer. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`.
+**Host (`StreamManager`):** The minimum fresh REMB target across active viewers (3 s stale expiry) is the ceiling of the quality controller (section 8.1.1), which applies the coalescing rule. Bitrate changes trigger encoder reconfigure (+ IDR on down-steps > 25%). When every estimate is stale (lost RTCP), the host **holds** the current bitrate as the ceiling — restoring max on transient REMB loss ramps the host back into the congestion that caused the silence. The last viewer leave (the manager counts the SFU's member joins and leaves) clears the ceiling, the SFU's synthetic `sfu` entry included, which no leave names: before stage 4 the next viewer inherited it. Pacing target includes RTP header headroom via `calc_stream_pacing_target_kbps`; with goog_cc the sender paces at goog_cc's rate instead.
 
 In SFU mode all viewers share one encoded stream. The SFU terminates TWCC per hop: it generates TWCC feedback to the host (host→SFU leg) and stamps per-leg transport-wide sequences toward viewers. It runs no estimator and no pacer of its own: the minimum of the fresh viewer REMB values goes upstream as REMB, on arrival and on the ~1 s tick. The SFU caches the last complete IDR access unit and sends it to a viewer when the viewer's PeerConnection connects.
 

@@ -1014,6 +1014,39 @@ impl SfuConnection {
         Ok(())
     }
 
+    /// goog_cc limits of the stream host's video sender, in bits per second
+    /// (streaming-quality stage 4). `start_bps` 0 keeps the default.
+    pub fn set_video_bitrate_limits(
+        &self,
+        min_bps: u64,
+        start_bps: u64,
+        max_bps: u64,
+    ) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "set_video_bitrate_limits")?;
+        let result = unsafe {
+            mello_sys::mello_peer_video_set_bitrate_limits(self.peer, min_bps, start_bps, max_bps)
+        };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_bitrate_limits failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The encoder allocation of the stream host's video sender, in bits per
+    /// second (streaming-quality stage 4). A raise makes the sender re-probe.
+    pub fn set_video_max_allocated(&self, bps: u64) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "set_video_max_allocated")?;
+        let result = unsafe { mello_sys::mello_peer_video_set_max_allocated(self.peer, bps) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_max_allocated failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Set the stream-viewer receive target in bits per second.
     pub fn set_video_receive_target(&self, bps: u32) -> Result<(), StreamError> {
         self.require_stream_role(PeerMediaRole::StreamViewer, "set_video_receive_target")?;

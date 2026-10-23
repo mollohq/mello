@@ -66,6 +66,16 @@ pub trait PacketSink: Send + Sync {
     /// Propagate the pacing target to each native RTP sender (bits/sec internally).
     async fn set_pacing_kbps(&self, target_kbps: u32);
 
+    /// goog_cc limits of the native RTP sender, kbps with the RTP overhead
+    /// (`mello_peer_video_set_bitrate_limits`). Default no-op for the test
+    /// fake.
+    async fn set_bitrate_limits(&self, _min_kbps: u32, _start_kbps: u32, _max_kbps: u32) {}
+
+    /// The encoder allocation for goog_cc, kbps with the RTP overhead
+    /// (`mello_peer_video_set_max_allocated`). A raise makes the sender
+    /// re-probe. Default no-op for the test fake.
+    async fn set_max_allocated_kbps(&self, _kbps: u32) {}
+
     /// Aggregated native RTP egress stats for telemetry.
     async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry>;
 

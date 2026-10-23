@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::atomic::{AtomicU16, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -7,9 +7,9 @@ use tokio::sync::oneshot;
 use tokio::time::MissedTickBehavior;
 
 use super::config::StreamConfig;
+use super::controller::{self, EncoderLoad, QualityController, Rung};
 use super::error::StreamError;
 use super::input::{InputPassthrough, InputPassthroughStub};
-use super::ladder::FramerateLadder;
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::pause::{pause_message, PauseController};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
@@ -72,8 +72,8 @@ pub(crate) struct HostStatsFields {
     pub width: u32,
     pub height: u32,
     pub fps_cfg: u32,
-    /// Framerate the ladder is currently targeting; below fps_cfg means a rung
-    /// has been taken.
+    /// Frame rate of the current rung; below fps_cfg means a rung has been
+    /// taken. `width` and `height` are the rung's encode size.
     pub fps_out: u32,
     pub recovery: bool,
     pub video_send_fail: u64,
@@ -162,16 +162,10 @@ const FEEDBACK_POLL_INTERVAL_MS: u64 = 10;
 /// pointer looks smooth at and a control channel carries without effort.
 const CURSOR_POLL_INTERVAL_MS: u64 = 33;
 const REMB_STALE_SECS: u64 = 3;
-const REMB_INCREASE_MAX_PER_SEC: f32 = 0.05;
 /// At most one encoder bitrate increase per window. A decrease over the dead
 /// band applies at once. REMB arrives on a 10 ms poll, and each encoder
 /// reconfigure costs the encoder control path, so per-tick changes are not
 /// wanted.
-const BITRATE_CHANGE_MIN_INTERVAL: Duration = Duration::from_millis(250);
-/// A target within this fraction of the current bitrate changes nothing.
-const BITRATE_DEAD_BAND_PERCENT: u64 = 5;
-
-#[derive(Clone, Copy)]
 struct ViewerRembState {
     bitrate_bps: u32,
     updated_at: Instant,
@@ -340,10 +334,9 @@ pub struct StreamManager {
     min_bitrate_kbps: u32,
     max_bitrate_kbps: u32,
     viewer_remb: HashMap<String, ViewerRembState>,
-    remb_increase_last_at: Instant,
-    /// The last encoder bitrate change. Increases wait
-    /// `BITRATE_CHANGE_MIN_INTERVAL` after it.
-    last_bitrate_change_at: Instant,
+    /// The viewers that joined and did not leave (SFU membership). At zero
+    /// the REMB ceiling goes, the SFU's synthetic `sfu` entry included.
+    viewers: HashSet<String>,
     audio_seq: AtomicU16,
     last_queue_keyframe_request: Instant,
     // Separate cooldown clocks per request class: a 2s queue-pressure
@@ -387,9 +380,15 @@ pub struct StreamManager {
     /// The exit has been reported. Sticky: the tick reports it exactly once
     /// and the host ends the stream on it.
     target_exited_reported: bool,
-    /// Owns the encoder's framerate target. Congestion control feeds it the
-    /// bitrate; it decides the cadence that bitrate can actually sustain.
-    framerate_ladder: FramerateLadder,
+    /// The one owner of `(bitrate, fps, resolution)` (stage 4): goog_cc
+    /// target, REMB ceiling, encoder load and source size in; encoder
+    /// bitrate, rung and allocation out.
+    quality: QualityController,
+    /// `MelloStreamStats` counters at the last quality tick, for the
+    /// encoder load window.
+    quality_last_frames: u64,
+    quality_last_drops: u64,
+    quality_last_source_changes: u32,
     /// Viewer pause UX: debounced capture-target availability. Transitions
     /// broadcast a control message and (for the host UI) an event.
     pause: PauseController,
@@ -446,18 +445,21 @@ impl StreamManager {
     ) -> Self {
         let max_bitrate_kbps = config.bitrate_kbps;
         let min_bitrate_kbps = StreamConfig::min_bitrate_kbps(config.codec);
-        // Read before `config` is moved into the struct literal below.
-        let ladder = FramerateLadder::new(config.width, config.height, config.fps, Instant::now());
+        // The top rung is the preset; `start_quality` moves it to the encode
+        // size the host started at (the width from the source aspect).
+        let quality =
+            QualityController::new(config.width, config.height, config.fps, config.bitrate_kbps);
         Self {
             ctx,
             host,
             sink,
+            // The native encoder starts at the preset; `run` applies the
+            // controller's start value (60 %) at once.
             current_bitrate_kbps: max_bitrate_kbps,
             min_bitrate_kbps,
             max_bitrate_kbps,
             viewer_remb: HashMap::new(),
-            remb_increase_last_at: Instant::now(),
-            last_bitrate_change_at: Instant::now() - BITRATE_CHANGE_MIN_INTERVAL,
+            viewers: HashSet::new(),
             config,
             input: Arc::new(InputPassthroughStub),
             video_rx,
@@ -495,7 +497,10 @@ impl StreamManager {
             capture_state_last: CAPTURE_STATE_CAPTURING,
             target_exited_seen: false,
             target_exited_reported: false,
-            framerate_ladder: ladder,
+            quality,
+            quality_last_frames: 0,
+            quality_last_drops: 0,
+            quality_last_source_changes: 0,
             pause: PauseController::new(),
             pause_event_tx: None,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
@@ -560,59 +565,63 @@ impl StreamManager {
         Some(self.clamp_bitrate_kbps((min_bps / 1_000).max(1)))
     }
 
-    /// True when `target_kbps` differs from the current bitrate by at least
-    /// the dead band.
-    fn outside_dead_band(&self, target_kbps: u32) -> bool {
-        let current = u64::from(self.current_bitrate_kbps);
-        let diff = u64::from(target_kbps.abs_diff(self.current_bitrate_kbps));
-        diff * 100 >= current * BITRATE_DEAD_BAND_PERCENT
+    /// Feeds the REMB ceiling to the quality controller and applies its
+    /// bitrate. A fresh minimum is the ceiling. Only stale entries (REMB
+    /// rides unreliable RTCP and can stop with the viewers still there):
+    /// hold the current bitrate as the ceiling, so the host does not ramp
+    /// back into the congestion that caused the silence. No entries: no
+    /// ceiling.
+    async fn apply_remb_aggregate(&mut self, now: Instant) {
+        let had_entries = !self.viewer_remb.is_empty();
+        self.expire_stale_remb(now);
+        let ceiling = match self.aggregate_remb_target_kbps(now) {
+            Some(kbps) => Some(kbps),
+            None if had_entries => Some(self.current_bitrate_kbps),
+            None => None,
+        };
+        self.quality.set_remb_ceiling_kbps(ceiling);
+        self.apply_quality_bitrate(now).await;
     }
 
-    async fn apply_remb_aggregate(&mut self, now: Instant) {
-        self.expire_stale_remb(now);
-        let Some(desired_kbps) = self.aggregate_remb_target_kbps(now) else {
-            // No fresh estimates: receivers are quiet, REMBs were lost, or no
-            // viewers remain. Hold the current target — REMB rides unreliable
-            // RTCP, and restoring max on transient silence ramps the host
-            // back into the congestion that caused the silence (yo-yo).
+    /// Applies the controller's bitrate when its coalescing rule allows a
+    /// change (5 % dead band, decreases at once, increases 250 ms apart).
+    async fn apply_quality_bitrate(&mut self, now: Instant) {
+        let Some(kbps) = self.quality.update_bitrate(now) else {
             return;
         };
-
-        let current_kbps = self.current_bitrate_kbps;
-        if desired_kbps <= current_kbps {
-            // A decrease over the dead band applies at once: the viewers
-            // lose packets now. A smaller one changes nothing.
-            if self.outside_dead_band(desired_kbps) && self.apply_bitrate_kbps(desired_kbps) {
-                self.last_bitrate_change_at = now;
-                self.refresh_pacing_target().await;
-            }
-            self.remb_increase_last_at = now;
-            return;
-        }
-
-        // An increase waits for the window. The increase clock is not reset
-        // while it waits, so the allowed step grows with the wait (5 %/s).
-        if now.duration_since(self.last_bitrate_change_at) < BITRATE_CHANGE_MIN_INTERVAL {
-            return;
-        }
-        let elapsed_secs = now
-            .duration_since(self.remb_increase_last_at)
-            .as_secs_f32()
-            .max(0.0);
-        let max_step_kbps = ((current_kbps as f32) * REMB_INCREASE_MAX_PER_SEC * elapsed_secs)
-            .round()
-            .max(1.0) as u32;
-        let capped_kbps = current_kbps.saturating_add(max_step_kbps).min(desired_kbps);
-        // The last step to the preset ceiling can be smaller than the dead
-        // band; without it the stream stays up to 5 % under the ceiling.
-        if !self.outside_dead_band(capped_kbps) && capped_kbps != self.max_bitrate_kbps {
-            return;
-        }
-        if self.apply_bitrate_kbps(capped_kbps) {
-            self.last_bitrate_change_at = now;
+        if self.apply_bitrate_kbps(kbps) {
             self.refresh_pacing_target().await;
         }
-        self.remb_increase_last_at = now;
+    }
+
+    /// The start of a stream: the goog_cc limits and the allocation for the
+    /// sender, and the encoder at the controller's start value (60 % of the
+    /// preset). goog_cc's start probes take it to the target.
+    async fn start_quality(&mut self) {
+        if !self.host.is_null() {
+            let (mut w, mut h) = (0u32, 0u32);
+            unsafe { mello_sys::mello_stream_get_host_resolution(self.host, &mut w, &mut h) };
+            if w > 0 && h > 0 {
+                let _ = self.quality.set_top_size(w, h);
+            }
+        }
+        let (floor, start, max) = self.quality.sender_limits_kbps();
+        self.sink.set_bitrate_limits(floor, start, max).await;
+        self.sink
+            .set_max_allocated_kbps(self.quality.allocation_kbps())
+            .await;
+        let start_kbps = self.quality.bitrate_kbps();
+        log::info!(
+            "Stream quality: start at {} kbps ({} % of the {} kbps preset), goog_cc limits {}..{} kbps",
+            start_kbps,
+            controller::START_PERCENT,
+            self.quality.preset_kbps(),
+            floor,
+            max
+        );
+        if self.apply_bitrate_kbps(start_kbps) {
+            self.refresh_pacing_target().await;
+        }
     }
 
     async fn log_pacing_telemetry(&mut self) {
@@ -799,35 +808,106 @@ impl StreamManager {
         }
     }
 
-    fn tick_framerate_ladder(&mut self) {
-        let Some(fps) = self
-            .framerate_ladder
-            .observe(self.current_bitrate_kbps, Instant::now())
-        else {
-            return;
-        };
-
+    /// The quality controller's 1 s tick: the encoder load over the last
+    /// second, a new source size (stage 8 stats), then the rung.
+    async fn tick_quality(&mut self) {
+        let now = Instant::now();
         if !self.host.is_null() {
+            let mut stats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+            unsafe { mello_sys::mello_stream_get_stats(self.host, &mut stats) };
+            let load = EncoderLoad {
+                frames_offered: stats
+                    .frames_captured
+                    .saturating_sub(self.quality_last_frames),
+                queue_drops: stats
+                    .encode_queue_drops
+                    .saturating_sub(self.quality_last_drops),
+                mean_encode_ms: f64::from(stats.encode_ms_mean),
+                fps: self.quality.rung().fps,
+            };
+            self.quality_last_frames = stats.frames_captured;
+            self.quality_last_drops = stats.encode_queue_drops;
+            self.quality.set_encoder_load(load);
+
+            if stats.source_size_changes != self.quality_last_source_changes
+                && stats.source_width > 0
+                && stats.source_height > 0
+            {
+                self.quality_last_source_changes = stats.source_size_changes;
+                let (w, h) = controller::encode_size_for(
+                    stats.source_width,
+                    stats.source_height,
+                    self.config.height,
+                    self.config.fps,
+                );
+                if let Some(rung) = self.quality.set_top_size(w, h) {
+                    log::info!(
+                        "Stream quality: source {}x{}, the rung follows its aspect: {}x{}",
+                        stats.source_width,
+                        stats.source_height,
+                        rung.width,
+                        rung.height
+                    );
+                    self.apply_rung_geometry(rung);
+                    self.sink
+                        .send_control(&controller::rung_message(rung))
+                        .await;
+                }
+            }
+        }
+
+        let update = self.quality.tick_rung(now);
+        if let Some(rung) = update.rung {
+            self.apply_rung(rung).await;
+        }
+        if let Some(allocation) = update.allocation_kbps {
+            self.sink.set_max_allocated_kbps(allocation).await;
+        }
+    }
+
+    fn apply_rung_geometry(&self, rung: Rung) {
+        if self.host.is_null() {
+            return;
+        }
+        let result =
+            unsafe { mello_sys::mello_stream_set_resolution(self.host, rung.width, rung.height) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            log::warn!(
+                "Stream quality: set_resolution {}x{} failed ({}); the encode size stays",
+                rung.width,
+                rung.height,
+                result
+            );
+        }
+    }
+
+    /// A rung change: the frame rate, the encode size, and the rung message
+    /// to the viewers.
+    async fn apply_rung(&mut self, rung: Rung) {
+        let full_fps = self.config.fps;
+        log::info!(
+            "Stream quality: rung {}x{} at {} fps, {} kbps ({:.3} bpp)",
+            rung.width,
+            rung.height,
+            rung.fps,
+            self.current_bitrate_kbps,
+            rung.bits_per_pixel(self.current_bitrate_kbps)
+        );
+        if !self.host.is_null() {
+            // 0 restores the capture rate.
+            let fps = if rung.fps >= full_fps { 0 } else { rung.fps };
             unsafe {
                 mello_sys::mello_stream_set_framerate(self.host, fps);
             }
-        }
-        log::info!(
-            "Stream framerate ladder: {} fps at {} kbps ({:.3} bpp at full rate) — {}",
-            fps,
-            self.current_bitrate_kbps,
-            super::ladder::bits_per_pixel(
-                self.current_bitrate_kbps,
-                self.config.width,
-                self.config.height,
-                self.config.fps
-            ),
-            if fps < self.config.fps {
-                "bitrate cannot sustain full cadence, halving"
-            } else {
-                "headroom recovered, restoring"
+            let (mut w, mut h) = (0u32, 0u32);
+            unsafe { mello_sys::mello_stream_get_host_resolution(self.host, &mut w, &mut h) };
+            if w != rung.width || h != rung.height {
+                self.apply_rung_geometry(rung);
             }
-        );
+        }
+        self.sink
+            .send_control(&controller::rung_message(rung))
+            .await;
     }
 
     /// The idle state from the keepalive counter, read on the 1 s tick.
@@ -997,10 +1077,10 @@ impl StreamManager {
             bitrate_target_kbps: self.current_bitrate_kbps,
             bitrate_actual_kbps: stats.bitrate_kbps,
             pace_kbps,
-            width: self.config.width,
-            height: self.config.height,
+            width: self.quality.rung().width,
+            height: self.quality.rung().height,
             fps_cfg: self.config.fps,
-            fps_out: self.framerate_ladder.current_fps(),
+            fps_out: self.quality.rung().fps,
             recovery: self.drop_delta_until_keyframe,
             video_send_fail: self.manager_video_send_fail_total,
             video_queue_len: self.video_rx.len(),
@@ -1066,6 +1146,7 @@ impl StreamManager {
     pub async fn run(&mut self, mut stop: oneshot::Receiver<()>) {
         log::info!("Stream manager run loop started");
         self.refresh_pacing_target().await;
+        self.start_quality().await;
         self.log_pacing_telemetry().await;
         let mut pacing_tick =
             tokio::time::interval(Duration::from_secs(PACING_TELEMETRY_INTERVAL_SECS));
@@ -1102,7 +1183,7 @@ impl StreamManager {
                 }
                 _ = manager_tick.tick() => {
                     self.log_manager_telemetry().await;
-                    self.tick_framerate_ladder();
+                    self.tick_quality().await;
                     self.check_capture_state();
                     self.tick_stream_pause().await;
                     self.tick_host_idle().await;
@@ -1136,11 +1217,15 @@ impl StreamManager {
         }
         if !self.viewer_remb.is_empty() {
             self.apply_remb_aggregate(now).await;
+        } else {
+            // An increase held by the 250 ms window applies here.
+            self.apply_quality_bitrate(now).await;
         }
     }
 
     async fn handle_viewer_joined(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
+        self.viewers.insert(viewer_id.to_string());
         self.sink.on_viewer_joined(viewer_id).await;
         // No IDR here. `member_joined` comes before the viewer's ICE and DTLS
         // are up, so an IDR now does not reach the viewer, and its cooldown
@@ -1152,6 +1237,10 @@ impl StreamManager {
         if self.pause.is_paused() {
             self.send_pause_state(true).await;
         }
+        // The rung the stream is on, for the newcomer's label.
+        self.sink
+            .send_control(&controller::rung_message(self.quality.rung()))
+            .await;
         // Same for the idle keepalive: the newcomer must not count its gaps.
         if self.host_idle {
             self.sink
@@ -1170,18 +1259,16 @@ impl StreamManager {
 
     async fn handle_viewer_left(&mut self, viewer_id: &str) {
         self.viewer_remb.remove(viewer_id);
+        self.viewers.remove(viewer_id);
         self.sink.on_viewer_left(viewer_id).await;
-        if self.viewer_remb.is_empty() {
-            // No viewers remain: restore the configured ceiling so the next
-            // viewer starts at full quality. Distinct from stale-REMB hold:
-            // an empty map after an explicit leave is real, not packet loss.
-            if self.apply_bitrate_kbps(self.max_bitrate_kbps) {
-                self.last_bitrate_change_at = Instant::now();
-                self.refresh_pacing_target().await;
-            }
-            return;
+        if self.viewers.is_empty() {
+            // No viewers remain: the REMB ceiling goes, with the entry of
+            // the SFU's synthetic viewer id (`sfu`), which no leave names.
+            // The next viewer starts at what goog_cc allows. Distinct from
+            // the stale-REMB hold: an empty room is real, not packet loss.
+            self.viewer_remb.clear();
         }
-        let _ = self.apply_remb_aggregate(Instant::now()).await;
+        self.apply_remb_aggregate(Instant::now()).await;
     }
 
     async fn handle_video_feedback(&mut self, feedback: &SinkVideoFeedback, now: Instant) {
@@ -1230,10 +1317,14 @@ impl StreamManager {
                 );
                 self.apply_remb_aggregate(now).await;
             }
-            SinkVideoFeedbackKind::GccTarget { .. } => {
-                // The host's local TWCC estimate for the host-to-SFU hop. It
-                // sets neither the encoder nor the RTP pacing rate. The SFU
-                // forwards the viewer-path capacity separately as REMB.
+            SinkVideoFeedbackKind::GccTarget { bitrate_bps } => {
+                // goog_cc's encoder target for the host-to-SFU hop (the
+                // target less the congestion window pushback, with the RTP
+                // overhead). The quality controller takes it under the REMB
+                // ceiling and the preset.
+                log::debug!("Stream manager goog_cc target: {} bps", bitrate_bps);
+                self.quality.set_gcc_target_bps(bitrate_bps);
+                self.apply_quality_bitrate(now).await;
             }
         }
     }
@@ -1566,6 +1657,8 @@ mod tests {
         audio_packets: Mutex<Vec<Vec<u8>>>,
         audio_timestamps: Mutex<Vec<u32>>,
         control: Mutex<Vec<Vec<u8>>>,
+        limits: Mutex<Option<(u32, u32, u32)>>,
+        allocation: Mutex<Option<u32>>,
     }
 
     impl FakeSink {
@@ -1578,6 +1671,8 @@ mod tests {
                 audio_packets: Mutex::new(Vec::new()),
                 audio_timestamps: Mutex::new(Vec::new()),
                 control: Mutex::new(Vec::new()),
+                limits: Mutex::new(None),
+                allocation: Mutex::new(None),
             }
         }
 
@@ -1614,6 +1709,14 @@ mod tests {
 
         async fn send_control(&self, data: &[u8]) {
             self.control.lock().expect("lock").push(data.to_vec());
+        }
+
+        async fn set_bitrate_limits(&self, min_kbps: u32, start_kbps: u32, max_kbps: u32) {
+            *self.limits.lock().expect("lock") = Some((min_kbps, start_kbps, max_kbps));
+        }
+
+        async fn set_max_allocated_kbps(&self, kbps: u32) {
+            *self.allocation.lock().expect("lock") = Some(kbps);
         }
 
         async fn native_rtp_telemetry(&self) -> Option<NativeRtpTelemetry> {
@@ -2202,7 +2305,7 @@ mod tests {
             video_rx,
             audio_rx,
         );
-        mgr.current_bitrate_kbps = 8_000;
+        set_bitrate(&mut mgr, 8_000);
         let now = Instant::now();
         mgr.viewer_remb.insert(
             "viewer".to_string(),
@@ -2218,38 +2321,29 @@ mod tests {
         std::mem::forget(mgr);
     }
 
+    /// Stage 4: an increase waits 250 ms after the last change, then goes to
+    /// the REMB ceiling (capped at the preset) in one step. The 5 %/s cap
+    /// went: goog_cc paces increases, and the cap held the start ramp from
+    /// 60 % to the preset for 10 s.
     #[test]
-    fn remb_increase_is_rate_limited() {
+    fn remb_increase_applies_after_the_window_in_one_step() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
-        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
-        let sink = Arc::new(FakeSink::new());
-        let (_video_tx, video_rx) = mpsc::channel(4);
-        let (_audio_tx, audio_rx) = mpsc::channel(4);
-        let mut mgr = StreamManager::new(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            sink.clone(),
-            config,
-            video_rx,
-            audio_rx,
-        );
-        mgr.current_bitrate_kbps = 3_000;
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
         let now = Instant::now();
-        mgr.remb_increase_last_at = now - Duration::from_secs(1);
-        mgr.viewer_remb.insert(
-            "viewer".to_string(),
-            ViewerRembState {
-                bitrate_bps: 8_000_000,
-                updated_at: now,
-            },
-        );
+        mgr.current_bitrate_kbps = 3_000;
+        mgr.quality.set_applied_bitrate(3_000, Some(now));
+        set_remb(&mut mgr, 8_000_000, now);
 
-        rt.block_on(mgr.apply_remb_aggregate(now));
+        rt.block_on(mgr.apply_remb_aggregate(now + Duration::from_millis(100)));
+        assert_eq!(mgr.current_bitrate_kbps, 3_000, "inside the 250 ms window");
 
-        assert_eq!(mgr.current_bitrate_kbps, 3_150);
+        let later = now + Duration::from_millis(260);
+        set_remb(&mut mgr, 8_000_000, later);
+        rt.block_on(mgr.apply_remb_aggregate(later));
+        assert_eq!(mgr.current_bitrate_kbps, mgr.max_bitrate_kbps);
         std::mem::forget(mgr);
     }
 
@@ -2265,6 +2359,13 @@ mod tests {
             video_rx,
             audio_rx,
         )
+    }
+
+    /// The encoder bitrate in the manager and in its quality controller,
+    /// with the last change long ago.
+    fn set_bitrate(mgr: &mut StreamManager, kbps: u32) {
+        mgr.current_bitrate_kbps = kbps;
+        mgr.quality.set_applied_bitrate(kbps, None);
     }
 
     fn set_remb(mgr: &mut StreamManager, bitrate_bps: u32, at: Instant) {
@@ -2286,7 +2387,7 @@ mod tests {
             .build()
             .expect("runtime");
         let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
-        mgr.current_bitrate_kbps = 3_000;
+        set_bitrate(&mut mgr, 3_000);
         let start = Instant::now();
         let mut changes: Vec<(Duration, u32, u32)> = Vec::new();
         for tick in 0..=300u64 {
@@ -2331,7 +2432,7 @@ mod tests {
             .build()
             .expect("runtime");
         let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
-        mgr.current_bitrate_kbps = 3_000;
+        set_bitrate(&mut mgr, 3_000);
         let now = Instant::now();
         set_remb(&mut mgr, 2_900_000, now);
 
@@ -2348,9 +2449,9 @@ mod tests {
             .build()
             .expect("runtime");
         let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
-        mgr.current_bitrate_kbps = 3_000;
         let now = Instant::now();
-        mgr.last_bitrate_change_at = now;
+        mgr.current_bitrate_kbps = 3_000;
+        mgr.quality.set_applied_bitrate(3_000, Some(now));
         set_remb(&mut mgr, 2_000_000, now);
 
         rt.block_on(mgr.apply_remb_aggregate(now));
@@ -2437,7 +2538,7 @@ mod tests {
             video_rx,
             audio_rx,
         );
-        mgr.current_bitrate_kbps = 3_000;
+        set_bitrate(&mut mgr, 3_000);
         mgr.viewer_remb.insert(
             "last-viewer".to_string(),
             ViewerRembState {
@@ -2479,7 +2580,7 @@ mod tests {
         // A live viewer whose REMB heartbeats stopped arriving (lost RTCP):
         // the entry is stale but no leave was signaled. The host must hold
         // the current target rather than ramping back into congestion.
-        mgr.current_bitrate_kbps = 3_000;
+        set_bitrate(&mut mgr, 3_000);
         mgr.viewer_remb.insert(
             "quiet-viewer".to_string(),
             ViewerRembState {
@@ -2547,7 +2648,15 @@ mod tests {
             rt.block_on(mgr.tick_host_idle());
         }
 
-        let control = sink.control.lock().expect("lock").clone();
+        // The idle messages only (a joiner also gets the rung message).
+        let control: Vec<Vec<u8>> = sink
+            .control
+            .lock()
+            .expect("lock")
+            .iter()
+            .filter(|m| m.get(1) == Some(&0x04))
+            .cloned()
+            .collect();
         assert_eq!(
             control,
             vec![
@@ -2586,36 +2695,81 @@ mod tests {
         std::mem::forget(mgr);
     }
 
+    /// Stage 4: goog_cc's target drives the encoder (it was discarded in SFU
+    /// mode, so the host learned of its own uplink congestion only from the
+    /// viewers' loss). 3.24 Mbps with the RTP overhead is 3 Mbps for the
+    /// encoder; a decrease over the dead band applies at once.
     #[test]
-    fn sfu_local_twcc_gcc_target_does_not_crush_encoder() {
+    fn the_gcc_target_drives_the_encoder() {
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
             .expect("runtime");
-        let config = StreamConfig::from_preset(QualityPreset::High, Codec::H264);
-        let sink = Arc::new(FakeSink::new());
-        let (_video_tx, video_rx) = mpsc::channel(4);
-        let (_audio_tx, audio_rx) = mpsc::channel(4);
-        let mut mgr = StreamManager::new(
-            std::ptr::null_mut(),
-            std::ptr::null_mut(),
-            sink,
-            config,
-            video_rx,
-            audio_rx,
-        );
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        set_bitrate(&mut mgr, 4_500);
         let now = Instant::now();
         rt.block_on(mgr.handle_video_feedback(
             &SinkVideoFeedback {
                 viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),
                 kind: SinkVideoFeedbackKind::GccTarget {
-                    bitrate_bps: 300_000,
+                    bitrate_bps: 3_240_000,
                 },
             },
             now,
         ));
         assert!(mgr.viewer_remb.is_empty());
+        assert_eq!(mgr.current_bitrate_kbps, 3_000);
+        std::mem::forget(mgr);
+    }
+
+    /// Stage 4: in SFU mode every REMB arrives under the synthetic id `sfu`,
+    /// which no leave names. The entry used to stay after the last viewer
+    /// left, so the next viewer inherited its ceiling.
+    #[test]
+    fn the_last_viewer_leave_clears_the_sfu_remb_entry() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        rt.block_on(mgr.handle_viewer_joined("viewer-1"));
+        let now = Instant::now();
+        mgr.viewer_remb.insert(
+            SFU_CONTROL_VIEWER_ID.to_string(),
+            ViewerRembState {
+                bitrate_bps: 1_000_000,
+                updated_at: now,
+            },
+        );
+        rt.block_on(mgr.apply_remb_aggregate(now));
+        assert_eq!(mgr.current_bitrate_kbps, 1_000);
+
+        rt.block_on(mgr.handle_viewer_left("viewer-1"));
+        assert!(mgr.viewer_remb.is_empty(), "the synthetic entry went");
+        mgr.quality
+            .set_applied_bitrate(mgr.current_bitrate_kbps, None);
+        rt.block_on(mgr.apply_remb_aggregate(Instant::now()));
         assert_eq!(mgr.current_bitrate_kbps, mgr.max_bitrate_kbps);
+        std::mem::forget(mgr);
+    }
+
+    /// Stage 4: the encoder starts at 60 % of the preset, and the sender gets
+    /// its goog_cc limits (floor, start, preset, with the RTP overhead).
+    #[test]
+    fn the_stream_starts_at_60_percent_with_the_sender_limits() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let sink = Arc::new(FakeSink::new());
+        let mut mgr = remb_test_manager(sink.clone());
+        rt.block_on(mgr.start_quality());
+        assert_eq!(mgr.current_bitrate_kbps, 2_700, "60 % of 4500");
+        assert_eq!(
+            *sink.limits.lock().expect("lock"),
+            Some((324, 2_916, 4_860))
+        );
+        assert_eq!(*sink.allocation.lock().expect("lock"), Some(4_860));
         std::mem::forget(mgr);
     }
 
