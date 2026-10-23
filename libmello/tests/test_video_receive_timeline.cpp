@@ -139,7 +139,7 @@ TEST(VideoReceiveTimeline, TheStartWaitsForAKeyFrameAndAsksOnlyOncePerRetry) {
         loop.run_until(clock.now + kFrameUs);
     }
     EXPECT_TRUE(loop.released.empty());
-    // First request 200 ms after the first frame, then one per second.
+    // First request 50 ms after the first frame, then one per second.
     EXPECT_EQ(loop.keyframe_requests, 3);
     // The key frame starts the picture.
     tl.insert(frame(1000, -1, 150 * kRtpPerFrame, clock.now, true));

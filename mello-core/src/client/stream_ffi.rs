@@ -445,6 +445,11 @@ impl ViewerTimelineStats {
     }
 }
 
+/// One decimal, in f64 so the JSON shows 31.3 and not 31.299999237060547.
+fn round1(v: f32) -> f64 {
+    (f64::from(v) * 10.0).round() / 10.0
+}
+
 /// The abbreviated viewer fields of `stream_client_stats` (spec 12
 /// section 11): the timeline and the decoder over the report interval.
 pub(super) fn timeline_report_fields(
@@ -453,15 +458,15 @@ pub(super) fn timeline_report_fields(
     interval_secs: f32,
 ) -> serde_json::Value {
     serde_json::json!({
-        "tgt_ms": (stats.target_delay_ms * 10.0).round() / 10.0,
-        "jit_ms": (stats.jitter_ms * 10.0).round() / 10.0,
-        "dec_p95": (stats.decode_ms_p95 * 10.0).round() / 10.0,
+        "tgt_ms": round1(stats.target_delay_ms),
+        "jit_ms": round1(stats.jitter_ms),
+        "dec_p95": round1(stats.decode_ms_p95),
         "rel": stats.frames_released,
         "late": stats.frames_late,
         "drop_late": stats.frames_dropped_late,
         "kf_req": stats.keyframe_requests,
         "dec": stats.decoder,
-        "dec_fps": ((decoded_in_interval as f32 / interval_secs.max(0.001)) * 10.0).round() / 10.0,
+        "dec_fps": round1(decoded_in_interval as f32 / interval_secs.max(0.001)),
     })
 }
 

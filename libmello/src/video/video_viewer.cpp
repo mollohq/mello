@@ -68,6 +68,7 @@ bool ViewerPipeline::start(const GraphicsDevice& device, const ViewerConfig& con
         MELLO_LOG_ERROR(TAG, "No decoder available");
         return false;
     }
+    decoder_name_ = decoder_->name();
 #ifdef _WIN32
     // The CPU readback is set up for every viewer: the gate and the tools
     // use the CPU callback, the client the native one. It costs one small
@@ -196,7 +197,7 @@ bool ViewerPipeline::take_presented() {
 }
 
 void ViewerPipeline::stats(ViewerStats& out) const {
-    out.decoder_name = decoder_ ? decoder_->name() : "";
+    out.decoder_name = decoder_name_;
     out.attached = attached_.load();
     out.frames_decoded = frames_decoded_.load();
     out.decode_errors = decode_errors_.load();

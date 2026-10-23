@@ -58,9 +58,11 @@ constexpr TimeDelta kMaxWaitForFrame = TimeDelta::Seconds(3);
 // Upstream jitter estimate constants (VideoStreamBufferController).
 constexpr double kRttMult = 0.9;
 constexpr TimeDelta kRttMultAddCap = TimeDelta::Millis(200);
-// The first key-frame request waits this long after the first frame: the SFU
-// replays the cached IDR to a new viewer, and it is usually on its way.
-constexpr int64_t kFirstKeyframeWaitUs = 200'000;
+// The first key-frame request waits a short while for reordering. An IDR the
+// SFU replays to a new viewer comes before the live frames, so a first frame
+// that is not a key frame means no IDR is on its way; while one is still
+// arriving, the receiver session absorbs the request.
+constexpr int64_t kFirstKeyframeWaitUs = 50'000;
 // A frame is late when it can no longer be on screen at its render time:
 // released less than the decode time before it (VCMTiming's render delay).
 constexpr TimeDelta kRenderDelay = TimeDelta::Millis(10);

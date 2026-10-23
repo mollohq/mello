@@ -137,6 +137,7 @@ private:
     GraphicsDevice device_{};
     ViewerConfig config_{};
     std::unique_ptr<Decoder> decoder_;
+    std::string decoder_name_;  // set at start; stats read it from any thread
 #ifdef _WIN32
     StagingTexture converter_;
     bool converter_ready_ = false;
