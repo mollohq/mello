@@ -398,11 +398,27 @@ The encode size keeps the source aspect (`VideoPipeline::encode_size_for`):
 |---|---|
 | The height is the preset height. The width follows the source aspect, rounded to a multiple of 16. | 1920x1200 on 1080p gives 1728x1080. 1440x1080 on 720p gives 960x720. |
 | The size never goes above the capture size. | 1280x720 on 1080p stays 1280x720. |
-| Over H.264 level 4.2 (8704 macroblocks per frame, 522240 per second), the height goes down until the size fits. The host logs a warning. | 3440x1440 on 1080p60 gives 2288x960, not 2560x1080 (10880 macroblocks). |
+| Over H.264 level 5.1 (36864 macroblocks per frame, 983040 per second), the height goes down until the size fits. The host logs a warning. Every backend configures level 5.1 (streaming-quality stage 4); every current hardware decoder handles it. | 3440x1440 on 1080p60 gives 2576x1080 (10948 macroblocks; level 4.2 gave 2288x960). |
 
 The host reports the size through `mello_stream_get_host_resolution`.
 
-**The source size can change mid-stream; the encode size does not.** A window
+**Geometry rungs (stage 4).** `mello_stream_set_resolution(host, w, h)` changes
+the encode size to the height `h`; the width follows the current source aspect
+(`encode_size_for`). The capture thread makes a new preprocessor at the new
+size at the next frame. The encode thread changes the encoder's size at the
+first frame of the new size: NVENC reconfigures in place (`resetEncoder`,
+`forceIDR`, the initialize parameters kept), and when the driver refuses
+(a size over the initialize size) or the backend has no in-place path, the
+encoder is shut down and initialized again on the same device at the current
+bitrate and frame rate. The first frame at the new size is an IDR with SPS
+and PPS. The old preprocessor is freed when the encoder runs at the new size
+(a queued frame or the idle keepalive picture can still be one of its ring
+textures). `mello_stream_get_host_resolution` gives the new size. The quality
+controller (section 8) uses it for the 540p, 480p and 360p rungs and after a
+source size change. macOS has no geometry path yet (the call fails there).
+
+**The source size can change mid-stream; the encode size changes only on a
+geometry request.** A window
 resize, a display mode change, or a ladder move to a method of another size
 gives frames of a new size. Every backend follows it: WGC makes its frame pool
 again at the new content size (the frame of the change is dropped), DXGI
@@ -423,6 +439,8 @@ A dedicated `encode_thread` pulls from a bounded ring queue (`ENCODE_QUEUE_CAP =
 NVENC tries P4+ULL (Ultra Low Latency) first, then P1+ULL, then P1+LL. The effective preset is logged at init.
 
 **Async mode:** The encoder initializes with `enableEncodeAsync = 1` and registers a Windows completion event. `nvEncEncodePicture` returns immediately while the GPU works; the encode thread waits on the event before calling `nvEncLockBitstream`. Falls back to synchronous mode if the driver doesn't support async.
+
+**GOP: 10 s** (`keyframe_interval` = 10 x the preset frame rate) on every backend, plus IDRs on demand (a join, a PLI, a local IDR request, a rung change). The viewer repairs a loss with NACK and asks for an IDR only on real loss, so the periodic IDR, 6 to 10 times a delta frame, comes every 10 s instead of every 2 s. H.264 level 5.1 on NVENC, AMF and QSV.
 
 Rate control is VBR with 1.25× max headroom. The VBV spans ~0.5 s of the max rate (floored at 4 frames of bits, `vbvInitialDelay = vbv/2`) so IDRs are not rate-starved. Bitrate reconfigures reuse the full init-time NVENC config (the driver does not merge sparse configs on re-init) and force an IDR only on down-steps > 25%. Texture registration is cached per NV12 ring slot so `nvEncRegisterResource` runs once per slot, not per frame. `repeatSPSPPS = 1` ensures every keyframe is self-contained.
 

@@ -400,4 +400,101 @@ TEST(ViewerSizeChange, TheHardwareDecoderShowsEachPictureWithItsAccessUnit) {
     }
     EXPECT_GE(same, soft.size() - 2) << hw_name << " shows the picture of the access unit it just got";
 }
+
+// Streaming-quality stage 4, geometry rungs: set_encode_height changes the
+// encode size mid-stream. The preprocessor is made again at the new size,
+// the encoder changes its size (OpenH264: a full re-initialize; NVENC: in
+// place), and the first access unit at the new size is an IDR. Before stage
+// 4 the encode size was fixed for the whole stream.
+namespace {
+
+void run_geometry_change(bool soft) {
+    const uint32_t w = 640, h = 480, frames = 60;
+    const auto path = std::filesystem::temp_directory_path() / "mello_geometry_test.yuv";
+    {
+        std::vector<uint8_t> frame(reference_frame_bytes(w, h), 128);
+        FILE* f = std::fopen(path.string().c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        for (uint32_t n = 0; n < frames; ++n) {
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x)
+                    frame[y * w + x] = static_cast<uint8_t>(16 + ((x + y + n) % 200));
+            std::fwrite(frame.data(), 1, frame.size(), f);
+        }
+        std::fclose(f);
+    }
+    set_env("MELLO_SOFT_ENCODER", soft ? "1" : nullptr);
+
+    VideoPipeline host;
+    if (!host.init_device()) GTEST_SKIP() << "No D3D11 device";
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Reference;
+    desc.reference.path = path.string();
+    desc.reference.width = w;
+    desc.reference.height = h;
+    desc.reference.fps = 60;
+    PipelineConfig cfg{};
+    cfg.width = w;
+    cfg.height = h;
+    cfg.fps = 60;
+    cfg.bitrate_kbps = 2000;
+
+    std::mutex mu;
+    std::vector<bool> keys;
+    ASSERT_TRUE(host.start_host(desc, cfg, [&](const uint8_t*, size_t, bool key, uint64_t) {
+        std::lock_guard<std::mutex> lock(mu);
+        keys.push_back(key);
+    }));
+    const auto wait_for = [&](size_t count) {
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < deadline) {
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                if (keys.size() >= count) return true;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        return false;
+    };
+    ASSERT_TRUE(wait_for(20));
+    size_t before = 0;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        before = keys.size();
+    }
+    ASSERT_TRUE(host.set_encode_height(240));
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    while (host.geometry_changes() == 0 && std::chrono::steady_clock::now() < deadline) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(host.geometry_changes(), 1u);
+    ASSERT_TRUE(wait_for(before + 20));
+    uint32_t ew = 0, eh = 0;
+    host.get_host_resolution(ew, eh);
+    host.stop_host();
+    set_env("MELLO_SOFT_ENCODER", nullptr);
+    std::filesystem::remove(path);
+
+    EXPECT_EQ(ew, 320u);
+    EXPECT_EQ(eh, 240u);
+    // A keyframe after the request: the first frame at the new size.
+    bool key_after = false;
+    for (size_t i = before; i < keys.size(); ++i) key_after = key_after || keys[i];
+    EXPECT_TRUE(key_after) << "no IDR after the size change";
+    // The GOP is 10 s: no periodic IDR in the first 20 frames but the first.
+    for (size_t i = 1; i < before; ++i) EXPECT_FALSE(keys[i]) << "IDR at frame " << i;
+}
+
+} // namespace
+
+TEST(ReferenceGeometry, ARungChangesTheEncodeSizeWithAnIdrOpenH264) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    if (!OpenH264Encoder::is_available()) GTEST_SKIP() << "OpenH264 DLL with encoder not found";
+    run_geometry_change(true);
+}
+
+TEST(ReferenceGeometry, ARungChangesTheEncodeSizeWithAnIdrHardware) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    run_geometry_change(false);
+}
 #endif

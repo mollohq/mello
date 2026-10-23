@@ -23,6 +23,7 @@ public:
     int         cost_tier() const override { return cost_tier_; }
     int         max_cost_tier() const override { return kMaxCostTier; }
     void        set_framerate(uint32_t fps) override;
+    bool        reconfigure_size(uint32_t width, uint32_t height) override;
     void        get_phase_timing(EncodePhaseTiming& out) const override;
 
     static bool is_available();
@@ -52,6 +53,9 @@ private:
     // Full init-time NVENC config. Reconfigure reuses it because the driver
     // does not merge sparse configs on re-init (unset fields become zero).
     NV_ENC_CONFIG base_config_{};
+    // The initialize parameters (without the config pointer), for a size
+    // change in place.
+    NV_ENC_INITIALIZE_PARAMS init_params_{};
 
     // Wall time of each phase of the last encode. A single fused figure cannot
     // tell a busy NVENC block from a stalled bitstream readback, and those have

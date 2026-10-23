@@ -534,7 +534,8 @@ This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 =
 Low-latency encode profile (mandatory for all hardware encoders):
 - No B-frames (`num_b_frames = 0`)
 - Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = max × 0.5` with a floor of 4 frames of bits, `vbvInitialDelay = vbv / 2`)
-- Keyframe interval: 120 frames (2 seconds at 60fps) under normal conditions
+- Keyframe interval: 10 seconds (10 x the preset frame rate) plus IDRs on demand (streaming-quality stage 4; 2 s before)
+- H.264 level 5.1 on NVENC, AMF and QSV
 - Look-ahead: disabled
 
 The VBR headroom of 1.25× allows keyframes slightly more bits without large bandwidth spikes. The half-second VBV keeps rate control tight for interactive latency while leaving IDRs enough room — a one-frame VBV visibly starves keyframes. This applies to both initial configuration and dynamic `set_bitrate()` reconfiguration.
@@ -561,7 +562,7 @@ struct EncoderConfig {
     uint32_t   height;
     uint32_t   fps;
     uint32_t   bitrate_kbps;
-    uint32_t   keyframe_interval = 120;
+    uint32_t   keyframe_interval = 120;   // the pipeline sets 10 x fps
     VideoCodec codec = VideoCodec::H264;
 };
 

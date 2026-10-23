@@ -613,17 +613,28 @@ TEST(EncodeSize, KeepsThePresetHeightAndTheSourceAspect) {
     EXPECT_EQ(s.height, 720u);
 }
 
-// 2560x1080 is 10880 macroblocks, over the 8704 of level 4.2, which every
-// encoder backend configures. The height goes down, the aspect stays.
-TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+// Every encoder backend configures H.264 level 5.1 (streaming-quality stage
+// 4): 36864 macroblocks per frame, 983040 per second. An ultrawide source on
+// the 1080p60 preset keeps the preset height: 2576x1080 is 10948 macroblocks
+// (level 4.2 allowed 8704 and gave 2288x960).
+TEST(EncodeSize, AnUltrawideSourceKeepsThePresetHeightAtLevel51) {
     const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 60);
+    EXPECT_FALSE(s.level_capped);
+    EXPECT_EQ(s.width, 2576u);
+    EXPECT_EQ(s.height, 1080u);
+    EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
+}
+
+// Over level 5.1 the height goes down, the aspect stays: the same source at
+// 120 fps is 1313760 macroblocks per second at 1080 lines.
+TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+    const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 120);
     EXPECT_TRUE(s.level_capped);
-    EXPECT_EQ(s.width, 2288u);
-    EXPECT_EQ(s.height, 960u);
+    EXPECT_LT(s.height, 1080u);
     EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
     const uint32_t mbs = ((s.width + 15) / 16) * ((s.height + 15) / 16);
-    EXPECT_LE(mbs, 8704u);
-    EXPECT_LE(mbs * 60u, 522240u);
+    EXPECT_LE(mbs, 36864u);
+    EXPECT_LE(mbs * 120u, 983040u);
 }
 
 TEST(EncodeSize, NeverUpscales) {

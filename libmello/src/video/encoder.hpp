@@ -108,6 +108,16 @@ public:
     ///
     /// Default no-op for backends without runtime framerate control.
     virtual void set_framerate(uint32_t fps) { (void)fps; }
+
+    /// Change the encode size in place, with an IDR. Returns false when the
+    /// backend cannot (the default) or the driver refuses; the pipeline then
+    /// re-initializes the encoder on the same device at the new size
+    /// (streaming-quality stage 4, geometry rungs).
+    virtual bool reconfigure_size(uint32_t width, uint32_t height) {
+        (void)width;
+        (void)height;
+        return false;
+    }
 };
 
 } // namespace mello::video

@@ -1350,6 +1350,19 @@ MELLO_API MelloResult mello_peer_video_set_bitrate_limits(
     uint64_t max_bps
 );
 
+/** Change the host's encode size (a geometry rung). `height` is the target
+ *  height; the width follows the source aspect and libmello rounds it to a
+ *  multiple of 16 (`width` is the caller's expectation, for the log). The
+ *  change applies at the next captured frame, and the next frame is an IDR
+ *  with SPS and PPS. `mello_stream_get_host_resolution` gives the size after
+ *  it. MELLO_ERROR_FAILED when no host runs or the platform has no geometry path
+ *  (macOS). */
+MELLO_API MelloResult mello_stream_set_resolution(
+    MelloStreamHost* host,
+    uint32_t width,
+    uint32_t height
+);
+
 /** The encoder allocation of the stream host (goog_cc max total allocated
  *  bitrate). A value over the previous one makes goog_cc probe up to it. */
 MELLO_API MelloResult mello_peer_video_set_max_allocated(

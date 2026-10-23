@@ -1592,6 +1592,14 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
 
+MelloResult mello_stream_set_resolution(MelloStreamHost* host, uint32_t width, uint32_t height) {
+    if (!host || height == 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        MELLO_LOG_INFO("stream", "set_resolution: %ux%u requested", width, height);
+        return host->video->set_encode_height(height) ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
 MelloResult mello_stream_set_framerate(MelloStreamHost* host, uint32_t fps) {
     if (!host) return MELLO_ERROR_INVALID_PARAM;
     try {

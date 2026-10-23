@@ -56,8 +56,8 @@ public:
     ///
     /// The height is the preset height, the width follows the source aspect
     /// and is rounded to a multiple of 16. The size never goes above the
-    /// capture size. When the size is over H.264 level 4.2 (8704 macroblocks
-    /// per frame, 522240 per second), the height goes down until it fits and
+    /// capture size. When the size is over H.264 level 5.1 (36864 macroblocks
+    /// per frame, 983040 per second), the height goes down until it fits and
     /// `level_capped` is set. Pure, so it is testable without a GPU.
     struct EncodeSize {
         uint32_t width = 0;
@@ -105,6 +105,21 @@ public:
     /// `fps` is clamped to the configured capture rate; 0 restores it.
     void set_output_fps(uint32_t fps);
     uint32_t output_fps() const { return output_fps_.load(std::memory_order_relaxed); }
+
+    /// Change the encode size to the height `height` (a geometry rung of the
+    /// stage 4 quality controller). The width follows the current source
+    /// aspect (`encode_size_for`). Any thread; returns at once. The capture
+    /// thread makes a new preprocessor at the new size at the next frame; the
+    /// encode thread then changes the encoder's size (NVENC reconfigures in
+    /// place, every other backend, and NVENC when the driver refuses, is
+    /// re-initialized on the same device) and the next frame is an IDR with
+    /// SPS and PPS. The old preprocessor is freed when the encoder no longer
+    /// reads its textures. A request for the current size changes nothing,
+    /// and a new source aspect needs a new request. Returns false when no
+    /// host runs or the height is 0. Windows only; false on other platforms.
+    bool set_encode_height(uint32_t height);
+    /// Geometry changes applied since the host started.
+    uint32_t geometry_changes() const { return geometry_changes_.load(std::memory_order_relaxed); }
 
     /// True when a captured frame should be passed downstream under the current
     /// decimation target. Static and pure so the cadence is testable without a
@@ -271,9 +286,36 @@ private:
     int32_t              cursor_sent_x_ = 0;
     int32_t              cursor_sent_y_ = 0;
 
-    // Encode dimensions (even-aligned from capture)
-    uint32_t encode_w_ = 0;
-    uint32_t encode_h_ = 0;
+    // Encode dimensions (even-aligned from capture). Written at start and on
+    // the encode thread at a geometry change, read by the stats and cursor
+    // callers.
+    std::atomic<uint32_t> encode_w_{0};
+    std::atomic<uint32_t> encode_h_{0};
+
+    // Geometry change (set_encode_height). The request is a height; 0 = none.
+    std::atomic<uint32_t> encode_height_request_{0};
+    // The last encoder bitrate asked for, for a full encoder re-initialize.
+    std::atomic<uint32_t> last_bitrate_kbps_{0};
+    std::atomic<uint32_t> geometry_changes_{0};
+#ifdef _WIN32
+    // Capture thread: the size and generation of the current preprocessor.
+    uint32_t preprocessor_w_ = 0;
+    uint32_t preprocessor_h_ = 0;
+    uint32_t preprocessor_generation_ = 0;
+    // Encode thread: the generation the encoder runs at.
+    uint32_t encoder_generation_ = 0;
+    // Preprocessors of earlier sizes. The encode thread frees one when it
+    // runs at a later generation: until then a queued job (and the idle
+    // keepalive picture) can still be one of its ring textures.
+    struct RetiredPreprocessor {
+        std::unique_ptr<VideoPreprocessor> preprocessor;
+        uint32_t generation = 0;
+    };
+    std::mutex retired_mutex_;
+    std::vector<RetiredPreprocessor> retired_preprocessors_;
+    void apply_geometry_request(ID3D11Texture2D* texture);
+    bool resize_encoder(uint32_t width, uint32_t height, uint32_t generation);
+#endif
 
     // Async encode thread: capture enqueues, encode thread dequeues
     struct EncodeJob {
@@ -283,6 +325,11 @@ private:
         void* texture = nullptr;
 #endif
         uint64_t timestamp_us = 0;
+        // The encode size of the texture and the preprocessor generation
+        // that made it (geometry changes).
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t generation = 0;
     };
     static constexpr size_t ENCODE_QUEUE_CAP = 2;
     std::array<EncodeJob, ENCODE_QUEUE_CAP> encode_queue_{};
