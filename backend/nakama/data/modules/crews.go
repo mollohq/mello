@@ -555,6 +555,7 @@ func AfterJoinCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
 		logger.Warn("Failed to write member_joined event for crew %s: %v", crewID, err)
 	}
+	queueCrewJoinPush(ctx, logger, nk, crewID, userID)
 
 	return nil
 }

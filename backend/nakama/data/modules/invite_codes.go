@@ -197,6 +197,8 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 			return "", inviteJoinError(err)
 		}
 		logger.Info("User %s joined crew %s via invite code %s", userID, crewID, code)
+		// GroupUsersAdd runs no after-join hook, so the push is queued here.
+		queueCrewJoinPush(ctx, logger, nk, crewID, userID)
 	}
 
 	// Fetch group name for the response
