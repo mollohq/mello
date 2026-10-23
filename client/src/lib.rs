@@ -546,8 +546,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         frame_consumed.clone(),
         frame_lifecycle.clone(),
         #[cfg(target_os = "windows")]
-        native_frame_slot.clone(),
-        #[cfg(target_os = "windows")]
         dcomp_presenter.clone(),
     ));
 

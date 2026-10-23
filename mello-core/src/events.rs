@@ -429,6 +429,21 @@ pub enum Event {
         present_fps: f32,
         ingress_kbps: f32,
     },
+    /// The viewer's receive timeline and decoder, once a second
+    /// (streaming-quality stage 3, spec 12 section 7).
+    StreamViewerTimeline {
+        /// Jitter estimate plus p95 decode time plus render delay.
+        target_delay_ms: f32,
+        jitter_ms: f32,
+        decode_ms_p95: f32,
+        frames_released: u64,
+        /// Released after their decode deadline.
+        frames_late: u64,
+        /// Decoded or buffered and never shown.
+        frames_dropped_late: u64,
+        decoder: String,
+        decode_fps: f32,
+    },
     StreamHostPacingStats {
         mode: String,
         target_kbps: u32,

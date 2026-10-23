@@ -128,6 +128,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_stream_frame(slint::Image::default());
             #[cfg(target_os = "windows")]
             {
+                // No present may reach the swap chain once it goes.
+                mello_core::set_native_presenter(None);
                 let _ = ctx.dcomp_presenter.borrow_mut().take();
                 log::info!("DComp presenter destroyed (stream ended)");
             }
@@ -207,6 +209,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     let adapter_luid = mello_core::video_adapter_luid();
                     match DCompPresenter::new(hwnd, width, height, 0.0, 0.0, adapter_luid) {
                         Ok(p) => {
+                            // libmello's present thread shows each frame
+                            // through this swap chain (stage 3).
+                            mello_core::set_native_presenter(Some(p.frame_presenter()));
                             *ctx.dcomp_presenter.borrow_mut() = Some(p);
                             log::info!("DComp presenter created for stream watching");
                         }
@@ -233,6 +238,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_stream_frame(slint::Image::default());
             #[cfg(target_os = "windows")]
             {
+                // No present may reach the swap chain once it goes.
+                mello_core::set_native_presenter(None);
                 let _ = ctx.dcomp_presenter.borrow_mut().take();
                 log::info!("DComp presenter destroyed (stopped watching)");
             }
@@ -304,6 +311,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app
                 .set_dbg_stream_truncations(transport_truncations as i32);
         }
+        // The viewer timeline (stage 3): mello-core logs it once a second
+        // ("Stream timeline"); no debug panel field shows it yet.
+        Event::StreamViewerTimeline { .. } => {}
         Event::StreamHostPacingStats {
             mode,
             target_kbps,

@@ -125,6 +125,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::StreamTargetExited
         | Event::StreamFrame { .. }
         | Event::StreamDebugStats { .. }
+        | Event::StreamViewerTimeline { .. }
         | Event::StreamHostPacingStats { .. }
         | Event::StreamError { .. } => streaming::handle(ctx, event),
 

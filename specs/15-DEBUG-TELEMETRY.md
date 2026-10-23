@@ -232,7 +232,7 @@ pub struct HostStats {
 #[derive(Debug, Clone)]
 pub struct ViewerStats {
     // Decoder
-    pub decoder_name:      String,      // "NVDEC", "AMF-Decode", "D3D11VA", "SW-FFmpeg"
+    pub decoder_name:      String,      // "NVDEC", "AMF-Decode", "OpenH264", "VideoToolbox"
     pub codec:             String,
     pub resolution:        (u32, u32),
     pub fps_actual:        f32,
@@ -360,7 +360,7 @@ The dialog shows only sections relevant to the current session state. `BackendSt
 │  ⚙ SYSTEM                               │
 │  GPU   NVIDIA GeForce RTX 4070  8176MB   │
 │  Enc   NVENC ✓  AMF –  QSV –  x264 ✓   │
-│  Dec   NVDEC ✓  AMF –  D3D11VA ✓  SW ✓ │
+│  Dec   NVDEC ✓  AMF –  OpenH264 ✓      │
 └──────────────────────────────────────────┘
 ```
 

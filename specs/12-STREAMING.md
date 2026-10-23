@@ -514,7 +514,7 @@ Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or 
 
 **TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at the manager ceiling. The estimator target does not set the pacing rate: the estimator updates its target only when an inter-arrival group closes, and under continuous pacing no group closes, so the target stays at its 4 Mbps start value (streaming-quality handoff §12.2). The estimator target is the host's own estimate for the host-to-SFU hop. It is forwarded to Rust as `GCC_TARGET` feedback and shown in the stats. The stream manager does not apply it to the encoder: the SFU sends the viewer-path capacity as REMB.
 
-**Receiver (libmello):** reorder buffer, NACK/PLI/RR/REMB/TWCC. NACK retry budget is RTT-adaptive (one attempt per ~20 ms of measured RTT, clamped 2–8). Access units expire on a 120 ms stall (no fragment progress) or a 600 ms hard age cap, so paced large AUs (e.g. IDRs at low bitrates) complete while lost tails fail fast — only repaired complete access units reach the decoder. When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
+**Receiver (libmello):** the H.264 receiver, the receive timeline and NACK/PLI/RR/REMB/TWCC (§7.1 to §7.3). A missing packet is NACKed every max(RTT, 10 ms) until its repair deadline (the render time of the first frame after the gap plus one RTT); complete access units go to the timeline in any order; a PLI goes out only when the timeline needs a key frame. The 3-AU window, the 120 ms stall, the 600 ms hard age and the fixed NACK budget are gone (streaming-quality stage 3). When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
 **Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s so both sides have a live RTT measurement (`rtt_ms` in telemetry).
 
@@ -575,63 +575,188 @@ The client logs the error and reports a stream error. A failed SFU connect, join
 
 ## 7. Viewer Pipeline
 
+Streaming-quality stage 3. The viewer runs in libmello, on its own threads.
+The command loop only reads stats, follows the pause state and the members,
+and keeps the freeze clock (§7.8).
+
 ```
-RTP ingress → Access-unit poll → Pre-keyframe gate → Decode → NativeSurfaceFrame slot → DComp presenter
- (native RTCP)   (complete AU only)  (PLI/REMB)      (HW dec)   (latest-frame-wins)      (shared texture)
+RTP ingress → H.264 receiver → receive timeline → decode thread → 3-slot ring → present thread → DComp swap chain
+ (worker)     (repair, NACK)    (FrameBuffer,      (HW decode)    (per-slot       (render time,     (waitable object,
+                                 VCMTiming)                        textures)       keyed mutex)       keyed mutex)
 ```
+
+`mello_stream_viewer_attach_peer(view, peer)` connects the view to its
+StreamViewer peer. From then on nothing polls access units, feeds packets or
+presents: the peer's receive timeline releases frames, the view's decode thread
+decodes them, and the view's present thread calls the frame callbacks at each
+frame's render time. A new video track of the peer (a renegotiation) brings a
+new receiver session and timeline; the decode thread asks the peer for it again.
 
 ### 7.1 Native RTP receive
 
-`poll_received_access_unit` in `mello-core/src/stream/rtp_peer.rs` pulls complete Annex-B access units from libmello's RTP receiver. Incomplete or gated access units are dropped before decode. The viewer's `ViewerCongestionController` samples native RTP stats every 500 ms and emits REMB receive targets when loss, jitter, or gate pressure warrants a change.
+`RtpVideoReceiverSession` (`libmello/src/transport/rtp_video_receiver_session.cpp`)
+copies each datagram on the libdatachannel thread into a bounded ingress queue
+(2048 packets, 4 MB). One worker thread owns the H.264 receiver, the RTCP state
+and every feedback packet. A full ingress queue drops the newest packet only
+(the receiver NACKs the gap); it never flushes the queue and never rebuilds the
+receiver.
 
-### 7.2 Viewer recovery policy
+The H.264 receiver (`rtp_h264_receiver.cpp`) repairs and assembles:
 
-- **Pre-keyframe gating:** All access units before the first keyframe are dropped.
-- **PLI/IDR:** Native receiver sends PLI when gated; host manager also honors queue-pressure keyframe requests. A late joiner gets the SFU's cached IDR when its PeerConnection connects (mello-sfu 01-SFU.md §6.1), then its own PLI asks for a fresh IDR.
-- **H.264 IDR detection:** Scans all NALs in the access unit for type 5 (IDR), not just the first.
-- **REMB uplink:** Viewer congestion controller drives receive targets; host steps down immediately on severe loss, ramps up slowly (5%/s cap in SFU aggregate mode).
+| Rule | Value |
+|---|---|
+| Emit | An access unit goes out as soon as it is complete, also before an older one that still waits for a repair. The timeline puts them in order. |
+| Frame id | The unwrapped sequence number of the access unit's last packet. Its reference is the last media packet before its first packet (padding packets are skipped). A key frame (IDR with SPS and PPS) has none. |
+| Start of an access unit | The packet before is the previous access unit's last packet (marker bit, or another RTP timestamp). After a lost packet, only a payload that can open an access unit (AUD, SEI, SPS, or the slice at macroblock 0) starts one. |
+| NACK | First after 3 ms of reorder grace or 2 newer packets, then every max(RTT, 10 ms). |
+| Repair deadline | The render time of the first frame after the gap plus one RTT; never before the last packet of that frame plus one RTT (a large key frame still arriving) and never before one RTT after the gap was seen. |
+| Loss | A packet still missing at its deadline is lost for real: `on_loss` runs once and the access units that needed it are dropped. |
+| Key frame | Everything before it is obsolete: no more repair for older gaps. |
+| Discontinuity | A gap over 2048 packets is not NACKed: everything before it is lost. |
+| Packet memory | 4096 packets or 8 MB of incomplete access units. When the stream is silent for 600 ms, incomplete access units are forgotten (memory only, no key-frame request). |
 
-### 7.3 Hardware Decode
+The RTT is the control channel's smoothed ping RTT. `set_rtt_hint` applies at
+once to the NACK interval, the repair deadlines and the timeline.
 
-NVDEC (R8 layout: CUDA to host on the decode worker, host to GPU on the present thread), AMF, D3D11VA, OpenH264 on Windows. VideoToolbox on macOS. The decoder outputs to a GPU texture which goes into the decoded-frame ring. With async decode, CUDA/NVDEC runs on the decode worker; any D3D11 immediate-context updates (`CopyResource`, `UpdateSubresource`) are deferred to `Decoder::publish_d3d11_frame()` on the present/feed thread.
+### 7.2 Receive timeline
 
-Every Windows decoder has a native present path. `StagingTexture` converts the decoded frame to RGBA in a compute shader, into the shared RGBA texture of §7.5:
+`VideoReceiveTimeline` (`libmello/src/transport/video_receive_timeline.cpp`, a
+C++20 island over the vendored M131 overlay `third_party/webrtc-video-timing`)
+is WebRTC's `FrameBuffer` and `VCMTiming` behind a synchronous controller that
+replaces upstream's `VideoStreamBufferController`. One per viewer session.
+
+- **Insert** (receiver worker): each complete access unit, in any order. A
+  frame decodes when its reference was decoded.
+- **Poll** (decode thread): `Release{frame, render_time}`, `Wait{wake}`,
+  `KeyframeNeeded` or `Idle`. `wait(wake)` blocks until a frame arrives or the
+  wake time.
+- **Target delay** = jitter estimate + 95th percentile decode time + 10 ms
+  render delay, between 1 ms and 150 ms. The minimum is 1 ms, not 0: a minimum
+  of 0 with a maximum under 500 ms switches VCMTiming to low-latency rendering,
+  which has no jitter buffer. The delay a frame gets moves toward the target at
+  most 100 ms per second.
+- **Jitter estimate:** two upstream `JitterEstimator`s on the same input, each
+  restarted every 4 s, 2 s apart; the larger estimate counts ("staggered
+  pair"). Upstream alone forgets over about 13 s and does not rise in a 3 s
+  jitter spike. The pair rises within a second and returns within 5 s after the
+  spike.
+- **Late frames:** a late frame is decoded late, never dropped (each H.264 frame
+  needs the one before). A delta frame more than 1 s past its render time means
+  decode cannot keep up: the timeline drops to the next key frame and asks for
+  one instead of decoding a backlog.
+- **Minimum delay** (`set_min_delay_us`, stage 7 A/V sync) is applied again
+  after a timing reset.
+
+### 7.3 Key-frame requests (PLI)
+
+A PLI goes out only for the timeline's `KeyframeNeeded`, with a 1 s cooldown in
+the receiver session. `KeyframeNeeded` comes from:
+
+| Cause | Effect |
+|---|---|
+| A packet missed its repair deadline (`on_loss`) | One request. The frames before the gap still play; the chain waits at the gap. |
+| The decoder refused a frame | Delta frames are dropped until a key frame. |
+| A delta frame more than 1 s late | As above. |
+| The first frame is not a key frame | First request 200 ms after the first frame. |
+
+While the timeline waits for a key frame it asks again once per second, and
+only while frames arrive. The session sends no PLI while a key frame is arriving
+(an access unit that starts with an SPS or IDR slice, last packet under 200 ms
+old). A late joiner gets the SFU's cached IDR when its PeerConnection connects
+(mello-sfu 01-SFU.md §6.1); the jump to the live sequence numbers is a
+discontinuity, so the timeline asks for a fresh IDR at once.
+
+### 7.4 Hardware Decode
+
+`libmello/src/video/video_viewer.cpp` (`ViewerPipeline`). The decoder writes
+each picture into one of 3 output slots, a texture per slot, chosen by the
+caller:
+
+| Decoder | Slot texture | Path |
+|---|---|---|
+| NVDEC | R8 with the NV12 layout (luma rows, then chroma rows) | CUDA-D3D11 interop: each slot texture is registered with CUDA once; the decoded surface goes into it with `cuMemcpy2D` on the GPU. No host copy, no upload. The copy runs after `cuvidParseVideoData` returns, not in a parser callback. |
+| AMF | NV12 | The AMF surface (a texture array slice) is copied into the slot texture on the GPU, so the surface goes back to AMF's pool at once. |
+| OpenH264 | NV12 | I420 to NV12 on the CPU, then `UpdateSubresource` into the slot texture. |
+| VideoToolbox (macOS) | CVPixelBuffer | The ring retains the decoder's pixel buffer. |
+
+There is no D3D11VA decoder. It was a stub (the raw access unit as one
+bitstream buffer, no DXVA picture parameters) that decoded nothing and was
+chosen on Intel before OpenH264; it was removed in stage 3, so an Intel viewer
+decodes with OpenH264. A full D3D11VA implementation needs an Intel box to test
+on. The order is NVDEC, AMF, OpenH264; `MELLO_SOFT_DECODER=1` forces OpenH264.
+
+The picture size comes from the SPS. A new size makes new slot textures; the old
+ones live on while the present thread holds them (stage 4's resolution rungs
+need this).
+
+A decode error tells the timeline (`on_decode_error`), which asks for a key
+frame.
+
+### 7.5 Decoded-frame ring
+
+Three slots, one per decoder output slot. States: free, decoding, ready (with
+its render time), presenting. The decode thread takes a free slot; when none is
+free, the oldest ready frame gives its slot up (counted as dropped). A slot the
+present thread reads is never the slot of the next decode.
+
+### 7.6 Present clock
+
+One present thread per viewer is the only present clock. It sleeps until the
+render time of the next ready frame (1 ms timer resolution while a viewer runs),
+shows the newest frame that is due and drops the older ones that are due too
+(`frames_dropped_late`). The 16 ms command-loop tick and the 16 ms Slint timer
+present nothing.
+
+On Windows the present thread converts the picture into one shared RGBA texture
+(`StagingTexture`, compute shader) and calls the native frame callback. The
+shared texture has a keyed mutex: libmello writes it under key 0, the presenter
+reads it under key 0, so the presenter never reads half a frame. The texture
+follows the picture size (a new size gives a new NT handle).
 
 | Decoder output | Shader entry | Source views |
 |---|---|---|
 | R8, NV12 layout (NVDEC) | `CSMain` | one R8 view; chroma from row `uv_y` |
-| `DXGI_FORMAT_NV12` (AMF, D3D11VA, OpenH264) | `CSMainNv12` | R8 view of the luma plane, R8G8 view of the chroma plane |
+| `DXGI_FORMAT_NV12` (AMF, OpenH264) | `CSMainNv12` | R8 view of the luma plane, R8G8 view of the chroma plane |
 
-The CPU conversion runs only when the shader cannot be built. `MELLO_SOFT_DECODER=1` forces OpenH264 for tests.
+The CPU frame callback (the gate and the tools) gets the RGBA read back on the
+present thread. The `ts` of both callbacks is the present time, taken before
+the conversion and the readback.
 
-### 7.4 Decoded-Frame Ring
+### 7.7 DirectComposition Rendering (Windows)
 
-A 3-slot ring buffer in `VideoPipeline` holds decoded GPU textures. Guarded by a mutex: `push_decoded` (decode/feed thread) and `pop_decoded` (present path) are synchronized.
+Video frames bypass Slint's renderer entirely. A separate D3D11 device,
+composition swap chain, and DComp visual tree are created when the viewer starts
+watching. Slint renders the UI with Skia's CPU rasterizer, so no GPU context
+exists when not streaming (see [12-NATIVE-PLATFORM.md §3.1](./12-NATIVE-PLATFORM.md)).
 
-When the ring is full, the oldest frame is evicted (newest-wins, same principle as the encode queue).
+`client/src/dcomp_presenter.rs` has two halves on two threads:
 
-### 7.5 Jitter Buffer and Native Surface Contract
+- `VideoSwapChain` presents, on libmello's present thread (installed with
+  `mello_core::set_native_presenter`). For each frame it waits on the swap
+  chain's frame-latency waitable object (`DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT`,
+  maximum frame latency 1: at most one frame in the queue), opens the shared
+  texture when the handle or size changes, acquires its keyed mutex (key 0),
+  copies it into the back buffer, releases the mutex and calls `Present(1, 0)`.
+  A new texture size resizes the swap chain.
+- `DCompPresenter` stays on the UI thread: the visual tree, the geometry from
+  Slint, the pause card and the host's pointer (a child visual, §10). The Slint
+  timer only updates the pointer, applies the geometry again after a stream size
+  change and reads the present count for the debug fps.
 
-`present_frame()` doesn't pop immediately. It waits until the ring has >= 2 frames (or 50ms since the last present, whichever comes first). This absorbs network/decode jitter and stabilizes cadence.
-
-The Rust `stream_tick` drives `mello_stream_present_frame`, which emits `on_viewer_native_frame` metadata into a single latest-frame slot (`NativeSurfaceFrame`). The slot carries an NT shared handle (`DXGI_FORMAT_R8G8B8A8_UNORM`) created by libmello via `IDXGIResource1::CreateSharedHandle`. The client's DComp presenter opens the handle with `ID3D11Device1::OpenSharedResource1` and copies it to the swap chain back buffer.
-
-### 7.6 DirectComposition Rendering (Windows)
-
-Video frames bypass Slint's renderer entirely. A separate D3D11 device, composition swap chain, and DComp visual tree are created when the viewer starts watching. Slint renders the UI with Skia's CPU rasterizer, so no GPU context exists when not streaming (see [12-NATIVE-PLATFORM.md §3.1](./12-NATIVE-PLATFORM.md)). The video D3D11 device and composition swap chain exist only while a stream is active.
+The presenter's D3D11 device is multithread-protected: the pointer upload (UI
+thread) and the frame copy (present thread) share its immediate context.
 
 **DComp visual tree:**
 
 ```
 IDCompositionTarget (bound to the Slint HWND)
   └─ IDCompositionVisual
-       ├─ Content: IDXGISwapChain1 (CreateSwapChainForComposition)
+       ├─ Content: IDXGISwapChain1 (CreateSwapChainForComposition, waitable)
        ├─ Offset: SetOffsetX/Y (physical pixels)
        ├─ Transform: Matrix3x2 scale (stream resolution → card size)
-       └─ Clip: IDCompositionRectangleClip (scroll viewport intersection)
+       ├─ Clip: IDCompositionRectangleClip (scroll viewport intersection)
+       └─ Child: the host's pointer (§10)
 ```
-
-**Per-frame present path:** The 16ms frame timer reads the latest `NativeSurfaceFrame` shared handle, opens it via `OpenSharedResource1`, copies to the swap chain back buffer with `CopyResource`, and calls `Present(0, 0)` (non-blocking, DWM manages VSync).
 
 **Geometry sync:** The Slint stream card contains a zero-size `geo-tracker` element with properties bound to `media-rect.absolute-position` and dimensions. Slint `changed` handlers fire a `VideoRect.geometry-changed` callback synchronously during every layout pass (scroll, resize, reflow). Rust wires this callback to `DCompPresenter::update_geometry`, which:
 
@@ -640,15 +765,28 @@ IDCompositionTarget (bound to the Slint HWND)
 3. Calls `SetOffsetX/Y`, `SetTransform2` (scale matrix), `SetClip` (viewport intersection), `Commit`.
 4. When fully scrolled out of view, removes swap chain content from the visual (`SetContent(None)`).
 
-This pipeline runs entirely on the UI thread with no queueing, so geometry tracks the Slint layout frame-by-frame. Scroll is cheap: only offset + clip + commit, no swap chain resize.
+Scroll is cheap: only offset + clip + commit, no swap chain resize.
 
-**Swap chain format:** `DXGI_FORMAT_R8G8B8A8_UNORM`, `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL`, 2 buffers, `DXGI_ALPHA_MODE_IGNORE`. Matches libmello's shared texture format. Swap chain is created at stream resolution; a DComp scale transform maps it to the card's display size, avoiding `ResizeBuffers` during window resize.
+**Swap chain format:** `DXGI_FORMAT_R8G8B8A8_UNORM`, `DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL`, 2 buffers, `DXGI_ALPHA_MODE_IGNORE`, frame-latency waitable object. Matches libmello's shared texture format. Swap chain is created at stream resolution; a DComp scale transform maps it to the card's display size.
 
-**Lifecycle:** `DCompPresenter` is created when `StreamWatching` fires and dropped on `StreamWatchingStopped`. The Slint card's video area is transparent and the `Image` element is hidden (`visible: false`) because the DComp layer renders the actual video. The current visual is composition content above the Slint surface, not a true window underlay; see Known Gaps.
+**Lifecycle:** `DCompPresenter` is created when `StreamWatching` fires and installs the native presenter; `StreamWatchingStopped` and `StreamEnded` remove the native presenter (which waits for a present in progress) and drop it. The Slint card's video area is transparent and the `Image` element is hidden (`visible: false`) because the DComp layer renders the actual video. The current visual is composition content above the Slint surface, not a true window underlay; see Known Gaps.
 
-### 7.7 Backlog Guard
+### 7.8 The stream tick (command loop)
 
-If the decode queue depth exceeds a threshold, the viewer drops incoming delta frames (keeping keyframes) and optionally requests an IDR. This prevents the decode ring from falling behind during sustained network bursts.
+`stream_tick` on the command loop (16 ms) does stats, pause state and membership
+only:
+
+- the receive-target controller (`ViewerCongestionController`, REMB) and the 2 s
+  control-channel ping;
+- the pause slot (the host's pause message, §9 viewer mute), the game-audio mute and the SFU events (members, game
+  audio packets, disconnect);
+- the freeze clock: the frame callbacks count each presented frame
+  (`delivered_frames`); a tick with new frames ends a freeze;
+- once a second the debug event, the `Stream timeline` log line and the
+  `StreamViewerTimeline` event; every 10 s `stream_client_stats` (§12.1).
+
+Nothing on the tick waits on the network: the `stream_client_stats` send and the
+host's `stream_viewer_left` RPC run on their own tasks.
 
 ---
 
@@ -852,9 +990,10 @@ The backend removes the stream records when the host's realtime socket ends (`On
 2. For SFU: connects to the SFU endpoint, joins the session, negotiates WebRTC.
 3. Uses the encode resolution and bitrate returned by `watch_stream` (falling back to crew-state/default values only for older responses).
 4. Creates the decoder pipeline at the correct resolution (`mello_stream_start_viewer`).
-5. Creates `DCompPresenter` with the stream resolution and parent HWND (Windows).
-6. `stream_tick` runs each frame: poll RTP access units → feed decoder → present shared handle → DComp swap chain; `ViewerCongestionController` emits REMB from native stats.
-7. `VideoRect.geometry-changed` callback keeps the DComp visual in sync with the Slint card layout.
+5. Attaches the viewer peer (`mello_stream_viewer_attach_peer`): libmello decodes and presents on its own threads from then on (§7).
+6. Creates `DCompPresenter` with the stream resolution and parent HWND (Windows) and installs its swap chain as the native presenter.
+7. `stream_tick` (16 ms) reads stats, follows the pause state and the members, and keeps the freeze clock; `ViewerCongestionController` emits REMB from native stats.
+8. `VideoRect.geometry-changed` callback keeps the DComp visual in sync with the Slint card layout.
 
 ### Teardown
 
@@ -876,7 +1015,14 @@ Encoder periodic (every 300 frames): `convert_ms`, `encode_ms`, `eq_depth`, `eq_
 
 ### Viewer-side (per second)
 
-`viewer_probe_tick` / client tick: `dec_fps`, `native_fps`, `present_hz`, `au_received_hz`, `au_fed_hz`, `decode_queue_depth`, `decode_stall_ms`, `rtt_ms`, `rx_ingress_pps`, `rx_ingress_kbps`, `rx_missing_hz`, `rx_repaired_hz`, `rx_nacks_hz`, `rx_pli_hz`, `rx_jitter`, `rx_gated`, `rx_receive_target_bps`.
+`Stream timeline` (client, once a second; also the `StreamViewerTimeline`
+event): `target_ms` (jitter + p95 decode + render delay), `jitter_ms`,
+`decode_p95_ms`, `released`, `late` (released after the decode deadline),
+`dropped_late` (never shown), `keyframe_requests`, `losses`, `waiting_key`,
+`decoder`, `decode_fps`, `present_fps`, `tick_hz`, `rtt_ms`. The values come
+from `mello_stream_viewer_get_stats` (the stage 3 fields of `MelloStreamStats`).
+
+`viewer_probe_tick` (probe): `dec_fps`, `native_fps`, `present_hz`, `au_received_hz` (frames the timeline released), `au_fed_hz` (frames decoded), `decode_queue_depth`, `decode_stall_ms`, `rtt_ms`, `rx_ingress_pps`, `rx_ingress_kbps`, `rx_missing_hz`, `rx_repaired_hz`, `rx_nacks_hz`, `rx_pli_hz`, `rx_jitter`, `rx_gated` (waiting for a key frame), `rx_receive_target_bps`.
 
 `viewer_probe_native_rtp`: `rx_complete`, `rx_emitted`, `rx_incomplete`, `gate_dropped`, `buffered_aus`, `receive_target_bps`.
 
@@ -895,7 +1041,12 @@ over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
 
 **Viewer:** `freeze_n`, `freeze_ms`, `present_fps`, `rtt_ms`, `rx_complete`,
 `rx_incomplete`, `rx_missing`, `rx_repaired`, `rx_gated`, `rx_nacks`, `rx_pli`,
-`rx_jitter`, `rx_fec_ok`, `rx_fec_fail`, `bg_drops`.
+`rx_jitter`, and the receive timeline (stage 3): `tgt_ms` (target delay),
+`jit_ms` (jitter estimate), `dec_p95` (p95 decode ms), `rel` (frames released),
+`late` (released after the decode deadline), `drop_late` (never shown),
+`kf_req` (key-frame requests), `dec` (decoder name), `dec_fps` (decode rate over
+the report interval). `bg_drops` (the backlog guard), `rx_fec_ok` and
+`rx_fec_fail` are gone.
 
 Four of these carry more weight than the rest:
 
@@ -966,8 +1117,8 @@ DComp presenter diagnostics:
 | Quality presets + config | `mello-core/src/stream/config.rs` |
 | Pacing telemetry | `mello-core/src/stream/pacer.rs` |
 | Host session setup | `mello-core/src/stream/host.rs` |
-| Viewer tick loop | `mello-core/src/client/streaming.rs` |
-| Viewer AU poll + REMB | `mello-core/src/client/stream_ffi.rs` |
+| Viewer tick loop (stats, pause, members) | `mello-core/src/client/streaming.rs` |
+| Viewer attach, stats, native presenter hook, REMB | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
 | DComp presenter (Windows) | `client/src/dcomp_presenter.rs` |
 | Client render loop + metrics | `client/src/main.rs` |
@@ -983,7 +1134,10 @@ DComp presenter diagnostics:
 | Encoder factory | `libmello/src/video/encoder_factory.cpp` |
 | Decoder factory | `libmello/src/video/decoder_factory.cpp` |
 | NVDEC decoder | `libmello/src/video/decoder_nvdec.cpp` |
-| Staging / readback | `libmello/src/video/staging_texture.cpp` |
+| H.264 receiver (repair, assembly) | `libmello/src/transport/rtp_h264_receiver.cpp` |
+| Receive timeline (FrameBuffer, VCMTiming) | `libmello/src/transport/video_receive_timeline.cpp` |
+| Viewer pipeline (decode thread, ring, present thread) | `libmello/src/video/video_viewer.cpp` |
+| Converter (keyed-mutex shared RGBA) | `libmello/src/video/staging_texture.cpp` |
 | C API (streaming) | `libmello/src/mello.cpp` (search `mello_stream_`) |
 | **Probe tools** | |
 | Stream host probe | `tools/stream-host/src/main.rs` |
@@ -994,7 +1148,7 @@ DComp presenter diagnostics:
 
 ## 14. Current State and Known Gaps
 
-**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, proper IDR detection, H.264 RTP transport through the SFU, REMB congestion control, native RTCP recovery, SFU control-only DataChannel, probe tooling with native RTP telemetry, jitter buffer, DComp rendering with NT shared handle import (Windows RGBA8 path), callback-driven geometry sync.
+**What works well:** Process-aware capture with hot-swap, deferred start, DXGI adaptive throttle, GPU preprocessing, async NVENC, mutex-guarded decoded ring, proper IDR detection, H.264 RTP transport through the SFU, REMB congestion control, native RTCP recovery, SFU control-only DataChannel, probe tooling with native RTP telemetry, receive timeline (WebRTC FrameBuffer and VCMTiming) with a present thread at each frame's render time, DComp rendering with NT shared handle import (Windows RGBA8 path), callback-driven geometry sync.
 
 **Known gaps and future work:**
 
@@ -1002,14 +1156,15 @@ DComp presenter diagnostics:
 |-----|--------|--------|
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
-| Viewer jitter buffer is simple depth-gate, not PID-paced | Residual cadence oscillation under varying network conditions | Medium |
 | Ladder Stage 2 (geometry rungs) not implemented | Below ~1 Mbps even 30fps 720p starves; needs viewer SPS-change + DComp resize | Medium |
 | ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
 | End-to-end certification matrix pending | Performance targets not yet certified across LAN/loss/multi-viewer gates | Medium |
-| macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer) | Medium |
+| macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer); the present thread hands RGBA to the Slint timer | Medium |
+| No D3D11VA decoder (removed in stage 3) | Intel viewers decode with OpenH264 on the CPU | Large (needs an Intel box) |
+| AMF decode slot copy untested on AMD | The array-slice copy follows the AMF samples; not run on an AMD GPU | Small |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
 
 ---

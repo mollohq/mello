@@ -32,8 +32,9 @@ pub mod voice;
 
 pub use client::waveform::{compute_clip_waveform_b64, decode_clip_waveform};
 pub use client::{
-    video_adapter_luid, Client, FrameLifecycleSlot, FrameSlot, NativeFrameSlot, NativeSurfaceFrame,
-    FRAME_STATE_IDLE, FRAME_STATE_LATCHED, FRAME_STATE_PRESENTED, FRAME_STATE_READY,
+    set_native_presenter, video_adapter_luid, Client, FrameLifecycleSlot, FrameSlot,
+    NativeFrameSlot, NativePresentFn, NativeSurfaceFrame, FRAME_STATE_IDLE, FRAME_STATE_LATCHED,
+    FRAME_STATE_PRESENTED, FRAME_STATE_READY,
 };
 pub use command::Command;
 pub use config::Config;

@@ -103,7 +103,7 @@ the video timing and goog_cc targets link `webrtc_neteq` for the shared base
 | Overlay | Target and option | Contents | Users |
 |---|---|---|---|
 | `third_party/webrtc-neteq/` | `webrtc_neteq`, `MELLO_WEBRTC_NETEQ`: ON on every platform | NetEQ, the audio mixer, the Opus and CNG decoders, and the shared WebRTC base | Voice playout (section 4) |
-| `third_party/webrtc-video-timing/` | `webrtc_video_timing` (`cmake/webrtc-video-timing.cmake`), `MELLO_WEBRTC_VIDEO_TIMING`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers` and the `EncodedFrame` types. No depacketizer, decoder or transport | Nothing in libmello yet. `tests/test_video_timing_spike.cpp` (`mello_video_timing_spike_tests`) proves it as the viewer jitter buffer; the stage 3 viewer timeline builds on it |
+| `third_party/webrtc-video-timing/` | `webrtc_video_timing` (`cmake/webrtc-video-timing.cmake`), `MELLO_WEBRTC_VIDEO_TIMING`: ON on every platform (Apple clang verified in Release on 2026-10-22). `NDEBUG` is a public define of the target, so a consumer compiles the WebRTC headers as the library does on every build type | `modules/video_coding/timing/` (`VCMTiming`, `JitterEstimator` and their filters), `api/video/frame_buffer` (`FrameBuffer`), `video/frame_decode_timing`, `modules/video_coding/frame_helpers` and the `EncodedFrame` types. No depacketizer, decoder or transport | The stream viewer's receive timeline (`src/transport/video_receive_timeline.cpp`, the C++20 object library `mello_video_timeline`, 12-STREAMING.md §7.2). libmello links it link-only (its `NDEBUG` stays in the island). `tests/test_video_timing_spike.cpp` keeps the spike's proofs |
 | `third_party/webrtc-goog-cc/` | `webrtc_goog_cc` (`cmake/webrtc-goog-cc.cmake`), `MELLO_WEBRTC_GOOG_CC`: ON on Windows and Linux, OFF on Apple until a Mac build is verified | `modules/congestion_controller/goog_cc`, the `remote_bitrate_estimator` parts it uses, `api/transport` network control and the rate control parsers. No pacer, RTCP or RTC event log encoder: the logged event classes are stubs in `cmake/webrtc-goog-cc/compat/mello_rtc_event_stubs.h` | Nothing in libmello yet. `tests/test_goog_cc_spike.cpp` (`mello_goog_cc_spike_tests`); the stream sender uses it from streaming-quality stage 4 |
 
 ---
@@ -129,7 +129,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | **Context** | `mello_init`, `mello_destroy`, `mello_get_error` | One context per app |
 | **Voice** | `mello_voice_start_capture`, `stop_capture`, `set_mute`, `set_deafen`, `is_speaking`, `set_vad_callback`, `get_packet`, `set_packet_sink`, `feed_packet`, `feed_rtp`, `remove_peer`, `set_peer_volume`, `set_peer_pan`, `report_send_feedback`, `set_max_bitrate` | Mute stops sending but capture continues for VAD. With a packet sink set, frames go to the sink, not to `get_packet`. Received audio plays through one NetEQ per peer (spec 10 section 5) |
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
-| **Stream View** | `mello_stream_start_view`, `stop_view`, `feed_video_packet`, `get_frame`, `free_frame`, `feed_audio_packet`, `viewer_set_audio_muted` | Caller must free frames after use. Game audio plays on the voice output device; mute drops the queued audio |
+| **Stream View** | `mello_stream_start_viewer`, `stop_viewer`, `viewer_attach_peer`, `viewer_get_stats`, `set_native_frame_callback`, `feed_audio_packet`, `viewer_set_audio_muted`; `feed_packet` and `present_frame` for tests and tools | `viewer_attach_peer` hands the view its SFU peer: the view's decode thread takes frames from the peer's receive timeline and its present thread calls the frame callbacks at each frame's render time (streaming-quality stage 3, 12-STREAMING.md §7). Game audio plays on the voice output device; mute drops the queued audio |
 | **Peer Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `handle_remote_offer`, `add_ice_candidate`, `send_reliable`, `send_ping`, `rtt_ms`, `pong_age_ms` | The client side of an SFU session (§6), plus control-plane liveness/RTT probes. `create_answer` stays for the in-process tests, where a libmello peer stands in for the SFU |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
 
@@ -308,6 +308,13 @@ Without this, the WASAPI playback thread falls through to `ring_.read()` (always
 
 ### Viewer (Decode → Display)
 
+Streaming-quality stage 3 replaced the pull path below with libmello's own
+threads: the receive timeline (WebRTC `FrameBuffer` and `VCMTiming`), a decode
+thread that decodes into a 3-slot ring of per-slot textures (NVDEC through
+CUDA-D3D11 interop, AMF and OpenH264 into NV12 textures), and a present thread
+that converts the due frame into a keyed-mutex shared RGBA texture at its render
+time. See 12-STREAMING.md §7 and 14-VIDEO-PIPELINE.md §7 and §8.
+
 ```
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                         VIDEO PIPELINE (VIEWER)                         │
@@ -390,6 +397,11 @@ Media goes on RTP tracks: voice (Opus: the mic m-line and the receive slots), st
 │  ┌─────────────────┐                                                    │
 │  │  Video Encode   │  ← Processes captured frames                      │
 │  │     Thread      │                                                    │
+│  └─────────────────┘                                                    │
+│                                                                         │
+│  ┌─────────────────┐                                                    │
+│  │ Viewer decode / │  ← one each per stream view (timeline poll,       │
+│  │ viewer present  │    decode; present at each frame's render time)   │
 │  └─────────────────┘                                                    │
 │                                                                         │
 │  ┌─────────────────┐                                                    │
