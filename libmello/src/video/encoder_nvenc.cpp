@@ -509,6 +509,12 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
                 "NVENC: nvEncReconfigureEncoder failed: %d (bitrate=%ukbps)",
                 reconfig_status, kbps);
         } else {
+            // Keep the new rate control in the config every reconfigure
+            // starts from. Without it the frame rate, size and cost tier
+            // reconfigures put the encoder back at the bitrate it started
+            // with: after the 30 fps rung the encoder made 8.4 Mbps on a
+            // 2 Mbps target (stage 4 gate, hw congested).
+            base_config_ = enc_config;
             MELLO_LOG_DEBUG(TAG, "NVENC: reconfigured bitrate=%ukbps vbv=%u", kbps, vbv);
         }
     }

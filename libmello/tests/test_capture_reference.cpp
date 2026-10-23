@@ -531,4 +531,72 @@ TEST(ReferenceBitrate, ALargeDownStepGivesNoIdrHardware) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     run_geometry_change(false, true);
 }
+// Streaming-quality stage 4: a frame rate change (the 30 fps rung) keeps the
+// bitrate. NVENC rebuilt every reconfigure from its initialize config, so
+// after set_framerate the encoder ran at the start bitrate again: 8.4 Mbps on
+// a 2 Mbps target in the gate. A noise clip at 2 Mbps, the bitrate set to
+// 400 kbps, then 30 fps: the bytes of the next second stay near 400 kbps.
+TEST(ReferenceBitrate, AFrameRateChangeKeepsTheBitrateHardware) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    const uint32_t w = 640, h = 480, frames = 120;
+    const auto path = std::filesystem::temp_directory_path() / "mello_rate_test.yuv";
+    {
+        std::vector<uint8_t> frame(reference_frame_bytes(w, h), 128);
+        FILE* f = std::fopen(path.string().c_str(), "wb");
+        ASSERT_NE(f, nullptr);
+        uint32_t seed = 12345;
+        for (uint32_t n = 0; n < frames; ++n) {
+            for (size_t i = 0; i < static_cast<size_t>(w) * h; ++i) {
+                seed = seed * 1103515245u + 12345u;
+                frame[i] = static_cast<uint8_t>(16 + ((seed >> 16) % 200));
+            }
+            std::fwrite(frame.data(), 1, frame.size(), f);
+        }
+        std::fclose(f);
+    }
+    set_env("MELLO_SOFT_ENCODER", nullptr);
+    VideoPipeline host;
+    if (!host.init_device()) GTEST_SKIP() << "No D3D11 device";
+    CaptureSourceDesc desc{};
+    desc.mode = CaptureMode::Reference;
+    desc.reference.path = path.string();
+    desc.reference.width = w;
+    desc.reference.height = h;
+    desc.reference.fps = 60;
+    PipelineConfig cfg{};
+    cfg.width = w;
+    cfg.height = h;
+    cfg.fps = 60;
+    cfg.bitrate_kbps = 2000;
+    std::mutex mu;
+    std::vector<std::pair<uint64_t, size_t>> sizes;  // (arrival us, bytes)
+    const auto now_us = [] {
+        return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+            std::chrono::steady_clock::now().time_since_epoch()).count());
+    };
+    ASSERT_TRUE(host.start_host(desc, cfg, [&](const uint8_t*, size_t n, bool, uint64_t) {
+        std::lock_guard<std::mutex> lock(mu);
+        sizes.emplace_back(now_us(), n);
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    host.set_bitrate(400);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    host.set_output_fps(30);
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    const uint64_t from = now_us();
+    std::this_thread::sleep_for(std::chrono::milliseconds(1500));
+    const uint64_t to = now_us();
+    host.stop_host();
+    std::filesystem::remove(path);
+    uint64_t bytes = 0;
+    {
+        std::lock_guard<std::mutex> lock(mu);
+        for (const auto& [at, n] : sizes) {
+            if (at >= from && at < to) bytes += n;
+        }
+    }
+    const double kbps = static_cast<double>(bytes) * 8.0 / (static_cast<double>(to - from) / 1e6) / 1000.0;
+    std::printf("[rate] after the 30 fps change: %.0f kbps for a 400 kbps target\n", kbps);
+    EXPECT_LT(kbps, 800.0) << "the frame rate change put the start bitrate back";
+}
 #endif
