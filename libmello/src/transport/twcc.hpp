@@ -52,14 +52,17 @@ private:
 struct TwccPacketResult {
     uint16_t sequence = 0;
     bool received = false;
-    // Valid only when received: absolute arrival time in microseconds on the
-    // receiver's clock (reconstructed from reference time + deltas).
+    // Valid only when received: arrival time in microseconds on the
+    // receiver's clock, the reference time plus the deltas (250 us units).
     int64_t arrival_time_us = 0;
 };
 
 struct TwccFeedback {
     uint32_t sender_ssrc = 0;
     uint32_t media_ssrc = 0;
+    // 24-bit reference time in 64 ms units, as on the wire. The arrival
+    // times below start from it; they wrap with it after about 12 days.
+    uint32_t reference_time_64ms = 0;
     uint8_t feedback_packet_count = 0;
     std::vector<TwccPacketResult> packets;
 };
@@ -86,9 +89,12 @@ public:
     // extension value; `arrival_time_us` from the local monotonic clock.
     void on_packet(uint16_t twcc_sequence, int64_t arrival_time_us);
 
-    // Builds one TWCC RTCP packet covering everything recorded since the last
-    // call. Returns empty when nothing is pending. Deltas are clamped to the
-    // reportable range; unrepresentable packets are marked not-received.
+    // Builds one TWCC RTCP packet (transport-cc draft section 3.1) that
+    // starts after the last reported sequence. It covers every pending
+    // packet unless the packet would grow over about 1.1 kB or a delta does
+    // not fit in 16 bits; the rest stays pending for the next call. Small
+    // deltas are unsigned 8 bits, large deltas signed 16 bits, never
+    // clamped. Returns empty when nothing is pending.
     std::vector<uint8_t> build_feedback(uint32_t sender_ssrc, uint32_t media_ssrc);
 
     size_t pending() const { return pending_.size(); }
