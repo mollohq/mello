@@ -308,6 +308,14 @@ libmello/build/tests/Release/mello_rtp_tests.exe
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
 (read `specs/03-LIBMELLO.md` first — threading/COM/callback invariants).
 
+Stream viewer (streaming-quality stage 3, spec 12 section 7):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `RtpH264ReceiverTest` and siblings | `test_rtp_h264_receiver.cpp` (`mello_rtp_tests`) | Assembly, out-of-order emit before an older incomplete access unit, frame ids and references, padding packets, NACK every max(RTT, 10 ms) until the repair deadline, a new RTT applies at once, a key frame still arriving is not lost, a loss is reported once after its deadline, a key frame ends older repairs, discontinuity, memory bounds. Simulated clock. |
+| `VideoReceiveTimeline`, `ReceivePath` | `test_video_receive_timeline.cpp` (`mello_rtp_tests`) | The timeline alone (release on the RTP clock, key-frame waits and retries, loss, decode error, the 150 ms cap, the minimum delay after a reset) and behind the receiver on a simulated lossy link: 2 % single losses cost no key frame, an unrepairable burst costs one, the target delay returns within 5 s after a 3 s jitter spike. |
+| `ViewerPipelineTest`, `ViewerConverter` | `test_video_viewer.cpp` (`mello_tests`, needs a D3D11 adapter) | A fake decoder through the real ring, present thread and converter: frames shown at their render time (interval p95 under 20 ms), only the newest due frame shown, a size change gives a new shared texture, the shared frame opens on a second device and reads under keyed-mutex key 0, the R8 (NVDEC) layout converts. |
+
 ### Streaming quality gate
 
 `tools/stream-gate` plays a deterministic reference clip through the real
@@ -334,7 +342,7 @@ for a setup error and for a run on a busy machine.
 
 | Part | Where | What it does |
 |---|---|---|
-| Path | `tools/stream-gate/src/session.rs` | Reference source → D3D11 video processor (NV12 to BGRA) → preprocessor → encoder → mello-core `StreamManager` and `SfuSink` → RTP sender → shim → mello-sfu in test mode → shim → RTP receiver session → the client's viewer tick (16 ms: receive target, up to 32 AUs, backlog guard, one present) → decoder → `mello_stream_present_frame` → CPU frame callback. Host and viewers run in one process, each on its own `MelloContext`, in the client's order (native host start, then SFU connect and join). |
+| Path | `tools/stream-gate/src/session.rs` | Reference source → D3D11 video processor (NV12 to BGRA) → preprocessor → encoder → mello-core `StreamManager` and `SfuSink` → RTP sender → shim → mello-sfu in test mode → shim → RTP receiver session → receive timeline → the viewer's decode thread → its present thread at each frame's render time → CPU frame callback (the client's viewer since stage 3: `mello_stream_viewer_attach_peer`; the 16 ms loop only sets the receive target, pings and reads the SFU events). Host and viewers run in one process, each on its own `MelloContext`, in the client's order (native host start, then SFU connect and join). |
 | Clip | `tools/stream-gate/src/clip.rs` | 20 s at 60 fps, 1920x1080 and a 1280x720 cut: a panning textured background, six bouncing textured sprites, two scrolling text lines, a scene cut at 10 s, a static section from 14 s to 17 s. Integer arithmetic and a frozen generator: rendered on first use into `benchmarks/clips/` (git-ignored, 1.7 and 3.7 GB) and checked against the FNV-1a hashes in `profiles.json`. |
 | Burned-in code | `tools/stream-gate/src/code.rs` | Top-left 512x48 px: the frame index, the clip clock in ms and a CRC-16, as 16x16 blocks. The viewer reads it from every presented frame. |
 | Reference source | `libmello/src/video/capture_reference.cpp` | `MELLO_CAPTURE_REFERENCE` with `mello_test_set_reference_clip`: plays the clip at a fixed rate, frame n due at start + n/fps, never skipped, looped (spec 14 §4.7). |

@@ -15,7 +15,7 @@
 
 use crate::code::FrameCode;
 
-/// One `mello_stream_present_frame` that delivered a frame.
+/// One frame the viewer's present thread showed.
 #[derive(Clone, Copy, Debug)]
 pub struct Present {
     /// Present time, µs on `mello_clock_now_us`.

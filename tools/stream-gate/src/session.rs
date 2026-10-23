@@ -8,16 +8,17 @@
 //! passes viewer joins and leaves to the sink, and pings every 2 s, as
 //! `poll_sfu_host_membership_events` does.
 //!
-//! Viewer. The client's viewer tick (`stream_tick` with
-//! `poll_sfu_viewer_access_units`), which is private to the client and is
-//! reproduced here: every 16 ms the receive-target controller
-//! (`ViewerCongestionController`), up to 32 access units polled, the backlog
-//! guard (a delta access unit is dropped while more than 4 wait for decode),
-//! the feed, and at most one `mello_stream_present_frame`. One difference:
-//! the client registers a native frame callback (the GPU texture for the
-//! compositor); the harness registers the CPU frame callback and reads every
-//! presented frame back, so it can read the burned-in code and score the
-//! pixels. The readback adds 1 to 3 ms per present on the tick thread.
+//! Viewer. The client's viewer (streaming-quality stage 3): the viewer
+//! pipeline is attached to the viewer peer (`mello_stream_viewer_attach_peer`)
+//! and libmello runs it on its own threads: the receive timeline releases
+//! each frame, the decode thread decodes it, the present thread shows it at
+//! its render time. The 16 ms loop here does what the client's stream tick
+//! does: the receive-target controller (`ViewerCongestionController`), the
+//! ping and the SFU events. One difference: the client registers a native
+//! frame callback (the GPU texture for the compositor); the harness registers
+//! the CPU frame callback and reads every presented frame back, so it can
+//! read the burned-in code and score the pixels. The readback runs on the
+//! present thread after the present time is taken.
 
 use crate::code::{self, FrameCode};
 use mello_core::stream::congestion::{CongestionSample, ViewerCongestionController};
@@ -34,8 +35,6 @@ use std::time::{Duration, Instant};
 
 /// The tick of the client's stream loop.
 pub const TICK: Duration = Duration::from_millis(16);
-const MAX_AU_POLLS_PER_TICK: usize = 32;
-const DECODE_QUEUE_BACKLOG_THRESHOLD: i32 = 4;
 
 pub fn clock_us() -> u64 {
     // SAFETY: no arguments, reads the steady clock.
@@ -316,11 +315,10 @@ pub struct PresentRec {
     pub slot: Option<u64>,
 }
 
-/// Where the frame callback puts each presented frame. The callback runs
-/// inside `mello_stream_present_frame` on the viewer tick, so it only copies
-/// the pixels and hands them to a worker thread; the worker reads the code,
-/// converts to luma and writes the file. The tick then costs the product's
-/// present plus one copy.
+/// Where the frame callback puts each presented frame. The callback runs on
+/// libmello's present thread, so it only copies the pixels and hands them to
+/// a worker thread; the worker reads the code, converts to luma and writes
+/// the file. `ts` is the present thread's present time.
 /// One presented frame on its way to the worker: present time and RGBA.
 type FrameMsg = (u64, Vec<u8>);
 
@@ -423,6 +421,23 @@ pub struct ViewerRecord {
     pub ticks_over_30ms: u64,
     pub present_max_ms: f64,
     pub callback_max_ms: f64,
+    /// The viewer's receive timeline at the end (stage 3).
+    pub timeline: Option<TimelineRecord>,
+}
+
+/// The viewer pipeline's stage 3 counters at the end of a run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TimelineRecord {
+    pub target_delay_ms: f32,
+    pub jitter_ms: f32,
+    pub decode_ms_p95: f32,
+    pub frames_released: u64,
+    pub frames_late: u64,
+    pub frames_dropped_late: u64,
+    pub frames_decoded: u64,
+    pub frames_presented: u64,
+    pub keyframe_requests: u64,
+    pub loss_events: u64,
 }
 
 pub struct ViewerSpec {
@@ -469,6 +484,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         ticks_over_30ms: 0,
         present_max_ms: 0.0,
         callback_max_ms: 0.0,
+        timeline: None,
     };
     let file = match std::fs::File::create(&luma_path) {
         Ok(f) => f,
@@ -536,8 +552,23 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         return rec;
     }
 
+    // The client's order: the pipeline takes the peer's receive timeline.
+    match conn.peer_nonnull() {
+        // SAFETY: viewer and peer are live; the viewer stops before `conn` goes.
+        Ok(peer) => unsafe {
+            if mello_sys::mello_stream_viewer_attach_peer(viewer, peer.as_ptr())
+                != mello_sys::MelloResult_MELLO_OK
+            {
+                rec.error = Some(format!(
+                    "{}: mello_stream_viewer_attach_peer failed",
+                    spec.role
+                ));
+            }
+        },
+        Err(e) => rec.error = Some(format!("{}: no viewer peer: {e}", spec.role)),
+    }
+
     let mut congestion = ViewerCongestionController::new(spec.receive_kbps, Codec::H264);
-    let mut au = vec![0u8; 256 * 1024];
     let mut tick: u64 = 0;
     let mut next = Instant::now();
     let mut disconnected = false;
@@ -558,41 +589,6 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
                 }
             }
         }
-        for _ in 0..MAX_AU_POLLS_PER_TICK {
-            let unit = match conn.poll_received_access_unit(&mut au) {
-                Ok(Some(u)) => u,
-                Ok(None) => break,
-                Err(e) => {
-                    log::warn!("{}: AU poll: {e}", spec.role);
-                    break;
-                }
-            };
-            // SAFETY: viewer is live.
-            let depth = unsafe { mello_sys::mello_stream_viewer_decode_queue_depth(viewer) };
-            if !unit.is_idr && depth > DECODE_QUEUE_BACKLOG_THRESHOLD {
-                rec.backlog_drops += 1;
-                continue;
-            }
-            // SAFETY: au holds the unit; viewer is live.
-            let ok = unsafe {
-                mello_sys::mello_stream_feed_packet(
-                    viewer,
-                    au.as_ptr(),
-                    i32::try_from(au.len()).unwrap_or(i32::MAX),
-                    unit.is_idr,
-                )
-            };
-            if ok {
-                rec.aus_fed += 1;
-                rec.aus_idr += u64::from(unit.is_idr);
-            } else {
-                rec.feed_failures += 1;
-            }
-        }
-        // SAFETY: viewer is live. At most one present per tick, as the client.
-        let p0 = Instant::now();
-        unsafe { mello_sys::mello_stream_present_frame(viewer) };
-        rec.present_max_ms = rec.present_max_ms.max(p0.elapsed().as_secs_f64() * 1000.0);
         for ev in conn.poll_events() {
             if let SfuEvent::Disconnected { reason } = ev {
                 log::warn!("{}: SFU disconnected: {reason}", spec.role);
@@ -612,6 +608,25 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         }
     }
     rec.video = conn.video_stats().ok();
+    {
+        // SAFETY: viewer is live until the stop below.
+        let mut vstats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+        unsafe { mello_sys::mello_stream_viewer_get_stats(viewer, &mut vstats) };
+        rec.aus_fed = vstats.frames_released;
+        rec.feed_failures = vstats.decode_errors;
+        rec.timeline = Some(TimelineRecord {
+            target_delay_ms: vstats.target_delay_ms,
+            jitter_ms: vstats.jitter_ms,
+            decode_ms_p95: vstats.decode_ms_p95,
+            frames_released: vstats.frames_released,
+            frames_late: vstats.frames_late,
+            frames_dropped_late: vstats.frames_dropped_late,
+            frames_decoded: vstats.frames_decoded,
+            frames_presented: vstats.frames_presented,
+            keyframe_requests: vstats.keyframe_requests,
+            loss_events: vstats.loss_events,
+        });
+    }
     // SAFETY: stop before the sink goes; no callback after it returns.
     unsafe { mello_sys::mello_stream_stop_viewer(viewer) };
     rt.block_on(conn.leave());
