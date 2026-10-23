@@ -2,6 +2,8 @@
 
 #include "twcc.hpp"
 #include "ulpfec.hpp"
+#include "video_receive_timeline.hpp"
+#include "../util/log.hpp"
 
 #include <rtc/mediahandler.hpp>
 #include <rtc/message.hpp>
@@ -28,6 +30,8 @@ namespace {
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr auto kReceiverTickInterval = std::chrono::milliseconds(1);
+// Core stats are copied for other threads at this cadence, not every tick.
+constexpr auto kStatsPublishInterval = std::chrono::milliseconds(20);
 constexpr auto kPliCooldown = std::chrono::milliseconds(1000);
 // TWCC feedback cadence: ~50 ms keeps the estimator's delay signal fresh
 // without measurable RTCP overhead (~42 packets per report at 830 pps).
@@ -169,53 +173,6 @@ private:
     IncomingCallback callback_;
 };
 
-void add_core_counters(
-    RtpH264Receiver::Stats& destination,
-    const RtpH264Receiver::Stats& source
-) noexcept {
-    destination.packets += source.packets;
-    destination.bytes_received += source.bytes_received;
-    destination.accepted_packets += source.accepted_packets;
-    destination.accepted_bytes += source.accepted_bytes;
-    destination.duplicates += source.duplicates;
-    destination.late_packets += source.late_packets;
-    destination.invalid_rtp_packets += source.invalid_rtp_packets;
-    destination.invalid_h264_packets += source.invalid_h264_packets;
-    destination.wrong_payload_type_packets +=
-        source.wrong_payload_type_packets;
-    destination.wrong_ssrc_packets += source.wrong_ssrc_packets;
-    destination.backwards_time_inputs += source.backwards_time_inputs;
-    destination.missing_sequences_detected +=
-        source.missing_sequences_detected;
-    destination.repaired_packets += source.repaired_packets;
-    destination.nacks += source.nacks;
-    destination.nack_callbacks += source.nack_callbacks;
-    destination.complete_access_units += source.complete_access_units;
-    destination.incomplete_access_units += source.incomplete_access_units;
-    destination.emitted_access_units += source.emitted_access_units;
-    destination.pli_requests += source.pli_requests;
-    destination.gate_dropped_access_units +=
-        source.gate_dropped_access_units;
-    destination.gate_entries += source.gate_entries;
-    destination.gate_exits += source.gate_exits;
-    destination.buffer_evictions += source.buffer_evictions;
-    destination.sequence_discontinuities +=
-        source.sequence_discontinuities;
-    destination.cumulative_loss += source.cumulative_loss;
-    destination.peak_buffered_access_units = std::max(
-        destination.peak_buffered_access_units,
-        source.peak_buffered_access_units
-    );
-    destination.peak_buffered_packets = std::max(
-        destination.peak_buffered_packets,
-        source.peak_buffered_packets
-    );
-    destination.peak_buffered_bytes = std::max(
-        destination.peak_buffered_bytes,
-        source.peak_buffered_bytes
-    );
-}
-
 } // namespace
 
 namespace detail {
@@ -330,9 +287,8 @@ struct RtpVideoReceiverSession::State
               config.local_feedback_ssrc == 0
                   ? generate_feedback_ssrc()
                   : config.local_feedback_ssrc
-          ) {
-        completed_core.gate_entries = 0;
-    }
+          ),
+          timeline(std::make_shared<VideoReceiveTimeline>()) {}
 
     ~State() {
         shutdown();
@@ -391,29 +347,16 @@ struct RtpVideoReceiverSession::State
         }
     }
 
+    // One packet that cannot be queued is dropped alone. The queue keeps
+    // what it has: a dropped packet is a gap the receiver NACKs, while a
+    // flushed queue was a gap of hundreds of packets and a key frame.
     void signal_ingress_overflow(size_t rejected_bytes) noexcept {
-        uint64_t dropped_packets = 1;
-        uint64_t dropped_bytes = static_cast<uint64_t>(rejected_bytes);
-        {
-            std::lock_guard<std::mutex> lock(ingress_mutex);
-            dropped_packets += static_cast<uint64_t>(ingress_queue.size());
-            dropped_bytes += static_cast<uint64_t>(ingress_queued_bytes_value);
-            ingress_queue.clear();
-            ingress_queued_bytes_value = 0;
-            ++recovery_generation;
-            ingress_queued_packets.store(0, std::memory_order_relaxed);
-            ingress_queued_bytes.store(0, std::memory_order_relaxed);
-        }
-        ingress_dropped_packets.fetch_add(
-            dropped_packets,
-            std::memory_order_relaxed
-        );
+        ingress_dropped_packets.fetch_add(1, std::memory_order_relaxed);
         ingress_dropped_bytes.fetch_add(
-            dropped_bytes,
+            static_cast<uint64_t>(rejected_bytes),
             std::memory_order_relaxed
         );
         ingress_overflows.fetch_add(1, std::memory_order_relaxed);
-        worker_cv.notify_one();
     }
 
     void enqueue_ingress(
@@ -461,14 +404,9 @@ struct RtpVideoReceiverSession::State
                 ingress_queue.size() >= kMaxIngressPackets
                 || size > kMaxIngressBytes - ingress_queued_bytes_value;
             if (overflow) {
-                dropped_packets =
-                    static_cast<uint64_t>(ingress_queue.size()) + 1;
-                dropped_bytes =
-                    static_cast<uint64_t>(ingress_queued_bytes_value)
-                    + static_cast<uint64_t>(size);
-                ingress_queue.clear();
-                ingress_queued_bytes_value = 0;
-                ++recovery_generation;
+                // Tail drop: the newest packet goes, the queue stays.
+                dropped_packets = 1;
+                dropped_bytes = static_cast<uint64_t>(size);
             } else {
                 ingress_queue.push_back(std::move(packet));
                 ingress_queued_bytes_value += size;
@@ -538,10 +476,26 @@ struct RtpVideoReceiverSession::State
         }
     }
 
-    void request_pli() noexcept {
+    // The only way to a PLI: the timeline's KeyframeNeeded. Any thread. The
+    // worker sends it (it owns the RTCP state and the 1 s cooldown).
+    void request_keyframe() noexcept {
+        keyframe_requested.store(true, std::memory_order_release);
+        worker_cv.notify_one();
+    }
+
+    // Worker thread. A key frame that is arriving now (its packets are
+    // recent) answers the request already: no second IDR for it.
+    void take_keyframe_request(SteadyClock::time_point now) noexcept {
+        if (!keyframe_requested.exchange(false, std::memory_order_acq_rel)) {
+            return;
+        }
+        if (receiver && receiver->keyframe_in_progress(now)) {
+            keyframe_requests_absorbed.fetch_add(1, std::memory_order_relaxed);
+            MELLO_LOG_INFO("transport/video-rx", "key frame request absorbed: a key frame is arriving");
+            return;
+        }
         pli_requests.fetch_add(1, std::memory_order_relaxed);
         pending_pli = true;
-        flush_pending_pli(SteadyClock::now());
     }
 
     void flush_pending_pli(SteadyClock::time_point now) noexcept {
@@ -780,164 +734,81 @@ struct RtpVideoReceiverSession::State
         }
     }
 
-    void queue_access_unit(
-        const std::vector<uint8_t>& annex_b,
-        bool is_idr,
-        uint32_t rtp_timestamp
-    ) noexcept {
-        uint64_t dropped_count = 0;
-        uint64_t dropped_bytes = 0;
-        bool request_recovery = false;
-        uint64_t queue_count = 0;
-        uint64_t queue_bytes = 0;
-
+    // Worker thread: one complete access unit from the H.264 core, in any
+    // order, into the timeline.
+    void queue_access_unit(RtpH264Receiver::AccessUnit&& unit) noexcept {
+        const uint64_t bytes = static_cast<uint64_t>(unit.annex_b.size());
+        bool inserted = false;
         try {
-            RtpVideoReceiverAccessUnit access_unit;
-            access_unit.annex_b = annex_b;
-            access_unit.is_idr = is_idr;
-            access_unit.rtp_timestamp = rtp_timestamp;
-
-            std::lock_guard<std::mutex> lock(output_mutex);
-            const auto clear_output = [&]() noexcept {
-                dropped_count += static_cast<uint64_t>(output_queue.size());
-                dropped_bytes += static_cast<uint64_t>(
-                    output_queued_bytes_value
-                );
-                output_queue.clear();
-                output_queued_bytes_value = 0;
-            };
-
-            if (output_awaiting_idr && !is_idr) {
-                dropped_count = 1;
-                dropped_bytes = static_cast<uint64_t>(annex_b.size());
-            } else if (annex_b.size() > kMaxOutputBytes) {
-                clear_output();
-                ++dropped_count;
-                dropped_bytes += static_cast<uint64_t>(annex_b.size());
-                output_awaiting_idr = true;
-                request_recovery = true;
-            } else {
-                const bool exceeds_bounds =
-                    output_queue.size() >= kMaxOutputAccessUnits
-                    || annex_b.size()
-                        > kMaxOutputBytes - output_queued_bytes_value;
-                if (exceeds_bounds) {
-                    clear_output();
-                    if (!is_idr) {
-                        ++dropped_count;
-                        dropped_bytes +=
-                            static_cast<uint64_t>(annex_b.size());
-                        output_awaiting_idr = true;
-                        request_recovery = true;
-                    }
-                }
-
-                if (!output_awaiting_idr || is_idr) {
-                    output_queue.push_back(std::move(access_unit));
-                    output_queued_bytes_value += annex_b.size();
-                    output_awaiting_idr = false;
-                    access_units_queued_total.fetch_add(
-                        1,
-                        std::memory_order_relaxed
-                    );
-                    access_unit_bytes_queued_total.fetch_add(
-                        static_cast<uint64_t>(annex_b.size()),
-                        std::memory_order_relaxed
-                    );
-                }
-            }
-
-            queue_count = static_cast<uint64_t>(output_queue.size());
-            queue_bytes = static_cast<uint64_t>(output_queued_bytes_value);
-            output_queued_access_units.store(
-                queue_count,
-                std::memory_order_relaxed
-            );
-            output_queued_bytes.store(
-                queue_bytes,
-                std::memory_order_relaxed
-            );
-            awaiting_output_idr.store(
-                output_awaiting_idr,
-                std::memory_order_relaxed
-            );
+            TimelineInput input;
+            input.id = unit.last_sequence;
+            input.reference = unit.reference;
+            input.rtp_timestamp = unit.rtp_timestamp;
+            input.arrival_us = std::chrono::duration_cast<std::chrono::microseconds>(
+                                   unit.last_arrival.time_since_epoch())
+                                   .count();
+            input.keyframe = unit.keyframe;
+            input.retransmitted = unit.retransmitted;
+            input.annex_b = std::move(unit.annex_b);
+            inserted = timeline->insert(std::move(input));
         } catch (...) {
-            dropped_count = 1;
-            dropped_bytes = static_cast<uint64_t>(annex_b.size());
-            request_recovery = true;
-            {
-                std::lock_guard<std::mutex> lock(output_mutex);
-                output_awaiting_idr = true;
-                awaiting_output_idr.store(true, std::memory_order_relaxed);
-            }
+            inserted = false;
         }
-
-        access_units_dropped.fetch_add(
-            dropped_count,
-            std::memory_order_relaxed
-        );
-        access_unit_bytes_dropped.fetch_add(
-            dropped_bytes,
-            std::memory_order_relaxed
-        );
-        update_max(peak_output_queued_access_units, queue_count);
-        update_max(peak_output_queued_bytes, queue_bytes);
-        if (request_recovery) {
-            request_pli();
+        if (inserted) {
+            access_units_queued_total.fetch_add(1, std::memory_order_relaxed);
+            access_unit_bytes_queued_total.fetch_add(bytes, std::memory_order_relaxed);
+        } else {
+            access_units_dropped.fetch_add(1, std::memory_order_relaxed);
+            access_unit_bytes_dropped.fetch_add(bytes, std::memory_order_relaxed);
         }
     }
 
-    void reset_receiver(bool recovery) {
-        if (receiver) {
-            add_core_counters(completed_core, receiver->stats());
-            receiver.reset();
-        }
-
+    void reset_receiver() {
         RtpH264Receiver::Callbacks callbacks;
         callbacks.on_access_unit =
-            [this](const std::vector<uint8_t>& bytes,
-                   bool is_idr,
-                   uint32_t timestamp) {
-                queue_access_unit(bytes, is_idr, timestamp);
+            [this](RtpH264Receiver::AccessUnit&& unit) {
+                queue_access_unit(std::move(unit));
             };
         callbacks.on_nack =
             [this](const std::vector<uint16_t>& sequences) {
                 send_nack(sequences);
             };
-        callbacks.on_pli = [this]() {
-            request_pli();
+        // A packet missed its repair deadline: the timeline asks for a key
+        // frame through its KeyframeNeeded decision.
+        callbacks.on_loss = [this](int64_t sequence) {
+            MELLO_LOG_INFO("transport/video-rx", "packet %lld missed its repair deadline: a reference is lost",
+                           static_cast<long long>(sequence));
+            timeline->on_loss();
         };
+        callbacks.render_time =
+            [this](uint32_t rtp_timestamp) -> std::optional<SteadyClock::time_point> {
+                const auto render = timeline->render_time_us(rtp_timestamp);
+                if (!render) return std::nullopt;
+                return SteadyClock::time_point(std::chrono::microseconds(*render));
+            };
 
         RtpH264Receiver::Config receiver_config;
         receiver_config.payload_type = config.payload_type;
-        // RTT-adaptive NACK budget: one attempt per ~20ms of RTT (bounded),
-        // so a 100ms link gets ~6 repair chances instead of the static 2
-        // (whose ~30ms repair window could never beat a 100ms RTT).
         const uint32_t rtt_us = rtt_hint_us.load(std::memory_order_relaxed);
         if (rtt_us != 0) {
-            const size_t attempts = static_cast<size_t>(
-                std::clamp((rtt_us + 10'000) / 20'000 + 1, 2u, 8u));
-            receiver_config.nack_max_attempts = attempts;
+            receiver_config.rtt = std::chrono::microseconds(rtt_us);
         }
+        applied_rtt_us = rtt_us;
         receiver = std::make_unique<RtpH264Receiver>(
             std::move(callbacks),
             receiver_config
         );
         receiver_has_bound_ssrc = false;
-        if (recovery) {
-            core_restarts.fetch_add(1, std::memory_order_relaxed);
-            request_pli();
-        }
         publish_core_stats();
     }
 
     void observe_accepted_rtp(
         uint16_t sequence,
         uint32_t ssrc,
-        const RtpH264Receiver::Stats& before,
-        const RtpH264Receiver::Stats& after
+        uint64_t accepted_before,
+        uint64_t accepted_after
     ) noexcept {
-        if (after.accepted_packets == before.accepted_packets) {
+        if (accepted_after == accepted_before) {
             return;
         }
 
@@ -1062,11 +933,11 @@ struct RtpVideoReceiverSession::State
             return;
         }
 
-        const auto before = receiver->stats();
+        const uint64_t accepted_before = receiver->accepted_packets();
         receiver->on_rtp_packet(data, size, now);
-        const auto after = receiver->stats();
         if (has_basic_header) {
-            observe_accepted_rtp(sequence, ssrc, before, after);
+            observe_accepted_rtp(sequence, ssrc, accepted_before,
+                                 receiver->accepted_packets());
         }
         if (config.fec_enabled) {
             fec_recovery.add_media_packet(data, size);
@@ -1075,16 +946,17 @@ struct RtpVideoReceiverSession::State
     }
 
     RtpH264Receiver::Stats combined_core_stats() const noexcept {
-        RtpH264Receiver::Stats result = completed_core;
+        RtpH264Receiver::Stats result;
         if (receiver) {
-            const auto current = receiver->stats();
-            add_core_counters(result, current);
-            result.buffered_access_units = current.buffered_access_units;
-            result.buffered_packets = current.buffered_packets;
-            result.buffered_bytes = current.buffered_bytes;
-            result.interarrival_jitter = current.interarrival_jitter;
-            result.gated = current.gated;
+            result = receiver->stats();
         }
+        // The C ABI fields of the old IDR gate now describe the timeline's
+        // wait for a key frame.
+        const TimelineStats t = timeline->stats();
+        result.pli_requests = t.keyframe_requests;
+        result.gate_dropped_access_units = t.frames_dropped;
+        result.gate_entries = t.losses;
+        result.gated = t.keyframe_required;
         result.has_ssrc = has_remote_media_ssrc;
         result.ssrc = has_remote_media_ssrc ? remote_media_ssrc : 0;
         result.extended_highest_sequence = have_global_extended_sequence
@@ -1103,39 +975,32 @@ struct RtpVideoReceiverSession::State
     }
 
     void worker_main() noexcept {
-        uint64_t handled_recovery_generation = 0;
         auto next_tick = SteadyClock::now() + kReceiverTickInterval;
         auto next_report =
             SteadyClock::now() + config.receiver_report_interval;
         auto next_twcc = SteadyClock::now() + kTwccReportInterval;
 
         try {
-            reset_receiver(false);
+            reset_receiver();
+            auto next_publish = SteadyClock::now() + kStatsPublishInterval;
             for (;;) {
                 IngressPacket packet;
                 bool have_packet = false;
-                bool recover = false;
                 {
                     std::unique_lock<std::mutex> lock(ingress_mutex);
                     const auto wake_at = config.twcc_enabled
                         ? std::min({next_tick, next_report, next_twcc})
                         : std::min(next_tick, next_report);
-                    worker_cv.wait_until(lock, wake_at, [this,
-                                                        handled_recovery_generation]() {
+                    worker_cv.wait_until(lock, wake_at, [this]() {
                         return stopping.load(std::memory_order_acquire)
                             || !ingress_queue.empty()
-                            || recovery_generation
-                                != handled_recovery_generation;
+                            || keyframe_requested.load(std::memory_order_acquire);
                     });
                     if (stopping.load(std::memory_order_acquire)) {
                         break;
                     }
 
-                    if (recovery_generation
-                        != handled_recovery_generation) {
-                        handled_recovery_generation = recovery_generation;
-                        recover = true;
-                    } else if (!ingress_queue.empty()) {
+                    if (!ingress_queue.empty()) {
                         packet = std::move(ingress_queue.front());
                         ingress_queued_bytes_value -= packet.bytes.size();
                         ingress_queue.pop_front();
@@ -1151,8 +1016,13 @@ struct RtpVideoReceiverSession::State
                     }
                 }
 
-                if (recover) {
-                    reset_receiver(true);
+                // The RTT applies at once (set_rtt_hint), not at a rebuild.
+                const uint32_t rtt_us = rtt_hint_us.load(std::memory_order_relaxed);
+                if (rtt_us != applied_rtt_us) {
+                    applied_rtt_us = rtt_us;
+                    if (rtt_us != 0) {
+                        receiver->set_rtt(std::chrono::microseconds(rtt_us));
+                    }
                 }
 
                 auto now = SteadyClock::now();
@@ -1179,7 +1049,10 @@ struct RtpVideoReceiverSession::State
                 if (now >= next_tick) {
                     receiver->tick(now);
                     next_tick = now + kReceiverTickInterval;
-                    publish_core_stats();
+                    if (now >= next_publish) {
+                        publish_core_stats();
+                        next_publish = now + kStatsPublishInterval;
+                    }
                     if (config.fec_enabled) {
                         queue_eager_fec_recovery();
                     }
@@ -1197,6 +1070,7 @@ struct RtpVideoReceiverSession::State
                             requested_generation;
                     }
                 }
+                take_keyframe_request(now);
                 flush_pending_pli(now);
 
                 if (config.twcc_enabled && now >= next_twcc) {
@@ -1238,6 +1112,7 @@ struct RtpVideoReceiverSession::State
         shutdown_started = true;
         stopping.store(true, std::memory_order_release);
         attached.store(false, std::memory_order_release);
+        timeline->stop();
 
         try {
             if (track && root_handler
@@ -1294,12 +1169,18 @@ struct RtpVideoReceiverSession::State
     std::condition_variable worker_cv;
     std::deque<IngressPacket> ingress_queue;
     size_t ingress_queued_bytes_value = 0;
-    uint64_t recovery_generation = 0;
 
+    // The viewer timeline. Shared with the viewer pipeline, which polls it on
+    // its decode thread (PeerConnectionImpl::video_receive_timeline).
+    std::shared_ptr<VideoReceiveTimeline> timeline;
+    std::atomic<bool> keyframe_requested{false};
+    std::atomic<uint64_t> keyframe_requests_absorbed{0};
+    uint32_t applied_rtt_us = 0;  // worker thread
+
+    // pop_access_unit (the pull API of the tests and tools): a frame that did
+    // not fit the caller's buffer waits here for the next call.
     std::mutex output_mutex;
-    std::deque<RtpVideoReceiverAccessUnit> output_queue;
-    size_t output_queued_bytes_value = 0;
-    bool output_awaiting_idr = true;
+    std::optional<TimelineFrame> held_frame;
 
     std::mutex send_mutex;
     rtc::message_callback send_callback;
@@ -1309,7 +1190,6 @@ struct RtpVideoReceiverSession::State
     std::thread worker;
 
     std::unique_ptr<RtpH264Receiver> receiver;
-    RtpH264Receiver::Stats completed_core;
     mutable std::mutex core_stats_mutex;
     RtpH264Receiver::Stats published_core_stats;
 
@@ -1365,11 +1245,6 @@ struct RtpVideoReceiverSession::State
     std::atomic<uint64_t> access_unit_bytes_queued_total{0};
     std::atomic<uint64_t> access_units_dropped{0};
     std::atomic<uint64_t> access_unit_bytes_dropped{0};
-    std::atomic<uint64_t> output_queued_access_units{0};
-    std::atomic<uint64_t> output_queued_bytes{0};
-    std::atomic<uint64_t> peak_output_queued_access_units{0};
-    std::atomic<uint64_t> peak_output_queued_bytes{0};
-    std::atomic<bool> awaiting_output_idr{true};
 
     std::atomic<uint64_t> nack_packets_sent{0};
     std::atomic<uint64_t> nack_sequences_sent{0};
@@ -1380,7 +1255,6 @@ struct RtpVideoReceiverSession::State
     std::atomic<uint64_t> sender_reports_received{0};
     std::atomic<uint64_t> invalid_rtcp_packets{0};
     std::atomic<uint64_t> feedback_send_failures{0};
-    std::atomic<uint64_t> core_restarts{0};
 };
 
 RtpVideoReceiverSession::RtpVideoReceiverSession(
@@ -1423,6 +1297,12 @@ RtpVideoReceiverSession::RtpVideoReceiverSession(
             }
         );
 
+        // KeyframeNeeded from whoever polls the timeline becomes a PLI.
+        state->timeline->set_keyframe_request_handler([weak_state]() {
+            if (const auto locked = weak_state.lock()) {
+                locked->request_keyframe();
+            }
+        });
         state->start_worker();
         state->track->setMediaHandler(state->root_handler);
         state->attached.store(true, std::memory_order_release);
@@ -1459,6 +1339,28 @@ RtpVideoReceiverSession& RtpVideoReceiverSession::operator=(
     return *this;
 }
 
+namespace {
+
+// The pull API for tests and tools: the next frame the timeline releases
+// now. A key-frame request on the way goes to the worker.
+std::optional<TimelineFrame> release_now(VideoReceiveTimeline& timeline) {
+    for (int i = 0; i < 4; ++i) {
+        TimelineDecision d = timeline.poll();
+        switch (d.kind) {
+        case TimelineDecision::Kind::Release:
+            return std::move(d.frame);
+        case TimelineDecision::Kind::KeyframeNeeded:
+            // The timeline's handler sent it to the worker already.
+            continue;
+        default:
+            return std::nullopt;
+        }
+    }
+    return std::nullopt;
+}
+
+} // namespace
+
 std::optional<RtpVideoReceiverAccessUnit>
 RtpVideoReceiverSession::pop_access_unit() noexcept {
     const auto state = state_;
@@ -1468,21 +1370,20 @@ RtpVideoReceiverSession::pop_access_unit() noexcept {
 
     try {
         std::lock_guard<std::mutex> lock(state->output_mutex);
-        if (state->output_queue.empty()) {
+        std::optional<TimelineFrame> frame;
+        if (state->held_frame) {
+            frame = std::move(state->held_frame);
+            state->held_frame.reset();
+        } else {
+            frame = release_now(*state->timeline);
+        }
+        if (!frame) {
             return std::nullopt;
         }
-
-        auto access_unit = std::move(state->output_queue.front());
-        state->output_queued_bytes_value -= access_unit.annex_b.size();
-        state->output_queue.pop_front();
-        state->output_queued_access_units.store(
-            static_cast<uint64_t>(state->output_queue.size()),
-            std::memory_order_relaxed
-        );
-        state->output_queued_bytes.store(
-            static_cast<uint64_t>(state->output_queued_bytes_value),
-            std::memory_order_relaxed
-        );
+        RtpVideoReceiverAccessUnit access_unit;
+        access_unit.annex_b = std::move(frame->annex_b);
+        access_unit.is_idr = frame->keyframe;
+        access_unit.rtp_timestamp = frame->rtp_timestamp;
         return access_unit;
     } catch (...) {
         return std::nullopt;
@@ -1504,34 +1405,41 @@ RtpVideoReceiverPopResult RtpVideoReceiverSession::pop_access_unit(
 
     try {
         std::lock_guard<std::mutex> lock(state->output_mutex);
-        if (state->output_queue.empty()) {
+        if (!state->held_frame) {
+            state->held_frame = release_now(*state->timeline);
+        }
+        if (!state->held_frame) {
             size = 0;
             return RtpVideoReceiverPopResult::Empty;
         }
 
-        const auto& access_unit = state->output_queue.front();
-        size = access_unit.annex_b.size();
-        is_idr = access_unit.is_idr;
-        rtp_timestamp = access_unit.rtp_timestamp;
+        const TimelineFrame& frame = *state->held_frame;
+        size = frame.annex_b.size();
+        is_idr = frame.keyframe;
+        rtp_timestamp = frame.rtp_timestamp;
         if (buffer == nullptr || capacity < size) {
             return RtpVideoReceiverPopResult::BufferTooSmall;
         }
 
-        std::memcpy(buffer, access_unit.annex_b.data(), size);
-        state->output_queued_bytes_value -= size;
-        state->output_queue.pop_front();
-        state->output_queued_access_units.store(
-            static_cast<uint64_t>(state->output_queue.size()),
-            std::memory_order_relaxed
-        );
-        state->output_queued_bytes.store(
-            static_cast<uint64_t>(state->output_queued_bytes_value),
-            std::memory_order_relaxed
-        );
+        std::memcpy(buffer, frame.annex_b.data(), size);
+        state->held_frame.reset();
         return RtpVideoReceiverPopResult::Ok;
     } catch (...) {
         size = 0;
         return RtpVideoReceiverPopResult::Empty;
+    }
+}
+
+std::shared_ptr<VideoReceiveTimeline>
+RtpVideoReceiverSession::timeline() const noexcept {
+    const auto state = state_;
+    return state ? state->timeline : nullptr;
+}
+
+void RtpVideoReceiverSession::request_keyframe() noexcept {
+    const auto state = state_;
+    if (state) {
+        state->request_keyframe();
     }
 }
 
@@ -1561,6 +1469,12 @@ void RtpVideoReceiverSession::set_rtt_hint(float rtt_ms) noexcept {
             ? static_cast<uint32_t>(rtt_ms * 1'000.0f)
             : 0u;
     state->rtt_hint_us.store(micros, std::memory_order_relaxed);
+    if (micros != 0) {
+        // At once: the timeline's late-frame rule and jitter estimate, and
+        // (on the worker's next pass) the NACK interval and repair deadlines.
+        state->timeline->set_rtt_us(static_cast<int64_t>(micros));
+    }
+    state->worker_cv.notify_one();
 }
 
 bool RtpVideoReceiverSession::is_open() const noexcept {
@@ -1606,16 +1520,11 @@ RtpVideoReceiverSessionStats RtpVideoReceiverSession::stats() const noexcept {
         state->access_units_dropped.load(std::memory_order_relaxed);
     result.access_unit_bytes_dropped =
         state->access_unit_bytes_dropped.load(std::memory_order_relaxed);
-    result.output_queued_access_units =
-        state->output_queued_access_units.load(std::memory_order_relaxed);
-    result.output_queued_bytes =
-        state->output_queued_bytes.load(std::memory_order_relaxed);
-    result.peak_output_queued_access_units =
-        state->peak_output_queued_access_units.load(
-            std::memory_order_relaxed
-        );
-    result.peak_output_queued_bytes =
-        state->peak_output_queued_bytes.load(std::memory_order_relaxed);
+    result.timeline = state->timeline->stats();
+    result.output_queued_access_units = result.timeline.frames_buffered;
+    result.peak_output_queued_access_units = result.timeline.frames_buffered;
+    result.keyframe_requests_absorbed =
+        state->keyframe_requests_absorbed.load(std::memory_order_relaxed);
 
     result.nack_packets_sent =
         state->nack_packets_sent.load(std::memory_order_relaxed);
@@ -1641,15 +1550,12 @@ RtpVideoReceiverSessionStats RtpVideoReceiverSession::stats() const noexcept {
         state->invalid_rtcp_packets.load(std::memory_order_relaxed);
     result.feedback_send_failures =
         state->feedback_send_failures.load(std::memory_order_relaxed);
-    result.core_restarts =
-        state->core_restarts.load(std::memory_order_relaxed);
 
     result.payload_type = state->config.payload_type;
     result.local_feedback_ssrc = state->local_feedback_ssrc;
     result.receive_target_bps =
         state->receive_target_bps.load(std::memory_order_relaxed);
-    result.awaiting_output_idr =
-        state->awaiting_output_idr.load(std::memory_order_relaxed);
+    result.awaiting_output_idr = result.timeline.keyframe_required;
     try {
         std::lock_guard<std::mutex> lock(state->core_stats_mutex);
         result.core = state->published_core_stats;

@@ -89,6 +89,9 @@ fn main() {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
+    // The stream viewer timeline (streaming-quality stage 3); before NetEQ,
+    // whose rtc_base it uses.
+    println!("cargo:rustc-link-lib=static=webrtc_video_timing");
     println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
@@ -382,6 +385,9 @@ fn build_ios(manifest_dir: &str) {
     println!("cargo:rustc-link-search=native={}", lib_dir.display());
     println!("cargo:rustc-link-lib=static=mello");
     println!("cargo:rustc-link-lib=static=rnnoise");
+    // The stream viewer timeline (streaming-quality stage 3); before NetEQ,
+    // whose rtc_base it uses.
+    println!("cargo:rustc-link-lib=static=webrtc_video_timing");
     println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 

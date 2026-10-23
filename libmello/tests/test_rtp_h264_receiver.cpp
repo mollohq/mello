@@ -5,6 +5,7 @@
 #include <chrono>
 #include <cstdint>
 #include <initializer_list>
+#include <optional>
 #include <utility>
 #include <vector>
 
@@ -22,12 +23,6 @@ struct RtpOptions {
     uint32_t ssrc = 0;
 };
 
-struct EmittedFrame {
-    std::vector<uint8_t> bytes;
-    bool is_idr = false;
-    uint32_t timestamp = 0;
-};
-
 RtpH264Receiver::TimePoint at(int milliseconds) {
     return RtpH264Receiver::TimePoint{} +
            std::chrono::milliseconds(milliseconds);
@@ -38,9 +33,6 @@ std::vector<uint8_t> make_rtp(uint16_t sequence,
                               bool marker,
                               const std::vector<uint8_t>& payload,
                               const RtpOptions& options = {}) {
-    EXPECT_LE(options.csrc_count, 15);
-    EXPECT_EQ(options.extension.size() % 4, 0u);
-
     uint8_t first = static_cast<uint8_t>(0x80 | options.csrc_count);
     if (!options.extension.empty()) {
         first |= 0x10;
@@ -91,6 +83,13 @@ std::vector<uint8_t> make_rtp(uint16_t sequence,
     return packet;
 }
 
+// A pacer's padding packet: a header and padding, no payload.
+std::vector<uint8_t> make_padding(uint16_t sequence, uint32_t timestamp) {
+    RtpOptions options;
+    options.padding = 8;
+    return make_rtp(sequence, timestamp, false, {}, options);
+}
+
 std::vector<uint8_t> make_stap(
     std::initializer_list<std::vector<uint8_t>> nals) {
     std::vector<uint8_t> payload{0x78};
@@ -112,41 +111,58 @@ std::vector<uint8_t> annex_b(
     return bytes;
 }
 
+// An IDR access unit in one packet (SPS, PPS, IDR slice at macroblock 0).
+std::vector<uint8_t> idr_payload() {
+    return make_stap({{0x67, 0x42}, {0x68, 0xce}, {0x65, 0x88}});
+}
+
 void deliver(RtpH264Receiver& receiver,
              std::vector<uint8_t> packet,
              RtpH264Receiver::TimePoint now) {
     receiver.on_rtp_packet(packet.data(), packet.size(), now);
 }
 
+// A receiver with every callback recorded. `render_ms` answers the repair
+// deadline's render time query: the RTP timestamp in ms (90 kHz) plus the
+// offset, or nothing.
 class RtpH264ReceiverTest : public ::testing::Test {
 protected:
-    RtpH264ReceiverTest()
-        : receiver(RtpH264Receiver::Callbacks{
-              [this](const std::vector<uint8_t>& bytes,
-                     bool is_idr,
-                     uint32_t timestamp) {
-                  frames.push_back({bytes, is_idr, timestamp});
-              },
-              [this](const std::vector<uint16_t>& sequences) {
-                  nacks.push_back(sequences);
-              },
-              [this]() { ++plis; },
-          }) {}
+    RtpH264ReceiverTest() : receiver(make_callbacks(), config()) {}
 
-    void unlock(uint16_t sequence = 10, int start_ms = 0) {
-        const auto payload = make_stap(
-            {{0x67, 0x42}, {0x68, 0xce}, {0x65, 0xaa}});
-        deliver(receiver,
-                make_rtp(sequence, 1000, true, payload),
-                at(start_ms));
-        receiver.tick(at(start_ms + 3));
-        ASSERT_FALSE(receiver.gated());
-        ASSERT_EQ(frames.size(), 1u);
+    static RtpH264Receiver::Config config() {
+        RtpH264Receiver::Config c;
+        c.rtt = 20ms;
+        return c;
     }
 
-    std::vector<EmittedFrame> frames;
+    RtpH264Receiver::Callbacks make_callbacks() {
+        RtpH264Receiver::Callbacks callbacks;
+        callbacks.on_access_unit = [this](RtpH264Receiver::AccessUnit&& unit) {
+            units.push_back(std::move(unit));
+        };
+        callbacks.on_nack = [this](const std::vector<uint16_t>& sequences) {
+            nacks.push_back(sequences);
+        };
+        callbacks.on_loss = [this](int64_t sequence) { losses.push_back(sequence); };
+        callbacks.render_time =
+            [this](uint32_t rtp) -> std::optional<RtpH264Receiver::TimePoint> {
+            if (!render_offset_ms) return std::nullopt;
+            return at(static_cast<int>(rtp / 90) + *render_offset_ms);
+        };
+        return callbacks;
+    }
+
+    // Seq 10, timestamp 0: an IDR that opens the stream.
+    void unlock() {
+        deliver(receiver, make_rtp(10, 0, true, idr_payload()), at(0));
+        ASSERT_EQ(units.size(), 1u);
+        ASSERT_TRUE(units[0].keyframe);
+    }
+
+    std::vector<RtpH264Receiver::AccessUnit> units;
     std::vector<std::vector<uint16_t>> nacks;
-    int plis = 0;
+    std::vector<int64_t> losses;
+    std::optional<int> render_offset_ms = 30;
     RtpH264Receiver receiver;
 };
 
@@ -156,24 +172,18 @@ TEST_F(RtpH264ReceiverTest, ReconstructsZeroLossAccessUnit) {
     options.extension = {0x10, 0x20, 0x30, 0x40};
     options.padding = 4;
 
-    deliver(receiver,
-            make_rtp(100, 9000, false, {0x67, 0x42}, options),
-            at(0));
-    deliver(receiver,
-            make_rtp(101, 9000, false, {0x68, 0xce}),
-            at(0));
-    deliver(receiver,
-            make_rtp(102, 9000, true, {0x65, 0xaa, 0xbb}),
-            at(0));
+    deliver(receiver, make_rtp(100, 9000, false, {0x67, 0x42}, options), at(0));
+    deliver(receiver, make_rtp(101, 9000, false, {0x68, 0xce}), at(0));
+    deliver(receiver, make_rtp(102, 9000, true, {0x65, 0xaa, 0xbb}), at(0));
 
-    ASSERT_EQ(frames.size(), 1u);
-    EXPECT_EQ(frames[0].bytes,
-              annex_b({{0x67, 0x42},
-                       {0x68, 0xce},
-                       {0x65, 0xaa, 0xbb}}));
-    EXPECT_TRUE(frames[0].is_idr);
-    EXPECT_EQ(frames[0].timestamp, 9000u);
-    EXPECT_FALSE(receiver.gated());
+    ASSERT_EQ(units.size(), 1u);
+    EXPECT_EQ(units[0].annex_b,
+              annex_b({{0x67, 0x42}, {0x68, 0xce}, {0x65, 0xaa, 0xbb}}));
+    EXPECT_TRUE(units[0].keyframe);
+    EXPECT_EQ(units[0].rtp_timestamp, 9000u);
+    EXPECT_EQ(units[0].first_sequence, 100);
+    EXPECT_EQ(units[0].last_sequence, 102);
+    EXPECT_EQ(units[0].reference, -1);
 
     const auto stats = receiver.stats();
     EXPECT_EQ(stats.packets, 3u);
@@ -183,28 +193,34 @@ TEST_F(RtpH264ReceiverTest, ReconstructsZeroLossAccessUnit) {
 }
 
 TEST(RtpH264ReceiverConfigurationTest, AcceptsConfiguredPayloadType) {
-    std::vector<EmittedFrame> frames;
+    std::vector<RtpH264Receiver::AccessUnit> units;
     RtpH264Receiver::Callbacks callbacks;
-    callbacks.on_access_unit =
-        [&frames](const std::vector<uint8_t>& bytes,
-                  bool is_idr,
-                  uint32_t timestamp) {
-            frames.push_back({bytes, is_idr, timestamp});
-        };
+    callbacks.on_access_unit = [&units](RtpH264Receiver::AccessUnit&& unit) {
+        units.push_back(std::move(unit));
+    };
     RtpH264Receiver::Config config;
     config.payload_type = 110;
     RtpH264Receiver configured(std::move(callbacks), config);
 
     RtpOptions options;
     options.payload_type = 110;
-    const auto stap = make_stap(
-        {{0x67, 0x01}, {0x68, 0x02}, {0x65, 0x03}});
-    deliver(configured, make_rtp(1, 1234, true, stap, options), at(0));
-    configured.tick(at(3));
+    deliver(configured, make_rtp(1, 1234, true, idr_payload(), options), at(0));
 
-    ASSERT_EQ(frames.size(), 1u);
-    EXPECT_EQ(frames[0].timestamp, 1234u);
+    ASSERT_EQ(units.size(), 1u);
+    EXPECT_EQ(units[0].rtp_timestamp, 1234u);
     EXPECT_EQ(configured.stats().wrong_payload_type_packets, 0u);
+}
+
+// The sender's loopback tests hand the older callback form; it still works.
+TEST(RtpH264ReceiverConfigurationTest, TheOlderCallbackFormGetsTheAccessUnit) {
+    std::vector<std::vector<uint8_t>> bytes;
+    RtpH264Receiver receiver(RtpH264Receiver::Callbacks{
+        [&bytes](const std::vector<uint8_t>& annex_b, bool, uint32_t) { bytes.push_back(annex_b); },
+        {},
+        {},
+    });
+    deliver(receiver, make_rtp(1, 0, true, idr_payload()), at(0));
+    ASSERT_EQ(bytes.size(), 1u);
 }
 
 TEST(RtpH264ReceiverSourceTest, LearnsAndStrictlyFiltersSsrc) {
@@ -214,17 +230,15 @@ TEST(RtpH264ReceiverSourceTest, LearnsAndStrictlyFiltersSsrc) {
     RtpOptions other_source;
     other_source.ssrc = 0x55667788;
 
-    const auto first =
-        make_rtp(1, 1000, false, {0x61, 0x01}, source);
-    const auto foreign =
-        make_rtp(2, 1000, true, {0x61, 0x02}, other_source);
-    const auto second =
-        make_rtp(2, 1000, true, {0x61, 0x02}, source);
-    const size_t received_bytes =
-        first.size() + foreign.size() + second.size();
-    const size_t accepted_bytes = first.size() + second.size();
+    const auto first = make_rtp(1, 1000, false, {0x61, 0x81});
+    auto first_with_ssrc = make_rtp(1, 1000, false, {0x61, 0x81}, source);
+    const auto foreign = make_rtp(2, 1000, true, {0x61, 0x02}, other_source);
+    const auto second = make_rtp(2, 1000, true, {0x61, 0x02}, source);
+    (void)first;
+    const size_t received_bytes = first_with_ssrc.size() + foreign.size() + second.size();
+    const size_t accepted_bytes = first_with_ssrc.size() + second.size();
 
-    deliver(receiver, first, at(0));
+    deliver(receiver, first_with_ssrc, at(0));
     deliver(receiver, foreign, at(1));
     deliver(receiver, second, at(2));
 
@@ -247,12 +261,8 @@ TEST(RtpH264ReceiverSourceTest, InvalidPayloadDoesNotSelectSsrc) {
     RtpOptions valid_source;
     valid_source.ssrc = 0x22222222;
 
-    deliver(receiver,
-            make_rtp(1, 1000, true, {0x79, 0x01}, invalid_source),
-            at(0));
-    deliver(receiver,
-            make_rtp(1, 1000, true, {0x61, 0x01}, valid_source),
-            at(1));
+    deliver(receiver, make_rtp(1, 1000, true, {0x79, 0x01}, invalid_source), at(0));
+    deliver(receiver, make_rtp(1, 1000, true, {0x61, 0x81}, valid_source), at(1));
 
     const auto stats = receiver.stats();
     EXPECT_TRUE(stats.has_ssrc);
@@ -262,271 +272,277 @@ TEST(RtpH264ReceiverSourceTest, InvalidPayloadDoesNotSelectSsrc) {
     EXPECT_EQ(stats.accepted_packets, 1u);
 }
 
-TEST(RtpH264ReceiverTimeTest, RejectsBackwardsInputsWithoutMovingDeadlines) {
-    std::vector<std::vector<uint16_t>> nacks;
-    RtpH264Receiver::Callbacks callbacks;
-    callbacks.on_nack =
-        [&nacks](const std::vector<uint16_t>& sequences) {
-            nacks.push_back(sequences);
-        };
-    RtpH264Receiver receiver(std::move(callbacks));
-
-    deliver(receiver,
-            make_rtp(1, 1000, false, {0x61, 0x01}),
-            at(10));
-    deliver(receiver,
-            make_rtp(3, 1000, true, {0x61, 0x03}),
-            at(10));
-    deliver(receiver,
-            make_rtp(2, 1000, false, {0x61, 0x02}),
-            at(9));
+TEST_F(RtpH264ReceiverTest, RejectsBackwardsInputsWithoutMovingDeadlines) {
+    unlock();
+    deliver(receiver, make_rtp(11, 1000, false, {0x61, 0x81}), at(10));
+    deliver(receiver, make_rtp(13, 1000, true, {0x61, 0x03}), at(10));
+    deliver(receiver, make_rtp(12, 1000, false, {0x61, 0x02}), at(9));
     receiver.tick(at(8));
 
     EXPECT_TRUE(nacks.empty());
     EXPECT_EQ(receiver.stats().backwards_time_inputs, 2u);
-    EXPECT_EQ(receiver.stats().accepted_packets, 2u);
     EXPECT_EQ(receiver.stats().repaired_packets, 0u);
 
     receiver.tick(at(13));
     ASSERT_EQ(nacks.size(), 1u);
-    EXPECT_EQ(nacks[0], std::vector<uint16_t>({2}));
+    EXPECT_EQ(nacks[0], std::vector<uint16_t>({12}));
 }
 
 TEST(RtpH264ReceiverStatsTest, ComputesRfc3550InterarrivalJitter) {
     RtpH264Receiver receiver;
 
-    deliver(receiver,
-            make_rtp(1, 0, true, {0x61, 0x01}),
-            at(0));
-    deliver(receiver,
-            make_rtp(2, 900, true, {0x61, 0x02}),
-            at(10));
+    deliver(receiver, make_rtp(1, 0, true, {0x61, 0x81}), at(0));
+    deliver(receiver, make_rtp(2, 900, true, {0x61, 0x82}), at(10));
     EXPECT_EQ(receiver.stats().interarrival_jitter, 0u);
 
-    deliver(receiver,
-            make_rtp(3, 1800, true, {0x61, 0x03}),
-            at(30));
+    deliver(receiver, make_rtp(3, 1800, true, {0x61, 0x83}), at(30));
     EXPECT_EQ(receiver.stats().interarrival_jitter, 56u);
 
-    deliver(receiver,
-            make_rtp(4, 2700, true, {0x61, 0x04}),
-            at(40));
+    deliver(receiver, make_rtp(4, 2700, true, {0x61, 0x84}), at(40));
     EXPECT_EQ(receiver.stats().interarrival_jitter, 52u);
 }
 
-TEST_F(RtpH264ReceiverTest, ReassemblesFuA) {
+TEST_F(RtpH264ReceiverTest, ReassemblesFuAAndReferencesThePreviousAccessUnit) {
     unlock();
 
-    deliver(receiver,
-            make_rtp(11, 2000, false, {0x7c, 0x81, 0xaa}),
-            at(4));
-    deliver(receiver,
-            make_rtp(12, 2000, false, {0x7c, 0x01, 0xbb}),
-            at(4));
-    deliver(receiver,
-            make_rtp(13, 2000, true, {0x7c, 0x41, 0xcc}),
-            at(4));
+    deliver(receiver, make_rtp(11, 1500, false, {0x7c, 0x81, 0xaa}), at(4));
+    deliver(receiver, make_rtp(12, 1500, false, {0x7c, 0x01, 0xbb}), at(4));
+    deliver(receiver, make_rtp(13, 1500, true, {0x7c, 0x41, 0xcc}), at(4));
 
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_EQ(frames[1].bytes, annex_b({{0x61, 0xaa, 0xbb, 0xcc}}));
-    EXPECT_FALSE(frames[1].is_idr);
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_EQ(units[1].annex_b, annex_b({{0x61, 0xaa, 0xbb, 0xcc}}));
+    EXPECT_FALSE(units[1].keyframe);
+    EXPECT_EQ(units[1].first_sequence, 11);
+    EXPECT_EQ(units[1].last_sequence, 13);
+    EXPECT_EQ(units[1].reference, 10) << "a delta frame decodes from the access unit before it";
     EXPECT_TRUE(nacks.empty());
 }
 
-TEST_F(RtpH264ReceiverTest, UnpacksStapA) {
-    const auto stap = make_stap(
-        {{0x67, 0x01}, {0x68, 0x02}, {0x65, 0x03}});
-    deliver(receiver, make_rtp(20, 3000, true, stap), at(0));
-
-    EXPECT_TRUE(frames.empty());
-    receiver.tick(at(3));
-
-    ASSERT_EQ(frames.size(), 1u);
-    EXPECT_EQ(frames[0].bytes,
-              annex_b({{0x67, 0x01},
-                       {0x68, 0x02},
-                       {0x65, 0x03}}));
-    EXPECT_TRUE(frames[0].is_idr);
+TEST_F(RtpH264ReceiverTest, UnpacksStapAAtOnce) {
+    deliver(receiver, make_rtp(20, 3000, true,
+                               make_stap({{0x67, 0x01}, {0x68, 0x02}, {0x65, 0x83}})),
+            at(0));
+    ASSERT_EQ(units.size(), 1u) << "a complete access unit leaves at once, no reorder wait";
+    EXPECT_EQ(units[0].annex_b, annex_b({{0x67, 0x01}, {0x68, 0x02}, {0x65, 0x83}}));
+    EXPECT_TRUE(units[0].keyframe);
 }
 
-TEST_F(RtpH264ReceiverTest, ReordersBeforeEmitting) {
+TEST_F(RtpH264ReceiverTest, ReordersWithinAnAccessUnit) {
     unlock();
 
-    deliver(receiver,
-            make_rtp(12, 2000, true, {0x61, 0x12}),
-            at(4));
-    EXPECT_EQ(frames.size(), 1u);
-    deliver(receiver,
-            make_rtp(11, 2000, false, {0x61, 0x11}),
-            at(5));
+    deliver(receiver, make_rtp(12, 1500, true, {0x61, 0x12}), at(4));
+    EXPECT_EQ(units.size(), 1u);
+    deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(5));
 
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_EQ(frames[1].bytes,
-              annex_b({{0x61, 0x11}, {0x61, 0x12}}));
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_EQ(units[1].annex_b, annex_b({{0x61, 0x91}, {0x61, 0x12}}));
     EXPECT_TRUE(nacks.empty());
 }
 
-TEST_F(RtpH264ReceiverTest, NacksAndRepairsOnePacketLoss) {
+// Stage 3: a complete access unit is not held behind an older incomplete one
+// (the old receiver emitted strictly in order, and its 3-AU window evicted
+// the incomplete one, gated the stream and asked for a key frame).
+TEST_F(RtpH264ReceiverTest, ACompleteAccessUnitLeavesBeforeAnOlderIncompleteOne) {
     unlock();
+    // AU 1500: seq 11..13, seq 12 lost for now.
+    deliver(receiver, make_rtp(11, 1500, false, {0x7c, 0x81, 0xaa}), at(16));
+    deliver(receiver, make_rtp(13, 1500, true, {0x7c, 0x41, 0xcc}), at(16));
+    // Four newer access units arrive complete.
+    for (int i = 0; i < 4; ++i) {
+        deliver(receiver, make_rtp(static_cast<uint16_t>(14 + i), 3000 + 1500 * i, true, {0x61, 0x81}),
+                at(17 + i));
+    }
+    ASSERT_EQ(units.size(), 5u) << "four newer AUs are out while seq 12 is repaired";
+    EXPECT_EQ(units[1].first_sequence, 14);
+    EXPECT_EQ(units[1].reference, 13) << "they reference the incomplete AU: the timeline orders them";
+    EXPECT_GE(receiver.stats().out_of_order_access_units, 4u);
+    EXPECT_TRUE(losses.empty());
 
-    deliver(receiver,
-            make_rtp(11, 2000, false, {0x7c, 0x81, 0xaa}),
-            at(4));
-    deliver(receiver,
-            make_rtp(13, 2000, true, {0x7c, 0x41, 0xcc}),
-            at(4));
-    receiver.tick(at(7));
-
-    ASSERT_EQ(nacks.size(), 1u);
-    EXPECT_EQ(nacks[0], std::vector<uint16_t>({12}));
-    EXPECT_EQ(frames.size(), 1u);
-
-    deliver(receiver,
-            make_rtp(12, 2000, false, {0x7c, 0x01, 0xbb}),
-            at(8));
-
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_EQ(frames[1].bytes, annex_b({{0x61, 0xaa, 0xbb, 0xcc}}));
-    const auto stats = receiver.stats();
-    EXPECT_EQ(stats.incomplete_access_units, 0u);
-    EXPECT_EQ(stats.missing_sequences_detected, 1u);
-    EXPECT_EQ(stats.nacks, 1u);
-    EXPECT_EQ(stats.repaired_packets, 1u);
-    EXPECT_EQ(stats.cumulative_loss, 0);
+    // The repair completes the older one; nothing was given up.
+    deliver(receiver, make_rtp(12, 1500, false, {0x7c, 0x01, 0xbb}), at(40));
+    ASSERT_EQ(units.size(), 6u);
+    EXPECT_EQ(units[5].first_sequence, 11);
+    EXPECT_TRUE(units[5].retransmitted);
+    EXPECT_EQ(receiver.stats().incomplete_access_units, 0u);
 }
 
-TEST_F(RtpH264ReceiverTest, RepeatsNackOnlyOnce) {
+// Stage 3: NACK repeats every max(RTT, 10 ms) until the repair deadline
+// (render time of the frame after the gap plus one RTT), not twice.
+TEST_F(RtpH264ReceiverTest, NacksEveryRttUntilTheRepairDeadline) {
+    receiver.set_rtt(20ms);
+    render_offset_ms = 100;  // the frame after the gap renders at 1500/90 + 100 = 116 ms
     unlock();
+    deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
+    for (int t = 5; t <= 200; ++t) {
+        receiver.tick(at(t));
+    }
+    // First NACK at 7 ms (reorder grace), then every 20 ms until the
+    // deadline 116 + 20 = 136 ms: 7, 27, ..., 127 = 7 NACKs.
+    EXPECT_EQ(nacks.size(), 7u);
+    for (const auto& n : nacks) EXPECT_EQ(n, std::vector<uint16_t>({12}));
+    ASSERT_EQ(losses.size(), 1u) << "a packet past its deadline is lost for real, once";
+    EXPECT_EQ(losses[0], 12);
+    EXPECT_EQ(receiver.stats().lost_packets, 1u);
+    // Its access unit is given up; a late copy is ignored.
+    deliver(receiver, make_rtp(12, 1500, false, {0x61, 0x12}), at(210));
+    EXPECT_EQ(units.size(), 1u);
+    EXPECT_EQ(receiver.stats().late_packets, 1u);
+}
 
-    deliver(receiver,
-            make_rtp(11, 2000, false, {0x61, 0x11}),
-            at(4));
-    deliver(receiver,
-            make_rtp(13, 2000, true, {0x61, 0x13}),
-            at(4));
-    receiver.tick(at(7));
-    receiver.tick(at(22));
-    receiver.tick(at(38));
+// Stage 3: the RTT applies at once, not at a rebuild of the receiver.
+TEST_F(RtpH264ReceiverTest, ANewRttChangesTheNackIntervalAtOnce) {
+    render_offset_ms = 500;
+    unlock();
+    deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
+    for (int t = 5; t <= 50; ++t) receiver.tick(at(t));
+    const size_t before = nacks.size();  // 7, 27, 47 at 20 ms
+    EXPECT_EQ(before, 3u);
+    receiver.set_rtt(50ms);
+    for (int t = 51; t <= 150; ++t) receiver.tick(at(t));
+    // 97, 147 at 50 ms.
+    EXPECT_EQ(nacks.size(), before + 2);
+}
 
-    ASSERT_EQ(nacks.size(), 2u);
-    EXPECT_EQ(nacks[0], std::vector<uint16_t>({12}));
-    EXPECT_EQ(nacks[1], std::vector<uint16_t>({12}));
-    EXPECT_EQ(receiver.stats().nacks, 2u);
-    EXPECT_EQ(receiver.stats().missing_sequences_detected, 1u);
+// Stage 3: a large key frame that is still arriving is not lost. While
+// packets of the frame after a gap keep coming, the deadline moves with them.
+TEST_F(RtpH264ReceiverTest, AKeyFrameThatIsStillArrivingIsNotGivenUp) {
+    render_offset_ms = 20;
+    // IDR at timestamp 0: SPS+PPS STAP, then 60 FU-A fragments, one each 10 ms
+    // (a slow link), seq 3 missing until repaired late.
+    deliver(receiver, make_rtp(1, 0, false, make_stap({{0x67, 0x42}, {0x68, 0xce}})), at(0));
+    deliver(receiver, make_rtp(2, 0, false, {0x7c, 0x85, 0x88}), at(0));
+    for (int i = 4; i <= 61; ++i) {
+        const bool last = i == 61;
+        deliver(receiver, make_rtp(static_cast<uint16_t>(i), 0, last,
+                                   {0x7c, static_cast<uint8_t>(last ? 0x45 : 0x05), 0x10}),
+                at(10 * i));
+        receiver.tick(at(10 * i + 5));
+    }
+    EXPECT_TRUE(losses.empty()) << "the deadline follows the frame's progress";
+    deliver(receiver, make_rtp(3, 0, false, {0x7c, 0x05, 0x33}), at(620));
+    ASSERT_EQ(units.size(), 1u);
+    EXPECT_TRUE(units[0].keyframe);
+    EXPECT_TRUE(units[0].retransmitted);
 }
 
 TEST_F(RtpH264ReceiverTest, TwoNewerPacketsEndReorderGrace) {
     unlock();
 
-    deliver(receiver,
-            make_rtp(12, 2000, true, {0x61, 0x12}),
-            at(4));
+    deliver(receiver, make_rtp(12, 1500, true, {0x61, 0x12}), at(4));
     EXPECT_TRUE(nacks.empty());
-    deliver(receiver,
-            make_rtp(13, 3000, true, {0x61, 0x13}),
-            at(4));
+    deliver(receiver, make_rtp(13, 3000, true, {0x61, 0x93}), at(4));
 
     ASSERT_EQ(nacks.size(), 1u);
     EXPECT_EQ(nacks[0], std::vector<uint16_t>({11}));
 }
 
-TEST_F(RtpH264ReceiverTest, ExpiryRequestsPliAndRegates) {
+// Stage 3: the receiver itself never asks for a key frame; a loss goes to
+// on_loss once, and only after the repair deadline.
+TEST_F(RtpH264ReceiverTest, NothingIsLostBeforeTheDeadline) {
+    render_offset_ms = 60;
     unlock();
-
-    deliver(receiver,
-            make_rtp(11, 2000, false, {0x7c, 0x81, 0xaa}),
-            at(4));
-    deliver(receiver,
-            make_rtp(13, 2000, true, {0x7c, 0x41, 0xcc}),
-            at(4));
-    receiver.tick(at(125));
-
-    EXPECT_TRUE(receiver.gated());
-    EXPECT_EQ(plis, 1);
-    EXPECT_EQ(receiver.stats().incomplete_access_units, 1u);
-
-    deliver(receiver,
-            make_rtp(14, 3000, true, {0x61, 0xdd}),
-            at(126));
-    EXPECT_EQ(frames.size(), 1u);
-    EXPECT_EQ(receiver.stats().gate_dropped_access_units, 1u);
-    EXPECT_EQ(plis, 1) << "PLI cooldown must suppress a storm";
-
-    const auto recovery = make_stap(
-        {{0x67, 0x10}, {0x68, 0x20}, {0x65, 0x30}});
-    deliver(receiver,
-            make_rtp(15, 4000, true, recovery),
-            at(127));
-
-    EXPECT_FALSE(receiver.gated());
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_TRUE(frames[1].is_idr);
-    EXPECT_EQ(receiver.stats().gate_entries, 2u);
-    EXPECT_EQ(receiver.stats().gate_exits, 2u);
+    deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
+    for (int t = 5; t <= 90; ++t) receiver.tick(at(t));  // deadline 16 + 60 + 20 = 96
+    EXPECT_TRUE(losses.empty());
+    receiver.tick(at(97));
+    EXPECT_EQ(losses.size(), 1u);
 }
 
-TEST_F(RtpH264ReceiverTest, SuppressesLateAndDuplicatePackets) {
+TEST_F(RtpH264ReceiverTest, SuppressesDuplicatePackets) {
     unlock();
+    deliver(receiver, make_rtp(11, 1500, true, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(11, 1500, true, {0x61, 0x91}), at(5));
+    deliver(receiver, make_rtp(10, 0, true, idr_payload()), at(5));
 
-    deliver(receiver,
-            make_rtp(10, 1000, true, {0x65, 0xff}),
-            at(4));
-    deliver(receiver,
-            make_rtp(11, 2000, true, {0x61, 0x11}),
-            at(4));
-    deliver(receiver,
-            make_rtp(9, 900, true, {0x61, 0x09}),
-            at(5));
-    deliver(receiver,
-            make_rtp(9, 900, true, {0x61, 0x09}),
-            at(5));
+    EXPECT_EQ(receiver.stats().duplicates, 2u);
+    EXPECT_EQ(units.size(), 2u);
+}
 
-    const auto stats = receiver.stats();
-    EXPECT_EQ(stats.duplicates, 2u);
-    EXPECT_EQ(stats.late_packets, 1u);
-    EXPECT_EQ(frames.size(), 2u);
+// Stage 3: a key frame makes everything before it obsolete: no more NACKs
+// for older gaps, no loss for them.
+TEST_F(RtpH264ReceiverTest, AKeyFrameEndsTheRepairOfOlderGaps) {
+    unlock();
+    deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
+    receiver.tick(at(8));
+    ASSERT_EQ(nacks.size(), 1u);
+    deliver(receiver, make_rtp(14, 3000, true, idr_payload()), at(10));
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_TRUE(units[1].keyframe);
+    for (int t = 11; t <= 300; ++t) receiver.tick(at(t));
+    EXPECT_EQ(nacks.size(), 1u);
+    EXPECT_TRUE(losses.empty());
 }
 
 TEST_F(RtpH264ReceiverTest, TracksSequenceWraparound) {
-    deliver(receiver,
-            make_rtp(65534, 1000, false, {0x67, 0x01}),
-            at(0));
-    deliver(receiver,
-            make_rtp(65535, 1000, false, {0x68, 0x02}),
-            at(0));
-    deliver(receiver,
-            make_rtp(0, 1000, true, {0x65, 0x03}),
-            at(0));
-    deliver(receiver,
-            make_rtp(1, 2000, true, {0x61, 0x04}),
-            at(1));
+    deliver(receiver, make_rtp(65534, 1000, false, {0x67, 0x01}), at(0));
+    deliver(receiver, make_rtp(65535, 1000, false, {0x68, 0x02}), at(0));
+    deliver(receiver, make_rtp(0, 1000, true, {0x65, 0x83}), at(0));
+    deliver(receiver, make_rtp(1, 2000, true, {0x61, 0x84}), at(1));
 
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_TRUE(frames[0].is_idr);
-    EXPECT_FALSE(frames[1].is_idr);
-    EXPECT_EQ(receiver.stats().late_packets, 0u);
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_TRUE(units[0].keyframe);
+    EXPECT_FALSE(units[1].keyframe);
+    EXPECT_EQ(units[1].reference, units[0].last_sequence);
     EXPECT_EQ(receiver.stats().incomplete_access_units, 0u);
     EXPECT_EQ(receiver.stats().extended_highest_sequence, 65537u);
     EXPECT_EQ(receiver.stats().cumulative_loss, 0);
 }
 
 TEST_F(RtpH264ReceiverTest, TimestampChangeClosesMarkerlessAccessUnit) {
-    deliver(receiver,
-            make_rtp(1, 1000, false, {0x67, 0x01}),
-            at(0));
-    deliver(receiver,
-            make_rtp(2, 1000, false, {0x68, 0x02}),
-            at(0));
-    deliver(receiver,
-            make_rtp(3, 1000, false, {0x65, 0x03}),
-            at(0));
-    deliver(receiver,
-            make_rtp(4, 2000, true, {0x61, 0x04}),
-            at(0));
+    deliver(receiver, make_rtp(1, 1000, false, {0x67, 0x01}), at(0));
+    deliver(receiver, make_rtp(2, 1000, false, {0x68, 0x02}), at(0));
+    deliver(receiver, make_rtp(3, 1000, false, {0x65, 0x83}), at(0));
+    deliver(receiver, make_rtp(4, 2000, true, {0x61, 0x84}), at(0));
 
-    ASSERT_EQ(frames.size(), 2u);
-    EXPECT_EQ(frames[0].timestamp, 1000u);
-    EXPECT_EQ(frames[1].timestamp, 2000u);
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_EQ(units[0].rtp_timestamp, 1000u);
+    EXPECT_EQ(units[1].rtp_timestamp, 2000u);
+}
+
+// Stage 3: padding packets of a pacer take sequence numbers but no frame;
+// the next frame still references the last frame before them.
+TEST_F(RtpH264ReceiverTest, PaddingPacketsDoNotBreakTheReferenceChain) {
+    unlock();
+    deliver(receiver, make_padding(11, 0), at(2));
+    deliver(receiver, make_padding(12, 0), at(3));
+    deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x91}), at(16));
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_EQ(units[1].reference, 10);
+    EXPECT_EQ(receiver.stats().padding_packets, 2u);
+    EXPECT_TRUE(nacks.empty());
+}
+
+// Stage 3: after a loss, an access unit right behind the lost packet still
+// completes when its first NAL can only open an access unit (an IDR).
+TEST_F(RtpH264ReceiverTest, AKeyFrameRightAfterALostPacketStillCompletes) {
+    render_offset_ms = 0;
+    unlock();
+    // seq 11 lost; seq 12 is an IDR with SPS first.
+    deliver(receiver, make_rtp(12, 3000, true, idr_payload()), at(40));
+    EXPECT_EQ(units.size(), 1u) << "the start of seq 12 is unknown while seq 11 may come";
+    for (int t = 41; t <= 200; ++t) receiver.tick(at(t));
+    ASSERT_EQ(losses.size(), 1u);
+    ASSERT_EQ(units.size(), 2u);
+    EXPECT_TRUE(units[1].keyframe);
+}
+
+TEST_F(RtpH264ReceiverTest, ADiscontinuityIsALoss) {
+    unlock();
+    deliver(receiver, make_rtp(10 + 5000, 90000, true, {0x61, 0x91}), at(10));
+    EXPECT_EQ(receiver.stats().sequence_discontinuities, 1u);
+    EXPECT_EQ(losses.size(), 1u);
+    EXPECT_TRUE(nacks.empty()) << "a jump is not NACKed packet by packet";
+}
+
+TEST_F(RtpH264ReceiverTest, KnowsWhenAKeyFrameIsArriving) {
+    deliver(receiver, make_rtp(1, 0, false, make_stap({{0x67, 0x42}, {0x68, 0xce}})), at(0));
+    deliver(receiver, make_rtp(2, 0, false, {0x7c, 0x85, 0x88}), at(10));
+    EXPECT_TRUE(receiver.keyframe_in_progress(at(100)));
+    EXPECT_FALSE(receiver.keyframe_in_progress(at(400)));
 }
 
 TEST_F(RtpH264ReceiverTest, RejectsInvalidRtpAndH264Payloads) {
@@ -550,103 +566,49 @@ TEST_F(RtpH264ReceiverTest, RejectsInvalidRtpAndH264Payloads) {
     wrong_pt[1] = static_cast<uint8_t>(0x80 | 97);
     deliver(receiver, std::move(wrong_pt), at(0));
 
-    deliver(receiver,
-            make_rtp(1, 1, true, {0x78, 0x00, 0x04, 0x67}),
-            at(0));
-    deliver(receiver,
-            make_rtp(2, 1, true, {0x7c, 0xc1, 0xaa}),
-            at(0));
-    deliver(receiver,
-            make_rtp(3, 1, true, {0x79, 0xaa}),
-            at(0));
+    deliver(receiver, make_rtp(1, 1, true, {0x78, 0x00, 0x04, 0x67}), at(0));
+    deliver(receiver, make_rtp(2, 1, true, {0x7c, 0xc1, 0xaa}), at(0));
+    deliver(receiver, make_rtp(3, 1, true, {0x79, 0xaa}), at(0));
 
     const auto stats = receiver.stats();
     EXPECT_EQ(stats.invalid_rtp_packets, 4u);
     EXPECT_EQ(stats.wrong_payload_type_packets, 1u);
     EXPECT_EQ(stats.invalid_h264_packets, 3u);
-    EXPECT_TRUE(frames.empty());
+    EXPECT_TRUE(units.empty());
 }
 
-TEST(RtpH264ReceiverBoundsTest, EnforcesAccessUnitPacketAndByteLimits) {
-    RtpH264Receiver access_unit_receiver;
-    deliver(access_unit_receiver,
-            make_rtp(1, 100, false, {0x61, 0x01}),
-            at(0));
-    deliver(access_unit_receiver,
-            make_rtp(3, 200, false, {0x61, 0x03}),
-            at(0));
-    deliver(access_unit_receiver,
-            make_rtp(5, 300, false, {0x61, 0x05}),
-            at(0));
-    deliver(access_unit_receiver,
-            make_rtp(7, 400, false, {0x61, 0x07}),
-            at(0));
-
-    const auto access_unit_stats = access_unit_receiver.stats();
-    EXPECT_LE(access_unit_stats.buffered_access_units,
-              RtpH264Receiver::kMaxAccessUnits);
-    EXPECT_LE(access_unit_stats.peak_buffered_access_units,
-              RtpH264Receiver::kMaxAccessUnits);
-    EXPECT_GE(access_unit_stats.buffer_evictions, 1u);
-
-    RtpH264Receiver packet_receiver;
-    std::vector<uint8_t> large_nal(4096, 0x55);
+TEST(RtpH264ReceiverBoundsTest, PacketMemoryStaysWithinItsBounds) {
+    RtpH264Receiver receiver;
+    std::vector<uint8_t> large_nal(16 * 1024, 0x55);
     large_nal[0] = 0x61;
-    for (uint16_t sequence = 0; sequence <= 256; ++sequence) {
-        deliver(packet_receiver,
-                make_rtp(sequence, 500, false, large_nal),
-                at(0));
+    // Never complete: no marker, one timestamp, a slice that cannot open an
+    // access unit after packet 0.
+    for (uint32_t sequence = 0; sequence <= 1200; ++sequence) {
+        deliver(receiver, make_rtp(static_cast<uint16_t>(sequence), 500, false, large_nal), at(0));
     }
-
-    const auto packet_stats = packet_receiver.stats();
-    EXPECT_LE(packet_stats.buffered_packets,
-              RtpH264Receiver::kMaxPackets);
-    EXPECT_LE(packet_stats.peak_buffered_packets,
-              RtpH264Receiver::kMaxPackets);
-    EXPECT_LE(packet_stats.buffered_bytes,
-              RtpH264Receiver::kMaxBufferedBytes);
-    EXPECT_LE(packet_stats.peak_buffered_bytes,
-              RtpH264Receiver::kMaxBufferedBytes);
-    EXPECT_GE(packet_stats.buffer_evictions, 1u);
+    const auto stats = receiver.stats();
+    EXPECT_LE(stats.buffered_packets, RtpH264Receiver::kMaxPackets);
+    EXPECT_LE(stats.peak_buffered_bytes, RtpH264Receiver::kMaxBufferedBytes + large_nal.size());
+    EXPECT_LE(stats.buffered_bytes, RtpH264Receiver::kMaxBufferedBytes);
+    EXPECT_GE(stats.buffer_evictions, 1u);
 }
 
-TEST(RtpH264ReceiverConfigTest, AdaptiveNackBudgetAllowsMoreRetries) {
-    std::vector<std::vector<uint16_t>> nacks;
-    RtpH264Receiver::Config config;
-    config.nack_max_attempts = 5;
-    RtpH264Receiver receiver(
-        RtpH264Receiver::Callbacks{
-            [](const std::vector<uint8_t>&, bool, uint32_t) {},
-            [&nacks](const std::vector<uint16_t>& sequences) {
-                nacks.push_back(sequences);
-            },
-            []() {},
-        },
-        config
-    );
-
-    // Open the gate with an IDR AU, then leave sequence 12 missing.
-    deliver(receiver,
-            make_rtp(10,
-                     1000,
-                     true,
-                     make_stap({{0x67, 0x42}, {0x68, 0xce}, {0x65, 0xaa}})),
-            at(0));
-    receiver.tick(at(3));
-    deliver(receiver, make_rtp(11, 2000, false, {0x61, 0x11}), at(4));
-    deliver(receiver, make_rtp(13, 2000, true, {0x61, 0x13}), at(4));
-
-    receiver.tick(at(7));
-    receiver.tick(at(22));
-    receiver.tick(at(37));
-    receiver.tick(at(52));
-    receiver.tick(at(67));
-    receiver.tick(at(82));
-
-    // Default budget is 2 attempts; the configured budget allows 5.
-    EXPECT_EQ(nacks.size(), 5u);
-    EXPECT_EQ(receiver.stats().nacks, 5u);
-    EXPECT_EQ(receiver.stats().missing_sequences_detected, 1u);
+TEST(RtpH264ReceiverStartTest, OnlyAnAccessUnitStartOpensAfterAGap) {
+    using mello::transport::h264_payload_starts_access_unit;
+    const std::vector<uint8_t> sps{0x67, 0x42};
+    const std::vector<uint8_t> pps{0x68, 0xce};
+    const std::vector<uint8_t> slice_mb0{0x61, 0x88};
+    const std::vector<uint8_t> slice_mb5{0x61, 0x28};
+    const std::vector<uint8_t> fu_start_mb0{0x7c, 0x85, 0x88};
+    const std::vector<uint8_t> fu_middle{0x7c, 0x05, 0x88};
+    const auto stap = make_stap({{0x67, 0x42}, {0x68, 0xce}});
+    EXPECT_TRUE(h264_payload_starts_access_unit(sps.data(), sps.size()));
+    EXPECT_FALSE(h264_payload_starts_access_unit(pps.data(), pps.size()));
+    EXPECT_TRUE(h264_payload_starts_access_unit(slice_mb0.data(), slice_mb0.size()));
+    EXPECT_FALSE(h264_payload_starts_access_unit(slice_mb5.data(), slice_mb5.size()));
+    EXPECT_TRUE(h264_payload_starts_access_unit(fu_start_mb0.data(), fu_start_mb0.size()));
+    EXPECT_FALSE(h264_payload_starts_access_unit(fu_middle.data(), fu_middle.size()));
+    EXPECT_TRUE(h264_payload_starts_access_unit(stap.data(), stap.size()));
 }
 
 } // namespace

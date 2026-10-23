@@ -69,6 +69,16 @@ public:
     void video_get_stats(MelloRtpVideoStats* stats) const noexcept;
     bool video_is_open() const noexcept;
 
+    // ---- streaming-quality stage 3 ----
+    // The receive timeline of the current viewer session, or null. The viewer
+    // pipeline polls it on its decode thread. A new session (the video track
+    // opened again) has a new timeline: callers ask again when theirs stops.
+    std::shared_ptr<VideoReceiveTimeline> video_receive_timeline() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return rtp_video_receiver_ ? rtp_video_receiver_->timeline() : nullptr;
+    }
+    // ---- end stage 3 ----
+
     void send_ping();
     float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
     int64_t pong_age_ms() const;

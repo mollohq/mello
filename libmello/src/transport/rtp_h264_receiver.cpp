@@ -11,16 +11,20 @@ namespace mello::transport {
 namespace {
 
 constexpr uint8_t kNalTypeMask = 0x1f;
+constexpr uint8_t kSei = 6;
 constexpr uint8_t kStapA = 24;
 constexpr uint8_t kFuA = 28;
 constexpr uint8_t kIdr = 5;
+constexpr uint8_t kNonIdrSlice = 1;
 constexpr uint8_t kSps = 7;
 constexpr uint8_t kPps = 8;
+constexpr uint8_t kAud = 9;
 constexpr uint8_t kForbiddenZeroBit = 0x80;
 constexpr uint8_t kFuStartBit = 0x80;
 constexpr uint8_t kFuEndBit = 0x40;
 constexpr uint8_t kFuReservedBit = 0x20;
-constexpr size_t kMaxAnnexBBytes = 2 * 1024 * 1024;
+constexpr size_t kMaxAnnexBBytes = 4 * 1024 * 1024;
+constexpr size_t kMaxPayloadBytes = 64 * 1024;
 
 uint16_t read_u16_be(const uint8_t* data) {
     return static_cast<uint16_t>(
@@ -45,11 +49,20 @@ struct ParsedRtpPacket {
     size_t payload_size = 0;
 };
 
-bool parse_rtp_packet(const uint8_t* data,
-                      size_t size,
-                      ParsedRtpPacket& packet) {
+enum class ParseResult {
+    Invalid,
+    Media,
+    // A valid RTP header with only padding after it (RFC 3550 5.1): a
+    // pacer's padding packet. It takes a sequence number but carries no
+    // video.
+    Padding,
+};
+
+ParseResult parse_rtp_packet(const uint8_t* data,
+                             size_t size,
+                             ParsedRtpPacket& packet) {
     if (data == nullptr || size < 12 || (data[0] >> 6) != 2) {
-        return false;
+        return ParseResult::Invalid;
     }
 
     const bool has_padding = (data[0] & 0x20) != 0;
@@ -57,16 +70,16 @@ bool parse_rtp_packet(const uint8_t* data,
     const size_t csrc_count = data[0] & 0x0f;
     size_t header_size = 12 + csrc_count * 4;
     if (header_size > size) {
-        return false;
+        return ParseResult::Invalid;
     }
 
     if (has_extension) {
         if (size - header_size < 4) {
-            return false;
+            return ParseResult::Invalid;
         }
         const size_t extension_words = read_u16_be(data + header_size + 2);
         if (extension_words > (size - header_size - 4) / 4) {
-            return false;
+            return ParseResult::Invalid;
         }
         header_size += 4 + extension_words * 4;
     }
@@ -75,12 +88,9 @@ bool parse_rtp_packet(const uint8_t* data,
     if (has_padding) {
         const size_t padding_size = data[size - 1];
         if (padding_size == 0 || padding_size > payload_end - header_size) {
-            return false;
+            return ParseResult::Invalid;
         }
         payload_end -= padding_size;
-    }
-    if (payload_end <= header_size) {
-        return false;
     }
 
     packet.payload_type = data[1] & 0x7f;
@@ -89,8 +99,11 @@ bool parse_rtp_packet(const uint8_t* data,
     packet.timestamp = read_u32_be(data + 4);
     packet.ssrc = read_u32_be(data + 8);
     packet.payload = data + header_size;
-    packet.payload_size = payload_end - header_size;
-    return true;
+    packet.payload_size = payload_end > header_size ? payload_end - header_size : 0;
+    if (packet.payload_size == 0) {
+        return has_padding ? ParseResult::Padding : ParseResult::Invalid;
+    }
+    return ParseResult::Media;
 }
 
 bool valid_single_nal_header(uint8_t header) {
@@ -144,18 +157,70 @@ bool validate_h264_payload(const uint8_t* payload, size_t size) {
     return false;
 }
 
+// One NAL (header byte first) that can only open an access unit.
+bool nal_starts_access_unit(uint8_t type, const uint8_t* body, size_t body_size) {
+    if (type == kAud || type == kSps || type == kSei) {
+        return true;
+    }
+    if (type == kIdr || type == kNonIdrSlice) {
+        // first_mb_in_slice is the first ue(v) of the slice header; it is 0
+        // exactly when its first bit is 1.
+        return body_size >= 1 && (body[0] & 0x80) != 0;
+    }
+    return false;
+}
+
+// A payload that begins a NAL (not the middle or end of an FU-A).
+bool starts_nal(const uint8_t* payload, size_t size) {
+    if (payload == nullptr || size == 0) return false;
+    const uint8_t type = payload[0] & kNalTypeMask;
+    if (type >= 1 && type <= 23) return true;
+    if (type == kStapA) return true;
+    return type == kFuA && size >= 2 && (payload[1] & kFuStartBit) != 0;
+}
+
+// The NAL type that opens a payload: the single NAL, the first NAL of a
+// STAP-A, or the original type of a starting FU-A. 0 when there is none.
+uint8_t first_nal_type(const uint8_t* payload, size_t size) {
+    if (payload == nullptr || size == 0) return 0;
+    const uint8_t type = payload[0] & kNalTypeMask;
+    if (type >= 1 && type <= 23) return type;
+    if (type == kStapA && size >= 4) return payload[3] & kNalTypeMask;
+    if (type == kFuA && size >= 2 && (payload[1] & kFuStartBit) != 0) {
+        return payload[1] & kNalTypeMask;
+    }
+    return 0;
+}
+
 } // namespace
+
+bool h264_payload_starts_access_unit(const uint8_t* payload, size_t size) {
+    if (payload == nullptr || size == 0) return false;
+    const uint8_t type = payload[0] & kNalTypeMask;
+    if (type >= 1 && type <= 23) {
+        return nal_starts_access_unit(type, payload + 1, size - 1);
+    }
+    if (type == kStapA) {
+        if (size < 4) return false;
+        const size_t nal_size = read_u16_be(payload + 1);
+        if (nal_size == 0 || nal_size > size - 3) return false;
+        return nal_starts_access_unit(payload[3] & kNalTypeMask, payload + 4,
+                                      nal_size - 1);
+    }
+    if (type == kFuA) {
+        if (size < 3 || (payload[1] & kFuStartBit) == 0) return false;
+        return nal_starts_access_unit(payload[1] & kNalTypeMask, payload + 2,
+                                      size - 2);
+    }
+    return false;
+}
 
 class RtpH264Receiver::Impl {
 public:
     Impl(Callbacks callbacks, const Config& config)
         : callbacks_(std::move(callbacks)),
           payload_type_(config.payload_type & 0x7f),
-          pli_cooldown_(std::max(config.pli_cooldown,
-                                 std::chrono::milliseconds::zero())),
-          nack_max_attempts_(config.nack_max_attempts != 0
-                                 ? config.nack_max_attempts
-                                 : kMaxNackAttempts) {}
+          rtt_(std::max(config.rtt, std::chrono::microseconds::zero())) {}
 
     void on_rtp_packet(const uint8_t* data, size_t size, TimePoint now) {
         ++stats_.packets;
@@ -163,66 +228,100 @@ public:
         if (!accept_time(now)) {
             return;
         }
-        process_time(now);
 
         ParsedRtpPacket parsed;
-        if (!parse_rtp_packet(data, size, parsed)) {
+        const ParseResult kind = parse_rtp_packet(data, size, parsed);
+        if (kind == ParseResult::Invalid) {
             ++stats_.invalid_rtp_packets;
+            process_time(now);
             return;
         }
         if (parsed.payload_type != payload_type_) {
             ++stats_.wrong_payload_type_packets;
+            process_time(now);
             return;
         }
         if (stats_.has_ssrc && parsed.ssrc != stats_.ssrc) {
             ++stats_.wrong_ssrc_packets;
+            process_time(now);
             return;
         }
 
+        const bool padding = kind == ParseResult::Padding;
         const bool valid_h264 =
-            parsed.payload_size <= kMaxBufferedBytes &&
-            validate_h264_payload(parsed.payload, parsed.payload_size);
-        if (!stats_.has_ssrc && !valid_h264) {
-            ++stats_.invalid_h264_packets;
+            padding ||
+            (parsed.payload_size <= kMaxPayloadBytes &&
+             validate_h264_payload(parsed.payload, parsed.payload_size));
+        if (!stats_.has_ssrc && (padding || !valid_h264)) {
+            // The first packet chooses the SSRC; it must carry video.
+            if (!valid_h264) ++stats_.invalid_h264_packets;
+            process_time(now);
             return;
         }
 
-        const int64_t extended_sequence = extend_sequence(parsed.sequence);
-        if (seen_sequences_.count(extended_sequence) != 0) {
+        const int64_t sequence = extend_sequence(parsed.sequence);
+        if (packets_.count(sequence) != 0) {
             ++stats_.duplicates;
+            process_time(now);
             return;
         }
-        if (have_release_floor_ && extended_sequence <= release_floor_) {
+        if ((have_floor_ && sequence <= floor_) || lost_.count(sequence) != 0) {
             ++stats_.late_packets;
-            remember_sequence(extended_sequence);
-            return;
-        }
-
-        observe_sequence(extended_sequence, now);
-
-        if (!valid_h264) {
-            ++stats_.invalid_h264_packets;
-            mark_missing(extended_sequence, now);
-            process_nacks(now);
+            process_time(now);
             return;
         }
 
         if (!stats_.has_ssrc) {
             stats_.has_ssrc = true;
             stats_.ssrc = parsed.ssrc;
-            base_sequence_ = extended_sequence;
+            base_sequence_ = sequence;
+            first_sequence_ = sequence;
         }
-        if (missing_.erase(extended_sequence) != 0) {
+
+        const bool repaired = missing_.erase(sequence) != 0;
+        if (repaired) {
             ++stats_.repaired_packets;
         }
-        remember_sequence(extended_sequence);
-        store_packet(parsed, extended_sequence, now);
+        observe_sequence(sequence, now);
+        last_any_arrival_ = now;
         ++stats_.accepted_packets;
         stats_.accepted_bytes += static_cast<uint64_t>(size);
         update_interarrival_jitter(parsed.timestamp, now);
 
-        process_nacks(now);
-        process_access_units(now);
+        Packet packet;
+        packet.timestamp = parsed.timestamp;
+        packet.marker = parsed.marker;
+        packet.arrival = now;
+        packet.repaired = repaired;
+        if (padding) {
+            ++stats_.padding_packets;
+            packet.padding = true;
+            packet.emitted = true;  // holds no video
+            packets_.emplace(sequence, std::move(packet));
+        } else if (!valid_h264) {
+            // A corrupt packet is as good as a missing one: NACK it.
+            ++stats_.invalid_h264_packets;
+            --stats_.accepted_packets;
+            stats_.accepted_bytes -= static_cast<uint64_t>(size);
+            mark_missing(sequence, now);
+        } else {
+            packet.payload.assign(parsed.payload,
+                                  parsed.payload + parsed.payload_size);
+            buffered_bytes_ += packet.payload.size();
+            ++buffered_packets_;
+            packets_.emplace(sequence, std::move(packet));
+            unemitted_.insert(sequence);
+            update_peaks();
+        }
+
+        enforce_memory_bounds(now);
+        // A new packet (or a padding packet) can settle the end of the access
+        // unit before it and the start of the one after it. The older one
+        // goes first.
+        try_complete_around(sequence - 1, now);
+        try_complete_around(sequence, now);
+        try_complete_around(sequence + 1, now);
+        process_time(now);
     }
 
     void tick(TimePoint now) {
@@ -232,49 +331,69 @@ public:
         process_time(now);
     }
 
+    void set_rtt(std::chrono::microseconds rtt) {
+        rtt_ = std::max(rtt, std::chrono::microseconds::zero());
+        // Deadlines move with the RTT: compute them again when next due.
+        for (auto& entry : missing_) {
+            entry.second.deadline_known = false;
+        }
+    }
+
+    bool keyframe_in_progress(TimePoint now) const {
+        for (const int64_t sequence : unemitted_) {
+            const Packet& p = packets_.at(sequence);
+            const uint8_t type = first_nal_type(p.payload.data(), p.payload.size());
+            if (type != kSps && type != kIdr) continue;
+            int64_t lo = 0;
+            int64_t hi = 0;
+            if (!group_of(sequence, lo, hi)) continue;
+            // The newest packet of this access unit.
+            TimePoint last = p.arrival;
+            for (int64_t s = lo; s <= hi; ++s) {
+                last = std::max(last, packets_.at(s).arrival);
+            }
+            if (now - last <= kKeyframeProgress) return true;
+        }
+        return false;
+    }
+
+    uint64_t accepted_packets() const { return stats_.accepted_packets; }
+
     Stats stats() const {
         Stats result = stats_;
-        result.buffered_access_units = access_units_.size();
         result.buffered_packets = buffered_packets_;
         result.buffered_bytes = buffered_bytes_;
+        result.buffered_access_units = count_groups();
         if (have_highest_sequence_) {
             result.extended_highest_sequence =
                 static_cast<uint64_t>(highest_sequence_);
-            const int64_t expected =
-                highest_sequence_ - base_sequence_ + 1;
+            const int64_t expected = highest_sequence_ - base_sequence_ + 1;
             result.cumulative_loss =
-                expected -
-                static_cast<int64_t>(stats_.accepted_packets);
+                expected - static_cast<int64_t>(stats_.accepted_packets);
         }
-        result.gated = gated_;
         return result;
-    }
-
-    bool gated() const {
-        return gated_;
     }
 
 private:
     struct Packet {
+        uint32_t timestamp = 0;
+        bool marker = false;
+        bool padding = false;
+        // Its access unit went out (or it is padding): only the header facts
+        // stay, for the start and end of the access units next to it.
+        bool emitted = false;
+        bool repaired = false;
+        TimePoint arrival{};
         std::vector<uint8_t> payload;
     };
 
-    struct AccessUnit {
-        uint32_t timestamp = 0;
-        std::map<int64_t, Packet> packets;
-        TimePoint first_arrival{};
-        TimePoint last_arrival{};
-        bool first_observed_was_marker = false;
-        bool has_marker = false;
-        int64_t marker_sequence = 0;
-        bool structurally_invalid = false;
-    };
-
-    struct MissingPacket {
+    struct Missing {
         TimePoint first_detected{};
         TimePoint last_nack{};
         size_t attempts = 0;
         size_t newer_packets = 0;
+        bool deadline_known = false;
+        TimePoint deadline{};
     };
 
     struct ReconstructedAccessUnit {
@@ -283,6 +402,45 @@ private:
         bool has_sps = false;
         bool has_pps = false;
     };
+
+    // What is known about the packet before `sequence`, skipping padding.
+    enum class Before {
+        // A media packet: `prev` points at it.
+        Media,
+        // The packet is lost for real, older than the last key frame, or
+        // before the first packet of the stream: it will never be known.
+        Gone,
+        // Missing, and it may still arrive.
+        Unknown,
+    };
+
+    Before packet_before(int64_t sequence, std::map<int64_t, Packet>::const_iterator& prev) const {
+        int64_t s = sequence - 1;
+        for (;;) {
+            if (s < first_sequence_ || (have_floor_ && s <= floor_) || lost_.count(s) != 0) {
+                return Before::Gone;
+            }
+            auto it = packets_.find(s);
+            if (it == packets_.end()) {
+                return Before::Unknown;
+            }
+            if (it->second.padding) {
+                --s;
+                continue;
+            }
+            prev = it;
+            return Before::Media;
+        }
+    }
+
+    int64_t reference_of(int64_t first_sequence) const {
+        int64_t s = first_sequence - 1;
+        for (auto it = packets_.find(s); it != packets_.end() && it->second.padding;
+             it = packets_.find(s)) {
+            --s;
+        }
+        return s;
+    }
 
     bool accept_time(TimePoint now) {
         if (have_last_time_ && now < last_time_) {
@@ -296,7 +454,7 @@ private:
 
     void process_time(TimePoint now) {
         process_nacks(now);
-        process_access_units(now);
+        forget_silent(now);
     }
 
     void update_interarrival_jitter(uint32_t timestamp, TimePoint now) {
@@ -317,8 +475,7 @@ private:
                 deviation = -deviation;
             }
             jitter_ += (deviation - jitter_) / 16.0;
-            stats_.interarrival_jitter =
-                static_cast<uint32_t>(jitter_);
+            stats_.interarrival_jitter = static_cast<uint32_t>(jitter_);
         }
         have_previous_arrival_ = true;
         previous_arrival_ = now;
@@ -359,20 +516,16 @@ private:
         }
 
         const int64_t gap = sequence - highest_sequence_ - 1;
-        if (gap > static_cast<int64_t>(kMaxPackets) ||
-            static_cast<size_t>(gap) >
-                kMaxPackets - std::min(kMaxPackets, missing_.size())) {
+        if (gap > kMaxGap) {
+            // A jump (a host restart, an SFU replay of an old IDR, a long
+            // outage): NACKing it is pointless. Everything before is gone.
             ++stats_.sequence_discontinuities;
-            drop_all_access_units(now, true);
-            missing_.clear();
-            set_release_floor(sequence - 1);
-            next_access_unit_start_ = sequence;
-            have_next_access_unit_start_ = true;
+            give_up_before(sequence, now, true);
         } else {
             for (int64_t missing_sequence = highest_sequence_ + 1;
                  missing_sequence < sequence;
                  ++missing_sequence) {
-                MissingPacket missing;
+                Missing missing;
                 missing.first_detected = now;
                 missing.newer_packets = 1;
                 if (missing_.emplace(missing_sequence, missing).second) {
@@ -382,51 +535,315 @@ private:
         }
 
         highest_sequence_ = sequence;
-        const int64_t prune_before = highest_sequence_ - 1024;
-        seen_sequences_.erase(seen_sequences_.begin(),
-                              seen_sequences_.lower_bound(prune_before));
+        prune_history();
     }
 
     void mark_missing(int64_t sequence, TimePoint now) {
-        auto existing = missing_.find(sequence);
-        if (existing != missing_.end()) {
-            return;
-        }
-        if (missing_.size() >= kMaxPackets) {
-            ++stats_.sequence_discontinuities;
-            const bool transitioned = enter_gate(now);
-            if (!transitioned) {
-                request_pli(now);
-            }
-            return;
-        }
-        MissingPacket missing;
+        Missing missing;
         missing.first_detected = now;
         if (missing_.emplace(sequence, missing).second) {
             ++stats_.missing_sequences_detected;
         }
     }
 
-    void remember_sequence(int64_t sequence) {
-        seen_sequences_.insert(sequence);
+    void prune_history() {
+        const int64_t keep_from = highest_sequence_ - kHistory;
+        for (auto it = packets_.begin(); it != packets_.end() && it->first < keep_from;) {
+            if (!it->second.emitted) {
+                // Never completed and now out of memory.
+                release_payload(it->first, it->second);
+                ++stats_.incomplete_access_units;
+            }
+            it = packets_.erase(it);
+        }
+        lost_.erase(lost_.begin(), lost_.lower_bound(keep_from));
+        missing_.erase(missing_.begin(), missing_.lower_bound(keep_from));
+    }
+
+    void release_payload(int64_t sequence, Packet& packet) {
+        if (!packet.emitted && !packet.padding) {
+            buffered_bytes_ -= packet.payload.size();
+            --buffered_packets_;
+            unemitted_.erase(sequence);
+        }
+        packet.payload.clear();
+        packet.payload.shrink_to_fit();
+        packet.emitted = true;
+    }
+
+    void update_peaks() {
+        stats_.peak_buffered_packets =
+            std::max(stats_.peak_buffered_packets, buffered_packets_);
+        stats_.peak_buffered_bytes =
+            std::max(stats_.peak_buffered_bytes, buffered_bytes_);
+        stats_.peak_buffered_access_units =
+            std::max(stats_.peak_buffered_access_units, count_groups());
+    }
+
+    size_t count_groups() const {
+        size_t groups = 0;
+        bool in_group = false;
+        uint32_t group_ts = 0;
+        int64_t previous = 0;
+        for (const int64_t sequence : unemitted_) {
+            const Packet& packet = packets_.at(sequence);
+            if (!in_group || packet.timestamp != group_ts || sequence != previous + 1) {
+                ++groups;
+                in_group = true;
+                group_ts = packet.timestamp;
+            }
+            previous = sequence;
+        }
+        return groups;
+    }
+
+    // The bounds of the not yet emitted access unit that holds `sequence`:
+    // the run of stored, not emitted media packets with its timestamp.
+    bool group_of(int64_t sequence, int64_t& lo, int64_t& hi) const {
+        auto it = packets_.find(sequence);
+        if (it == packets_.end() || it->second.emitted || it->second.padding) {
+            return false;
+        }
+        const uint32_t ts = it->second.timestamp;
+        lo = sequence;
+        hi = sequence;
+        for (auto p = packets_.find(lo - 1);
+             p != packets_.end() && !p->second.emitted && !p->second.padding &&
+             p->second.timestamp == ts;
+             p = packets_.find(lo - 1)) {
+            --lo;
+        }
+        for (auto n = packets_.find(hi + 1);
+             n != packets_.end() && !n->second.emitted && !n->second.padding &&
+             n->second.timestamp == ts;
+             n = packets_.find(hi + 1)) {
+            ++hi;
+        }
+        return true;
+    }
+
+    // Is `lo` the first packet of its access unit?
+    // true: yes. false: no or not known yet. `dead` set: it never will be.
+    bool start_known(int64_t lo, uint32_t ts, bool& dead) const {
+        dead = false;
+        std::map<int64_t, Packet>::const_iterator prev;
+        switch (packet_before(lo, prev)) {
+        case Before::Media:
+            if (prev->second.marker || prev->second.timestamp != ts) {
+                return true;
+            }
+            // The packet before is of this access unit and already emitted
+            // or given up: this run cannot be whole.
+            dead = true;
+            return false;
+        case Before::Gone: {
+            const Packet& first = packets_.at(lo);
+            // The first packet of the stream: any NAL start may open the
+            // first access unit (a stream starts on an access unit; a
+            // viewer that joins in the middle gets a frame that references
+            // nothing it has, which the timeline never releases).
+            if (lo == first_sequence_ && starts_nal(first.payload.data(), first.payload.size())) {
+                return true;
+            }
+            if (h264_payload_starts_access_unit(first.payload.data(), first.payload.size())) {
+                return true;
+            }
+            dead = true;
+            return false;
+        }
+        case Before::Unknown:
+            return false;
+        }
+        return false;
+    }
+
+    // Is `hi` the last packet of its access unit?
+    bool end_known(int64_t hi, uint32_t ts, bool& dead) const {
+        dead = false;
+        const Packet& last = packets_.at(hi);
+        if (last.marker) {
+            return true;
+        }
+        // No marker: the next media packet tells, when it is known.
+        int64_t s = hi + 1;
+        for (;;) {
+            if (lost_.count(s) != 0) {
+                // The packet after is lost: it may have been this access
+                // unit's last one.
+                dead = true;
+                return false;
+            }
+            auto it = packets_.find(s);
+            if (it == packets_.end()) {
+                return false;
+            }
+            if (it->second.padding) {
+                ++s;
+                continue;
+            }
+            return it->second.timestamp != ts;
+        }
+    }
+
+    void try_complete_around(int64_t sequence, TimePoint now) {
+        int64_t lo = 0;
+        int64_t hi = 0;
+        if (!group_of(sequence, lo, hi)) {
+            return;
+        }
+        const uint32_t ts = packets_.at(lo).timestamp;
+        bool start_dead = false;
+        bool end_dead = false;
+        const bool start = start_known(lo, ts, start_dead);
+        const bool end = end_known(hi, ts, end_dead);
+        if (start_dead || end_dead) {
+            drop_group(lo, hi);
+            return;
+        }
+        if (!start || !end) {
+            return;
+        }
+
+        ReconstructedAccessUnit reconstructed;
+        if (!reconstruct(lo, hi, reconstructed)) {
+            // A corrupt access unit can never decode: as good as lost.
+            ++stats_.invalid_h264_packets;
+            drop_group(lo, hi);
+            report_loss(hi);
+            return;
+        }
+
+        AccessUnit unit;
+        unit.rtp_timestamp = ts;
+        unit.first_sequence = lo;
+        unit.last_sequence = hi;
+        unit.has_idr = reconstructed.has_idr;
+        unit.keyframe = reconstructed.has_idr && reconstructed.has_sps && reconstructed.has_pps;
+        unit.reference = unit.keyframe ? -1 : reference_of(lo);
+        unit.first_arrival = packets_.at(lo).arrival;
+        unit.last_arrival = unit.first_arrival;
+        for (int64_t s = lo; s <= hi; ++s) {
+            Packet& packet = packets_.at(s);
+            unit.last_arrival = std::max(unit.last_arrival, packet.arrival);
+            unit.retransmitted = unit.retransmitted || packet.repaired;
+            release_payload(s, packet);
+        }
+        unit.annex_b = std::move(reconstructed.bytes);
+
+        ++stats_.complete_access_units;
+        if (older_incomplete_exists(lo)) {
+            ++stats_.out_of_order_access_units;
+        }
+        if (unit.keyframe) {
+            // Everything before a key frame is obsolete: stop repairing it.
+            give_up_before(lo, now, false);
+        }
+        ++stats_.emitted_access_units;
+        if (callbacks_.on_access_unit) {
+            callbacks_.on_access_unit(std::move(unit));
+        }
+    }
+
+    bool older_incomplete_exists(int64_t sequence) const {
+        return (!unemitted_.empty() && *unemitted_.begin() < sequence) ||
+               (!missing_.empty() && missing_.begin()->first < sequence);
+    }
+
+    void drop_group(int64_t lo, int64_t hi) {
+        for (int64_t s = lo; s <= hi; ++s) {
+            auto it = packets_.find(s);
+            if (it != packets_.end()) release_payload(s, it->second);
+        }
+        ++stats_.incomplete_access_units;
+    }
+
+    // Everything before `sequence` is obsolete (a key frame) or gone (a
+    // discontinuity): no more repair, no more assembly.
+    void give_up_before(int64_t sequence, TimePoint now, bool is_loss) {
+        (void)now;
+        bool dropped = false;
+        while (!unemitted_.empty() && *unemitted_.begin() < sequence) {
+            const int64_t s = *unemitted_.begin();
+            release_payload(s, packets_.at(s));
+            dropped = true;
+        }
+        if (dropped) ++stats_.incomplete_access_units;
+        missing_.erase(missing_.begin(), missing_.lower_bound(sequence));
+        if (!have_floor_ || sequence - 1 > floor_) {
+            floor_ = sequence - 1;
+            have_floor_ = true;
+        }
+        if (is_loss) {
+            report_loss(sequence - 1);
+        }
+    }
+
+    void report_loss(int64_t sequence) {
+        ++stats_.loss_events;
+        if (callbacks_.on_loss) {
+            callbacks_.on_loss(sequence);
+        }
+    }
+
+    std::chrono::microseconds nack_repeat() const {
+        return std::max<std::chrono::microseconds>(rtt_, kMinNackRepeat);
+    }
+
+    // The repair deadline of a missing packet: the render time of the first
+    // frame after the gap plus one RTT, and never before the last packet of
+    // that frame plus one RTT (a large key frame still arriving), nor before
+    // one RTT after the gap was seen.
+    TimePoint compute_deadline(int64_t sequence, const Missing& missing) const {
+        TimePoint deadline = missing.first_detected + rtt_ + kRepairMargin;
+        auto after = packets_.upper_bound(sequence);
+        while (after != packets_.end() && after->second.padding) ++after;
+        if (after == packets_.end()) {
+            return std::max(deadline, missing.first_detected + kDefaultRepairWindow);
+        }
+        const uint32_t ts = after->second.timestamp;
+        std::optional<TimePoint> render;
+        if (callbacks_.render_time) render = callbacks_.render_time(ts);
+        if (render) {
+            deadline = std::max(deadline, *render + rtt_);
+        } else {
+            deadline = std::max(deadline, missing.first_detected + kDefaultRepairWindow);
+        }
+        // Progress of that frame.
+        TimePoint last = after->second.arrival;
+        for (auto it = std::next(after);
+             it != packets_.end() && !it->second.padding && it->second.timestamp == ts;
+             ++it) {
+            last = std::max(last, it->second.arrival);
+        }
+        return std::max(deadline, last + rtt_ + kRepairMargin);
     }
 
     void process_nacks(TimePoint now) {
         std::vector<uint16_t> due;
-        due.reserve(missing_.size());
-        for (auto& entry : missing_) {
-            MissingPacket& missing = entry.second;
+        std::vector<int64_t> expired;
+        for (auto& [sequence, missing] : missing_) {
+            if (!missing.deadline_known || now >= missing.deadline) {
+                // Compute it again when it seems due: the render time and the
+                // progress of the frame after the gap can have moved it.
+                missing.deadline = compute_deadline(sequence, missing);
+                missing.deadline_known = true;
+            }
+            if (now >= missing.deadline) {
+                expired.push_back(sequence);
+                continue;
+            }
+
             bool should_send = false;
             if (missing.attempts == 0) {
                 should_send =
                     now - missing.first_detected >= kReorderGrace ||
                     missing.newer_packets >= kNewerPacketGrace;
-            } else if (missing.attempts < nack_max_attempts_) {
-                should_send = now - missing.last_nack >= kNackRepeat;
+            } else {
+                should_send = now - missing.last_nack >= nack_repeat();
             }
 
             if (should_send) {
-                due.push_back(static_cast<uint16_t>(entry.first & 0xffff));
+                due.push_back(static_cast<uint16_t>(sequence & 0xffff));
                 missing.last_nack = now;
                 ++missing.attempts;
             }
@@ -439,132 +856,75 @@ private:
                 callbacks_.on_nack(due);
             }
         }
+
+        if (!expired.empty()) {
+            for (const int64_t sequence : expired) {
+                missing_.erase(sequence);
+                lost_.insert(sequence);
+                ++stats_.lost_packets;
+            }
+            // The access units next to a lost packet can never complete.
+            for (const int64_t sequence : expired) {
+                drop_dead_around(sequence - 1);
+                drop_dead_around(sequence + 1);
+            }
+            report_loss(expired.back());
+        }
     }
 
-    size_t find_access_unit(uint32_t timestamp) const {
-        for (size_t i = 0; i < access_units_.size(); ++i) {
-            if (access_units_[i].timestamp == timestamp) {
-                return i;
-            }
+    void drop_dead_around(int64_t sequence) {
+        int64_t lo = 0;
+        int64_t hi = 0;
+        if (!group_of(sequence, lo, hi)) return;
+        const uint32_t ts = packets_.at(lo).timestamp;
+        bool start_dead = false;
+        bool end_dead = false;
+        start_known(lo, ts, start_dead);
+        end_known(hi, ts, end_dead);
+        if (start_dead || end_dead) {
+            drop_group(lo, hi);
+        } else {
+            // The loss can settle its start (a NAL that opens an access
+            // unit right after the lost packet).
+            try_complete_around(lo, last_time_);
         }
-        return access_units_.size();
     }
 
-    size_t oldest_access_unit() const {
-        size_t oldest = 0;
-        for (size_t i = 1; i < access_units_.size(); ++i) {
-            if (access_units_[i].packets.begin()->first <
-                access_units_[oldest].packets.begin()->first) {
-                oldest = i;
-            }
+    // Packet memory: when the stream is silent, forget what cannot complete.
+    void forget_silent(TimePoint now) {
+        if (buffered_packets_ == 0 || now - last_any_arrival_ < kPacketMemory) {
+            return;
         }
-        return oldest;
+        const bool dropped = !unemitted_.empty();
+        while (!unemitted_.empty()) {
+            const int64_t s = *unemitted_.begin();
+            release_payload(s, packets_.at(s));
+        }
+        if (dropped) ++stats_.incomplete_access_units;
     }
 
-    void store_packet(const ParsedRtpPacket& parsed,
-                      int64_t extended_sequence,
-                      TimePoint now) {
-        size_t index = find_access_unit(parsed.timestamp);
-        while (!access_units_.empty() &&
-               (buffered_packets_ >= kMaxPackets ||
-                buffered_bytes_ >
-                    kMaxBufferedBytes - parsed.payload_size)) {
-            drop_access_unit(oldest_access_unit(), now, true, true);
-            index = find_access_unit(parsed.timestamp);
+    // Over the memory bounds: give up the oldest incomplete access unit. A
+    // reference is gone with it.
+    void enforce_memory_bounds(TimePoint now) {
+        (void)now;
+        while (buffered_packets_ > kMaxPackets || buffered_bytes_ > kMaxBufferedBytes) {
+            if (unemitted_.empty()) break;
+            const int64_t oldest = *unemitted_.begin();
+            int64_t lo = 0;
+            int64_t hi = 0;
+            if (!group_of(oldest, lo, hi)) break;
+            drop_group(lo, hi);
+            ++stats_.buffer_evictions;
+            for (int64_t s = lo; s <= hi; ++s) lost_.insert(s);
+            report_loss(hi);
         }
-
-        if (index == access_units_.size()) {
-            if (access_units_.size() >= kMaxAccessUnits) {
-                drop_access_unit(oldest_access_unit(), now, true, true);
-            }
-
-            AccessUnit access_unit;
-            access_unit.timestamp = parsed.timestamp;
-            access_unit.first_arrival = now;
-            access_unit.first_observed_was_marker = parsed.marker;
-            access_units_.push_back(std::move(access_unit));
-            index = access_units_.size() - 1;
-        }
-
-        AccessUnit& access_unit = access_units_[index];
-        Packet packet;
-        packet.payload.assign(parsed.payload,
-                              parsed.payload + parsed.payload_size);
-        access_unit.packets.emplace(extended_sequence, std::move(packet));
-        ++buffered_packets_;
-        buffered_bytes_ += parsed.payload_size;
-
-        if (parsed.marker) {
-            if (access_unit.has_marker &&
-                access_unit.marker_sequence != extended_sequence) {
-                access_unit.structurally_invalid = true;
-            }
-            access_unit.has_marker = true;
-            access_unit.marker_sequence = extended_sequence;
-        }
-
-        access_unit.last_arrival = now;
-
-        update_peaks();
-    }
-
-    void update_peaks() {
-        stats_.peak_buffered_access_units =
-            std::max(stats_.peak_buffered_access_units, access_units_.size());
-        stats_.peak_buffered_packets =
-            std::max(stats_.peak_buffered_packets, buffered_packets_);
-        stats_.peak_buffered_bytes =
-            std::max(stats_.peak_buffered_bytes, buffered_bytes_);
-    }
-
-    bool next_timestamp_boundary(size_t index,
-                                 int64_t start,
-                                 int64_t& end) const {
-        bool found = false;
-        int64_t next_start = std::numeric_limits<int64_t>::max();
-        for (size_t i = 0; i < access_units_.size(); ++i) {
-            if (i == index || access_units_[i].packets.empty()) {
-                continue;
-            }
-            const int64_t candidate =
-                access_units_[i].packets.begin()->first;
-            if (candidate > start && candidate < next_start) {
-                next_start = candidate;
-                found = true;
-            }
-        }
-        if (found) {
-            end = next_start - 1;
-        }
-        return found;
-    }
-
-    bool has_other_timestamp_in_range(size_t index,
-                                      int64_t start,
-                                      int64_t end) const {
-        for (size_t i = 0; i < access_units_.size(); ++i) {
-            if (i == index) {
-                continue;
-            }
-            auto it = access_units_[i].packets.lower_bound(start);
-            if (it != access_units_[i].packets.end() && it->first <= end) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    size_t count_seen_after(int64_t sequence) const {
-        const auto begin = seen_sequences_.upper_bound(sequence);
-        return static_cast<size_t>(std::distance(begin,
-                                                  seen_sequences_.end()));
     }
 
     bool append_nal(ReconstructedAccessUnit& output,
                     const uint8_t* nal,
                     size_t nal_size) const {
         constexpr uint8_t start_code[] = {0, 0, 0, 1};
-        if (nal_size > kMaxAnnexBBytes - sizeof(start_code) ||
+        if (nal_size == 0 || nal_size > kMaxAnnexBBytes - sizeof(start_code) ||
             output.bytes.size() >
                 kMaxAnnexBBytes - sizeof(start_code) - nal_size) {
             return false;
@@ -581,16 +941,21 @@ private:
         return true;
     }
 
-    bool reconstruct(const AccessUnit& access_unit,
-                     int64_t start,
+    bool reconstruct(int64_t start,
                      int64_t end,
                      ReconstructedAccessUnit& output) const {
         bool fu_open = false;
         uint8_t fu_nal_header = 0;
         std::vector<uint8_t> fu_nal;
 
+        size_t total = 0;
         for (int64_t sequence = start; sequence <= end; ++sequence) {
-            const Packet& packet = access_unit.packets.at(sequence);
+            total += packets_.at(sequence).payload.size() + 4;
+        }
+        output.bytes.reserve(total);
+
+        for (int64_t sequence = start; sequence <= end; ++sequence) {
+            const Packet& packet = packets_.at(sequence);
             const uint8_t* payload = packet.payload.data();
             const size_t size = packet.payload.size();
             const uint8_t type = payload[0] & kNalTypeMask;
@@ -641,7 +1006,7 @@ private:
                 return false;
             }
 
-            if (fu_nal.size() > kMaxBufferedBytes - (size - 2)) {
+            if (fu_nal.size() > kMaxAnnexBBytes - (size - 2)) {
                 return false;
             }
             fu_nal.insert(fu_nal.end(), payload + 2, payload + size);
@@ -657,250 +1022,31 @@ private:
         return !fu_open && !output.bytes.empty();
     }
 
-    void process_access_units(TimePoint now) {
-        while (!access_units_.empty()) {
-            const size_t index = oldest_access_unit();
-            AccessUnit& access_unit = access_units_[index];
-            const int64_t minimum_sequence =
-                access_unit.packets.begin()->first;
-            const int64_t maximum_sequence =
-                access_unit.packets.rbegin()->first;
-            const int64_t start =
-                have_next_access_unit_start_
-                    ? next_access_unit_start_
-                    : minimum_sequence;
-
-            bool boundary_known = false;
-            int64_t end = 0;
-            if (access_unit.has_marker) {
-                boundary_known = true;
-                end = access_unit.marker_sequence;
-                if (end < maximum_sequence) {
-                    access_unit.structurally_invalid = true;
-                }
-            } else {
-                boundary_known =
-                    next_timestamp_boundary(index, start, end);
-            }
-
-            if (access_unit.structurally_invalid ||
-                minimum_sequence < start ||
-                (boundary_known &&
-                 has_other_timestamp_in_range(index, start, end))) {
-                ++stats_.invalid_h264_packets;
-                drop_access_unit(index, now, false, false);
-                continue;
-            }
-
-            // Expire on stall (no fragment progress within the deadline) or
-            // on hitting the hard age cap. Sender pacing spreads an AU's
-            // fragments across its wire time, so a large AU legitimately
-            // needs longer than 120 ms end-to-end — but only while fragments
-            // keep arriving. A lost tail stops progress and expires quickly.
-            const bool expired =
-                now - access_unit.last_arrival >= kAccessUnitDeadline ||
-                now - access_unit.first_arrival >= kAccessUnitHardDeadline;
-            if (!boundary_known) {
-                if (expired) {
-                    drop_access_unit(index, now, false, true);
-                    continue;
-                }
-                break;
-            }
-
-            if (!have_next_access_unit_start_ &&
-                access_unit.first_observed_was_marker &&
-                now - access_unit.first_arrival < kReorderGrace &&
-                count_seen_after(access_unit.marker_sequence) <
-                    kNewerPacketGrace) {
-                break;
-            }
-
-            const int64_t span = end - start + 1;
-            bool all_packets_present =
-                span > 0 &&
-                span <= static_cast<int64_t>(kMaxPackets);
-            if (all_packets_present) {
-                for (int64_t sequence = start;
-                     sequence <= end;
-                     ++sequence) {
-                    if (access_unit.packets.count(sequence) == 0) {
-                        all_packets_present = false;
-                        break;
-                    }
-                }
-            }
-
-            if (!all_packets_present) {
-                if (expired) {
-                    drop_access_unit(index, now, false, true);
-                    continue;
-                }
-                break;
-            }
-
-            ReconstructedAccessUnit reconstructed;
-            if (!reconstruct(access_unit, start, end, reconstructed)) {
-                ++stats_.invalid_h264_packets;
-                drop_access_unit(index, now, false, false);
-                continue;
-            }
-
-            const uint32_t timestamp = access_unit.timestamp;
-            ++stats_.complete_access_units;
-            release_access_unit(index, end);
-
-            const bool opens_gate =
-                reconstructed.has_idr &&
-                reconstructed.has_sps &&
-                reconstructed.has_pps;
-            bool emit = !gated_;
-            if (gated_) {
-                if (opens_gate) {
-                    gated_ = false;
-                    ++stats_.gate_exits;
-                    emit = true;
-                } else {
-                    ++stats_.gate_dropped_access_units;
-                    request_pli(now);
-                }
-            }
-
-            if (emit) {
-                ++stats_.emitted_access_units;
-                if (callbacks_.on_access_unit) {
-                    callbacks_.on_access_unit(reconstructed.bytes,
-                                              reconstructed.has_idr,
-                                              timestamp);
-                }
-            }
-        }
-    }
-
-    void release_access_unit(size_t index, int64_t end) {
-        const AccessUnit& access_unit = access_units_[index];
-        buffered_packets_ -= access_unit.packets.size();
-        for (const auto& entry : access_unit.packets) {
-            buffered_bytes_ -= entry.second.payload.size();
-        }
-        access_units_.erase(access_units_.begin() +
-                            static_cast<std::ptrdiff_t>(index));
-
-        set_release_floor(end);
-        next_access_unit_start_ = end + 1;
-        have_next_access_unit_start_ = true;
-        erase_missing_through(end);
-    }
-
-    void drop_access_unit(size_t index,
-                          TimePoint now,
-                          bool eviction,
-                          bool request_even_if_gated) {
-        const AccessUnit& access_unit = access_units_[index];
-        int64_t start = access_unit.packets.begin()->first;
-        if (have_next_access_unit_start_) {
-            start = next_access_unit_start_;
-        }
-
-        int64_t end = access_unit.packets.rbegin()->first;
-        if (access_unit.has_marker) {
-            end = std::max(end, access_unit.marker_sequence);
-        } else {
-            int64_t timestamp_end = 0;
-            if (next_timestamp_boundary(index, start, timestamp_end)) {
-                end = std::max(end, timestamp_end);
-            }
-        }
-
-        ++stats_.incomplete_access_units;
-        if (eviction) {
-            ++stats_.buffer_evictions;
-        }
-        release_access_unit(index, end);
-
-        const bool transitioned = enter_gate(now);
-        if (request_even_if_gated && !transitioned) {
-            request_pli(now);
-        }
-    }
-
-    void drop_all_access_units(TimePoint now,
-                               bool request_even_if_gated) {
-        bool dropped_any = false;
-        while (!access_units_.empty()) {
-            drop_access_unit(oldest_access_unit(),
-                             now,
-                             true,
-                             request_even_if_gated && !dropped_any);
-            dropped_any = true;
-        }
-        if (!dropped_any) {
-            const bool transitioned = enter_gate(now);
-            if (request_even_if_gated && !transitioned) {
-                request_pli(now);
-            }
-        }
-    }
-
-    void set_release_floor(int64_t sequence) {
-        if (!have_release_floor_ || sequence > release_floor_) {
-            release_floor_ = sequence;
-            have_release_floor_ = true;
-        }
-    }
-
-    void erase_missing_through(int64_t sequence) {
-        missing_.erase(missing_.begin(),
-                       missing_.upper_bound(sequence));
-    }
-
-    bool enter_gate(TimePoint now) {
-        if (gated_) {
-            return false;
-        }
-        gated_ = true;
-        ++stats_.gate_entries;
-        request_pli(now);
-        return true;
-    }
-
-    void request_pli(TimePoint now) {
-        if (have_last_pli_ && now - last_pli_ < pli_cooldown_) {
-            return;
-        }
-        have_last_pli_ = true;
-        last_pli_ = now;
-        ++stats_.pli_requests;
-        if (callbacks_.on_pli) {
-            callbacks_.on_pli();
-        }
-    }
-
     Callbacks callbacks_;
     uint8_t payload_type_ = 96;
-    std::chrono::milliseconds pli_cooldown_{1000};
-    size_t nack_max_attempts_ = kMaxNackAttempts;
+    std::chrono::microseconds rtt_{30'000};
     Stats stats_;
 
-    std::vector<AccessUnit> access_units_;
-    std::map<int64_t, MissingPacket> missing_;
-    std::set<int64_t> seen_sequences_;
+    // Every packet of the history window by unwrapped sequence number.
+    std::map<int64_t, Packet> packets_;
+    // The media packets of access units not yet emitted (they hold payload).
+    std::set<int64_t> unemitted_;
+    std::map<int64_t, Missing> missing_;
+    std::set<int64_t> lost_;
     size_t buffered_packets_ = 0;
     size_t buffered_bytes_ = 0;
 
     bool have_highest_sequence_ = false;
     int64_t highest_sequence_ = 0;
     int64_t base_sequence_ = 0;
-    bool have_release_floor_ = false;
-    int64_t release_floor_ = 0;
-    bool have_next_access_unit_start_ = false;
-    int64_t next_access_unit_start_ = 0;
+    int64_t first_sequence_ = 0;
+    // Sequence numbers at or before the floor are obsolete or gone.
+    bool have_floor_ = false;
+    int64_t floor_ = 0;
 
-    bool gated_ = true;
-    bool have_last_pli_ = false;
-    TimePoint last_pli_{};
     bool have_last_time_ = false;
     TimePoint last_time_{};
+    TimePoint last_any_arrival_{};
     bool have_previous_arrival_ = false;
     TimePoint previous_arrival_{};
     uint32_t previous_rtp_timestamp_ = 0;
@@ -929,12 +1075,20 @@ void RtpH264Receiver::tick(TimePoint now) {
     impl_->tick(now);
 }
 
+void RtpH264Receiver::set_rtt(std::chrono::microseconds rtt) {
+    impl_->set_rtt(rtt);
+}
+
+bool RtpH264Receiver::keyframe_in_progress(TimePoint now) const {
+    return impl_->keyframe_in_progress(now);
+}
+
 RtpH264Receiver::Stats RtpH264Receiver::stats() const {
     return impl_->stats();
 }
 
-bool RtpH264Receiver::gated() const {
-    return impl_->gated();
+uint64_t RtpH264Receiver::accepted_packets() const {
+    return impl_->accepted_packets();
 }
 
 } // namespace mello::transport
