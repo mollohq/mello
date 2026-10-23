@@ -9,14 +9,10 @@ namespace {
 constexpr uint16_t kOneByteHeaderProfile = 0xBEDE;
 constexpr uint8_t kTwccFeedbackFmt = 15;
 constexpr uint8_t kRtcpRtpfb = 205;
-constexpr int64_t kMicrosPerSecond = 1'000'000;
 constexpr int64_t kReferenceTimeUnitUs = 64'000;
 constexpr int64_t kDeltaUnitUs = 250;
 // One report stays under the path MTU with the SRTCP and DTLS overhead.
 constexpr size_t kMaxReportBytes = 1'100;
-// Send-side burst window: packets sent within 5 ms of each other form one
-// delay-gradient measurement group (WebRTC inter-arrival grouping).
-constexpr int64_t kGroupSendWindowUs = 5'000;
 
 uint16_t read_u16(const uint8_t* p) {
     return static_cast<uint16_t>((static_cast<uint16_t>(p[0]) << 8) | p[1]);
@@ -125,7 +121,7 @@ int64_t floor_div(int64_t value, int64_t divisor) {
 
 } // namespace
 
-bool TwccSendStamper::stamp(std::vector<uint8_t>& packet, int64_t send_time_us) {
+bool TwccSendStamper::stamp(std::vector<uint8_t>& packet, uint16_t& out_sequence) {
     const RtpHeaderInfo info = inspect_rtp_header(packet.data(), packet.size());
     if (!info.valid) {
         return false;
@@ -172,26 +168,8 @@ bool TwccSendStamper::stamp(std::vector<uint8_t>& packet, int64_t send_time_us) 
         ext[7] = 0; // padding
     }
 
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        send_times_[sequence] = send_time_us;
-        send_order_.push_back(sequence);
-        while (send_order_.size() > kMaxSendRecords) {
-            send_times_.erase(send_order_.front());
-            send_order_.pop_front();
-        }
-    }
+    out_sequence = sequence;
     ++next_sequence_;
-    return true;
-}
-
-bool TwccSendStamper::send_time_for(uint16_t sequence, int64_t& out_us) const {
-    std::lock_guard<std::mutex> lock(mutex_);
-    const auto it = send_times_.find(sequence);
-    if (it == send_times_.end()) {
-        return false;
-    }
-    out_us = it->second;
     return true;
 }
 
@@ -507,142 +485,6 @@ std::vector<uint8_t> TwccFeedbackGenerator::build_feedback(
     last_emitted_sequence_ = static_cast<uint16_t>(base + emit_count - 1);
     has_emitted_ = true;
     return packet;
-}
-
-GccEstimator::GccEstimator(Config config, uint64_t initial_bps)
-    : config_(config),
-      target_bps_(std::clamp(initial_bps, config.min_bps, config.max_bps)) {}
-
-void GccEstimator::on_packet(
-    uint16_t /*sequence*/,
-    bool received,
-    int64_t send_time_us,
-    int64_t arrival_time_us
-) {
-    ++feedback_packets_seen_;
-    if (!received) {
-        ++feedback_packets_lost_;
-    }
-    const double instant_loss = received ? 0.0 : 1.0;
-    smoothed_loss_ += (instant_loss - smoothed_loss_) * 0.05;
-
-    if (!received || send_time_us < 0) {
-        return;
-    }
-
-    if (has_open_group_
-        && send_time_us - open_group_.last_send_us > kGroupSendWindowUs) {
-        close_group(arrival_time_us);
-    }
-    if (!has_open_group_) {
-        open_group_ = Group{};
-        open_group_.first_send_us = send_time_us;
-        has_open_group_ = true;
-    }
-    open_group_.last_send_us = send_time_us;
-    open_group_.arrival_sum_us += arrival_time_us;
-    open_group_.received += 1;
-    open_group_.packets += 1;
-}
-
-void GccEstimator::close_group(int64_t now_us) {
-    const Group group = open_group_;
-    open_group_ = Group{};
-    has_open_group_ = false;
-    if (group.received == 0) {
-        return;
-    }
-
-    const int64_t send_mean_us =
-        (group.first_send_us + group.last_send_us) / 2;
-    const int64_t arrival_mean_us =
-        group.arrival_sum_us / static_cast<int64_t>(group.received);
-
-    if (has_prev_group_) {
-        const double delta_ms =
-            static_cast<double>(arrival_mean_us - prev_arrival_mean_us_)
-            / 1000.0
-            - static_cast<double>(send_mean_us - prev_send_mean_us_) / 1000.0;
-        accumulated_delay_ms_ += delta_ms;
-        trendline_.push_back(accumulated_delay_ms_);
-        if (trendline_.size() > kTrendlineWindow) {
-            trendline_.pop_front();
-        }
-        trend_ms_ = trendline_slope_ms() * static_cast<double>(trendline_.size());
-
-        if (trend_ms_ > config_.overuse_threshold_ms) {
-            if (overuse_since_us_ == 0) {
-                overuse_since_us_ = now_us;
-            }
-            if (now_us - overuse_since_us_
-                > config_.overuse_time_ms * 1'000) {
-                // Overuse persists: multiplicative decrease, then re-arm so
-                // continued buildup keeps backing off every interval.
-                target_bps_ = std::clamp(
-                    static_cast<uint64_t>(
-                        static_cast<double>(target_bps_) * 0.85),
-                    config_.min_bps,
-                    config_.max_bps);
-                overusing_ = true;
-                overuse_since_us_ = now_us;
-                last_decrease_us_ = now_us;
-            }
-        } else if (trend_ms_ < -config_.overuse_threshold_ms) {
-            overusing_ = false;
-            overuse_since_us_ = 0;
-        } else {
-            overuse_since_us_ = 0;
-            if (!overusing_
-                && trendline_.size() >= kTrendlineWindow / 2) {
-                // Additive-ish increase: ~5% + 100 kbps per closed group,
-                // gated on a half-full trendline window so the estimator
-                // does not ramp on thin data.
-                const uint64_t step = std::max<uint64_t>(
-                    target_bps_ / 20,
-                    100'000);
-                target_bps_ = std::clamp(
-                    target_bps_ + step,
-                    config_.min_bps,
-                    config_.max_bps);
-                last_increase_us_ = now_us;
-            }
-        }
-
-        // Loss-based cap on top of the delay signal.
-        if (smoothed_loss_ > config_.loss_high_water) {
-            const double excess = smoothed_loss_ - config_.loss_high_water;
-            target_bps_ = std::clamp(
-                static_cast<uint64_t>(
-                    static_cast<double>(target_bps_) * (1.0 - 0.5 * excess)),
-                config_.min_bps,
-                config_.max_bps);
-        }
-    }
-
-    prev_arrival_mean_us_ = arrival_mean_us;
-    prev_send_mean_us_ = send_mean_us;
-    has_prev_group_ = true;
-}
-
-double GccEstimator::trendline_slope_ms() const {
-    const size_t n = trendline_.size();
-    if (n < 2) {
-        return 0.0;
-    }
-    double sum_x = 0, sum_y = 0, sum_xy = 0, sum_xx = 0;
-    for (size_t i = 0; i < n; ++i) {
-        const double x = static_cast<double>(i);
-        const double y = trendline_[i];
-        sum_x += x;
-        sum_y += y;
-        sum_xy += x * y;
-        sum_xx += x * x;
-    }
-    const double denom = static_cast<double>(n) * sum_xx - sum_x * sum_x;
-    if (denom == 0.0) {
-        return 0.0;
-    }
-    return (static_cast<double>(n) * sum_xy - sum_x * sum_y) / denom;
 }
 
 } // namespace mello::transport

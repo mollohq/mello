@@ -10,6 +10,7 @@
 #include <cstring>
 #include <mutex>
 #include <optional>
+#include <cctype>
 #include <string>
 #include <thread>
 #include <vector>
@@ -538,6 +539,36 @@ TEST_F(PeerRtpRolesTest, StreamOffersCarryNoUlpfec) {
         EXPECT_EQ(offer.find("FEC-FR"), std::string::npos) << offer;
         mello_peer_destroy(peer);
     }
+}
+
+// Streaming-quality stage 4: the host offers RFC 4588 RTX (PT 97, apt 96)
+// on its own SSRC, grouped with the media SSRC. The viewer does not offer it
+// (its receive session does not unwrap RTX yet).
+TEST_F(PeerRtpRolesTest, TheHostOfferCarriesRtxAndTheViewerOfferDoesNot) {
+    auto* host = mello_peer_create_for_role(nullptr, "host", MELLO_PEER_MEDIA_ROLE_STREAM_HOST);
+    ASSERT_NE(host, nullptr);
+    mello_peer_set_ice_servers(host, nullptr, 0);
+    const char* host_offer_ptr = mello_peer_create_offer(host);
+    ASSERT_NE(host_offer_ptr, nullptr);
+    std::string host_offer(host_offer_ptr);
+    // libdatachannel writes the encoding name as "RTX"; SDP names are case
+    // insensitive (RFC 4855 section 3).
+    for (auto& c : host_offer) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    EXPECT_NE(host_offer.find("a=rtpmap:97 rtx/90000"), std::string::npos) << host_offer;
+    EXPECT_NE(host_offer.find("a=fmtp:97 apt=96"), std::string::npos) << host_offer;
+    EXPECT_NE(host_offer.find("a=ssrc-group:fid "), std::string::npos) << host_offer;
+    mello_peer_destroy(host);
+
+    auto* viewer = mello_peer_create_for_role(nullptr, "viewer", MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER);
+    ASSERT_NE(viewer, nullptr);
+    mello_peer_set_ice_servers(viewer, nullptr, 0);
+    const char* viewer_offer_ptr = mello_peer_create_offer(viewer);
+    ASSERT_NE(viewer_offer_ptr, nullptr);
+    const std::string viewer_offer(viewer_offer_ptr);
+    EXPECT_EQ(viewer_offer.find("rtx"), std::string::npos) << viewer_offer;
+    mello_peer_destroy(viewer);
 }
 
 TEST_F(PeerRtpRolesTest, HostOfferViewerAnswerNegotiates) {

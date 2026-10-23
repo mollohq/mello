@@ -87,6 +87,7 @@ add_executable(mello_rtp_tests
     test_voice_rtp_timestamps.cpp
     test_voice_send_feedback.cpp
     test_twcc.cpp
+    test_send_controller.cpp
     test_ulpfec.cpp
 )
 
@@ -199,28 +200,3 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     gtest_discover_tests(mello_video_timing_spike_tests)
 endif()
 
-# Stage 4 spike: vendored goog_cc against the current estimator
-# (option MELLO_WEBRTC_GOOG_CC, cmake/webrtc-goog-cc.cmake). Own executable:
-# it replaces the global operator new to count heap per controller, and it
-# does not link the mello library. It compiles twcc.cpp for GccEstimator.
-if(MELLO_WEBRTC_GOOG_CC)
-    add_executable(mello_goog_cc_spike_tests
-        test_goog_cc_spike.cpp
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src/transport/twcc.cpp
-    )
-    set_target_properties(mello_goog_cc_spike_tests PROPERTIES CXX_STANDARD 20 CXX_STANDARD_REQUIRED ON)
-    target_link_libraries(mello_goog_cc_spike_tests PRIVATE
-        webrtc_goog_cc
-        GTest::gtest
-        GTest::gtest_main
-    )
-    target_include_directories(mello_goog_cc_spike_tests PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}/../src
-        ${CMAKE_CURRENT_SOURCE_DIR}/../cmake/webrtc-audio-processing/compat
-    )
-    if(WIN32)
-        # rtc_base headers include winsock2.h; windows.h must not pull winsock.h.
-        target_compile_definitions(mello_goog_cc_spike_tests PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
-    endif()
-    gtest_discover_tests(mello_goog_cc_spike_tests)
-endif()

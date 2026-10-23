@@ -5,6 +5,7 @@
 #include "ulpfec.hpp"
 #include "../util/log.hpp"
 
+#include <cctype>
 #include <chrono>
 #include <algorithm>
 #include <cstring>
@@ -23,6 +24,8 @@ namespace mello::transport {
 namespace {
 
 constexpr uint8_t kVideoPayloadType = 96;
+// RFC 4588 retransmission payload type offered by the stream host (apt 96).
+constexpr uint8_t kRtxPayloadType = 97;
 constexpr uint8_t kAudioPayloadType = 111;
 constexpr char kVideoMid[] = "video";
 constexpr char kAudioMid[] = "audio";
@@ -194,6 +197,34 @@ bool remote_media_supports_twcc(const rtc::Description::Media& media) {
     } catch (...) {
         return false;
     }
+}
+
+// The RTX payload type of the remote video media section: an `rtx/90000`
+// rtpmap whose fmtp carries apt=96. 0 when the remote did not answer RTX.
+uint8_t remote_media_rtx_payload_type(const rtc::Description::Media& media) {
+    try {
+        const std::string apt = "apt=" + std::to_string(kVideoPayloadType);
+        for (const int payload_type : media.payloadTypes()) {
+            const auto* map = media.rtpMap(payload_type);
+            if (map == nullptr || payload_type <= 0 || payload_type > 127) {
+                continue;
+            }
+            std::string format = map->format;
+            for (auto& c : format) {
+                c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+            }
+            if (format != "rtx") {
+                continue;
+            }
+            for (const auto& fmtp : map->fmtps) {
+                if (fmtp.find(apt) != std::string::npos) {
+                    return static_cast<uint8_t>(payload_type);
+                }
+            }
+        }
+    } catch (...) {
+    }
+    return 0;
 }
 
 // True when the remote video media section advertises the ULPFEC payload
@@ -517,6 +548,18 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
         const uint32_t ssrc = video_ssrc_ != 0 ? video_ssrc_ : generate_ssrc();
         const std::string cname = video_cname_.empty() ? generate_cname() : video_cname_;
         video.addSSRC(ssrc, cname, peer_id_, "video");
+        // RFC 4588 RTX on its own SSRC and payload type, so the SFU's
+        // duplicate window tells a retransmit from a late original. Only the
+        // sender offers it: the viewer's receive session does not unwrap
+        // RTX yet. An answer without it keeps the old retransmit (same SSRC
+        // and sequence).
+        if (video_rtx_ssrc_ != 0) {
+            video.addRtxCodec(kRtxPayloadType, kVideoPayloadType, 90'000);
+            video.addSSRC(video_rtx_ssrc_, cname, peer_id_, "video");
+            video.addAttribute(
+                "ssrc-group:FID " + std::to_string(ssrc) + " "
+                + std::to_string(video_rtx_ssrc_));
+        }
     }
     return video;
 }
@@ -842,6 +885,11 @@ void PeerConnectionImpl::try_start_video_pipeline(
     uint32_t sender_ssrc = 0;
     std::string sender_cname;
     uint64_t pacing_target_bps = 0;
+    uint64_t min_bitrate_bps = 0;
+    uint64_t start_bitrate_bps = 0;
+    uint64_t max_bitrate_bps = 0;
+    uint32_t rtx_ssrc = 0;
+    uint8_t rtx_payload_type = 0;
     uint32_t receive_target_bps = 0;
     {
         std::lock_guard<std::mutex> lock(mutex_);
@@ -861,6 +909,11 @@ void PeerConnectionImpl::try_start_video_pipeline(
             sender_ssrc = video_ssrc_;
             sender_cname = video_cname_;
             pacing_target_bps = pacing_target_bps_;
+            min_bitrate_bps = min_bitrate_bps_;
+            start_bitrate_bps = start_bitrate_bps_;
+            max_bitrate_bps = max_bitrate_bps_;
+            rtx_ssrc = video_rtx_ssrc_;
+            rtx_payload_type = rtx_payload_type_;
         } else if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
             receive_target_bps = receive_target_bps_;
         }
@@ -891,7 +944,13 @@ void PeerConnectionImpl::try_start_video_pipeline(
         config.cname = std::move(sender_cname);
         config.pacing_target_bps = pacing_target_bps;
         config.twcc_enabled = twcc_supported_;
-        config.fec_enabled = fec_supported_;
+        config.min_bps = min_bitrate_bps;
+        config.start_bps = start_bitrate_bps;
+        config.max_bps = max_bitrate_bps;
+        if (rtx_payload_type != 0) {
+            config.rtx_ssrc = rtx_ssrc;
+            config.rtx_payload_type = rtx_payload_type;
+        }
 
         const std::weak_ptr<PeerConnectionImpl> weak_self = weak_from_this();
         auto sender = std::make_unique<RtpVideoSender>(
@@ -1391,6 +1450,7 @@ void PeerConnectionImpl::setup_stream_offer_channels() {
 
     if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
         video_ssrc_ = generate_ssrc();
+        video_rtx_ssrc_ = generate_ssrc();
         video_cname_ = generate_cname();
         audio_ssrc_ = generate_ssrc();
         audio_cname_ = generate_cname();
@@ -1680,6 +1740,9 @@ bool PeerConnectionImpl::set_remote_description(const char* sdp, bool is_offer) 
             if (const auto* video = find_single_video_media(desc, error)) {
                 twcc_supported_ = remote_media_supports_twcc(*video);
                 fec_supported_ = remote_media_supports_fec(*video);
+                rtx_payload_type_ = role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST
+                    ? remote_media_rtx_payload_type(*video)
+                    : 0;
             }
         }
         return true;
@@ -2141,6 +2204,37 @@ bool PeerConnectionImpl::video_set_pacing_target(uint64_t bps) noexcept {
     return rtp_video_sender_->set_pacing_target_bps(bps);
 }
 
+bool PeerConnectionImpl::video_set_bitrate_limits(
+    uint64_t min_bps,
+    uint64_t start_bps,
+    uint64_t max_bps
+) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (max_bps == 0 || min_bps > max_bps) {
+        return false;
+    }
+    min_bitrate_bps_ = min_bps;
+    max_bitrate_bps_ = max_bps;
+    if (start_bps != 0) {
+        start_bitrate_bps_ = start_bps;
+    }
+    if (!rtp_video_sender_) {
+        return true;
+    }
+    return rtp_video_sender_->set_bitrate_limits(min_bps, max_bps);
+}
+
+bool PeerConnectionImpl::video_set_max_allocated(uint64_t bps) noexcept {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (bps == 0) {
+        return false;
+    }
+    if (!rtp_video_sender_) {
+        return true;
+    }
+    return rtp_video_sender_->set_max_allocated_bps(bps);
+}
+
 bool PeerConnectionImpl::video_set_receive_target(uint32_t bps) noexcept {
     std::lock_guard<std::mutex> lock(mutex_);
     receive_target_bps_ = bps;
@@ -2191,7 +2285,20 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_rtx_queue_dropped = tx.rtx_queue_dropped;
         stats->tx_twcc_reports = tx.twcc_reports;
         stats->tx_gcc_target_bps = tx.gcc_target_bps;
-        stats->tx_fec_packets_sent = tx.fec_packets_sent;
+        stats->tx_fec_packets_sent = 0;
+        stats->tx_pacing_rate_bps = tx.pacing_rate_bps;
+        stats->tx_rtx_bytes_sent = tx.rtx_bytes_sent;
+        stats->tx_probe_clusters_started = tx.probe_clusters_started;
+        stats->tx_probe_clusters_completed = tx.probe_clusters_completed;
+        stats->tx_padding_packets_sent = tx.padding_packets_sent;
+        stats->tx_send_pauses = tx.send_pauses;
+        stats->tx_idr_access_units_sent = tx.idr_access_units_sent;
+        stats->tx_last_idr_send_us = tx.last_idr_send_us;
+        stats->tx_max_idr_send_us = tx.max_idr_send_us;
+        stats->tx_rtx_queue_flushes = tx.rtx_queue_flushes;
+        stats->tx_reprobes = tx.reprobes;
+        stats->tx_send_paused = tx.send_paused ? 1 : 0;
+        stats->tx_rtx_negotiated = rtx_payload_type_ != 0 ? 1 : 0;
         stats->tx_active = 1;
     }
 

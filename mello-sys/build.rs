@@ -92,6 +92,9 @@ fn main() {
     // The stream viewer timeline (streaming-quality stage 3); before NetEQ,
     // whose rtc_base it uses.
     println!("cargo:rustc-link-lib=static=webrtc_video_timing");
+    // The goog_cc send-side controller of the stream sender (option
+    // MELLO_WEBRTC_GOOG_CC, on by default). Linked when cmake built it.
+    link_goog_cc(&lib_dir);
     println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
@@ -388,6 +391,9 @@ fn build_ios(manifest_dir: &str) {
     // The stream viewer timeline (streaming-quality stage 3); before NetEQ,
     // whose rtc_base it uses.
     println!("cargo:rustc-link-lib=static=webrtc_video_timing");
+    // The goog_cc send-side controller of the stream sender (option
+    // MELLO_WEBRTC_GOOG_CC, on by default). Linked when cmake built it.
+    link_goog_cc(&lib_dir);
     println!("cargo:rustc-link-lib=static=webrtc_neteq");
     println!("cargo:rustc-link-lib=static=webrtc_audio_processing");
 
@@ -576,4 +582,14 @@ fn copy_file_or_symlink(src: &Path, dst: &Path) -> std::io::Result<()> {
 
     let _ = std::fs::copy(src, dst)?;
     Ok(())
+}
+
+/// Links webrtc_goog_cc when libmello was built with MELLO_WEBRTC_GOOG_CC
+/// (streaming-quality stage 4). It depends on webrtc_neteq and
+/// webrtc_audio_processing, so it goes before them for single-pass linkers.
+fn link_goog_cc(lib_dir: &Path) {
+    let names = ["webrtc_goog_cc.lib", "libwebrtc_goog_cc.a"];
+    if names.iter().any(|name| lib_dir.join(name).exists()) {
+        println!("cargo:rustc-link-lib=static=webrtc_goog_cc");
+    }
 }

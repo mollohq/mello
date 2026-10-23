@@ -3,7 +3,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <deque>
-#include <mutex>
+#include <memory>
 #include <unordered_map>
 #include <vector>
 
@@ -13,12 +13,11 @@ namespace mello::transport {
 // native RTP stream path:
 //
 // - TwccSendStamper: stamps transport-wide sequence numbers into egress RTP
-//   (header extension, one-byte-header profile 0xBEDE) and records per-packet
-//   send times for later feedback processing.
+//   (header extension, one-byte-header profile 0xBEDE).
 // - parse_twcc_feedback: parses TWCC RTCP feedback (PT=205, FMT=15).
 // - TwccFeedbackGenerator: receiver-side feedback report builder.
-// - GccEstimator: delay-gradient (GCC-style) send-side bitrate estimator fed
-//   by parsed feedback.
+// - GoogCcController: WebRTC goog_cc fed by the send history and the parsed
+//   feedback.
 
 inline constexpr char kTwccExtensionUri[] =
     "http://www.ietf.org/id/draft-holmer-rmcat-transport-wide-cc-extensions-01";
@@ -27,26 +26,17 @@ inline constexpr int kTwccExtensionId = 3;
 class TwccSendStamper {
 public:
     // Stamps `packet` (marshaled RTP bytes) with the next transport-wide
-    // sequence number and records `send_time_us` for it. Re-stamping a
-    // packet that already carries our element (retransmit) overwrites the
-    // sequence in place. Returns false for non-RTP input.
-    bool stamp(std::vector<uint8_t>& packet, int64_t send_time_us);
+    // sequence number and returns it in `sequence`. Re-stamping a packet
+    // that already carries our element (retransmit) overwrites the sequence
+    // in place. Returns false for non-RTP input. The send history lives in
+    // GoogCcController. Pacing worker only.
+    bool stamp(std::vector<uint8_t>& packet, uint16_t& sequence);
 
-    // Last sequence assigned by stamp() (for tests and diagnostics).
+    // The sequence the next stamp() assigns.
     uint16_t next_sequence() const { return next_sequence_; }
 
-    // Send time recorded for a feedback-referenced sequence. False when the
-    // record was evicted or never existed.
-    bool send_time_for(uint16_t sequence, int64_t& out_us) const;
-
 private:
-    static constexpr size_t kMaxSendRecords = 2048;
-
-    // stamp() runs on the pacing worker; send_time_for() on the RTCP thread.
-    mutable std::mutex mutex_;
     uint16_t next_sequence_ = 0;
-    std::unordered_map<uint16_t, int64_t> send_times_;
-    std::deque<uint16_t> send_order_;
 };
 
 struct TwccPacketResult {
@@ -110,77 +100,88 @@ private:
     std::unordered_map<uint16_t, Arrival> pending_;
 };
 
-// Delay-gradient send-side estimator (simplified GCC): trendline over
-// packet-group delay deltas, threshold overuse detector, AIMD rate control.
-// Fed by TWCC feedback; emits a pacing/encoder target in bits per second.
-class GccEstimator {
+// One probe cluster that goog_cc asks the pacer to send: at least
+// `min_probes` packets and `min_bytes` bytes at `rate_bps`.
+struct SendProbeCluster {
+    int id = -1;
+    uint64_t rate_bps = 0;
+    int min_probes = 0;
+    uint64_t min_bytes = 0;
+};
+
+// One packet as the pacer sent it.
+struct SentPacketInfo {
+    uint16_t transport_sequence = 0;
+    int64_t send_time_us = 0;
+    // RTP bytes after the TWCC stamp. The controller adds the IP, UDP and
+    // SRTP overhead.
+    size_t rtp_bytes = 0;
+    // -1 when the packet is not part of a probe cluster.
+    int probe_cluster_id = -1;
+    int probe_min_probes = -1;
+    int probe_min_bytes = -1;
+};
+
+// The send-side congestion controller of the stream sender: WebRTC goog_cc
+// (M131, third_party/webrtc-goog-cc) behind its NetworkControllerInterface.
+// It keeps the send history (60 s, or 32768 packets, whichever is less),
+// turns TWCC feedback into TransportPacketsFeedback, and gives the target
+// rate, the pacing rate, the padding rate and the probe clusters.
+// Configuration: feedback_only (loss and round trip from TWCC), loss-based
+// v2 and the probe controller at their upstream defaults.
+//
+// Thread model: not thread safe. The pacing worker of RtpVideoSender owns it
+// and makes every call. Built only with MELLO_WEBRTC_GOOG_CC; without it
+// available() is false and the sender paces at its ceiling.
+class GoogCcController {
 public:
     struct Config {
+        uint64_t start_bps = 0;
         uint64_t min_bps = 300'000;
-        uint64_t max_bps = 12'000'000;
-        // Trend above this for longer than overuse_time_ms means overuse.
-        double overuse_threshold_ms = 12.5;
-        int64_t overuse_time_ms = 100;
-        // Loss fraction above this applies the loss-based cap.
-        double loss_high_water = 0.10;
-        double loss_low_water = 0.02;
+        uint64_t max_bps = 0;
     };
 
-    explicit GccEstimator(Config config, uint64_t initial_bps);
+    // True when this build of libmello carries goog_cc.
+    static bool available() noexcept;
 
-    // Feed one feedback-referenced packet. `send_time_us` may be -1 when the
-    // send record was evicted (packet is then ignored for delay). Lost
-    // packets (received=false) only count toward the loss rate.
-    void on_packet(
-        uint16_t sequence,
-        bool received,
-        int64_t send_time_us,
-        int64_t arrival_time_us
-    );
+    GoogCcController(Config config, int64_t now_us);
+    ~GoogCcController();
+    GoogCcController(const GoogCcController&) = delete;
+    GoogCcController& operator=(const GoogCcController&) = delete;
 
-    uint64_t target_bps() const { return target_bps_; }
+    void on_packet_sent(const SentPacketInfo& packet);
+    // One parsed report. `now_us` is the local time it arrived. Returns the
+    // number of packets of the report that matched the send history.
+    size_t on_feedback(const TwccFeedback& feedback, int64_t now_us);
+    // Every 25 ms. `pacer_queue_bytes`: media waiting in the pacer.
+    void on_process_interval(int64_t now_us, uint64_t pacer_queue_bytes);
+    // After a feedback outage: libwebrtc's route change. The estimators
+    // restart from the current target and the initial probes run again.
+    void on_route_change(int64_t now_us);
+    void set_bitrate_limits(int64_t now_us, uint64_t min_bps, uint64_t max_bps);
+    // The QualityController's allocation. A higher value than before makes
+    // goog_cc probe up to it (ProbeController::OnMaxTotalAllocatedBitrate).
+    void set_max_total_allocated(int64_t now_us, uint64_t bps);
 
-    // Test/diagnostic visibility.
-    double trend_ms() const { return trend_ms_; }
-    double loss_rate() const { return smoothed_loss_; }
+    uint64_t target_bps() const noexcept { return target_bps_; }
+    // The rate for the encoder: the target less the congestion window
+    // pushback.
+    uint64_t encoder_target_bps() const noexcept;
+    uint64_t pacing_bps() const noexcept { return pacing_bps_; }
+    uint64_t padding_bps() const noexcept { return padding_bps_; }
+    uint64_t bytes_in_flight() const noexcept { return in_flight_bytes_; }
+    std::vector<SendProbeCluster> take_probe_clusters();
 
 private:
-    struct Group {
-        int64_t first_send_us = 0;
-        int64_t last_send_us = 0;
-        int64_t arrival_sum_us = 0;
-        size_t received = 0;
-        size_t packets = 0;
-    };
+    struct Impl;
 
-    void close_group(int64_t now_us);
-    double trendline_slope_ms() const;
-
-    const Config config_;
-    uint64_t target_bps_;
-
-    Group open_group_{};
-    bool has_open_group_ = false;
-    bool has_prev_group_ = false;
-    int64_t prev_arrival_mean_us_ = 0;
-    int64_t prev_send_mean_us_ = 0;
-
-    // Accumulated delay change (WebRTC trendline input): the window stores
-    // the running sum so a sustained per-group delay growth shows up as a
-    // positive regression slope.
-    double accumulated_delay_ms_ = 0.0;
-    static constexpr size_t kTrendlineWindow = 20;
-    std::deque<double> trendline_;
-
-    double trend_ms_ = 0.0;
-    int64_t overuse_since_us_ = 0;
-    bool overusing_ = false;
-    int64_t last_decrease_us_ = 0;
-    int64_t last_increase_us_ = 0;
-
-    double smoothed_loss_ = 0.0;
-    uint64_t feedback_packets_seen_ = 0;
-    uint64_t feedback_packets_lost_ = 0;
+    std::unique_ptr<Impl> impl_;
+    uint64_t target_bps_ = 0;
+    double cwnd_reduce_ratio_ = 0.0;
+    uint64_t pacing_bps_ = 0;
+    uint64_t padding_bps_ = 0;
+    uint64_t in_flight_bytes_ = 0;
+    std::vector<SendProbeCluster> probes_;
 };
 
 } // namespace mello::transport

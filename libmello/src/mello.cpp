@@ -1066,6 +1066,42 @@ MelloResult mello_peer_video_set_pacing_target(
     }
 }
 
+MelloResult mello_peer_video_set_bitrate_limits(
+    MelloPeerConnection* peer,
+    uint64_t min_bps,
+    uint64_t start_bps,
+    uint64_t max_bps
+) {
+    if (!peer || max_bps == 0 || min_bps > max_bps) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_bitrate_limits(min_bps, start_bps, max_bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+MelloResult mello_peer_video_set_max_allocated(
+    MelloPeerConnection* peer,
+    uint64_t bps
+) {
+    if (!peer || bps == 0) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_max_allocated(bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
 MelloResult mello_peer_video_set_receive_target(
     MelloPeerConnection* peer,
     uint32_t bps

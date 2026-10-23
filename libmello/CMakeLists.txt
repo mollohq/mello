@@ -435,6 +435,15 @@ target_link_libraries(mello
         $<LINK_ONLY:webrtc_video_timing>
 )
 target_link_libraries(mello PUBLIC onnxruntime)
+# Streaming-quality stage 4: the goog_cc send-side controller of the stream
+# sender (cmake/webrtc-goog-cc.cmake builds the object library and the
+# overlay target). Without the option the stubs compile into libmello.
+if(MELLO_WEBRTC_GOOG_CC)
+    target_sources(mello PRIVATE $<TARGET_OBJECTS:mello_goog_cc>)
+    target_link_libraries(mello PUBLIC webrtc_goog_cc)
+else()
+    target_sources(mello PRIVATE src/transport/goog_cc_controller.cpp)
+endif()
 
 if(WIN32)
     target_link_libraries(mello PUBLIC
