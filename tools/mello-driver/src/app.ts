@@ -166,6 +166,8 @@ export type AppState = {
     header_note: string;
     tiles: { name: string; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
   };
+  /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
+  live_sessions: { game_name: string; member_names: string[]; since_min: number; index: number; octagons: number; with_avatar: number }[];
   /** The skeleton trio cells that show, 0 to 3. */
   skeleton_trio: number;
   /** The audio page of the settings. */
@@ -547,6 +549,21 @@ export class App {
   async events(): Promise<AppEvent[]> {
     const r = await fetch(`http://127.0.0.1:${this.statePort}/events`);
     return (await r.json()) as AppEvent[];
+  }
+
+  /**
+   * Feed the game sensor a start or an end for a catalogue game (`counter-strike-2`),
+   * through the real handler path. E2e builds only (`POST /fake-game`).
+   * `agoMin` moves a start into the past, so that the session is long enough
+   * for the ledger when it ends (2 min).
+   */
+  async fakeGame(action: "start" | "end", gameId: string, agoMin = 0): Promise<void> {
+    const r = await fetch(`http://127.0.0.1:${this.statePort}/fake-game`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, game_id: gameId, ago_min: agoMin }),
+    });
+    if (!r.ok) throw new DriverError(`${this.name}: fakeGame ${action} ${gameId} failed: HTTP ${r.status} ${await r.text()}`);
   }
 
   /** The controls on screen that declare accessible-enabled: false. */

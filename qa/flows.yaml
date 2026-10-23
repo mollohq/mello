@@ -476,6 +476,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-08
+    title: "A game in progress shows as a live card for the viewer and the crew, and becomes the session card at the end"
+    priority: P1
+    users: 1
+    harness: [a_live_session_for_the_viewer_shows_the_pip_and_since_n_min, two_crewmates_in_the_same_game_share_one_card, the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot, the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_once]
+    journeys: [qa/journeys/feed-live-session.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar

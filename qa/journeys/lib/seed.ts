@@ -331,3 +331,27 @@ export async function crewFeed(token: string, crewId: string): Promise<{ ms: num
   const feed = await rpc<any>(token, "crew_feed", { crew_id: crewId });
   return { ms: Date.now() - t0, feed };
 }
+
+/**
+ * Mark a seeded member as playing a game, through the `presence_update` RPC
+ * that the client's game sensor uses (`game`: name, id and `started_at`).
+ * `startedAgoMin` puts the start in the past. The server pushes the change to
+ * the crew. Pass `null` to clear the game.
+ */
+export async function setPlaying(
+  member: { token: string },
+  game: { catalogueId: string; name: string } | null,
+  startedAgoMin = 0,
+): Promise<void> {
+  const payload = game
+    ? {
+        status: "online",
+        game: {
+          game_name: game.name,
+          game_id: game.catalogueId,
+          started_at: new Date(Date.now() - startedAgoMin * 60_000).toISOString().replace(/\.\d{3}Z$/, "Z"),
+        },
+      }
+    : { clear_game: true };
+  await rpc(member.token, "presence_update", payload);
+}
