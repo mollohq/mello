@@ -14,7 +14,8 @@
 //! encoder allocation that the sender gives goog_cc.
 //!
 //! Rungs: the preset, then 60 to 30 fps, then 540p, 480p and 360p at 30 fps,
-//! judged in bits per pixel per frame. Down after 2 s under the rung's floor
+//! judged in bits per pixel per frame. The geometry rungs are off by default
+//! (`GEOMETRY_RUNGS_DEFAULT`) until the viewers handle a size change. Down after 2 s under the rung's floor
 //! (or 2 s of encoder overload), up after 15 s over the next rung's restore
 //! point, 10 s between two switches, and no wait before the first switch.
 //! The bitrate starts at 60 % of the preset and follows the inputs with the
@@ -47,6 +48,16 @@ const UP_DWELL: Duration = Duration::from_secs(15);
 const SWITCH_COOLDOWN: Duration = Duration::from_secs(10);
 /// The geometry rungs, at `LOW_FPS`.
 const GEOMETRY_HEIGHTS: [u32; 3] = [540, 480, 360];
+/// The geometry rungs are off by default: a viewer does not handle a size
+/// change yet. Its software decoder (OpenH264) copies the configured size
+/// out of a smaller decoded picture and crashes (the stage 4 gate, cpu lane,
+/// congested: exit 139 at the step to 540p), and its D3D11 present shows the
+/// smaller picture in a corner of the configured size. The encoder side
+/// (`mello_stream_set_resolution`) is in and tested. They come on when the
+/// viewer handles a new size; `MELLO_STREAM_GEOMETRY_RUNGS=1` turns them on
+/// for that work and the gate.
+pub const GEOMETRY_RUNGS_DEFAULT: bool = false;
+const GEOMETRY_RUNGS_ENV: &str = "MELLO_STREAM_GEOMETRY_RUNGS";
 const LOW_FPS: u32 = 30;
 
 /// The stage 2b coalescing rule (manager.rs before stage 4).
@@ -172,6 +183,26 @@ pub fn encode_size_for(source_w: u32, source_h: u32, preset_h: u32, fps: u32) ->
 }
 
 /// The rungs of a stream whose top rung is `width` x `height` at `fps`.
+/// The geometry rungs on or off: `MELLO_STREAM_GEOMETRY_RUNGS` (`1` or `0`),
+/// else `GEOMETRY_RUNGS_DEFAULT`.
+pub fn geometry_rungs_enabled() -> bool {
+    match std::env::var(GEOMETRY_RUNGS_ENV) {
+        Ok(v) if v == "1" => true,
+        Ok(v) if v == "0" => false,
+        _ => GEOMETRY_RUNGS_DEFAULT,
+    }
+}
+
+/// The rungs of a preset: `rungs_for`, without the geometry rungs when they
+/// are off.
+fn ladder(width: u32, height: u32, fps: u32, geometry: bool) -> Vec<Rung> {
+    let mut rungs = rungs_for(width, height, fps);
+    if !geometry {
+        rungs.retain(|r| r.width == width && r.height == height);
+    }
+    rungs
+}
+
 pub fn rungs_for(width: u32, height: u32, fps: u32) -> Vec<Rung> {
     let mut rungs = vec![Rung { width, height, fps }];
     if fps > LOW_FPS {
@@ -231,6 +262,8 @@ pub struct QualityController {
     preset_kbps: u32,
     rungs: Vec<Rung>,
     rung: usize,
+    /// The geometry rungs are in `rungs` (`geometry_rungs_enabled`).
+    geometry: bool,
     /// Encoder share of the goog_cc target, kbps.
     gcc_kbps: Option<u32>,
     remb_kbps: Option<u32>,
@@ -247,10 +280,12 @@ impl QualityController {
     /// `encode_size_for`), `fps` and `preset_kbps` the preset's.
     pub fn new(width: u32, height: u32, fps: u32, preset_kbps: u32) -> Self {
         let preset_kbps = preset_kbps.max(FLOOR_KBPS);
+        let geometry = geometry_rungs_enabled();
         Self {
             preset_kbps,
-            rungs: rungs_for(width, height, fps),
+            rungs: ladder(width, height, fps, geometry),
             rung: 0,
+            geometry,
             gcc_kbps: None,
             remb_kbps: None,
             overloaded: false,
@@ -260,6 +295,16 @@ impl QualityController {
             above_since: None,
             last_switch: None,
         }
+    }
+
+    /// Turns the geometry rungs on or off (tests; the default comes from
+    /// `geometry_rungs_enabled`).
+    pub fn with_geometry_rungs(mut self, on: bool) -> Self {
+        let top = self.rungs[0];
+        self.geometry = on;
+        self.rungs = ladder(top.width, top.height, top.fps, on);
+        self.rung = self.rung.min(self.rungs.len() - 1);
+        self
     }
 
     pub fn bitrate_kbps(&self) -> u32 {
@@ -324,7 +369,7 @@ impl QualityController {
             return None;
         }
         let before = self.rungs[self.rung];
-        self.rungs = rungs_for(width, height, top.fps);
+        self.rungs = ladder(width, height, top.fps, self.geometry);
         self.rung = self.rung.min(self.rungs.len() - 1);
         let after = self.rungs[self.rung];
         (after != before).then_some(after)
@@ -460,7 +505,10 @@ mod tests {
     use super::*;
 
     fn ultra(now: Instant) -> (QualityController, Instant) {
-        (QualityController::new(1920, 1080, 60, 8_000), now)
+        (
+            QualityController::new(1920, 1080, 60, 8_000).with_geometry_rungs(true),
+            now,
+        )
     }
 
     fn gcc_kbps(controller: &mut QualityController, kbps: u32) {
@@ -622,6 +670,28 @@ mod tests {
             .collect();
         assert_eq!(heights, vec![1080, 540, 480, 360]);
         assert_eq!(controller.rung().height, 360);
+    }
+
+    /// The default ladder (geometry rungs off) stops at 30 fps: a deep cap
+    /// keeps the preset size, so no viewer sees a size change.
+    #[test]
+    fn without_the_geometry_rungs_a_deep_cap_keeps_the_preset_size() {
+        let mut controller =
+            QualityController::new(1920, 1080, 60, 8_000).with_geometry_rungs(false);
+        assert_eq!(controller.rungs().len(), 2);
+        let updates = run(&mut controller, Instant::now(), 40, 600);
+        assert!(updates
+            .iter()
+            .filter_map(|u| u.rung)
+            .all(|r| r.width == 1920 && r.height == 1080));
+        assert_eq!(
+            controller.rung(),
+            Rung {
+                width: 1920,
+                height: 1080,
+                fps: 30
+            }
+        );
     }
 
     #[test]
