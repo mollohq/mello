@@ -39,7 +39,6 @@ using mello::transport::parse_twcc_feedback;
 
 constexpr int64_t kPacketBytes = 1'150;
 constexpr int64_t kOneWayUs = 10'000;
-constexpr int64_t kQueueLimitUs = 100'000;
 constexpr int64_t kFeedbackIntervalUs = 50'000;
 constexpr int64_t kProcessIntervalUs = 25'000;
 constexpr int64_t kFrameIntervalUs = 16'667;
@@ -54,6 +53,7 @@ struct LinkProfile {
     std::vector<std::pair<int64_t, int64_t>> capacity{{0, 20'000'000}};
     int64_t outage_start_us = -1;
     int64_t outage_end_us = -1;
+    int64_t queue_limit_us = 100'000;
 
     int64_t capacity_at(int64_t t) const {
         int64_t bps = capacity.front().second;
@@ -97,6 +97,13 @@ public:
         take_probes(0);
     }
 
+    // An IDR every `every_us` between `from_us` and `to_us` (the viewer's
+    // PLIs while it gates on loss).
+    void set_idr_requests(int64_t from_us, int64_t to_us, int64_t every_us) {
+        idr_from_us_ = from_us;
+        idr_to_us_ = to_us;
+        idr_every_us_ = every_us;
+    }
     // The most the encoder makes (the rung's bitrate). Default: the preset.
     void set_encoder_cap(uint64_t bps) { encoder_cap_bps_ = bps; }
     // Each hook runs once, at the first process interval at or after its
@@ -159,6 +166,11 @@ public:
                 continue;
             }
             if (next_frame == now) {
+                if (idr_every_us_ > 0 && now >= idr_from_us_ && now < idr_to_us_
+                    && now >= next_idr_us_) {
+                    idr_requested_ = true;
+                    next_idr_us_ = now + idr_every_us_;
+                }
                 encode_frame(frame_index == 0 || idr_requested_);
                 idr_requested_ = false;
                 ++frame_index;
@@ -294,7 +306,7 @@ private:
             return;
         }
         const int64_t start = std::max(now, link_free_);
-        if (start - now > kQueueLimitUs) {
+        if (start - now > link_.queue_limit_us) {
             ++result.lost_packets;
             ++sequence_;
             return;
@@ -383,6 +395,10 @@ private:
     int64_t first_unfed_ = -1;
     bool paused_ = false;
     bool idr_requested_ = false;
+    int64_t idr_from_us_ = 0;
+    int64_t idr_to_us_ = 0;
+    int64_t idr_every_us_ = 0;
+    int64_t next_idr_us_ = 0;
     int64_t next_keepalive_ = 0;
     int64_t pauses_ = 0;
 };
@@ -460,6 +476,36 @@ TEST(SendController, ACapAt60PercentIsReachedWithin2Seconds) {
     // It uses the cap: at least 70 % of it on average, not a collapse.
     EXPECT_GE(mean_in_cap, 0.7 * static_cast<double>(cap));
     EXPECT_LT(static_cast<double>(r.lost_packets), 0.05 * static_cast<double>(r.sent_packets));
+}
+
+// The gate's congested profile: a cap at 60 % with a 150 ms tail-drop queue,
+// and an IDR every second in the cap (the viewer's PLIs while stage 3 is not
+// in). The send rate must stay near the cap, not collapse.
+TEST(SendController, TheGateCapWithIdrsKeepsTheSendRateNearTheCap) {
+    REQUIRE_GOOG_CC();
+    LinkProfile link;
+    const int64_t cap = static_cast<int64_t>(kPreset) * 108 / 100 * 6 / 10;
+    link.capacity = {{0, 20'000'000}, {5'000'000, cap}, {25'000'000, 20'000'000}};
+    link.queue_limit_us = 150'000;
+    Simulation sim(link, kPreset, kPreset);
+    sim.set_idr_requests(5'000'000, 25'000'000, 1'000'000);
+    const Result r = sim.run(30'000'000);
+    uint64_t sum = 0;
+    uint64_t minimum = UINT64_MAX;
+    int count = 0;
+    for (const auto& s : r.samples) {
+        if (s.t_us >= 7'000'000 && s.t_us < 25'000'000) {
+            sum += s.sent_bps;
+            minimum = std::min(minimum, s.target_bps);
+            ++count;
+        }
+    }
+    const double mean = count ? static_cast<double>(sum) / count : 0.0;
+    std::printf("[send-controller] gate cap with IDRs: mean send in the cap %.0f kbps of %lld, lowest target %llu kbps, loss %.2f %%\n",
+                mean / 1000.0, static_cast<long long>(cap / 1000),
+                static_cast<unsigned long long>(minimum / 1000),
+                100.0 * static_cast<double>(r.lost_packets) / static_cast<double>(r.sent_packets));
+    EXPECT_GE(mean, 0.7 * static_cast<double>(cap));
 }
 
 // The spike's outage design: media stops after 1 s without feedback, and on
