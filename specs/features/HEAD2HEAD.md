@@ -222,7 +222,7 @@ The weekly recap (spec 19 section 3.5) has two belt sections. The recap job read
 
 ## 7. Pushes
 
-A belt move sends a push to the previous holder. A new member sends a push to the crew. Both use the push queue and sender of the weekly recap push. The delivery rules, quiet hours and collapse ids are in [push service spec 23, section 6.6](../../../mello-backlog/specs/23-PUSH-SERVICE.md).
+A belt move sends a push to the previous holder. A new member sends a push to the crew. Both use the push queue and sender of the weekly recap push. The delivery rules below are the contract; the Worker accepts the types `belt` and `crew_join` with the shape of a mention. Collapse ids are `belt-<crew>-<recipient>` and `join-<crew>-<day>`, with the ids shortened to 12 hex characters to stay under the 64 bytes that APNs allows.
 
 | Push | Trigger | Copy |
 |---|---|---|
