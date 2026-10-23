@@ -1075,6 +1075,7 @@ component GameArt inherits Rectangle {
     background: transparent;
 
     if card.game-has-icon: GameIcon {
+        x: 0px;
         game-id: card.game-id;
         short-name: card.game-monogram;
         runtime-icon: card.game-icon;
@@ -1937,9 +1938,9 @@ component LiveSessionCard inherits Rectangle {
             spacing: 10px;
             GameArt {
                 card: root.card;
-                size: 112px;
+                size: 84px;
                 art-width: root.width - 32px;
-                art-height: 112px;
+                art-height: 84px;
             }
             LiveSessionText { card: root.card; }
         }

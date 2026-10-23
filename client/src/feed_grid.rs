@@ -141,10 +141,21 @@ fn is_fixed(t: &str) -> bool {
 /// `start` is the first card of the grid: the live stream beside the feed takes
 /// two cards when exactly one stream is live (`stream-side-consumed`).
 pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
-    let Some(live) = cards.iter().position(|c| c.card_type == "live-session") else {
+    let lives: Vec<usize> = (0..cards.len())
+        .filter(|&i| cards[i].card_type == "live-session")
+        .collect();
+    let Some(&live) = lives.first() else {
         return arrange_core(cards, start);
     };
-    let rest: Vec<usize> = (0..cards.len()).filter(|&i| i != live).collect();
+    // The first game leads. More games are plain cells behind the first row.
+    let more = &lives[1..];
+    let place_more = |mut out: Vec<usize>| {
+        for (n, &i) in more.iter().enumerate() {
+            out.insert((start + 2 + n).min(out.len()), i);
+        }
+        out
+    };
+    let rest: Vec<usize> = (0..cards.len()).filter(|i| !lives.contains(i)).collect();
     let hero = rest.get(start).is_some_and(|&i| {
         cards[i].is_hero || (cards[i].card_type == "head2head" && cards[i].variant == "versus")
     });
@@ -156,7 +167,7 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
             .map(|j| rest[j])
             .collect();
         out.insert((start + 1).min(out.len()), live);
-        return out;
+        return place_more(out);
     }
     // The live session leads and the head2head card is the cell beside it.
     let mut seq = rest;
@@ -170,10 +181,12 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
         seq.insert(start + 1, id);
     }
     let infos: Vec<CardInfo> = seq.iter().map(|&i| cards[i].clone()).collect();
-    arrange_core(&infos, start)
-        .into_iter()
-        .map(|j| seq[j])
-        .collect()
+    place_more(
+        arrange_core(&infos, start)
+            .into_iter()
+            .map(|j| seq[j])
+            .collect(),
+    )
 }
 
 fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
@@ -415,6 +428,26 @@ mod tests {
         let cards = vec![card("game-session"), card("clip"), h2h("wide"), live()];
         let t = types(&cards, &arrange(&cards, 2));
         assert_eq!(t[2], "live-session", "{t:?}");
+    }
+
+    #[test]
+    fn a_second_game_is_a_cell_behind_the_first_row() {
+        let cards = vec![
+            h2h("cell"),
+            card("recent-games"),
+            card("game-session"),
+            live(),
+            live(),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(
+            &t[..4],
+            ["live-session", "head2head", "live-session", "recent-games"],
+            "{t:?}"
+        );
+        let again: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(arrange(&again, 0), (0..cards.len()).collect::<Vec<_>>());
     }
 
     #[test]

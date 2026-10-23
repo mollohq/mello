@@ -52,7 +52,9 @@ pub fn since_min(started_ms: i64, now_ms: i64) -> i64 {
 /// The text of the card: "since 12 min", "since 1 h 5 min".
 pub fn since_text(min: i64) -> String {
     let min = min.max(1);
-    if min >= 60 {
+    if min >= 60 && min % 60 == 0 {
+        format!("since {} h", min / 60)
+    } else if min >= 60 {
         format!("since {} h {} min", min / 60, min % 60)
     } else {
         format!("since {min} min")
@@ -248,5 +250,6 @@ mod tests {
         assert_eq!(since_text(0), "since 1 min");
         assert_eq!(since_text(12), "since 12 min");
         assert_eq!(since_text(65), "since 1 h 5 min");
+        assert_eq!(since_text(120), "since 2 h");
     }
 }
