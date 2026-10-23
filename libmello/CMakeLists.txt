@@ -312,6 +312,7 @@ if(WIN32)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/capture_dxgi.cpp
         src/video/capture_wgc.cpp
         src/video/capture_process.cpp
@@ -330,7 +331,6 @@ if(WIN32)
         src/video/capture_reference.cpp
         src/video/decoder_nvdec.cpp
         src/video/decoder_amf.cpp
-        src/video/decoder_d3d11va.cpp
         src/video/decoder_openh264.cpp
         src/video/openh264_dynload.cpp
     )
@@ -341,6 +341,7 @@ elseif(IOS)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/decoder_videotoolbox.mm
         src/video/process_enum_ios_stub.cpp
         src/video/window_thumbnail_ios_stub.cpp
@@ -349,6 +350,7 @@ elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/capture_screencapturekit.mm
         src/video/encoder_videotoolbox.mm
         src/video/decoder_videotoolbox.mm
@@ -359,6 +361,7 @@ else()
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
     )

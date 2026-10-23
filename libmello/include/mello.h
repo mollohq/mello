@@ -1131,9 +1131,47 @@ typedef struct MelloStreamStats {
     uint32_t source_width;
     uint32_t source_height;
     uint32_t source_size_changes;
+    /* ---- streaming-quality stage 3: the viewer receive timeline ----
+     * Filled by mello_stream_viewer_get_stats (with decoder_name); zero in
+     * the host stats. Appended fields: existing offsets unchanged. */
+    float    target_delay_ms;      /* jitter + p95 decode time + render delay, 1..150 ms */
+    float    current_delay_ms;     /* the delay frames get now; moves toward the target */
+    float    jitter_ms;            /* the jitter estimate alone */
+    float    decode_ms_p95;
+    float    decode_ms_mean;
+    float    present_lateness_ms;  /* present time minus render time, last frame */
+    uint64_t frames_released;      /* released for decode by the timeline */
+    uint64_t frames_late;          /* released after their decode deadline */
+    uint64_t frames_dropped_late;  /* never shown: a newer frame was due, or a key frame was awaited */
+    uint64_t frames_decoded;       /* rate = decode fps */
+    uint64_t frames_presented;
+    uint64_t decode_errors;
+    uint64_t keyframe_requests;    /* KeyframeNeeded decisions (PLIs after the 1 s cooldown) */
+    uint64_t loss_events;          /* a packet missed its repair deadline */
+    uint8_t  waiting_for_keyframe;
+    /* ---- end stage 3 ---- */
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
+
+/* ---- streaming-quality stage 3: the viewer receive timeline ---- */
+
+/** Take the video of a stream view from `peer`, its StreamViewer peer.
+ *  libmello then runs the viewer by itself: the peer's receive timeline
+ *  releases each frame for decode at the right time, the view's decode
+ *  thread decodes it into a 3-slot ring, and the view's present thread calls
+ *  the frame callbacks (native or CPU) at the frame's render time. The
+ *  caller polls no access unit, feeds no packet and calls no present. A new
+ *  video track of the peer (a renegotiation) is picked up by itself. The
+ *  view holds the peer weakly: destroying the peer first only stops the
+ *  video. Call it after mello_stream_start_viewer. */
+MELLO_API MelloResult mello_stream_viewer_attach_peer(MelloStreamView* view, MelloPeerConnection* peer);
+
+/** The viewer's statistics: decoder_name and the stage 3 fields of
+ *  MelloStreamStats; every other field is zero. Counters are monotonic. */
+MELLO_API void mello_stream_viewer_get_stats(MelloStreamView* view, MelloStreamStats* stats);
+
+/* ---- end stage 3 ---- */
 
 /* ---- Cursor ---- */
 

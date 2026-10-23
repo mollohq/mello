@@ -216,7 +216,10 @@ bool VTDecoder::create_session() {
     }
 }
 
-DecodeFeedResult VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+// VideoToolbox hands out a new CVPixelBuffer per frame; the viewer ring
+// retains it, so the output slot needs no texture of its own here.
+DecodeFeedResult VTDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) {
+    (void)slot;
     uint64_t generation_before = 0;
     {
         std::lock_guard<std::mutex> lock(frame_mutex_);

@@ -1807,6 +1807,52 @@ void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats) {
     }
 }
 
+/* ---- streaming-quality stage 3: the viewer receive timeline ---- */
+
+MelloResult mello_stream_viewer_attach_peer(MelloStreamView* view, MelloPeerConnection* peer) {
+    if (!view || !peer || !peer->impl) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        std::weak_ptr<mello::transport::PeerConnectionImpl> weak_peer = peer->impl;
+        view->video->attach_receive_timeline(
+            [weak_peer]() -> std::shared_ptr<mello::transport::VideoReceiveTimeline> {
+                const auto pc = weak_peer.lock();
+                return pc ? pc->video_receive_timeline() : nullptr;
+            });
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+void mello_stream_viewer_get_stats(MelloStreamView* view, MelloStreamStats* stats) {
+    if (!view || !stats) return;
+    try {
+        memset(stats, 0, sizeof(MelloStreamStats));
+        mello::video::ViewerStats vs{};
+        view->video->get_viewer_stats(vs);
+        strncpy(stats->decoder_name, vs.decoder_name.c_str(), sizeof(stats->decoder_name) - 1);
+        stats->target_delay_ms     = static_cast<float>(vs.timeline.target_delay_ms);
+        stats->current_delay_ms    = static_cast<float>(vs.timeline.current_delay_ms);
+        stats->jitter_ms           = static_cast<float>(vs.timeline.jitter_ms);
+        stats->decode_ms_p95       = static_cast<float>(vs.timeline.decode_ms_p95);
+        stats->decode_ms_mean      = static_cast<float>(vs.decode_ms_mean);
+        stats->present_lateness_ms = static_cast<float>(vs.present_lateness_ms);
+        stats->frames_released     = vs.timeline.frames_released;
+        stats->frames_late         = vs.timeline.frames_late;
+        stats->frames_dropped_late = vs.timeline.frames_dropped + vs.frames_dropped_present;
+        stats->frames_decoded      = vs.frames_decoded;
+        stats->frames_presented    = vs.frames_presented;
+        stats->decode_errors       = vs.decode_errors;
+        stats->keyframe_requests   = vs.timeline.keyframe_requests;
+        stats->loss_events         = vs.timeline.losses;
+        stats->waiting_for_keyframe = vs.timeline.keyframe_required ? 1 : 0;
+    } catch (...) {
+        memset(stats, 0, sizeof(MelloStreamStats));
+    }
+}
+
+/* ---- end stage 3 ---- */
+
 int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_size) {
     if (!host || !buf || buf_size <= 0) return 0;
     try {

@@ -3,7 +3,7 @@
 #include "capture_source.hpp"
 #include "encoder.hpp"
 #include "encoder_control.hpp"
-#include "decoder.hpp"
+#include "video_viewer.hpp"
 #include "cursor.hpp"
 #include <memory>
 #include <functional>
@@ -17,7 +17,6 @@
 
 #ifdef _WIN32
 #include "video_preprocessor.hpp"
-#include "staging_texture.hpp"
 #endif
 
 namespace mello::video {
@@ -184,24 +183,25 @@ public:
     /// system audio alongside video (ScreenCaptureKit). Valid until stop_host().
     CaptureSource* capture() const { return capture_.get(); }
 
-    // VIEWER SIDE
+    // VIEWER SIDE (streaming-quality stage 3). The work runs in
+    // ViewerPipeline (video_viewer.hpp): a decode thread fed by the viewer's
+    // receive timeline, a 3-slot ring and a present thread that calls the
+    // frame callbacks at each frame's render time.
     bool start_viewer(const PipelineConfig& config, FrameCallback on_frame);
     void stop_viewer();
+    /// Take frames from the receive timeline of the viewer's peer.
+    void attach_receive_timeline(ViewerPipeline::TimelineProvider provider);
+    /// Without a timeline: decode this access unit now, show it at once.
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
+    /// True when the present thread showed a frame since the last call. The
+    /// present thread calls the frame callbacks by itself.
     bool present_frame();
-    // Decode input backlog: compressed jobs waiting for the decode thread.
-    // This is what the viewer backlog guard (via FFI
-    // mello_stream_viewer_decode_queue_depth) and probe telemetry want.
-    size_t decode_queue_depth() const {
-        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
-        return decode_jobs_.size();
-    }
-    // Decoded frames waiting in the present ring (used by the present path).
-    size_t decoded_ring_depth() const {
-        std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
-        return decoded_ring_count_;
-    }
+    /// Access units fed without a timeline that wait for decode.
+    size_t decode_queue_depth() const;
+    /// Decoded frames waiting in the ring for their render time.
+    size_t decoded_ring_depth() const;
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
+    void get_viewer_stats(ViewerStats& out) const;
 
     // CURSOR
     /// The next cursor packet for the viewers, or false when there is nothing
@@ -240,14 +240,12 @@ private:
     // Every call into encoder_ that can run beside the encode path goes
     // through this: encode, cost tiers, bitrate, framerate, keyframes.
     EncoderControl                       encoder_control_;
-    std::unique_ptr<Decoder>             decoder_;
 #ifdef _WIN32
     std::unique_ptr<VideoPreprocessor>   preprocessor_;
-    std::unique_ptr<StagingTexture>      staging_;
 #endif
+    std::unique_ptr<ViewerPipeline>      viewer_;
 
     PacketCallback  packet_cb_;
-    FrameCallback   frame_cb_;
     NativeFrameCallback native_frame_cb_;
     PipelineConfig  config_{};
 
@@ -363,61 +361,6 @@ private:
     uint64_t next_emit_deadline_us_ = 0;
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
-    uint64_t viewer_start_time_ = 0;
-    // Written on the decode thread, read on others (stop_viewer, present
-    // debug dumps) — atomic.
-    std::atomic<uint64_t> frames_decoded_{0};
-    std::atomic<uint64_t> decode_errors_{0};
-
-    std::vector<uint8_t> rgba_buf_;
-
-    static constexpr size_t DECODED_RING_CAP = 3;
-    mutable std::mutex decoded_ring_mutex_;
-#ifdef _WIN32
-    std::array<ID3D11Texture2D*, DECODED_RING_CAP> decoded_ring_{};
-#elif defined(__APPLE__)
-    std::array<void*, DECODED_RING_CAP> decoded_ring_{}; // CVPixelBufferRef
-#endif
-    size_t decoded_ring_head_ = 0; // next write slot
-    size_t decoded_ring_tail_ = 0; // next read slot
-    size_t decoded_ring_count_ = 0;
-
-    // Async decode: feed_packet enqueues, decode_thread_ dequeues and runs
-    // decoder_->decode()/get_frame() — those may ONLY ever run on
-    // decode_thread_.
-    struct DecodeJob {
-        std::vector<uint8_t> bytes;
-        bool is_keyframe = false;
-    };
-    static constexpr size_t DECODE_QUEUE_CAP = 8;
-    mutable std::mutex decode_jobs_mutex_;
-    std::condition_variable decode_jobs_cv_;
-    std::deque<DecodeJob> decode_jobs_;
-    std::thread decode_thread_;
-    void decode_thread_func();
-
-    // Continuous jitter regulator: present immediately when the ring holds
-    // >= JITTER_TARGET frames (we are ahead), otherwise at frame cadence
-    // (~90% of the configured frame interval since the last present). No
-    // one-shot priming latch — underflow recovers without a stall.
-    static constexpr size_t JITTER_TARGET = 2;
-    uint64_t last_present_us_ = 0;
-
-    bool jitter_should_present(size_t depth, uint64_t now_us) const;
-
-    void push_decoded(
-#ifdef _WIN32
-        ID3D11Texture2D* frame
-#elif defined(__APPLE__)
-        void* frame
-#endif
-    );
-
-#ifdef _WIN32
-    ID3D11Texture2D* pop_decoded();
-#elif defined(__APPLE__)
-    void* pop_decoded();
-#endif
 };
 
 } // namespace mello::video

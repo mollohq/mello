@@ -16,6 +16,7 @@ add_executable(mello_tests
     test_send_adaptation.cpp
     test_vad.cpp
     test_video_pipeline.cpp
+    test_video_viewer.cpp
     test_stream_audio_pipeline.cpp
     test_d3d9ex_share.cpp
     test_hook_capture.cpp
