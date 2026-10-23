@@ -22,6 +22,11 @@
 #   scripts/e2e-head2head.sh --existing   # use the stack on NAKAMA_HOST:NAKAMA_PORT
 #                                         # (default 127.0.0.1:7350)
 #
+# The push test (belt moved, friend landed) serves a stub push Worker on the
+# host. The own stack posts to it through host.docker.internal. With --existing,
+# the stack needs PUSH_WORKER_URL and PUSH_WORKER_TOKEN as scripts/e2e.sh sets
+# them, and MELLO_E2E_PUSH_PORT must name the same port. Else that test skips.
+#
 # Local only. It never reads a remote URL, and --existing refuses a host that
 # is not loopback. The second test needs MELLO_ENABLE_DEV_FAULT=1 and
 # SFU_JWT_PRIVATE_KEY on the stack. The own stack sets both. With --existing,
@@ -64,6 +69,11 @@ else
     command -v openssl >/dev/null 2>&1 || { echo "openssl is needed for the throwaway SFU key" >&2; exit 1; }
     SFU_JWT_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)"
     export SFU_JWT_PRIVATE_KEY
+    # Nakama posts push requests to the stub Worker that the push test serves.
+    MELLO_E2E_PUSH_PORT="${MELLO_E2E_PUSH_PORT:-18787}"
+    PUSH_WORKER_URL="http://host.docker.internal:$MELLO_E2E_PUSH_PORT"
+    PUSH_WORKER_TOKEN="e2e-push-token"
+    export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
     export SFU_ENDPOINT_EU="ws://127.0.0.1:8080/ws"
     # Distinct container names and ports, so it lives next to the main stack.
     cat >"$TMP/override.yml" <<YML

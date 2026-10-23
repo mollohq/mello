@@ -10,6 +10,10 @@
 //! RPC (`MELLO_ENABLE_DEV_FAULT=1`, which the script sets on its own stack) to
 //! backdate voice joins and to generate the recap.
 //!
+//! A third test, `belt_and_join_pushes_reach_the_push_worker`, checks the belt
+//! moved push and the friend landed push against a stub push Worker (spec 23).
+//! It needs `MELLO_E2E_PUSH_PORT`, which the script sets. It takes a few seconds.
+//!
 //! The stack must serve THIS checkout's Nakama module, because the main
 //! checkout may not have `library_report`. Run it with:
 //!
@@ -24,7 +28,11 @@
 //! the tests wait it out rather than forcing a recompute. They run in
 //! parallel, so the total stays near 70 seconds.
 
+mod common;
+
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use common::{drain_sends, next_send_of_type, stub_push_worker};
 
 use mello_core::nakama::client::NakamaClient;
 use mello_core::Config;
@@ -655,5 +663,203 @@ fn session_titles_and_recap_belts_follow_the_activity_stats() {
 
         let _ = b.delete_account().await;
         let _ = a.delete_account().await;
+    });
+}
+
+/// The name a push shows for a user: the display name, else the username.
+fn push_name(u: &mello_core::events::User) -> String {
+    if u.display_name.is_empty() {
+        u.username.clone()
+    } else {
+        u.display_name.clone()
+    }
+}
+
+/// The belt moved push and the friend landed push (HEAD2HEAD section 8), against
+/// a live Nakama and a stub Worker.
+///
+/// 1. B takes the_carry from A with a second library report. A gets "<B> took
+///    The Carry from you. You hold <n>." B caused the move and gets nothing.
+/// 2. C joins the crew by invite code. A and B each get "<C> joined <crew>.
+///    Say hi." C gets nothing.
+///
+/// Quiet hours (no push before 09:00 or from 22:00 local) would make this test
+/// depend on the time of day. Every account first reports an offset that puts
+/// its clock at 12:00.
+#[test]
+fn belt_and_join_pushes_reach_the_push_worker() {
+    if std::env::var("MELLO_E2E").is_err() {
+        println!(
+            "SKIP belt_and_join_pushes_reach_the_push_worker: \
+             set MELLO_E2E=1 and run ./scripts/e2e-head2head.sh"
+        );
+        return;
+    }
+    let Some(port) = std::env::var("MELLO_E2E_PUSH_PORT")
+        .ok()
+        .and_then(|p| p.parse::<u16>().ok())
+    else {
+        println!(
+            "SKIP belt_and_join_pushes_reach_the_push_worker: \
+             run ./scripts/e2e-head2head.sh (push stub env unset)"
+        );
+        return;
+    };
+    let captured = stub_push_worker(port);
+
+    rt().block_on(async {
+        let mut a = NakamaClient::new(e2e_config());
+        let (user_a, _) = a
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("auth A");
+        let mut b = NakamaClient::new(e2e_config());
+        let (user_b, _) = b
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("auth B");
+        let mut c = NakamaClient::new(e2e_config());
+        let (user_c, _) = c
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("auth C");
+
+        let crew_name = format!("E2E Push {:x}", rand::random::<u32>());
+        let (crew, _) = a
+            .create_crew(&crew_name, "", true, None, &[])
+            .await
+            .expect("create_crew");
+        let code = a.create_invite_code(&crew.id).await.expect("invite code");
+        b.join_by_invite_code(&code).await.expect("B joins");
+
+        // The offset comes from game_session_end. A and B report one so their
+        // clocks read 12:00, then register a device.
+        let noon = tz_for_local_minute(12 * 60);
+        for client in [&a, &b] {
+            rpc_json(
+                client,
+                "game_session_end",
+                json!({
+                    "crew_id": crew.id, "game_name": "Shared Game", "duration_min": 1,
+                    "active_min": 1, "session_id": format!("e2e-{:x}", rand::random::<u64>()),
+                    "tz_offset_min": noon,
+                }),
+            )
+            .await;
+        }
+        a.register_push_token("a1a1a1a1", "ios", "sandbox")
+            .await
+            .expect("token A");
+        b.register_push_token("b2b2b2b2", "ios", "sandbox")
+            .await
+            .expect("token B");
+        c.register_push_token("c3c3c3c3", "ios", "sandbox")
+            .await
+            .expect("token C");
+        // The session trigger of the holders doc may recompute later. No title
+        // has a holder to lose yet, so it sends nothing. Drop anything that
+        // came before the move under test.
+        let _ = drain_sends(&captured, Duration::from_millis(500)).await;
+
+        // ---- belt moved ----
+        let games_a = json!({"games": [
+            game("steam-100", "Alpha", 300),
+            game("steam-1000", "Shared Game", 6000),
+        ]});
+        let games_b = |shared_min: i64| {
+            json!({"games": [
+                game("steam-200", "Beta", 600),
+                game("steam-1000", "Shared Game", shared_min),
+            ]})
+        };
+        rpc_json(&a, "library_report", games_a).await;
+        rpc_json(&b, "library_report", games_b(1200)).await;
+        let h2h = head2head_of(&a, &crew.id).await;
+        assert_eq!(
+            title(&h2h, "the_carry").expect("carry")["holder_user_id"],
+            user_a.id.as_str()
+        );
+        rpc_json(&b, "library_report", games_b(7200)).await;
+
+        let h2h = head2head_of(&a, &crew.id).await;
+        assert_eq!(
+            title(&h2h, "the_carry").expect("carry")["holder_user_id"],
+            user_b.id.as_str(),
+            "B took the_carry"
+        );
+        let held_by_a = h2h["titles"]
+            .as_array()
+            .expect("titles")
+            .iter()
+            .filter(|t| t["holder_user_id"] == user_a.id.as_str())
+            .count();
+
+        let got = next_send_of_type(&captured, "belt", "belt push to the previous holder").await;
+        let n = &got.body["notification"];
+        assert_eq!(n["crew_id"], crew.id.as_str());
+        assert_eq!(n["title"], crew_name.as_str());
+        assert_eq!(
+            n["body"],
+            format!(
+                "{} took The Carry from you. You hold {held_by_a}.",
+                push_name(&user_b)
+            )
+            .as_str()
+        );
+        assert!(
+            n["message_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("belt-")
+                && n["message_id"].as_str().unwrap_or_default().len() <= 64,
+            "collapse id: {}",
+            n["message_id"]
+        );
+        assert_eq!(
+            got.body["tokens"][0]["token"], "a1a1a1a1",
+            "to the previous holder"
+        );
+        let extra = drain_sends(&captured, Duration::from_millis(1500)).await;
+        assert!(
+            extra
+                .iter()
+                .all(|s| s.body["notification"]["type"] != "belt"),
+            "B caused the move and gets no belt push: {:?}",
+            extra.iter().map(|s| s.body.to_string()).collect::<Vec<_>>()
+        );
+
+        // ---- friend landed ----
+        c.join_by_invite_code(&code).await.expect("C joins");
+        let first = next_send_of_type(&captured, "crew_join", "join push").await;
+        let second = next_send_of_type(&captured, "crew_join", "join push").await;
+        let want = format!("{} joined {crew_name}. Say hi.", push_name(&user_c));
+        let mut tokens = Vec::new();
+        for s in [&first, &second] {
+            assert_eq!(s.body["notification"]["body"], want.as_str());
+            assert_eq!(s.body["notification"]["crew_id"], crew.id.as_str());
+            assert!(s.body["notification"]["message_id"]
+                .as_str()
+                .unwrap_or_default()
+                .starts_with("join-"));
+            tokens.push(
+                s.body["tokens"][0]["token"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            );
+        }
+        tokens.sort();
+        assert_eq!(tokens, ["a1a1a1a1", "b2b2b2b2"], "everyone but the joiner");
+        let extra = drain_sends(&captured, Duration::from_millis(1000)).await;
+        assert!(
+            extra
+                .iter()
+                .all(|s| s.body["tokens"][0]["token"] != "c3c3c3c3"),
+            "the joiner gets no push"
+        );
+
+        for client in [c, b, a] {
+            let _ = client.delete_account().await;
+        }
     });
 }
