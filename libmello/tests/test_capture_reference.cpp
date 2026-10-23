@@ -502,7 +502,7 @@ void run_geometry_change(bool soft, bool bitrate_step = false) {
     bool key_after = false;
     for (size_t i = before; i < keys.size(); ++i) key_after = key_after || keys[i];
     EXPECT_TRUE(key_after) << "no IDR after the size change";
-    // The GOP is 10 s: no periodic IDR in the first 20 frames but the first.
+    // The GOP is 4 s: no periodic IDR in the first 20 frames but the first.
     for (size_t i = 1; i < before; ++i) EXPECT_FALSE(keys[i]) << "IDR at frame " << i;
 }
 

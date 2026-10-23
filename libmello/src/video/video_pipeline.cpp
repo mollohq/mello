@@ -40,14 +40,16 @@ static constexpr const char* TAG = "video/pipeline";
 using mello::video::kMinEncodeWidth;
 using mello::video::kMinEncodeHeight;
 
-// GOP: 10 s at the preset frame rate (streaming-quality stage 4). The
-// viewer repairs a loss with NACK and asks for an IDR only on real loss, so
-// the periodic IDR (6 to 10 times a delta frame) goes from every 2 s to every
-// 10 s. IDRs on demand (join, PLI, a rung change) are unchanged.
+// GOP: 4 s at the preset frame rate (streaming-quality stage 4; 2 s before).
+// The plan's 10 s holds at 4 s: on the gate's mobile profile a 10 s GOP gave
+// a glass-to-glass p95 of 2455 and 2532 ms against 437 and 1061 ms at 4 s,
+// with the same number of IDRs (PLIs drive them there) and no better VMAF,
+// fps or freeze time. Measure 10 s again when the stage 3 viewer is in.
+// IDRs on demand (join, PLI, a rung change) are unchanged.
 // MELLO_STREAM_GOP_SECONDS (1 to 60) overrides it for the GOP measurement of
 // the streaming gate.
 static uint32_t keyframe_interval_for(uint32_t fps) {
-    uint32_t seconds = 10;
+    uint32_t seconds = 4;
 #ifdef _WIN32
     char buf[8] = {};
     const DWORD n = GetEnvironmentVariableA("MELLO_STREAM_GOP_SECONDS", buf, sizeof(buf));
