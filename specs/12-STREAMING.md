@@ -444,7 +444,15 @@ NVENC tries P4+ULL (Ultra Low Latency) first, then P1+ULL, then P1+LL. The effec
 
 Rate control is VBR with 1.25× max headroom. The VBV spans ~0.5 s of the max rate (floored at 4 frames of bits, `vbvInitialDelay = vbv/2`) so IDRs are not rate-starved. Bitrate reconfigures reuse the full init-time NVENC config (the driver does not merge sparse configs on re-init) and force an IDR only on down-steps > 25%. Texture registration is cached per NV12 ring slot so `nvEncRegisterResource` runs once per slot, not per frame. `repeatSPSPPS = 1` ensures every keyframe is self-contained.
 
-**Other encoder backends:** AMF (AMD), QSV/oneVPL (Intel), VideoToolbox (macOS) exist in the codebase but are less battle-tested than NVENC.
+**Other encoder backends (stage 4 parity):**
+
+| Backend | Configuration |
+|---|---|
+| AMF (AMD) | Level 5.1, VBV 0.5 s of the peak rate (`vbv_bits_for`, the NVENC rule) with the buffer half full at the start, VUI BT.709 limited range (optional properties: a driver without one keeps its default), `QueryOutput` polled up to 50 ms after each submit (one call returned nothing and the frame came out with the next one), frame rate changes in place, a geometry change with `ReInit`. |
+| QSV (Intel, oneVPL) | Level 5.1, VBV 0.5 s with half the buffer as the initial delay, VUI BT.709 limited range (`mfxExtVideoSignalInfo`). **Off unless `MELLO_ENABLE_QSV=1`**: it hands oneVPL a D3D11 texture as `MemId` with no frame allocator, and the texture height is not a multiple of 16 where `FrameInfo` says it is. It has never run on an Intel GPU; it stays out of the factory until an Intel box tests it, and an Intel-only host has no hardware encoder until then. |
+| VideoToolbox (macOS) | Level 5.1, the presentation time is the capture time (it was frame count / fps, wrong at 30 fps and after a dropped frame), `set_framerate` sets the expected frame rate. No geometry path yet. |
+
+AMF, QSV and VideoToolbox are compiled but untested on their hardware in the lab (AMD, Intel and Mac checks are Bob's).
 
 **Adaptive cost tiers.** Quality features that are free on a current GPU are not
 free on an older one, and the encode queue is two deep with newest-wins
@@ -516,7 +524,7 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 
 Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or DataChannel chunking.
 
-**FEC is off.** The stream offers carry no `ulpfec` payload type, and the SFU does not negotiate ULPFEC (mello-sfu 01-SFU.md §6.1). The stage 4 measurement decides if FEC comes back, end to end. Before, the host sent one parity packet per 10 media packets: no viewer received them (the SFU FEC track had no binding), and the parity plus RTP overhead (about 1.13×) was over the 1.08× pacing ceiling, so the AU queue overflowed. The sender and receiver FEC code stays; it runs only when an answer negotiates PT 127.
+**No FEC (streaming-quality stage 4 decision).** The stream offers carry no `ulpfec` payload type, the SFU does not negotiate ULPFEC (mello-sfu 01-SFU.md §6.1), and the host has no FEC generator. Repair is NACK (RTX when negotiated). FEC never reached a viewer: in the 2.1 baseline it cost 10.7 to 11.3 % of the host's bytes and recovered 0 packets, because the SFU's FEC track had no binding, and the SFU removed that leg in stage 2b. Keeping it needs an SFU FEC leg to the viewers and a measured gain on `home-wifi` and `mobile` over its 10 % uplink cost; the plan's default applies. The viewer's FEC recovery code (`rtp_video_receiver_session`, `ulpfec.*`) is stage 3's to remove; `ulpfec.*` goes with it.
 
 | Parameter | Value |
 |-----------|-------|
@@ -844,7 +852,7 @@ host's `stream_viewer_left` RPC run on their own tasks.
 | **Low** | 1280×720 | 30 | 2.5 Mbps |
 | **Potato** | 854×480 | 30 | 1.5 Mbps |
 
-Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution, and the quality controller moves the stream down and up the rungs under it (section 8.1.1). Preset `fec_n` fields remain in config for schema compatibility but are unused on the RTP path.
+Default is Medium. The host can select a preset before starting. The GPU preprocessor downscales capture to the preset's target resolution, and the quality controller moves the stream down and up the rungs under it (section 8.1.1).
 
 ### 8.1.1 The quality controller (streaming-quality stage 4)
 

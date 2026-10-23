@@ -29,7 +29,6 @@ impl QualityPreset {
                     Codec::H264 => 8_000,
                     Codec::Av1 => 5_000,
                 },
-                fec_n: 5,
             },
             Self::High => PresetParams {
                 width: 1920,
@@ -39,7 +38,6 @@ impl QualityPreset {
                     Codec::H264 => 4_500,
                     Codec::Av1 => 3_000,
                 },
-                fec_n: 5,
             },
             Self::Medium => PresetParams {
                 width: 1280,
@@ -49,7 +47,6 @@ impl QualityPreset {
                     Codec::H264 => 5_000,
                     Codec::Av1 => 2_500,
                 },
-                fec_n: 4,
             },
             Self::Low => PresetParams {
                 width: 1280,
@@ -59,14 +56,12 @@ impl QualityPreset {
                     Codec::H264 => 3_000,
                     Codec::Av1 => 1_500,
                 },
-                fec_n: 3,
             },
             Self::Potato => PresetParams {
                 width: 854,
                 height: 480,
                 fps: 30,
                 bitrate_kbps: 1_500,
-                fec_n: 3,
             },
         }
     }
@@ -78,7 +73,6 @@ pub struct PresetParams {
     pub height: u32,
     pub fps: u32,
     pub bitrate_kbps: u32,
-    pub fec_n: usize,
 }
 
 #[derive(Debug, Clone)]
@@ -89,7 +83,6 @@ pub struct StreamConfig {
     pub bitrate_kbps: u32,
     pub codec: Codec,
     pub preset: QualityPreset,
-    pub fec_n: usize,
     /// What is actually being captured, e.g. `process pid=1234`.
     ///
     /// Carried so host telemetry can state it. A stream that captures the wrong
@@ -168,7 +161,6 @@ impl StreamConfig {
             bitrate_kbps: p.bitrate_kbps,
             codec,
             preset,
-            fec_n: p.fec_n,
             capture_desc: String::new(),
         }
     }
@@ -261,11 +253,9 @@ mod tests {
         let ultra = QualityPreset::Ultra.params(Codec::H264);
         assert_eq!(ultra.bitrate_kbps, 8_000);
         assert_eq!(ultra.fps, 60);
-        assert_eq!(ultra.fec_n, 5);
 
         let potato = QualityPreset::Potato.params(Codec::H264);
         assert_eq!(potato.bitrate_kbps, 1_500);
-        assert_eq!(potato.fec_n, 3);
         assert_eq!(potato.width, 854);
     }
 

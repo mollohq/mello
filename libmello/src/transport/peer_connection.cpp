@@ -530,10 +530,9 @@ rtc::Description::Video PeerConnectionImpl::make_stream_video_description(
 ) const {
     rtc::Description::Video video(mid, direction);
     video.addH264Codec(kVideoPayloadType, kVideoFmtp);
-    // No ulpfec payload type: FEC is off until the stage 4 measurement
-    // (specs/12-STREAMING.md section 5). The SFU answered ulpfec, so the
-    // host sent 10 % parity that no viewer received and that overflowed the
-    // pacer. Without ulpfec in the answer, fec_supported_ stays false.
+    // No ulpfec payload type: the host sends no FEC (streaming-quality stage
+    // 4 decision, specs/12-STREAMING.md section 5). Repair is NACK, with RTX
+    // when the answer negotiates it.
     if (auto* map = video.rtpMap(kVideoPayloadType)) {
         map->addFeedback("nack");
         map->addFeedback("nack pli");
