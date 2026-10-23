@@ -547,6 +547,10 @@ fn run_profile(
     );
     put("tx_idr_aus", Some(hv.tx_idr_access_units_sent as f64));
     put(
+        "tx_idr_over_50ms",
+        Some(hv.tx_idr_access_units_over_50ms as f64),
+    );
+    put(
         "tx_rtx_pct",
         (hv.tx_rtp_wire_bytes_sent > 0)
             .then(|| 100.0 * hv.tx_rtx_bytes_sent as f64 / hv.tx_rtp_wire_bytes_sent as f64),

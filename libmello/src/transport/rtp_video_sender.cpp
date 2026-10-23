@@ -780,7 +780,10 @@ struct RtpVideoSender::State
     // Publishes the goog_cc encoder target: in the stats, and to Rust on the
     // first value and on a change over 1/32.
     void publish_target() noexcept {
-        if (!controller) {
+        // Before the first feedback the target is only goog_cc's start
+        // value: no information about the link, so the encoder keeps the
+        // stream manager's start value.
+        if (!controller || twcc_reports.load(std::memory_order_relaxed) == 0) {
             return;
         }
         const uint64_t target = controller->encoder_target_bps();
@@ -819,10 +822,22 @@ struct RtpVideoSender::State
             return;
         }
         if (limits_changed.exchange(false, std::memory_order_acq_rel)) {
-            controller->set_bitrate_limits(
-                now_us,
-                min_limit_bps.load(std::memory_order_relaxed),
-                max_limit_bps.load(std::memory_order_relaxed));
+            const uint64_t min_bps = min_limit_bps.load(std::memory_order_relaxed);
+            const uint64_t max_bps = max_limit_bps.load(std::memory_order_relaxed);
+            const uint64_t start_bps = start_limit_bps.load(std::memory_order_relaxed);
+            if (start_bps != 0 && twcc_reports.load(std::memory_order_relaxed) == 0) {
+                // No feedback yet: start goog_cc again at the stream's
+                // start value, so its start probes are relative to it.
+                controller_config.min_bps = min_bps;
+                controller_config.max_bps = max_bps;
+                controller_config.start_bps = start_bps;
+                controller = std::make_unique<GoogCcController>(controller_config, now_us);
+                probes.clear();
+                take_probes(now_us);
+                last_allocated_bps = max_bps;
+            } else {
+                controller->set_bitrate_limits(now_us, min_bps, max_bps);
+            }
         }
         if (allocation_changed.exchange(false, std::memory_order_acq_rel)) {
             const uint64_t allocation = max_allocated_bps.load(std::memory_order_relaxed);
@@ -1120,6 +1135,9 @@ struct RtpVideoSender::State
             idr_access_units_sent.fetch_add(1, std::memory_order_relaxed);
             last_idr_send_us.store(delay, std::memory_order_relaxed);
             update_max(max_idr_send_us, delay);
+            if (delay > 50'000) {
+                idr_over_50ms.fetch_add(1, std::memory_order_relaxed);
+            }
         }
     }
 
@@ -1409,6 +1427,7 @@ struct RtpVideoSender::State
     GoogCcController::Config controller_config;
     std::atomic<uint64_t> min_limit_bps{0};
     std::atomic<uint64_t> max_limit_bps{0};
+    std::atomic<uint64_t> start_limit_bps{0};
     std::atomic<bool> limits_changed{false};
     std::atomic<uint64_t> max_allocated_bps{0};
     std::atomic<bool> allocation_changed{false};
@@ -1463,6 +1482,7 @@ struct RtpVideoSender::State
     std::atomic<uint64_t> last_idr_send_us{0};
     std::atomic<uint64_t> max_idr_send_us{0};
     std::atomic<uint64_t> reprobes{0};
+    std::atomic<uint64_t> idr_over_50ms{0};
 };
 
 RtpVideoSender::RtpVideoSender(
@@ -1781,6 +1801,7 @@ bool RtpVideoSender::set_pacing_target_bps(
 
 bool RtpVideoSender::set_bitrate_limits(
     uint64_t min_bps,
+    uint64_t start_bps,
     uint64_t max_bps
 ) noexcept {
     const auto state = state_;
@@ -1790,6 +1811,7 @@ bool RtpVideoSender::set_bitrate_limits(
     }
     state->min_limit_bps.store(min_bps, std::memory_order_relaxed);
     state->max_limit_bps.store(max_bps, std::memory_order_relaxed);
+    state->start_limit_bps.store(start_bps, std::memory_order_relaxed);
     state->limits_changed.store(true, std::memory_order_release);
     state->wake();
     return true;
@@ -1860,6 +1882,7 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
     result.max_idr_send_us = load(state->max_idr_send_us);
     result.rtx_queue_flushes = load(state->rtx_queue_flushes);
     result.reprobes = load(state->reprobes);
+    result.idr_access_units_over_50ms = load(state->idr_over_50ms);
     return result;
 }
 

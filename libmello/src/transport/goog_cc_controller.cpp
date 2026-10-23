@@ -73,6 +73,8 @@ struct GoogCcController::Impl {
 
     std::deque<Record> history;
     int64_t newest_sequence = -1;
+    // Every record before this sequence is reported, or never will be.
+    int64_t scan_from = 0;
     uint64_t in_flight_bytes = 0;
 
     bool has_reference = false;
@@ -189,9 +191,15 @@ void GoogCcController::Impl::apply(GoogCcController& self, const webrtc::Network
     }
 }
 
+// M131's default congestion window is "QueueSize:350,MinBitrate:30000,
+// DropFrame:true": the target is not pushed back, and cwnd_reduce_ratio is
+// the share of frames the encoder side may drop while the window is full.
+// The encoder bitrate is the target; the sender's bounded queue drops frames
+// (and asks for an IDR) when the link does not take them. Multiplying the
+// target by (1 - ratio) took the encoder to the 300 kbps floor at every cap
+// (the first stage 4 gate run).
 uint64_t GoogCcController::encoder_target_bps() const noexcept {
-    return static_cast<uint64_t>(
-        static_cast<double>(target_bps_) * (1.0 - cwnd_reduce_ratio_));
+    return target_bps_;
 }
 
 void GoogCcController::on_packet_sent(const SentPacketInfo& packet) {
@@ -231,6 +239,25 @@ size_t GoogCcController::on_feedback(const TwccFeedback& feedback, int64_t now_u
     webrtc::TransportPacketsFeedback report;
     report.feedback_time = at_us(now_us);
     report.packet_feedbacks.reserve(feedback.packets.size());
+    if (!feedback.packets.empty()) {
+        const int64_t first = impl.unwrap_sequence(feedback.packets.front().sequence);
+        const int64_t from = impl.history.empty()
+            ? 0
+            : std::max<int64_t>(0, impl.scan_from - impl.history.front().sequence);
+        for (size_t i = static_cast<size_t>(from); i < impl.history.size(); ++i) {
+            Record& record = impl.history[i];
+            if (record.sequence >= first) {
+                break;
+            }
+            if (!record.reported) {
+                // A lost report: these packets are never reported. They
+                // leave the in-flight count, or it grows for 60 s.
+                record.reported = true;
+                impl.in_flight_bytes -= std::min<uint64_t>(impl.in_flight_bytes, record.bytes);
+            }
+        }
+        impl.scan_from = std::max(impl.scan_from, first);
+    }
     for (const auto& packet : feedback.packets) {
         Record* record = impl.find(impl.unwrap_sequence(packet.sequence));
         if (record == nullptr || record->reported) {

@@ -89,6 +89,8 @@ struct RtpVideoSenderStats {
     uint64_t idr_access_units_sent = 0;
     uint64_t last_idr_send_us = 0;
     uint64_t max_idr_send_us = 0;
+    // IDRs that took more than 50 ms (the stage 4 gate's bound).
+    uint64_t idr_access_units_over_50ms = 0;
     // Retransmit queue flushes on an IDR request (PLI or local IDR).
     uint64_t rtx_queue_flushes = 0;
     // Re-probes after an allocation raise (a rung step up).
@@ -137,7 +139,11 @@ public:
     // Zero is invalid because it would stop a non-empty packet batch forever.
     bool set_pacing_target_bps(uint64_t bitrate_bps) noexcept;
     // goog_cc limits (OnTargetRateConstraints). Applied on the worker.
-    bool set_bitrate_limits(uint64_t min_bps, uint64_t max_bps) noexcept;
+    // `start_bps` (0 = keep) restarts goog_cc at it while no feedback has
+    // come yet: the sender can open before the stream manager sends its
+    // limits, and its default start (60 % of the default ceiling) would
+    // else set the start probes and the first encoder target.
+    bool set_bitrate_limits(uint64_t min_bps, uint64_t start_bps, uint64_t max_bps) noexcept;
     // The encoder allocation (OnStreamsConfig max_total_allocated_bitrate).
     // A value over the previous one is a rung step up: the sender re-probes
     // (a route change at the current target, then the initial probes).

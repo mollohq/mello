@@ -100,6 +100,11 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         -1,
     ),
     ("tx_idr_aus", "IDR access units the host sent", 0),
+    (
+        "tx_idr_over_50ms",
+        "IDRs that took more than 50 ms to the wire",
+        -1,
+    ),
     ("tx_rtx_pct", "Host retransmit bytes / host bytes (%)", -1),
     (
         "tx_probe_clusters",

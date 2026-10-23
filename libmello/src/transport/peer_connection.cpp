@@ -2220,7 +2220,7 @@ bool PeerConnectionImpl::video_set_bitrate_limits(
     if (!rtp_video_sender_) {
         return true;
     }
-    return rtp_video_sender_->set_bitrate_limits(min_bps, max_bps);
+    return rtp_video_sender_->set_bitrate_limits(min_bps, start_bps, max_bps);
 }
 
 bool PeerConnectionImpl::video_set_max_allocated(uint64_t bps) noexcept {
@@ -2296,6 +2296,7 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_max_idr_send_us = tx.max_idr_send_us;
         stats->tx_rtx_queue_flushes = tx.rtx_queue_flushes;
         stats->tx_reprobes = tx.reprobes;
+        stats->tx_idr_access_units_over_50ms = tx.idr_access_units_over_50ms;
         stats->tx_send_paused = tx.send_paused ? 1 : 0;
         stats->tx_rtx_negotiated = rtx_payload_type_ != 0 ? 1 : 0;
         stats->tx_active = 1;

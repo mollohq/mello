@@ -553,6 +553,7 @@ typedef struct MelloRtpVideoStats {
     uint64_t tx_max_idr_send_us;
     uint64_t tx_rtx_queue_flushes;        /* retransmit queue dropped on an IDR request */
     uint64_t tx_reprobes;                 /* re-probes after an allocation raise */
+    uint64_t tx_idr_access_units_over_50ms; /* IDRs whose send took more than 50 ms */
     uint8_t tx_send_paused;
     uint8_t tx_rtx_negotiated;            /* RFC 4588 RTX on its own SSRC */
 } MelloRtpVideoStats;

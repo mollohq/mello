@@ -164,8 +164,8 @@ public:
     void set_max_total_allocated(int64_t now_us, uint64_t bps);
 
     uint64_t target_bps() const noexcept { return target_bps_; }
-    // The rate for the encoder: the target less the congestion window
-    // pushback.
+    // The rate for the encoder: the target. With M131's default congestion
+    // window (DropFrame) goog_cc does not push the target back.
     uint64_t encoder_target_bps() const noexcept;
     uint64_t pacing_bps() const noexcept { return pacing_bps_; }
     uint64_t padding_bps() const noexcept { return padding_bps_; }
