@@ -1231,9 +1231,9 @@ impl StreamManager {
                 self.apply_remb_aggregate(now).await;
             }
             SinkVideoFeedbackKind::GccTarget { .. } => {
-                // The host's local TWCC estimate for the host-to-SFU hop.
-                // libmello already applies it to RTP pacing. The SFU forwards
-                // the viewer-path capacity separately as REMB.
+                // The host's local TWCC estimate for the host-to-SFU hop. It
+                // sets neither the encoder nor the RTP pacing rate. The SFU
+                // forwards the viewer-path capacity separately as REMB.
             }
         }
     }
