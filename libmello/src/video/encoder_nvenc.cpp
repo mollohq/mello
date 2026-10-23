@@ -489,17 +489,18 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         NV_ENC_RECONFIGURE_PARAMS reconfig;
         memset(&reconfig, 0, sizeof(reconfig));
         reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+        // The initialize parameters as they were (codec, preset, tuning, PTD,
+        // async): a reconfigure with them zeroed re-initialized the session
+        // and gave an IDR on every bitrate change.
+        reconfig.reInitEncodeParams = init_params_;
         reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
         reconfig.reInitEncodeParams.encodeWidth  = config_.width;
         reconfig.reInitEncodeParams.encodeHeight = config_.height;
         reconfig.reInitEncodeParams.frameRateNum = config_.fps;
         reconfig.reInitEncodeParams.frameRateDen = 1;
         reconfig.reInitEncodeParams.encodeConfig = &enc_config;
-        // IDR only on large down-steps: congestion events can leave damaged
-        // reference chains, so a forced keyframe helps resync. Routine REMB
-        // adjustments must not keyframe-storm the stream.
-        const bool big_down_step = bitrate_step_forces_idr(config_.bitrate_kbps, kbps);
-        reconfig.forceIDR = big_down_step ? 1 : 0;
+        // No IDR on a bitrate change (encoder.hpp).
+        reconfig.forceIDR = 0;
 
         const NVENCSTATUS reconfig_status =
             fn_.nvEncReconfigureEncoder(encoder_, &reconfig);
@@ -508,12 +509,7 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
                 "NVENC: nvEncReconfigureEncoder failed: %d (bitrate=%ukbps)",
                 reconfig_status, kbps);
         } else {
-            if (big_down_step) {
-                force_idr_ = true;
-            }
-            MELLO_LOG_DEBUG(TAG,
-                "NVENC: reconfigured bitrate=%ukbps vbv=%u forceIDR=%d",
-                kbps, vbv, reconfig.forceIDR);
+            MELLO_LOG_DEBUG(TAG, "NVENC: reconfigured bitrate=%ukbps vbv=%u", kbps, vbv);
         }
     }
     config_.bitrate_kbps = kbps;
@@ -597,6 +593,7 @@ void NvencEncoder::set_framerate(uint32_t fps) {
     NV_ENC_RECONFIGURE_PARAMS reconfig;
     memset(&reconfig, 0, sizeof(reconfig));
     reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    reconfig.reInitEncodeParams = init_params_;
     reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
     reconfig.reInitEncodeParams.encodeWidth  = config_.width;
     reconfig.reInitEncodeParams.encodeHeight = config_.height;
@@ -656,6 +653,7 @@ bool NvencEncoder::reduce_cost_tier() {
     NV_ENC_RECONFIGURE_PARAMS reconfig;
     memset(&reconfig, 0, sizeof(reconfig));
     reconfig.version = NV_ENC_RECONFIGURE_PARAMS_VER;
+    reconfig.reInitEncodeParams = init_params_;
     reconfig.reInitEncodeParams.version = NV_ENC_INITIALIZE_PARAMS_VER;
     reconfig.reInitEncodeParams.encodeWidth  = config_.width;
     reconfig.reInitEncodeParams.encodeHeight = config_.height;

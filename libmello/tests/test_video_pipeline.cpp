@@ -832,18 +832,6 @@ TEST(EncoderControl, AnIdleEncoderTakesTheValueAtOnce) {
     EXPECT_EQ(encoder.rate_a.load(), 2500u);
 }
 
-// AMF and QSV forced an IDR on every bitrate change; NVENC only on a down-step
-// of more than 25 %. All three now share the rule.
-TEST(EncoderControl, OnlyALargeDownStepForcesAKeyframe) {
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 1100)) << "an up-step";
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 950)) << "a routine estimator step";
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 750)) << "exactly 25 %";
-    EXPECT_TRUE(bitrate_step_forces_idr(1000, 749));
-    EXPECT_TRUE(bitrate_step_forces_idr(8000, 2000));
-    EXPECT_FALSE(bitrate_step_forces_idr(0, 2000)) << "no previous bitrate";
-    EXPECT_TRUE(bitrate_step_forces_idr(4'000'000'000u, 1)) << "no overflow";
-}
-
 // ─────────────────────────────────────────────────────────────────────────────
 // NVDEC host copy. Before stage 2 the NV12 fallback buffer was w*h*3/2 and the
 // copy wrote w*coded_h*3/2 bytes: 1920 * 8 * 1.5 = 23040 bytes past the end at

@@ -352,12 +352,9 @@ void QsvEncoder::set_bitrate(uint32_t kbps) {
         if (sts != MFX_ERR_NONE) {
             MELLO_LOG_ERROR(TAG, "QSV: EncReset after bitrate change failed: %d (kbps=%u)", sts, kbps);
         } else {
-            // IDR only on a large down-step, as NVENC does. Every step was an
-            // IDR before, and the host steps the bitrate many times a second.
-            const bool idr = bitrate_step_forces_idr(config_.bitrate_kbps, kbps);
-            if (idr) force_idr_ = true;
-            MELLO_LOG_DEBUG(TAG, "QSV: reconfigured bitrate=%ukbps vbv=%uKB forceIDR=%d", kbps,
-                vbv_kb, idr ? 1 : 0);
+            // No IDR on a bitrate change (encoder.hpp).
+            MELLO_LOG_DEBUG(TAG, "QSV: reconfigured bitrate=%ukbps vbv=%uKB", kbps,
+                vbv_kb);
         }
     }
     config_.bitrate_kbps = kbps;

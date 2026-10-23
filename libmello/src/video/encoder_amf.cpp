@@ -399,12 +399,9 @@ void AmfEncoder::set_bitrate(uint32_t kbps) {
                 "AMF: bitrate reconfigure rejected (target=%d peak=%d vbv=%d kbps=%u)",
                 target_res, peak_res, vbv_res, kbps);
         } else {
-            // IDR only on a large down-step, as NVENC does. Every step was an
-            // IDR before, and the host steps the bitrate many times a second.
-            const bool idr = bitrate_step_forces_idr(config_.bitrate_kbps, kbps);
-            if (idr) force_idr_ = true;
-            MELLO_LOG_DEBUG(TAG, "AMF: reconfigured bitrate=%ukbps vbv=%lld forceIDR=%d",
-                kbps, static_cast<long long>(vbv_bits), idr ? 1 : 0);
+            // No IDR on a bitrate change (encoder.hpp).
+            MELLO_LOG_DEBUG(TAG, "AMF: reconfigured bitrate=%ukbps vbv=%lld",
+                kbps, static_cast<long long>(vbv_bits));
         }
     }
     config_.bitrate_kbps = kbps;

@@ -41,14 +41,13 @@ struct EncodePhaseTiming {
     double lock_ms = 0.0;
 };
 
-/// True when a bitrate change must force an IDR: a down-step of more than
-/// 25 %. Congestion can leave a damaged reference chain, and a keyframe
-/// resyncs it. A routine estimator step must not give a keyframe, or a ramp
-/// of small steps becomes a keyframe storm. Every backend uses this rule.
-inline bool bitrate_step_forces_idr(uint32_t from_kbps, uint32_t to_kbps) {
-    return from_kbps > 0 &&
-           static_cast<uint64_t>(to_kbps) * 4 < static_cast<uint64_t>(from_kbps) * 3;
-}
+// A bitrate change never forces an IDR (streaming-quality stage 4). Until
+// stage 4 a down-step of more than 25 % did, to resync a reference chain
+// that congestion could have broken. With goog_cc the target moves by more
+// than 25 % at every congestion event, and each IDR (6 to 10 times a delta
+// frame) then overloaded the link that had just shrunk: 55 IDRs in 30 s on
+// the gate's congested profile. A broken reference chain is the receiver's
+// to report (PLI), as in libwebrtc.
 
 /// The VBV of every backend, in bits: half a second of the peak rate (1.25 x
 /// the bitrate), at least four frames of the bitrate. A one-frame VBV starves

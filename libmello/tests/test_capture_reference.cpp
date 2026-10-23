@@ -408,7 +408,7 @@ TEST(ViewerSizeChange, TheHardwareDecoderShowsEachPictureWithItsAccessUnit) {
 // 4 the encode size was fixed for the whole stream.
 namespace {
 
-void run_geometry_change(bool soft) {
+void run_geometry_change(bool soft, bool bitrate_step = false) {
     const uint32_t w = 640, h = 480, frames = 60;
     const auto path = std::filesystem::temp_directory_path() / "mello_geometry_test.yuv";
     {
@@ -462,6 +462,27 @@ void run_geometry_change(bool soft) {
         std::lock_guard<std::mutex> lock(mu);
         before = keys.size();
     }
+    if (bitrate_step) {
+        // A 75 % down-step: the old rule forced an IDR on any step over 25 %.
+        host.set_bitrate(500);
+        const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        while (std::chrono::steady_clock::now() < until) {
+            {
+                std::lock_guard<std::mutex> lock(mu);
+                if (keys.size() >= before + 20) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+        host.stop_host();
+        set_env("MELLO_SOFT_ENCODER", nullptr);
+        std::filesystem::remove(path);
+        std::lock_guard<std::mutex> lock(mu);
+        ASSERT_GE(keys.size(), before + 20);
+        for (size_t i = before; i < keys.size(); ++i) {
+            EXPECT_FALSE(keys[i]) << "IDR after the bitrate step, frame " << i;
+        }
+        return;
+    }
     ASSERT_TRUE(host.set_encode_height(240));
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
     while (host.geometry_changes() == 0 && std::chrono::steady_clock::now() < deadline) {
@@ -496,5 +517,18 @@ TEST(ReferenceGeometry, ARungChangesTheEncodeSizeWithAnIdrOpenH264) {
 TEST(ReferenceGeometry, ARungChangesTheEncodeSizeWithAnIdrHardware) {
     if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
     run_geometry_change(false);
+}
+// Streaming-quality stage 4: a bitrate change never forces an IDR. A
+// down-step of more than 25 % did, and under goog_cc every congestion event
+// is one: 55 IDRs in 30 s on the gate's congested profile.
+TEST(ReferenceBitrate, ALargeDownStepGivesNoIdrOpenH264) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    if (!OpenH264Encoder::is_available()) GTEST_SKIP() << "OpenH264 DLL with encoder not found";
+    run_geometry_change(true, true);
+}
+
+TEST(ReferenceBitrate, ALargeDownStepGivesNoIdrHardware) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    run_geometry_change(false, true);
 }
 #endif
