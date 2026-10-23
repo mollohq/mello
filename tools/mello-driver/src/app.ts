@@ -167,7 +167,7 @@ export type AppState = {
     tiles: { name: string; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
   };
   /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
-  live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number }[];
+  live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
   /** The skeleton trio cells that show, 0 to 3. */
   skeleton_trio: number;
   /** The audio page of the settings. */

@@ -66,6 +66,26 @@ pub fn resolve_local_steam_art(ctx: &AppContext, game_id: &str) -> Option<slint:
     Some(img)
 }
 
+/// Local Steam poster art (the library hero, else the header) for a game id,
+/// for the wide live session card. Decoded and cached in memory. The file is
+/// read from the Steam cache on this disk. Nothing is fetched and nothing is
+/// uploaded.
+pub fn resolve_local_steam_poster(ctx: &AppContext, game_id: &str) -> Option<slint::Image> {
+    let key = format!("steam-poster:{game_id}");
+    if let Some(img) = ctx.game_icon_cache.borrow().get(&key) {
+        return Some(img.clone());
+    }
+    let path = mello_core::library::local_steam_poster(game_id)?;
+    let (rgba, w, h) = decode_scaled(&path, POSTER_MAX_WIDTH)?;
+    let img = crate::avatar::rgba_to_image(&rgba, w, h);
+    ctx.game_icon_cache.borrow_mut().insert(key, img.clone());
+    Some(img)
+}
+
+/// Widest decoded poster. The wide card is about 740 px at 1x, so this holds
+/// the art at 2x on a normal window.
+const POSTER_MAX_WIDTH: u32 = 1280;
+
 /// Widest decoded capsule. The tile draws it at 76 px, so this holds the art
 /// at 2x scale without keeping a full header in memory.
 const CAPSULE_MAX_WIDTH: u32 = 184;
@@ -73,22 +93,27 @@ const CAPSULE_MAX_WIDTH: u32 = 184;
 /// Decode a JPEG or PNG from the Steam cache to RGBA, shrunk to
 /// `CAPSULE_MAX_WIDTH` wide at most. `None` for an unreadable file.
 fn decode_capsule(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
+    decode_scaled(path, CAPSULE_MAX_WIDTH)
+}
+
+/// Decode an image to RGBA, shrunk to `max_width` wide at most.
+fn decode_scaled(path: &std::path::Path, max_width: u32) -> Option<(Vec<u8>, u32, u32)> {
     let decoded = image::open(path).ok()?.to_rgba8();
     let (w, h) = decoded.dimensions();
     if w == 0 || h == 0 {
         return None;
     }
-    if w <= CAPSULE_MAX_WIDTH {
+    if w <= max_width {
         return Some((decoded.into_raw(), w, h));
     }
-    let nh = ((h as u64 * CAPSULE_MAX_WIDTH as u64) / w as u64).max(1) as u32;
+    let nh = ((h as u64 * max_width as u64) / w as u64).max(1) as u32;
     let small = image::imageops::resize(
         &decoded,
-        CAPSULE_MAX_WIDTH,
+        max_width,
         nh,
         image::imageops::FilterType::Triangle,
     );
-    Some((small.into_raw(), CAPSULE_MAX_WIDTH, nh))
+    Some((small.into_raw(), max_width, nh))
 }
 
 /// Make sure a detected game has art, extracting the executable's own icon if

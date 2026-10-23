@@ -7,10 +7,14 @@
 //!
 //! - A voice clip never takes a wide slot (CLIPS 7.1, plans/next-gen-feed.md
 //!   section 2).
-//! - A live session (a game in progress) takes the wide slot of the first row,
-//!   and the head2head card sits beside it as the cell. When a hero leads the
-//!   feed (a versus card, a hero clip), the live session takes the first cell
-//!   of the side column. A live stream is above all of it.
+//! - A live session (a game in progress) with poster art takes the wide slot
+//!   of the first row, and the head2head card sits beside it as the cell. When
+//!   a hero leads the feed (a versus card, a hero clip), the live session takes
+//!   the first cell of the side column. A live stream is above all of it.
+//! - A live session without poster art is a plain cell. It never takes the
+//!   wide slot: the slot goes to the next card in the hero order (the wide
+//!   head2head card of a crew of one, else the card the grid leads with). The
+//!   cell sits beside the lead, in the first cell of the side column.
 //! - The recent games card is on the first screen for every crew size. In the
 //!   plain layout (head2head cell and invite card lead) it takes the wide slot
 //!   of the second row. Next to a hero or a wide head2head it takes the first
@@ -31,6 +35,8 @@ pub struct CardInfo {
     /// The head2head variant: "wide", "versus", "cell", "cell-full", "invite".
     pub variant: String,
     pub is_hero: bool,
+    /// A live session with poster art: the only live card for the wide slot.
+    pub has_poster: bool,
     /// A recap with content takes the side column alone.
     pub recap_has_content: bool,
 }
@@ -41,6 +47,7 @@ impl CardInfo {
             card_type: c.card_type.to_string(),
             variant: c.head2head.variant.to_string(),
             is_hero: c.is_hero,
+            has_poster: c.live.has_poster,
             recap_has_content: c.card_type == "recap"
                 && (c.leaderboard.row_count() > 0
                     || c.awards.row_count() > 0
@@ -77,7 +84,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         .unwrap_or("");
     let lead = match first {
         None => Lead::Hero,
-        Some(c) if c.card_type == "live-session" => Lead::Wide,
+        Some(c) if c.card_type == "live-session" && c.has_poster => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
         Some(_) if variant == "wide" => Lead::Wide,
@@ -144,18 +151,23 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
     let lives: Vec<usize> = (0..cards.len())
         .filter(|&i| cards[i].card_type == "live-session")
         .collect();
-    let Some(&live) = lives.first() else {
+    if lives.is_empty() {
         return arrange_core(cards, start);
+    }
+    let rest: Vec<usize> = (0..cards.len()).filter(|i| !lives.contains(i)).collect();
+    // The first game with poster art leads. Every other game is a plain cell.
+    let Some(&live) = lives.iter().find(|&&i| cards[i].has_poster) else {
+        return arrange_cells(cards, start, &rest, &lives);
     };
-    // The first game leads. More games are plain cells behind the first row.
-    let more = &lives[1..];
+    let more: Vec<usize> = lives.iter().copied().filter(|&i| i != live).collect();
+    let more = &more[..];
     let place_more = |mut out: Vec<usize>| {
         for (n, &i) in more.iter().enumerate() {
             out.insert((start + 2 + n).min(out.len()), i);
         }
+        clips_leave_wide(cards, &mut out, start);
         out
     };
-    let rest: Vec<usize> = (0..cards.len()).filter(|i| !lives.contains(i)).collect();
     let hero = rest.get(start).is_some_and(|&i| {
         cards[i].is_hero || (cards[i].card_type == "head2head" && cards[i].variant == "versus")
     });
@@ -187,6 +199,27 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
             .map(|j| seq[j])
             .collect(),
     )
+}
+
+/// No live session has poster art: they are all cells. The cards without them
+/// take the layout, so the wide slot goes to the next card in the hero order.
+/// The first cell sits beside the lead (behind a recap that holds the side
+/// column), the others follow it.
+fn arrange_cells(cards: &[CardInfo], start: usize, rest: &[usize], lives: &[usize]) -> Vec<usize> {
+    let infos: Vec<CardInfo> = rest.iter().map(|&i| cards[i].clone()).collect();
+    let mut out: Vec<usize> = arrange_core(&infos, start)
+        .into_iter()
+        .map(|j| rest[j])
+        .collect();
+    let side_recap = out
+        .get(start + 1)
+        .is_some_and(|&i| cards[i].card_type == "recap" && cards[i].recap_has_content);
+    let base = start + 1 + usize::from(side_recap);
+    for (n, &i) in lives.iter().enumerate() {
+        out.insert((base + n).min(out.len()), i);
+    }
+    clips_leave_wide(cards, &mut out, start);
+    out
 }
 
 fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
@@ -227,8 +260,16 @@ fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
         }
     }
 
-    // 2. A clip leaves every wide slot. Swap it with the nearest card that is
-    // not fixed, later cards first. With none, the clip stays.
+    clips_leave_wide(cards, &mut order, start);
+    order
+}
+
+/// A clip leaves every wide slot. Swap it with the nearest card that is not
+/// fixed, later cards first. With none, the clip stays.
+fn clips_leave_wide(cards: &[CardInfo], order: &mut [usize], start: usize) {
+    if order.len() <= start {
+        return;
+    }
     let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
     let l = layout(&infos, start);
     for w in wide_slots(&l, order.len()) {
@@ -248,7 +289,6 @@ fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
             order.swap(w, p);
         }
     }
-    order
 }
 
 /// Apply `arrange` to a card list.
@@ -384,7 +424,83 @@ mod tests {
     }
 
     fn live() -> CardInfo {
+        CardInfo {
+            has_poster: true,
+            ..card("live-session")
+        }
+    }
+
+    /// A live session without poster art.
+    fn live_cell() -> CardInfo {
         card("live-session")
+    }
+
+    #[test]
+    fn a_live_session_without_poster_is_a_cell_and_the_wide_head2head_keeps_the_slot() {
+        let cards = vec![
+            h2h("wide"),
+            card("recent-games"),
+            card("game-session"),
+            live_cell(),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(
+            &t[..3],
+            ["head2head", "live-session", "recent-games"],
+            "{t:?}"
+        );
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(wide_slots(&layout(&infos, 0), infos.len())[0], 0);
+        assert_eq!(infos[0].variant, "wide");
+    }
+
+    #[test]
+    fn a_live_session_without_poster_leaves_the_next_card_the_wide_slot() {
+        let cards = vec![
+            h2h("cell"),
+            card("invite"),
+            card("game-session"),
+            live_cell(),
+        ];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(&t[..3], ["head2head", "live-session", "invite"], "{t:?}");
+        let mut hero = card("recap");
+        hero.is_hero = true;
+        let cards = vec![hero, card("recent-games"), live_cell()];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(&t[..3], ["recap", "live-session", "recent-games"], "{t:?}");
+    }
+
+    #[test]
+    fn a_poster_game_leads_and_a_game_without_one_is_a_cell_behind_the_first_row() {
+        let cards = vec![h2h("cell"), card("recent-games"), live_cell(), live()];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert!(infos[0].has_poster, "{infos:?}");
+        assert_eq!(infos[1].card_type, "head2head");
+        assert!(infos[2..].iter().any(|c| c.card_type == "live-session"));
+        assert_eq!(arrange(&infos, 0), (0..cards.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn no_clip_sits_in_a_wide_slot_after_a_live_cell_moves_the_row() {
+        let cards = vec![
+            h2h("wide"),
+            card("recent-games"),
+            card("game-session"),
+            card("clip"),
+            card("clip"),
+            card("game-session"),
+            card("clip"),
+            card("game-session"),
+            live_cell(),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        for w in wide_slots(&layout(&infos, 0), infos.len()) {
+            assert_ne!(infos[w].card_type, "clip", "{infos:?}");
+        }
     }
 
     #[test]

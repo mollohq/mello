@@ -191,8 +191,22 @@ fn normalize(path: &str) -> String {
 
 // --------------------------------------------------------------------- Steam
 
+thread_local! {
+    static STEAM_ROOT_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Point the Steam art lookups of this thread at another root. For tests: a
+/// thread-local, so a parallel test never sees it. `None` clears it.
+pub fn set_steam_root_override(root: Option<PathBuf>) {
+    STEAM_ROOT_OVERRIDE.with(|r| *r.borrow_mut() = root);
+}
+
 /// Steam install root.
 fn steam_root() -> Option<PathBuf> {
+    if let Some(root) = STEAM_ROOT_OVERRIDE.with(|r| r.borrow().clone()) {
+        return Some(root);
+    }
     #[cfg(windows)]
     {
         use winreg::enums::HKEY_CURRENT_USER;
@@ -341,15 +355,20 @@ pub fn steam_header_art_in(root: &Path, appid: &str) -> Option<PathBuf> {
     if old.is_file() {
         return Some(old);
     }
-    let app_dir = cache.join(appid);
-    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(&app_dir)
+    named_art_in(&cache.join(appid), STEAM_ART_NAMES)
+}
+
+/// The first of `names` in an app's cache folder, or one level down in the
+/// hash-named folders (in name order). Names are tried in the order given.
+fn named_art_in(app_dir: &Path, names: &[&str]) -> Option<PathBuf> {
+    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(app_dir)
         .ok()?
         .flatten()
         .map(|e| e.path())
         .filter(|p| p.is_dir())
         .collect();
     subdirs.sort();
-    for name in STEAM_ART_NAMES {
+    for name in names {
         let direct = app_dir.join(name);
         if direct.is_file() {
             return Some(direct);
@@ -359,6 +378,34 @@ pub fn steam_header_art_in(root: &Path, appid: &str) -> Option<PathBuf> {
         }
     }
     None
+}
+
+/// Wide art for a poster: the library hero (1920 by 620) when Steam has it,
+/// else the header. Same rules and same privacy as `local_steam_art`: the
+/// disk only.
+pub fn local_steam_poster(game_id: &str) -> Option<PathBuf> {
+    let appid = game_id.strip_prefix("steam-")?;
+    steam_poster_in(&steam_root()?, appid)
+}
+
+/// The poster of an installed Steam app under a Steam root.
+pub fn steam_poster_in(root: &Path, appid: &str) -> Option<PathBuf> {
+    if appid.is_empty() || !appid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let app_dir = root.join("appcache").join("librarycache").join(appid);
+    // The portrait cover is not a poster: it is not landscape.
+    named_art_in(
+        &app_dir,
+        &["library_hero.jpg", "library_header.jpg", "header.jpg"],
+    )
+    .or_else(|| {
+        let old = root
+            .join("appcache")
+            .join("librarycache")
+            .join(format!("{appid}_header.jpg"));
+        old.is_file().then_some(old)
+    })
 }
 
 // ------------------------------------------------------- Steam local readers
@@ -1490,6 +1537,20 @@ mod tests {
         assert_eq!(steam_header_art_in(&root, "30"), Some(hashed));
         assert_eq!(steam_header_art_in(&root, "40"), Some(lib_header));
         assert_eq!(steam_header_art_in(&root, "50"), Some(portrait));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_poster_prefers_the_hero_and_skips_the_portrait() {
+        let root = art_fixture("poster");
+        put(&root, "7/header.jpg");
+        let hero = put(&root, "7/abc/library_hero.jpg");
+        put(&root, "8/library_600x900.jpg");
+        let header = put(&root, "9/header.jpg");
+        assert_eq!(steam_poster_in(&root, "7"), Some(hero));
+        assert_eq!(steam_poster_in(&root, "8"), None);
+        assert_eq!(steam_poster_in(&root, "9"), Some(header));
+        assert_eq!(steam_poster_in(&root, "../x"), None);
         let _ = std::fs::remove_dir_all(&root);
     }
 

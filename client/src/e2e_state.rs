@@ -306,6 +306,9 @@ struct LiveSessionSnap {
     /// The octagons drawn, and how many wear an avatar.
     octagons: usize,
     with_avatar: usize,
+    /// The card has local poster art and holds the wide slot. Without it the
+    /// card is a cell.
+    poster: bool,
 }
 
 /// The invite card of the feed. `present` is false when the feed has none.
@@ -1076,6 +1079,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 index,
                 octagons: c.live.players.row_count(),
                 with_avatar: c.live.players.iter().filter(|p| p.has_avatar).count(),
+                poster: c.live.has_poster,
             })
             .collect(),
         skeleton_trio: [

@@ -6906,6 +6906,124 @@ fn mate_plays(user: &str, game_id: &str, name: &str, ago_min: i64) -> Event {
     }
 }
 
+/// Local Steam poster art for a game installed on this device: a Steam cache
+/// in a temp folder with `library_hero.jpg`, the installed list that knows the
+/// game by name, and the art lookup of this thread pointed at the cache. The
+/// returned guard clears the lookup and the folder.
+struct PosterArt(std::path::PathBuf);
+
+impl Drop for PosterArt {
+    fn drop(&mut self) {
+        mello_core::library::set_steam_root_override(None);
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
+fn install_with_poster(h: &Harness, appid: &str, name: &str) -> PosterArt {
+    let root = std::env::temp_dir().join(format!(
+        "m3llo-poster-{}-{appid}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("appcache").join("librarycache").join(appid);
+    std::fs::create_dir_all(&dir).expect("poster dir");
+    let mut jpg = Vec::new();
+    let art = image::RgbImage::from_pixel(96, 31, image::Rgb([200, 120, 40]));
+    image::codecs::jpeg::JpegEncoder::new(&mut jpg)
+        .encode_image(&art)
+        .expect("encode the poster");
+    std::fs::write(dir.join("library_hero.jpg"), jpg).expect("poster file");
+    mello_core::library::set_steam_root_override(Some(root.clone()));
+    h.ctx()
+        .installed_games
+        .borrow_mut()
+        .push(mello_core::events::InstalledGameInfo {
+            game_id: format!("steam-{appid}"),
+            name: name.into(),
+            steam_hidden: false,
+        });
+    PosterArt(root)
+}
+
+fn solo_crew_feed(h: &mut Harness) {
+    app_with_crew_of(h, 1);
+    set_roster(h, &[("user-1", "Test User")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            1,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![],
+            None,
+        )]),
+    });
+}
+
+/// With poster art the live card takes the wide slot and shows the poster
+/// instead of the tile. The wide head2head card gives way to the cell.
+#[test]
+fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
+    let mut h = Harness::new();
+    solo_crew_feed(&mut h);
+    let _art = install_with_poster(&h, "291550", "Brawlhalla");
+    h.emit(game_detected(
+        "brawlhalla",
+        "Brawlhalla",
+        now_ms() - 12 * 60_000,
+    ));
+
+    let card = live_cards(&h).remove(0);
+    assert!(card.live.has_poster, "the card carries the poster");
+    assert_eq!(first_card(&h).card_type.as_str(), "live-session");
+    let el: Vec<ElementHandle> =
+        ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
+    assert_eq!(el.len(), 1);
+    assert!(el[0].size().width > 420.0, "the wide slot");
+    let (pos, size) = (el[0].absolute_position(), el[0].size());
+    let tiles = ElementHandle::find_by_element_type_name(h.app(), "GameArt")
+        .filter(|t| {
+            let p = t.absolute_position();
+            p.x >= pos.x && p.y >= pos.y && p.x < pos.x + size.width && p.y < pos.y + size.height
+        })
+        .count();
+    assert_eq!(tiles, 0, "the poster is the art, there is no tile");
+    assert_eq!(count_of(&h, "Head2headCardWide"), 0);
+    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    let texts = drawn_texts(&h);
+    for want in ["NOW PLAYING", "Brawlhalla", "since 12 min"] {
+        assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
+    }
+}
+
+/// Without poster art the live card is a cell, and the wide head2head card of a
+/// crew of one keeps the wide slot.
+#[test]
+fn a_live_session_without_poster_art_is_a_cell_and_head2head_keeps_the_wide_slot() {
+    let mut h = Harness::new();
+    solo_crew_feed(&mut h);
+    h.emit(game_detected(
+        "rocket-league",
+        "Rocket League",
+        now_ms() - 12 * 60_000,
+    ));
+
+    let card = live_cards(&h).remove(0);
+    assert!(!card.live.has_poster);
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "the wide card stays");
+    let el: Vec<ElementHandle> =
+        ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
+    assert_eq!(el.len(), 1);
+    assert!(el[0].size().width < 420.0, "a cell");
+    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
+    assert_eq!(cards[0].card_type.as_str(), "head2head");
+    assert_eq!(cards[1].card_type.as_str(), "live-session");
+}
+
 fn live_cards(h: &Harness) -> Vec<FeedCardData> {
     h.app()
         .get_feed_cards()
@@ -6951,10 +7069,12 @@ fn a_live_session_for_the_viewer_shows_the_pip_and_since_n_min() {
     let card = live_cards(&h).remove(0);
     assert_eq!(card.live.since_min, 12);
     assert_eq!(card.live.players.row_count(), 1);
+    let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
+    assert_eq!(cards[0].card_type.as_str(), "head2head");
     assert_eq!(
-        first_card(&h).card_type.as_str(),
+        cards[1].card_type.as_str(),
         "live-session",
-        "no hero leads, so it takes the first place"
+        "no poster art, so it is the cell beside the lead"
     );
 }
 
@@ -7045,7 +7165,7 @@ fn a_live_session_started_3_min_ago_is_on_the_feed() {
 /// session tile's size, in the wide slot and in a cell, and a card height that
 /// equals the side cell.
 #[test]
-fn the_live_card_has_the_session_tile_size_in_the_wide_slot_and_in_a_cell() {
+fn the_live_card_has_the_session_tile_size_in_a_cell_and_the_poster_in_the_wide_slot() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
@@ -7062,6 +7182,7 @@ fn the_live_card_has_the_session_tile_size_in_the_wide_slot_and_in_a_cell() {
             None,
         )]),
     });
+    let _art = install_with_poster(&h, "730", "Counter-Strike 2");
     h.emit(game_detected(
         "counter-strike-2",
         "Counter-Strike 2",
@@ -7083,7 +7204,7 @@ fn the_live_card_has_the_session_tile_size_in_the_wide_slot_and_in_a_cell() {
         cell.size().height,
         "the wide card is as high as the side cell"
     );
-    for card in [wide, cell] {
+    for (card, want) in [(wide, 0), (cell, 1)] {
         let (pos, size) = (card.absolute_position(), card.size());
         let tiles: Vec<ElementHandle> =
             ElementHandle::find_by_element_type_name(h.app(), "GameArt")
@@ -7095,14 +7216,21 @@ fn the_live_card_has_the_session_tile_size_in_the_wide_slot_and_in_a_cell() {
                         && p.y < pos.y + size.height
                 })
                 .collect();
-        assert_eq!(tiles.len(), 1, "one tile in the card");
-        assert_eq!(tiles[0].size().width, 40.0, "the session tile width");
-        assert_eq!(tiles[0].size().height, 40.0, "the session tile height");
+        // The wide card has the poster, so it has no tile.
+        assert_eq!(
+            tiles.len(),
+            want,
+            "the tile of the cell, none on the poster"
+        );
+        if want == 1 {
+            assert_eq!(tiles[0].size().width, 40.0, "the session tile width");
+            assert_eq!(tiles[0].size().height, 40.0, "the session tile height");
+        }
     }
 }
 
-/// A live session holds the wide slot, so the wide head2head card of a crew of
-/// one becomes the cell beside it. When the game ends the wide card is back.
+/// A live session with poster art holds the wide slot, so the wide head2head
+/// card of a crew of one becomes the cell beside it. When the game ends the wide card is back.
 #[test]
 fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() {
     let mut h = Harness::new();
@@ -7123,6 +7251,7 @@ fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() 
     });
     assert_eq!(count_of(&h, "Head2headCardWide"), 1);
 
+    let _art = install_with_poster(&h, "730", "Counter-Strike 2");
     h.emit(game_detected(
         "counter-strike-2",
         "Counter-Strike 2",

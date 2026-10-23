@@ -628,6 +628,14 @@ pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
                     .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
                     .map_or((slint::Image::default(), false), |img| (img, true))
             };
+            // Poster art for the wide slot: only a game installed on this
+            // device has it, and it never leaves the device.
+            let (poster, has_poster) = launcher_id
+                .iter()
+                .map(String::as_str)
+                .chain(std::iter::once(game_id.as_str()))
+                .find_map(|id| crate::game_icons::resolve_local_steam_poster(ctx, id))
+                .map_or((slint::Image::default(), false), |img| (img, true));
             FeedCardData {
                 id: format!(
                     "live-{}",
@@ -662,6 +670,8 @@ pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
                     .into(),
                     more_players: people.len().saturating_sub(LIVE_OCTAGONS) as i32,
                     players: Rc::new(VecModel::from(shown)).into(),
+                    poster,
+                    has_poster,
                 },
                 ..Default::default()
             }
@@ -676,12 +686,13 @@ fn live_signature(cards: &[FeedCardData]) -> Vec<String> {
         .iter()
         .map(|c| {
             format!(
-                "{}|{}|{}|{}|{}",
+                "{}|{}|{}|{}|{}|{}",
                 c.id,
                 c.live.since_text,
                 c.live.names_line,
                 c.live.players.iter().filter(|p| p.has_avatar).count(),
                 c.game_has_capsule || c.game_has_icon,
+                c.live.has_poster,
             )
         })
         .collect()

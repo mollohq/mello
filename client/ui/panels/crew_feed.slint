@@ -1879,12 +1879,13 @@ component LivePip inherits Rectangle {
 // Live session card: a game in progress (mockup cold-start frames 5 and 8).
 // The shape of the session card: the fixed game tile at the left, then the
 // name, the player octagons and "since N min". Red is only the pip of the
-// label. The wide slot keeps the tile and puts the name and the octagons on
-// one row.
+// label. With poster art in the wide slot the art fills the card instead.
 component LiveSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
-    property <bool> wide: root.width > 420px;
+    // The wide slot is only given to a card with poster art. Without it the
+    // card is a cell, whatever the width.
+    property <bool> poster-mode: card.live.has-poster && root.width > 420px;
 
     background: transparent;
     border-width: 0px;
@@ -1906,7 +1907,74 @@ component LiveSessionCard inherits Rectangle {
         fill: Theme.card-bg;
     }
 
-    VerticalLayout {
+    // Wide card with poster: the local Steam art keeps its colour. Chrome
+    // sits on black washes, as on the stream hero card (mockup next-gen-feed,
+    // stage D): the label on the top wash, the game and the players on the
+    // bottom one.
+    if root.poster-mode: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Image {
+            source: root.card.live.poster;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        Rectangle {
+            width: parent.width;
+            height: parent.height;
+            background: @linear-gradient(180deg,
+                #00000099 0%, #00000000 26%, #00000000 40%, #000000E6 100%);
+        }
+        CutMask { width: parent.width; height: parent.height; n: Theme.notch; corner: "br"; fill: Theme.bg-app; }
+
+        VerticalLayout {
+            padding: 14px;
+            spacing: 4px;
+
+            HorizontalLayout {
+                height: 16px;
+                spacing: 6px;
+                LivePip { }
+                Text {
+                    horizontal-stretch: 1;
+                    text: "NOW PLAYING";
+                    font-family: Theme.font-label;
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.on-media;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle { vertical-stretch: 1; }
+
+            LiveSessionName {
+                card: root.card;
+                font-size: 20px;
+                color: Theme.on-media;
+            }
+            HorizontalLayout {
+                spacing: 10px;
+                height: 20px;
+                LivePlayers { card: root.card; horizontal-stretch: 0; }
+                Text {
+                    horizontal-stretch: 1;
+                    text: root.card.live.since-text;
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    font-size: 12px;
+                    color: Theme.on-media;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    if !root.poster-mode: VerticalLayout {
         padding: 14px;
         spacing: 8px;
         alignment: start;
@@ -1929,7 +1997,7 @@ component LiveSessionCard inherits Rectangle {
 
         HorizontalLayout {
             spacing: 10px;
-            height: root.wide ? 44px : 58px;
+            height: 58px;
 
             Rectangle {
                 width: 40px;
@@ -1941,24 +2009,12 @@ component LiveSessionCard inherits Rectangle {
                 }
             }
 
-            if !root.wide: VerticalLayout {
+            VerticalLayout {
                 alignment: start;
                 spacing: 2px;
                 horizontal-stretch: 1;
                 LiveSessionName { card: root.card; }
                 LivePlayers { card: root.card; }
-                LiveSinceText { card: root.card; }
-            }
-
-            if root.wide: VerticalLayout {
-                alignment: center;
-                spacing: 4px;
-                horizontal-stretch: 1;
-                HorizontalLayout {
-                    spacing: 12px;
-                    LiveSessionName { card: root.card; horizontal-stretch: 1; }
-                    LivePlayers { card: root.card; horizontal-stretch: 0; }
-                }
                 LiveSinceText { card: root.card; }
             }
         }
@@ -2357,7 +2413,8 @@ export component CrewFeed inherits Rectangle {
         ? cards[feed-start-index].head2head.variant : "";
     property <bool> hero-is-full-row: hero-is-clip || lead-h2h == "versus";
     property <bool> lead-is-live: cards.length > feed-start-index
-        && cards[feed-start-index].card-type == "live-session";
+        && cards[feed-start-index].card-type == "live-session"
+        && cards[feed-start-index].live.has-poster;
     // A live session takes the wide slot as well as the wide head2head card.
     property <bool> lead-is-wide: lead-h2h == "wide" || lead-is-live;
     property <bool> lead-is-plain: lead-h2h == "cell" || lead-h2h == "cell-full"

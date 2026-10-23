@@ -205,6 +205,9 @@ export struct LiveSessionData {
     member-names: [string],
     players: [H2hPerson],
     more-players: int,
+    // Local poster art for the wide slot. A card without it is a cell.
+    poster: image,
+    has-poster: bool,
 }
 
 export struct FeedCardData {
