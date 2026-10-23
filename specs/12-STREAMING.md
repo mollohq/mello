@@ -664,7 +664,7 @@ the receiver session. `KeyframeNeeded` comes from:
 
 | Cause | Effect |
 |---|---|
-| A packet missed its repair deadline (`on_loss`) | One request. The frames before the gap still play; the chain waits at the gap (at least the 300 ms repair window). |
+| A packet missed its repair deadline (`on_loss`) | One request. The frames before the gap still play; the chain waits at the gap (at least the 300 ms repair window). A loss less than 1 s after a request, while the timeline still waits for that key frame, asks nothing more: the retry covers it. |
 | The decoder refused a frame | Delta frames are dropped until a key frame. |
 | A delta frame more than 1 s late | As above. |
 | The first frame is not a key frame | First request 50 ms after the first frame (reorder room). |

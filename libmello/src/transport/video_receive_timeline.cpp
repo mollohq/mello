@@ -206,9 +206,17 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             ++losses_;
+            // A key frame asked for less than one retry interval ago answers
+            // this loss too: the chain already waits for it. On a link that
+            // loses many packets, each loss would ask again.
+            const Timestamp now = clock_.CurrentTime();
+            const bool asked = waiting_for_keyframe_ && keyframe_requests_ > 0 &&
+                               now - last_request_ < TimeDelta::Micros(config_.keyframe_retry_us);
             waiting_for_keyframe_ = true;
-            request_pending_ = true;
-            pending_cause_ = "packet lost";
+            if (!asked) {
+                request_pending_ = true;
+                pending_cause_ = "packet lost";
+            }
             ++events_;
         }
         cv_.notify_all();

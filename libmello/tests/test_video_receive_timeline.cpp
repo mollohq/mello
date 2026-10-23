@@ -167,6 +167,31 @@ TEST(VideoReceiveTimeline, ALossAsksForOneKeyFrameAndTheDecodableFramesStillPlay
     EXPECT_FALSE(tl.keyframe_required());
 }
 
+// Stage 3: more losses while the timeline waits for the key frame it asked
+// for do not ask again; the retry interval does. On the congested profile
+// the timeline asked 333 times in 30 s for 20 PLIs on the wire.
+TEST(VideoReceiveTimeline, LossesWhileAKeyFrameIsAskedForDoNotAskAgain) {
+    SimClock clock;
+    VideoReceiveTimeline tl({}, clock.fn());
+    DecodeLoop loop{tl, clock};
+    tl.insert(frame(0, -1, 0, clock.now, true));
+    loop.run_until(clock.now + 50'000);
+    ASSERT_EQ(loop.released.size(), 1u);
+    // Frame 1 never comes; 2..5 reference it.
+    for (int i = 2; i < 6; ++i) tl.insert(frame(i, i - 1, i * kRtpPerFrame, clock.now, false));
+    tl.on_loss();
+    loop.run_until(clock.now + 100'000);
+    ASSERT_EQ(loop.keyframe_requests, 1);
+    for (int i = 0; i < 5; ++i) {
+        tl.on_loss();
+        loop.run_until(clock.now + 100'000);
+    }
+    EXPECT_EQ(loop.keyframe_requests, 1) << "five more losses in 0.5 s, no new request";
+    loop.run_until(clock.now + 600'000);
+    EXPECT_EQ(loop.keyframe_requests, 2) << "the retry after 1 s still comes";
+    EXPECT_EQ(tl.stats().losses, 6u);
+}
+
 TEST(VideoReceiveTimeline, ADecodeErrorDropsToTheNextKeyFrame) {
     SimClock clock;
     VideoReceiveTimeline tl({}, clock.fn());
