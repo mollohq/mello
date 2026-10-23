@@ -1,6 +1,7 @@
 #include "rtp_h264_receiver.hpp"
 
 #include <algorithm>
+#include <deque>
 #include <iterator>
 #include <limits>
 #include <map>
@@ -267,6 +268,11 @@ public:
         }
         if ((have_floor_ && sequence <= floor_) || lost_.count(sequence) != 0) {
             ++stats_.late_packets;
+            auto declared = lost_at_.find(sequence);
+            if (declared != lost_at_.end()) {
+                // It came after its deadline: the window was too short.
+                note_repair(now, declared->second.first + (now - declared->second.second));
+            }
             process_time(now);
             return;
         }
@@ -278,8 +284,11 @@ public:
             first_sequence_ = sequence;
         }
 
-        const bool repaired = missing_.erase(sequence) != 0;
-        if (repaired) {
+        bool repaired = false;
+        if (auto it = missing_.find(sequence); it != missing_.end()) {
+            repaired = true;
+            note_repair(now, now - it->second.expected);
+            missing_.erase(it);
             ++stats_.repaired_packets;
         }
         observe_sequence(sequence, now);
@@ -359,6 +368,38 @@ public:
 
     uint64_t accepted_packets() const { return stats_.accepted_packets; }
 
+    // A gap was filled `latency` after it was seen (a repair, a late
+    // original, or a packet that came after its deadline).
+    void note_repair(TimePoint now, std::chrono::steady_clock::duration latency) {
+        const auto us = std::chrono::duration_cast<std::chrono::microseconds>(latency);
+        repairs_.push_back({now, us});
+        while (!repairs_.empty() && now - repairs_.front().first > kRepairMemory) {
+            repairs_.pop_front();
+        }
+        while (repairs_.size() > 4096) repairs_.pop_front();
+    }
+
+    // The slowest repair of the last kRepairMemory. A mean or a percentile
+    // leaves the repairs of a lost last packet late: the receiver finds that
+    // gap only with the next frame, one frame interval after the others.
+    std::chrono::microseconds repair_latency() const {
+        std::chrono::microseconds slowest{0};
+        for (const auto& [at, us] : repairs_) {
+            if (last_time_ - at <= kRepairMemory) slowest = std::max(slowest, us);
+        }
+        return slowest;
+    }
+
+    std::chrono::microseconds repair_window(TimePoint now) const {
+        std::chrono::microseconds slowest{0};
+        for (const auto& [at, us] : repairs_) {
+            if (now - at <= kRepairMemory) slowest = std::max(slowest, us);
+        }
+        const auto window = std::chrono::microseconds(slowest.count() * 3 / 2);
+        return std::clamp<std::chrono::microseconds>(
+            std::max(window, 3 * rtt_), kMinRepairWindow, kMaxRepairWindow);
+    }
+
     Stats stats() const {
         Stats result = stats_;
         result.buffered_packets = buffered_packets_;
@@ -389,6 +430,10 @@ private:
 
     struct Missing {
         TimePoint first_detected{};
+        // When the packet would have come: the arrival of the packet before
+        // the gap. A lost last packet of a frame is found only with the next
+        // frame; a repair time from `first_detected` hides that interval.
+        TimePoint expected{};
         TimePoint last_nack{};
         size_t attempts = 0;
         size_t newer_packets = 0;
@@ -522,11 +567,16 @@ private:
             ++stats_.sequence_discontinuities;
             give_up_before(sequence, now, true);
         } else {
+            TimePoint expected = now;
+            if (auto before = packets_.find(highest_sequence_); before != packets_.end()) {
+                expected = std::min(expected, before->second.arrival);
+            }
             for (int64_t missing_sequence = highest_sequence_ + 1;
                  missing_sequence < sequence;
                  ++missing_sequence) {
                 Missing missing;
                 missing.first_detected = now;
+                missing.expected = expected;
                 missing.newer_packets = 1;
                 if (missing_.emplace(missing_sequence, missing).second) {
                     ++stats_.missing_sequences_detected;
@@ -541,6 +591,7 @@ private:
     void mark_missing(int64_t sequence, TimePoint now) {
         Missing missing;
         missing.first_detected = now;
+        missing.expected = now;
         if (missing_.emplace(sequence, missing).second) {
             ++stats_.missing_sequences_detected;
         }
@@ -795,18 +846,17 @@ private:
     // one RTT after the gap was seen.
     TimePoint compute_deadline(int64_t sequence, const Missing& missing) const {
         TimePoint deadline = missing.first_detected + rtt_ + kRepairMargin;
+        deadline = std::max(deadline, missing.first_detected + repair_window(last_time_));
         auto after = packets_.upper_bound(sequence);
         while (after != packets_.end() && after->second.padding) ++after;
         if (after == packets_.end()) {
-            return std::max(deadline, missing.first_detected + kDefaultRepairWindow);
+            return deadline;
         }
         const uint32_t ts = after->second.timestamp;
         std::optional<TimePoint> render;
         if (callbacks_.render_time) render = callbacks_.render_time(ts);
         if (render) {
             deadline = std::max(deadline, *render + rtt_);
-        } else {
-            deadline = std::max(deadline, missing.first_detected + kDefaultRepairWindow);
         }
         // Progress of that frame.
         TimePoint last = after->second.arrival;
@@ -859,10 +909,15 @@ private:
 
         if (!expired.empty()) {
             for (const int64_t sequence : expired) {
-                missing_.erase(sequence);
+                auto it = missing_.find(sequence);
+                if (it != missing_.end()) {
+                    lost_at_[sequence] = {now - it->second.expected, now};
+                    missing_.erase(it);
+                }
                 lost_.insert(sequence);
                 ++stats_.lost_packets;
             }
+            while (lost_at_.size() > 1024) lost_at_.erase(lost_at_.begin());
             // The access units next to a lost packet can never complete.
             for (const int64_t sequence : expired) {
                 drop_dead_around(sequence - 1);
@@ -1033,6 +1088,10 @@ private:
     std::set<int64_t> unemitted_;
     std::map<int64_t, Missing> missing_;
     std::set<int64_t> lost_;
+    // When a lost packet was given up, and how long it had waited then.
+    std::map<int64_t, std::pair<std::chrono::steady_clock::duration, TimePoint>> lost_at_;
+    // Repairs of the last kRepairMemory: (when, how long the gap lasted).
+    std::deque<std::pair<TimePoint, std::chrono::microseconds>> repairs_;
     size_t buffered_packets_ = 0;
     size_t buffered_bytes_ = 0;
 
@@ -1077,6 +1136,14 @@ void RtpH264Receiver::tick(TimePoint now) {
 
 void RtpH264Receiver::set_rtt(std::chrono::microseconds rtt) {
     impl_->set_rtt(rtt);
+}
+
+std::chrono::microseconds RtpH264Receiver::repair_latency() const {
+    return impl_->repair_latency();
+}
+
+std::chrono::microseconds RtpH264Receiver::repair_window(TimePoint now) const {
+    return impl_->repair_window(now);
 }
 
 bool RtpH264Receiver::keyframe_in_progress(TimePoint now) const {

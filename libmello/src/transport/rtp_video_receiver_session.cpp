@@ -1024,6 +1024,17 @@ struct RtpVideoReceiverSession::State
                         receiver->set_rtt(std::chrono::microseconds(rtt_us));
                     }
                 }
+                // The timeline's RTT is the time a repair takes on this
+                // link when that is longer than the ping (a repair crosses
+                // the viewer leg's jitter): its delay then leaves room for it.
+                {
+                    const int64_t repair_us = receiver->repair_latency().count();
+                    const int64_t want = std::max<int64_t>(rtt_us, repair_us);
+                    if (want > 0 && std::abs(want - timeline_rtt_us) > 2'000) {
+                        timeline_rtt_us = want;
+                        timeline->set_rtt_us(want);
+                    }
+                }
 
                 auto now = SteadyClock::now();
                 if (have_packet) {
@@ -1176,6 +1187,7 @@ struct RtpVideoReceiverSession::State
     std::atomic<bool> keyframe_requested{false};
     std::atomic<uint64_t> keyframe_requests_absorbed{0};
     uint32_t applied_rtt_us = 0;  // worker thread
+    int64_t timeline_rtt_us = 0;  // worker thread
 
     // pop_access_unit (the pull API of the tests and tools): a frame that did
     // not fit the caller's buffer waits here for the next call.

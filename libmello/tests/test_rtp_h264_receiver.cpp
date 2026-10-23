@@ -367,27 +367,65 @@ TEST_F(RtpH264ReceiverTest, ACompleteAccessUnitLeavesBeforeAnOlderIncompleteOne)
 }
 
 // Stage 3: NACK repeats every max(RTT, 10 ms) until the repair deadline
-// (render time of the frame after the gap plus one RTT), not twice.
+// (render time of the frame after the gap plus one RTT, and not before the
+// repair window has passed since the gap was seen), not twice.
 TEST_F(RtpH264ReceiverTest, NacksEveryRttUntilTheRepairDeadline) {
     receiver.set_rtt(20ms);
-    render_offset_ms = 100;  // the frame after the gap renders at 1500/90 + 100 = 116 ms
+    render_offset_ms = 400;  // the frame after the gap renders at 1500/90 + 400 = 416 ms
     unlock();
     deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
     deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
-    for (int t = 5; t <= 200; ++t) {
+    for (int t = 5; t <= 500; ++t) {
         receiver.tick(at(t));
     }
     // First NACK at 7 ms (reorder grace), then every 20 ms until the
-    // deadline 116 + 20 = 136 ms: 7, 27, ..., 127 = 7 NACKs.
-    EXPECT_EQ(nacks.size(), 7u);
+    // deadline 416 + 20 = 436 ms: 7, 27, ..., 427 = 22 NACKs.
+    EXPECT_EQ(nacks.size(), 22u);
     for (const auto& n : nacks) EXPECT_EQ(n, std::vector<uint16_t>({12}));
     ASSERT_EQ(losses.size(), 1u) << "a packet past its deadline is lost for real, once";
     EXPECT_EQ(losses[0], 12);
     EXPECT_EQ(receiver.stats().lost_packets, 1u);
     // Its access unit is given up; a late copy is ignored.
-    deliver(receiver, make_rtp(12, 1500, false, {0x61, 0x12}), at(210));
+    deliver(receiver, make_rtp(12, 1500, false, {0x61, 0x12}), at(510));
     EXPECT_EQ(units.size(), 1u);
     EXPECT_EQ(receiver.stats().late_packets, 1u);
+}
+
+// Stage 3: the repair window follows the repairs the link needs. A packet
+// that came 400 ms after its gap (after its deadline) makes the next window
+// 1.5 x 400 = 600 ms. The receiver before had one fixed deadline, so on a
+// link with jitter spikes every late repair was a loss and a key frame.
+TEST_F(RtpH264ReceiverTest, ASlowRepairWidensTheRepairWindow) {
+    receiver.set_rtt(20ms);
+    render_offset_ms = 0;
+    unlock();
+    EXPECT_EQ(receiver.repair_window(at(4)), 300ms) << "the minimum window";
+    deliver(receiver, make_rtp(11, 1500, true, {0x61, 0x91}), at(4));
+    deliver(receiver, make_rtp(13, 4500, true, {0x61, 0x93}), at(4));
+    for (int t = 5; t <= 303; ++t) receiver.tick(at(t));
+    EXPECT_TRUE(losses.empty()) << "the gap seen at 4 ms has until 304 ms";
+    for (int t = 304; t <= 310; ++t) receiver.tick(at(t));
+    ASSERT_EQ(losses.size(), 1u);
+    // The original comes at 404 ms: 400 ms after the gap was seen.
+    deliver(receiver, make_rtp(12, 3000, true, {0x61, 0x92}), at(404));
+    EXPECT_EQ(receiver.repair_window(at(404)), 600ms);
+
+    // The next gap (seq 15) is seen at 500 ms and is kept until 1100 ms.
+    deliver(receiver, make_rtp(14, 6000, true, {0x61, 0x94}), at(500));
+    deliver(receiver, make_rtp(16, 9000, true, {0x61, 0x96}), at(500));
+    for (int t = 501; t <= 1049; ++t) receiver.tick(at(t));
+    EXPECT_EQ(losses.size(), 1u) << "the wider window still waits for the repair";
+    deliver(receiver, make_rtp(15, 7500, true, {0x61, 0x95}), at(1050));
+    EXPECT_EQ(losses.size(), 1u);
+    // Seq 15 completes its access unit; seq 16 waited behind it (its start
+    // was unknown while seq 15 could still come).
+    ASSERT_GE(units.size(), 2u);
+    EXPECT_EQ(units[units.size() - 2].first_sequence, 15);
+    EXPECT_TRUE(units[units.size() - 2].retransmitted);
+    EXPECT_EQ(units.back().first_sequence, 16);
+
+    // Ten seconds after the last slow repair, the window is the minimum again.
+    EXPECT_EQ(receiver.repair_window(at(12'000)), 300ms);
 }
 
 // Stage 3: the RTT applies at once, not at a rebuild of the receiver.
@@ -445,9 +483,11 @@ TEST_F(RtpH264ReceiverTest, NothingIsLostBeforeTheDeadline) {
     unlock();
     deliver(receiver, make_rtp(11, 1500, false, {0x61, 0x91}), at(4));
     deliver(receiver, make_rtp(13, 1500, true, {0x61, 0x13}), at(4));
-    for (int t = 5; t <= 90; ++t) receiver.tick(at(t));  // deadline 16 + 60 + 20 = 96
+    // Render deadline 16 + 60 + 20 = 96 ms, but the repair window keeps
+    // the gap seen at 4 ms until 304 ms.
+    for (int t = 5; t <= 303; ++t) receiver.tick(at(t));
     EXPECT_TRUE(losses.empty());
-    receiver.tick(at(97));
+    receiver.tick(at(305));
     EXPECT_EQ(losses.size(), 1u);
 }
 
@@ -524,7 +564,7 @@ TEST_F(RtpH264ReceiverTest, AKeyFrameRightAfterALostPacketStillCompletes) {
     // seq 11 lost; seq 12 is an IDR with SPS first.
     deliver(receiver, make_rtp(12, 3000, true, idr_payload()), at(40));
     EXPECT_EQ(units.size(), 1u) << "the start of seq 12 is unknown while seq 11 may come";
-    for (int t = 41; t <= 200; ++t) receiver.tick(at(t));
+    for (int t = 41; t <= 400; ++t) receiver.tick(at(t));
     ASSERT_EQ(losses.size(), 1u);
     ASSERT_EQ(units.size(), 2u);
     EXPECT_TRUE(units[1].keyframe);

@@ -67,6 +67,8 @@ constexpr int64_t kFirstKeyframeWaitUs = 50'000;
 // released less than the decode time before it (VCMTiming's render delay).
 constexpr TimeDelta kRenderDelay = TimeDelta::Millis(10);
 constexpr const char* TAG = "transport/timeline";
+// A repaired frame keeps the room for a repair in the delay this long.
+constexpr TimeDelta kRepairMemory = TimeDelta::Seconds(10);
 
 int64_t steady_now_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -525,12 +527,29 @@ private:
                     reset_b_ = now;
                 }
             }
+            // While the link needs repairs, the delay leaves room for one
+            // (the RTT here is the measured repair time when that is
+            // longer). Upstream adds it only after 3 NACKed frames and
+            // forgets it on a reset, which the staggered pair does every 2 s.
+            if (last_nacked_.IsFinite() && now - last_nacked_ < kRepairMemory) {
+                jitter = std::max(jitter, rtt_);
+            }
             timing_.SetJitterDelay(jitter);
             timing_.UpdateCurrentDelay(render_time, now);
         } else if (retransmitted) {
             jitter_.FrameNacked();
             jitter_b_.FrameNacked();
+            last_nacked_ = now;
+            const TimeDelta jitter = std::max(timing_.GetTimings().minimum_delay, rtt_);
+            timing_.SetJitterDelay(jitter);
         }
+        // Move the current delay to the target at most 100 ms per second, in
+        // both directions. The update above raises it only when a frame
+        // that was not repaired decodes late: a repaired frame is late by
+        // the repair, and the frames behind it are not, so the room for a
+        // repair would never come. Without this, the delay also stays high
+        // after the link is clean again.
+        timing_.UpdateCurrentDelay(first.RtpTimestamp());
         timing_.SetLastDecodeScheduledTimestamp(now);
 
         if (timing_.MaxWaitingTime(render_time, now, false) + kRenderDelay < TimeDelta::Zero()) {
@@ -567,6 +586,7 @@ private:
     Timestamp reset_b_ = Timestamp::Zero();
     std::optional<Scheduled> scheduled_;
     TimeDelta rtt_ = TimeDelta::Millis(30);
+    Timestamp last_nacked_ = Timestamp::MinusInfinity();
     TimeDelta min_delay_ = TimeDelta::Millis(1);
 
     bool have_input_ = false;

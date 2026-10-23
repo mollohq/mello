@@ -279,6 +279,7 @@ struct PathResult {
     int losses = 0;
     size_t released = 0;
     size_t nacked = 0;
+    uint64_t late = 0;
     std::vector<std::pair<int64_t, double>> target_ms;  // (sim us, ms)
 };
 
@@ -331,6 +332,7 @@ PathResult run_path(const LinkSpec& link, int frames) {
     config.rtt = std::chrono::microseconds(2 * link.one_way_us);
     RtpH264Receiver receiver(std::move(callbacks), config);
     tl.set_rtt_us(2 * link.one_way_us);
+    int64_t timeline_rtt_us = 2 * link.one_way_us;
     DecodeLoop loop{tl, clock};
 
     uint16_t seq = 1000;
@@ -358,15 +360,25 @@ PathResult run_path(const LinkSpec& link, int frames) {
                 auto node = in_flight.extract(in_flight.begin());
                 if (node.key() > clock.now) loop.run_until(node.key());
                 receiver.on_rtp_packet(node.mapped().data(), node.mapped().size(), tp(clock.now));
+                // An insert wakes the decode thread (VideoReceiveTimeline::wait).
+                loop.next_poll = std::min(loop.next_poll, clock.now);
             }
             loop.run_until(step_end);
             receiver.tick(tp(clock.now));
+            // As the receiver session does: the timeline's RTT is the
+            // measured repair time when that is longer than the ping.
+            const int64_t want = std::max<int64_t>(2 * link.one_way_us, receiver.repair_latency().count());
+            if (std::abs(want - timeline_rtt_us) > 2'000) {
+                timeline_rtt_us = want;
+                tl.set_rtt_us(want);
+            }
         }
         if (f % 6 == 0) result.target_ms.push_back({clock.now - start, tl.stats().target_delay_ms});
     }
     loop.run_until(clock.now + 500'000);
     result.keyframe_requests = loop.keyframe_requests;
     result.released = loop.released.size();
+    result.late = tl.stats().frames_late;
     return result;
 }
 
@@ -383,6 +395,27 @@ TEST(ReceivePath, SingleLossesAreRepairedWithoutAKeyFrame) {
     // One request at the start: the first key frame is the first frame.
     EXPECT_EQ(r.keyframe_requests, 0);
     EXPECT_GE(r.released, 1190u);
+}
+
+// While the link needs repairs, the target delay keeps room for one. A
+// repaired frame comes one RTT (80 ms here) after its original time; with a
+// delay under the RTT it and the frames behind it are late. Upstream adds
+// the RTT only after 3 NACKed frames and forgets it at each estimator
+// reset, which the staggered pair does every 2 s.
+TEST(ReceivePath, TheDelayKeepsRoomForARepairWhileTheLinkNeedsThem) {
+    LinkSpec link;
+    link.loss = 0.005;
+    link.one_way_us = 40'000;
+    link.seed = 3;
+    const PathResult r = run_path(link, 1200);  // 20 s
+    EXPECT_EQ(r.losses, 0);
+    EXPECT_EQ(r.keyframe_requests, 0);
+    double low = 1e9;
+    for (const auto& [t, ms] : r.target_ms) {
+        if (t > 5'000'000) low = std::min(low, ms);
+    }
+    EXPECT_GE(low, 80.0) << "the delay stays at the RTT or more after the first repair";
+    EXPECT_LE(r.late, 12u);
 }
 
 // A burst the SFU can still resend is repaired: no key frame.
@@ -408,7 +441,9 @@ TEST(ReceivePath, AnUnrepairableBurstIsOneKeyFrameRequest) {
     const PathResult r = run_path(link, 420);
     EXPECT_EQ(r.losses, 1);
     EXPECT_EQ(r.keyframe_requests, 1);
-    EXPECT_GE(r.released, 400u) << "the picture comes back with the answering key frame";
+    // The loss is declared after the 300 ms repair window (18 frames); the
+    // key frame that answers it is the frame after that.
+    EXPECT_GE(r.released, 420u - 3u - 18u - 2u) << "the picture comes back with the answering key frame";
 }
 
 // The target delay rises during a 3 s jitter spike and is back within 5 s

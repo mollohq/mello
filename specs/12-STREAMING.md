@@ -514,7 +514,7 @@ Video uses **H.264 RTP/RTCP** for media — no custom `StreamPacket` framing or 
 
 **TWCC congestion control:** when negotiated, egress packets carry transport-wide sequence numbers (stamped in the pacer at emit time; retransmits get fresh seqs). The receiver emits TWCC feedback every ~50 ms; the sender's delay-gradient estimator (GCC-style: accumulated-delay trendline, overuse detector, AIMD + loss cap) produces a send-side target. The pacer runs at the manager ceiling. The estimator target does not set the pacing rate: the estimator updates its target only when an inter-arrival group closes, and under continuous pacing no group closes, so the target stays at its 4 Mbps start value (streaming-quality handoff §12.2). The estimator target is the host's own estimate for the host-to-SFU hop. It is forwarded to Rust as `GCC_TARGET` feedback and shown in the stats. The stream manager does not apply it to the encoder: the SFU sends the viewer-path capacity as REMB.
 
-**Receiver (libmello):** the H.264 receiver, the receive timeline and NACK/PLI/RR/REMB/TWCC (§7.1 to §7.3). A missing packet is NACKed every max(RTT, 10 ms) until its repair deadline (the render time of the first frame after the gap plus one RTT); complete access units go to the timeline in any order; a PLI goes out only when the timeline needs a key frame. The 3-AU window, the 120 ms stall, the 600 ms hard age and the fixed NACK budget are gone (streaming-quality stage 3). When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
+**Receiver (libmello):** the H.264 receiver, the receive timeline and NACK/PLI/RR/REMB/TWCC (§7.1 to §7.3). A missing packet is NACKed every max(RTT, 10 ms) until its repair deadline (the render time of the first frame after the gap plus one RTT, and not before the adaptive repair window of 300 ms to 1.5 s); complete access units go to the timeline in any order; a PLI goes out only when the timeline needs a key frame. The 3-AU window, the 120 ms stall, the 600 ms hard age and the fixed NACK budget are gone (streaming-quality stage 3). When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
 **Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s so both sides have a live RTT measurement (`rtt_ms` in telemetry).
 
@@ -609,14 +609,17 @@ The H.264 receiver (`rtp_h264_receiver.cpp`) repairs and assembles:
 | Frame id | The unwrapped sequence number of the access unit's last packet. Its reference is the last media packet before its first packet (padding packets are skipped). A key frame (IDR with SPS and PPS) has none. |
 | Start of an access unit | The packet before is the previous access unit's last packet (marker bit, or another RTP timestamp). After a lost packet, only a payload that can open an access unit (AUD, SEI, SPS, or the slice at macroblock 0) starts one. |
 | NACK | First after 3 ms of reorder grace or 2 newer packets, then every max(RTT, 10 ms). |
-| Repair deadline | The render time of the first frame after the gap plus one RTT; never before the last packet of that frame plus one RTT (a large key frame still arriving) and never before one RTT after the gap was seen. |
+| Repair deadline | The render time of the first frame after the gap plus one RTT; never before the last packet of that frame plus one RTT (a large key frame still arriving) and never before the repair window has passed since the gap was seen. |
+| Repair window | 1.5 times the slowest repair of the last 10 s, and at least 3 RTT; between 300 ms and 1.5 s. A repair is the time from the arrival of the packet before the gap to the packet that fills it: a NACK repair, a late original, or a packet that came after its deadline. A repair crosses the viewer leg's jitter twice, so a fixed deadline turns each jitter spike into a loss and a key frame. |
 | Loss | A packet still missing at its deadline is lost for real: `on_loss` runs once and the access units that needed it are dropped. |
 | Key frame | Everything before it is obsolete: no more repair for older gaps. |
 | Discontinuity | A gap over 2048 packets is not NACKed: everything before it is lost. |
 | Packet memory | 4096 packets or 8 MB of incomplete access units. When the stream is silent for 600 ms, incomplete access units are forgotten (memory only, no key-frame request). |
 
 The RTT is the control channel's smoothed ping RTT. `set_rtt_hint` applies at
-once to the NACK interval, the repair deadlines and the timeline.
+once to the NACK interval and the repair deadlines. The timeline gets the
+larger of the RTT and the slowest repair of the last 10 s
+(`RtpH264Receiver::repair_latency`).
 
 ### 7.2 Receive timeline
 
@@ -633,8 +636,15 @@ replaces upstream's `VideoStreamBufferController`. One per viewer session.
 - **Target delay** = jitter estimate + 95th percentile decode time + 10 ms
   render delay, between 1 ms and 150 ms. The minimum is 1 ms, not 0: a minimum
   of 0 with a maximum under 500 ms switches VCMTiming to low-latency rendering,
-  which has no jitter buffer. The delay a frame gets moves toward the target at
-  most 100 ms per second.
+  which has no jitter buffer. The delay a frame gets (VCMTiming's current
+  delay) moves toward the target at most 100 ms per second, up and down, at
+  each released frame. Upstream raises it only when a frame that was not
+  repaired decodes late, so it never makes room for a repair and never comes
+  down after a lossy period.
+- **Room for a repair:** for 10 s after a repaired frame, the jitter delay is
+  at least the timeline's RTT (above). Upstream adds the RTT only after 3
+  repaired frames and forgets it at each estimator reset, which the staggered
+  pair does every 2 s.
 - **Jitter estimate:** two upstream `JitterEstimator`s on the same input, each
   restarted every 4 s, 2 s apart; the larger estimate counts ("staggered
   pair"). Upstream alone forgets over about 13 s and does not rise in a 3 s
@@ -654,7 +664,7 @@ the receiver session. `KeyframeNeeded` comes from:
 
 | Cause | Effect |
 |---|---|
-| A packet missed its repair deadline (`on_loss`) | One request. The frames before the gap still play; the chain waits at the gap. |
+| A packet missed its repair deadline (`on_loss`) | One request. The frames before the gap still play; the chain waits at the gap (at least the 300 ms repair window). |
 | The decoder refused a frame | Delta frames are dropped until a key frame. |
 | A delta frame more than 1 s late | As above. |
 | The first frame is not a key frame | First request 50 ms after the first frame (reorder room). |

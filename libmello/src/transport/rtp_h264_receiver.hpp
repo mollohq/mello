@@ -23,9 +23,13 @@ namespace mello::transport {
 //   packet) and the id it decodes from (the last packet before it), so the
 //   timeline knows which frames a missing one blocks.
 // - A missing packet is NACKed every max(RTT, 10 ms) until its repair
-//   deadline: the render time of the first frame after the gap plus one RTT.
-//   While packets of that frame still arrive (a large key frame on a slow
-//   link), the deadline moves with them. A packet still missing after its
+//   deadline: the render time of the first frame after the gap plus one RTT,
+//   and never before the repair window has passed since the gap was seen.
+//   The repair window follows the repairs this link needed (the slowest
+//   repair of the last 10 s, times 1.5, 300 ms to 1.5 s): a repair crosses
+//   the viewer leg's jitter twice, and a late original crosses its spikes.
+//   While packets of the frame after the gap still arrive (a large key frame
+//   on a slow link), the deadline moves with them. A packet still missing after its
 //   deadline is lost for real: `on_loss` runs once and the access units that
 //   needed it are dropped.
 // - No window of a fixed number of access units, no stall timer and no hard
@@ -180,8 +184,11 @@ public:
     /// Room for a retransmission after the last packet of the frame that
     /// follows a gap.
     inline static constexpr std::chrono::milliseconds kRepairMargin{10};
-    /// Repair window when the timeline knows no render time yet.
-    inline static constexpr std::chrono::milliseconds kDefaultRepairWindow{150};
+    /// Bounds of the repair window (see the class comment).
+    inline static constexpr std::chrono::milliseconds kMinRepairWindow{300};
+    inline static constexpr std::chrono::milliseconds kMaxRepairWindow{1500};
+    /// How long a slow repair keeps the window wide.
+    inline static constexpr std::chrono::milliseconds kRepairMemory{10'000};
     /// Packet memory: when no packet arrives for this long, incomplete access
     /// units are forgotten. Memory only; it never asks for a key frame.
     inline static constexpr std::chrono::milliseconds kPacketMemory{600};
@@ -209,6 +216,16 @@ public:
     /// The measured round trip. Applies at once to the NACK interval and the
     /// repair deadlines.
     void set_rtt(std::chrono::microseconds rtt);
+
+    /// The time from when a missing packet would have come (the arrival of
+    /// the packet before its gap) to the packet that fills it (a NACK repair
+    /// or a late original): the slowest of the last 10 s. The receiver
+    /// session gives the timeline the larger of this and the ping RTT, so
+    /// the delay leaves room for a repair.
+    std::chrono::microseconds repair_latency() const;
+
+    /// The current repair window (see the class comment).
+    std::chrono::microseconds repair_window(TimePoint now) const;
 
     /// True while a key frame is arriving: an access unit that starts with an
     /// SPS or an IDR slice is incomplete and its last packet is recent.
