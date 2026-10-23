@@ -86,6 +86,15 @@ pub struct HostSample {
     pub width: u32,
     pub height: u32,
     pub fps: u32,
+    /// Sender counters (cumulative) for the congestion timeline: wire
+    /// bytes, retransmit bytes, PLIs, local IDR requests, access units the
+    /// bounded queue dropped, and the queue depth now.
+    pub wire_bytes: u64,
+    pub rtx_bytes: u64,
+    pub plis: u64,
+    pub local_idrs: u64,
+    pub aus_dropped: u64,
+    pub queued_aus: u64,
 }
 
 pub struct Host {
@@ -305,6 +314,12 @@ fn host_loop(
                 width: w,
                 height: h,
                 fps: st.fps_actual,
+                wire_bytes: v.tx_rtp_wire_bytes_sent,
+                rtx_bytes: v.tx_rtx_bytes_sent,
+                plis: v.tx_pli_requests,
+                local_idrs: v.tx_local_idr_requests,
+                aus_dropped: v.tx_access_units_dropped,
+                queued_aus: v.tx_queued_access_units,
             });
         }
         next += TICK;
