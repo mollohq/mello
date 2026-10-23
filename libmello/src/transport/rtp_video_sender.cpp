@@ -836,9 +836,25 @@ struct RtpVideoSender::State
             ceiling * kPacingFactorNumerator / kPacingFactorDenominator, 50'000);
     }
 
-    // Publishes the goog_cc encoder target: in the stats, and to Rust on the
-    // first value and on a change over 1/32.
-    void publish_target() noexcept {
+    // The retransmit bytes the worker sent in the last kRetransmitRateWindowUs.
+    uint64_t retransmit_rate_bps(int64_t now_us) {
+        while (!rtx_sent_window.empty()
+               && now_us - rtx_sent_window.front().first >= kRetransmitRateWindowUs) {
+            rtx_sent_window_bytes -= rtx_sent_window.front().second;
+            rtx_sent_window.pop_front();
+        }
+        return rtx_sent_window_bytes * 8'000'000 / static_cast<uint64_t>(kRetransmitRateWindowUs);
+    }
+
+    // Publishes the goog_cc target (stats, retransmit limit) and the encoder
+    // target to Rust: on the first value and on a change over 1/32 from the
+    // last value that Rust got.
+    //
+    // The encoder target is the goog_cc target less the retransmit rate of
+    // the last 500 ms (libwebrtc's protection bitrate: the encoder gets
+    // what repairs leave), at least a quarter of the target. Retransmits
+    // then take the place of media under a cap instead of adding to it.
+    void publish_target(int64_t now_us) noexcept {
         // Before the first feedback the target is only goog_cc's start
         // value: no information about the link, so the encoder keeps the
         // stream manager's start value.
@@ -847,16 +863,21 @@ struct RtpVideoSender::State
         }
         const uint64_t target = controller->encoder_target_bps();
         pacing_rate_bps.store(current_pacing_rate(), std::memory_order_relaxed);
-        const uint64_t previous = gcc_target_bps.exchange(target, std::memory_order_relaxed);
+        gcc_target_bps.store(target, std::memory_order_relaxed);
+        const uint64_t repairs = retransmit_rate_bps(now_us);
+        const uint64_t encoder = std::max(target / 4, target > repairs ? target - repairs : 0);
+        encoder_target_bps.store(encoder, std::memory_order_relaxed);
+        const uint64_t previous = published_encoder_bps;
         if (previous != 0
-            && target <= previous + previous / 32
-            && target + previous / 32 >= previous) {
+            && encoder <= previous + previous / 32
+            && encoder + previous / 32 >= previous) {
             return;
         }
+        published_encoder_bps = encoder;
         try {
             std::lock_guard<std::mutex> lock(callback_mutex);
             if (on_gcc_target) {
-                on_gcc_target(static_cast<uint32_t>(std::min<uint64_t>(target, UINT32_MAX)));
+                on_gcc_target(static_cast<uint32_t>(std::min<uint64_t>(encoder, UINT32_MAX)));
             }
         } catch (...) {
         }
@@ -915,7 +936,7 @@ struct RtpVideoSender::State
             }
             last_allocated_bps = allocation;
             take_probes(now_us);
-            publish_target();
+            publish_target(now_us);
         }
     }
 
@@ -946,7 +967,7 @@ struct RtpVideoSender::State
         }
         if (!reports.empty()) {
             take_probes(now_us);
-            publish_target();
+            publish_target(now_us);
         }
     }
 
@@ -1003,6 +1024,10 @@ struct RtpVideoSender::State
     // Under queue_mutex. Returns the number dropped.
     uint64_t drop_queued_access_units_locked(bool keep_newest) {
         uint64_t dropped = 0;
+        // A dropped IDR does not drain (kMaxQueuedAccessUnits).
+        idr_in_sender.store(
+            keep_newest && !access_unit_queue.empty() && access_unit_queue.back().is_idr,
+            std::memory_order_relaxed);
         while (access_unit_queue.size() > (keep_newest ? 1u : 0u)) {
             queued_bytes_value -= access_unit_queue.front().bytes.size();
             access_unit_queue.pop_front();
@@ -1014,6 +1039,9 @@ struct RtpVideoSender::State
     }
 
     void drop_media_packets() {
+        if (!media_packets.empty() && media_packets.front().idr) {
+            idr_in_sender.store(false, std::memory_order_relaxed);
+        }
         if (!media_packets.empty()) {
             access_units_dropped.fetch_add(1, std::memory_order_relaxed);
         }
@@ -1038,6 +1066,9 @@ struct RtpVideoSender::State
         }
         if (!track_is_open()) {
             send_failures.fetch_add(1, std::memory_order_relaxed);
+            if (access_unit.is_idr) {
+                idr_in_sender.store(false, std::memory_order_relaxed);
+            }
             return true;
         }
         try {
@@ -1048,12 +1079,18 @@ struct RtpVideoSender::State
         } catch (...) {
             discard_batch();
             send_failures.fetch_add(1, std::memory_order_relaxed);
+            if (access_unit.is_idr) {
+                idr_in_sender.store(false, std::memory_order_relaxed);
+            }
             return true;
         }
         PacedBatch batch;
         if (!take_batch(batch)) {
             if (!stopping.load(std::memory_order_acquire)) {
                 send_failures.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (access_unit.is_idr) {
+                idr_in_sender.store(false, std::memory_order_relaxed);
             }
             return true;
         }
@@ -1196,6 +1233,7 @@ struct RtpVideoSender::State
         current_pacing_delay_us.store(delay, std::memory_order_relaxed);
         update_max(max_pacing_delay_us, delay);
         if (media.idr) {
+            idr_in_sender.store(false, std::memory_order_relaxed);
             idr_access_units_sent.fetch_add(1, std::memory_order_relaxed);
             last_idr_send_us.store(delay, std::memory_order_relaxed);
             update_max(max_idr_send_us, delay);
@@ -1215,6 +1253,9 @@ struct RtpVideoSender::State
             if (size > 0) {
                 rtx_sent.fetch_add(1, std::memory_order_relaxed);
                 rtx_bytes_sent.fetch_add(size, std::memory_order_relaxed);
+                rtx_sent_window.emplace_back(now_us, size);
+                rtx_sent_window_bytes += size;
+                (void)retransmit_rate_bps(now_us);
             }
             charge(size, probe, now_us);
             return true;
@@ -1352,7 +1393,7 @@ struct RtpVideoSender::State
             controller = std::make_unique<GoogCcController>(controller_config, now_us);
             last_allocated_bps = controller_config.max_bps;
             take_probes(now_us);
-            publish_target();
+            publish_target(now_us);
         }
         pacing_rate_bps.store(current_pacing_rate(), std::memory_order_relaxed);
         budget_updated_us = now_us;
@@ -1365,7 +1406,7 @@ struct RtpVideoSender::State
             if (controller && now_us >= next_process_us) {
                 controller->on_process_interval(now_us, pacer_queue_bytes());
                 take_probes(now_us);
-                publish_target();
+                publish_target(now_us);
                 next_process_us = now_us + kProcessIntervalUs;
             }
             pacing_rate_bps.store(current_pacing_rate(), std::memory_order_relaxed);
@@ -1536,6 +1577,14 @@ struct RtpVideoSender::State
     std::atomic<uint64_t> rtx_queue_dropped{0};
     std::atomic<uint64_t> rtx_queue_flushes{0};
     std::atomic<uint64_t> rtx_suppressed{0};
+    // An IDR is queued or partly on the wire (kMaxQueuedAccessUnits).
+    std::atomic<bool> idr_in_sender{false};
+    // The encoder target that Rust gets (publish_target); worker only,
+    // except the stats copy.
+    std::atomic<uint64_t> encoder_target_bps{0};
+    uint64_t published_encoder_bps = 0;
+    std::deque<std::pair<int64_t, size_t>> rtx_sent_window;
+    uint64_t rtx_sent_window_bytes = 0;
     std::atomic<uint64_t> feedback_rtt_us{0};
     std::atomic<uint64_t> pli_requests{0};
     std::atomic<uint64_t> remb_reports{0};
@@ -1784,7 +1833,9 @@ SendAccessUnitResult RtpVideoSender::send_access_unit(
     }
 
     if (!access_unit_info.is_idr) {
-        if (state->access_unit_queue.size() >= kMaxQueuedAccessUnits
+        // While an IDR drains, only the byte bound applies (kMaxQueuedAccessUnits).
+        const bool idr_draining = state->idr_in_sender.load(std::memory_order_relaxed);
+        if ((!idr_draining && state->access_unit_queue.size() >= kMaxQueuedAccessUnits)
             || size > kMaxQueuedBytes - state->queued_bytes_value) {
             drop_queued_deltas();
             enter_idr_gate();
@@ -1830,6 +1881,7 @@ SendAccessUnitResult RtpVideoSender::send_access_unit(
                 std::memory_order_relaxed
             );
             state->awaiting_idr = false;
+            state->idr_in_sender.store(true, std::memory_order_relaxed);
         } else {
             state->access_unit_queue.push_back(std::move(access_unit));
             state->queued_bytes_value += size;
@@ -1954,6 +2006,7 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
     result.reprobes = load(state->reprobes);
     result.idr_access_units_over_50ms = load(state->idr_over_50ms);
     result.rtx_suppressed = load(state->rtx_suppressed);
+    result.encoder_target_bps = load(state->encoder_target_bps);
     result.feedback_rtt_us = load(state->feedback_rtt_us);
     return result;
 }

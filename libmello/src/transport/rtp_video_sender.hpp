@@ -100,6 +100,9 @@ struct RtpVideoSenderStats {
     uint64_t rtx_suppressed = 0;
     // goog_cc's smoothed round trip from the TWCC reports; 0 unknown.
     uint64_t feedback_rtt_us = 0;
+    // The encoder target that Rust gets: gcc_target_bps less the retransmit
+    // rate of the last 500 ms, at least a quarter of it.
+    uint64_t encoder_target_bps = 0;
 };
 
 // One producer thread may call send_access_unit(). It only copies accepted
@@ -115,6 +118,10 @@ public:
     using GccTargetCallback = std::function<void(uint32_t bitrate_bps)>;
 
     // ~266 ms at 60 fps — absorbs VBR bursts while the pacing worker drains.
+    // While an IDR is in the sender (queued or partly on the wire) this
+    // bound does not apply, only kMaxQueuedBytes: the deltas behind the IDR
+    // wait for it, and an overflow there would only ask for a second IDR
+    // behind the first (streaming-quality stage 4).
     static constexpr size_t kMaxQueuedAccessUnits = 16;
     static constexpr size_t kMaxQueuedBytes = 4 * 1024 * 1024;
 

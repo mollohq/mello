@@ -776,6 +776,74 @@ std::vector<uint8_t> make_nack_packet(std::initializer_list<uint16_t> sequences)
         0xfeedface, kSenderSsrc, std::vector<uint16_t>(sequences));
 }
 
+// libwebrtc's protection bitrate: the encoder target is the goog_cc target
+// less the retransmit rate of the last 500 ms, so repairs take the place of
+// media under a cap instead of adding to it. The old sender gave the encoder
+// the whole target: at the gate's cap change media and repairs together
+// were twice the target.
+TEST(RtpVideoSenderTwccTest, RetransmitsComeOutOfTheEncoderTarget) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000, {}, {}, {}, true);
+    uint16_t highest = 0;
+    {
+        mello::transport::RtpVideoReceiverSessionConfig rx_config;
+        rx_config.payload_type = kPayloadType;
+        rx_config.twcc_enabled = true;
+        mello::transport::RtpVideoReceiverSession receiver(link.receiver_track(), rx_config);
+        ASSERT_TRUE(receiver.is_open());
+
+        // About 1 s of 10 kB frames: TWCC feedback sets the goog_cc target.
+        // An access unit the bounded queue rejects does not matter here.
+        for (int index = 0; index < 60; ++index) {
+            const auto au = index == 0 ? make_large_idr_access_unit(10'000)
+                                       : make_large_delta_access_unit(10'000);
+            (void)send_au_accepted(sender, au.data(), au.size(),
+                                   static_cast<uint64_t>(index) * 16'667);
+            while (receiver.pop_access_unit()) {
+            }
+            std::this_thread::sleep_for(16ms);
+        }
+        ASSERT_TRUE(link.wait_for_stats(
+            [](const RtpVideoSenderStats& stats) { return stats.encoder_target_bps > 0; },
+            sender,
+            5s
+        ));
+        highest = static_cast<uint16_t>(receiver.stats().core.extended_highest_sequence);
+    }
+    // The receiver session is gone (its handler takes the track's sends), so
+    // the test sends the NACK. The sender keeps its goog_cc target for the
+    // 1 s before the feedback timeout.
+    const auto before = sender.stats();
+    EXPECT_EQ(before.encoder_target_bps, before.gcc_target_bps);
+
+    // A NACK for the last 300 packets. The retransmit limit (the target over
+    // 500 ms) admits part of them; the encoder target falls by their rate.
+    std::vector<uint16_t> sequences;
+    for (uint16_t back = 300; back > 0; --back) {
+        sequences.push_back(static_cast<uint16_t>(highest - back));
+    }
+    const auto nack = mello::transport::detail::make_generic_nack_packet(
+        0xfeedface, kSenderSsrc, sequences);
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), nack));
+    uint64_t lowest_share_permille = 1000;
+    const auto deadline = std::chrono::steady_clock::now() + 500ms;
+    while (std::chrono::steady_clock::now() < deadline) {
+        const auto stats = sender.stats();
+        if (stats.gcc_target_bps > 0) {
+            lowest_share_permille = std::min<uint64_t>(
+                lowest_share_permille, stats.encoder_target_bps * 1000 / stats.gcc_target_bps);
+        }
+        std::this_thread::sleep_for(5ms);
+    }
+    const auto after = sender.stats();
+    std::printf("[protection] %llu retransmits; the encoder target fell to %llu permille of the goog_cc target\n",
+                static_cast<unsigned long long>(after.rtx_sent),
+                static_cast<unsigned long long>(lowest_share_permille));
+    EXPECT_GE(after.rtx_sent, 100u);
+    EXPECT_LE(lowest_share_permille, 700u);
+    EXPECT_GE(lowest_share_permille, 245u);  // the floor: a quarter of the target
+}
+
 // Without TWCC (no goog_cc) the pacer runs at 2.5 x the manager ceiling,
 // libwebrtc's pacing factor. The old pacer ran at the ceiling (1.08 x the
 // encoder bitrate) and dropped 17 to 20 % of the access units on a clean
@@ -1056,6 +1124,13 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
 
     const auto idr = make_idr_access_unit();
     ASSERT_TRUE(send_au_accepted(sender,idr.data(), idr.size(), 0));
+    // The bound applies once the IDR has left: while it drains, deltas wait
+    // behind it (AnOverflowWhileAnIdrDrainsAsksForNoSecondIdr).
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) { return stats.idr_access_units_sent >= 1; },
+        sender,
+        10s
+    ));
 
     // Comfortably more than kMaxQueuedAccessUnits (16) so the bound is crossed
     // even if a frame or two does drain.
@@ -1083,6 +1158,36 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
     EXPECT_LE(stats.peak_queued_access_units, RtpVideoSender::kMaxQueuedAccessUnits);
     EXPECT_LE(stats.peak_queued_bytes, RtpVideoSender::kMaxQueuedBytes);
     EXPECT_GE(idr_requests.load(std::memory_order_relaxed), 1);
+}
+
+// While an IDR drains, the deltas behind it wait: no overflow, no second
+// IDR. The old sender dropped them at 16 access units and asked for another
+// IDR, which then drained as slowly as the first: at the gate's cap change
+// one PLI became three IDRs, each a burst into the full link.
+TEST(RtpVideoSenderAdmissionTest, AnOverflowWhileAnIdrDrainsAsksForNoSecondIdr) {
+    LoopbackVideoLink link;
+    std::atomic<int> idr_requests{0};
+    // 8 kbps ceiling: 20 kbps pacing. The 6 kB IDR takes about 2.4 s.
+    RtpVideoSender sender = link.make_sender(
+        8'000,
+        {},
+        {},
+        [&idr_requests]() { idr_requests.fetch_add(1, std::memory_order_relaxed); }
+    );
+    const auto idr = make_large_idr_access_unit(6'000);
+    ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 0));
+    for (int index = 0; index < 40; ++index) {
+        const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));
+        EXPECT_TRUE(send_au_accepted(sender, delta.data(), delta.size(),
+                                     static_cast<uint64_t>(index + 1) * 16'667));
+    }
+    const auto stats = sender.stats();
+    EXPECT_EQ(stats.idr_access_units_sent, 0u) << "the IDR must still drain";
+    EXPECT_EQ(stats.access_units_rejected, 0u);
+    EXPECT_EQ(stats.access_units_dropped, 0u);
+    EXPECT_EQ(stats.local_idr_requests, 0u);
+    EXPECT_EQ(idr_requests.load(std::memory_order_relaxed), 0);
+    EXPECT_GT(stats.peak_queued_access_units, RtpVideoSender::kMaxQueuedAccessUnits);
 }
 
 TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {

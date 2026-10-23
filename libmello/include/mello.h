@@ -558,6 +558,7 @@ typedef struct MelloRtpVideoStats {
     uint8_t tx_rtx_negotiated;            /* RFC 4588 RTX on its own SSRC */
     uint64_t tx_rtx_suppressed;           /* NACKed packets not resent: once per round trip, target rate */
     uint64_t tx_feedback_rtt_us;          /* goog_cc round trip from the TWCC reports, 0 unknown */
+    uint64_t tx_encoder_target_bps;       /* goog_cc target less the retransmit rate: the encoder's */
 } MelloRtpVideoStats;
 
 /** Create a peer. `ctx` may be NULL. With a context, a voice peer counts
