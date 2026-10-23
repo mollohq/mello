@@ -36,11 +36,22 @@ const (
 )
 
 // RecapPushItem is one queued push.
+//
+// The belt and crew join pushes (event_push.go) use the same item. They set
+// Type and MessageID, and a coalescing item keeps its Group, its Events and
+// the time of its last send so the next one can wait out the window.
 type RecapPushItem struct {
 	UserID   string `json:"user_id"`
 	SendAtMs int64  `json:"send_at_ms"`
 	Body     string `json:"body"`
 	Sent     bool   `json:"sent"`
+
+	Type       string      `json:"type,omitempty"`         // empty means recap
+	MessageID  string      `json:"message_id,omitempty"`   // collapse id, empty means the recap id
+	Group      string      `json:"group,omitempty"`        // coalescing group, empty means none
+	Events     []pushEvent `json:"events,omitempty"`       // what the coalesced body is built from
+	Hold       int         `json:"hold,omitempty"`         // belts the member holds, for the belt body
+	LastSentMs int64       `json:"last_sent_ms,omitempty"` // when the item last went out
 }
 
 // RecapPushDoc is the queue of one crew for one recap week.
@@ -157,6 +168,7 @@ func splitDueRecapPushes(doc *RecapPushDoc, now time.Time) (due []RecapPushItem,
 		it.Sent = true
 		changed = true
 		if nowMs-it.SendAtMs <= recapPushMaxLateness.Milliseconds() {
+			it.LastSentMs = nowMs
 			due = append(due, *it)
 		}
 	}
@@ -208,11 +220,18 @@ var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.
 		logger.Warn("recap push: channel id for crew %s: %v", crewID, err)
 		return
 	}
+	typ, messageID := recapPushType, "recap-"+crewID+"-"+week // collapse id, under 64 bytes
+	if it.Type != "" {
+		typ = it.Type
+	}
+	if it.MessageID != "" {
+		messageID = it.MessageID
+	}
 	sendPushToUser(ctx, logger, nk, it.UserID, pushAlert{
-		Type:      recapPushType,
+		Type:      typ,
 		CrewID:    crewID,
 		ChannelID: channelID,
-		MessageID: "recap-" + crewID + "-" + week, // collapse id, under 64 bytes
+		MessageID: messageID,
 		Title:     truncateRunes(title, pushTitleMaxRunes),
 		Body:      it.Body,
 	})
@@ -229,32 +248,37 @@ func sendDueRecapPushes(ctx context.Context, nk runtime.NakamaModule, logger run
 			return
 		}
 		for _, o := range objects {
-			var doc RecapPushDoc
-			if json.Unmarshal([]byte(o.GetValue()), &doc) != nil {
-				continue
-			}
-			due, changed := splitDueRecapPushes(&doc, now)
-			if !changed {
-				continue
-			}
-			data, err := json.Marshal(doc)
-			if err != nil {
-				continue
-			}
-			if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{{
-				Collection: RecapPushCollection, Key: o.GetKey(), UserID: SystemUserID,
-				Value: string(data), Version: o.GetVersion(), PermissionRead: 0, PermissionWrite: 0,
-			}}); err != nil {
-				logger.Debug("recap push: claim failed for crew %s, next tick: %v", doc.CrewID, err)
-				continue
-			}
-			for _, it := range due {
-				recapPushSend(ctx, logger, nk, doc.CrewID, doc.Week, it)
-			}
+			processPushQueueDoc(ctx, nk, logger, o.GetKey(), o.GetValue(), o.GetVersion(), now)
 		}
 		if next == "" || len(objects) == 0 {
 			return
 		}
 		cursor = next
+	}
+}
+
+// processPushQueueDoc claims and sends what is due in one queue doc.
+func processPushQueueDoc(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, key, value, version string, now time.Time) {
+	var doc RecapPushDoc
+	if json.Unmarshal([]byte(value), &doc) != nil {
+		return
+	}
+	due, changed := splitDueRecapPushes(&doc, now)
+	if !changed {
+		return
+	}
+	data, err := json.Marshal(doc)
+	if err != nil {
+		return
+	}
+	if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+		Collection: RecapPushCollection, Key: key, UserID: SystemUserID,
+		Value: string(data), Version: version, PermissionRead: 0, PermissionWrite: 0,
+	}}); err != nil {
+		logger.Debug("recap push: claim failed for crew %s, next tick: %v", doc.CrewID, err)
+		return
+	}
+	for _, it := range due {
+		recapPushSend(ctx, logger, nk, doc.CrewID, doc.Week, it)
 	}
 }

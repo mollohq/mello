@@ -716,6 +716,7 @@ func recomputeHead2head(ctx context.Context, logger runtime.Logger, nk runtime.N
 			continue
 		}
 		clearHead2headDirty(crewID)
+		queueBeltPushes(ctx, logger, nk, doc)
 		return doc
 	}
 	logger.Warn("head2head: write failed for crew %s after 3 tries", crewID)
@@ -801,6 +802,8 @@ func recomputeHead2headForUser(ctx context.Context, logger runtime.Logger, nk ru
 		return
 	}
 	now := time.Now().UnixMilli()
+	// The user is the actor: a belt they take is no news to them.
+	ctx = withHead2headActor(ctx, userID)
 	for _, g := range groups {
 		if st := g.GetState(); st != nil && st.GetValue() > 2 {
 			continue
