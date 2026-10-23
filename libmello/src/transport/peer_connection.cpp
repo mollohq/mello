@@ -1372,16 +1372,8 @@ void PeerConnectionImpl::setup_voice_channels() {
     }
 #endif
 
-    rtc::DataChannelInit dcInit;
-    dcInit.reliability.unordered = true;
-    dcInit.reliability.maxRetransmits = 0;
-    auto unreliable = pc_->createDataChannel("audio", dcInit);
-    {
-        std::lock_guard<std::mutex> lock(mutex_);
-        unreliable_dc_ = unreliable;
-    }
-    setup_dc_handlers(unreliable, false, generation);
-
+    // Voice opens only the reliable control channel: audio goes on the RTP
+    // track, and the SFU has no data path on an "audio" DataChannel.
     auto reliable = pc_->createDataChannel("control");
     {
         std::lock_guard<std::mutex> lock(mutex_);
