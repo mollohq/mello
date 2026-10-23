@@ -306,16 +306,28 @@ func PushFeedChangedForUser(ctx context.Context, logger runtime.Logger, nk runti
 }
 
 // PushPresenceChange sends a presence change to active crew subscribers only.
-func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID string, p *UserPresence) {
-	content := map[string]interface{}{
-		"type":    "presence_change",
-		"crew_id": crewID,
-		"user_id": userID,
-		"presence": map[string]interface{}{
-			"status":   p.Status,
-			"activity": p.Activity,
-		},
+// presenceChangeContent is the body of a presence_change push. It carries the
+// game (name, id, started_at) beside the activity, so a crewmate's client can
+// show the game that is in progress without loading the crew state again
+// (spec 17 section 5.2). Nothing else of the presence leaves the server.
+func presenceChangeContent(crewID, userID string, p *UserPresence) map[string]interface{} {
+	presence := map[string]interface{}{
+		"status":   p.Status,
+		"activity": p.Activity,
 	}
+	if p.Game != nil {
+		presence["game"] = p.Game
+	}
+	return map[string]interface{}{
+		"type":     "presence_change",
+		"crew_id":  crewID,
+		"user_id":  userID,
+		"presence": presence,
+	}
+}
+
+func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID string, p *UserPresence) {
+	content := presenceChangeContent(crewID, userID, p)
 
 	subs := getActiveSubscribersForCrew(crewID)
 	seen := make(map[string]bool, len(subs))
