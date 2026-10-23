@@ -220,10 +220,24 @@ The weekly recap (spec 19 section 3.5) has two belt sections. The recap job read
 - The recap fields that the RecapCard already exports are filled from these. `awards` gets one entry of kind `belt` for each moved belt, after the existing game awards. `leaderboard` has the same entries as `belts_held`.
 - The `belt` award has `title` (the English title name), `name` (the new holder) and `detail` (`took it from <name>`, absent without a previous holder).
 
-## 7. Later
+## 7. Pushes
+
+A belt move sends a push to the previous holder. A new member sends a push to the crew. Both use the push queue and sender of the weekly recap push. The delivery rules, quiet hours and collapse ids are in [push service spec 23, section 6.6](../../../mello-backlog/specs/23-PUSH-SERVICE.md).
+
+| Push | Trigger | Copy |
+|---|---|---|
+| Belt moved | A recompute changes the holder of a title | To the previous holder: `<Name> took <Title> from you. You hold <n>.` To the new holder, when they did not cause the recompute: `You took <Title> from <Name>. You hold <n>.` |
+| Friend landed | A member joins the crew | Members 2 to 5: `<Name> joined <Crew>. Say hi.` Member 6 on: `<Name> joined <Crew>.` |
+
+- Quiet hours: no push before 09:00 or from 22:00 local. The offset is `tz_offset_min` on the activity doc, else UTC. The push waits for 09:00.
+- Belt rate: one push for each member and crew in 6 hours. Moves inside the window leave as one push, `<Name> took <Title> and <m> more. You hold <n>.`
+- Join coalescing: from member 6, joiners inside 1 hour leave as one push, `<Name> and <m> others joined <Crew>.`
+- The joiner never gets a join push. The member who causes a recompute never gets a push for a belt they took.
+- Code: `event_push.go` (queue, quiet hours, belt), `crew_join_push.go` (join). Tests: `event_push_test.go`, `crew_join_push_test.go`, and `belt_and_join_pushes_reach_the_push_worker` in `tools/e2e/tests/head2head_feed.rs`.
+
+## 8. Later
 
 - The opened view with the round robin of all pairs.
-- Push when a belt moves.
 - A per-crew off switch.
 - Recompute on member join and leave.
 - The client sends `tz_offset_min` with `game_session_end`.
