@@ -94,6 +94,26 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         -1,
     ),
     ("tx_pli", "PLI requests at the host", 0),
+    (
+        "tx_max_idr_send_ms",
+        "Longest IDR from the sender queue to the wire (ms)",
+        -1,
+    ),
+    ("tx_idr_aus", "IDR access units the host sent", 0),
+    ("tx_rtx_pct", "Host retransmit bytes / host bytes (%)", -1),
+    (
+        "tx_probe_clusters",
+        "goog_cc probe clusters the host sent",
+        0,
+    ),
+    ("tx_padding", "Padding packets the host sent", 0),
+    (
+        "tx_send_pauses",
+        "Host media stops for a feedback outage",
+        0,
+    ),
+    ("tx_reprobes", "Host re-probes after an allocation raise", 0),
+    ("tx_rtx_negotiated", "RFC 4588 RTX negotiated (1 = yes)", 0),
     ("host_keyframes", "Keyframes the host encoded", 0),
     (
         "host_frames_late",

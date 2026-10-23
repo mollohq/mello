@@ -80,6 +80,12 @@ pub struct HostSample {
     pub pacing_target_kbps: u64,
     pub gcc_target_kbps: u64,
     pub keyframes: u32,
+    /// The stage 4 sender's pacing rate, and the encode size and frame rate
+    /// of the quality controller's rung.
+    pub pacing_rate_kbps: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
 }
 
 pub struct Host {
@@ -286,12 +292,19 @@ fn host_loop(
             let v = conn
                 .video_stats()
                 .unwrap_or_else(|_| unsafe { std::mem::zeroed() });
+            let (mut w, mut h) = (0u32, 0u32);
+            // SAFETY: as above.
+            unsafe { mello_sys::mello_stream_get_host_resolution(native.0, &mut w, &mut h) };
             samples.push(HostSample {
                 t_us: clock_us(),
                 encoder_kbps: st.bitrate_kbps,
                 pacing_target_kbps: v.tx_pacing_target_bps / 1000,
                 gcc_target_kbps: v.tx_gcc_target_bps / 1000,
                 keyframes: st.keyframes_sent,
+                pacing_rate_kbps: v.tx_pacing_rate_bps / 1000,
+                width: w,
+                height: h,
+                fps: st.fps_actual,
             });
         }
         next += TICK;
