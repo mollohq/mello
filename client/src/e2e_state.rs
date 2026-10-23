@@ -300,6 +300,7 @@ struct LiveSessionSnap {
     /// Every player, the viewer first.
     member_names: Vec<String>,
     since_min: i32,
+    since_text: String,
     /// The place in the feed card list. 0 is the first card.
     index: usize,
     /// The octagons drawn, and how many wear an avatar.
@@ -1071,6 +1072,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 game_name: c.game_name.to_string(),
                 member_names: c.live.member_names.iter().map(|n| n.to_string()).collect(),
                 since_min: c.live.since_min,
+                since_text: c.live.since_text.to_string(),
                 index,
                 octagons: c.live.players.row_count(),
                 with_avatar: c.live.players.iter().filter(|p| p.has_avatar).count(),

@@ -1823,52 +1823,45 @@ component RecentGamesCard inherits Rectangle {
 }
 
 
-component LiveSessionText inherits VerticalLayout {
+// The player octagons of a live card, with "+N" past the last one.
+component LivePlayers inherits HorizontalLayout {
     in property <FeedCardData> card;
-    in property <bool> centered: false;
 
-    spacing: 6px;
-    alignment: centered ? center : start;
+    height: 20px;
+    spacing: 4px;
+    alignment: start;
+    for p in card.live.players: UserAvatar {
+        initials: p.initials;
+        avatar: p.avatar;
+        has-avatar: p.has-avatar;
+        color-index: p.hue-index;
+        size: 20px;
+    }
+    if card.live.more-players > 0: AvatarOverflow {
+        count: card.live.more-players;
+        size: 20px;
+    }
+}
 
-    Text {
-        text: card.game-name;
-        font-family: Theme.font-display;
-        font-size: 14px;
-        font-weight: Theme.weight-display;
-        color: Theme.text-primary;
-        overflow: elide;
-    }
-    HorizontalLayout {
-        height: 20px;
-        spacing: 4px;
-        alignment: start;
-        for p in card.live.players: UserAvatar {
-            initials: p.initials;
-            avatar: p.avatar;
-            has-avatar: p.has-avatar;
-            color-index: p.hue-index;
-            size: 20px;
-        }
-        if card.live.more-players > 0: AvatarOverflow {
-            count: card.live.more-players;
-            size: 20px;
-        }
-    }
-    Text {
-        text: card.live.names-line;
-        font-weight: Theme.weight-sentence;
-        font-family: Theme.font-body;
-        font-size: 12px;
-        color: Theme.text-sub;
-        overflow: elide;
-    }
-    Text {
-        text: card.live.since-text;
-        font-weight: Theme.weight-sentence;
-        font-family: Theme.font-body;
-        font-size: 12px;
-        color: Theme.text-value;
-    }
+component LiveSessionName inherits Text {
+    in property <FeedCardData> card;
+
+    text: card.game-name;
+    font-family: Theme.font-display;
+    font-size: 13px;
+    font-weight: Theme.weight-display;
+    color: Theme.text-primary;
+    overflow: elide;
+}
+
+component LiveSinceText inherits Text {
+    in property <FeedCardData> card;
+
+    text: card.live.since-text;
+    font-weight: Theme.weight-sentence;
+    font-family: Theme.font-body;
+    font-size: 12px;
+    color: Theme.text-sub;
 }
 
 // The red dot of a live card. Red is only this.
@@ -1884,8 +1877,10 @@ component LivePip inherits Rectangle {
 }
 
 // Live session card: a game in progress (mockup cold-start frames 5 and 8).
-// Red is only the pip. A cell stacks art, name and players; the wide slot lays
-// the art beside them.
+// The shape of the session card: the fixed game tile at the left, then the
+// name, the player octagons and "since N min". Red is only the pip of the
+// label. The wide slot keeps the tile and puts the name and the octagons on
+// one row.
 component LiveSessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
@@ -1913,9 +1908,7 @@ component LiveSessionCard inherits Rectangle {
 
     VerticalLayout {
         padding: 14px;
-        padding-left: 16px;
-        padding-right: 16px;
-        spacing: 10px;
+        spacing: 8px;
         alignment: start;
 
         HorizontalLayout {
@@ -1934,28 +1927,42 @@ component LiveSessionCard inherits Rectangle {
             }
         }
 
-        if !root.wide: VerticalLayout {
+        HorizontalLayout {
             spacing: 10px;
-            GameArt {
-                card: root.card;
-                size: 84px;
-                art-width: root.width - 32px;
-                art-height: 84px;
+            height: root.wide ? 44px : 58px;
+
+            Rectangle {
+                width: 40px;
+                Rectangle {
+                    width: 40px;
+                    height: 40px;
+                    y: 0px;
+                    GameArt { card: root.card; size: 40px; }
+                }
             }
-            LiveSessionText { card: root.card; }
+
+            if !root.wide: VerticalLayout {
+                alignment: start;
+                spacing: 2px;
+                horizontal-stretch: 1;
+                LiveSessionName { card: root.card; }
+                LivePlayers { card: root.card; }
+                LiveSinceText { card: root.card; }
+            }
+
+            if root.wide: VerticalLayout {
+                alignment: center;
+                spacing: 4px;
+                horizontal-stretch: 1;
+                HorizontalLayout {
+                    spacing: 12px;
+                    LiveSessionName { card: root.card; horizontal-stretch: 1; }
+                    LivePlayers { card: root.card; horizontal-stretch: 0; }
+                }
+                LiveSinceText { card: root.card; }
+            }
         }
 
-        if root.wide: HorizontalLayout {
-            spacing: 16px;
-            height: 156px;
-            GameArt {
-                card: root.card;
-                size: 156px;
-                art-width: 292px;
-                art-height: 156px;
-            }
-            LiveSessionText { card: root.card; centered: true; horizontal-stretch: 1; }
-        }
     }
 }
 

@@ -7008,6 +7008,99 @@ fn two_crewmates_in_the_same_game_share_one_card() {
     assert_eq!(left[0].live.names_line.as_str(), "Jonas");
 }
 
+/// A session started 3 min ago is on the feed from the first sensor report.
+/// Nothing prunes a live card: the server curation only scores the ended
+/// session card.
+#[test]
+fn a_live_session_started_3_min_ago_is_on_the_feed() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+    h.emit(game_detected(
+        "counter-strike-2",
+        "Counter-Strike 2",
+        now_ms() - 3 * 60_000 - 5_000,
+    ));
+    assert_eq!(count_of(&h, "LiveSessionCard"), 1);
+    assert_eq!(
+        live_cards(&h).remove(0).live.since_text.as_str(),
+        "since 3 min"
+    );
+}
+
+/// The live card has the shape of the session card: a fixed game tile of the
+/// session tile's size, in the wide slot and in a cell, and a card height that
+/// equals the side cell.
+#[test]
+fn the_live_card_has_the_session_tile_size_in_the_wide_slot_and_in_a_cell() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![h2h_title(
+                "the_carry",
+                "user-1",
+                serde_json::json!(4167.0),
+                "h",
+            )],
+            vec![h2h_pair("u2", 1, 1)],
+            None,
+        )]),
+    });
+    h.emit(game_detected(
+        "counter-strike-2",
+        "Counter-Strike 2",
+        now_ms() - 12 * 60_000,
+    ));
+    h.emit(mate_plays("u2", "rocket-league", "Rocket League", 20));
+    assert_eq!(count_of(&h, "LiveSessionCard"), 2);
+    let cards: Vec<ElementHandle> =
+        ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard").collect();
+    let (wide, cell) = if cards[0].size().width > cards[1].size().width {
+        (&cards[0], &cards[1])
+    } else {
+        (&cards[1], &cards[0])
+    };
+    assert!(wide.size().width > 420.0, "one card is in the wide slot");
+    assert!(cell.size().width < 420.0, "one card is in a cell");
+    assert_eq!(
+        wide.size().height,
+        cell.size().height,
+        "the wide card is as high as the side cell"
+    );
+    for card in [wide, cell] {
+        let (pos, size) = (card.absolute_position(), card.size());
+        let tiles: Vec<ElementHandle> =
+            ElementHandle::find_by_element_type_name(h.app(), "GameArt")
+                .filter(|t| {
+                    let p = t.absolute_position();
+                    p.x >= pos.x
+                        && p.y >= pos.y
+                        && p.x < pos.x + size.width
+                        && p.y < pos.y + size.height
+                })
+                .collect();
+        assert_eq!(tiles.len(), 1, "one tile in the card");
+        assert_eq!(tiles[0].size().width, 40.0, "the session tile width");
+        assert_eq!(tiles[0].size().height, 40.0, "the session tile height");
+    }
+}
+
 /// A live session holds the wide slot, so the wide head2head card of a crew of
 /// one becomes the cell beside it. When the game ends the wide card is back.
 #[test]
