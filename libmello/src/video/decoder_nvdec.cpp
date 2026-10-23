@@ -221,7 +221,7 @@ DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_
     CUVIDSOURCEDATAPACKET packet{};
     packet.payload      = data;
     packet.payload_size = static_cast<unsigned long>(size);
-    packet.flags        = CUVID_PKT_TIMESTAMP;
+    packet.flags        = CUVID_PKT_TIMESTAMP | CUVID_PKT_ENDOFPICTURE;
     packet.timestamp    = 0;
 
     auto cuvidParseVideoData_fn = reinterpret_cast<decltype(&cuvidParseVideoData)>(
@@ -364,6 +364,16 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
     create_info.ulNumDecodeSurfaces = 8;
     create_info.ulNumOutputSurfaces = 2;
     create_info.DeinterlaceMode     = cudaVideoDeinterlaceMode_Weave;
+
+    // A picture of the old sequence the parser showed in this parse call
+    // (the last one before the new SPS) indexes a surface of the decoder
+    // that goes now. Mapped on the new decoder, the index is another
+    // surface: a broken picture at the new size. It is not shown.
+    if (!self->pending_display_.empty()) {
+        MELLO_LOG_INFO(TAG, "NVDEC: %zu picture(s) of the old sequence not shown at the size change",
+                       self->pending_display_.size());
+        self->pending_display_.clear();
+    }
 
     if (self->decoder_) {
         auto fn = reinterpret_cast<decltype(&cuvidDestroyDecoder)>(

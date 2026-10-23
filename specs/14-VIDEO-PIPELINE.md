@@ -854,6 +854,16 @@ CUDA-D3D11 interop, no host copy:
   gives the rows of the two copies, so a stream with a larger coded height
   cannot write past the slot.
 - The display size comes from the sequence callback (`display_area`).
+- Each packet is one access unit and carries `CUVID_PKT_ENDOFPICTURE`: the
+  parser shows the picture in the same `cuvidParseVideoData` call. Without
+  the flag it shows each picture only when the next access unit comes, one
+  frame late.
+- A size change (an SPS at a new size) makes the decoder again in the
+  sequence callback. A picture of the old sequence still waiting to be shown
+  in that call indexes a surface of the old decoder; it is not shown. The
+  slots take the new size at their next copy (`ensure_slot`), the converter
+  makes the shared RGBA texture again at the new size, and the presenter
+  resizes its swap chain to it.
 
 ### 7.4 AMF Decoder
 
