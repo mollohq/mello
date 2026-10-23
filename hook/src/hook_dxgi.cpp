@@ -222,7 +222,7 @@ bool is_target_swap_chain(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc
 }
 
 // The body of the present hook. Runs on the game's present thread. Returns
-// true for a Direct3D 12 swap chain.
+// true for the Direct3D 12 swap chain that is captured.
 bool capture_present(IDXGISwapChain* swap) {
     HookState& state = HookState::instance();
     if (!state.capture_wanted()) {
@@ -247,7 +247,9 @@ bool capture_present(IDXGISwapChain* swap) {
             g_res.ready ? static_cast<uint64_t>(g_res.width) * g_res.height : 0;
         if (d3d12_capture_present(swap, identity, desc, d3d11_area, state) ==
             D3d12Present::Handled) {
-            return true;
+            // Only the captured swap chain may name the presenting queue: a
+            // smaller one (a launcher) can present on another queue.
+            return d3d12_is_target(identity);
         }
     }
     if (!is_target_swap_chain(swap, desc)) return false;
