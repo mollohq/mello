@@ -1023,6 +1023,48 @@ TEST(RtpVideoSenderRetransmitTest, RetransmitsUseAtMostTheTargetRate) {
     EXPECT_GE(admitted, 15u);
 }
 
+// Retransmits leave at most at the target rate (40 ms burst), not at the
+// pacer rate (2.5 x the target). At a cap change the repairs of a burst of
+// lost packets went at 2.5 x the target into the link that had just dropped
+// them (stage 4 gate, hw congested).
+TEST(RtpVideoSenderRetransmitTest, RetransmitsLeaveAtMostAtTheTargetRate) {
+    LoopbackVideoLink link(true);
+    // 400 kbps ceiling: the pacer runs at 1 Mbps, retransmits at 400 kbps.
+    RtpVideoSender sender = link.make_sender(400'000, {}, {}, {}, false, true);
+
+    const auto big = make_large_delta_access_unit(24 * 1024);
+    ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 0));
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) { return stats.access_units_sent >= 1; },
+        sender,
+        10s
+    ));
+    std::this_thread::sleep_for(100ms);
+    std::vector<uint16_t> sequences;
+    for (const auto& packet : link.captured_rtp()) {
+        sequences.push_back(packet.sequence);
+    }
+    link.clear_captured_rtp();
+    // About 22 kB of repairs, under the 25 kB retransmit limit.
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), mello::transport::detail::make_generic_nack_packet(
+                                                     0xfeedface, kSenderSsrc, sequences)));
+    ASSERT_TRUE(link.wait_for_captured_count(sequences.size(), 5s));
+    const auto packets = link.captured_rtp();
+    size_t bytes = 0;
+    for (const auto& packet : packets) {
+        EXPECT_EQ(packet.ssrc, kRtxSsrc);
+        bytes += packet.payload_size + 12;
+    }
+    const auto spread = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets.back().received_at - packets.front().received_at);
+    // At 400 kbps less the 2 kB burst: about (bytes - 2000) x 8 / 400 ms.
+    const auto expected_ms = static_cast<int64_t>((bytes - 2'000) * 8 / 400);
+    std::printf("[rtx-pace] %zu repairs, %zu bytes in %lld ms (%lld ms at the target rate)\n",
+                packets.size(), bytes, static_cast<long long>(spread.count()),
+                static_cast<long long>(expected_ms));
+    EXPECT_GE(spread.count(), expected_ms * 8 / 10);
+}
+
 // RFC 4588: with RTX negotiated a retransmit goes out on the RTX SSRC and
 // payload type, with the original sequence number as the first two payload
 // bytes. The old sender re-sent the packet on the media SSRC with its own

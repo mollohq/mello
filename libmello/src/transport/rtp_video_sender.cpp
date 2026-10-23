@@ -1243,11 +1243,49 @@ struct RtpVideoSender::State
         }
     }
 
-    // Sends one packet of the next kind in priority order: retransmits,
-    // then media, then padding (probes only). Returns false when there was
-    // nothing to send.
+    // The retransmit rate: the goog_cc target (without goog_cc the manager
+    // ceiling). Retransmits leave at most at this rate, with the same 40 ms
+    // burst as the pacer; the pacer rate (2.5 x the target) is for media
+    // bursts. A cap change loses a burst of packets, and their repairs at
+    // 2.5 x the target went into the link that had just dropped them: 5 to
+    // 7 Mbps of repairs into 4.8 Mbps (stage 4 gate, hw congested).
+    uint64_t retransmit_pacing_bps() const noexcept {
+        uint64_t rate = gcc_target_bps.load(std::memory_order_relaxed);
+        if (rate == 0) {
+            rate = pacing_target_bps.load(std::memory_order_relaxed);
+        }
+        return std::max<uint64_t>(rate, 50'000);
+    }
+
+    // When the retransmit budget allows the next repair.
+    int64_t rtx_ready_us(int64_t now_us) {
+        const uint64_t rate = retransmit_pacing_bps();
+        if (now_us > rtx_budget_updated_us) {
+            rtx_debt_bytes = std::max(
+                0.0,
+                rtx_debt_bytes
+                    - static_cast<double>(now_us - rtx_budget_updated_us)
+                        * static_cast<double>(rate) / 8e6);
+        }
+        rtx_budget_updated_us = now_us;
+        const double burst =
+            static_cast<double>(rate) * static_cast<double>(kBurstWindowUs) / 8e6;
+        if (rtx_debt_bytes <= burst) {
+            return now_us;
+        }
+        return now_us + static_cast<int64_t>(
+            (rtx_debt_bytes - burst) * 8e6 / static_cast<double>(rate)) + 1;
+    }
+
+    // Sends one packet of the next kind in priority order: retransmits
+    // (inside their own budget, retransmit_pacing_bps), then media, then
+    // padding (probes only). Returns false when there was nothing to send.
     bool send_one(int64_t now_us, ActiveProbe* probe) {
-        if (rtc::message_ptr original = pop_rtx()) {
+        rtc::message_ptr original;
+        if (probe != nullptr || rtx_ready_us(now_us) <= now_us) {
+            original = pop_rtx();
+        }
+        if (original) {
             rtc::message_ptr packet = retransmit_packet(original);
             const size_t size = packet ? transmit(packet, probe, now_us) : 0;
             if (size > 0) {
@@ -1256,6 +1294,7 @@ struct RtpVideoSender::State
                 rtx_sent_window.emplace_back(now_us, size);
                 rtx_sent_window_bytes += size;
                 (void)retransmit_rate_bps(now_us);
+                rtx_debt_bytes += static_cast<double>(size);
             }
             charge(size, probe, now_us);
             return true;
@@ -1325,7 +1364,11 @@ struct RtpVideoSender::State
     }
 
     bool has_media_work() {
-        if (!media_packets.empty() || has_rtx()) {
+        return has_fresh_media() || has_rtx();
+    }
+
+    bool has_fresh_media() {
+        if (!media_packets.empty()) {
             return true;
         }
         std::lock_guard<std::mutex> lock(queue_mutex);
@@ -1467,7 +1510,11 @@ struct RtpVideoSender::State
                 wait_until_us(process_deadline);
                 continue;
             }
-            const int64_t ready_us = budget_ready_us(now_us);
+            int64_t ready_us = budget_ready_us(now_us);
+            if (!has_fresh_media()) {
+                // Only repairs wait: they also need their own budget.
+                ready_us = std::max(ready_us, rtx_ready_us(now_us));
+            }
             if (ready_us > now_us) {
                 wait_until_us(std::min(ready_us, process_deadline));
                 continue;
@@ -1548,6 +1595,9 @@ struct RtpVideoSender::State
     std::deque<ActiveProbe> probes;
     double budget_debt_bytes = 0.0;
     int64_t budget_updated_us = 0;
+    // The retransmit budget (rtx_ready_us).
+    double rtx_debt_bytes = 0.0;
+    int64_t rtx_budget_updated_us = 0;
     int64_t first_unfed_send_us = 0;
     bool paused = false;
     int64_t next_keepalive_us = 0;
