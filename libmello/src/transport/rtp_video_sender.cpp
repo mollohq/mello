@@ -35,6 +35,20 @@ constexpr size_t kNackCachePackets = 512;
 constexpr auto kNackCacheMaxAge = std::chrono::microseconds(1'000'000);
 // Bound on retransmits queued for the pacing worker.
 constexpr size_t kMaxRtxQueuePackets = 256;
+// Retransmit limits, libwebrtc's two rules (RtpPacketHistory and the
+// retransmission RateLimiter of RtpTransportControllerSend):
+// - a packet is resent at most once per round trip. A receiver repeats its
+//   NACK until the repair arrives, and every repeat inside one round trip
+//   asks for a repair that is already on its way. Until the first round
+//   trip sample the interval is kDefaultResendIntervalUs.
+// - retransmits use at most the target rate over a 500 ms window.
+// Without them a cap change made 5 to 7 Mbps of retransmits into a 4.8 Mbps
+// link (stage 4 gate, hw congested): the loss doubled and the goog_cc
+// loss-based estimate went to 450 kbps.
+constexpr int64_t kMinResendIntervalUs = 5'000;
+constexpr int64_t kDefaultResendIntervalUs = 100'000;
+constexpr int64_t kRetransmitRateWindowUs = 500'000;
+constexpr size_t kMaxResendRecords = 4'096;
 constexpr uint64_t kMicrosPerSecond = 1'000'000;
 constexpr uint64_t kRtpTimestampModulus = uint64_t{1} << 32;
 
@@ -702,6 +716,7 @@ struct RtpVideoSender::State
         }
         const auto* bytes = reinterpret_cast<const uint8_t*>(packet->data());
         const uint16_t sequence = read_u16_be(bytes + 2);
+        const int64_t now_us = steady_now_us();
         {
             std::lock_guard<std::mutex> lock(queue_mutex);
             // A packet older than the newest IDR is useless to a receiver
@@ -709,6 +724,10 @@ struct RtpVideoSender::State
             if (has_repair_floor
                 && static_cast<int16_t>(sequence - repair_floor_sequence) < 0) {
                 rtx_queue_dropped.fetch_add(1, std::memory_order_relaxed);
+                return;
+            }
+            if (!admit_resend_locked(sequence, packet->size(), now_us)) {
+                rtx_suppressed.fetch_add(1, std::memory_order_relaxed);
                 return;
             }
             if (rtx_queue.size() >= kMaxRtxQueuePackets) {
@@ -719,6 +738,46 @@ struct RtpVideoSender::State
             wake_pending = true;
         }
         queue_cv.notify_one();
+    }
+
+    // Under queue_mutex. The two retransmit limits (kMinResendIntervalUs
+    // above); records the resend when both allow it.
+    bool admit_resend_locked(uint16_t sequence, size_t bytes, int64_t now_us) {
+        const int64_t rtt = static_cast<int64_t>(
+            feedback_rtt_us.load(std::memory_order_relaxed));
+        const int64_t interval = std::max(
+            kMinResendIntervalUs, rtt > 0 ? rtt : kDefaultResendIntervalUs);
+        const auto last = resent_at_us.find(sequence);
+        if (last != resent_at_us.end() && now_us - last->second < interval) {
+            return false;
+        }
+        while (!resend_window.empty()
+               && now_us - resend_window.front().first >= kRetransmitRateWindowUs) {
+            resend_window_bytes -= resend_window.front().second;
+            resend_window.pop_front();
+        }
+        uint64_t limit_bps = gcc_target_bps.load(std::memory_order_relaxed);
+        if (limit_bps == 0) {
+            limit_bps = pacing_target_bps.load(std::memory_order_relaxed);
+        }
+        const uint64_t limit_bytes =
+            limit_bps * static_cast<uint64_t>(kRetransmitRateWindowUs) / 8'000'000;
+        if (resend_window_bytes + bytes > limit_bytes) {
+            return false;
+        }
+        resend_window.emplace_back(now_us, bytes);
+        resend_window_bytes += bytes;
+        if (resent_at_us.size() >= kMaxResendRecords) {
+            // The NACK cache keeps a packet for 1 s; older records are dead.
+            for (auto it = resent_at_us.begin(); it != resent_at_us.end();) {
+                it = now_us - it->second >= 1'000'000 ? resent_at_us.erase(it) : std::next(it);
+            }
+            if (resent_at_us.size() >= kMaxResendRecords) {
+                resent_at_us.clear();
+            }
+        }
+        resent_at_us[sequence] = now_us;
+        return true;
     }
 
     void record_rtx_stats(uint64_t requests, uint64_t cache_misses) noexcept {
@@ -879,6 +938,11 @@ struct RtpVideoSender::State
                 continue;
             }
             controller->on_feedback(report.feedback, report.arrived_us);
+        }
+        if (controller) {
+            feedback_rtt_us.store(
+                static_cast<uint64_t>(std::max<int64_t>(controller->rtt_us(), 0)),
+                std::memory_order_relaxed);
         }
         if (!reports.empty()) {
             take_probes(now_us);
@@ -1398,6 +1462,10 @@ struct RtpVideoSender::State
     // asking for local IDRs.
     bool paused_for_producer = false;
     std::deque<rtc::message_ptr> rtx_queue;
+    // The retransmit limits (admit_resend_locked), under queue_mutex.
+    std::unordered_map<uint16_t, int64_t> resent_at_us;
+    std::deque<std::pair<int64_t, size_t>> resend_window;
+    uint64_t resend_window_bytes = 0;
     std::deque<QueuedFeedback> feedback_queue;
     uint16_t repair_floor_sequence = 0;
     bool has_repair_floor = false;
@@ -1467,6 +1535,8 @@ struct RtpVideoSender::State
     std::atomic<uint64_t> rtx_cache_misses{0};
     std::atomic<uint64_t> rtx_queue_dropped{0};
     std::atomic<uint64_t> rtx_queue_flushes{0};
+    std::atomic<uint64_t> rtx_suppressed{0};
+    std::atomic<uint64_t> feedback_rtt_us{0};
     std::atomic<uint64_t> pli_requests{0};
     std::atomic<uint64_t> remb_reports{0};
     std::atomic<uint32_t> latest_remb_bitrate_bps{0};
@@ -1883,6 +1953,8 @@ RtpVideoSenderStats RtpVideoSender::stats() const noexcept {
     result.rtx_queue_flushes = load(state->rtx_queue_flushes);
     result.reprobes = load(state->reprobes);
     result.idr_access_units_over_50ms = load(state->idr_over_50ms);
+    result.rtx_suppressed = load(state->rtx_suppressed);
+    result.feedback_rtt_us = load(state->feedback_rtt_us);
     return result;
 }
 

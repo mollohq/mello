@@ -13,6 +13,7 @@
 #include <algorithm>
 #include <cstdlib>
 #include <deque>
+#include <limits>
 #include <map>
 #include <optional>
 #include <string>
@@ -312,6 +313,31 @@ size_t GoogCcController::on_feedback(const TwccFeedback& feedback, int64_t now_u
               [](const webrtc::PacketResult& a, const webrtc::PacketResult& b) {
                   return a.sent_packet.sequence_number < b.sent_packet.sequence_number;
               });
+    // The round trip without the receiver's feedback hold, as goog_cc's
+    // feedback-only mode measures it: for each received packet, the time
+    // from its send to this report, less the time the receiver held it
+    // after it arrived (the newest arrival minus its arrival). The minimum
+    // over the report is one sample; the sender smooths it (1/8 weight).
+    std::optional<Timestamp> newest_arrival;
+    for (const auto& result : report.packet_feedbacks) {
+        if (result.IsReceived()
+            && (!newest_arrival || result.receive_time > *newest_arrival)) {
+            newest_arrival = result.receive_time;
+        }
+    }
+    if (newest_arrival) {
+        int64_t sample_us = std::numeric_limits<int64_t>::max();
+        for (const auto& result : report.packet_feedbacks) {
+            if (!result.IsReceived()) {
+                continue;
+            }
+            const int64_t held_us = (*newest_arrival - result.receive_time).us();
+            const int64_t round_trip_us = now_us - result.sent_packet.send_time.us();
+            sample_us = std::min(sample_us, round_trip_us - held_us);
+        }
+        sample_us = std::max<int64_t>(sample_us, 0);
+        rtt_us_ = rtt_us_ == 0 ? sample_us : (rtt_us_ * 7 + sample_us) / 8;
+    }
     const size_t matched = report.packet_feedbacks.size();
     Impl::apply(*this, impl.controller->OnTransportPacketsFeedback(report));
     return matched;

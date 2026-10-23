@@ -95,6 +95,11 @@ struct RtpVideoSenderStats {
     uint64_t rtx_queue_flushes = 0;
     // Re-probes after an allocation raise (a rung step up).
     uint64_t reprobes = 0;
+    // NACKed packets not resent: one resend per round trip per packet, and
+    // retransmits at most at the target rate (libwebrtc's two rules).
+    uint64_t rtx_suppressed = 0;
+    // goog_cc's smoothed round trip from the TWCC reports; 0 unknown.
+    uint64_t feedback_rtt_us = 0;
 };
 
 // One producer thread may call send_access_unit(). It only copies accepted

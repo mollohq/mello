@@ -170,6 +170,9 @@ public:
     uint64_t pacing_bps() const noexcept { return pacing_bps_; }
     uint64_t padding_bps() const noexcept { return padding_bps_; }
     uint64_t bytes_in_flight() const noexcept { return in_flight_bytes_; }
+    // The smoothed round trip from the TWCC reports, microseconds; 0 until
+    // the first report with a received packet.
+    int64_t rtt_us() const noexcept { return rtt_us_; }
     std::vector<SendProbeCluster> take_probe_clusters();
 
 private:
@@ -181,6 +184,7 @@ private:
     uint64_t pacing_bps_ = 0;
     uint64_t padding_bps_ = 0;
     uint64_t in_flight_bytes_ = 0;
+    int64_t rtt_us_ = 0;
     std::vector<SendProbeCluster> probes_;
 };
 

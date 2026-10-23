@@ -2299,6 +2299,8 @@ void PeerConnectionImpl::video_get_stats(MelloRtpVideoStats* stats) const noexce
         stats->tx_idr_access_units_over_50ms = tx.idr_access_units_over_50ms;
         stats->tx_send_paused = tx.send_paused ? 1 : 0;
         stats->tx_rtx_negotiated = rtx_payload_type_ != 0 ? 1 : 0;
+        stats->tx_rtx_suppressed = tx.rtx_suppressed;
+        stats->tx_feedback_rtt_us = tx.feedback_rtt_us;
         stats->tx_active = 1;
     }
 

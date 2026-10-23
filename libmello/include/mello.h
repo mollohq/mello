@@ -556,6 +556,8 @@ typedef struct MelloRtpVideoStats {
     uint64_t tx_idr_access_units_over_50ms; /* IDRs whose send took more than 50 ms */
     uint8_t tx_send_paused;
     uint8_t tx_rtx_negotiated;            /* RFC 4588 RTX on its own SSRC */
+    uint64_t tx_rtx_suppressed;           /* NACKed packets not resent: once per round trip, target rate */
+    uint64_t tx_feedback_rtt_us;          /* goog_cc round trip from the TWCC reports, 0 unknown */
 } MelloRtpVideoStats;
 
 /** Create a peer. `ctx` may be NULL. With a context, a voice peer counts

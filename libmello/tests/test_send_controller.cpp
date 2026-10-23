@@ -82,6 +82,8 @@ struct Result {
     uint64_t lost_packets = 0;
     uint64_t probe_clusters = 0;
     int64_t pauses = 0;
+    // The controller's round trip at the end of the run.
+    int64_t rtt_us = 0;
 };
 
 class Simulation {
@@ -188,6 +190,7 @@ public:
             }
         }
         result.pauses = pauses_;
+        result.rtt_us = controller_->rtt_us();
         return result;
     }
 
@@ -447,6 +450,18 @@ TEST(SendController, TheStartReachesThePresetWithin3Seconds) {
     EXPECT_LE(reach, 3.0);
     EXPECT_GE(r.probe_clusters, 1u);
     EXPECT_EQ(r.lost_packets, 0u);
+}
+
+// The round trip for the retransmit rule (one resend per round trip): 10 ms
+// each way, without the receiver's 50 ms feedback hold. A plain "report
+// arrival minus send time" would read up to 70 ms.
+TEST(SendController, TheRoundTripLeavesOutTheFeedbackHold) {
+    REQUIRE_GOOG_CC();
+    Simulation sim(LinkProfile{}, kPreset, kPreset);
+    const Result r = sim.run(3'000'000);
+    std::printf("[send-controller] round trip: %.1f ms\n", static_cast<double>(r.rtt_us) / 1000.0);
+    EXPECT_GE(r.rtt_us, 18'000);
+    EXPECT_LE(r.rtt_us, 30'000);
 }
 
 // The stage 4 gate: "on congested the bitrate reaches the cap within 2 s".

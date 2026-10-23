@@ -119,6 +119,16 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ),
     ("tx_reprobes", "Host re-probes after an allocation raise", 0),
     ("tx_rtx_negotiated", "RFC 4588 RTX negotiated (1 = yes)", 0),
+    (
+        "tx_rtx_suppressed",
+        "NACKed packets not resent (once per round trip, target rate)",
+        0,
+    ),
+    (
+        "tx_feedback_rtt_ms",
+        "goog_cc round trip at the end (ms)",
+        0,
+    ),
     ("host_keyframes", "Keyframes the host encoded", 0),
     (
         "host_frames_late",

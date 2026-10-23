@@ -866,7 +866,8 @@ TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     const uint16_t a = first[0].sequence;
     const uint16_t b = first[1].sequence;
     const uint16_t c = first[2].sequence;
-    // Hold the pacer on a large access unit, then ask for 30 repairs.
+    // Hold the pacer on a large access unit, then ask for the same three
+    // repairs ten times. One resend per round trip: three are queued.
     const auto big = make_large_delta_access_unit(16 * 1024);
     ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 33'333));
     for (int i = 0; i < 10; ++i) {
@@ -885,8 +886,73 @@ TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     ));
     const auto stats = sender.stats();
     EXPECT_GE(stats.pli_requests, 1u);
-    EXPECT_GE(stats.rtx_queue_dropped, 20u);
-    EXPECT_LE(stats.rtx_sent, 10u);
+    EXPECT_GE(stats.rtx_suppressed, 27u);
+    EXPECT_GE(stats.rtx_queue_dropped, 2u);
+    EXPECT_LE(stats.rtx_sent, 1u);
+}
+
+// libwebrtc's first retransmit rule: a packet is resent at most once per
+// round trip. A receiver repeats its NACK until the repair arrives; the old
+// sender resent the packet for every repeat, and at a cap change the
+// repeats made 5 to 7 Mbps of retransmits into a 4.8 Mbps link (stage 4
+// gate, hw congested).
+TEST(RtpVideoSenderRetransmitTest, ARepeatedNackInsideOneRoundTripResendsOnce) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(3, 10s));
+    const uint16_t lost = link.captured_rtp().front().sequence;
+    // No TWCC here: the round trip is unknown, so the interval is 100 ms.
+    for (int i = 0; i < 5; ++i) {
+        ASSERT_TRUE(send_rtcp(link.receiver_track(), make_nack_packet({lost})));
+    }
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.rtx_requests >= 5 && stats.rtx_sent >= 1;
+        },
+        sender,
+        5s
+    ));
+    const auto stats = sender.stats();
+    EXPECT_EQ(stats.rtx_sent, 1u);
+    EXPECT_EQ(stats.rtx_suppressed, 4u);
+}
+
+// libwebrtc's second retransmit rule: retransmits use at most the target
+// rate over 500 ms. At a 400 kbps ceiling that is 25 kB: a NACK for all 55
+// packets of a 64 KiB access unit resends about 20 of them.
+TEST(RtpVideoSenderRetransmitTest, RetransmitsUseAtMostTheTargetRate) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(400'000);
+
+    const auto big = make_large_delta_access_unit(64 * 1024);
+    ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(55, 10s));
+    std::vector<uint16_t> sequences;
+    for (const auto& packet : link.captured_rtp()) {
+        sequences.push_back(packet.sequence);
+    }
+    const auto nack = mello::transport::detail::make_generic_nack_packet(
+        0xfeedface, kSenderSsrc, sequences);
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), nack));
+    ASSERT_TRUE(link.wait_for_stats(
+        [&sequences](const RtpVideoSenderStats& stats) {
+            return stats.rtx_requests >= sequences.size();
+        },
+        sender,
+        5s
+    ));
+    const auto stats = sender.stats();
+    const uint64_t admitted = stats.rtx_requests - stats.rtx_suppressed - stats.rtx_cache_misses;
+    std::printf("[rtx-limit] %llu NACKed, %llu admitted, %llu suppressed\n",
+                static_cast<unsigned long long>(stats.rtx_requests),
+                static_cast<unsigned long long>(admitted),
+                static_cast<unsigned long long>(stats.rtx_suppressed));
+    EXPECT_EQ(stats.rtx_cache_misses, 0u);
+    EXPECT_LE(admitted, 23u);
+    EXPECT_GE(admitted, 15u);
 }
 
 // RFC 4588: with RTX negotiated a retransmit goes out on the RTX SSRC and

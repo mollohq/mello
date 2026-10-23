@@ -563,6 +563,11 @@ fn run_profile(
     put("tx_send_pauses", Some(hv.tx_send_pauses as f64));
     put("tx_reprobes", Some(hv.tx_reprobes as f64));
     put("tx_rtx_negotiated", Some(f64::from(hv.tx_rtx_negotiated)));
+    put("tx_rtx_suppressed", Some(hv.tx_rtx_suppressed as f64));
+    put(
+        "tx_feedback_rtt_ms",
+        Some(hv.tx_feedback_rtt_us as f64 / 1000.0),
+    );
     put(
         "host_keyframes",
         Some(f64::from(host_end.stats.keyframes_sent)),
