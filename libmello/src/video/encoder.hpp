@@ -50,6 +50,18 @@ inline bool bitrate_step_forces_idr(uint32_t from_kbps, uint32_t to_kbps) {
            static_cast<uint64_t>(to_kbps) * 4 < static_cast<uint64_t>(from_kbps) * 3;
 }
 
+/// The VBV of every backend, in bits: half a second of the peak rate (1.25 x
+/// the bitrate), at least four frames of the bitrate. A one-frame VBV starves
+/// IDRs and pumps the quality (AMF and QSV had one frame before
+/// streaming-quality stage 4; NVENC's compute_vbv_bits is this rule).
+inline uint64_t vbv_bits_for(uint32_t bitrate_kbps, uint32_t fps) {
+    const uint64_t avg = static_cast<uint64_t>(bitrate_kbps) * 1000;
+    const uint64_t peak = avg + avg / 4;
+    const uint64_t frames = fps > 0 ? fps : 60;
+    const uint64_t four_frames = avg * 4 / frames;
+    return peak / 2 > four_frames ? peak / 2 : four_frames;
+}
+
 struct EncoderStats {
     uint32_t bitrate_kbps;
     uint32_t fps_actual;
@@ -67,8 +79,11 @@ public:
 #ifdef _WIN32
     virtual bool        encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) = 0;
 #elif defined(__APPLE__)
-    /// Encode one frame from a CVPixelBufferRef (passed as void*). BGRA input accepted.
-    virtual bool        encode(void* cv_pixel_buffer, EncodedPacket& out) = 0;
+    /// Encode one frame from a CVPixelBufferRef (passed as void*). BGRA input
+    /// accepted. `capture_us` is the frame's capture time: the presentation
+    /// time of the frame (stage 4; it was frame count / fps, which is wrong
+    /// at the 30 fps rung and after a dropped frame).
+    virtual bool        encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) = 0;
 #endif
 
     virtual void        request_keyframe() = 0;

@@ -38,6 +38,11 @@ public:
     int         max_cost_tier() const override { return kMaxCostTier; }
 
     static bool is_available();
+    /// MELLO_ENABLE_QSV=1 in the process environment. QSV stays out of the
+    /// factory without it until it is tested on an Intel GPU (stage 4).
+    static bool enabled();
+    /// The VBV in KB (vbv_bits_for, rounded up). Pure.
+    static mfxU16 vbv_kb_for(uint32_t bitrate_kbps, uint32_t fps);
 
     /// The oneVPL TargetUsage of a cost tier: the NVENC tiers' equivalent on
     /// Intel. Tier 0 is balanced (4), tier 1 is 6, tier 2 is best speed (7).
@@ -53,6 +58,7 @@ private:
     mfxVideoParam     video_params_{};
     mfxExtCodingOption2 opt2_{};
     mfxExtCodingOption3 opt3_{};
+    mfxExtVideoSignalInfo signal_{};
     mfxBitstream      bitstream_{};
     std::vector<uint8_t> bs_buf_;
 

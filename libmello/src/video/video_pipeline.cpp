@@ -5,6 +5,7 @@
 #include "frame_cadence.hpp"
 #include "../util/log.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -43,8 +44,19 @@ using mello::video::kMinEncodeHeight;
 // viewer repairs a loss with NACK and asks for an IDR only on real loss, so
 // the periodic IDR (6 to 10 times a delta frame) goes from every 2 s to every
 // 10 s. IDRs on demand (join, PLI, a rung change) are unchanged.
+// MELLO_STREAM_GOP_SECONDS (1 to 60) overrides it for the GOP measurement of
+// the streaming gate.
 static uint32_t keyframe_interval_for(uint32_t fps) {
-    return std::max<uint32_t>(fps, 1) * 10;
+    uint32_t seconds = 10;
+#ifdef _WIN32
+    char buf[8] = {};
+    const DWORD n = GetEnvironmentVariableA("MELLO_STREAM_GOP_SECONDS", buf, sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        const long v = std::strtol(buf, nullptr, 10);
+        if (v >= 1 && v <= 60) seconds = static_cast<uint32_t>(v);
+    }
+#endif
+    return std::max<uint32_t>(fps, 1) * seconds;
 }
 
 static uint64_t now_us() {
@@ -361,7 +373,7 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_control_.encode(cv_pixel_buffer, packet)) {
+    if (encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet)) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {

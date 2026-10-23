@@ -1574,6 +1574,30 @@ TEST(EncoderCostTier, QsvTargetUsageOnlyGoesTowardsSpeed) {
     }
 }
 
+// Streaming-quality stage 4, backend parity: every backend's VBV is half a
+// second of the peak rate (1.25 x the bitrate), at least four frames. AMF and
+// QSV had one frame (8 Mbps at 60 fps: 133 kbit), which starved IDRs.
+TEST(EncoderVbv, HalfASecondOfThePeakRateOnEveryBackend) {
+    EXPECT_EQ(vbv_bits_for(8'000, 60), 5'000'000u);
+    EXPECT_EQ(vbv_bits_for(5'000, 30), 3'125'000u);
+    // Four frames when that is more: 300 kbps at 1 fps.
+    EXPECT_EQ(vbv_bits_for(300, 1), 1'200'000u);
+    EXPECT_EQ(QsvEncoder::vbv_kb_for(8'000, 60), 625u);
+    EXPECT_EQ(QsvEncoder::vbv_kb_for(300, 60), 24u);
+}
+
+// QSV hands oneVPL a texture with no frame allocator and an unaligned height:
+// it has never run on an Intel GPU, so the factory skips it unless
+// MELLO_ENABLE_QSV=1 (stage 4, until an Intel box tests it).
+TEST(EncoderFactory, QsvIsSkippedWithoutTheOptIn) {
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", nullptr);
+    EXPECT_FALSE(QsvEncoder::enabled());
+    EXPECT_FALSE(QsvEncoder::is_available());
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", "1");
+    EXPECT_TRUE(QsvEncoder::enabled());
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", nullptr);
+}
+
 // An encoder without a session refuses a tier and stays at 0: the pipeline
 // may ask before the first encode.
 TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {

@@ -44,10 +44,10 @@ public:
         return encoder_ && encoder_->encode(nv12_texture, out);
     }
 #elif defined(__APPLE__)
-    bool encode(void* cv_pixel_buffer, EncodedPacket& out) {
+    bool encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) {
         std::lock_guard<std::mutex> lock(mutex_);
         apply_pending_locked();
-        return encoder_ && encoder_->encode(cv_pixel_buffer, out);
+        return encoder_ && encoder_->encode(cv_pixel_buffer, capture_us, out);
     }
 #endif
 

@@ -142,16 +142,16 @@ bool VTEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& co
         VTSessionSetProperty(sess, kVTCompressionPropertyKey_AllowFrameReordering, kCFBooleanFalse);
 
         status = VTSessionSetProperty(sess, kVTCompressionPropertyKey_ProfileLevel,
-            kVTProfileLevel_H264_High_4_2);
+            kVTProfileLevel_H264_High_5_1);
         if (status != noErr) {
             MELLO_LOG_ERROR(TAG,
-                "VideoToolbox: required H264 profile=High level=4.2 rejected: %d",
+                "VideoToolbox: required H264 profile=High level=5.1 rejected: %d",
                 (int)status);
             VTCompressionSessionInvalidate(sess);
             CFRelease(sess);
             return false;
         }
-        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High level=4.2");
+        MELLO_LOG_INFO(TAG, "VideoToolbox: accepted H264 profile=High level=5.1");
 
         // Bitrate: VBR with max = avg * 1.25 (matches spec §6.1)
         int avg_bps = (int)bitrate_ * 1000;
@@ -205,12 +205,15 @@ void VTEncoder::shutdown() {
         frame_count_, stats_.keyframes_sent, stats_.bytes_sent / (1024 * 1024));
 }
 
-bool VTEncoder::encode(void* cv_pixel_buffer, EncodedPacket& out) {
+bool VTEncoder::encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) {
     if (!session_ || !cv_pixel_buffer) return false;
 
     CVPixelBufferRef pb = (CVPixelBufferRef)cv_pixel_buffer;
 
-    CMTime pts = CMTimeMake(frame_count_, fps_);
+    // The capture time is the presentation time: rate control then sees the
+    // real spacing of the frames (the 30 fps rung, a dropped frame). The
+    // pipeline's capture timestamps only go up.
+    CMTime pts = CMTimeMake(static_cast<int64_t>(capture_us), 1000000);
 
     CFDictionaryRef frame_props = nullptr;
     if (force_keyframe_) {
@@ -289,6 +292,21 @@ void VTEncoder::set_bitrate(uint32_t kbps) {
     CFRelease(limit_dur);
 
     MELLO_LOG_INFO(TAG, "Bitrate updated: %u kbps", kbps);
+}
+
+// The 30 fps rung (stage 4): rate control budgets bits per frame from the
+// expected frame rate.
+void VTEncoder::set_framerate(uint32_t fps) {
+    if (fps == 0 || fps == fps_) return;
+    fps_ = fps;
+    if (!session_) return;
+    float expected_fps = (float)fps;
+    CFNumberRef fps_ref = CFNumberCreate(nullptr, kCFNumberFloatType, &expected_fps);
+    const OSStatus status = VTSessionSetProperty((VTCompressionSessionRef)session_,
+        kVTCompressionPropertyKey_ExpectedFrameRate, fps_ref);
+    CFRelease(fps_ref);
+    force_keyframe_ = true;
+    MELLO_LOG_INFO(TAG, "VideoToolbox: expected frame rate %u fps (status %d)", fps, (int)status);
 }
 
 void VTEncoder::get_stats(EncoderStats& out) const {
