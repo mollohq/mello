@@ -253,7 +253,7 @@ void expect_stream_sdp(const char* sdp, const char* expected_direction) {
     const std::string text(sdp);
     EXPECT_NE(text.find("m=video"), std::string::npos);
     EXPECT_NE(text.find("H264/90000"), std::string::npos);
-    EXPECT_NE(text.find("profile-level-id=4d002a"), std::string::npos);
+    EXPECT_NE(text.find("profile-level-id=4d0033"), std::string::npos);
     EXPECT_NE(text.find("packetization-mode=1"), std::string::npos);
     EXPECT_NE(text.find("level-asymmetry-allowed=1"), std::string::npos);
     EXPECT_NE(text.find(expected_direction), std::string::npos);
@@ -569,6 +569,42 @@ TEST_F(PeerRtpRolesTest, TheHostOfferCarriesRtxAndTheViewerOfferDoesNot) {
     const std::string viewer_offer(viewer_offer_ptr);
     EXPECT_EQ(viewer_offer.find("rtx"), std::string::npos) << viewer_offer;
     mello_peer_destroy(viewer);
+}
+
+// The offers say level 5.1 (4d0033), the level the encoders run at since
+// stage 4; they said 4.2 (4d002a). An offer from a peer that still says
+// 4d002a is answered (level-asymmetry-allowed=1, the same Main profile
+// bytes); a High profile offer (6400xx) is not.
+TEST_F(PeerRtpRolesTest, TheOffersSayLevel51AndALevel42OfferIsAnswered) {
+    auto* host = mello_peer_create_for_role(nullptr, "host", MELLO_PEER_MEDIA_ROLE_STREAM_HOST);
+    ASSERT_NE(host, nullptr);
+    mello_peer_set_ice_servers(host, nullptr, 0);
+    const char* offer_ptr = mello_peer_create_offer(host);
+    ASSERT_NE(offer_ptr, nullptr);
+    const std::string offer(offer_ptr);
+    const auto at = offer.find("profile-level-id=4d0033");
+    ASSERT_NE(at, std::string::npos) << offer;
+    EXPECT_EQ(offer.find("4d002a"), std::string::npos);
+    const size_t level_at = at + std::strlen("profile-level-id=");
+
+    const auto answer_for = [](const std::string& sdp) {
+        auto* viewer =
+            mello_peer_create_for_role(nullptr, "viewer", MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER);
+        EXPECT_NE(viewer, nullptr);
+        mello_peer_set_ice_servers(viewer, nullptr, 0);
+        const bool answered = mello_peer_create_answer(viewer, sdp.c_str()) != nullptr;
+        mello_peer_destroy(viewer);
+        return answered;
+    };
+    EXPECT_TRUE(answer_for(offer));
+    std::string older = offer;
+    older.replace(level_at, 6, "4d002a");
+    EXPECT_TRUE(answer_for(older));
+    std::string high = offer;
+    high.replace(level_at, 6, "640033");
+    EXPECT_FALSE(answer_for(high));
+
+    mello_peer_destroy(host);
 }
 
 TEST_F(PeerRtpRolesTest, HostOfferViewerAnswerNegotiates) {

@@ -29,8 +29,17 @@ constexpr uint8_t kRtxPayloadType = 97;
 constexpr uint8_t kAudioPayloadType = 111;
 constexpr char kVideoMid[] = "video";
 constexpr char kAudioMid[] = "audio";
+// H.264 Main profile (4d00) at level 5.1 (0x33). The encoders run at level
+// 5.1 since streaming-quality stage 4 (NVENC, AMF, QSV and VideoToolbox; the
+// OpenH264 software encoder stays under it); the offer said level 4.2 (2a).
+// With level-asymmetry-allowed each side may send up to its own level, and
+// Pion matches H.264 on the profile bytes only, so a peer or an SFU that
+// still says 4d002a negotiates (h264_profile_matches). The profile stays
+// Main: Pion compares the profile byte, and the SFU registers Main.
 constexpr char kVideoFmtp[] =
-    "profile-level-id=4d002a;packetization-mode=1;level-asymmetry-allowed=1";
+    "profile-level-id=4d0033;packetization-mode=1;level-asymmetry-allowed=1";
+// The profile bytes (profile_idc, profile_iop) of kVideoFmtp.
+constexpr char kVideoProfile[] = "4d00";
 
 int64_t steady_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -126,6 +135,40 @@ bool fmtp_has_kv(const rtc::Description::Media::RtpMap& map,
         }
     }
     return false;
+}
+
+// The value of `key` in the fmtp lines of `map`, or "" when it is absent.
+std::string fmtp_value(const rtc::Description::Media::RtpMap& map, const std::string& key) {
+    const std::string prefix = key + "=";
+    for (const auto& fmtp : map.fmtps) {
+        size_t offset = 0;
+        while (offset < fmtp.size()) {
+            const size_t end = fmtp.find(';', offset);
+            const std::string part = fmtp.substr(
+                offset, end == std::string::npos ? std::string::npos : end - offset);
+            if (part.compare(0, prefix.size(), prefix) == 0) {
+                return part.substr(prefix.size());
+            }
+            if (end == std::string::npos) {
+                break;
+            }
+            offset = end + 1;
+        }
+    }
+    return {};
+}
+
+// A remote profile-level-id matches when its profile bytes are ours; the
+// level may differ (level-asymmetry-allowed=1).
+bool h264_profile_matches(const rtc::Description::Media::RtpMap& map) {
+    std::string value = fmtp_value(map, "profile-level-id");
+    if (value.size() != 6) {
+        return false;
+    }
+    for (auto& c : value) {
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    }
+    return value.compare(0, 4, kVideoProfile) == 0;
 }
 
 size_t video_media_count(const rtc::Description& description) {
@@ -581,7 +624,7 @@ bool PeerConnectionImpl::validate_remote_video_media(
         error = "remote SDP H264 clock rate must be 90000";
         return false;
     }
-    if (!fmtp_has_kv(*map, "profile-level-id", "4d002a")
+    if (!h264_profile_matches(*map)
         || !fmtp_has_kv(*map, "packetization-mode", "1")
         || !fmtp_has_kv(*map, "level-asymmetry-allowed", "1")) {
         error = "remote SDP H264 fmtp is incompatible";
