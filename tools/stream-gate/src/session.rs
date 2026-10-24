@@ -529,6 +529,8 @@ pub struct SyncSample {
     pub audio_delay_ms: f32,
     pub video_target_ms: f32,
     pub video_current_ms: f32,
+    pub offset_last_ms: f32,
+    pub from_shown: f32,
 }
 
 /// The viewer's game audio and A/V sync at the end of a run (stage 7).
@@ -760,6 +762,8 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec)
                 audio_delay_ms: s.audio_delay_ms,
                 video_target_ms: s.target_delay_ms,
                 video_current_ms: s.current_delay_ms,
+                offset_last_ms: s.av_offset_last_ms,
+                from_shown: s.av_from_shown as f32,
             });
         }
         if conn.is_video_track_open() {

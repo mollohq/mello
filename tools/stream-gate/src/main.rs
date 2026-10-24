@@ -664,18 +664,20 @@ fn run_profile(
         }
         let _ = std::fs::write(pdir.join("av.csv"), csv);
         let mut scsv = String::from(
-            "t_ms,av_offset_ms,video_min_ms,audio_min_ms,audio_delay_ms,video_target_ms,video_current_ms\n",
+            "t_ms,av_offset_ms,video_min_ms,audio_min_ms,audio_delay_ms,video_target_ms,video_current_ms,offset_last_ms,from_shown\n",
         );
         for x in &measured.sync_samples {
             let t = (x.t_us as i64 - arm_us as i64) as f64 / 1000.0;
             scsv.push_str(&format!(
-                "{t:.0},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}\n",
+                "{t:.0},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}\n",
                 x.av_offset_ms,
                 x.video_min_ms,
                 x.audio_min_ms,
                 x.audio_delay_ms,
                 x.video_target_ms,
-                x.video_current_ms
+                x.video_current_ms,
+                x.offset_last_ms,
+                x.from_shown
             ));
         }
         let _ = std::fs::write(pdir.join("sync.csv"), scsv);
