@@ -1264,6 +1264,29 @@ TEST(RtpVideoSenderAdmissionTest, AnIdrQueuesBehindTheDeltasAndDropsNothing) {
     EXPECT_EQ(sender.stats().access_units_dropped, 0u);
 }
 
+// The REMB that the SFU sends the host (01-SFU.md section 6.1: the minimum
+// fresh viewer estimate, about once a second) reaches the sender's REMB
+// counter. The bytes are Pion's rtcp.ReceiverEstimatedMaximumBitrate
+// {Bitrate: 2500000, SSRCs: [the host SSRC]}.Marshal(): sender SSRC 0 and
+// media SSRC 0, as the SFU writes it. The gate saw tx_remb_reports = 0.
+TEST(RtpVideoSenderFeedbackTest, APionRembReachesTheRembCounter) {
+    LoopbackVideoLink link;
+    RtpVideoSender sender = link.make_sender(8'000'000);
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(3, 10s));
+    const std::vector<uint8_t> remb = {
+        0x8f, 0xce, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+        0x52, 0x45, 0x4d, 0x42, 0x01, 0x12, 0x62, 0x5a, 0x12, 0x34, 0x56, 0x78};
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), remb));
+    EXPECT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) { return stats.remb_reports >= 1; },
+        sender,
+        5s
+    ));
+    EXPECT_EQ(sender.stats().latest_remb_bitrate_bps, 2'500'000u);
+}
+
 TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {
     auto completed = std::async(std::launch::async, []() -> bool {
         LoopbackVideoLink link;
