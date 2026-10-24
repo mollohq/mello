@@ -10,8 +10,6 @@ use minifb::{Key, Window, WindowOptions};
 
 const DEFAULT_WINDOW_W: u32 = 1280;
 const DEFAULT_WINDOW_H: u32 = 720;
-const MAX_AU_POLLS_PER_TICK: usize = 32;
-const VIEWER_AU_RECV_BUF_INITIAL: usize = 256 * 1024;
 const DEFAULT_RECEIVE_BITRATE_KBPS: u32 = 6000;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -362,9 +360,21 @@ fn main() {
             );
         }
     }
+    // Stage 3: libmello takes the video from the peer's receive timeline,
+    // decodes and presents it on its own threads. The probe polls nothing.
+    match conn.peer_nonnull() {
+        Ok(peer) => {
+            // SAFETY: the viewer was just started; the peer lives as long as
+            // `conn`, which outlives the viewer below.
+            let rc = unsafe { mello_sys::mello_stream_viewer_attach_peer(viewer, peer.as_ptr()) };
+            if rc != mello_sys::MelloResult_MELLO_OK {
+                eprintln!("ERROR: mello_stream_viewer_attach_peer() failed: {rc}");
+            }
+        }
+        Err(e) => eprintln!("ERROR: no viewer peer: {e}"),
+    }
     VIEWER_READY.store(true, Ordering::Relaxed);
 
-    let mut au_recv_buf = Vec::with_capacity(VIEWER_AU_RECV_BUF_INITIAL);
     let mut receive_target_set = false;
     let mut logged_first_keyframe = false;
 
@@ -394,11 +404,12 @@ fn main() {
     let mut last_tick = Instant::now();
     let mut last_decoded = 0u32;
     let mut last_native = 0u32;
-    let mut au_received: u64 = 0;
-    let mut au_fed: u64 = 0;
-    let mut au_feed_failures: u64 = 0;
-    let mut au_poll_errors: u64 = 0;
-    let mut au_buffer_grows: u64 = 0;
+    let mut au_received: u64;
+    let mut au_fed: u64;
+    let mut au_feed_failures: u64;
+    // Kept in the tick line for the scripts that read it; the AU poll is gone.
+    let au_poll_errors: u64 = 0;
+    let au_buffer_grows: u64 = 0;
     let mut present_calls: u64 = 0;
     let mut present_true: u64 = 0;
     let mut last_au_received: u64 = 0;
@@ -452,54 +463,23 @@ fn main() {
 
         try_set_receive_target(&conn, receive_target_bps, &mut receive_target_set);
 
-        for _ in 0..MAX_AU_POLLS_PER_TICK {
-            let before_len = au_recv_buf.len();
-            let au = match conn.poll_received_access_unit(&mut au_recv_buf) {
-                Ok(Some(au)) => au,
-                Ok(None) => break,
-                Err(e) => {
-                    au_poll_errors = au_poll_errors.saturating_add(1);
-                    log::warn!("SFU viewer AU poll failed: {}", e);
-                    break;
-                }
-            };
-            au_received = au_received.saturating_add(1);
-            if au_recv_buf.len() > before_len {
-                au_buffer_grows = au_buffer_grows.saturating_add(1);
-            }
-
-            let ok = unsafe {
-                mello_sys::mello_stream_feed_packet(
-                    viewer,
-                    au_recv_buf.as_ptr(),
-                    i32::try_from(au_recv_buf.len()).unwrap_or(i32::MAX),
-                    au.is_idr,
-                )
-            };
-            if ok {
-                au_fed = au_fed.saturating_add(1);
-                if !logged_first_keyframe && au.is_idr {
-                    logged_first_keyframe = true;
-                    let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
-                    log::info!(
-                        "viewer_probe_event session={} wall_ms={} mono_ms={} event=first_keyframe",
-                        session_id,
-                        wall_ms,
-                        mono_ms
-                    );
-                }
-            } else {
-                au_feed_failures = au_feed_failures.saturating_add(1);
-                if au.is_idr {
-                    let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
-                    log::warn!(
-                        "viewer_probe_event session={} wall_ms={} mono_ms={} event=feed_keyframe_failed bytes={}",
-                        session_id,
-                        wall_ms,
-                        mono_ms,
-                        au_recv_buf.len()
-                    );
-                }
+        // The viewer pipeline's counters stand in for the AU poll's.
+        {
+            let mut vstats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+            // SAFETY: `viewer` is live for this loop.
+            unsafe { mello_sys::mello_stream_viewer_get_stats(viewer, &mut vstats) };
+            au_received = vstats.frames_released;
+            au_fed = vstats.frames_decoded;
+            au_feed_failures = vstats.decode_errors;
+            if !logged_first_keyframe && vstats.frames_decoded > 0 {
+                logged_first_keyframe = true;
+                let (wall_ms, mono_ms) = correlation_stamp(correlation_start);
+                log::info!(
+                    "viewer_probe_event session={} wall_ms={} mono_ms={} event=first_keyframe",
+                    session_id,
+                    wall_ms,
+                    mono_ms
+                );
             }
         }
 

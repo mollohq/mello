@@ -94,8 +94,8 @@ fn game_capture_source(
     Some((entry.is_some(), source))
 }
 use super::stream_ffi::{
-    feed_viewer_audio_rtp, log_viewer_native_stats, on_viewer_native_frame,
-    poll_sfu_viewer_access_units, register_pause_callback, tick_viewer_congestion_sfu,
+    attach_viewer_peer, feed_viewer_audio_rtp, log_viewer_native_stats, on_viewer_native_frame,
+    register_pause_callback, tick_viewer_congestion_sfu, timeline_report_fields, viewer_stats,
     FrameCallbackData, PauseSlot, StreamHostHandle, ViewerState,
 };
 use super::FRAME_STATE_PRESENTED;
@@ -252,16 +252,12 @@ impl super::Client {
         if let Some(conn) = vs.sfu_connection.clone() {
             // ~2s control-channel ping: the stream path had no RTT signal
             // at all (send_ping was only wired for voice), leaving rtt_ms
-            // dark in viewer telemetry.
+            // dark in viewer telemetry. The peer hands each RTT sample to
+            // the receive timeline at once (NACK interval, repair deadline).
             if vs.stream_tick_count.is_multiple_of(125) {
                 conn.send_ping();
             }
             tick_viewer_congestion_sfu(vs, &conn);
-            // Deliberately not logged per access unit: at 60fps that is 60
-            // lines a second, and every field is already accumulated into
-            // transport_packets / transport_bytes / au_buffer_grows and
-            // reported once a second by `Stream cadence`.
-            let _ = poll_sfu_viewer_access_units(vs, viewer, &conn);
         }
 
         // Pause UX: host tab-out arrives on the reliable control channel into
@@ -306,35 +302,21 @@ impl super::Client {
         // holds the freeze clock the same way: those gaps are not stalls.
         let held_now = paused_now || vs.pause_slot.is_host_idle();
 
-        // Present at most one frame per stream tick so visual cadence tracks
-        // UI cadence instead of burst-draining the decoder queue.
-        const MAX_PRESENTS_PER_TICK: u32 = 1;
-        let mut presented_this_tick = 0u32;
-
-        while presented_this_tick < MAX_PRESENTS_PER_TICK {
-            vs.present_attempts = vs.present_attempts.saturating_add(1);
-            let presented = unsafe { mello_sys::mello_stream_present_frame(viewer) };
-            vs.last_present_attempt = Instant::now();
-            if !presented {
-                break; // ring buffer empty
-            }
-            presented_this_tick += 1;
-            // Only a present that delivered a new frame is a frame.
-            let delivered = vs
-                .delivered_frames
-                .load(std::sync::atomic::Ordering::Acquire);
-            if super::stream_ffi::present_is_new_frame(
-                presented,
-                delivered,
-                &mut vs.last_delivered_frames,
-            ) {
-                vs.frames_presented += 1;
-                vs.last_new_frame_at = Instant::now();
-                vs.in_freeze = false;
-                vs.freeze_accounted_ms = 0;
-                if vs.frames_presented <= 3 || vs.frames_presented.is_multiple_of(300) {
-                    log::info!("Stream frame presented #{}", vs.frames_presented);
-                }
+        // libmello's present thread shows the frames (stage 3); the frame
+        // callbacks count each one. New frames since the last tick end a
+        // freeze.
+        let delivered = vs
+            .delivered_frames
+            .load(std::sync::atomic::Ordering::Acquire);
+        let new_frames =
+            super::stream_ffi::new_frames_since(delivered, &mut vs.last_delivered_frames);
+        if new_frames > 0 {
+            vs.frames_presented = vs.frames_presented.saturating_add(new_frames);
+            vs.last_new_frame_at = Instant::now();
+            vs.in_freeze = false;
+            vs.freeze_accounted_ms = 0;
+            if vs.frames_presented <= 3 {
+                log::info!("Stream frame presented #{}", vs.frames_presented);
             }
         }
 
@@ -415,67 +397,76 @@ impl super::Client {
             let delta_ticks = vs
                 .stream_tick_count
                 .saturating_sub(vs.debug_last_tick_count);
-            let delta_bytes = vs.transport_bytes.saturating_sub(vs.debug_last_bytes);
             let delta_frames = vs
                 .frames_presented
                 .saturating_sub(vs.debug_last_frames_presented);
-            let delta_present_attempts = vs
-                .present_attempts
-                .saturating_sub(vs.debug_last_present_attempts);
-            let delta_present_forced = vs
-                .present_forced_attempts
-                .saturating_sub(vs.debug_last_present_forced_attempts);
-            let delta_present_skipped = vs
-                .present_skipped_unconsumed
-                .saturating_sub(vs.debug_last_present_skipped_unconsumed);
-            let delta_backlog_guard_drops = vs
-                .backlog_guard_drops
-                .saturating_sub(vs.debug_last_backlog_guard_drops);
+            let native = vs
+                .sfu_connection
+                .as_ref()
+                .and_then(|c| c.video_stats().ok());
+            // SAFETY: `viewer` is live for this ViewerState.
+            let timeline = unsafe { viewer_stats(viewer) };
+            let ingress_bytes = native.as_ref().map_or(0, |s| s.rx_ingress_bytes);
+            let delta_bytes = ingress_bytes.saturating_sub(vs.debug_last_bytes);
+            let delta_decoded = timeline
+                .frames_decoded
+                .saturating_sub(vs.debug_last_frames_decoded);
             let ingress_kbps = (delta_bytes as f32 * 8.0 / 1000.0) / elapsed.max(0.001);
             let present_fps = (delta_frames as f32) / elapsed.max(0.001);
+            let decode_fps = (delta_decoded as f32) / elapsed.max(0.001);
             let stream_tick_hz = (delta_ticks as f32) / elapsed.max(0.001);
-            let present_attempt_hz = (delta_present_attempts as f32) / elapsed.max(0.001);
 
             let _ = self.event_tx.send(Event::StreamDebugStats {
                 mode: "sfu".to_string(),
-                transport_packets: vs.transport_packets,
-                transport_bytes: vs.transport_bytes,
-                transport_truncations: vs.au_buffer_grows,
+                transport_packets: timeline.frames_released,
+                transport_bytes: ingress_bytes,
+                transport_truncations: 0,
                 frames_presented: vs.frames_presented,
                 present_fps,
                 ingress_kbps,
             });
+            let _ = self.event_tx.send(Event::StreamViewerTimeline {
+                target_delay_ms: timeline.target_delay_ms,
+                jitter_ms: timeline.jitter_ms,
+                decode_ms_p95: timeline.decode_ms_p95,
+                frames_released: timeline.frames_released,
+                frames_late: timeline.frames_late,
+                frames_dropped_late: timeline.frames_dropped_late,
+                decoder: timeline.decoder.clone(),
+                decode_fps,
+            });
 
-            if let Some(conn) = vs.sfu_connection.clone() {
-                if let Ok(stats) = conn.video_stats() {
-                    log_viewer_native_stats(&stats);
-                }
+            if let Some(stats) = native.as_ref() {
+                log_viewer_native_stats(stats);
             }
 
             let rtt_ms = vs.sfu_connection.as_ref().map(|conn| conn.rtt_ms());
             log::info!(
-                "Stream cadence: tick_hz={:.1} present_attempt_hz={:.1} present_fps={:.1} forced={} skipped_unconsumed={} backlog_guard_drops={} rtt_ms={:.0}",
-                stream_tick_hz,
-                present_attempt_hz,
+                "Stream timeline: target_ms={:.1} jitter_ms={:.1} decode_p95_ms={:.1} released={} late={} dropped_late={} keyframe_requests={} losses={} waiting_key={} decoder={} decode_fps={:.1} present_fps={:.1} tick_hz={:.1} rtt_ms={:.0}",
+                timeline.target_delay_ms,
+                timeline.jitter_ms,
+                timeline.decode_ms_p95,
+                timeline.frames_released,
+                timeline.frames_late,
+                timeline.frames_dropped_late,
+                timeline.keyframe_requests,
+                timeline.loss_events,
+                timeline.waiting_for_keyframe,
+                timeline.decoder,
+                decode_fps,
                 present_fps,
-                delta_present_forced,
-                delta_present_skipped,
-                delta_backlog_guard_drops,
+                stream_tick_hz,
                 rtt_ms.unwrap_or(-1.0)
             );
 
             vs.debug_last_emit = Instant::now();
             vs.debug_last_tick_count = vs.stream_tick_count;
-            vs.debug_last_present_attempts = vs.present_attempts;
-            vs.debug_last_present_forced_attempts = vs.present_forced_attempts;
-            vs.debug_last_present_skipped_unconsumed = vs.present_skipped_unconsumed;
-            vs.debug_last_packets = vs.transport_packets;
-            vs.debug_last_bytes = vs.transport_bytes;
+            vs.debug_last_bytes = ingress_bytes;
             vs.debug_last_frames_presented = vs.frames_presented;
-            vs.debug_last_backlog_guard_drops = vs.backlog_guard_drops;
+            vs.debug_last_frames_decoded = timeline.frames_decoded;
         }
 
-        self.report_viewer_stream_stats().await;
+        self.report_viewer_stream_stats();
     }
 
     /// Push viewer diagnostics to the SFU every 10s.
@@ -483,7 +474,7 @@ impl super::Client {
     /// Freeze time leads the payload because it is the only field that
     /// corresponds to what the user actually sees — the rest explain *why* a
     /// freeze happened.
-    async fn report_viewer_stream_stats(&mut self) {
+    fn report_viewer_stream_stats(&mut self) {
         let Some(vs) = self.viewer_state.as_mut() else {
             return;
         };
@@ -494,6 +485,9 @@ impl super::Client {
         vs.stats_last_emit = Instant::now();
 
         let Some(conn) = vs.sfu_connection.clone() else {
+            return;
+        };
+        let Some(viewer) = vs.viewer else {
             return;
         };
 
@@ -508,8 +502,15 @@ impl super::Client {
         let freeze_ms = vs.freeze_ms_total.saturating_sub(vs.stats_last_freeze_ms);
         vs.stats_last_freeze_ms = vs.freeze_ms_total;
 
+        // SAFETY: `viewer` is live for this ViewerState.
+        let timeline = unsafe { viewer_stats(viewer) };
+        let decoded = timeline
+            .frames_decoded
+            .saturating_sub(vs.stats_last_frames_decoded);
+        vs.stats_last_frames_decoded = timeline.frames_decoded;
+
         let native = conn.video_stats().ok();
-        let payload = serde_json::json!({
+        let mut payload = serde_json::json!({
             "role": "viewer",
             "freeze_n": freeze_count,
             "freeze_ms": freeze_ms,
@@ -523,11 +524,17 @@ impl super::Client {
             "rx_nacks": native.as_ref().map(|s| s.rx_nack_sequences_sent),
             "rx_pli": native.as_ref().map(|s| s.rx_pli_requests),
             "rx_jitter": native.as_ref().map(|s| s.rx_core_interarrival_jitter),
-            "rx_fec_ok": native.as_ref().map(|s| s.rx_fec_recovered),
-            "rx_fec_fail": native.as_ref().map(|s| s.rx_fec_unrecoverable),
-            "bg_drops": vs.backlog_guard_drops,
         });
-        conn.send_stream_stats(&payload).await;
+        if let (Some(map), serde_json::Value::Object(extra)) = (
+            payload.as_object_mut(),
+            timeline_report_fields(&timeline, decoded, elapsed),
+        ) {
+            map.extend(extra);
+        }
+        // The send waits on the SFU socket: never on the command loop.
+        tokio::spawn(async move {
+            conn.send_stream_stats(&payload).await;
+        });
     }
 
     async fn poll_sfu_host_membership_events(&mut self) {
@@ -580,8 +587,18 @@ impl super::Client {
             return;
         };
         let payload = serde_json::json!({ "crew_id": crew_id, "viewer_id": viewer_id });
-        if let Err(e) = self.nakama.rpc("stream_viewer_left", &payload).await {
-            log::warn!("stream_viewer_left RPC failed for {}: {}", viewer_id, e);
+        // A slow backend must not hold the stream tick: the RPC runs on its
+        // own task.
+        match self.nakama.rpc_detached("stream_viewer_left", &payload) {
+            Ok(request) => {
+                let viewer_id = viewer_id.to_string();
+                tokio::spawn(async move {
+                    if let Err(e) = request.await {
+                        log::warn!("stream_viewer_left RPC failed for {}: {}", viewer_id, e);
+                    }
+                });
+            }
+            Err(e) => log::warn!("stream_viewer_left RPC failed for {}: {}", viewer_id, e),
         }
     }
 
@@ -1567,6 +1584,19 @@ impl super::Client {
             return;
         }
 
+        // Stage 3: libmello takes the video from the peer's receive timeline
+        // and presents it on its own threads.
+        match conn.peer_nonnull() {
+            Ok(peer) => {
+                // SAFETY: `viewer` was just started; the peer lives as long as
+                // `conn`, which the ViewerState keeps until after the stop.
+                if !unsafe { attach_viewer_peer(viewer, peer) } {
+                    log::error!("SFU viewer: libmello refused the viewer peer");
+                }
+            }
+            Err(e) => log::error!("SFU viewer: no peer for the viewer pipeline: {}", e),
+        }
+
         log::info!("SFU viewer pipeline initialized at {}x{}", w, h);
 
         let _ = self.event_tx.send(Event::StreamWatching {
@@ -1606,27 +1636,12 @@ impl super::Client {
             pause_cb_peer,
             frames_presented: 0,
             stream_tick_count: 0,
-            present_attempts: 0,
-            present_forced_attempts: 0,
-            present_skipped_unconsumed: 0,
-            transport_packets: 0,
-            transport_bytes: 0,
-            au_buffer_grows: 0,
-            au_poll_errors: 0,
-            au_feed_failures: 0,
-            backlog_guard_drops: 0,
             congestion: ViewerCongestionController::new(receive_bitrate_kbps, Codec::H264),
             debug_last_emit: Instant::now(),
             debug_last_tick_count: 0,
-            debug_last_present_attempts: 0,
-            debug_last_present_forced_attempts: 0,
-            debug_last_present_skipped_unconsumed: 0,
-            debug_last_packets: 0,
             debug_last_bytes: 0,
             debug_last_frames_presented: 0,
-            debug_last_backlog_guard_drops: 0,
-            last_present_attempt: Instant::now(),
-            au_recv_buf: ViewerState::new_au_recv_buf(),
+            debug_last_frames_decoded: 0,
             audio_packets_received: 0,
             last_new_frame_at: Instant::now(),
             freeze_count: 0,
@@ -1637,6 +1652,7 @@ impl super::Client {
             stats_last_frames_presented: 0,
             stats_last_freeze_count: 0,
             stats_last_freeze_ms: 0,
+            stats_last_frames_decoded: 0,
             delivered_frames,
             last_delivered_frames: 0,
             audio_muted: false,

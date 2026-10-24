@@ -1082,6 +1082,34 @@ impl NakamaClient {
         Ok(rpc_resp.payload.unwrap_or_default())
     }
 
+    /// The same request as [`Self::rpc`], as a future that owns everything it
+    /// needs. The caller spawns it, so a slow backend never holds the command
+    /// loop (the stream tick sends `stream_viewer_left` this way).
+    pub fn rpc_detached(
+        &self,
+        id: &str,
+        payload: &serde_json::Value,
+    ) -> Result<impl std::future::Future<Output = Result<String>> + Send + 'static> {
+        let token = self.bearer()?;
+        let url = format!("{}/v2/rpc/{}", self.config.http_base(), id);
+        let body = serde_json::Value::String(payload.to_string());
+        let http = self.http.clone();
+        Ok(async move {
+            let resp = http
+                .post(&url)
+                .bearer_auth(&token)
+                .json(&body)
+                .send()
+                .await?;
+            if !resp.status().is_success() {
+                let err_text = resp.text().await.unwrap_or_default();
+                return Err(Error::Server(err_text));
+            }
+            let rpc_resp: ApiRpcResponse = resp.json().await?;
+            Ok(rpc_resp.payload.unwrap_or_default())
+        })
+    }
+
     // --- Storage ---
 
     /// Read a single object from Nakama storage. Returns the value string.

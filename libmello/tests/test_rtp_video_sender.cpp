@@ -3,6 +3,7 @@
 #include "transport/rtp_h264_receiver.hpp"
 #include "transport/rtp_video_receiver_session.hpp"
 #include "transport/rtp_video_sender.hpp"
+#include "transport/twcc.hpp"
 #include "transport/ulpfec.hpp"
 
 #include <rtc/rtc.hpp>
@@ -776,6 +777,62 @@ TEST(RtpVideoSenderTwccTest, ViewerFeedbackDrivesGccEstimate) {
     const auto rx_stats = receiver.stats();
     EXPECT_GT(rx_stats.twcc_packets_sent, 0u);
     EXPECT_GT(popped, 30u);
+}
+
+// Handoff section 12.2: the old estimator updates its target only when an
+// inter-arrival group closes. Under continuous pacing no group closes, so the
+// target stays at its start value, and min(ceiling, target) held a 1080p60
+// host at 4 Mbps. One feedback report that closes no group leaves the target
+// at its start value; the pacer must still run at the manager ceiling.
+TEST(RtpVideoSenderPacingTest, AnEstimatorTargetThatNeverUpdatesDoesNotCapThePacer) {
+    LoopbackVideoLink link;
+    // The estimator clamps its start value to its 300 kbps floor.
+    constexpr uint64_t start_bps = 400'000;
+    constexpr uint64_t ceiling_bps = 1'200'000;
+    RtpVideoSender sender = link.make_sender(start_bps, {}, {}, {}, true);
+
+    // One packet, so the estimator has one open group and no closed group.
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 0));
+    ASSERT_TRUE(link.wait_for_captured_count(1, 10s));
+
+    mello::transport::TwccFeedbackGenerator generator;
+    generator.on_packet(0, 1'000'000);
+    const auto feedback = generator.build_feedback(0xfeedface, kSenderSsrc);
+    ASSERT_FALSE(feedback.empty());
+    rtc::binary feedback_message;
+    for (const uint8_t byte : feedback) {
+        feedback_message.push_back(static_cast<std::byte>(byte));
+    }
+    ASSERT_TRUE(link.receiver_track()->send(std::move(feedback_message)));
+    ASSERT_TRUE(link.wait_for_stats(
+        [](const RtpVideoSenderStats& stats) {
+            return stats.twcc_reports >= 1;
+        },
+        sender,
+        10s
+    ));
+    // The estimator reports its start value: it never updated.
+    EXPECT_EQ(sender.stats().gcc_target_bps, start_bps);
+
+    // The manager raises the ceiling over the estimator's start value (and
+    // over 4x of it, so the old quarter rule does not hide the cap).
+    ASSERT_TRUE(sender.set_pacing_target_bps(ceiling_bps));
+    link.clear_captured_rtp();
+
+    // 32 KiB: 30 fragments of about 1.15 kB. 29 slots take about 223 ms at
+    // the ceiling and about 670 ms at the start value.
+    const auto access_unit = make_large_delta_access_unit(32 * 1024);
+    ASSERT_TRUE(send_au_accepted(
+        sender, access_unit.data(), access_unit.size(), 33'333));
+    ASSERT_TRUE(link.wait_for_captured_count(30, 15s));
+    const auto packets = link.captured_rtp();
+    const auto spread = std::chrono::duration_cast<std::chrono::milliseconds>(
+        packets[29].received_at - packets[0].received_at
+    );
+    EXPECT_GE(spread.count(), 120);
+    EXPECT_LE(spread.count(), 450);
+    EXPECT_EQ(sender.stats().pacing_target_bps, ceiling_bps);
 }
 
 TEST(RtpVideoSenderFecTest, ParityFecRepairsOneLossPerGroupWithoutPli) {

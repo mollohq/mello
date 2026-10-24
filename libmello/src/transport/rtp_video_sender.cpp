@@ -567,24 +567,14 @@ struct RtpVideoSender::State
         rtx_cache_misses.fetch_add(cache_misses, std::memory_order_relaxed);
     }
 
-    // Pacing budget: min(manager ceiling, estimator target) when TWCC is on.
+    // Pacing budget: the manager ceiling. The TWCC estimator does not set
+    // it. Its target updates only when an inter-arrival group closes, and
+    // under continuous pacing no group closes, so the target stays at its
+    // start value (4 Mbps) for the whole stream. As a cap that start value
+    // halved the 1080p60 send rate. The estimator still runs and reports its
+    // target in the stats and the GCC_TARGET feedback.
     uint64_t effective_target_bps() const noexcept {
-        const uint64_t manager_target =
-            pacing_target_bps.load(std::memory_order_relaxed);
-        if (!twcc_enabled) {
-            return manager_target;
-        }
-        const uint64_t gcc = gcc_target_bps.load(std::memory_order_relaxed);
-        if (gcc == 0 || gcc >= manager_target) {
-            return manager_target;
-        }
-        // When the estimator is pinned near its floor (startup false overuse
-        // on low-latency hops such as localhost host→SFU), keep the manager
-        // ceiling. Viewer-path REMB owns encoder adaptation upstream.
-        if (gcc <= manager_target / 4) {
-            return manager_target;
-        }
-        return gcc;
+        return pacing_target_bps.load(std::memory_order_relaxed);
     }
 
     // Stamps a packet with a transport-wide sequence + send time. Returns a
@@ -612,7 +602,7 @@ struct RtpVideoSender::State
     }
 
     // RTCP thread: feed one parsed TWCC report into the estimator and
-    // publish significant target changes (pacer wake + Rust feedback).
+    // publish significant target changes as Rust feedback.
     void handle_twcc_feedback(const TwccFeedback& feedback) {
         if (!estimator) {
             return;
@@ -641,7 +631,6 @@ struct RtpVideoSender::State
             return;
         }
         gcc_target_bps.store(target, std::memory_order_relaxed);
-        pacing_cv.notify_all();
         // Forward to the host manager on the first estimate and on changes
         // beyond ~3% — the manager applies GCC targets to the encoder.
         if (previous == 0

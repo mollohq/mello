@@ -82,6 +82,28 @@ void operator delete(void* p) noexcept {
 
 void operator delete(void* p, size_t) noexcept { operator delete(p); }
 
+// Every other replaceable variant goes through the two functions above, so a
+// block that one variant allocates is never freed by a variant that reads
+// another header. Without them a standard library that allocates through a
+// variant this file does not replace frees a block it did not make (the
+// segfault on macOS, streaming-quality handoff 5.1). The aligned variants
+// stay with the standard library: it allocates and frees them as a pair.
+void* operator new[](size_t size) { return operator new(size); }
+void* operator new(size_t size, const std::nothrow_t&) noexcept {
+    try {
+        return operator new(size);
+    } catch (...) {
+        return nullptr;
+    }
+}
+void* operator new[](size_t size, const std::nothrow_t&) noexcept {
+    return operator new(size, std::nothrow);
+}
+void operator delete[](void* p) noexcept { operator delete(p); }
+void operator delete[](void* p, size_t) noexcept { operator delete(p); }
+void operator delete(void* p, const std::nothrow_t&) noexcept { operator delete(p); }
+void operator delete[](void* p, const std::nothrow_t&) noexcept { operator delete(p); }
+
 namespace {
 
 using webrtc::DataSize;

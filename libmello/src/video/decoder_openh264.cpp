@@ -29,24 +29,6 @@ bool OpenH264Decoder::initialize(const GraphicsDevice& device, const DecoderConf
     device_->GetImmediateContext(&context_);
     config_ = config;
 
-    nv12_buf_.resize(static_cast<size_t>(config.width) * config.height * 3 / 2);
-
-    D3D11_TEXTURE2D_DESC tex_desc{};
-    tex_desc.Width  = config.width;
-    tex_desc.Height = config.height;
-    tex_desc.MipLevels = 1;
-    tex_desc.ArraySize = 1;
-    tex_desc.Format = DXGI_FORMAT_NV12;
-    tex_desc.SampleDesc.Count = 1;
-    tex_desc.Usage = D3D11_USAGE_DEFAULT;
-    tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-    HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &upload_tex_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "OpenH264 decoder: Failed to create upload texture: hr=0x%08X", hr);
-        return false;
-    }
-
     if (!openh264::load()) {
         MELLO_LOG_WARN(TAG, "OpenH264 DLL not available");
         return false;
@@ -86,15 +68,15 @@ void OpenH264Decoder::shutdown() {
         }
         decoder_ = nullptr;
     }
-    upload_tex_.Reset();
+    for (Slot& slot : slots_) slot = Slot{};
     context_.Reset();
     device_.Reset();
     nv12_buf_.clear();
 }
 
-DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
+DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool is_keyframe, int slot_index) {
     (void)is_keyframe;
-    if (!decoder_) return DecodeFeedResult::Error;
+    if (!decoder_ || slot_index < 0 || slot_index >= kOutputSlots) return DecodeFeedResult::Error;
 
     unsigned char* yuv[3] = { nullptr, nullptr, nullptr };
     wa::SBufferInfo buf_info{};
@@ -112,27 +94,52 @@ DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool 
         return DecodeFeedResult::Error;
     }
 
-    uint32_t w = config_.width;
-    uint32_t h = config_.height;
-    int y_stride  = buf_info.UsrData.sSystemBuffer.iStride[0];
-    int uv_stride = buf_info.UsrData.sSystemBuffer.iStride[1];
+    // The picture size comes from the SPS, not from the viewer's config: a
+    // host that changes its encode size changes it here.
+    const uint32_t w = static_cast<uint32_t>(buf_info.UsrData.sSystemBuffer.iWidth) & ~1u;
+    const uint32_t h = static_cast<uint32_t>(buf_info.UsrData.sSystemBuffer.iHeight) & ~1u;
+    if (w == 0 || h == 0) {
+        MELLO_LOG_ERROR(TAG, "OpenH264: decoded frame without a size");
+        return DecodeFeedResult::Error;
+    }
+    const int y_stride  = buf_info.UsrData.sSystemBuffer.iStride[0];
+    const int uv_stride = buf_info.UsrData.sSystemBuffer.iStride[1];
 
-    // Convert I420 -> NV12 for D3D11 texture upload
-    uint8_t* nv12_y  = nv12_buf_.data();
-    uint8_t* nv12_uv = nv12_y + w * h;
-
-    // Copy Y plane
-    for (uint32_t row = 0; row < h; ++row) {
-        memcpy(nv12_y + row * w, yuv[0] + row * y_stride, w);
+    Slot& slot = slots_[slot_index];
+    if (!slot.texture || slot.width != w || slot.height != h) {
+        D3D11_TEXTURE2D_DESC tex_desc{};
+        tex_desc.Width  = w;
+        tex_desc.Height = h;
+        tex_desc.MipLevels = 1;
+        tex_desc.ArraySize = 1;
+        tex_desc.Format = DXGI_FORMAT_NV12;
+        tex_desc.SampleDesc.Count = 1;
+        tex_desc.Usage = D3D11_USAGE_DEFAULT;
+        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &texture);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "OpenH264: slot texture %ux%u failed: hr=0x%08X", w, h, hr);
+            return DecodeFeedResult::Error;
+        }
+        slot.texture = texture;
+        slot.width = w;
+        slot.height = h;
     }
 
-    // Interleave U + V into NV12 UV plane
-    uint32_t uv_h = h / 2;
-    uint32_t uv_w = w / 2;
+    // I420 to NV12 for the upload.
+    nv12_buf_.resize(static_cast<size_t>(w) * h * 3 / 2);
+    uint8_t* nv12_y  = nv12_buf_.data();
+    uint8_t* nv12_uv = nv12_y + static_cast<size_t>(w) * h;
+    for (uint32_t row = 0; row < h; ++row) {
+        memcpy(nv12_y + static_cast<size_t>(row) * w, yuv[0] + static_cast<size_t>(row) * y_stride, w);
+    }
+    const uint32_t uv_h = h / 2;
+    const uint32_t uv_w = w / 2;
     for (uint32_t row = 0; row < uv_h; ++row) {
-        const uint8_t* u_row = yuv[1] + row * uv_stride;
-        const uint8_t* v_row = yuv[2] + row * uv_stride;
-        uint8_t* dst = nv12_uv + row * w;
+        const uint8_t* u_row = yuv[1] + static_cast<size_t>(row) * uv_stride;
+        const uint8_t* v_row = yuv[2] + static_cast<size_t>(row) * uv_stride;
+        uint8_t* dst = nv12_uv + static_cast<size_t>(row) * w;
         for (uint32_t col = 0; col < uv_w; ++col) {
             dst[col * 2]     = u_row[col];
             dst[col * 2 + 1] = v_row[col];
@@ -140,15 +147,22 @@ DecodeFeedResult OpenH264Decoder::decode(const uint8_t* data, size_t size, bool 
     }
 
     context_->UpdateSubresource(
-        upload_tex_.Get(), 0, nullptr,
+        slot.texture.Get(), 0, nullptr,
         nv12_buf_.data(), w,
         static_cast<UINT>(nv12_buf_.size()));
 
     return DecodeFeedResult::FrameReady;
 }
 
-ID3D11Texture2D* OpenH264Decoder::get_frame() {
-    return upload_tex_.Get();
+bool OpenH264Decoder::picture(int slot_index, DecodedPicture& out) const {
+    if (slot_index < 0 || slot_index >= kOutputSlots || !slots_[slot_index].texture) return false;
+    const Slot& slot = slots_[slot_index];
+    out.texture = slot.texture;
+    out.format = DXGI_FORMAT_NV12;
+    out.width = slot.width;
+    out.height = slot.height;
+    out.uv_row = 0;
+    return true;
 }
 
 } // namespace mello::video

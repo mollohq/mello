@@ -49,6 +49,7 @@ use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_rtp;
 use stream_ffi::ViewerState;
+pub use stream_ffi::{set_native_presenter, NativePresentFn};
 
 /// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
 /// Zero when no adapter is usable, and always zero off Windows.

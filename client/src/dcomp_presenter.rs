@@ -4,13 +4,29 @@
 //! composites the decoded video frame *underneath* the Slint window.  Slint
 //! continues to use its default (software/Skia) renderer for the UI, so the
 //! GPU context only exists while a stream is being watched.
+//!
+//! Streaming-quality stage 3: two halves on two threads.
+//! - [`VideoSwapChain`] presents. libmello's present thread calls it (through
+//!   `mello_core::set_native_presenter`) at each frame's render time. It waits
+//!   on the swap chain's frame-latency waitable object (at most one frame in
+//!   the queue, so a present goes to the next vblank), reads libmello's shared
+//!   RGBA texture under its keyed mutex (key 0), copies it into the back
+//!   buffer and presents.
+//! - [`DCompPresenter`] stays on the UI thread: the visual tree, the geometry
+//!   from Slint, the pause card and the host's pointer. Slint presents nothing.
+//!
+//! The device is multithread-protected: the cursor upload (UI thread) and the
+//! frame copy (present thread) share its immediate context.
+
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use windows::core::Interface;
-use windows::Win32::Foundation::{HANDLE, HMODULE, HWND};
+use windows::Win32::Foundation::{CloseHandle, HANDLE, HMODULE, HWND};
 use windows::Win32::Graphics::Direct3D::{D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_UNKNOWN};
 use windows::Win32::Graphics::Direct3D11::{
-    D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Texture2D,
-    D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
+    D3D11CreateDevice, ID3D11Device, ID3D11Device1, ID3D11DeviceContext, ID3D11Multithread,
+    ID3D11Texture2D, D3D11_CREATE_DEVICE_BGRA_SUPPORT, D3D11_SDK_VERSION,
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
@@ -20,31 +36,204 @@ use windows::Win32::Graphics::Dxgi::Common::{
     DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
-    CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+    CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIFactory2, IDXGIKeyedMutex,
+    IDXGISwapChain1, IDXGISwapChain2, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
+    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
     DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
+use windows::Win32::System::Threading::WaitForSingleObjectEx;
 
-pub struct DCompPresenter {
-    _device: ID3D11Device,
+/// Longest wait for the swap chain to take a frame: a little over one vblank
+/// at 30 Hz. A missed wait presents anyway.
+const FRAME_LATENCY_WAIT_MS: u32 = 40;
+/// Longest wait for libmello to give the shared frame back. libmello holds it
+/// only for one copy.
+const KEYED_MUTEX_WAIT_MS: u32 = 50;
+
+fn pack_size(width: u32, height: u32) -> u64 {
+    (u64::from(width) << 32) | u64::from(height)
+}
+
+fn unpack_size(packed: u64) -> (u32, u32) {
+    ((packed >> 32) as u32, packed as u32)
+}
+
+/// The presenting half: runs on libmello's present thread.
+pub struct VideoSwapChain {
     device1: ID3D11Device1,
     device_ctx: ID3D11DeviceContext,
     swap_chain: IDXGISwapChain1,
-    dcomp_device: IDCompositionDevice,
-    _dcomp_target: IDCompositionTarget,
-    dcomp_visual: IDCompositionVisual,
-    stream_width: u32,
-    stream_height: u32,
+    /// Signalled when the swap chain can take the next frame.
+    waitable: HANDLE,
+    /// The swap chain size, read by the UI thread for the geometry.
+    size: Arc<AtomicU64>,
+    /// The opened shared texture: libmello makes a new one (a new handle) when
+    /// the picture size changes, so the key is handle and size.
+    cached: Option<(usize, u32, u32, ID3D11Texture2D, IDXGIKeyedMutex)>,
     presented_frames: u64,
-    // Shared texture is created once per stream by libmello, so the opened
-    // COM object is cached instead of re-opening the handle every frame.
-    cached_shared_handle: usize,
-    cached_shared_tex: Option<ID3D11Texture2D>,
     // A present failure repeats at the display rate. Logging every one buried
     // an hour of client log under 60 identical lines a second and hid the
     // events around it, so the same message is logged once and then counted.
     last_present_error: String,
     repeated_present_errors: u64,
+}
+
+// SAFETY: the COM objects are used from one thread at a time (the Mutex in
+// DCompPresenter), and the D3D11 device is multithread-protected for the
+// immediate context the UI thread also uses (the cursor upload).
+unsafe impl Send for VideoSwapChain {}
+
+impl VideoSwapChain {
+    /// Present one frame of libmello's shared RGBA texture. Returns `true`
+    /// when it went to the swap chain.
+    pub fn present(&mut self, frame: &mello_core::NativeSurfaceFrame) -> bool {
+        if frame.shared_handle == 0 || frame.width == 0 || frame.height == 0 {
+            return false;
+        }
+        match unsafe { self.present_inner(frame) } {
+            Ok(()) => {
+                self.presented_frames = self.presented_frames.saturating_add(1);
+                if !self.last_present_error.is_empty() {
+                    log::info!(
+                        "DComp present recovered after {} failed frames",
+                        self.repeated_present_errors.saturating_add(1)
+                    );
+                    self.last_present_error.clear();
+                    self.repeated_present_errors = 0;
+                }
+                true
+            }
+            Err(e) => {
+                if self.last_present_error == e {
+                    self.repeated_present_errors = self.repeated_present_errors.saturating_add(1);
+                    // One line per 300 frames, about five seconds, so a stuck
+                    // presenter stays visible without drowning the log.
+                    if self.repeated_present_errors.is_multiple_of(300) {
+                        log::error!(
+                            "DComp present still failing after {} frames: {}",
+                            self.repeated_present_errors,
+                            e
+                        );
+                    }
+                } else {
+                    log::error!("DComp present failed: {}", e);
+                    self.last_present_error = e;
+                    self.repeated_present_errors = 0;
+                }
+                false
+            }
+        }
+    }
+
+    pub fn presented_frames(&self) -> u64 {
+        self.presented_frames
+    }
+
+    unsafe fn present_inner(
+        &mut self,
+        frame: &mello_core::NativeSurfaceFrame,
+    ) -> Result<(), String> {
+        let key = (frame.shared_handle, frame.width, frame.height);
+        let fresh = !matches!(&self.cached, Some((h, w, hh, _, _)) if (*h, *w, *hh) == key);
+        if fresh {
+            self.cached = None;
+            let handle = HANDLE(frame.shared_handle as *mut _);
+            let opened: ID3D11Texture2D = self
+                .device1
+                .OpenSharedResource1(handle)
+                .map_err(|e| format!("OpenSharedResource1: {e}"))?;
+            let mutex: IDXGIKeyedMutex = opened
+                .cast()
+                .map_err(|e| format!("shared frame without a keyed mutex: {e}"))?;
+            self.cached = Some((key.0, key.1, key.2, opened, mutex));
+        }
+        let (_, _, _, shared_tex, mutex) = self.cached.as_ref().expect("cached above");
+        let (shared_tex, mutex) = (shared_tex.clone(), mutex.clone());
+
+        let mut tex_desc = Default::default();
+        shared_tex.GetDesc(&mut tex_desc);
+        let (sw, sh) = unpack_size(self.size.load(Ordering::Acquire));
+        if tex_desc.Width != sw || tex_desc.Height != sh {
+            log::info!(
+                "DComp: stream resolution changed {}x{} → {}x{}, resizing swap chain",
+                sw,
+                sh,
+                tex_desc.Width,
+                tex_desc.Height
+            );
+            self.swap_chain
+                .ResizeBuffers(
+                    2,
+                    tex_desc.Width,
+                    tex_desc.Height,
+                    DXGI_FORMAT_R8G8B8A8_UNORM,
+                    DXGI_SWAP_CHAIN_FLAG(DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0),
+                )
+                .map_err(|e| format!("ResizeBuffers: {e}"))?;
+            self.size.store(
+                pack_size(tex_desc.Width, tex_desc.Height),
+                Ordering::Release,
+            );
+        }
+
+        // The vsync gate: the swap chain holds at most one frame, so this
+        // returns when the last one is on its way to the screen.
+        if !self.waitable.is_invalid() {
+            let _ = WaitForSingleObjectEx(self.waitable, FRAME_LATENCY_WAIT_MS, true);
+        }
+
+        let back_tex: ID3D11Texture2D = self
+            .swap_chain
+            .GetBuffer(0)
+            .map_err(|e| format!("GetBuffer: {e}"))?;
+
+        // Key 0 on both sides: libmello writes the frame only while it holds
+        // the mutex, so this copy never reads half a frame.
+        mutex
+            .AcquireSync(0, KEYED_MUTEX_WAIT_MS)
+            .map_err(|e| format!("AcquireSync: {e}"))?;
+        self.device_ctx.CopyResource(&back_tex, &shared_tex);
+        let _ = mutex.ReleaseSync(0);
+
+        self.swap_chain
+            .Present(1, DXGI_PRESENT(0))
+            .ok()
+            .map_err(|e| format!("Present: {e}"))?;
+        Ok(())
+    }
+}
+
+impl Drop for VideoSwapChain {
+    fn drop(&mut self) {
+        self.cached = None;
+        if !self.waitable.is_invalid() {
+            // SAFETY: the handle came from GetFrameLatencyWaitableObject and
+            // nothing else closes it.
+            unsafe {
+                let _ = CloseHandle(self.waitable);
+            }
+        }
+        log::info!(
+            "DComp swap chain destroyed (presented {} frames)",
+            self.presented_frames
+        );
+    }
+}
+
+pub struct DCompPresenter {
+    _device: ID3D11Device,
+    device_ctx: ID3D11DeviceContext,
+    swap_chain: IDXGISwapChain1,
+    dcomp_device: IDCompositionDevice,
+    _dcomp_target: IDCompositionTarget,
+    dcomp_visual: IDCompositionVisual,
+    /// The presenting half, shared with libmello's present thread.
+    video: Arc<Mutex<VideoSwapChain>>,
+    /// The swap chain size (the stream size); the present thread changes it.
+    stream_size: Arc<AtomicU64>,
+    /// The size the geometry was last computed for, and the last geometry.
+    geometry_size: std::cell::Cell<u64>,
+    last_geometry: std::cell::Cell<Option<[f32; 6]>>,
     /// The host's pointer, drawn over the video from cursor packets (the
     /// game capture hook's frames have none; `mello_core::stream::cursor`).
     /// A child of the video visual, so the video's scale and clip apply and
@@ -77,6 +266,22 @@ impl DCompPresenter {
             .cast()
             .map_err(|e| format!("cast to ID3D11Device1: {e}"))?;
         let swap_chain = Self::create_swap_chain(&device, stream_width, stream_height)?;
+        let waitable = match swap_chain.cast::<IDXGISwapChain2>() {
+            Ok(chain2) => unsafe {
+                let _ = chain2.SetMaximumFrameLatency(1);
+                chain2.GetFrameLatencyWaitableObject()
+            },
+            Err(e) => {
+                log::warn!("DComp: no IDXGISwapChain2 ({e}); presents are not vsync-gated");
+                HANDLE::default()
+            }
+        };
+        if !waitable.is_invalid() {
+            // The waitable object starts signalled; consume it like the
+            // first frame would.
+            let _ = unsafe { WaitForSingleObjectEx(waitable, 0, true) };
+        }
+        let stream_size = Arc::new(AtomicU64::new(pack_size(stream_width, stream_height)));
         let (dcomp_device, dcomp_target, dcomp_visual) =
             Self::create_dcomp_tree(&device, hwnd, &swap_chain, offset_x, offset_y)?;
         let cursor_visual = unsafe { dcomp_device.CreateVisual() }
@@ -93,21 +298,29 @@ impl DCompPresenter {
             hwnd,
         );
 
+        let video = Arc::new(Mutex::new(VideoSwapChain {
+            device1,
+            device_ctx: device_ctx.clone(),
+            swap_chain: swap_chain.clone(),
+            waitable,
+            size: Arc::clone(&stream_size),
+            cached: None,
+            presented_frames: 0,
+            last_present_error: String::new(),
+            repeated_present_errors: 0,
+        }));
+
         Ok(Self {
             _device: device,
-            device1,
             device_ctx,
             swap_chain,
             dcomp_device,
             _dcomp_target: dcomp_target,
             dcomp_visual,
-            stream_width,
-            stream_height,
-            presented_frames: 0,
-            cached_shared_handle: 0,
-            cached_shared_tex: None,
-            last_present_error: String::new(),
-            repeated_present_errors: 0,
+            video,
+            geometry_size: std::cell::Cell::new(pack_size(stream_width, stream_height)),
+            stream_size,
+            last_geometry: std::cell::Cell::new(None),
             cursor_visual,
             cursor_swap: None,
             cursor_swap_size: (0, 0),
@@ -118,50 +331,28 @@ impl DCompPresenter {
         })
     }
 
-    /// Present a shared D3D11 texture handle (NT handle) to the DComp swap chain.
-    /// Returns `true` on success.
-    pub fn present_shared_texture(
-        &mut self,
-        shared_handle: usize,
-        width: u32,
-        height: u32,
-    ) -> bool {
-        if shared_handle == 0 || width == 0 || height == 0 {
-            return false;
+    /// The native frame presenter for `mello_core::set_native_presenter`:
+    /// libmello's present thread calls it at each frame's render time.
+    pub fn frame_presenter(&self) -> mello_core::NativePresentFn {
+        let video = Arc::clone(&self.video);
+        Box::new(move |frame| match video.lock() {
+            Ok(mut chain) => chain.present(frame),
+            Err(_) => false,
+        })
+    }
+
+    /// Compute the geometry again when the present thread resized the swap
+    /// chain (a new stream size). The UI thread calls it on its timer; cheap
+    /// when nothing changed.
+    pub fn refresh_geometry_if_resized(&self) {
+        let size = self.stream_size.load(Ordering::Acquire);
+        if size == self.geometry_size.get() {
+            return;
         }
-        match unsafe { self.present_inner(shared_handle) } {
-            Ok(true) => {
-                self.presented_frames = self.presented_frames.saturating_add(1);
-                if !self.last_present_error.is_empty() {
-                    log::info!(
-                        "DComp present recovered after {} failed frames",
-                        self.repeated_present_errors.saturating_add(1)
-                    );
-                    self.last_present_error.clear();
-                    self.repeated_present_errors = 0;
-                }
-                true
-            }
-            Ok(false) => false,
-            Err(e) => {
-                if self.last_present_error == e {
-                    self.repeated_present_errors = self.repeated_present_errors.saturating_add(1);
-                    // One line per 300 frames, about five seconds, so a stuck
-                    // presenter stays visible without drowning the log.
-                    if self.repeated_present_errors.is_multiple_of(300) {
-                        log::error!(
-                            "DComp present still failing after {} frames: {}",
-                            self.repeated_present_errors,
-                            e
-                        );
-                    }
-                } else {
-                    log::error!("DComp present failed: {}", e);
-                    self.last_present_error = e;
-                    self.repeated_present_errors = 0;
-                }
-                false
-            }
+        if let Some([x, y, w, h, vy, vh]) = self.last_geometry.get() {
+            self.update_geometry(x, y, w, h, vy, vh);
+        } else {
+            self.geometry_size.set(size);
         }
     }
 
@@ -306,7 +497,13 @@ impl DCompPresenter {
         viewport_y: f32,
         viewport_h: f32,
     ) -> bool {
-        if self.stream_width == 0 || self.stream_height == 0 {
+        self.last_geometry.set(Some([
+            canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h,
+        ]));
+        let packed = self.stream_size.load(Ordering::Acquire);
+        self.geometry_size.set(packed);
+        let (stream_width, stream_height) = unpack_size(packed);
+        if stream_width == 0 || stream_height == 0 {
             return false;
         }
 
@@ -334,8 +531,8 @@ impl DCompPresenter {
             self.apply_cursor_content(self.content_visible.get());
 
             // Uniform scale preserving aspect ratio (contain-fit).
-            let sw = self.stream_width as f32;
-            let sh = self.stream_height as f32;
+            let sw = stream_width as f32;
+            let sh = stream_height as f32;
             let scale = (canvas_w / sw).min(canvas_h / sh);
             let rendered_w = sw * scale;
             let rendered_h = sh * scale;
@@ -395,7 +592,7 @@ impl DCompPresenter {
     }
 
     pub fn presented_frames(&self) -> u64 {
-        self.presented_frames
+        self.video.lock().map(|v| v.presented_frames()).unwrap_or(0)
     }
 
     // -- private -----------------------------------------------------------
@@ -478,10 +675,15 @@ impl DCompPresenter {
             )
         }
         .map_err(|e| format!("D3D11CreateDevice: {e}"))?;
-        Ok((
-            device.ok_or("D3D11 device is None")?,
-            device_ctx.ok_or("D3D11 device context is None")?,
-        ))
+        let device = device.ok_or("D3D11 device is None")?;
+        // Two threads use the immediate context: the present thread (frame
+        // copy) and the UI thread (pointer upload).
+        if let Ok(mt) = device.cast::<ID3D11Multithread>() {
+            unsafe {
+                let _ = mt.SetMultithreadProtected(true);
+            }
+        }
+        Ok((device, device_ctx.ok_or("D3D11 device context is None")?))
     }
 
     fn create_swap_chain(
@@ -504,6 +706,8 @@ impl DCompPresenter {
                 ..Default::default()
             },
             AlphaMode: windows::Win32::Graphics::Dxgi::Common::DXGI_ALPHA_MODE_IGNORE,
+            // The present thread waits on it before each frame (vsync gate).
+            Flags: DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT.0 as u32,
             ..Default::default()
         };
 
@@ -553,78 +757,16 @@ impl DCompPresenter {
 
         Ok((dcomp_device, target, visual))
     }
-
-    unsafe fn present_inner(&mut self, shared_handle: usize) -> Result<bool, String> {
-        // Open the shared texture only when the handle changes — it stays
-        // valid for the stream's lifetime, so re-opening every frame is waste.
-        if self.cached_shared_handle != shared_handle || self.cached_shared_tex.is_none() {
-            let handle = HANDLE(shared_handle as *mut _);
-            let opened: ID3D11Texture2D = match self.device1.OpenSharedResource1(handle) {
-                Ok(tex) => tex,
-                Err(e) => {
-                    // Clear the cache so a later frame retries a fresh open.
-                    self.cached_shared_tex = None;
-                    self.cached_shared_handle = 0;
-                    return Err(format!("OpenSharedResource1: {e}"));
-                }
-            };
-            self.cached_shared_tex = Some(opened);
-            self.cached_shared_handle = shared_handle;
-        }
-        let shared_tex = self
-            .cached_shared_tex
-            .as_ref()
-            .expect("cached above")
-            .clone();
-
-        // Check if shared texture dimensions differ from swap chain.
-        let mut tex_desc = Default::default();
-        shared_tex.GetDesc(&mut tex_desc);
-        if tex_desc.Width != self.stream_width || tex_desc.Height != self.stream_height {
-            log::info!(
-                "DComp: stream resolution changed {}x{} → {}x{}, resizing swap chain",
-                self.stream_width,
-                self.stream_height,
-                tex_desc.Width,
-                tex_desc.Height
-            );
-            self.stream_width = tex_desc.Width;
-            self.stream_height = tex_desc.Height;
-            self.swap_chain
-                .ResizeBuffers(
-                    2,
-                    tex_desc.Width,
-                    tex_desc.Height,
-                    DXGI_FORMAT_R8G8B8A8_UNORM,
-                    DXGI_SWAP_CHAIN_FLAG(0),
-                )
-                .map_err(|e| format!("ResizeBuffers: {e}"))?;
-        }
-
-        let back_tex: ID3D11Texture2D = self
-            .swap_chain
-            .GetBuffer(0)
-            .map_err(|e| format!("GetBuffer: {e}"))?;
-
-        self.device_ctx.CopyResource(&back_tex, &shared_tex);
-
-        self.swap_chain
-            .Present(0, DXGI_PRESENT(0))
-            .ok()
-            .map_err(|e| format!("Present: {e}"))?;
-
-        Ok(true)
-    }
 }
 
 impl Drop for DCompPresenter {
     fn drop(&mut self) {
-        // Release the cached shared texture before the D3D11/DComp fields
-        // are torn down (fields drop in declaration order after this runs).
-        self.cached_shared_tex = None;
+        // libmello's present thread must not reach this swap chain any more.
+        // The caller clears the presenter first; this is the backstop.
+        mello_core::set_native_presenter(None);
         log::info!(
             "DComp presenter destroyed (presented {} frames)",
-            self.presented_frames
+            self.presented_frames()
         );
     }
 }

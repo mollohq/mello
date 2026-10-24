@@ -1,6 +1,7 @@
 #pragma once
 
 #include "rtp_h264_receiver.hpp"
+#include "video_receive_timeline.hpp"
 
 #include <chrono>
 #include <cstddef>
@@ -77,14 +78,18 @@ struct RtpVideoReceiverSessionStats {
     uint64_t peak_ingress_queued_bytes = 0;
     uint64_t wrong_ssrc_packets_after_recovery = 0;
 
+    // Access units inserted into the timeline, and refused by it.
     uint64_t access_units_queued_total = 0;
     uint64_t access_unit_bytes_queued_total = 0;
     uint64_t access_units_dropped = 0;
     uint64_t access_unit_bytes_dropped = 0;
+    // Frames the timeline holds (the C ABI kept the old output queue names).
     uint64_t output_queued_access_units = 0;
     uint64_t output_queued_bytes = 0;
     uint64_t peak_output_queued_access_units = 0;
     uint64_t peak_output_queued_bytes = 0;
+    // Key-frame requests not sent: a key frame was arriving already.
+    uint64_t keyframe_requests_absorbed = 0;
 
     uint64_t nack_packets_sent = 0;
     uint64_t nack_sequences_sent = 0;
@@ -108,19 +113,24 @@ struct RtpVideoReceiverSessionStats {
     uint32_t remote_media_ssrc = 0;
     uint32_t receive_target_bps = 0;
     bool has_remote_media_ssrc = false;
+    // The timeline waits for a key frame.
     bool awaiting_output_idr = true;
 
     RtpH264Receiver::Stats core;
+    TimelineStats timeline;
 };
 
 // The libdatachannel callback only classifies and copies datagrams. One worker
-// owns the H.264 receiver, RTCP state, and all outbound feedback. Consumers poll
-// complete access units; no user callback runs on either producer thread.
+// owns the H.264 receiver, RTCP state, and all outbound feedback. Complete
+// access units go into the viewer timeline (one per session); the viewer
+// pipeline polls the timeline on its decode thread (streaming-quality stage
+// 3, spec 12 section 7). A PLI goes out only for the timeline's
+// KeyframeNeeded, with a 1 s cooldown.
 class RtpVideoReceiverSession final {
 public:
-    static constexpr size_t kMaxIngressPackets = 512;
-    static constexpr size_t kMaxIngressBytes = 2 * 1024 * 1024;
-    static constexpr size_t kMaxOutputAccessUnits = 3;
+    static constexpr size_t kMaxIngressPackets = 2048;
+    static constexpr size_t kMaxIngressBytes = 4 * 1024 * 1024;
+    // Largest access unit the pull API hands out.
     static constexpr size_t kMaxOutputBytes = 4 * 1024 * 1024;
 
     explicit RtpVideoReceiverSession(
@@ -138,10 +148,13 @@ public:
     RtpVideoReceiverSession(RtpVideoReceiverSession&&) noexcept;
     RtpVideoReceiverSession& operator=(RtpVideoReceiverSession&&) noexcept;
 
+    // The pull API of the tests and tools: the next frame the timeline
+    // releases now, without a render clock. The viewer pipeline does not use
+    // it; it polls timeline() itself.
     std::optional<RtpVideoReceiverAccessUnit> pop_access_unit() noexcept;
 
-    // On BufferTooSmall, size is the required byte count and the queue head is
-    // retained. Metadata describes that retained access unit.
+    // On BufferTooSmall, size is the required byte count and the frame is
+    // retained for the next call. Metadata describes that retained frame.
     RtpVideoReceiverPopResult pop_access_unit(
         uint8_t* buffer,
         size_t capacity,
@@ -154,9 +167,17 @@ public:
     // a remote SSRC and libdatachannel feedback callback are available.
     bool set_receive_target(uint32_t bitrate_bps) noexcept;
 
-    // Hint the NACK retry budget from the measured control-channel RTT.
-    // Applied on the next receiver-core (re)build; 0 restores the default.
+    // The measured control-channel RTT. Applies at once to the NACK
+    // interval, the repair deadlines and the timeline.
     void set_rtt_hint(float rtt_ms) noexcept;
+
+    // The viewer timeline of this session. Null only for a moved-from
+    // session.
+    std::shared_ptr<VideoReceiveTimeline> timeline() const noexcept;
+
+    // Ask the host for a key frame (the timeline's KeyframeNeeded). Any
+    // thread; the worker sends the PLI.
+    void request_keyframe() noexcept;
 
     bool is_open() const noexcept;
     RtpVideoReceiverSessionStats stats() const noexcept;

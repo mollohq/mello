@@ -8,16 +8,17 @@
 //! passes viewer joins and leaves to the sink, and pings every 2 s, as
 //! `poll_sfu_host_membership_events` does.
 //!
-//! Viewer. The client's viewer tick (`stream_tick` with
-//! `poll_sfu_viewer_access_units`), which is private to the client and is
-//! reproduced here: every 16 ms the receive-target controller
-//! (`ViewerCongestionController`), up to 32 access units polled, the backlog
-//! guard (a delta access unit is dropped while more than 4 wait for decode),
-//! the feed, and at most one `mello_stream_present_frame`. One difference:
-//! the client registers a native frame callback (the GPU texture for the
-//! compositor); the harness registers the CPU frame callback and reads every
-//! presented frame back, so it can read the burned-in code and score the
-//! pixels. The readback adds 1 to 3 ms per present on the tick thread.
+//! Viewer. The client's viewer (streaming-quality stage 3): the viewer
+//! pipeline is attached to the viewer peer (`mello_stream_viewer_attach_peer`)
+//! and libmello runs it on its own threads: the receive timeline releases
+//! each frame, the decode thread decodes it, the present thread shows it at
+//! its render time. The 16 ms loop here does what the client's stream tick
+//! does: the receive-target controller (`ViewerCongestionController`), the
+//! ping and the SFU events. One difference: the client registers a native
+//! frame callback (the GPU texture for the compositor); the harness registers
+//! the CPU frame callback and reads every presented frame back, so it can
+//! read the burned-in code and score the pixels. The readback runs on the
+//! present thread after the present time is taken.
 
 use crate::code::{self, FrameCode};
 use mello_core::stream::congestion::{CongestionSample, ViewerCongestionController};
@@ -34,8 +35,6 @@ use std::time::{Duration, Instant};
 
 /// The tick of the client's stream loop.
 pub const TICK: Duration = Duration::from_millis(16);
-const MAX_AU_POLLS_PER_TICK: usize = 32;
-const DECODE_QUEUE_BACKLOG_THRESHOLD: i32 = 4;
 
 pub fn clock_us() -> u64 {
     // SAFETY: no arguments, reads the steady clock.
@@ -316,18 +315,20 @@ pub struct PresentRec {
     pub slot: Option<u64>,
 }
 
-/// Where the frame callback puts each presented frame. The callback runs
-/// inside `mello_stream_present_frame` on the viewer tick, so it only copies
-/// the pixels and hands them to a worker thread; the worker reads the code,
-/// converts to luma and writes the file. The tick then costs the product's
-/// present plus one copy.
+/// Where the frame callback puts each presented frame. The callback runs on
+/// libmello's present thread, so it only copies the pixels and hands them to
+/// a worker thread; the worker reads the code, converts to luma and writes
+/// the file. `ts` is the present thread's present time.
 /// One presented frame on its way to the worker: present time and RGBA.
-type FrameMsg = (u64, Vec<u8>);
+/// (present time, RGBA pixels, width, height).
+type FrameMsg = (u64, Vec<u8>, u32, u32);
 
 struct FrameSink {
     tx: Mutex<Option<std::sync::mpsc::Sender<FrameMsg>>>,
     pool: Arc<Mutex<Vec<Vec<u8>>>>,
-    wrong_size: AtomicU64,
+    /// Frames at another size than the clip (a resolution rung): scaled to
+    /// the clip size before the code is read.
+    scaled: AtomicU64,
     /// Longest callback, us: the harness's own cost inside the present.
     callback_max_us: AtomicU64,
     width: u32,
@@ -343,9 +344,11 @@ unsafe extern "C" fn on_frame(
 ) {
     // SAFETY: user is the FrameSink the viewer owns until it stops.
     let sink = unsafe { &*(user as *const FrameSink) };
-    if rgba.is_null() || w != sink.width || h != sink.height {
-        sink.wrong_size.fetch_add(1, Ordering::Relaxed);
+    if rgba.is_null() || w == 0 || h == 0 {
         return;
+    }
+    if w != sink.width || h != sink.height {
+        sink.scaled.fetch_add(1, Ordering::Relaxed);
     }
     let started = Instant::now();
     let n = (w as usize) * (h as usize) * 4;
@@ -360,7 +363,7 @@ unsafe extern "C" fn on_frame(
     buf.clear();
     buf.extend_from_slice(px);
     if let Some(tx) = sink.tx.lock().unwrap_or_else(|p| p.into_inner()).as_ref() {
-        let _ = tx.send((ts, buf));
+        let _ = tx.send((ts, buf, w, h));
     }
     sink.callback_max_us
         .fetch_max(started.elapsed().as_micros() as u64, Ordering::Relaxed);
@@ -379,8 +382,18 @@ fn frame_worker(
     let mut presents = Vec::with_capacity(4096);
     let mut last: Option<FrameCode> = None;
     let mut slots = 0u64;
-    for (ts, px) in rx {
-        let code = code::read_rgba(&px, width as usize);
+    let mut scaled = Vec::new();
+    for (ts, frame, fw, fh) in rx {
+        // A frame at another size (the host stepped its resolution) is
+        // scaled to the clip size: the code and the scores read the clip
+        // size.
+        let px: &[u8] = if fw == width && fh == height {
+            &frame
+        } else {
+            scale_rgba(&frame, fw, fh, width, height, &mut scaled);
+            &scaled
+        };
+        let code = code::read_rgba(px, width as usize);
         let mut slot = None;
         if code.is_some() && code != last {
             for (i, y) in luma.iter_mut().enumerate() {
@@ -397,10 +410,34 @@ fn frame_worker(
             code,
             slot,
         });
-        pool.lock().unwrap_or_else(|p| p.into_inner()).push(px);
+        pool.lock().unwrap_or_else(|p| p.into_inner()).push(frame);
     }
     let _ = writer.flush();
     presents
+}
+
+/// Bilinear scale of a `sw` x `sh` RGBA frame to `dw` x `dh` into `out`.
+fn scale_rgba(src: &[u8], sw: u32, sh: u32, dw: u32, dh: u32, out: &mut Vec<u8>) {
+    let (sw, sh, dw, dh) = (sw as usize, sh as usize, dw as usize, dh as usize);
+    out.resize(dw * dh * 4, 0);
+    for y in 0..dh {
+        let fy = ((y as f32 + 0.5) * sh as f32 / dh as f32 - 0.5).max(0.0);
+        let y0 = (fy as usize).min(sh - 1);
+        let y1 = (y0 + 1).min(sh - 1);
+        let wy = fy - y0 as f32;
+        for x in 0..dw {
+            let fx = ((x as f32 + 0.5) * sw as f32 / dw as f32 - 0.5).max(0.0);
+            let x0 = (fx as usize).min(sw - 1);
+            let x1 = (x0 + 1).min(sw - 1);
+            let wx = fx - x0 as f32;
+            for c in 0..4 {
+                let p = |xx: usize, yy: usize| f32::from(src[(yy * sw + xx) * 4 + c]);
+                let top = p(x0, y0) * (1.0 - wx) + p(x1, y0) * wx;
+                let bottom = p(x0, y1) * (1.0 - wx) + p(x1, y1) * wx;
+                out[(y * dw + x) * 4 + c] = (top * (1.0 - wy) + bottom * wy + 0.5) as u8;
+            }
+        }
+    }
 }
 
 /// What a viewer recorded.
@@ -416,13 +453,31 @@ pub struct ViewerRecord {
     pub feed_failures: u64,
     pub aus_fed: u64,
     pub aus_idr: u64,
-    pub wrong_size: u64,
+    /// Frames at another size than the clip, scaled before the code was read.
+    pub scaled_frames: u64,
     /// Longest tick of the viewer loop, and ticks over 30 ms: the loop's own
     /// stalls (the receive session flushes after a 3-AU backlog).
     pub tick_max_ms: f64,
     pub ticks_over_30ms: u64,
     pub present_max_ms: f64,
     pub callback_max_ms: f64,
+    /// The viewer's receive timeline at the end (stage 3).
+    pub timeline: Option<TimelineRecord>,
+}
+
+/// The viewer pipeline's stage 3 counters at the end of a run.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TimelineRecord {
+    pub target_delay_ms: f32,
+    pub jitter_ms: f32,
+    pub decode_ms_p95: f32,
+    pub frames_released: u64,
+    pub frames_late: u64,
+    pub frames_dropped_late: u64,
+    pub frames_decoded: u64,
+    pub frames_presented: u64,
+    pub keyframe_requests: u64,
+    pub loss_events: u64,
 }
 
 pub struct ViewerSpec {
@@ -464,11 +519,12 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         feed_failures: 0,
         aus_fed: 0,
         aus_idr: 0,
-        wrong_size: 0,
+        scaled_frames: 0,
         tick_max_ms: 0.0,
         ticks_over_30ms: 0,
         present_max_ms: 0.0,
         callback_max_ms: 0.0,
+        timeline: None,
     };
     let file = match std::fs::File::create(&luma_path) {
         Ok(f) => f,
@@ -490,7 +546,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
     let sink = Box::new(FrameSink {
         tx: Mutex::new(Some(tx)),
         pool,
-        wrong_size: AtomicU64::new(0),
+        scaled: AtomicU64::new(0),
         callback_max_us: AtomicU64::new(0),
         width: spec.width,
         height: spec.height,
@@ -536,8 +592,23 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         return rec;
     }
 
+    // The client's order: the pipeline takes the peer's receive timeline.
+    match conn.peer_nonnull() {
+        // SAFETY: viewer and peer are live; the viewer stops before `conn` goes.
+        Ok(peer) => unsafe {
+            if mello_sys::mello_stream_viewer_attach_peer(viewer, peer.as_ptr())
+                != mello_sys::MelloResult_MELLO_OK
+            {
+                rec.error = Some(format!(
+                    "{}: mello_stream_viewer_attach_peer failed",
+                    spec.role
+                ));
+            }
+        },
+        Err(e) => rec.error = Some(format!("{}: no viewer peer: {e}", spec.role)),
+    }
+
     let mut congestion = ViewerCongestionController::new(spec.receive_kbps, Codec::H264);
-    let mut au = vec![0u8; 256 * 1024];
     let mut tick: u64 = 0;
     let mut next = Instant::now();
     let mut disconnected = false;
@@ -558,41 +629,6 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
                 }
             }
         }
-        for _ in 0..MAX_AU_POLLS_PER_TICK {
-            let unit = match conn.poll_received_access_unit(&mut au) {
-                Ok(Some(u)) => u,
-                Ok(None) => break,
-                Err(e) => {
-                    log::warn!("{}: AU poll: {e}", spec.role);
-                    break;
-                }
-            };
-            // SAFETY: viewer is live.
-            let depth = unsafe { mello_sys::mello_stream_viewer_decode_queue_depth(viewer) };
-            if !unit.is_idr && depth > DECODE_QUEUE_BACKLOG_THRESHOLD {
-                rec.backlog_drops += 1;
-                continue;
-            }
-            // SAFETY: au holds the unit; viewer is live.
-            let ok = unsafe {
-                mello_sys::mello_stream_feed_packet(
-                    viewer,
-                    au.as_ptr(),
-                    i32::try_from(au.len()).unwrap_or(i32::MAX),
-                    unit.is_idr,
-                )
-            };
-            if ok {
-                rec.aus_fed += 1;
-                rec.aus_idr += u64::from(unit.is_idr);
-            } else {
-                rec.feed_failures += 1;
-            }
-        }
-        // SAFETY: viewer is live. At most one present per tick, as the client.
-        let p0 = Instant::now();
-        unsafe { mello_sys::mello_stream_present_frame(viewer) };
-        rec.present_max_ms = rec.present_max_ms.max(p0.elapsed().as_secs_f64() * 1000.0);
         for ev in conn.poll_events() {
             if let SfuEvent::Disconnected { reason } = ev {
                 log::warn!("{}: SFU disconnected: {reason}", spec.role);
@@ -612,10 +648,29 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         }
     }
     rec.video = conn.video_stats().ok();
+    {
+        // SAFETY: viewer is live until the stop below.
+        let mut vstats: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+        unsafe { mello_sys::mello_stream_viewer_get_stats(viewer, &mut vstats) };
+        rec.aus_fed = vstats.frames_released;
+        rec.feed_failures = vstats.decode_errors;
+        rec.timeline = Some(TimelineRecord {
+            target_delay_ms: vstats.target_delay_ms,
+            jitter_ms: vstats.jitter_ms,
+            decode_ms_p95: vstats.decode_ms_p95,
+            frames_released: vstats.frames_released,
+            frames_late: vstats.frames_late,
+            frames_dropped_late: vstats.frames_dropped_late,
+            frames_decoded: vstats.frames_decoded,
+            frames_presented: vstats.frames_presented,
+            keyframe_requests: vstats.keyframe_requests,
+            loss_events: vstats.loss_events,
+        });
+    }
     // SAFETY: stop before the sink goes; no callback after it returns.
     unsafe { mello_sys::mello_stream_stop_viewer(viewer) };
     rt.block_on(conn.leave());
-    rec.wrong_size = sink.wrong_size.load(Ordering::Relaxed);
+    rec.scaled_frames = sink.scaled.load(Ordering::Relaxed);
     rec.callback_max_ms = sink.callback_max_us.load(Ordering::Relaxed) as f64 / 1000.0;
     // Closing the channel ends the worker once it has written every frame.
     sink.tx.lock().unwrap_or_else(|p| p.into_inner()).take();
@@ -633,4 +688,39 @@ pub fn read_luma(path: &Path, slot: u64, w: u32, h: u32) -> Result<Vec<u8>, Stri
     let mut buf = vec![0u8; n];
     f.read_exact(&mut buf).map_err(|e| e.to_string())?;
     Ok(buf)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Stage 3: after a resolution rung (1080p to 540p) the viewer shows
+    // 960x540 frames. The sink dropped every one of them as the wrong size;
+    // now it scales them to the clip size and the code still reads.
+    #[test]
+    fn a_frame_at_half_the_clip_size_still_reads_its_code() {
+        let (w, h) = (1920usize, 1080usize);
+        let mut y = vec![90u8; w * h];
+        let mut u = vec![128u8; w * h / 4];
+        let mut v = vec![128u8; w * h / 4];
+        let want = code::FrameCode {
+            index: 4321,
+            clock_ms: 72_015,
+        };
+        code::paint(want, &mut y, w, &mut u, &mut v, w / 2);
+        let full: Vec<u8> = y
+            .iter()
+            .flat_map(|&l| {
+                let g = (((i32::from(l) - 16) * 298 + 128) >> 8).clamp(0, 255) as u8;
+                [g, g, g, 255]
+            })
+            .collect();
+        // What the viewer shows after the rung, then what the sink reads.
+        let mut half = Vec::new();
+        scale_rgba(&full, 1920, 1080, 960, 540, &mut half);
+        assert_eq!(half.len(), 960 * 540 * 4);
+        let mut back = Vec::new();
+        scale_rgba(&half, 960, 540, 1920, 1080, &mut back);
+        assert_eq!(code::read_rgba(&back, w), Some(want));
+    }
 }

@@ -20,12 +20,9 @@
 # cmake/webrtc-audio-processing/CMakeLists.txt, so WAP_ROOT, WAP_DEFINES and
 # the webrtc_neteq target are in scope. It links webrtc_neteq for the shared
 # rtc_base, system_wrappers (Clock) and struct_parameters_parser objects.
-# Apple clang build is unverified: OFF on Apple until stage 3 turns it on after a Mac build.
-if(APPLE)
-    option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" OFF)
-else()
-    option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" ON)
-endif()
+# ON on every platform. Apple clang builds it (verified on Bob's Mac on
+# 2026-10-22, Release): the stream viewer timeline links it everywhere.
+option(MELLO_WEBRTC_VIDEO_TIMING "Build the vendored WebRTC video timing and frame buffer" ON)
 
 if(MELLO_WEBRTC_VIDEO_TIMING)
     if(NOT MELLO_WEBRTC_NETEQ)
@@ -66,8 +63,16 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     # video_frame_buffer.cc, which needs I420Buffer and libyuv. A static
     # library exports nothing, so the macro has no use here.
     set(VIDEO_TIMING_DEFINES ${WAP_DEFINES})
-    list(REMOVE_ITEM VIDEO_TIMING_DEFINES WEBRTC_ENABLE_SYMBOL_EXPORT)
+    list(REMOVE_ITEM VIDEO_TIMING_DEFINES WEBRTC_ENABLE_SYMBOL_EXPORT NDEBUG)
     target_compile_definitions(webrtc_video_timing PRIVATE ${VIDEO_TIMING_DEFINES})
+    # NDEBUG is public. The library and webrtc_neteq (its rtc_base) always
+    # compile with NDEBUG, whatever the build type. A consumer that includes
+    # the WebRTC headers without it sees other inline code and other
+    # RTC_DCHECK_IS_ON members, so a Debug or empty build type mismatched the
+    # library (a segfault of the spike test on macOS, streaming-quality
+    # handoff 5.1). With the define public, every consumer compiles the
+    # headers as the library does, on every build type.
+    target_compile_definitions(webrtc_video_timing PUBLIC NDEBUG)
     target_include_directories(webrtc_video_timing BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/compat)
     target_include_directories(webrtc_video_timing PUBLIC ${VIDEO_TIMING_ROOT}/webrtc)
     target_link_libraries(webrtc_video_timing

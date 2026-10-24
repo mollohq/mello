@@ -208,6 +208,33 @@ if(MSVC)
     target_compile_options(mello_playout PRIVATE /EHsc /wd4100 /wd4244 /wd4267)
 endif()
 
+# Stream viewer timeline (streaming-quality stage 3): the vendored WebRTC
+# frame buffer and timing (cmake/webrtc-video-timing.cmake) behind a C++17
+# header. Same island rule as mello_playout: only this file includes the
+# WebRTC video headers. It takes NDEBUG from webrtc_video_timing (public),
+# so it compiles those headers as the library does on every build type.
+if(NOT MELLO_WEBRTC_VIDEO_TIMING)
+    message(FATAL_ERROR "[mello] the stream viewer timeline needs MELLO_WEBRTC_VIDEO_TIMING=ON")
+endif()
+add_library(mello_video_timeline OBJECT src/transport/video_receive_timeline.cpp)
+set_target_properties(mello_video_timeline PROPERTIES
+    CXX_STANDARD 20
+    CXX_STANDARD_REQUIRED ON
+    POSITION_INDEPENDENT_CODE ON
+)
+target_link_libraries(mello_video_timeline PRIVATE webrtc_video_timing)
+target_include_directories(mello_video_timeline
+    BEFORE PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/cmake/webrtc-audio-processing/compat
+)
+target_include_directories(mello_video_timeline PRIVATE src include)
+target_compile_definitions(mello_video_timeline PRIVATE NOMINMAX _USE_MATH_DEFINES)
+if(WIN32)
+    target_compile_definitions(mello_video_timeline PRIVATE WIN32_LEAN_AND_MEAN)
+endif()
+if(MSVC)
+    target_compile_options(mello_video_timeline PRIVATE /EHsc /wd4100 /wd4244 /wd4267)
+endif()
+
 # Platform-agnostic sources
 set(MELLO_SOURCES
     src/mello.cpp
@@ -285,6 +312,7 @@ if(WIN32)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/capture_dxgi.cpp
         src/video/capture_wgc.cpp
         src/video/capture_process.cpp
@@ -303,7 +331,6 @@ if(WIN32)
         src/video/capture_reference.cpp
         src/video/decoder_nvdec.cpp
         src/video/decoder_amf.cpp
-        src/video/decoder_d3d11va.cpp
         src/video/decoder_openh264.cpp
         src/video/openh264_dynload.cpp
     )
@@ -314,6 +341,7 @@ elseif(IOS)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/decoder_videotoolbox.mm
         src/video/process_enum_ios_stub.cpp
         src/video/window_thumbnail_ios_stub.cpp
@@ -322,6 +350,7 @@ elseif(APPLE)
     list(APPEND MELLO_SOURCES
         src/video/graphics_device_metal.mm
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/capture_screencapturekit.mm
         src/video/encoder_videotoolbox.mm
         src/video/decoder_videotoolbox.mm
@@ -332,6 +361,7 @@ else()
     list(APPEND MELLO_SOURCES
         src/video/graphics_device.cpp
         src/video/video_pipeline.cpp
+        src/video/video_viewer.cpp
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
     )
@@ -349,7 +379,7 @@ if(APPLE)
 endif()
 
 # Static library for Rust FFI linking
-add_library(mello STATIC ${MELLO_SOURCES} $<TARGET_OBJECTS:mello_playout>)
+add_library(mello STATIC ${MELLO_SOURCES} $<TARGET_OBJECTS:mello_playout> $<TARGET_OBJECTS:mello_video_timeline>)
 
 target_compile_definitions(mello PRIVATE MELLO_EXPORTS NOMINMAX _USE_MATH_DEFINES)
 
@@ -400,6 +430,9 @@ target_link_libraries(mello
         rnnoise
         webrtc_audio_processing
         webrtc_neteq
+        # Link only: its public NDEBUG is for the timeline island, not for
+        # libmello or the tests.
+        $<LINK_ONLY:webrtc_video_timing>
 )
 target_link_libraries(mello PUBLIC onnxruntime)
 
@@ -492,7 +525,7 @@ if(NOT IOS AND NOT EXISTS "${ECHO_SUPPRESSOR_MODEL}")
     message(STATUS "[mello] Echo-suppressor model downloaded")
 endif()
 
-install(TARGETS mello rnnoise webrtc_audio_processing webrtc_neteq
+install(TARGETS mello rnnoise webrtc_audio_processing webrtc_neteq webrtc_video_timing
     ARCHIVE DESTINATION lib
     LIBRARY DESTINATION lib
     RUNTIME DESTINATION bin

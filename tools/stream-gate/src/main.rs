@@ -669,6 +669,18 @@ fn run_profile(
                 "present_max_ms": v.present_max_ms,
                 "callback_max_ms": v.callback_max_ms,
                 "aus_idr": v.aus_idr,
+                "timeline": v.timeline.map(|t| json!({
+                    "target_delay_ms": t.target_delay_ms,
+                    "jitter_ms": t.jitter_ms,
+                    "decode_ms_p95": t.decode_ms_p95,
+                    "frames_released": t.frames_released,
+                    "frames_late": t.frames_late,
+                    "frames_dropped_late": t.frames_dropped_late,
+                    "frames_decoded": t.frames_decoded,
+                    "frames_presented": t.frames_presented,
+                    "keyframe_requests": t.keyframe_requests,
+                    "loss_events": t.loss_events,
+                })),
                 "rx": v.video.as_ref().map(|x| json!({
                     "ingress_packets": x.rx_ingress_packets,
                     "ingress_overflows": x.rx_ingress_overflows,
@@ -689,7 +701,7 @@ fn run_profile(
                     "wrong_ssrc": x.rx_core_wrong_ssrc_packets,
                     "invalid_h264": x.rx_core_invalid_h264_packets,
                 })),
-                "wrong_size_frames": v.wrong_size,
+                "scaled_frames": v.scaled_frames,
             })
         })
         .collect();
@@ -1323,7 +1335,7 @@ fn real_main() -> Result<bool, String> {
             "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
         },
         "method": {
-            "path": "reference clip (MELLO_CAPTURE_REFERENCE) -> D3D11 video processor -> preprocessor -> encoder -> mello-core manager and SfuSink -> RTP sender -> shim (UDP proxy, host leg) -> mello-sfu in test mode -> shim (viewer leg) -> RTP receiver session -> client viewer tick (16 ms) -> decoder -> mello_stream_present_frame -> CPU frame callback",
+            "path": "reference clip (MELLO_CAPTURE_REFERENCE) -> D3D11 video processor -> preprocessor -> encoder -> mello-core manager and SfuSink -> RTP sender -> shim (UDP proxy, host leg) -> mello-sfu in test mode -> shim (viewer leg) -> RTP receiver session -> receive timeline (stage 3) -> viewer decode thread -> present thread at each render time -> CPU frame callback",
             "lane": format!("{}: clip {}, {} kbps at {} fps, preset {}, {}", lane.name, lane.clip, lane.bitrate_kbps, lane.fps, lane.preset,
                 if lane.soft { "OpenH264 encode and decode (MELLO_SOFT_ENCODER=1, MELLO_SOFT_DECODER=1)" } else { "hardware encode and decode" }),
             "shim": format!("netmodel shim version {}; base delay {} ms each way per leg", stream_gate::netmodel::SHIM_VERSION, gf.profiles.first().map_or(0.0, |p| p.host.base_delay_ms)),

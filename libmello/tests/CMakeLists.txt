@@ -16,6 +16,7 @@ add_executable(mello_tests
     test_send_adaptation.cpp
     test_vad.cpp
     test_video_pipeline.cpp
+    test_video_viewer.cpp
     test_stream_audio_pipeline.cpp
     test_d3d9ex_share.cpp
     test_hook_capture.cpp
@@ -80,6 +81,7 @@ target_include_directories(mello_tests PRIVATE
 add_executable(mello_rtp_tests
     test_rtp_h264_receiver.cpp
     test_rtp_video_receiver_session.cpp
+    test_video_receive_timeline.cpp
     test_rtp_video_sender.cpp
     test_peer_rtp_roles.cpp
     test_voice_rtp_timestamps.cpp

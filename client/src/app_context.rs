@@ -142,8 +142,6 @@ impl AppContext {
             frame_consumed,
             frame_lifecycle.clone(),
             #[cfg(target_os = "windows")]
-            native_frame_slot.clone(),
-            #[cfg(target_os = "windows")]
             dcomp_presenter.clone(),
         ));
 

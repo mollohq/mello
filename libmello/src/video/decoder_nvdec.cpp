@@ -14,8 +14,7 @@ static HMODULE load_nvcuvid_dll() {
 }
 
 static HMODULE load_cuda_dll() {
-    HMODULE dll = LoadLibraryA("nvcuda.dll");
-    return dll;
+    return LoadLibraryA("nvcuda.dll");
 }
 
 // CUDA_MEMCPY2D layout (no cuda.h available — matched to CUDA driver API struct)
@@ -38,7 +37,9 @@ struct CudaMemcpy2D {
     size_t            Height;
 };
 
-typedef int (*CuMemcpy2D_t)(const CudaMemcpy2D*);
+constexpr unsigned int kMemoryTypeDevice = 2;
+constexpr unsigned int kMemoryTypeArray = 3;
+constexpr unsigned int kRegisterFlagsNone = 0;
 
 bool NvdecDecoder::is_available() {
     HMODULE cuvid = load_nvcuvid_dll();
@@ -49,62 +50,69 @@ bool NvdecDecoder::is_available() {
     return ok;
 }
 
+bool NvdecDecoder::load_cuda_entry_points() {
+    cuCtxPush_ = reinterpret_cast<CuCtxPushCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPushCurrent_v2"));
+    cuCtxPop_  = reinterpret_cast<CuCtxPopCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPopCurrent_v2"));
+    cuRegister_ = reinterpret_cast<CuGraphicsD3D11RegisterResource_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsD3D11RegisterResource"));
+    cuUnregister_ = reinterpret_cast<CuGraphicsUnregisterResource_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsUnregisterResource"));
+    cuMap_ = reinterpret_cast<CuGraphicsMapResources_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsMapResources"));
+    cuUnmap_ = reinterpret_cast<CuGraphicsUnmapResources_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsUnmapResources"));
+    cuMappedArray_ = reinterpret_cast<CuGraphicsSubResourceGetMappedArray_t>(
+        GetProcAddress(cuda_dll_, "cuGraphicsSubResourceGetMappedArray"));
+    cuMemcpy2D_ = reinterpret_cast<CuMemcpy2D_t>(GetProcAddress(cuda_dll_, "cuMemcpy2D_v2"));
+    return cuCtxPush_ && cuCtxPop_ && cuRegister_ && cuUnregister_ && cuMap_ && cuUnmap_ &&
+           cuMappedArray_ && cuMemcpy2D_;
+}
+
 bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig& config) {
     device_ = device.d3d11();
-    device_->GetImmediateContext(&context_);
     config_ = config;
 
     cuda_dll_  = load_cuda_dll();
     cuvid_dll_ = load_nvcuvid_dll();
-    if (!cuda_dll_ || !cuvid_dll_) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... not available (DLLs not found)");
-        if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
-        if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
+    auto fail = [this](const char* why) {
+        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... %s", why);
+        shutdown();
         return false;
-    }
+    };
+    if (!cuda_dll_ || !cuvid_dll_) return fail("not available (DLLs not found)");
 
-    // Initialize CUDA context
     auto cuInit      = reinterpret_cast<CuInit_t>(GetProcAddress(cuda_dll_, "cuInit"));
     auto cuDeviceGet = reinterpret_cast<CuDeviceGet_t>(GetProcAddress(cuda_dll_, "cuDeviceGet"));
     auto cuCtxCreate = reinterpret_cast<CuCtxCreate_t>(GetProcAddress(cuda_dll_, "cuCtxCreate_v2"));
-
-    if (!cuInit || !cuDeviceGet || !cuCtxCreate) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... CUDA entry points not found");
-        FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr;
-        FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr;
-        return false;
+    auto cuD3D11GetDevice =
+        reinterpret_cast<CuD3D11GetDevice_t>(GetProcAddress(cuda_dll_, "cuD3D11GetDevice"));
+    if (!cuInit || !cuDeviceGet || !cuCtxCreate || !load_cuda_entry_points()) {
+        return fail("CUDA entry points not found");
     }
+    if (cuInit(0) != 0) return fail("cuInit failed");
 
-    if (cuInit(0) != 0) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... cuInit failed");
-        FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr;
-        FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr;
-        return false;
-    }
-
+    // The CUDA device of libmello's adapter: interop registers textures of
+    // that adapter, which a context on another GPU cannot see.
     int cu_device = 0;
-    if (cuDeviceGet(&cu_device, 0) != 0) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... cuDeviceGet failed");
-        FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr;
-        FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr;
-        return false;
+    bool matched = false;
+    if (cuD3D11GetDevice) {
+        Microsoft::WRL::ComPtr<IDXGIDevice> dxgi_device;
+        Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+        if (SUCCEEDED(device_.As(&dxgi_device)) && SUCCEEDED(dxgi_device->GetAdapter(&adapter)) &&
+            cuD3D11GetDevice(&cu_device, adapter.Get()) == 0) {
+            matched = true;
+        }
     }
-
+    if (!matched && cuDeviceGet(&cu_device, 0) != 0) return fail("cuDeviceGet failed");
     if (cuCtxCreate(&cu_context_, 0, cu_device) != 0) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... cuCtxCreate failed");
-        FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr;
-        FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr;
-        return false;
+        cu_context_ = nullptr;
+        return fail("cuCtxCreate failed (no CUDA device on the video adapter)");
     }
 
-    cuCtxPush_ = reinterpret_cast<CuCtxPushCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPushCurrent_v2"));
-    cuCtxPop_  = reinterpret_cast<CuCtxPopCurrent_t>(GetProcAddress(cuda_dll_, "cuCtxPopCurrent_v2"));
-
-    // Create video parser
     CUVIDPARSERPARAMS parser_params{};
     parser_params.CodecType           = (config.codec == VideoCodec::AV1) ? cudaVideoCodec_AV1 : cudaVideoCodec_H264;
-    parser_params.ulMaxNumDecodeSurfaces = 4;
-    parser_params.ulMaxDisplayDelay      = 0; // Low-latency: display immediately
+    parser_params.ulMaxNumDecodeSurfaces = 8;
+    parser_params.ulMaxDisplayDelay      = 0; // Low latency: display at once
     parser_params.pUserData              = this;
     parser_params.pfnSequenceCallback    = handle_video_sequence;
     parser_params.pfnDecodePicture       = handle_picture_decode;
@@ -113,151 +121,128 @@ bool NvdecDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
     auto cuvidCreateVideoParser_fn = reinterpret_cast<decltype(&cuvidCreateVideoParser)>(
         GetProcAddress(cuvid_dll_, "cuvidCreateVideoParser"));
     if (!cuvidCreateVideoParser_fn || cuvidCreateVideoParser_fn(&parser_, &parser_params) != CUDA_SUCCESS) {
-        MELLO_LOG_DEBUG(TAG, "Probing NVDEC... cuvidCreateVideoParser failed");
-        auto cuCtxDestroy = reinterpret_cast<CuCtxDestroy_t>(GetProcAddress(cuda_dll_, "cuCtxDestroy_v2"));
-        if (cuCtxDestroy) cuCtxDestroy(cu_context_);
-        cu_context_ = nullptr;
-        FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr;
-        FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr;
-        return false;
-    }
-
-    // R8_UNORM w × (h*3/2) matches NV12 memory layout (Y then UV) for the
-    // GPU convert path. Async decode copies CUDA→host on the worker; D3D11
-    // upload runs on the present thread (cuGraphicsMap on a registered texture
-    // deadlocks with the immediate context used for present/staging).
-    uint32_t mb_height = ((config.height + 15) / 16) * 16;
-    coded_height_ = mb_height;
-
-    {
-        D3D11_TEXTURE2D_DESC tex_desc{};
-        tex_desc.Width  = config.width;
-        tex_desc.Height = mb_height + mb_height / 2;
-        tex_desc.MipLevels = 1;
-        tex_desc.ArraySize = 1;
-        tex_desc.Format = DXGI_FORMAT_R8_UNORM;
-        tex_desc.SampleDesc.Count = 1;
-        tex_desc.Usage = D3D11_USAGE_DEFAULT;
-        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
-        if (SUCCEEDED(hr)) {
-            use_interop_ = true;
-            layout_rows_ = mb_height;
-            MELLO_LOG_INFO(TAG, "NVDEC: R8 layout decode path (host upload %ux%u)",
-                tex_desc.Width, tex_desc.Height);
-        } else {
-            MELLO_LOG_WARN(TAG, "NVDEC: R8 texture creation failed (0x%08X), trying NV12 fallback", hr);
-            frame_tex_.Reset();
-        }
-    }
-
-    if (!use_interop_) {
-        D3D11_TEXTURE2D_DESC tex_desc{};
-        tex_desc.Width  = config.width;
-        tex_desc.Height = config.height;
-        tex_desc.MipLevels = 1;
-        tex_desc.ArraySize = 1;
-        tex_desc.Format = DXGI_FORMAT_NV12;
-        tex_desc.SampleDesc.Count = 1;
-        tex_desc.Usage = D3D11_USAGE_DEFAULT;
-        tex_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
-
-        HRESULT hr = device_->CreateTexture2D(&tex_desc, nullptr, &frame_tex_);
-        if (FAILED(hr)) {
-            MELLO_LOG_ERROR(TAG, "NVDEC: Failed to create output texture: hr=0x%08X", hr);
-            return false;
-        }
-        layout_rows_ = config.height & ~1u;
-    }
-
-    {
-        const size_t bytes =
-            plan_nvdec_host_copy(config.width, layout_rows_, layout_rows_).buffer_bytes;
-        decode_buf_.assign(bytes, 0);
-        ready_buf_.assign(bytes, 0);
-        upload_buf_.assign(bytes, 0);
+        parser_ = nullptr;
+        return fail("cuvidCreateVideoParser failed");
     }
 
     MELLO_LOG_DEBUG(TAG, "Probing NVDEC... ok");
-    MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u interop=%s",
+    MELLO_LOG_INFO(TAG, "Selected decoder: NVDEC codec=%s resolution=%ux%u interop=cuda-d3d11 device=%s",
         config.codec == VideoCodec::H264 ? "H264" : "AV1",
-        config.width, config.height,
-        use_interop_ ? "true" : "false");
+        config.width, config.height, matched ? "adapter" : "0");
     return true;
 }
 
+void NvdecDecoder::release_slot(Slot& slot) {
+    if (slot.resource && cuUnregister_) {
+        bool pushed = cuCtxPush_ && cu_context_ && cuCtxPush_(cu_context_) == CUDA_SUCCESS;
+        cuUnregister_(slot.resource);
+        if (pushed) { void* dummy = nullptr; cuCtxPop_(&dummy); }
+    }
+    slot = Slot{};
+}
+
 void NvdecDecoder::shutdown() {
-    if (parser_) {
-        auto cuvidDestroyVideoParser_fn = reinterpret_cast<decltype(&cuvidDestroyVideoParser)>(
+    for (Slot& slot : slots_) release_slot(slot);
+    if (parser_ && cuvid_dll_) {
+        auto fn = reinterpret_cast<decltype(&cuvidDestroyVideoParser)>(
             GetProcAddress(cuvid_dll_, "cuvidDestroyVideoParser"));
-        if (cuvidDestroyVideoParser_fn) cuvidDestroyVideoParser_fn(parser_);
-        parser_ = nullptr;
+        if (fn) fn(parser_);
     }
-    if (decoder_) {
-        auto cuvidDestroyDecoder_fn = reinterpret_cast<decltype(&cuvidDestroyDecoder)>(
+    parser_ = nullptr;
+    if (decoder_ && cuvid_dll_) {
+        auto fn = reinterpret_cast<decltype(&cuvidDestroyDecoder)>(
             GetProcAddress(cuvid_dll_, "cuvidDestroyDecoder"));
-        if (cuvidDestroyDecoder_fn) cuvidDestroyDecoder_fn(decoder_);
-        decoder_ = nullptr;
+        if (fn) fn(decoder_);
     }
-    if (cu_context_) {
+    decoder_ = nullptr;
+    if (cu_context_ && cuda_dll_) {
         auto cuCtxDestroy = reinterpret_cast<CuCtxDestroy_t>(GetProcAddress(cuda_dll_, "cuCtxDestroy_v2"));
         if (cuCtxDestroy) cuCtxDestroy(cu_context_);
-        cu_context_ = nullptr;
     }
+    cu_context_ = nullptr;
     if (cuvid_dll_) { FreeLibrary(cuvid_dll_); cuvid_dll_ = nullptr; }
     if (cuda_dll_)  { FreeLibrary(cuda_dll_);  cuda_dll_ = nullptr; }
-    frame_tex_.Reset();
-    decode_buf_.clear();
-    ready_buf_.clear();
-    upload_buf_.clear();
-    stream_coded_height_ = 0;
+    pending_display_.clear();
+    display_width_ = 0;
+    display_height_ = 0;
     decoder_coded_width_ = 0;
     decoder_coded_height_ = 0;
     decoder_codec_ = -1;
     decoder_chroma_format_ = -1;
     sequence_callback_count_ = 0;
-    {
-        std::lock_guard<std::mutex> lock(publish_mutex_);
-        pending_r8_upload_ = false;
-        pending_nv12_upload_ = false;
-    }
 }
 
-DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe) {
-    frame_ready_ = false;
-    if (!parser_) return DecodeFeedResult::Error;
-    (void)is_keyframe;
+// A slot texture at the picture size, registered with CUDA. A new size (a
+// new SPS) makes a new texture; the old one lives on in the viewer ring
+// while the present thread still holds it.
+bool NvdecDecoder::ensure_slot(int index, uint32_t width, uint32_t height) {
+    Slot& slot = slots_[index];
+    if (slot.texture && slot.width == width && slot.height == height) return true;
+    release_slot(slot);
 
-    // CUDA context must be current on the calling thread for decode callbacks
-    // (cuvidCreateDecoder, cuvidDecodePicture, cuvidMapVideoFrame64).
-    bool context_pushed = false;
-    if (cuCtxPush_ && cu_context_ && cuCtxPush_(cu_context_) != CUDA_SUCCESS) {
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width  = width;
+    desc.Height = height + height / 2;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &slot.texture);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: slot texture %ux%u failed: hr=0x%08X", width, height, hr);
+        slot = Slot{};
+        return false;
+    }
+    const int rc = cuRegister_(&slot.resource, slot.texture.Get(), kRegisterFlagsNone);
+    if (rc != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuGraphicsD3D11RegisterResource failed: %d", rc);
+        slot = Slot{};
+        return false;
+    }
+    slot.width = width;
+    slot.height = height;
+    MELLO_LOG_INFO(TAG, "NVDEC: slot %d is %ux%u (R8 NV12 layout, CUDA interop)", index, width, height);
+    return true;
+}
+
+DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) {
+    (void)is_keyframe;
+    if (!parser_ || slot < 0 || slot >= kOutputSlots) return DecodeFeedResult::Error;
+
+    // The CUDA context is current for the parser callbacks and the copy.
+    if (cuCtxPush_(cu_context_) != CUDA_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVDEC: cuCtxPushCurrent failed");
         return DecodeFeedResult::Error;
     }
-    context_pushed = cuCtxPush_ && cu_context_;
 
+    pending_display_.clear();
     CUVIDSOURCEDATAPACKET packet{};
     packet.payload      = data;
     packet.payload_size = static_cast<unsigned long>(size);
-    packet.flags        = CUVID_PKT_TIMESTAMP;
+    packet.flags        = CUVID_PKT_TIMESTAMP | CUVID_PKT_ENDOFPICTURE;
     packet.timestamp    = 0;
 
     auto cuvidParseVideoData_fn = reinterpret_cast<decltype(&cuvidParseVideoData)>(
         GetProcAddress(cuvid_dll_, "cuvidParseVideoData"));
-    if (!cuvidParseVideoData_fn) {
-        if (context_pushed && cuCtxPop_) { void* dummy = nullptr; cuCtxPop_(&dummy); }
-        return DecodeFeedResult::Error;
-    }
+    CUresult res = cuvidParseVideoData_fn ? cuvidParseVideoData_fn(parser_, &packet) : -1;
 
-    CUresult res = cuvidParseVideoData_fn(parser_, &packet);
-
-    int pop_result = CUDA_SUCCESS;
-    if (context_pushed && cuCtxPop_) {
-        void* dummy = nullptr;
-        pop_result = cuCtxPop_(&dummy);
+    bool frame_ready = false;
+    bool copy_failed = false;
+    if (res == CUDA_SUCCESS && !pending_display_.empty()) {
+        // The newest surface wins the slot.
+        const CUVIDPARSERDISPINFO disp = pending_display_.back();
+        if (copy_to_slot(disp.picture_index, slot)) {
+            frame_ready = true;
+        } else {
+            copy_failed = true;
+        }
     }
+    pending_display_.clear();
+
+    void* dummy = nullptr;
+    const int pop_result = cuCtxPop_(&dummy);
 
     if (res != CUDA_SUCCESS) {
         MELLO_LOG_ERROR(TAG, "NVDEC: cuvidParseVideoData failed: %d", res);
@@ -267,40 +252,103 @@ DecodeFeedResult NvdecDecoder::decode(const uint8_t* data, size_t size, bool is_
         MELLO_LOG_ERROR(TAG, "NVDEC: cuCtxPopCurrent failed: %d", pop_result);
         return DecodeFeedResult::Error;
     }
+    if (copy_failed) return DecodeFeedResult::Error;
+    return frame_ready ? DecodeFeedResult::FrameReady : DecodeFeedResult::Accepted;
+}
 
-    return frame_ready_ ? DecodeFeedResult::FrameReady : DecodeFeedResult::Accepted;
+// CUDA surface to the slot texture, on the GPU. The CUDA context is current.
+bool NvdecDecoder::copy_to_slot(int picture_index, int slot_index) {
+    if (!decoder_ || display_width_ == 0 || display_height_ == 0) return false;
+    const uint32_t w = display_width_ & ~1u;
+    const uint32_t h = display_height_ & ~1u;
+    if (!ensure_slot(slot_index, w, h)) return false;
+    Slot& slot = slots_[slot_index];
+
+    auto map_frame = reinterpret_cast<decltype(&cuvidMapVideoFrame64)>(
+        GetProcAddress(cuvid_dll_, "cuvidMapVideoFrame64"));
+    auto unmap_frame = reinterpret_cast<decltype(&cuvidUnmapVideoFrame64)>(
+        GetProcAddress(cuvid_dll_, "cuvidUnmapVideoFrame64"));
+    if (!map_frame || !unmap_frame) return false;
+
+    CUVIDPROCPARAMS proc{};
+    proc.progressive_frame = 1;
+    unsigned int pitch = 0;
+    unsigned long long dev_ptr = 0;
+    if (map_frame(decoder_, picture_index, &dev_ptr, &pitch, &proc) != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidMapVideoFrame failed");
+        return false;
+    }
+
+    bool ok = false;
+    void* resource = slot.resource;
+    if (cuMap_(1, &resource, nullptr) == CUDA_SUCCESS) {
+        void* array = nullptr;
+        if (cuMappedArray_(&array, resource, 0, 0) == CUDA_SUCCESS && array) {
+            // Luma rows from row 0, chroma rows from the surface's coded
+            // height into the slot's chroma rows (nvdec_host_layout).
+            const NvdecHostCopy plan = plan_nvdec_host_copy(w, h, decoder_coded_height_);
+            const size_t copy_w = (w <= pitch) ? w : pitch;
+            auto copy_rows = [&](uint32_t src_row, uint32_t dst_row, uint32_t rows) {
+                CudaMemcpy2D cp{};
+                cp.srcMemoryType = kMemoryTypeDevice;
+                cp.srcDevice     = dev_ptr;
+                cp.srcY          = src_row;
+                cp.srcPitch      = pitch;
+                cp.dstMemoryType = kMemoryTypeArray;
+                cp.dstArray      = array;
+                cp.dstY          = dst_row;
+                cp.WidthInBytes  = copy_w;
+                cp.Height        = rows;
+                return cuMemcpy2D_(&cp);
+            };
+            int rc = copy_rows(0, 0, plan.luma_rows);
+            if (rc == 0) rc = copy_rows(plan.chroma_src_row, plan.chroma_dst_row, plan.chroma_rows);
+            if (rc != 0) {
+                MELLO_LOG_ERROR(TAG, "NVDEC: CUDA copy into the slot texture failed: %d", rc);
+            } else {
+                ok = true;
+            }
+        } else {
+            MELLO_LOG_ERROR(TAG, "NVDEC: cuGraphicsSubResourceGetMappedArray failed");
+        }
+        // Unmap orders the copy before any later D3D11 use of the texture.
+        cuUnmap_(1, &resource, nullptr);
+    } else {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuGraphicsMapResources failed");
+    }
+
+    if (unmap_frame(decoder_, dev_ptr) != CUDA_SUCCESS) {
+        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidUnmapVideoFrame failed");
+        return false;
+    }
+    return ok;
 }
 
 int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) {
     auto* self = static_cast<NvdecDecoder*>(user);
     self->sequence_callback_count_++;
 
-    self->stream_coded_height_ = fmt->coded_height;
+    const uint32_t display_w = static_cast<uint32_t>(fmt->display_area.right - fmt->display_area.left);
+    const uint32_t display_h = static_cast<uint32_t>(fmt->display_area.bottom - fmt->display_area.top);
+    self->display_width_ = display_w > 0 ? display_w : fmt->coded_width;
+    self->display_height_ = display_h > 0 ? display_h : fmt->coded_height;
+
     const bool decoder_params_unchanged = self->decoder_
         && self->decoder_coded_width_ == fmt->coded_width
         && self->decoder_coded_height_ == fmt->coded_height
         && self->decoder_codec_ == static_cast<int>(fmt->codec)
         && self->decoder_chroma_format_ == static_cast<int>(fmt->chroma_format);
     if (decoder_params_unchanged) {
-        if (self->sequence_callback_count_ <= 3 || (self->sequence_callback_count_ % 60) == 0) {
-            MELLO_LOG_DEBUG(
-                TAG,
-                "NVDEC sequence callback #%llu: unchanged coded=%ux%u codec=%d chroma=%d (decoder reuse)",
-                self->sequence_callback_count_,
-                fmt->coded_width,
-                fmt->coded_height,
-                static_cast<int>(fmt->codec),
-                static_cast<int>(fmt->chroma_format)
-            );
-        }
         return 1;
     }
     MELLO_LOG_INFO(
         TAG,
-        "NVDEC sequence callback #%llu: (re)create decoder coded=%ux%u codec=%d chroma=%d",
+        "NVDEC sequence callback #%llu: (re)create decoder coded=%ux%u display=%ux%u codec=%d chroma=%d",
         self->sequence_callback_count_,
         fmt->coded_width,
         fmt->coded_height,
+        self->display_width_,
+        self->display_height_,
         static_cast<int>(fmt->codec),
         static_cast<int>(fmt->chroma_format)
     );
@@ -313,14 +361,24 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
     create_info.ulHeight     = fmt->coded_height;
     create_info.ulTargetWidth  = fmt->coded_width;
     create_info.ulTargetHeight = fmt->coded_height;
-    create_info.ulNumDecodeSurfaces = 4;
-    create_info.ulNumOutputSurfaces = 1;
+    create_info.ulNumDecodeSurfaces = 8;
+    create_info.ulNumOutputSurfaces = 2;
     create_info.DeinterlaceMode     = cudaVideoDeinterlaceMode_Weave;
 
+    // A picture of the old sequence the parser showed in this parse call
+    // (the last one before the new SPS) indexes a surface of the decoder
+    // that goes now. Mapped on the new decoder, the index is another
+    // surface: a broken picture at the new size. It is not shown.
+    if (!self->pending_display_.empty()) {
+        MELLO_LOG_INFO(TAG, "NVDEC: %zu picture(s) of the old sequence not shown at the size change",
+                       self->pending_display_.size());
+        self->pending_display_.clear();
+    }
+
     if (self->decoder_) {
-        auto cuvidDestroyDecoder_fn = reinterpret_cast<decltype(&cuvidDestroyDecoder)>(
+        auto fn = reinterpret_cast<decltype(&cuvidDestroyDecoder)>(
             GetProcAddress(self->cuvid_dll_, "cuvidDestroyDecoder"));
-        if (cuvidDestroyDecoder_fn) cuvidDestroyDecoder_fn(self->decoder_);
+        if (fn) fn(self->decoder_);
         self->decoder_ = nullptr;
     }
 
@@ -339,8 +397,8 @@ int CUDAAPI NvdecDecoder::handle_video_sequence(void* user, CUVIDEOFORMAT* fmt) 
     self->decoder_coded_height_ = fmt->coded_height;
     self->decoder_codec_ = static_cast<int>(fmt->codec);
     self->decoder_chroma_format_ = static_cast<int>(fmt->chroma_format);
-
-    return 1;
+    // ulNumDecodeSurfaces: the parser needs at least this many.
+    return 8;
 }
 
 int CUDAAPI NvdecDecoder::handle_picture_decode(void* user, CUVIDPICPARAMS* pic) {
@@ -361,113 +419,21 @@ int CUDAAPI NvdecDecoder::handle_picture_decode(void* user, CUVIDPICPARAMS* pic)
 
 int CUDAAPI NvdecDecoder::handle_picture_display(void* user, CUVIDPARSERDISPINFO* disp) {
     auto* self = static_cast<NvdecDecoder*>(user);
-    if (!self->decoder_) return 0;
-
-    CUVIDPROCPARAMS proc{};
-    proc.progressive_frame = disp->progressive_frame;
-    proc.top_field_first   = disp->top_field_first;
-
-    unsigned int pitch = 0;
-    unsigned long long dev_ptr = 0;
-
-    auto cuvidMapVideoFrame_fn = reinterpret_cast<decltype(&cuvidMapVideoFrame64)>(
-        GetProcAddress(self->cuvid_dll_, "cuvidMapVideoFrame64"));
-    auto cuvidUnmapVideoFrame_fn = reinterpret_cast<decltype(&cuvidUnmapVideoFrame64)>(
-        GetProcAddress(self->cuvid_dll_, "cuvidUnmapVideoFrame64"));
-
-    if (!cuvidMapVideoFrame_fn || !cuvidUnmapVideoFrame_fn) return 0;
-
-    CUresult res = cuvidMapVideoFrame_fn(self->decoder_, disp->picture_index,
-                                          &dev_ptr, &pitch, &proc);
-    if (res != CUDA_SUCCESS) return 0;
-
-    // CUDA to host on this (decode) thread; the D3D11 upload is deferred to
-    // publish_d3d11_frame() on the present thread. The luma and the chroma
-    // go as two blocks into the fixed host layout, so a stream with a larger
-    // coded height cannot write past the buffer.
-    const uint32_t w = self->config_.width;
-    const NvdecHostCopy plan = plan_nvdec_host_copy(w, self->layout_rows_,
-                                                    self->stream_coded_height_);
-    bool copied = false;
-
-    auto cuMemcpy2D_fn = reinterpret_cast<CuMemcpy2D_t>(
-        GetProcAddress(self->cuda_dll_, "cuMemcpy2D_v2"));
-    if (!cuMemcpy2D_fn) {
-        MELLO_LOG_ERROR(TAG, "NVDEC: cuMemcpy2D entry point missing");
-    } else if (self->decode_buf_.size() < plan.buffer_bytes ||
-               plan.bytes_written(w) > self->decode_buf_.size()) {
-        MELLO_LOG_ERROR(TAG, "NVDEC: host buffer %zu bytes is smaller than the layout %zu",
-                        self->decode_buf_.size(), plan.buffer_bytes);
-    } else {
-        const uint32_t copy_w = (w <= pitch) ? w : pitch;
-        auto copy_rows = [&](uint32_t src_row, uint32_t dst_row, uint32_t rows) {
-            CudaMemcpy2D cp{};
-            cp.srcMemoryType = 2; // CU_MEMORYTYPE_DEVICE
-            cp.srcDevice     = dev_ptr;
-            cp.srcY          = src_row;
-            cp.srcPitch      = pitch;
-            cp.dstMemoryType = 1; // CU_MEMORYTYPE_HOST
-            cp.dstHost       = self->decode_buf_.data();
-            cp.dstY          = dst_row;
-            cp.dstPitch      = w;
-            cp.WidthInBytes  = copy_w;
-            cp.Height        = rows;
-            return cuMemcpy2D_fn(&cp);
-        };
-        int rc_cpy = copy_rows(0, 0, plan.luma_rows);
-        if (rc_cpy == 0) rc_cpy = copy_rows(plan.chroma_src_row, plan.chroma_dst_row, plan.chroma_rows);
-        if (rc_cpy != 0) {
-            MELLO_LOG_ERROR(TAG, "NVDEC: CUDA-to-host copy failed: %d", rc_cpy);
-        } else {
-            std::lock_guard<std::mutex> lock(self->publish_mutex_);
-            self->decode_buf_.swap(self->ready_buf_);
-            if (self->use_interop_) {
-                self->pending_r8_upload_ = true;
-            } else {
-                self->pending_nv12_upload_ = true;
-            }
-            copied = true;
-        }
-    }
-
-    if (cuvidUnmapVideoFrame_fn(self->decoder_, dev_ptr) != CUDA_SUCCESS) {
-        MELLO_LOG_ERROR(TAG, "NVDEC: cuvidUnmapVideoFrame failed");
-        return 0;
-    }
-    if (!copied) return 0;
-
-    self->frame_ready_ = true;
+    if (!self->decoder_ || !disp) return 0;
+    // Only noted here; decode() copies it after the parse call returns.
+    self->pending_display_.push_back(*disp);
     return 1;
 }
 
-ID3D11Texture2D* NvdecDecoder::get_frame() {
-    return frame_tex_.Get();
-}
-
-DXGI_FORMAT NvdecDecoder::frame_format() const {
-    return use_interop_ ? DXGI_FORMAT_R8_UNORM : DXGI_FORMAT_NV12;
-}
-
-void NvdecDecoder::publish_d3d11_frame() {
-    if (!context_) return;
-
-    bool do_r8_upload = false;
-    bool do_nv12_upload = false;
-    {
-        std::lock_guard<std::mutex> lock(publish_mutex_);
-        do_r8_upload = pending_r8_upload_;
-        do_nv12_upload = pending_nv12_upload_;
-        pending_r8_upload_ = false;
-        pending_nv12_upload_ = false;
-        // Take the newest frame. The decode thread now fills another buffer.
-        if (do_r8_upload || do_nv12_upload) ready_buf_.swap(upload_buf_);
-    }
-
-    if ((do_r8_upload || do_nv12_upload) && frame_tex_ && !upload_buf_.empty()) {
-        context_->UpdateSubresource(
-            frame_tex_.Get(), 0, nullptr,
-            upload_buf_.data(), config_.width, 0);
-    }
+bool NvdecDecoder::picture(int slot_index, DecodedPicture& out) const {
+    if (slot_index < 0 || slot_index >= kOutputSlots || !slots_[slot_index].texture) return false;
+    const Slot& slot = slots_[slot_index];
+    out.texture = slot.texture;
+    out.format = DXGI_FORMAT_R8_UNORM;
+    out.width = slot.width;
+    out.height = slot.height;
+    out.uv_row = slot.height;
+    return true;
 }
 
 bool NvdecDecoder::supports_codec(VideoCodec codec) const {

@@ -25,8 +25,8 @@ struct RtpVideoSenderConfig {
     uint64_t pacing_target_bps = 4'000'000;
     // Transport-wide congestion control was negotiated for this leg: stamp
     // egress with TWCC sequence numbers and run the delay-gradient estimator
-    // from feedback. The estimator's target gates pacing via min(manager,
-    // estimator) and is reported upward as GCC feedback.
+    // from feedback. The estimator's target is reported upward as GCC
+    // feedback and in the stats. It does not set the pacing rate.
     bool twcc_enabled = false;
     // ULPFEC (XOR parity, ulpfec/90000 PT 127) was negotiated: XOR groups of
     // consecutive media packets and emit one parity packet per group on

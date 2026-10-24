@@ -1373,7 +1373,7 @@ TEST(HookPolicy, AnUnreadableModuleListIsRefused) {
 // Native present for NV12 decoders. The Windows client registers no CPU frame
 // callback, so a viewer sees only what reaches the native callback, through
 // StagingTexture::shared_rgba_handle(). Before stage 2 that handle existed only
-// for the R8 layout of NVDEC. AMF, D3D11VA and OpenH264 emit NV12, so
+// for the R8 layout of NVDEC. AMF and OpenH264 emit NV12, so
 // present_frame returned false on every frame: no picture on any viewer
 // without an NVIDIA GPU. No hardware decoder here: an NV12 texture with a
 // known colour stands in for the decoded frame.
@@ -1437,21 +1437,27 @@ TEST(NativePresent, AnNv12DecoderGetsASharedRgbaFrame) {
     auto texture = make_nv12(test.device.d3d11(), kW, kH, y, u, v);
     ASSERT_TRUE(texture);
 
+    DecodedPicture picture;
+    picture.texture = texture;
+    picture.format = DXGI_FORMAT_NV12;
+    picture.width = kW;
+    picture.height = kH;
+
     // The Windows client: a native callback and no CPU readback.
     StagingTexture native_only;
-    ASSERT_TRUE(native_only.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, false));
+    ASSERT_TRUE(native_only.initialize(test.device, false));
+    ASSERT_TRUE(native_only.convert(picture, false));
     EXPECT_NE(native_only.shared_rgba_handle(), nullptr)
         << "an NV12 decoder has no native present path";
-    native_only.copy_from(texture.Get(), false);
     native_only.shutdown();
 
     // The same conversion, read back to check the picture.
     StagingTexture staging;
-    ASSERT_TRUE(staging.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, true));
+    ASSERT_TRUE(staging.initialize(test.device, true));
+    ASSERT_TRUE(staging.convert(picture, true));
     ASSERT_NE(staging.shared_rgba_handle(), nullptr);
-    staging.copy_from(texture.Get(), true);
     std::vector<uint8_t> rgba(static_cast<size_t>(kW) * kH * 4);
-    staging.read_rgba(rgba.data());
+    ASSERT_TRUE(staging.read_rgba(rgba.data()));
     staging.shutdown();
 
     const int c = y - 16, d = u - 128, e = v - 128;
