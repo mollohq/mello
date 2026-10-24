@@ -647,12 +647,13 @@ fn run_profile(
     let _ = std::fs::write(pdir.join("presents.csv"), csv);
     let mut hcsv = String::from(
         "t_ms,encoder_kbps,pacing_target_kbps,gcc_target_kbps,keyframes,pacing_rate_kbps,width,height,fps,\
-         wire_bytes,rtx_bytes,plis,local_idrs,aus_dropped,queued_aus,enc_target_kbps\n",
+         wire_bytes,rtx_bytes,plis,local_idrs,aus_dropped,queued_aus,enc_target_kbps,\
+         idrs_sent,last_idr_send_us\n",
     );
     for s in &host_end.samples {
         let t = (s.t_us as i64 - arm_us as i64) as f64 / 1000.0;
         hcsv.push_str(&format!(
-            "{t:.0},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            "{t:.0},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
             s.encoder_kbps,
             s.pacing_target_kbps,
             s.gcc_target_kbps,
@@ -667,7 +668,9 @@ fn run_profile(
             s.local_idrs,
             s.aus_dropped,
             s.queued_aus,
-            s.enc_target_kbps
+            s.enc_target_kbps,
+            s.idrs_sent,
+            s.last_idr_send_us
         ));
     }
     let _ = std::fs::write(pdir.join("host.csv"), hcsv);

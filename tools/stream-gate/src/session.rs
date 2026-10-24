@@ -97,6 +97,10 @@ pub struct HostSample {
     pub queued_aus: u64,
     /// The encoder target the sender gives Rust (goog_cc less repairs).
     pub enc_target_kbps: u64,
+    /// The IDRs the sender has sent, and the enqueue-to-wire time of the
+    /// last one (the gate reads the exit time of each IDR from the steps).
+    pub idrs_sent: u64,
+    pub last_idr_send_us: u64,
 }
 
 pub struct Host {
@@ -323,6 +327,8 @@ fn host_loop(
                 aus_dropped: v.tx_access_units_dropped,
                 queued_aus: v.tx_queued_access_units,
                 enc_target_kbps: v.tx_encoder_target_bps / 1000,
+                idrs_sent: v.tx_idr_access_units_sent,
+                last_idr_send_us: v.tx_last_idr_send_us,
             });
         }
         next += TICK;
