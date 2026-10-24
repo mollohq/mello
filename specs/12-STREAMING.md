@@ -515,7 +515,7 @@ The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callbac
 ### Recovery policy
 
 - **Queue-pressure keyframe:** If the video queue grows too large (severe coalescing), force an IDR. Rate-limited.
-- **Viewer-requested keyframe:** Forwarded from control packets, rate-limited.
+- **Viewer-requested keyframe:** Forwarded from control packets, rate-limited (500 ms). A request that the cooldown holds back while the deltas wait for an IDR goes out when the cooldown expires; before, the deltas waited for the 2 s recovery request (streaming-quality stage 6: a 1.8 s freeze after an outage).
 - **Recovery mode:** A reference-chain gap, queue overflow, or failed accepted AU enters an IDR gate. Queued/dependent deltas are dropped and one rate-limited local keyframe request is emitted; deltas remain gated until a complete IDR arrives.
 
 ---
