@@ -137,6 +137,7 @@ impl Host {
         session_id: &str,
         bitrate_kbps: u32,
         fps: u32,
+        audio: bool,
         before_connect: impl FnOnce(),
     ) -> Result<Self, String> {
         let source = mello_sys::MelloCaptureSource {
@@ -159,6 +160,16 @@ impl Host {
         let (mut w, mut h) = (0u32, 0u32);
         // SAFETY: native is the live host.
         unsafe { mello_sys::mello_stream_get_host_resolution(native, &mut w, &mut h) };
+        // Stage 7: the clip's game audio, in the client's order (right after
+        // the native start). Only with a reference audio track: without one
+        // the host would open the loopback device.
+        if audio {
+            // SAFETY: native is the live host.
+            let r = unsafe { mello_sys::mello_stream_start_audio(native) };
+            if r != mello_sys::MelloResult_MELLO_OK {
+                return Err(format!("mello_stream_start_audio: {r}"));
+            }
+        }
 
         before_connect();
         let user = format!("gate-host-{session_id}");
@@ -500,6 +511,24 @@ pub struct ViewerRecord {
     pub callback_max_ms: f64,
     /// The viewer's receive timeline at the end (stage 3).
     pub timeline: Option<TimelineRecord>,
+    /// Stage 7: the game audio the viewer's output played, pulled 10 ms at
+    /// a time as the device thread does, and its stats at the end.
+    pub audio: Option<crate::audio::Capture>,
+    pub audio_stats: Option<AudioRecord>,
+}
+
+/// The viewer's game audio and A/V sync at the end of a run (stage 7).
+#[derive(Clone, Copy, Debug, Default)]
+pub struct AudioRecord {
+    pub delay_ms: f32,
+    pub av_offset_ms: f32,
+    pub av_video_min_delay_ms: f32,
+    pub av_audio_min_delay_ms: f32,
+    pub packets: u64,
+    pub expand_ms: u64,
+    pub fec_used: u64,
+    pub sync_extensions: u64,
+    pub sync_changes: u64,
 }
 
 /// The viewer pipeline's stage 3 counters at the end of a run.
@@ -527,6 +556,42 @@ pub struct ViewerSpec {
     pub receive_kbps: u32,
     pub end_us: u64,
     pub out_dir: PathBuf,
+    /// Stage 7: pull the context's audio output every 10 ms and keep it.
+    pub capture_audio: bool,
+}
+
+/// Pull `ctx`'s mixed output 10 ms at a time on a fixed schedule, as a
+/// device thread does, until `stop`. Late pulls catch up (the device clock
+/// does not wait).
+fn audio_puller(ctx: Arc<Ctx>, stop: Arc<AtomicBool>) -> crate::audio::Capture {
+    let mut cap = crate::audio::Capture::default();
+    let mut buf = [0i16; crate::audio::PULL];
+    let period = Duration::from_micros(10_000);
+    let mut next = Instant::now();
+    while !stop.load(Ordering::Relaxed) {
+        let now = Instant::now();
+        if next > now {
+            std::thread::sleep(next - now);
+            continue;
+        }
+        let t = clock_us();
+        // SAFETY: ctx is live while the viewer runs; the test backend.
+        let n = unsafe {
+            mello_sys::mello_voice_test_pull_output(
+                ctx.0,
+                buf.as_mut_ptr(),
+                crate::audio::PULL as i32,
+            )
+        };
+        if n < 0 {
+            log::warn!("audio pull: the context has no test backend");
+            break;
+        }
+        cap.pull_us.push(t);
+        cap.samples.extend_from_slice(&buf);
+        next += period;
+    }
+    cap
 }
 
 /// Run a viewer on its own thread until `spec.end_us`.
@@ -537,11 +602,12 @@ pub fn spawn_viewer(
 ) -> std::thread::JoinHandle<ViewerRecord> {
     std::thread::Builder::new()
         .name(format!("gate-{}", spec.role))
-        .spawn(move || run_viewer(&rt, &ctx, spec))
+        .spawn(move || run_viewer(&rt, ctx, spec))
         .expect("spawn viewer thread")
 }
 
-fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> ViewerRecord {
+fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec) -> ViewerRecord {
+    let ctx: &Ctx = &ctx_arc;
     let join_us = clock_us();
     let luma_path = spec.out_dir.join(format!("{}-luma.y", spec.role));
     let mut rec = ViewerRecord {
@@ -562,6 +628,8 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         present_max_ms: 0.0,
         callback_max_ms: 0.0,
         timeline: None,
+        audio: None,
+        audio_stats: None,
     };
     let file = match std::fs::File::create(&luma_path) {
         Ok(f) => f,
@@ -645,6 +713,16 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
         Err(e) => rec.error = Some(format!("{}: no viewer peer: {e}", spec.role)),
     }
 
+    // Stage 7: the viewer's speaker.
+    let audio_stop = Arc::new(AtomicBool::new(false));
+    let puller = spec.capture_audio.then(|| {
+        let (ctx, stop) = (Arc::clone(&ctx_arc), Arc::clone(&audio_stop));
+        std::thread::Builder::new()
+            .name(format!("gate-{}-audio", spec.role))
+            .spawn(move || audio_puller(ctx, stop))
+            .expect("spawn audio puller")
+    });
+
     let mut congestion = ViewerCongestionController::new(spec.receive_kbps, Codec::H264);
     let mut tick: u64 = 0;
     let mut next = Instant::now();
@@ -703,6 +781,21 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx: &Ctx, spec: ViewerSpec) -> View
             keyframe_requests: vstats.keyframe_requests,
             loss_events: vstats.loss_events,
         });
+        rec.audio_stats = Some(AudioRecord {
+            delay_ms: vstats.audio_delay_ms,
+            av_offset_ms: vstats.av_offset_ms,
+            av_video_min_delay_ms: vstats.av_video_min_delay_ms,
+            av_audio_min_delay_ms: vstats.av_audio_min_delay_ms,
+            packets: vstats.audio_packets,
+            expand_ms: vstats.audio_expand_ms,
+            fec_used: vstats.audio_fec_used,
+            sync_extensions: vstats.audio_sync_extensions,
+            sync_changes: vstats.av_sync_changes,
+        });
+    }
+    audio_stop.store(true, Ordering::Relaxed);
+    if let Some(p) = puller {
+        rec.audio = p.join().ok();
     }
     // SAFETY: stop before the sink goes; no callback after it returns.
     unsafe { mello_sys::mello_stream_stop_viewer(viewer) };
