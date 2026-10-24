@@ -1,0 +1,1672 @@
+{
+  "baseline": "stage4-hw",
+  "clip": {
+    "custom": false,
+    "file": "stream-gate-v1-1920x1080p60-1200f-seed20261021.yuv",
+    "fnv1a": "d5991cfa6d21a048",
+    "fps": 60,
+    "frames": 1200,
+    "generator_version": 1,
+    "height": 1080,
+    "seed": 20261021,
+    "width": 1920
+  },
+  "decoder": "NVDEC",
+  "decoders_available": [
+    "NVDEC",
+    "OpenH264"
+  ],
+  "encoder": "NVENC",
+  "encoders_available": [
+    "NVENC"
+  ],
+  "gates": [
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 19999.60 plus 1999.96 (spread 32.65 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "bad",
+      "rule": "<= 22000",
+      "value": 7049.075
+    },
+    {
+      "enforced": true,
+      "metric": "vmaf_mean",
+      "note": "baseline 98.36 minus 2.00 (spread 0.17 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+      "pass": false,
+      "profile": "clean",
+      "rule": ">= 96.4",
+      "value": 96.3504
+    },
+    {
+      "enforced": true,
+      "metric": "fps_delivered",
+      "note": "baseline 27.04 minus 13.30 (spread 12.09 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "clean",
+      "rule": ">= 13.7",
+      "value": 59.65003765540363
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 9750.35 plus 4197.34 (spread 3815.76 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 13948",
+      "value": 817.468
+    },
+    {
+      "enforced": true,
+      "metric": "ttff_ms",
+      "note": "baseline 1146.63 plus 286.66 (spread 221.04 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 1433",
+      "value": 540.662
+    },
+    {
+      "enforced": true,
+      "metric": "g2g_p95_ms",
+      "note": "baseline 333.26 plus 78.86 (spread 71.69 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "clean",
+      "rule": "<= 412",
+      "value": 109.38395
+    },
+    {
+      "enforced": true,
+      "metric": "vmaf_mean",
+      "note": "baseline 98.42 minus 6.56 (spread 5.96 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+      "pass": false,
+      "profile": "congested",
+      "rule": ">= 91.9",
+      "value": 86.7949
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 23138.65 plus 4998.75 (spread 4544.32 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "congested",
+      "rule": "<= 28137",
+      "value": 1150.865
+    },
+    {
+      "enforced": true,
+      "metric": "ttff_ms",
+      "note": "baseline 2119.30 plus 6891.82 (spread 6265.30 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "congested",
+      "rule": "<= 9011",
+      "value": 383.649
+    },
+    {
+      "enforced": true,
+      "metric": "g2g_p95_ms",
+      "note": "baseline 359.22 plus 2941.79 (spread 2674.36 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "congested",
+      "rule": "<= 3301",
+      "value": 328.64759999999984
+    },
+    {
+      "enforced": true,
+      "metric": "cap_overshoot_pct",
+      "note": "baseline 11.11 plus 88.00 (spread 80.00 over 9 runs; margin = max(fixed 5, 0 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "congested",
+      "rule": "<= 99.1",
+      "value": -44.884777777777785
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 16436.87 plus 14026.18 (spread 12751.07 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "home-wifi",
+      "rule": "<= 30463",
+      "value": 882.769
+    },
+    {
+      "enforced": true,
+      "metric": "vmaf_mean",
+      "note": "baseline 98.05 minus 2.00 (spread 1.16 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+      "pass": false,
+      "profile": "late-join",
+      "rule": ">= 96.0",
+      "value": 94.473
+    },
+    {
+      "enforced": true,
+      "metric": "fps_delivered",
+      "note": "baseline 35.09 minus 33.59 (spread 30.54 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "late-join",
+      "rule": ">= 1.49",
+      "value": 53.56895830063666
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 5325.93 plus 6775.69 (spread 6159.72 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "late-join",
+      "rule": "<= 12102",
+      "value": 1573.4850000000001
+    },
+    {
+      "enforced": true,
+      "metric": "ttff_ms",
+      "note": "baseline 543.56 plus 2984.95 (spread 2713.59 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "late-join",
+      "rule": "<= 3529",
+      "value": 370.245
+    },
+    {
+      "enforced": true,
+      "metric": "g2g_p95_ms",
+      "note": "baseline 241.44 plus 974.50 (spread 885.91 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "late-join",
+      "rule": "<= 1216",
+      "value": 66.90955
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 19999.66 plus 5214.88 (spread 4740.80 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "mobile",
+      "rule": "<= 25215",
+      "value": 7215.281
+    },
+    {
+      "enforced": true,
+      "metric": "vmaf_mean",
+      "note": "baseline 98.55 minus 2.00 (spread 0.87 over 9 runs; margin = max(fixed 2, 0 % of baseline, 1.1 x spread))",
+      "pass": false,
+      "profile": "outage",
+      "rule": ">= 96.5",
+      "value": 95.0548
+    },
+    {
+      "enforced": true,
+      "metric": "fps_delivered",
+      "note": "baseline 19.79 minus 13.96 (spread 12.69 over 9 runs; margin = max(fixed 2, 5 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "outage",
+      "rule": ">= 5.82",
+      "value": 43.04812118464709
+    },
+    {
+      "enforced": true,
+      "metric": "freeze_ms",
+      "note": "baseline 12273.75 plus 5409.09 (spread 4917.36 over 9 runs; margin = max(fixed 250, 10 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "outage",
+      "rule": "<= 17683",
+      "value": 6101.214
+    },
+    {
+      "enforced": true,
+      "metric": "ttff_ms",
+      "note": "baseline 932.19 plus 2589.71 (spread 2354.28 over 9 runs; margin = max(fixed 250, 25 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "outage",
+      "rule": "<= 3522",
+      "value": 381.992
+    },
+    {
+      "enforced": true,
+      "metric": "g2g_p95_ms",
+      "note": "baseline 329.39 plus 97.27 (spread 88.43 over 9 runs; margin = max(fixed 30, 15 % of baseline, 1.1 x spread))",
+      "pass": true,
+      "profile": "outage",
+      "rule": "<= 427",
+      "value": 85.72589999999998
+    }
+  ],
+  "git": {
+    "commit": "db5978dff5e9ea5ece9d54d5c385f9028a8e9c20",
+    "dirty": false
+  },
+  "gpu": "NVIDIA GeForce RTX 3080 Ti",
+  "inputs_fingerprint": "878e655dbb8e9288",
+  "kind": "stream-gate-baseline",
+  "lane": "hw",
+  "machine": {
+    "computer": "WIN10-GAMING",
+    "cpu": "AMD Ryzen 7 5800X 8-Core Processor",
+    "gpus": [
+      "Parsec Virtual Display Adapter (driver 0.45.0.0)",
+      "NVIDIA GeForce RTX 3080 Ti (driver 32.0.16.1088)"
+    ],
+    "memory_gb": "32",
+    "os": "Microsoft Windows 11 Pro 10.0.26300"
+  },
+  "method": {
+    "freeze": "present gap over 150 ms between new frames",
+    "lane": "hw: clip 1080p60, 8000 kbps at 60 fps, preset ultra, hardware encode and decode",
+    "path": "reference clip (MELLO_CAPTURE_REFERENCE) -> D3D11 video processor -> preprocessor -> encoder -> mello-core manager and SfuSink -> RTP sender -> shim (UDP proxy, host leg) -> mello-sfu in test mode -> shim (viewer leg) -> RTP receiver session -> receive timeline (stage 3) -> viewer decode thread -> present thread at each render time -> CPU frame callback",
+    "shim": "netmodel shim version 1; base delay 10 ms each way per leg",
+    "vmaf": "vmaf_v0.6.1 on luma, every 1 new frame(s)"
+  },
+  "platform": {
+    "arch": "x86_64",
+    "os": "windows"
+  },
+  "profiles": {
+    "bad": {
+      "description": "Viewer on a bad link: 5 % random loss plus Gilbert-Elliott bursts (about 5 % more), 10 % in total, 30 ms jitter.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1217,
+            "late_frames": 0,
+            "max_late_us": 596
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1202,
+            "fec_packets": 0,
+            "pli": 5,
+            "remb": 0,
+            "rtp_packets": 18260,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-bad-1792852420261",
+        "viewers": [
+          {
+            "aus_fed": 758,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.342,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 756,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 788,
+              "awaiting_idr": 0,
+              "core_complete": 788,
+              "core_emitted": 788,
+              "core_incomplete": 4,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 4,
+              "ingress_overflows": 0,
+              "ingress_packets": 14071,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 5716,
+              "nack_sequences": 121711,
+              "pli": 3,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.1094,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 7.0,
+              "frames_decoded": 757,
+              "frames_dropped_late": 1,
+              "frames_late": 27,
+              "frames_presented": 755,
+              "frames_released": 758,
+              "jitter_ms": 4128.39599609375,
+              "keyframe_requests": 3,
+              "loss_events": 4,
+              "target_delay_ms": 150.0
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 32943,
+              "offered_packets": 325,
+              "rtcp_packets": 291,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18779005,
+              "offered_packets": 18315,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 18260
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 2190,
+              "lost_queue": 0,
+              "offered_bytes": 17828696,
+              "offered_packets": 17244,
+              "rtcp_packets": 20,
+              "rtx_packets": 3085,
+              "video_packets": 14114
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 98254,
+              "offered_packets": 1691,
+              "rtcp_packets": 1665,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 38.5924,
+        "frame_interval_p95_ms": 18.7224,
+        "frames_dropped": 446.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 756.0,
+        "frames_presented": 756.0,
+        "frames_unreadable": 0.0,
+        "freeze_count": 3.0,
+        "freeze_ms": 7049.075,
+        "freeze_pct": 36.0307,
+        "g2g_max_ms": 651.498,
+        "g2g_p50_ms": 195.972,
+        "g2g_p95_ms": 200.1213,
+        "host_frames_late": 0.0,
+        "host_keyframes": 10.0,
+        "host_leg_lost": 0.0,
+        "host_media_kbps": 7479.9608,
+        "host_wire_kbps": 7481.2812,
+        "other_cpu_pct": 5.1214,
+        "psnr_y_mean": 31.8432,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 4.0,
+        "rx_missing": 5716.0,
+        "rx_nacks": 121711.0,
+        "rx_pli": 3.0,
+        "rx_repaired": 1600.0,
+        "ssim_y_mean": 0.9219,
+        "ttff_ms": 435.636,
+        "tx_feedback_rtt_ms": 24.703,
+        "tx_idr_aus": 10.0,
+        "tx_idr_over_50ms": 5.0,
+        "tx_max_idr_send_ms": 134.696,
+        "tx_padding": 0.0,
+        "tx_pli": 5.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 2190.0,
+        "viewer_rtx_pct": 21.78,
+        "vmaf_mean": 99.3529,
+        "vmaf_min": 70.2735,
+        "vmaf_p5": 95.9795
+      },
+      "seed": 404
+    },
+    "clean": {
+      "description": "10 ms each way on both legs, nothing else.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1221,
+            "late_frames": 0,
+            "max_late_us": 609
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1172,
+            "fec_packets": 0,
+            "pli": 3,
+            "remb": 0,
+            "rtp_packets": 18263,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-clean-1792852344048",
+        "viewers": [
+          {
+            "aus_fed": 1138,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.503,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 1133,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 1138,
+              "awaiting_idr": 0,
+              "core_complete": 1138,
+              "core_emitted": 1138,
+              "core_incomplete": 1,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 1,
+              "ingress_overflows": 0,
+              "ingress_packets": 17719,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 240,
+              "nack_sequences": 792,
+              "pli": 1,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.1507,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 4.0,
+              "frames_decoded": 1138,
+              "frames_dropped_late": 5,
+              "frames_late": 70,
+              "frames_presented": 1133,
+              "frames_released": 1138,
+              "jitter_ms": 23.64900016784668,
+              "keyframe_requests": 1,
+              "loss_events": 1,
+              "target_delay_ms": 37.64899826049805
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 33099,
+              "offered_packets": 326,
+              "rtcp_packets": 291,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18847866,
+              "offered_packets": 18319,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 18263
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18260935,
+              "offered_packets": 17745,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 17700
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 37070,
+              "offered_packets": 447,
+              "rtcp_packets": 421,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 59.65,
+        "frame_interval_p95_ms": 18.0998,
+        "frames_dropped": 7.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 1133.0,
+        "frames_presented": 1133.0,
+        "frames_unreadable": 1.0,
+        "freeze_count": 2.0,
+        "freeze_ms": 817.468,
+        "freeze_pct": 4.201,
+        "g2g_max_ms": 339.228,
+        "g2g_p50_ms": 67.0005,
+        "g2g_p95_ms": 109.384,
+        "host_frames_late": 0.0,
+        "host_keyframes": 7.0,
+        "host_leg_lost": 0.0,
+        "host_media_kbps": 7690.8567,
+        "host_wire_kbps": 7538.4048,
+        "other_cpu_pct": 5.6657,
+        "psnr_y_mean": 31.4928,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 1.0,
+        "rx_missing": 240.0,
+        "rx_nacks": 792.0,
+        "rx_pli": 1.0,
+        "rx_repaired": 0.0,
+        "ssim_y_mean": 0.945,
+        "ttff_ms": 540.662,
+        "tx_feedback_rtt_ms": 35.756,
+        "tx_idr_aus": 7.0,
+        "tx_idr_over_50ms": 4.0,
+        "tx_max_idr_send_ms": 141.939,
+        "tx_padding": 0.0,
+        "tx_pli": 3.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 0.0,
+        "viewer_rtx_pct": 0.0,
+        "vmaf_mean": 96.3504,
+        "vmaf_min": 76.1293,
+        "vmaf_p5": 79.547
+      },
+      "seed": 101
+    },
+    "congested": {
+      "description": "Host uplink capped at 60 % of the lane preset with a 150 ms tail-drop queue from 5 s for 20 s, then released.",
+      "duration_s": 30.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 2639,
+            "late_frames": 0,
+            "max_late_us": 681
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1554,
+            "fec_packets": 0,
+            "pli": 1,
+            "remb": 0,
+            "rtp_packets": 19145,
+            "rtx_sent": 632
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-congested-1792852445007",
+        "viewers": [
+          {
+            "aus_fed": 1127,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.269,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 1124,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 1130,
+              "awaiting_idr": 0,
+              "core_complete": 1129,
+              "core_emitted": 1129,
+              "core_incomplete": 1,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 0,
+              "ingress_overflows": 0,
+              "ingress_packets": 12597,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 262,
+              "nack_sequences": 1185,
+              "pli": 0,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 328,
+            "tick_max_ms": 0.08660000000000001,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 3.0,
+              "frames_decoded": 1127,
+              "frames_dropped_late": 3,
+              "frames_late": 118,
+              "frames_presented": 1124,
+              "frames_released": 1127,
+              "jitter_ms": 35.941001892089844,
+              "keyframe_requests": 0,
+              "loss_events": 0,
+              "target_delay_ms": 48.941001892089844
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 49882,
+              "offered_packets": 706,
+              "rtcp_packets": 647,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 149,
+              "lost_queue": 149,
+              "offered_bytes": 19000757,
+              "offered_packets": 19250,
+              "rtcp_packets": 44,
+              "rtx_packets": 0,
+              "video_packets": 18513
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 12454031,
+              "offered_packets": 12706,
+              "rtcp_packets": 30,
+              "rtx_packets": 67,
+              "video_packets": 12576
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 46875,
+              "offered_packets": 871,
+              "rtcp_packets": 839,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "bitrate_reaction_s": 1.4,
+        "cap_kbps": 4800.0,
+        "cap_overshoot_pct": -44.8848,
+        "cap_queue_drops": 149.0,
+        "cap_send_kbps": 2645.5307,
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 37.9117,
+        "frame_interval_p95_ms": 34.4978,
+        "frames_dropped": 684.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 1124.0,
+        "frames_presented": 1124.0,
+        "frames_unreadable": 0.0,
+        "freeze_count": 5.0,
+        "freeze_ms": 1150.865,
+        "freeze_pct": 3.886,
+        "g2g_max_ms": 1028.528,
+        "g2g_p50_ms": 141.567,
+        "g2g_p95_ms": 328.6476,
+        "host_frames_late": 0.0,
+        "host_keyframes": 10.0,
+        "host_leg_lost": 149.0,
+        "host_media_kbps": 3348.4461,
+        "host_wire_kbps": 3498.4816,
+        "other_cpu_pct": 2.6487,
+        "psnr_y_mean": 27.806,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 0.0,
+        "rx_missing": 262.0,
+        "rx_nacks": 1185.0,
+        "rx_pli": 0.0,
+        "rx_repaired": 94.0,
+        "ssim_y_mean": 0.7894,
+        "ttff_ms": 383.649,
+        "tx_feedback_rtt_ms": 32.277,
+        "tx_idr_aus": 10.0,
+        "tx_idr_over_50ms": 8.0,
+        "tx_max_idr_send_ms": 119.16,
+        "tx_padding": 0.0,
+        "tx_pli": 1.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 2.9303,
+        "tx_rtx_suppressed": 148.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 0.0,
+        "viewer_rtx_pct": 0.4699,
+        "vmaf_mean": 86.7949,
+        "vmaf_min": 64.3403,
+        "vmaf_p5": 66.7489
+      },
+      "seed": 505
+    },
+    "home-wifi": {
+      "description": "Viewer on Wi-Fi: 2 % random loss, 20 ms jitter on the SFU to viewer leg.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1216,
+            "late_frames": 0,
+            "max_late_us": 650
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1163,
+            "fec_packets": 0,
+            "pli": 3,
+            "remb": 0,
+            "rtp_packets": 18118,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-home-wifi-1792852370519",
+        "viewers": [
+          {
+            "aus_fed": 1128,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.154,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 1127,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 1129,
+              "awaiting_idr": 0,
+              "core_complete": 1129,
+              "core_emitted": 1129,
+              "core_incomplete": 1,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 1,
+              "ingress_overflows": 0,
+              "ingress_packets": 17584,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 559,
+              "nack_sequences": 1193,
+              "pli": 1,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.0961,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 4.0,
+              "frames_decoded": 1128,
+              "frames_dropped_late": 1,
+              "frames_late": 26,
+              "frames_presented": 1127,
+              "frames_released": 1128,
+              "jitter_ms": 105.9010009765625,
+              "keyframe_requests": 1,
+              "loss_events": 1,
+              "target_delay_ms": 119.9010009765625
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 32459,
+              "offered_packets": 314,
+              "rtcp_packets": 280,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18678860,
+              "offered_packets": 18173,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 18118
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 363,
+              "lost_queue": 0,
+              "offered_bytes": 18634281,
+              "offered_packets": 18119,
+              "rtcp_packets": 20,
+              "rtx_packets": 507,
+              "video_packets": 17566
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 51269,
+              "offered_packets": 899,
+              "rtcp_packets": 874,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 59.4838,
+        "frame_interval_p95_ms": 18.6945,
+        "frames_dropped": 3.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 1127.0,
+        "frames_presented": 1127.0,
+        "frames_unreadable": 1.0,
+        "freeze_count": 2.0,
+        "freeze_ms": 882.769,
+        "freeze_pct": 4.5132,
+        "g2g_max_ms": 350.982,
+        "g2g_p50_ms": 162.1145,
+        "g2g_p95_ms": 189.321,
+        "host_frames_late": 0.0,
+        "host_keyframes": 7.0,
+        "host_leg_lost": 0.0,
+        "host_media_kbps": 7700.4969,
+        "host_wire_kbps": 7470.8024,
+        "other_cpu_pct": 3.3741,
+        "psnr_y_mean": 31.474,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 1.0,
+        "rx_missing": 559.0,
+        "rx_nacks": 1193.0,
+        "rx_pli": 1.0,
+        "rx_repaired": 356.0,
+        "ssim_y_mean": 0.9432,
+        "ttff_ms": 439.798,
+        "tx_feedback_rtt_ms": 24.285,
+        "tx_idr_aus": 7.0,
+        "tx_idr_over_50ms": 4.0,
+        "tx_max_idr_send_ms": 141.458,
+        "tx_padding": 0.0,
+        "tx_pli": 3.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 363.0,
+        "viewer_rtx_pct": 2.9289,
+        "vmaf_mean": 96.2466,
+        "vmaf_min": 75.9582,
+        "vmaf_p5": 79.2313
+      },
+      "seed": 202
+    },
+    "late-join": {
+      "description": "A second viewer joins at 5 s on clean legs. Measured on that viewer; the first viewer's freeze time is other_viewer_freeze_ms.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1218,
+            "late_frames": 0,
+            "max_late_us": 936
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1199,
+            "fec_packets": 0,
+            "pli": 9,
+            "remb": 0,
+            "rtp_packets": 17785,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer2",
+        "session": "gate-hw-late-join-1792852517983",
+        "viewers": [
+          {
+            "aus_fed": 1143,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.739,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 1141,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 1165,
+              "awaiting_idr": 0,
+              "core_complete": 1165,
+              "core_emitted": 1165,
+              "core_incomplete": 5,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 2,
+              "ingress_overflows": 0,
+              "ingress_packets": 17251,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 216,
+              "nack_sequences": 816,
+              "pli": 2,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.1774,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 5.0,
+              "frames_decoded": 1143,
+              "frames_dropped_late": 2,
+              "frames_late": 70,
+              "frames_presented": 1141,
+              "frames_released": 1143,
+              "jitter_ms": 18.506999969482422,
+              "keyframe_requests": 2,
+              "loss_events": 2,
+              "target_delay_ms": 33.50699996948242
+            }
+          },
+          {
+            "aus_fed": 784,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 2.903,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 784,
+            "role": "viewer2",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 865,
+              "awaiting_idr": 0,
+              "core_complete": 865,
+              "core_emitted": 865,
+              "core_incomplete": 4,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 5,
+              "ingress_overflows": 0,
+              "ingress_packets": 13030,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 861,
+              "nack_sequences": 27263,
+              "pli": 3,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.1478,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 4.0,
+              "frames_decoded": 784,
+              "frames_dropped_late": 0,
+              "frames_late": 39,
+              "frames_presented": 784,
+              "frames_released": 784,
+              "jitter_ms": 19.444000244140625,
+              "keyframe_requests": 3,
+              "loss_events": 5,
+              "target_delay_ms": 33.444000244140625
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 33772,
+              "offered_packets": 345,
+              "rtcp_packets": 302,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18255793,
+              "offered_packets": 17849,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 17785
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 17680279,
+              "offered_packets": 17277,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 17232
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 37783,
+              "offered_packets": 481,
+              "rtcp_packets": 454,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 13410286,
+              "offered_packets": 13054,
+              "rtcp_packets": 15,
+              "rtx_packets": 0,
+              "video_packets": 13016
+            },
+            "role": "viewer2",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 36625,
+              "offered_packets": 414,
+              "rtcp_packets": 390,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 53.569,
+        "frame_interval_p95_ms": 18.2237,
+        "frames_dropped": 144.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 784.0,
+        "frames_presented": 784.0,
+        "frames_unreadable": 0.0,
+        "freeze_count": 2.0,
+        "freeze_ms": 1573.485,
+        "freeze_pct": 10.7562,
+        "g2g_max_ms": 1166.879,
+        "g2g_p50_ms": 56.3685,
+        "g2g_p95_ms": 66.9096,
+        "host_frames_late": 0.0,
+        "host_keyframes": 10.0,
+        "host_leg_lost": 0.0,
+        "host_media_kbps": 7299.9996,
+        "host_wire_kbps": 7301.576,
+        "other_cpu_pct": 4.7542,
+        "other_viewer_freeze_ms": 731.788,
+        "psnr_y_mean": 30.4873,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 5.0,
+        "rx_missing": 861.0,
+        "rx_nacks": 27263.0,
+        "rx_pli": 3.0,
+        "rx_repaired": 0.0,
+        "ssim_y_mean": 0.9361,
+        "ttff_ms": 370.245,
+        "tx_feedback_rtt_ms": 24.236,
+        "tx_idr_aus": 10.0,
+        "tx_idr_over_50ms": 4.0,
+        "tx_max_idr_send_ms": 131.665,
+        "tx_padding": 0.0,
+        "tx_pli": 9.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 0.0,
+        "viewer_rtx_pct": 0.0,
+        "vmaf_mean": 94.473,
+        "vmaf_min": 76.7833,
+        "vmaf_p5": 78.9555
+      },
+      "seed": 707
+    },
+    "mobile": {
+      "description": "Viewer on a mobile link: 5 % loss, 40 ms jitter, 250 ms delay spikes about 6 per minute, light reorder, 300 ppm clock drift.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1217,
+            "late_frames": 0,
+            "max_late_us": 612
+          },
+          "tx": {
+            "aus_dropped": 0,
+            "aus_sent": 1102,
+            "fec_packets": 0,
+            "pli": 6,
+            "remb": 0,
+            "rtp_packets": 18187,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-mobile-1792852396239",
+        "viewers": [
+          {
+            "aus_fed": 743,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.384,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 742,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 744,
+              "awaiting_idr": 1,
+              "core_complete": 744,
+              "core_emitted": 744,
+              "core_incomplete": 5,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 5,
+              "ingress_overflows": 0,
+              "ingress_packets": 13564,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 6039,
+              "nack_sequences": 162459,
+              "pli": 4,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.1263,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 3.0,
+              "frames_decoded": 743,
+              "frames_dropped_late": 1,
+              "frames_late": 30,
+              "frames_presented": 742,
+              "frames_released": 743,
+              "jitter_ms": 143.84500122070312,
+              "keyframe_requests": 5,
+              "loss_events": 5,
+              "target_delay_ms": 150.0
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 32744,
+              "offered_packets": 318,
+              "rtcp_packets": 284,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 18846362,
+              "offered_packets": 18241,
+              "rtcp_packets": 19,
+              "rtx_packets": 0,
+              "video_packets": 18187
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 783,
+              "lost_queue": 0,
+              "offered_bytes": 16312672,
+              "offered_packets": 15719,
+              "rtcp_packets": 20,
+              "rtx_packets": 2124,
+              "video_packets": 13549
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 105656,
+              "offered_packets": 1590,
+              "rtcp_packets": 1563,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 59.3161,
+        "frame_interval_p95_ms": 18.66,
+        "frames_dropped": 30.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 742.0,
+        "frames_presented": 742.0,
+        "frames_unreadable": 0.0,
+        "freeze_count": 2.0,
+        "freeze_ms": 7215.281,
+        "freeze_pct": 37.0116,
+        "g2g_max_ms": 719.302,
+        "g2g_p50_ms": 203.8545,
+        "g2g_p95_ms": 215.0854,
+        "host_frames_late": 0.0,
+        "host_keyframes": 11.0,
+        "host_leg_lost": 0.0,
+        "host_media_kbps": 7528.3412,
+        "host_wire_kbps": 7529.6368,
+        "other_cpu_pct": 3.585,
+        "psnr_y_mean": 32.0256,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 5.0,
+        "rx_missing": 6039.0,
+        "rx_nacks": 162459.0,
+        "rx_pli": 4.0,
+        "rx_repaired": 1480.0,
+        "ssim_y_mean": 0.9315,
+        "ttff_ms": 505.04,
+        "tx_feedback_rtt_ms": 25.323,
+        "tx_idr_aus": 11.0,
+        "tx_idr_over_50ms": 4.0,
+        "tx_max_idr_send_ms": 135.573,
+        "tx_padding": 0.0,
+        "tx_pli": 6.0,
+        "tx_probe_clusters": 2.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 0.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 783.0,
+        "viewer_rtx_pct": 15.7494,
+        "vmaf_mean": 99.5381,
+        "vmaf_min": 70.2735,
+        "vmaf_p5": 96.4791
+      },
+      "seed": 303
+    },
+    "outage": {
+      "description": "Host leg down in both directions for 3 s from 8 s.",
+      "duration_s": 20.0,
+      "info": {
+        "host": {
+          "capture": "reference",
+          "encode_queue_drops": 0,
+          "encoder": "NVENC",
+          "gpu": "NVIDIA GeForce RTX 3080 Ti",
+          "reference": {
+            "frames_delivered": 1218,
+            "late_frames": 0,
+            "max_late_us": 686
+          },
+          "tx": {
+            "aus_dropped": 155,
+            "aus_sent": 928,
+            "fec_packets": 0,
+            "pli": 4,
+            "remb": 0,
+            "rtp_packets": 14280,
+            "rtx_sent": 0
+          }
+        },
+        "measured_viewer": "viewer1",
+        "session": "gate-hw-outage-1792852493640",
+        "viewers": [
+          {
+            "aus_fed": 837,
+            "aus_idr": 0,
+            "backlog_drops": 0,
+            "callback_max_ms": 1.298,
+            "feed_failures": 0,
+            "present_max_ms": 0.0,
+            "presents": 834,
+            "role": "viewer1",
+            "rx": {
+              "aus_dropped": 0,
+              "aus_queued": 838,
+              "awaiting_idr": 0,
+              "core_complete": 838,
+              "core_emitted": 838,
+              "core_incomplete": 1,
+              "core_restarts": 0,
+              "evictions": 0,
+              "gate_dropped": 0,
+              "gate_entries": 2,
+              "ingress_overflows": 0,
+              "ingress_packets": 12433,
+              "invalid_h264": 0,
+              "late": 0,
+              "missing": 1430,
+              "nack_sequences": 13060,
+              "pli": 2,
+              "wrong_ssrc": 0
+            },
+            "scaled_frames": 0,
+            "tick_max_ms": 0.12990000000000002,
+            "ticks_over_30ms": 0,
+            "timeline": {
+              "decode_ms_p95": 4.0,
+              "frames_decoded": 837,
+              "frames_dropped_late": 3,
+              "frames_late": 69,
+              "frames_presented": 834,
+              "frames_released": 837,
+              "jitter_ms": 22.257999420166016,
+              "keyframe_requests": 2,
+              "loss_events": 2,
+              "target_delay_ms": 36.257999420166016
+            }
+          }
+        ],
+        "wire": [
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 19,
+              "lost_queue": 0,
+              "offered_bytes": 27455,
+              "offered_packets": 295,
+              "rtcp_packets": 257,
+              "rtx_packets": 0,
+              "video_packets": 0
+            },
+            "role": "host",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 1245,
+              "lost_queue": 0,
+              "offered_bytes": 14624604,
+              "offered_packets": 14335,
+              "rtcp_packets": 17,
+              "rtx_packets": 0,
+              "video_packets": 14160
+            }
+          },
+          {
+            "down": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 12761327,
+              "offered_packets": 12459,
+              "rtcp_packets": 20,
+              "rtx_packets": 0,
+              "video_packets": 12414
+            },
+            "role": "viewer1",
+            "up": {
+              "audio_packets": 0,
+              "fec_packets": 0,
+              "lost": 0,
+              "lost_queue": 0,
+              "offered_bytes": 31341,
+              "offered_packets": 362,
+              "rtcp_packets": 336,
+              "rtx_packets": 0,
+              "video_packets": 0
+            }
+          }
+        ]
+      },
+      "metrics": {
+        "fec_overhead_pct": 0.0,
+        "fps_delivered": 43.0481,
+        "frame_interval_p95_ms": 18.0428,
+        "frames_dropped": 344.0,
+        "frames_duplicated": 0.0,
+        "frames_new": 834.0,
+        "frames_presented": 834.0,
+        "frames_unreadable": 0.0,
+        "freeze_count": 4.0,
+        "freeze_ms": 6101.214,
+        "freeze_pct": 31.1006,
+        "g2g_max_ms": 604.752,
+        "g2g_p50_ms": 57.053,
+        "g2g_p95_ms": 85.7259,
+        "host_frames_late": 0.0,
+        "host_keyframes": 8.0,
+        "host_leg_lost": 1264.0,
+        "host_media_kbps": 5892.9491,
+        "host_wire_kbps": 5849.1,
+        "other_cpu_pct": 4.4196,
+        "outage_recovery_ms": 882.174,
+        "psnr_y_mean": 31.5097,
+        "rtx_overhead_pct": 0.0,
+        "rx_fec_recovered": 0.0,
+        "rx_gate_dropped_aus": 0.0,
+        "rx_gate_entries": 2.0,
+        "rx_missing": 1430.0,
+        "rx_nacks": 13060.0,
+        "rx_pli": 2.0,
+        "rx_repaired": 0.0,
+        "ssim_y_mean": 0.9374,
+        "ttff_ms": 381.992,
+        "tx_feedback_rtt_ms": 38.312,
+        "tx_idr_aus": 8.0,
+        "tx_idr_over_50ms": 4.0,
+        "tx_max_idr_send_ms": 134.032,
+        "tx_padding": 120.0,
+        "tx_pli": 4.0,
+        "tx_probe_clusters": 4.0,
+        "tx_reprobes": 0.0,
+        "tx_rtx_negotiated": 1.0,
+        "tx_rtx_pct": 0.0,
+        "tx_rtx_suppressed": 0.0,
+        "tx_send_pauses": 1.0,
+        "viewer_backlog_drops": 0.0,
+        "viewer_leg_lost": 0.0,
+        "viewer_rtx_pct": 0.0,
+        "vmaf_mean": 95.0548,
+        "vmaf_min": 70.2735,
+        "vmaf_p5": 79.429
+      },
+      "seed": 606
+    }
+  },
+  "runtime_s": 277.8,
+  "schema": 1,
+  "scorer": {
+    "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
+    "vmaf": {
+      "available": true,
+      "model": "vmaf_v0.6.1",
+      "python_version": "3.14.4",
+      "results": [
+        {
+          "frames": 1132,
+          "id": "clean",
+          "mean": 96.3504,
+          "min": 76.1293,
+          "p5": 79.547
+        },
+        {
+          "frames": 1126,
+          "id": "home-wifi",
+          "mean": 96.2466,
+          "min": 75.9582,
+          "p5": 79.2313
+        },
+        {
+          "frames": 742,
+          "id": "mobile",
+          "mean": 99.5381,
+          "min": 70.2735,
+          "p5": 96.4791
+        },
+        {
+          "frames": 756,
+          "id": "bad",
+          "mean": 99.3529,
+          "min": 70.2735,
+          "p5": 95.9795
+        },
+        {
+          "frames": 1124,
+          "id": "congested",
+          "mean": 86.7949,
+          "min": 64.3403,
+          "p5": 66.7489
+        },
+        {
+          "frames": 834,
+          "id": "outage",
+          "mean": 95.0548,
+          "min": 70.2735,
+          "p5": 79.429
+        },
+        {
+          "frames": 784,
+          "id": "late-join",
+          "mean": 94.473,
+          "min": 76.7833,
+          "p5": 78.9555
+        }
+      ],
+      "scorer": "vmaf 3.0.0 vmaf_v0.6.1",
+      "vmaf_version": "3.0.0"
+    }
+  },
+  "seeds": {
+    "bad": 404,
+    "clean": 101,
+    "congested": 505,
+    "home-wifi": 202,
+    "late-join": 707,
+    "mobile": 303,
+    "outage": 606
+  },
+  "sfu": {
+    "commit": "7e97d4abc257bab50af79d34323269b81f918c46",
+    "dir": "C:/Users/bob/dev/m3llo-dev/mello-sfu-main-gate",
+    "go": "go1.24.9"
+  },
+  "spread": {},
+  "taken_at_utc": "2026-10-24T14:36:47Z"
+}
