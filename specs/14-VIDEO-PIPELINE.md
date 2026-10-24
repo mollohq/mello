@@ -935,7 +935,8 @@ session of the peer (each video session) gets it.
 | Item | Rule |
 |---|---|
 | Who runs it | The receiver session's worker, every 20 ms (`kAvSyncTickInterval`); it decides every 250 ms. |
-| Measurement | The audio heard now, on the video RTP clock (the game audio's A/V sync extension), against `VideoReceiveTimeline::render_time_us` of that timestamp: when the frame of the same capture instant is shown. |
+| Measurement | The audio heard now, on the video RTP clock (the game audio's A/V sync extension), against `VideoReceiveTimeline::render_time_us` of that timestamp plus the present lateness (`ViewerPipeline` stats, the median of the last 16 samples): when the frame of the same capture instant is shown. The timeline's target minus its current delay counts in as the delay the video still has to reach. |
+| Start buffer | `AvSyncInput::start_buffer_ms`: the audio playout asks it when it starts, with the newest held packet; it answers from the render time at the timeline's target delay. |
 | Output | `VideoReceiveTimeline::set_min_delay_us` (at least 1 ms, at most the timeline's 150 ms maximum; the timeline applies it again after a timing reset), and for a late video the game audio's NetEQ minimum delay. |
 | Steps | A raise of the minimum: at most 10 ms per decision. VCMTiming clamps the delay it applies to the minimum at once, so a raise moves the render times by the step at once; the current delay then follows at 100 ms/s. A lowered minimum: at most 40 ms; the current delay falls at 100 ms/s. |
 | Stats | `MelloStreamStats` stage 7 fields: `av_offset_ms` (filtered), `av_video_min_delay_ms`, `av_audio_min_delay_ms`, `av_sync_changes`, `av_sync_active`. |

@@ -1013,7 +1013,11 @@ only part of each frame.
 a stereo NetEQ that is a source of the voice mixer, with NetEQ's own
 `DecisionLogic` (no talk-spurt controller: game audio has no speech gate). The
 voice peers and the game audio share the NetEQ creation code
-(`create_opus_neteq`), the environment and the delay manager tuning; the voice
+(`create_opus_neteq`) and the decoder factory. The game audio runs NetEQ's
+upstream delay manager (`VoicePlayout::Config::game_delay_manager_config`,
+empty): on the stream gate's CPU lane the voice tuning (short memory of a
+jitter burst, for speech with pauses) gave a pilot gap on `home-wifi` and a
+`mobile` MOS of 2.82, the upstream defaults no gap and 3.92. The voice
 statistics do not count the game audio.
 
 | What | Rule |
@@ -1069,11 +1073,12 @@ newest packet's extension, is heard one pull later plus the output latency
 
 | Step | Rule |
 |---|---|
-| Offset | The time the audio of one capture instant is heard, minus the render time the receive timeline gives the video frame of that instant (`render_time_us`). Positive: the audio is late. |
-| Filter | libwebrtc `StreamSynchronization`: a mean over 4; a filtered offset under 30 ms changes nothing; a change is half of it. |
+| Start buffer | When the playout starts (a stream, the first packet after a pause, a new SSRC) it holds the packets until the video has a frame (at most 1 s), then keeps as much audio as puts the newest packet's sound on the video of its capture instant at the timeline's target delay, and starts NetEQ with that as its minimum delay (`AvSyncInput::start_buffer_ms`). The audio starts in sync with no stretching: NetEQ reaches a raised minimum only by stretching, at about 25 ms per second on the gate's audio. |
+| Offset | The time the audio of one capture instant is heard, minus the time the viewer shows the video frame of that instant: the timeline's render time (`render_time_us`) plus the present lateness (the median of the last 16 samples of the present thread's lateness, within -20..60 ms). Then the delays both sides still have to reach count in: plus NetEQ's target minus its delay now, minus the timeline's target minus the delay frames get now. Positive: the audio is late. |
+| Filter | libwebrtc `StreamSynchronization`: a mean over 4. A filtered offset under 20 ms changes nothing (libwebrtc: 30; the gate measured the estimate about 10 ms off the shown offset, and the offset is to stay within +-30 ms). A change is the whole filtered offset (libwebrtc: half), because the pending delays are in the measurement. |
 | Steps | One change per decision. A raised video minimum moves at most 10 ms: VCMTiming applies it to the render time at once, so a step shows one frame 10 ms longer (the stage 3 spike: one step of 80 ms held 3 frames). An audio minimum, and a lowered video minimum, move at most 40 ms: neither moves a picture at once (NetEQ stretches the audio to its new delay; the timeline's delay falls at 100 ms/s). The applied change leaves the filter. |
 | Audio late | The audio is the master: the timeline's minimum delay (`set_min_delay_us`) rises from the timeline's target delay, to at most 150 ms (the timeline's maximum). A minimum the sync had given the audio comes back first. |
-| Video late | A minimum that binds (the target is the minimum) comes down first; then the audio waits (NetEQ's minimum delay, at most 150 ms), because the video cannot be earlier than its own target. |
+| Video late | A minimum that binds (the target is the minimum) comes down first; then the audio waits (NetEQ's minimum delay, at most 250 ms), because the video cannot be earlier than its own target. On the gate's CPU lane this is the usual case: the video's target is 100 to 150 ms (jitter, decode, render and the room for a repair), NetEQ's 40 to 80 ms. |
 | No audio | 3 s without a measurement (a pause, no audio) sets both minimums back to none. |
 | New video session | The new timeline gets the current minimum at once; the timeline itself applies it again after a timing reset. |
 

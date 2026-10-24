@@ -756,3 +756,41 @@ TEST(StreamAudioCApi, AFedPacketPlaysInTheVoiceOutput) {
     EXPECT_GT(rms(out.data() + out.size() - 19200, 19200), 4000.0)
         << "the game audio did not reach the voice output";
 }
+
+// The start buffer: the first packets wait until the A/V sync knows when
+// their video is shown; then the playout keeps that much audio and starts
+// with it as NetEQ's minimum delay, so the audio starts in sync.
+TEST_F(StreamPlayoutTest, TheStartBufferHoldsTheFirstPacketsUntilTheVideoIsKnown) {
+    GameEncoder enc;
+    int asked = 0;
+    playout->set_start_buffer([&asked](uint32_t, int64_t) -> std::optional<int> {
+        // No video frame for the first five packets.
+        return ++asked <= 5 ? std::nullopt : std::optional<int>(80);
+    });
+    for (int k = 0; k < 6; ++k) {
+        const auto pkt = rtp_packet(static_cast<uint16_t>(k), static_cast<uint32_t>(k * kFrame),
+                                    enc.encode(tone_frame(k)), 1800u * static_cast<uint32_t>(k));
+        step(&pkt);
+    }
+    // Five steps of 20 ms while held: silence.
+    EXPECT_EQ(rms(out.data(), 5 * 960), 0.0) << "audio played before the start buffer was known";
+    auto s = playout->stats();
+    EXPECT_EQ(s.start_buffers, 1u);
+    EXPECT_EQ(s.last_start_buffer_ms, 80);
+    EXPECT_EQ(s.source.minimum_delay_ms, 80);
+    // Five held packets (100 ms) and the sixth: 80 ms of them stay, and the
+    // audio plays from the next pull on.
+    for (int k = 6; k < 40; ++k) {
+        const auto pkt = rtp_packet(static_cast<uint16_t>(k), static_cast<uint32_t>(k * kFrame),
+                                    enc.encode(tone_frame(k)), 1800u * static_cast<uint32_t>(k));
+        step(&pkt);
+    }
+    EXPECT_GT(rms(out.data() + out.size() - 4800, 4800), 4000.0);
+    EXPECT_EQ(asked, 6) << "the start buffer is asked only while the playout starts";
+    // A pause starts it again.
+    playout->set_muted(true);
+    playout->set_muted(false);
+    const auto pkt = rtp_packet(40, 40u * kFrame, enc.encode(tone_frame(40)), 72000u);
+    step(&pkt);
+    EXPECT_EQ(playout->stats().start_buffers, 2u);
+}

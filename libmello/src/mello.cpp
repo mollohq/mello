@@ -161,6 +161,13 @@ struct MelloStreamView {
     std::weak_ptr<mello::transport::PeerConnectionImpl> audio_peer;
     std::shared_ptr<mello::transport::AvSyncInput> av_sync;
     std::atomic<bool> audio_attached{false};
+    /// The view's video for the A/V sync's present lateness; stop clears it
+    /// under the lock before the video goes.
+    struct LatenessSource {
+        std::mutex mutex;
+        mello::video::VideoPipeline* video = nullptr;
+    };
+    std::shared_ptr<LatenessSource> lateness_source;
     std::atomic<uint64_t> audio_packets_counted{0};
     // ---- end stage 7 ----
 };
@@ -1747,6 +1754,10 @@ void mello_stream_stop_viewer(MelloStreamView* view) {
             peer->set_stream_audio_sink({});
             peer->set_av_sync(nullptr);
         }
+        if (view->lateness_source) {
+            std::lock_guard<std::mutex> lock(view->lateness_source->mutex);
+            view->lateness_source->video = nullptr;
+        }
         if (view->audio_playout) {
             view->audio_playout->stop();
             view->audio_playout.reset();
@@ -1926,6 +1937,23 @@ MelloResult mello_stream_viewer_attach_peer(MelloStreamView* view, MelloPeerConn
                     if (const auto playout = weak_playout.lock()) {
                         playout->set_sync_delay_ms(delay_ms);
                     }
+                });
+            if (!view->lateness_source) {
+                view->lateness_source = std::make_shared<MelloStreamView::LatenessSource>();
+                view->lateness_source->video = view->video.get();
+            }
+            sync->set_video_lateness([source = view->lateness_source]() -> double {
+                std::lock_guard<std::mutex> lock(source->mutex);
+                if (!source->video) return 0.0;
+                mello::video::ViewerStats vs{};
+                source->video->get_viewer_stats(vs);
+                return vs.present_lateness_ms;
+            });
+            std::weak_ptr<mello::transport::AvSyncInput> weak_sync = sync;
+            view->audio_playout->set_start_buffer(
+                [weak_sync](uint32_t video_ts, int64_t heard_if_now_us) -> std::optional<int> {
+                    const auto s = weak_sync.lock();
+                    return s ? s->start_buffer_ms(video_ts, heard_if_now_us) : std::nullopt;
                 });
             peer->impl->set_av_sync(sync);
             view->av_sync = std::move(sync);

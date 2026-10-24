@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <vector>
 
 namespace mello::transport {
 
@@ -22,9 +23,11 @@ AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms) {
     filtered_ = filtered_ ? (*filtered_ * (n - 1.0) + offset_ms) / n : offset_ms;
     if (std::abs(*filtered_) < config_.dead_band_ms) return d;
 
-    // Half of the filtered offset (libwebrtc), one kind of change per
-    // decision, each with its step limit.
-    const double want = *filtered_ / 2.0;
+    // The filtered offset, one kind of change per decision, each with its
+    // step limit. libwebrtc moves half of it; the measurement here already
+    // counts the delay NetEQ and the timeline still have to reach (the
+    // pending delays), so a whole step does not overshoot.
+    const double want = *filtered_;
     const double video_before = video_min_ms_;
     const double audio_before = audio_min_ms_;
     if (want > 0.0) {
@@ -70,12 +73,18 @@ void AvSync::reset() {
     audio_min_ms_ = 0.0;
 }
 
+void AvSync::start_audio(double audio_min_delay_ms) {
+    filtered_.reset();
+    audio_min_ms_ = std::clamp(audio_min_delay_ms, 0.0, config_.max_audio_delay_ms);
+}
+
 AvSyncInput::AvSyncInput(AudioClockFn audio, AudioDelayFn set_audio_delay, AvSync::Config config,
                          int64_t interval_us)
     : audio_(std::move(audio)),
       set_audio_delay_(std::move(set_audio_delay)),
       interval_us_(std::max<int64_t>(interval_us, 1)),
-      sync_(config) {}
+      sync_(config),
+      max_audio_delay_ms_(config.max_audio_delay_ms) {}
 
 void AvSyncInput::apply_locked(VideoReceiveTimeline& timeline, const AvSync::Decision& d) {
     // The timeline's own floor is 1 ms (spec 14 section 7.2).
@@ -86,8 +95,34 @@ void AvSyncInput::apply_locked(VideoReceiveTimeline& timeline, const AvSync::Dec
     stats_.audio_min_delay_ms = d.audio_min_delay_ms;
 }
 
-void AvSyncInput::tick(VideoReceiveTimeline& timeline, int64_t now_us) {
+std::optional<int> AvSyncInput::start_buffer_ms(uint32_t video_rtp_timestamp,
+                                                int64_t heard_if_now_us) {
     std::lock_guard<std::mutex> lock(mutex_);
+    const auto timeline = timeline_.lock();
+    if (!timeline) return std::nullopt;
+    const auto render_us = timeline->render_time_us(video_rtp_timestamp);
+    if (!render_us) return std::nullopt;
+    // Where the video goes: its target, not the delay frames get now (the
+    // timeline's delay climbs at 100 ms/s while its jitter estimate settles,
+    // and the audio could follow only by stretching).
+    const TimelineStats ts = timeline->stats();
+    const double video_applied_ms =
+        std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
+    const double want_ms = static_cast<double>(*render_us - heard_if_now_us) / 1000.0 +
+                           lateness_ms_ + (ts.target_delay_ms - video_applied_ms);
+    const int buffer_ms = static_cast<int>(std::clamp(want_ms, 0.0, max_audio_delay_ms_) + 0.5);
+    sync_.start_audio(buffer_ms);
+    stats_.audio_min_delay_ms = sync_.audio_min_delay_ms();
+    MELLO_LOG_INFO("av_sync", "audio starts with a %d ms buffer (the video of its first packet "
+                   "is shown %.1f ms after it could be heard)", buffer_ms, want_ms);
+    return buffer_ms;
+}
+
+void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr, int64_t now_us) {
+    if (!timeline_ptr) return;
+    VideoReceiveTimeline& timeline = *timeline_ptr;
+    std::lock_guard<std::mutex> lock(mutex_);
+    timeline_ = timeline_ptr;
     if (applied_to_ != &timeline) {
         // A new video session: its timeline starts without our minimum.
         applied_to_ = &timeline;
@@ -101,6 +136,17 @@ void AvSyncInput::tick(VideoReceiveTimeline& timeline, int64_t now_us) {
     if (now_us < next_us_) return;
     next_us_ = now_us + interval_us_;
 
+    if (video_lateness_) {
+        const double l = video_lateness_();
+        if (std::isfinite(l)) {
+            lateness_samples_.push_back(l);
+            if (lateness_samples_.size() > 16) lateness_samples_.pop_front();
+            std::vector<double> sorted(lateness_samples_.begin(), lateness_samples_.end());
+            std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
+            lateness_ms_ = std::clamp(sorted[sorted.size() / 2], -20.0, 60.0);
+            stats_.video_lateness_ms = lateness_ms_;
+        }
+    }
     const std::optional<AudioSyncSample> sample = audio_ ? audio_() : std::nullopt;
     std::optional<int64_t> shown_us;
     if (sample) shown_us = timeline.render_time_us(sample->video_rtp_timestamp);
@@ -118,12 +164,20 @@ void AvSyncInput::tick(VideoReceiveTimeline& timeline, int64_t now_us) {
         return;
     }
 
-    const double offset_ms = static_cast<double>(sample->heard_at_us - *shown_us) / 1000.0;
     // The timeline's target: its own delay or the minimum, whichever is
     // larger. The current delay lags a changed minimum (100 ms/s), and a
     // decision on it would count a minimum that was just lowered as one that
     // does not bind.
-    const double video_delay_ms = timeline.stats().target_delay_ms;
+    const TimelineStats ts = timeline.stats();
+    const double video_delay_ms = ts.target_delay_ms;
+    // The offset when both delays have reached their targets: the audio
+    // gains its pending delay; the video moves from the delay frames get now
+    // (VCMTiming's current delay within the bounds) to its target.
+    const double video_applied_ms =
+        std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
+    const double offset_ms = static_cast<double>(sample->heard_at_us - *shown_us) / 1000.0 -
+                             lateness_ms_ + sample->pending_ms -
+                             (video_delay_ms - video_applied_ms);
     const AvSync::Decision d = sync_.update(offset_ms, video_delay_ms);
     last_measurement_us_ = now_us;
     ++stats_.measurements;
@@ -140,6 +194,11 @@ void AvSyncInput::tick(VideoReceiveTimeline& timeline, int64_t now_us) {
         ++stats_.changes;
         apply_locked(timeline, d);
     }
+}
+
+void AvSyncInput::set_video_lateness(VideoLatenessFn fn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    video_lateness_ = std::move(fn);
 }
 
 AvSyncInput::Stats AvSyncInput::stats() const {

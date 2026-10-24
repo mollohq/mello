@@ -287,22 +287,80 @@ bool StreamAudioPlayout::feed_rtp(const uint8_t* packet, size_t size, int64_t ar
     size_t payload_size = 0;
     if (!parse_rtp(packet, size, &rtp, &offset, &payload_size)) return false;
     const auto video_ts = transport::read_av_sync_extension(packet, size);
+    StartBufferFn start_fn;
+    {
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (muted_) {
+            ++packets_dropped_muted_;
+            return true;
+        }
+        if (video_ts) {
+            // The newest packet's mapping: a reordered older one does not
+            // move it.
+            if (!have_sync_ || static_cast<int32_t>(rtp.timestamp - sync_audio_ts_) >= 0) {
+                sync_audio_ts_ = rtp.timestamp;
+                sync_video_ts_ = *video_ts;
+                have_sync_ = true;
+            }
+            ++sync_extensions_;
+        }
+        if (have_ssrc_ && rtp.ssrc != ssrc_) {
+            // The host restarted its audio: a new start.
+            starting_ = true;
+            held_.clear();
+        }
+        have_ssrc_ = true;
+        ssrc_ = rtp.ssrc;
+        if (!start_buffer_fn_ || !starting_) {
+            // NetEQ's arrival clock is the playout clock in ms (VoicePlayout).
+            return insert_locked(rtp, packet + offset, payload_size, arrival_us / 1000);
+        }
+        held_.push_back(Held{std::vector<uint8_t>(packet, packet + size), rtp.timestamp, arrival_us});
+        start_fn = start_buffer_fn_;
+    }
+
+    // Outside the lock: the A/V sync takes its own lock, then this one.
+    std::optional<int> buffer_ms;
+    if (video_ts) {
+        const float latency_ms = output_latency_ ? output_latency_() : 0.0f;
+        // Inserted now with no buffer, the newest packet plays at the next
+        // pull and is heard over the 10 ms after it, then the output.
+        const int64_t heard_if_now = arrival_us + 10'000 + static_cast<int64_t>(latency_ms * 1000.0f);
+        buffer_ms = start_fn(*video_ts, heard_if_now);
+    }
+
     std::lock_guard<std::mutex> lock(mutex_);
-    if (muted_) {
-        ++packets_dropped_muted_;
+    if (!starting_ || held_.empty()) return true;
+    const bool give_up = held_.back().arrival_us - held_.front().arrival_us > 1'000'000;
+    if (!buffer_ms && !give_up) {
+        // Wait for the video's first frame; keep at most 1 s.
         return true;
     }
-    if (video_ts) {
-        // The newest packet's mapping: a reordered older one does not move it.
-        if (!have_sync_ || static_cast<int32_t>(rtp.timestamp - sync_audio_ts_) >= 0) {
-            sync_audio_ts_ = rtp.timestamp;
-            sync_video_ts_ = *video_ts;
-            have_sync_ = true;
+    const int keep_ms = buffer_ms.value_or(0);
+    const uint32_t newest = held_.back().timestamp;
+    const int64_t keep_samples = static_cast<int64_t>(keep_ms) * STREAM_AUDIO_SAMPLE_RATE / 1000;
+    if (source_) source_->set_minimum_delay_ms(keep_ms);
+    for (const Held& h : held_) {
+        if (static_cast<int64_t>(static_cast<int32_t>(newest - h.timestamp)) > keep_samples) continue;
+        RtpInfo r;
+        size_t off = 0;
+        size_t len = 0;
+        if (parse_rtp(h.packet.data(), h.packet.size(), &r, &off, &len)) {
+            insert_locked(r, h.packet.data() + off, len, h.arrival_us / 1000);
         }
-        ++sync_extensions_;
     }
-    // NetEQ's arrival clock is the playout clock in ms (VoicePlayout).
-    return insert_locked(rtp, packet + offset, payload_size, arrival_us / 1000);
+    MELLO_LOG_INFO("stream_audio", "viewer playout starts with a %d ms buffer (%zu packets held%s)",
+                   keep_ms, held_.size(), buffer_ms ? "" : ", no video frame in 1 s");
+    held_.clear();
+    starting_ = false;
+    ++start_buffers_;
+    last_start_buffer_ms_ = keep_ms;
+    return true;
+}
+
+void StreamAudioPlayout::set_start_buffer(StartBufferFn fn) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    start_buffer_fn_ = std::move(fn);
 }
 
 bool StreamAudioPlayout::feed_packet(const uint8_t* data, int size) {
@@ -330,6 +388,10 @@ void StreamAudioPlayout::set_muted(bool muted) {
         // packet after the pause starts a new stream.
         source_->flush();
         have_sync_ = false;
+    }
+    if (muted) {
+        starting_ = true;
+        held_.clear();
     }
     MELLO_LOG_INFO("stream_audio", "viewer playout %s", muted ? "muted (flushed)" : "unmuted");
 }
@@ -375,6 +437,9 @@ std::optional<transport::AudioSyncSample> StreamAudioPlayout::sync_sample() cons
     // The pull ended with that sample: it is heard one pull later, after
     // the output ring and the device.
     const float latency_ms = output_latency_ ? output_latency_() : 0.0f;
+    if (const auto d = source_->delay()) {
+        s.pending_ms = static_cast<double>(d->target_ms - d->filtered_ms);
+    }
     s.heard_at_us = playout->pulled_at_us +
                     static_cast<int64_t>(playout->samples) * 1'000'000 / STREAM_AUDIO_SAMPLE_RATE +
                     static_cast<int64_t>(latency_ms * 1000.0f);
@@ -392,6 +457,8 @@ StreamAudioPlayout::Stats StreamAudioPlayout::stats() const {
     s.packets_fed = packets_fed_;
     s.packets_dropped_muted = packets_dropped_muted_;
     s.sync_extensions = sync_extensions_;
+    s.start_buffers = start_buffers_;
+    s.last_start_buffer_ms = last_start_buffer_ms_;
     if (source_) {
         s.source = source_->stats();
         if (s.source.playing) {

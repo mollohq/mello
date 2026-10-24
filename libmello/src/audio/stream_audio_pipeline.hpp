@@ -5,6 +5,7 @@
 #include "../transport/av_sync.hpp"
 #include <atomic>
 #include <cstdint>
+#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -142,11 +143,26 @@ public:
     /// NetEQ's minimum delay for a late video.
     void set_sync_delay_ms(int delay_ms);
 
+    /// The A/V sync's start buffer (AvSyncInput::start_buffer_ms): given the
+    /// video timestamp of the newest held packet and when it would be heard
+    /// with no buffer, the buffer in ms, or empty while the video has none.
+    using StartBufferFn =
+        std::function<std::optional<int>(uint32_t video_rtp_timestamp, int64_t heard_if_now_us)>;
+    /// With it set, the playout holds the first packets of a stream (at the
+    /// start, after a pause, a new SSRC) until the start buffer is known,
+    /// keeps that much audio, and starts NetEQ with it as its minimum
+    /// delay: the audio starts in sync, with no stretching. Without a video
+    /// frame for 1 s it starts with no buffer.
+    void set_start_buffer(StartBufferFn fn);
+
     struct Stats {
         uint64_t packets_fed = 0;
         uint64_t packets_dropped_muted = 0;
         /// Packets that carried the A/V sync extension.
         uint64_t sync_extensions = 0;
+        /// Starts with a start buffer, and the last one in ms (-1: none).
+        uint64_t start_buffers = 0;
+        int last_start_buffer_ms = -1;
         /// NetEQ's delay plus the output latency, ms (0 while nothing plays).
         float delay_ms = 0.0f;
         /// Concealment (expand) since the view started, ms.
@@ -179,6 +195,19 @@ private:
     // feed_packet's own header.
     uint16_t plain_sequence_ = 0;
     uint32_t plain_timestamp_ = 0;
+    // The start buffer (set_start_buffer).
+    struct Held {
+        std::vector<uint8_t> packet;
+        uint32_t timestamp = 0;
+        int64_t arrival_us = 0;
+    };
+    StartBufferFn start_buffer_fn_;
+    bool starting_ = true;
+    bool have_ssrc_ = false;
+    uint32_t ssrc_ = 0;
+    std::deque<Held> held_;
+    uint64_t start_buffers_ = 0;
+    int last_start_buffer_ms_ = -1;
 };
 
 } // namespace mello::audio

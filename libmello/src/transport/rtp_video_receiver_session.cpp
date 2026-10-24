@@ -1083,7 +1083,7 @@ struct RtpVideoReceiverSession::State
                         sync = av_sync;
                     }
                     if (sync) {
-                        sync->tick(*timeline, timeline->now_us());
+                        sync->tick(timeline, timeline->now_us());
                     }
                 }
 

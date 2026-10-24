@@ -176,6 +176,14 @@ public:
     };
     std::optional<Playout> last_playout() const;
 
+    /// NetEQ's target delay and its filtered delay now, ms. Empty while no
+    /// stream plays. Cheaper than stats().
+    struct Delay {
+        float target_ms = 0.0f;
+        float filtered_ms = 0.0f;
+    };
+    std::optional<Delay> delay() const;
+
     GameAudioStats stats() const;
 
 private:
@@ -227,7 +235,7 @@ public:
     /// reorder_forget_factor:0.98", chosen with the voice gate (TESTING.md,
     /// NetEQ tuning).
     static const char* default_delay_manager_config();
-    /// The game audio's tuning that ships (stage 7).
+    /// The game audio's tuning that ships (stage 7): upstream's defaults.
     static const char* default_game_delay_manager_config();
 
     explicit VoicePlayout(Config config);

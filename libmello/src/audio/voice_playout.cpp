@@ -593,8 +593,11 @@ struct VoicePlayout::Impl {
 };
 
 const char* VoicePlayout::default_game_delay_manager_config() {
-    // The voice tuning until the stream gate measures another.
-    return "forget_factor:0.6,reorder_forget_factor:0.98";
+    // Upstream defaults. The stream gate (CPU lane, 2026-10-24) against the
+    // voice tuning: home-wifi 0 gaps against 1, mobile MOS 3.92 against 2.82.
+    // Game audio plays without pauses, so the voice tuning's short memory of
+    // a jitter burst gains nothing and lets the next burst through.
+    return "";
 }
 
 const char* VoicePlayout::default_delay_manager_config() {
@@ -1035,6 +1038,14 @@ void GameAudioSource::set_minimum_delay_ms(int delay_ms) {
 std::optional<GameAudioSource::Playout> GameAudioSource::last_playout() const {
     std::lock_guard<std::mutex> lock(impl_->shared->playout_mutex);
     return impl_->shared->playout;
+}
+
+std::optional<GameAudioSource::Delay> GameAudioSource::delay() const {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->stream) return std::nullopt;
+    webrtc::NetEq& neteq = impl_->stream->neteq();
+    return Delay{static_cast<float>(neteq.TargetDelayMs()),
+                 static_cast<float>(neteq.FilteredCurrentDelayMs())};
 }
 
 GameAudioStats GameAudioSource::stats() const {

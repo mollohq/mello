@@ -103,7 +103,7 @@ TEST(AvSyncExtension, NoExtensionReadsNothing) {
 TEST(AvSync, AnOffsetInsideTheDeadBandChangesNothing) {
     AvSync sync;
     for (int i = 0; i < 20; ++i) {
-        const auto d = sync.update(25.0, 40.0);
+        const auto d = sync.update(15.0, 40.0);
         EXPECT_FALSE(d.changed);
     }
     EXPECT_EQ(sync.video_min_delay_ms(), 0.0);
@@ -212,7 +212,8 @@ TimelineInput key_or_delta(int64_t id, uint32_t rtp, int64_t arrival_us) {
 TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
     SimClock clock;
     VideoReceiveTimeline::Config config;
-    VideoReceiveTimeline timeline(config, clock.fn());
+    auto timeline_ptr = std::make_shared<VideoReceiveTimeline>(config, clock.fn());
+    VideoReceiveTimeline& timeline = *timeline_ptr;
 
     // The audio: heard `audio_e2e_ms` after its capture, plus the delay the
     // sync gives it.
@@ -248,7 +249,7 @@ TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
                     timeline.on_decoded(1000);
                 }
             }
-            input.tick(timeline, clock.now);
+            input.tick(timeline_ptr, clock.now);
             clock.now += 1000;
         }
     };
@@ -278,7 +279,9 @@ TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
 // The audio stops (a pause): after 3 s the delays go back to none.
 TEST(AvSyncInput, NoAudioResetsTheDelays) {
     SimClock clock;
-    VideoReceiveTimeline timeline(VideoReceiveTimeline::Config{}, clock.fn());
+    auto timeline_ptr =
+        std::make_shared<VideoReceiveTimeline>(VideoReceiveTimeline::Config{}, clock.fn());
+    VideoReceiveTimeline& timeline = *timeline_ptr;
     bool audio = true;
     const int64_t start_us = clock.now;
     AvSyncInput input(
@@ -297,13 +300,13 @@ TEST(AvSyncInput, NoAudioResetsTheDelays) {
         while (timeline.poll().kind == mello::transport::TimelineDecision::Kind::Release) {
             timeline.on_decoded(1000);
         }
-        input.tick(timeline, clock.now);
+        input.tick(timeline_ptr, clock.now);
     }
     ASSERT_GT(input.stats().video_min_delay_ms, 0.0);
     audio = false;
     for (int64_t id = 300; id < 600; ++id) {
         clock.now = start_us + id * 16'667;
-        input.tick(timeline, clock.now);
+        input.tick(timeline_ptr, clock.now);
     }
     EXPECT_EQ(input.stats().video_min_delay_ms, 0.0);
     EXPECT_FALSE(input.stats().active);
@@ -434,4 +437,33 @@ TEST(AvSyncWire, TheGameAudioCarriesItsCaptureTimeOnTheVideoClock) {
     ASSERT_TRUE(video_ts.has_value()) << "no A/V sync extension on the game audio";
     EXPECT_EQ(*video_ts - info.rtp_timestamp, 3600u);
     EXPECT_GE(host->av_sync_extensions(), 1u);
+}
+
+// The start buffer is the time from when the audio could be heard to when
+// the video of its capture instant is shown, and it becomes the audio's
+// minimum delay. Before the first video frame there is none.
+TEST(AvSyncInput, TheStartBufferIsTheVideoDelayOverTheAudio) {
+    SimClock clock;
+    auto timeline_ptr =
+        std::make_shared<VideoReceiveTimeline>(VideoReceiveTimeline::Config{}, clock.fn());
+    AvSyncInput input([]() -> std::optional<AudioSyncSample> { return std::nullopt; }, nullptr);
+    EXPECT_FALSE(input.start_buffer_ms(0, clock.now).has_value()) << "no timeline yet";
+    input.tick(timeline_ptr, clock.now);
+    EXPECT_FALSE(input.start_buffer_ms(0, clock.now).has_value()) << "no frame yet";
+    const int64_t start_us = clock.now;
+    for (int64_t id = 0; id < 60; ++id) {
+        clock.now = start_us + id * 16'667;
+        timeline_ptr->insert(key_or_delta(id, static_cast<uint32_t>(id * 1500), clock.now));
+        while (timeline_ptr->poll().kind == mello::transport::TimelineDecision::Kind::Release) {
+            timeline_ptr->on_decoded(1000);
+        }
+    }
+    // Frame 59 is shown at its arrival plus the timeline's delay.
+    const auto shown = timeline_ptr->render_time_us(59 * 1500);
+    ASSERT_TRUE(shown.has_value());
+    const int64_t heard = clock.now + 5'000;
+    const auto buffer = input.start_buffer_ms(59 * 1500, heard);
+    ASSERT_TRUE(buffer.has_value());
+    EXPECT_NEAR(*buffer, static_cast<double>(*shown - heard) / 1000.0, 1.0);
+    EXPECT_EQ(input.stats().audio_min_delay_ms, *buffer);
 }
