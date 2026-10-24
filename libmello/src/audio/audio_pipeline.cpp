@@ -127,9 +127,12 @@ static std::string find_model_file(const char* filename) {
 static VoicePlayout::Config playout_config() {
     VoicePlayout::Config c;
     c.delay_manager_config = VoicePlayout::default_delay_manager_config();
+    c.game_delay_manager_config = VoicePlayout::default_game_delay_manager_config();
     if (test_audio_backend_requested()) {
         const std::string dm = test_backend_env("MELLO_NETEQ_DELAY_MANAGER_CONFIG");
         if (!dm.empty()) c.delay_manager_config = dm == "default" ? std::string() : dm;
+        const std::string game = test_backend_env("MELLO_GAME_NETEQ_DELAY_MANAGER_CONFIG");
+        if (!game.empty()) c.game_delay_manager_config = game == "default" ? std::string() : game;
         c.talk_spurt_hold = test_backend_env("MELLO_NETEQ_SPURT_HOLD") != "0";
         if (test_backend_env("MELLO_NETEQ_FAST_ACCELERATE") == "0") c.enable_fast_accelerate = false;
         const std::string floor = test_backend_env("MELLO_NETEQ_SPURT_HOLD_FLOOR_MS");

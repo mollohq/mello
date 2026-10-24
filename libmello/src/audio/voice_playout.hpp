@@ -200,6 +200,9 @@ public:
     struct Config {
         /// Value of the field trial WebRTC-Audio-NetEqDelayManagerConfig.
         std::string delay_manager_config;
+        /// The same for the game audio of streams (stage 7). Empty: the
+        /// upstream defaults.
+        std::string game_delay_manager_config;
         /// NetEq::Config::enable_muted_state: a peer silent for a long time
         /// costs no decode and does not mix.
         bool enable_muted_state = true;
@@ -224,6 +227,8 @@ public:
     /// reorder_forget_factor:0.98", chosen with the voice gate (TESTING.md,
     /// NetEQ tuning).
     static const char* default_delay_manager_config();
+    /// The game audio's tuning that ships (stage 7).
+    static const char* default_game_delay_manager_config();
 
     explicit VoicePlayout(Config config);
     ~VoicePlayout();

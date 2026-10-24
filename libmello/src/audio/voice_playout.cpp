@@ -485,13 +485,18 @@ void add_lifetime(PlayoutStats& s, const webrtc::NetEqLifetimeStatistics& lt,
 // (field trials, clock), the decoder factory, the mixer and the counters.
 // Held by shared_ptr, so a game-audio source may outlive the engine.
 struct MixCore {
-    explicit MixCore(const std::string& delay_manager_config)
+    MixCore(const std::string& delay_manager_config, const std::string& game_delay_manager_config)
         : env(webrtc::CreateEnvironment(std::make_unique<MelloFieldTrials>(delay_manager_config),
                                         std::make_unique<PlayoutClock>())),
+          game_env(webrtc::CreateEnvironment(
+              std::make_unique<MelloFieldTrials>(game_delay_manager_config),
+              std::make_unique<PlayoutClock>())),
           decoder_factory(webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>()),
           mixer(webrtc::AudioMixerImpl::Create()) {}
 
     webrtc::Environment env;
+    // The game audio's delay manager tuning (Config::game_delay_manager_config).
+    webrtc::Environment game_env;
     rtc::scoped_refptr<webrtc::AudioDecoderFactory> decoder_factory;
     rtc::scoped_refptr<webrtc::AudioMixerImpl> mixer;
     EngineCounters counters;
@@ -508,7 +513,7 @@ std::unique_ptr<webrtc::NetEq> create_opus_neteq(
     c.enable_muted_state = config.enable_muted_state;
     c.enable_fast_accelerate = config.enable_fast_accelerate;
     auto neteq = webrtc::CustomNetEqFactory(std::move(controller))
-                     .Create(core.env, c, core.decoder_factory);
+                     .Create(stereo ? core.game_env : core.env, c, core.decoder_factory);
     if (!neteq->RegisterPayloadType(
             VoicePlayout::kOpusPayloadType,
             webrtc::SdpAudioFormat("opus", kSampleRateHz, 2, {{"stereo", stereo ? "1" : "0"}})) ||
@@ -537,7 +542,8 @@ const char* new_stream_reason(uint32_t ssrc, bool has_last_timestamp, uint32_t l
 struct VoicePlayout::Impl {
     explicit Impl(Config cfg)
         : config(std::move(cfg)),
-          core(std::make_shared<MixCore>(config.delay_manager_config)),
+          core(std::make_shared<MixCore>(config.delay_manager_config,
+                                         config.game_delay_manager_config)),
           env(core->env),
           decoder_factory(core->decoder_factory),
           mixer(core->mixer),
@@ -585,6 +591,11 @@ struct VoicePlayout::Impl {
 
     webrtc::AudioFrame mixed;  // device thread only
 };
+
+const char* VoicePlayout::default_game_delay_manager_config() {
+    // The voice tuning until the stream gate measures another.
+    return "forget_factor:0.6,reorder_forget_factor:0.98";
+}
 
 const char* VoicePlayout::default_delay_manager_config() {
     return "forget_factor:0.6,reorder_forget_factor:0.98";
