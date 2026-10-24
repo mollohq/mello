@@ -184,7 +184,7 @@ The client decides if a card renders. A card with no titles, no `own_values` and
 
 ### Solo card
 
-A crew of one gets the wide card (frame A of the mockup). The card shows the viewer as an octagon with the full name, then four chips in a 2 by 2 grid, a keyline divider, "Nobody to compare with yet", four open seats each labelled "Open", and the red invite button.
+A crew of one gets the wide card (frame A of the mockup). The card shows the viewer as an octagon with the full name, then four chips in a 2 by 2 grid, a keyline divider, "Go head2head with your crew", four open seats each labelled "Open", and the red invite button.
 
 - The chips come from `own_values`: the first four in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick). They wear the viewer's identity hue. There is no holder octagon.
 - The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.

@@ -379,7 +379,7 @@ Rules:
 
 ### 8.2 Invite Line
 
-One line under the trio: "Invite your crew. Everything here comes alive when your friends join." A red "Share invite link" button follows it. A "Hide" link removes the line for that crew. The line shows only while at least one skeleton cell shows.
+One line under the trio: "Your crew is not here yet. Send them the link." A red "Share invite link" button follows it. A "Hide" link removes the line for that crew. The line shows only while at least one skeleton cell shows.
 
 ### 8.3 Progressive Replacement
 

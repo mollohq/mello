@@ -71,7 +71,7 @@ export default journey({
         expect(v.display !== "", `${v.title_id} has a value`);
       }
       expect(texts.filter((t) => t === "OPEN").length === 4, "four seats are labelled OPEN");
-      expect(texts.includes("NOBODY TO COMPARE WITH YET"), "the empty-compare line shows");
+      expect(texts.includes("GO HEAD2HEAD WITH YOUR CREW"), "the empty-compare line shows");
     });
 
     await step("the viewer octagon wears the avatar the app loaded, not initials", async () => {

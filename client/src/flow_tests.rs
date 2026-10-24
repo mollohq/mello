@@ -5106,7 +5106,7 @@ fn solo_card_shows_four_own_value_chips_and_four_open_labels() {
         4,
         "every seat is labelled"
     );
-    for want in ["4,167", "03:14", "5", "4.6", "NOBODY TO COMPARE WITH YET"] {
+    for want in ["4,167", "03:14", "5", "4.6", "GO HEAD2HEAD WITH YOUR CREW"] {
         assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
     }
     assert!(
