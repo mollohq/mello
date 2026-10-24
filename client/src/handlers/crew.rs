@@ -385,6 +385,18 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Catch-up is now fetched in mello-core handle_select_crew
             // (before set_active_crew) to avoid the last_seen race.
             let mut s = ctx.settings.borrow_mut();
+            // Opening a crew's feed marks its head2head moves as seen. The
+            // dot of this visit is judged against the previous open, so it
+            // clears on the next one. Leaving stamps the crew we leave.
+            if switching_crew || old_id.is_empty() {
+                let now = crate::head2head::now_ms();
+                if switching_crew {
+                    s.feed_seen_ms.insert(old_id.clone(), now);
+                }
+                let before = s.feed_seen_ms.get(crew_id.as_str()).copied().unwrap_or(0);
+                s.feed_baseline_ms.insert(crew_id.to_string(), before);
+                s.feed_seen_ms.insert(crew_id.to_string(), now);
+            }
             s.last_crew_id = Some(crew_id);
             s.save();
         }

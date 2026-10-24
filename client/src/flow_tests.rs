@@ -4946,6 +4946,103 @@ fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
+/// A five member crew: u2 took the_carry from u3 two hours ago, u4 took
+/// night_owl from u5 thirty hours ago. Neither belt is the viewer's, so no
+/// hero: the cell carries them. The dot marks the pair with u2 and sorts it
+/// first, though its tally is the widest.
+fn feed_with_moved_belts() -> FeedResponse {
+    let now = crate::head2head::now_ms();
+    let moved = |id: &str, holder: &str, prev: &str, ago_h: i64| {
+        let at = now - ago_h * 3_600_000;
+        serde_json::json!({
+            "title_id": id, "holder_user_id": holder, "value": 10, "unit": "h",
+            "since_ms": at, "moved_at_ms": at, "previous_holder_user_id": prev,
+        })
+    };
+    let recent = moved("the_carry", "u2", "u3", 2);
+    let old = moved("night_owl", "u4", "u5", 30);
+    feed_of(vec![h2h_entry(
+        5,
+        vec![recent.clone(), old],
+        vec![
+            h2h_pair("u3", 2, 2),
+            h2h_pair("u4", 3, 3),
+            h2h_pair("u5", 4, 4),
+            h2h_pair("u2", 1, 6),
+        ],
+        Some(recent),
+    )])
+}
+
+fn open_crew_feed_fresh(h: &mut Harness) {
+    // No crew is active yet, as at sign in: the first select has no baseline.
+    crate::converters::set_active_crew(h.app(), "");
+    h.emit(Event::CrewJoined {
+        crew_id: "crew-0".into(),
+    });
+}
+
+fn dot_names(h: &Harness) -> Vec<(String, bool)> {
+    let rows = first_card(h).head2head.pairs;
+    (0..rows.row_count())
+        .map(|i| {
+            let r = rows.row_data(i).unwrap();
+            (r.name.to_string(), r.moved_recent)
+        })
+        .collect()
+}
+
+/// A pair whose belt moved in the last 24 h wears the red dot and leads. A
+/// belt that moved 30 h ago does not. Opening the feed again clears it.
+#[test]
+fn a_pair_row_with_a_belt_moved_today_wears_a_dot_until_the_feed_is_opened_again() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+    open_crew_feed_fresh(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_moved_belts(),
+    });
+    assert_eq!(
+        first_card(&h).head2head.variant.as_str(),
+        "cell-full",
+        "no hero"
+    );
+    // u2 holds the 2 h belt: only the pair with u2 wears the dot, and it
+    // leads. Max holds a 30 h belt: no dot.
+    let rows = dot_names(&h);
+    assert_eq!(
+        rows,
+        vec![
+            ("Jonas".to_string(), true),
+            ("Sara".to_string(), false),
+            ("Max".to_string(), false),
+            ("Leo".to_string(), false),
+        ]
+    );
+
+    // The viewer leaves and opens the feed again: read.
+    h.emit(Event::CrewJoined {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::CrewJoined {
+        crew_id: "crew-0".into(),
+    });
+    h.emit(Event::FeedLoaded {
+        response: feed_with_moved_belts(),
+    });
+    assert!(dot_names(&h).iter().all(|(_, dot)| !dot), "the dot cleared");
+}
+
 /// A live stream holds the hero and sends the first cards to the side column,
 /// one column wide. A crew of one then gets the cell with its four seats as
 /// "+2", not the wide card squeezed into the column. With no live stream the

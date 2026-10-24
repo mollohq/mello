@@ -3,14 +3,15 @@
 // members are seeded over REST.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
+import { profiles, reportLibrary } from "./lib/seed.ts";
 import { bobWithSeededCrew, expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 
 export default journey({
   id: "feed.stage-five",
   flows: ["FEED-05"],
   async run(ctx) {
-    const { step, expect } = ctx;
-    const { bob } = await bobWithSeededCrew(ctx, 4);
+    const { step, expect, runId } = ctx;
+    const { bob, members } = await bobWithSeededCrew(ctx, 4);
 
     await step("head2head is a cell with no seats, over five members", async () => {
       const s = await bob.waitFor("head2head for five members", (st) => st.head2head.member_count === 5 && st.head2head.pairs_count === 4, 30_000);
@@ -29,8 +30,53 @@ export default journey({
       expect(s.invite_card.more_count === 0, `no +N, got ${s.invite_card.more_count}`);
       expectFullFeed(full, expect);
       await bob.waitFor("every octagon wears its avatar", (st) => st.invite_card.with_avatar === 5, 15_000);
-      
+
       await bob.checkpoint("five-feed");
+    });
+
+    // A belt that moves between two other members is not the viewer's: no
+    // hero, the cell shows a red dot on that pair until the feed is opened
+    // again (client/src/head2head.rs, spec HEAD2HEAD.md "Unread").
+    await step("a belt moves between two other members: nothing is unread before it", async () => {
+      await bob.restart();
+      const s = await bob.waitFor("the cell after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      expect(s.head2head.placement === "cell", `placement is cell, got ${s.head2head.placement}`);
+      expect(s.head2head.pair_rows_dot === 0, `pair_rows_dot is 0 before the move, got ${s.head2head.pair_rows_dot}`);
+      await bob.checkpoint("before-belt-move");
+    });
+
+    await step("a member re-reports a library that takes the_carry from another member", async () => {
+      const s0 = await bob.state();
+      const holder = s0.head2head.titles.find((t) => t.title_id === "the_carry")?.holder_name;
+      const taker = bobTakerFor(holder, members);
+      expect(taker !== undefined, `a seeded member other than the holder ${holder} exists`);
+      // The taker keeps the library the seed gave them and plays the shared
+      // top game far more than anyone. Every belt that moves lands on them,
+      // so one pair row wears the dot.
+      const own = profiles(members.length, runId).find((p) => p.name === taker!.name)?.games ?? [];
+      const library = own.filter((g) => g.id !== "steam-730").map((g) => ({ id: g.id, name: g.name, playtimeMin: g.playtimeMin }));
+      library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin: 20_000_000 });
+      await reportLibrary(taker!.token, library);
+      const s = await bob.waitFor(
+        "the_carry held by the taker and one pair row with the dot",
+        (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker!.name) && st.head2head.pair_rows_dot === 1,
+        60_000,
+      );
+      expect(s.head2head.placement === "cell", `no hero for a move between others, placement ${s.head2head.placement}`);
+      expect(s.head2head.pair_rows_dot === 1, `pair_rows_dot is 1, got ${s.head2head.pair_rows_dot}`);
+      await bob.checkpoint("belt-moved-dot");
+    });
+
+    await step("the dot clears when the feed is opened again", async () => {
+      await bob.restart();
+      const s = await bob.waitFor("the cell after the second reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      expect(s.head2head.pair_rows_dot === 0, `pair_rows_dot is 0 after a reopen, got ${s.head2head.pair_rows_dot}`);
+      await bob.checkpoint("belt-moved-read");
     });
   },
 });
+
+/** A seeded member who is not the current holder of the title. */
+function bobTakerFor<T extends { name: string }>(holder: string | undefined, members: T[]): T | undefined {
+  return members.find((m) => m.name !== holder);
+}

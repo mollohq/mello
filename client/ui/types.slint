@@ -152,6 +152,9 @@ export struct H2hPairRow {
     them-count: int,
     has-chip: bool,
     chip: TitleHeld,
+    /// A belt of this pair moved in the last 24 h and the viewer has not
+    /// opened the feed since. Draws the red dot before the label.
+    moved-recent: bool,
 }
 
 // A crew member shown as an octagon (the invite card).

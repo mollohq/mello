@@ -192,6 +192,15 @@ A crew of one gets the wide card (frame A of the mockup). The card shows the vie
 
 The cell shows the viewer's closest pairs (smallest gap first). With no open seats (five members or more) it shows up to four rows, as in frame D. With seats it shows up to two. A "+N more" line shows only when pairs remain.
 
+### Unread dot on a pair row
+
+- A pair row is unread when a title held by the viewer or by the other member has `moved_at_ms` less than 24 hours old and after the last time the viewer had the crew feed open.
+- An unread row shows a small red dot before the "You vs Name" label (red is state, "unread"). The client derives this from `titles`. The payload has no field for it.
+- Unread rows sort first. The other rows keep the closest-tally order.
+- The versus hero shows only when the moved title involves the viewer, as holder or as previous holder. A move between two other members has no hero. The cell carries it as the dot.
+- The client stores the time of the last feed view for each crew, locally. Opening a crew takes the stored time as the baseline for that visit, and every feed load of the visit updates the stored time. The dot shows for the whole visit and clears on the next open.
+- The state port reports `head2head.pair_rows_dot`: the number of pair rows with the dot.
+
 ### Deciding chip
 
 Each pair row in the cell shows one chip: the title that decides the pair. The client picks it from `values`.

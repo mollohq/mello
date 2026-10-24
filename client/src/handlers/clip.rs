@@ -409,11 +409,18 @@ fn head2head_cards(
             .cloned()
             .unwrap_or_else(|| Person::unknown(id))
     };
-    let now_ms = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_millis() as i64)
-        .unwrap_or(0);
-    let model = head2head::build(&data, &viewer, &roster, now_ms)?;
+    let now_ms = head2head::now_ms();
+    // Unread rule: a move after the viewer's previous open of this feed.
+    // With no baseline (feed not opened through a crew select) nothing is
+    // unread.
+    let seen_ms = ctx
+        .settings
+        .borrow()
+        .feed_baseline_ms
+        .get(ctx.app.get_active_crew_id().as_str())
+        .copied()
+        .unwrap_or(i64::MAX);
+    let model = head2head::build_seen(&data, &viewer, &roster, now_ms, seen_ms)?;
     // The octagons wear the avatar the app already loaded for the user id,
     // and fall back to initials. A late avatar patches the card in place
     // (`refresh_head2head_cards`).
@@ -1832,6 +1839,16 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             *ctx.last_feed.borrow_mut() = Some(response.clone());
+            // The feed is on screen now: what it shows counts as seen at the
+            // next open. This visit keeps its own baseline, so the dot stays.
+            {
+                let active = ctx.app.get_active_crew_id().to_string();
+                let mut s = ctx.settings.borrow_mut();
+                if !active.is_empty() && s.feed_baseline_ms.contains_key(&active) {
+                    s.feed_seen_ms.insert(active, head2head::now_ms());
+                    s.save();
+                }
+            }
             let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
 
             // The feed shows real cards only. The skeleton trio is separate

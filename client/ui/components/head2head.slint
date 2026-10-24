@@ -446,13 +446,24 @@ component PairRow inherits Rectangle {
             horizontal-stretch: 1;
             alignment: center;
             spacing: 3px;
-            Text {
-                text: "You vs " + root.pair.name;
-                font-family: Theme.font-display;
-                font-size: 12px;
-                font-weight: Theme.weight-display;
-                color: Theme.text-value;
-                overflow: elide;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                // Unread: a belt of this pair moved today. Red is state.
+                if root.pair.moved-recent: Rectangle {
+                    width: 6px; height: 6px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 3px;
+                    background: Theme.live;
+                }
+                Text {
+                    text: "You vs " + root.pair.name;
+                    font-family: Theme.font-display;
+                    font-size: 12px;
+                    font-weight: Theme.weight-display;
+                    color: Theme.text-value;
+                    overflow: elide;
+                }
             }
             HorizontalLayout {
                 alignment: start;

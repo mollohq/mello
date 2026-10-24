@@ -63,6 +63,13 @@ pub struct Settings {
     pub hud_miniplayer_y: Option<i32>,
     pub hidden_invite_crew_ids: Vec<String>,
     pub seen_session_ids: Vec<String>,
+    /// When the user last opened each crew's feed (ms, by crew id). A head2head
+    /// belt that moved after this is unread.
+    pub feed_seen_ms: std::collections::HashMap<String, i64>,
+    /// The `feed_seen_ms` of a crew as it was when the feed opened. Unread is
+    /// judged against this for the whole visit. Not stored.
+    #[serde(skip)]
+    pub feed_baseline_ms: std::collections::HashMap<String, i64>,
     // Games tab: integrations the user switched off (consent is default-on;
     // absence from this list means enabled).
     pub disabled_game_integrations: Vec<String>,
@@ -119,6 +126,8 @@ impl Default for Settings {
             hud_miniplayer_y: None,
             hidden_invite_crew_ids: Vec::new(),
             seen_session_ids: Vec::new(),
+            feed_seen_ms: Default::default(),
+            feed_baseline_ms: Default::default(),
             disabled_game_integrations: Vec::new(),
             hidden_games: Vec::new(),
             riot_prompt_dismissed: false,

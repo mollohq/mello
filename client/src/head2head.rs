@@ -137,6 +137,8 @@ struct WireTitle {
     since_ms: i64,
     #[serde(default)]
     previous_holder_user_id: String,
+    #[serde(default)]
+    moved_at_ms: i64,
 }
 
 /// What the two members of a pair hold in one title they both contend for.
@@ -279,6 +281,9 @@ pub struct PairRow {
     pub them_count: i32,
     /// The contested title that decides the pair, if any.
     pub deciding: Option<Chip>,
+    /// A belt of this pair moved in the last 24 h, after the viewer last
+    /// opened the feed. The row wears the red dot and sorts first.
+    pub moved_recent: bool,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -477,12 +482,45 @@ fn deciding_chip(
     Some(chip)
 }
 
-/// Build the model from the entry data. `None` when the data does not parse.
+/// Now, in ms since the epoch.
+pub fn now_ms() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_millis() as i64)
+        .unwrap_or(0)
+}
+
+/// Whether a belt held by one of the two members moved in the last 24 h and
+/// after `seen_ms`, the last time the viewer opened the crew feed.
+fn moved_recent(titles: &[WireTitle], a: &str, b: &str, now_ms: i64, seen_ms: i64) -> bool {
+    titles.iter().any(|t| {
+        (t.holder_user_id == a || t.holder_user_id == b)
+            && t.moved_at_ms > 0
+            && t.moved_at_ms > seen_ms
+            && now_ms - t.moved_at_ms < DAY_MS
+    })
+}
+
+/// Build the model with nothing marked unread.
+#[cfg(test)]
 pub fn build(
     data: &Value,
     viewer: &Person,
     roster: &dyn Fn(&str) -> Person,
     now_ms: i64,
+) -> Option<Model> {
+    build_seen(data, viewer, roster, now_ms, i64::MAX)
+}
+
+/// Build the model from the entry data. `None` when the data does not parse.
+/// A move after `seen_ms` (the viewer's last feed open for this crew) is
+/// unread and marks its pair row.
+pub fn build_seen(
+    data: &Value,
+    viewer: &Person,
+    roster: &dyn Fn(&str) -> Person,
+    now_ms: i64,
+    seen_ms: i64,
 ) -> Option<Model> {
     let wire: WireFeed = serde_json::from_value(data.clone()).ok()?;
     let known: Vec<&WireTitle> = wire
@@ -510,6 +548,7 @@ pub fn build(
                     you_count: p.a_count,
                     them_count: p.b_count,
                     deciding: None,
+                    moved_recent: moved_recent(&wire.titles, &viewer.id, &p.b, now_ms, seen_ms),
                 },
                 p,
             )
@@ -563,7 +602,12 @@ pub fn build(
     if let Some(moved) = &wire.belt_moved_recent {
         // Viewer against the new holder; when the viewer is the new holder,
         // against the member who lost the title.
-        let other_id = if moved.holder_user_id != viewer.id {
+        let involves_viewer =
+            moved.holder_user_id == viewer.id || moved.previous_holder_user_id == viewer.id;
+        let other_id = if !involves_viewer {
+            // Not the viewer's belt: no hero. The cell carries it as a dot.
+            None
+        } else if moved.holder_user_id != viewer.id {
             Some(moved.holder_user_id.clone())
         } else if !moved.previous_holder_user_id.is_empty() {
             Some(moved.previous_holder_user_id.clone())
@@ -595,7 +639,7 @@ pub fn build(
 
     // Closest tallies first: the pairs that are still open to a move lead.
     // The sort is stable, so equal gaps keep the payload order.
-    pairs.sort_by_key(|(p, _)| (p.you_count - p.them_count).abs());
+    pairs.sort_by_key(|(p, _)| (!p.moved_recent, (p.you_count - p.them_count).abs()));
     if wire.member_count >= SEATS {
         model.placement = Placement::CellFull;
         model.open_seats = 0;
@@ -695,6 +739,7 @@ pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Hea
             you_count: p.you_count,
             them_count: p.them_count,
             has_chip: p.deciding.is_some(),
+            moved_recent: p.moved_recent,
             chip: p.deciding.as_ref().map(title_held).unwrap_or_default(),
         })
         .collect();

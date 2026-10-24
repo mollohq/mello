@@ -283,6 +283,8 @@ struct Head2headSnap {
     pairs_count: usize,
     /// The pair rows the cell draws.
     pair_rows: usize,
+    /// Pair rows that wear the red dot (a belt moved today, not yet seen).
+    pair_rows_dot: usize,
     /// The "+N more" line of the cell. 0 when it does not show.
     more_pairs: i32,
     belt_moved_recent: bool,
@@ -498,6 +500,7 @@ fn read_head2head(app: &MainWindow) -> Head2headSnap {
             titles: Vec::new(),
             pairs_count: 0,
             pair_rows: 0,
+            pair_rows_dot: 0,
             more_pairs: 0,
             belt_moved_recent: false,
             own_avatar_key: String::new(),
@@ -529,6 +532,7 @@ fn read_head2head(app: &MainWindow) -> Head2headSnap {
         }),
         pairs_count: h.pairs_total.max(0) as usize,
         pair_rows: h.pairs.row_count(),
+        pair_rows_dot: h.pairs.iter().filter(|r| r.moved_recent).count(),
         more_pairs: h.more_pairs,
         belt_moved_recent: h.belt_moved_recent,
         own_avatar_key: if h.left_has_avatar {
@@ -1367,7 +1371,7 @@ mod tests {
                    "own_values": [{"title_id": "the_carry", "display": "62 %"},
                                   {"title_id": "one_trick", "display": "9"}],
                    "titles": [{"title_id": "the_carry", "holder_name": "bob"}],
-                   "pairs_count": 4, "pair_rows": 1, "more_pairs": 3, "belt_moved_recent": true,
+                   "pairs_count": 4, "pair_rows": 1, "pair_rows_dot": 0, "more_pairs": 3, "belt_moved_recent": true,
                    "own_avatar_key": image_key(&pixels([9, 9, 9, 255])),
                    "pair_avatar_keys": [""]})
         );
