@@ -14,8 +14,9 @@
 //! encoder allocation that the sender gives goog_cc.
 //!
 //! Rungs: the preset, then 60 to 30 fps, then 540p, 480p and 360p at 30 fps,
-//! judged in bits per pixel per frame. The geometry rungs are off by default
-//! (`GEOMETRY_RUNGS_DEFAULT`) until the viewers handle a size change. Down after 2 s under the rung's floor
+//! judged in bits per pixel per frame (`GEOMETRY_RUNGS_DEFAULT` and
+//! `MELLO_STREAM_GEOMETRY_RUNGS` switch the geometry rungs). Down after 2 s
+//! under the rung's floor
 //! (or 2 s of encoder overload), up after 15 s over the next rung's restore
 //! point, 10 s between two switches, and no wait before the first switch.
 //! The bitrate starts at 60 % of the preset and follows the inputs with the
@@ -48,15 +49,13 @@ const UP_DWELL: Duration = Duration::from_secs(15);
 const SWITCH_COOLDOWN: Duration = Duration::from_secs(10);
 /// The geometry rungs, at `LOW_FPS`.
 const GEOMETRY_HEIGHTS: [u32; 3] = [540, 480, 360];
-/// The geometry rungs are off by default: a viewer does not handle a size
-/// change yet. Its software decoder (OpenH264) copies the configured size
-/// out of a smaller decoded picture and crashes (the stage 4 gate, cpu lane,
-/// congested: exit 139 at the step to 540p), and its D3D11 present shows the
-/// smaller picture in a corner of the configured size. The encoder side
-/// (`mello_stream_set_resolution`) is in and tested. They come on when the
-/// viewer handles a new size; `MELLO_STREAM_GEOMETRY_RUNGS=1` turns them on
-/// for that work and the gate.
-pub const GEOMETRY_RUNGS_DEFAULT: bool = false;
+/// The geometry rungs are on: the stage 3 viewer handles a size change (a
+/// new size gives new decoder slots, a new shared RGBA texture and a resized
+/// presenter; ViewerSizeChange.*). They were off while the old viewer's
+/// software decoder copied the configured size out of a smaller picture and
+/// crashed (the stage 4 gate, cpu lane, congested: exit 139 at the step to
+/// 540p). `MELLO_STREAM_GEOMETRY_RUNGS=0` turns them off.
+pub const GEOMETRY_RUNGS_DEFAULT: bool = true;
 const GEOMETRY_RUNGS_ENV: &str = "MELLO_STREAM_GEOMETRY_RUNGS";
 const LOW_FPS: u32 = 30;
 
@@ -672,7 +671,19 @@ mod tests {
         assert_eq!(controller.rung().height, 360);
     }
 
-    /// The default ladder (geometry rungs off) stops at 30 fps: a deep cap
+    /// With the stage 3 viewer in, the default ladder has the geometry rungs
+    /// (they were off while the old viewer crashed on a size change).
+    #[test]
+    fn the_default_ladder_has_the_geometry_rungs() {
+        if std::env::var(GEOMETRY_RUNGS_ENV).is_ok() {
+            return;
+        }
+        let controller = QualityController::new(1920, 1080, 60, 8_000);
+        assert_eq!(controller.rungs().len(), 5);
+        assert_eq!(controller.rungs()[2].height, 540);
+    }
+
+    /// Without the geometry rungs the ladder stops at 30 fps: a deep cap
     /// keeps the preset size, so no viewer sees a size change.
     #[test]
     fn without_the_geometry_rungs_a_deep_cap_keeps_the_preset_size() {

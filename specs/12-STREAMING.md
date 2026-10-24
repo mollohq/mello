@@ -881,13 +881,14 @@ increases, and the cap held the start ramp for 10 s.
 |---|---|
 | 0 | the preset: the encode size at the preset height (source aspect), the preset fps |
 | 1 | the same size at 30 fps (a 60 fps preset only) |
-| 2, 3, 4 | 540p, 480p, 360p at 30 fps, the width from the aspect, a multiple of 16. **Off by default** (`GEOMETRY_RUNGS_DEFAULT`; `MELLO_STREAM_GEOMETRY_RUNGS=1` turns them on). |
+| 2, 3, 4 | 540p, 480p, 360p at 30 fps, the width from the aspect, a multiple of 16. On by default (`GEOMETRY_RUNGS_DEFAULT`; `MELLO_STREAM_GEOMETRY_RUNGS=0` turns them off). |
 
-The geometry rungs stay off until the viewer handles a size change. The viewer's
-software decoder (OpenH264) copies the configured size out of a smaller decoded
-picture and crashes (stage 4 gate, cpu lane, congested: exit 139 at the step to
-540p), and the D3D11 present shows the smaller picture in a corner of the
-configured size. Without them the ladder ends at the preset size at 30 fps.
+The geometry rungs need a viewer that handles a size change: the stage 3 viewer
+does (new decoder slots, a new shared RGBA texture and a resized presenter at a
+new size). They were off while the old viewer's software decoder (OpenH264)
+copied the configured size out of a smaller decoded picture and crashed (stage 4
+gate, cpu lane, congested: exit 139 at the step to 540p). Without them the
+ladder ends at the preset size at 30 fps.
 
 | Move | Condition | Dwell |
 |---|---|---|
@@ -1224,7 +1225,6 @@ DComp presenter diagnostics:
 |-----|--------|--------|
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
-| Geometry rungs off by default (stage 4: the encoder side is in) | Below ~1 Mbps even 30fps 720p starves; needs the viewer to handle a size change (decoder realloc on a new SPS, staging and DComp at the new size) | Medium |
 | ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
