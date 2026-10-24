@@ -21,6 +21,8 @@
 //!   games (`recent_pc_count`). The grid takes two columns of a row. When it
 //!   leads row 2 (`r2_wide`), that row holds the grid and one card, and every
 //!   row after it moves up by one card.
+//! - Under a hero the poster grid takes the wide slot of row 3 (frames C and
+//!   D). The one-PC list stays in the side column.
 //! - The recent games card is on the first screen for every crew size. In the
 //!   plain layout (head2head cell and invite card lead) it takes the wide slot
 //!   of the second row. Next to a hero or a wide head2head it takes the first
@@ -302,6 +304,9 @@ fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<us
             {
                 start + 2
             }
+            // The poster grid needs two columns. Under a hero it takes the wide
+            // slot of row 3 (frames C and D). The list stays in the side column.
+            Lead::Hero if cards[from].recent_grid => l.row2_base + 4,
             Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
         };
         let target = target.min(order.len() - 1);
@@ -555,6 +560,40 @@ mod tests {
         let order = arrange(&cards, 0);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         assert!(!layout(&infos, 0).r2_wide);
+    }
+
+    #[test]
+    fn the_poster_grid_takes_the_wide_slot_of_row_three_under_a_hero() {
+        // Frame C: the stream snapshot hero, two side cards, three cells in
+        // row 2, then a clip and the grid.
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![
+            hero,
+            h2h("cell"),
+            card("session"),
+            card("game-session"),
+            card("game-session"),
+            card("catchup"),
+            card("clip"),
+            grid(),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        let wide = wide_slots(&l, infos.len());
+        assert_eq!(wide, [0, 7], "the hero and the grid");
+        assert_eq!(infos[7].card_type, "recent-games");
+        assert_eq!(infos[6].card_type, "clip", "a clip is a cell, never wide");
+    }
+
+    #[test]
+    fn the_one_pc_list_stays_beside_a_hero() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![hero, card("session"), card("recent-games")];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(t[1], "recent-games", "{t:?}");
     }
 
     #[test]

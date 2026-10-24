@@ -571,13 +571,26 @@ export component Head2headCell inherits Rectangle {
             }
         }
 
-        if root.open-seats > 0: HorizontalLayout {
-            spacing: 6px;
-            cross-axis-alignment: center;
-
-            OpenSeatStrip { seats: root.open-seats; max-shown: 2; }
-            Rectangle { horizontal-stretch: 1; }
-            InviteButton { compact: true; clicked => { root.invite-clicked(); } }
+        // The seats row (mockup .openrow): a rule, the seats, "Open" once and
+        // the short red INVITE at the right.
+        if root.open-seats > 0: VerticalLayout {
+            spacing: 10px;
+            Rectangle { height: Theme.keyline; background: Theme.card-border; }
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+                OpenSeatStrip { seats: root.open-seats; max-shown: 2; }
+                Text {
+                    text: "OPEN";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-body;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
+            }
         }
     }
 }

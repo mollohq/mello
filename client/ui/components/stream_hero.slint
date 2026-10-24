@@ -1,0 +1,96 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape } from "cut.slint";
+
+// ============================================================
+//  Pieces of the stream hero (mockup frames C and D): the label chip, the
+//  play ring and the wash over footage. Chrome laid over game footage uses
+//  black washes, not the graphite ramp.
+// ============================================================
+
+/// The dark chip over footage, top-left and bottom-right cut (`.tag`).
+export component MediaChip inherits Rectangle {
+    in property <length> n: 4px;
+    in property <length> pad-x: 10px;
+    in property <length> pad-y: 4px;
+
+    width: chip-row.preferred-width + 2 * root.pad-x;
+    height: chip-row.preferred-height + 2 * root.pad-y;
+    background: transparent;
+
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: root.n;
+        fill: #000000A8;
+    }
+    chip-row := HorizontalLayout {
+        x: root.pad-x;
+        y: root.pad-y;
+        spacing: 8px;
+        cross-axis-alignment: center;
+        @children
+    }
+}
+
+/// "STREAM" with a white dot, or "LIVE" with a red dot and "2 STREAMING".
+export component StreamTag inherits MediaChip {
+    in property <string> label: "STREAM";
+    in property <bool> live: false;
+    /// "2 STREAMING": the count of the hero that holds more than one stream.
+    in property <string> count: "";
+
+    Rectangle {
+        width: 6px;
+        height: 6px;
+        border-radius: 3px;
+        background: root.live ? Theme.live : Theme.text-primary;
+    }
+    Text {
+        text: root.label;
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 9px;
+        letter-spacing: 1.4px;
+        color: root.live ? Theme.live : Theme.text-primary;
+    }
+    if root.count != "": Rectangle {
+        width: 1px;
+        height: 12px;
+        background: #FFFFFF47;
+    }
+    if root.count != "": Text {
+        text: root.count;
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 9px;
+        letter-spacing: 1.4px;
+        color: Theme.text-primary;
+    }
+}
+
+/// The ring a snapshot or a stream plays from. White is action.
+export component PlayRing inherits Rectangle {
+    in property <length> size: 56px;
+
+    width: root.size;
+    height: root.size;
+    border-radius: root.size / 2;
+    border-width: 1.5px;
+    border-color: Theme.text-primary;
+    background: #0000008C;
+
+    Image {
+        source: @image-url("../icons/play-fill.svg");
+        colorize: Theme.text-primary;
+        width: root.size * 0.32;
+        height: root.size * 0.32;
+        x: (parent.width - self.width) / 2 + root.size * 0.05;
+        y: (parent.height - self.height) / 2;
+    }
+}
+
+/// The black wash over footage: dark at the top for the tag, clear in the
+/// middle for the picture, dark at the bottom for the text.
+export component FootageWash inherits Rectangle {
+    background: @linear-gradient(180deg, #00000099 0%, #00000000 26%, #00000000 40%, #000000E6 100%);
+}

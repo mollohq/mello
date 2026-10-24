@@ -18,6 +18,8 @@ component ClipPlayRing inherits Rectangle {
     in property <bool> small: false;
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
+    /// Red for an unread clip, grey otherwise (frame C): red is state.
+    in property <color> tone: Theme.clip-amber;
 
     // Clicks on the ring must reach card-level play toggle: without this
     // forward the ring's own TouchArea would swallow the event silently.
@@ -27,13 +29,13 @@ component ClipPlayRing inherits Rectangle {
     height: small ? 24px : 44px;
     border-radius: self.width / 2;
     border-width: 1.5px;
-    border-color: Theme.clip-amber;
+    border-color: root.tone;
     background: ring-hover.has-hover ? Theme.live-bg : transparent;
     animate background { duration: 150ms; easing: ease-out; }
 
     if !is-playing || is-paused: Image {
         source: @image-url("../icons/play.svg");
-        colorize: Theme.clip-amber;
+        colorize: root.tone;
         width: small ? 8px : 14px;
         height: small ? 8px : 14px;
         opacity: 1.0;
@@ -44,7 +46,7 @@ component ClipPlayRing inherits Rectangle {
 
     if is-playing && !is-paused: Image {
         source: @image-url("../icons/pause.svg");
-        colorize: Theme.clip-amber;
+        colorize: root.tone;
         width: small ? 7px : 12px;
         height: small ? 7px : 12px;
         opacity: 1.0;
@@ -67,6 +69,8 @@ component DotWaveform inherits Rectangle {
     in property <bool> is-playing: false;
     in property <bool> is-paused: false;
     in property <int> rows: 15;
+    /// The lit dots. Red on the hero, grey on a read clip cell (frame C).
+    in property <color> tone: Theme.clip-amber;
     in property <length> dot-size: 3px;
     in property <length> row-pitch: 5px;
     in property <int> duration-ms: 30000;
@@ -142,7 +146,7 @@ component DotWaveform inherits Rectangle {
             height: root.dot-size;
             x: col-x;
             y: Math.floor((parent.height / 1px) - (root.row-pitch / 1px) - (root.dot-size / 1px) - row-from-base * (root.row-pitch / 1px)) * 1px;
-            background: is-snap-col ? white : (col-remaining ? Theme.text-dim : Theme.clip-amber);
+            background: is-snap-col ? white : (col-remaining ? Theme.text-dim : root.tone);
             opacity: dot-opacity;
             animate opacity { duration: 120ms; easing: ease-out; }
             animate background { duration: 120ms; easing: ease-out; }
@@ -512,6 +516,9 @@ component ClipCard inherits Rectangle {
     callback play-clicked(string);
     callback seek-ms(int);
 
+    // Red is state. An unread clip wears it, a read one is grey (frame C).
+    property <color> tone: card.is-new ? Theme.clip-amber : Theme.text-sub;
+
     background: transparent;
     border-width: 0px;
     clip: true;
@@ -569,7 +576,7 @@ component ClipCard inherits Rectangle {
 
                     Image {
                         source: @image-url("../icons/scissors.svg");
-                        colorize: Theme.clip-amber;
+                        colorize: root.tone;
                         width: 10px;
                         height: 10px;
                     }
@@ -579,7 +586,7 @@ component ClipCard inherits Rectangle {
                         text: "VOICE CLIP";
                         font-size: 10px;
                         font-weight: Theme.weight-label;
-                        color: Theme.clip-amber;
+                        color: root.tone;
                         letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
@@ -594,14 +601,14 @@ component ClipCard inherits Rectangle {
 
                     if !is-paused: Image {
                         source: @image-url("../icons/speaker.svg");
-                        colorize: Theme.clip-amber;
+                        colorize: root.tone;
                         width: 10px;
                         height: 10px;
                     }
 
                     if is-paused: Image {
                         source: @image-url("../icons/pause.svg");
-                        colorize: Theme.clip-amber;
+                        colorize: root.tone;
                         width: 10px;
                         height: 10px;
                     }
@@ -611,7 +618,7 @@ component ClipCard inherits Rectangle {
                         text: is-paused ? "PAUSED" : "PLAYING";
                         font-size: 10px;
                         font-weight: Theme.weight-label;
-                        color: Theme.clip-amber;
+                        color: root.tone;
                         letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
@@ -645,6 +652,7 @@ component ClipCard inherits Rectangle {
                 progress: root.progress;
                 is-playing: root.is-playing;
                 is-paused: root.is-paused;
+                tone: root.tone;
                 rows: 9;
                 dot-size: 2px;
                 row-pitch: 4px;
@@ -658,6 +666,7 @@ component ClipCard inherits Rectangle {
 
             ClipPlayRing {
                 small: true;
+                tone: root.tone;
                 is-playing: root.is-playing;
                 is-paused: root.is-paused;
                 x: parent.width - self.width - 4px;
@@ -678,6 +687,28 @@ component ClipCard inherits Rectangle {
                 font-weight: Theme.weight-display;
                 color: Theme.text-primary;
                 overflow: elide;
+            }
+
+            // Who was in the clip, as octagons and a count (frame C).
+            if card.participant-count > 0: HorizontalLayout {
+                height: 20px;
+                spacing: 8px;
+                cross-axis-alignment: center;
+                HorizontalLayout {
+                    spacing: 4px;
+                    horizontal-stretch: 0;
+                    UserAvatar { initials: card.part0-initials; avatar: card.part0-avatar; has-avatar: card.part0-has-avatar; color-index: 1; size: 20px; }
+                    if card.participant-count > 1: UserAvatar { initials: card.part1-initials; avatar: card.part1-avatar; has-avatar: card.part1-has-avatar; color-index: 0; size: 20px; }
+                    if card.participant-count > 2: UserAvatar { initials: card.part2-initials; avatar: card.part2-avatar; has-avatar: card.part2-has-avatar; color-index: 2; size: 20px; }
+                }
+                Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: card.participant-count + " participants";
+                    font-size: 11px;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                }
             }
 
             Text {
@@ -1402,6 +1433,7 @@ component GameSessionCompactBody inherits VerticalLayout {
         HorizontalLayout {
             spacing: 4px;
             alignment: start;
+            horizontal-stretch: 0;
             UserAvatar {
                 initials: card.part0-initials != "" ? card.part0-initials : card.actor-initials;
                 avatar: card.part0-has-avatar ? card.part0-avatar : card.actor-avatar;
@@ -1741,6 +1773,16 @@ component RecentGamePoster inherits Rectangle {
                 size: 16px;
             }
         }
+        // When it was last played (frames C and D).
+        if tile.when != "": Text {
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            text: tile.when.to-uppercase();
+            font-size: 9px;
+            letter-spacing: Theme.track-label;
+            color: Theme.text-dim;
+            overflow: elide;
+        }
     }
 }
 
@@ -1752,7 +1794,10 @@ component RecentGamesCard inherits Rectangle {
     property <bool> grid: root.card.recent-pc-count >= 2 && root.width >= 420px;
     property <int> grid-max: 5;
     property <length> grid-gap: 12px;
-    property <length> poster-width: (root.width - 32px - (root.grid-max - 1) * root.grid-gap) / root.grid-max;
+    // Three to five posters share the row: a week with fewer games gets larger
+    // posters, not a gap (frame C).
+    property <int> grid-n: Math.max(3, Math.min(card.recent-games.length, root.grid-max));
+    property <length> poster-width: (root.width - 32px - (root.grid-n - 1) * root.grid-gap) / root.grid-n;
 
     background: transparent;
     border-width: 0px;
@@ -2268,6 +2313,7 @@ component FeedSlot inherits Rectangle {
         game-name: card.game-name;
         streamer-username: card.actor-name;
         streamer-initials: card.actor-initials;
+        streamer-hue-index: card.actor-hue-index;
         duration-min: card.duration-min;
         peak-viewers: card.participant-count;
         clip-count: card.clip-count;
@@ -3839,6 +3885,107 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
                     { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
+                ],
+            },
+        ];
+    }
+}
+
+// Frame C: three members, day 5, nothing live. The hero is Jonas's stream
+// snapshot from yesterday: footage edge to edge, a play ring and no filled
+// white button. The head2head cell and a voice session card are the side
+// column. A voice clip is a plain cell, never the hero. No skeletons.
+export component PreviewFeedThreeMembers inherits Rectangle {
+    width: 1200px;
+    height: 1110px;
+    background: Theme.bg-app;
+
+    property <H2hPerson> bob: { id: "u1", name: "Bob", initials: "B", hue-index: 0 };
+    property <H2hPerson> jonas: { id: "u2", name: "Jonas", initials: "J", hue-index: 1 };
+    property <H2hPerson> max: { id: "u3", name: "Max", initials: "M", hue-index: 2 };
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        skeleton-stream: false;
+        skeleton-voice-clip: false;
+        skeleton-recap: false;
+        invite-line: false;
+        cards: [
+            {
+                id: "hero", card-type: "session-preview", role: "hero", size: "lg", is-hero: true,
+                title: "Ranked grind", game-name: "Rocket League",
+                actor-name: "Jonas", actor-initials: "J", actor-hue-index: 1,
+                duration-min: 72, participant-count: 3, timestamp: "Yesterday",
+                snapshot-urls: ["a", "b", "c"], snapshot-poster-ready: true,
+                snapshot-poster: @image-url("../previews/fixtures/stream-sample-1.png"),
+            },
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "md",
+                head2head: {
+                    variant: "cell", member-count: 3, open-seats: 2,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,171", unit: "h", hue-index: 0 } },
+                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2 } },
+                    ],
+                },
+            },
+            {
+                id: "voice", card-type: "session", role: "standard", size: "md",
+                session-kind: "voice", title: "General", channel-name: "General",
+                duration-human: "2h 14m", peak-count: 3, participant-count: 3,
+                part0-initials: "B", part1-initials: "J", part2-initials: "M",
+                participants-line: "Bob, Jonas and Max", timestamp: "Last night 22:40",
+            },
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Rocket League", game-name: "Rocket League",
+                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                game-record: "3W–1L", game-wins: 3, game-losses: 1,
+                game-streak-text: "W2", game-streak-positive: true,
+                game-winrate: "75%", game-matches: 4,
+                duration-human: "2h 05m", timestamp: "Last night",
+                actor-name: "Bob", actor-initials: "B", participant-count: 2,
+                part0-initials: "B", part1-initials: "J",
+            },
+            {
+                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Valorant", game-name: "Valorant",
+                game-short-name: "VA", game-monogram: "VA", game-hue-index: 3,
+                duration-human: "1h 30m", timestamp: "2 days ago",
+                actor-name: "Jonas", actor-initials: "J", participant-count: 2,
+                part0-initials: "J", part1-initials: "M", participants-line: "Jonas and Max",
+            },
+            {
+                id: "catchup", card-type: "catchup", is-hero: false, is-skeleton: false,
+                title: "Max joined the crew", subtitle: "", timestamp: "5 days ago",
+                actor-name: "Max", actor-initials: "M",
+            },
+            {
+                id: "clip", card-type: "clip", role: "standard", size: "md",
+                title: "Jonas clipped that", actor-name: "Jonas", actor-initials: "J",
+                game-name: "Rocket League", timestamp: "Last night 21:38",
+                duration: "0:42", duration-ms: 42000, participant-count: 3,
+                part0-initials: "J", part1-initials: "B", part2-initials: "M",
+                waveform: [0.43, 0.46, 0.58, 0.51, 0.58, 0.67, 0.59, 0.75, 0.83, 0.92, 0.64, 0.7, 0.59, 0.05, 0.05, 0.05, 0.6, 0.52, 0.34, 0.55, 0.56, 0.52, 0.56, 0.49, 0.49, 0.71, 0.59, 0.66, 0.7, 0.05, 0.05, 0.05, 0.52, 0.61, 0.54, 0.6, 0.47, 0.48, 0.44, 0.49, 0.48, 0.48, 0.74, 0.82, 0.83, 0.05, 0.05, 0.05, 0.87, 0.7, 0.63, 0.6, 0.48, 0.63, 0.48, 0.54, 0.42, 0.54, 0.54, 0.37, 0.47, 0.05, 0.05, 0.05],
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "5 sessions, 8 h this week", recent-pc-count: 3,
+                recent-games: [
+                    { game-id: "steam-252950", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "812 H", when: "Yesterday",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                      owners: [bob, jonas] },
+                    { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 3, hours: "91 H", when: "2 days ago",
+                      owners: [jonas, max] },
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,171 H", when: "4 days ago",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                      owners: [bob] },
                 ],
             },
         ];

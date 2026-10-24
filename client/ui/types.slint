@@ -130,6 +130,8 @@ export struct RecentGameTile {
     // octagons under the tile of the poster grid. Empty when the server
     // does not say.
     owners: [H2hPerson],
+    // When it was last played: "Yesterday", "2 days ago". "" when unknown.
+    when: string,
 }
 
 // One head2head title and who holds it. Display strings are pre-formatted in
@@ -229,6 +231,8 @@ export struct FeedCardData {
     duration-min: int,
     actor-name: string,
     actor-initials: string,
+    // Identity hue of the actor's octagon (the streamer, the session owner).
+    actor-hue-index: int,
     game-name: string,
     game-id: string,       // games.json / custom id; resolved from name when absent
     game-short-name: string, // badge text from the DB/custom entry; "" when unknown

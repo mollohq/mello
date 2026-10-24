@@ -1184,6 +1184,16 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
                 capsule,
                 has_capsule,
                 hours: crate::recent_games::hours_label(minutes, &launcher).into(),
+                // The caption comes with the week's line, from three PCs.
+                when: if pc_count >= 3 {
+                    crate::recent_games::when_label(
+                        row.get("last_played").and_then(|v| v.as_i64()).unwrap_or(0),
+                        crate::converters::current_time_ms(),
+                    )
+                } else {
+                    String::new()
+                }
+                .into(),
                 tracked,
                 owners: Rc::new(VecModel::from(
                     owner_ids
@@ -1659,6 +1669,7 @@ fn build_feed_card(
         duration_min,
         actor_name: actor.clone().into(),
         actor_initials: make_initials(&actor).into(),
+        actor_hue_index: avatar_color_index(actor_avatar_id.unwrap_or(&actor)),
         game_name: game.into(),
         game_id: game_id.into(),
         game_short_name: game_short_name.into(),
