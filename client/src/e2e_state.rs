@@ -168,6 +168,12 @@ struct Snapshot {
     skeleton_trio: usize,
     /// The joined line at the top of the feed, top row first.
     joined_rows: Vec<JoinedRowSnap>,
+    /// The quiet row (frame E): at most one, in the place of the recap.
+    quiet_rows: Vec<JoinedRowSnap>,
+    /// The dormant strip (frame F): the text and its age, if it shows.
+    dormant_strip: Option<DormantSnap>,
+    /// The belt hero leads the feed (frame E).
+    belt_hero: Option<BeltHeroSnap>,
     /// The audio page of the settings.
     audio: AudioSnap,
     riot: RiotSnap,
@@ -265,6 +271,19 @@ struct ClipSnap {
     /// From 0.0 to 1.0.
     progress: f32,
     duration_ms: i32,
+}
+
+#[derive(Serialize)]
+struct DormantSnap {
+    text: String,
+    age: String,
+}
+
+#[derive(Serialize)]
+struct BeltHeroSnap {
+    headline: String,
+    detail: String,
+    age: String,
 }
 
 /// The head2head card of the feed. `present` is false when the feed has none;
@@ -506,7 +525,11 @@ fn placement_name(variant: &str) -> &'static str {
 /// The head2head card of the feed, read from the first `head2head` card.
 fn read_head2head(app: &MainWindow) -> Head2headSnap {
     let feed = app.get_feed_cards();
-    let Some(card) = feed.iter().find(|c| c.card_type == "head2head") else {
+    // The belt hero is a head2head card too, but the cell carries the pairs.
+    let Some(card) = feed
+        .iter()
+        .find(|c| c.card_type == "head2head" && c.head2head.variant != "belt")
+    else {
         return Head2headSnap {
             present: false,
             placement: "none",
@@ -1119,6 +1142,27 @@ fn read(app: &MainWindow) -> Snapshot {
                 when: r.when.to_string(),
             })
             .collect(),
+        quiet_rows: app
+            .get_feed_quiet()
+            .iter()
+            .map(|r| JoinedRowSnap {
+                line: r.line.to_string(),
+                when: r.when.to_string(),
+            })
+            .collect(),
+        dormant_strip: app.get_feed_dormant().iter().next().map(|c| DormantSnap {
+            text: c.title.to_string(),
+            age: c.timestamp.to_string(),
+        }),
+        belt_hero: app
+            .get_feed_cards()
+            .iter()
+            .find(|c| c.card_type == "head2head" && c.head2head.variant == "belt")
+            .map(|c| BeltHeroSnap {
+                headline: c.head2head.belt.headline.to_string(),
+                detail: c.head2head.belt.detail.to_string(),
+                age: c.head2head.belt.age.to_string(),
+            }),
         skeleton_trio: [
             app.get_feed_skeleton_stream(),
             app.get_feed_skeleton_voice_clip(),

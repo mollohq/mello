@@ -27,6 +27,8 @@ import {
     YouStripData,
     GameStatsCardData,
     JoinedRowData,
+    BeltHeroData,
+    HeroStreamData,
     GameIntegrationData,
     InstalledGameData,
     InvitePersonData,
@@ -56,7 +58,7 @@ import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 import { RecapOpened } from "panels/recap_opened.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -470,6 +472,9 @@ export component MainWindow inherits Window {
     in-out property <bool> feed-invite-line: false;
     // Members who joined in the last 24 hours, newest first (CLIPS 7).
     in property <[JoinedRowData]> feed-joined: [];
+    in property <[JoinedRowData]> feed-quiet: [];
+    // The dormant strip: one catch-up card above the grid (frame F).
+    in property <[FeedCardData]> feed-dormant: [];
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
     callback feed-show-more-clicked();
@@ -1034,6 +1039,8 @@ export component MainWindow inherits Window {
                             skeleton-recap: root.feed-skeleton-recap;
                             invite-line: root.feed-invite-line;
                             joined-rows: root.feed-joined;
+                            quiet-rows: root.feed-quiet;
+                            dormant-cards: root.feed-dormant;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
                             feed-show-more-clicked => {
@@ -1077,6 +1084,9 @@ export component MainWindow inherits Window {
                             }
                             invite-clicked => {
                                 root.invite-share-requested();
+                            }
+                            start-voice-clicked(channel-id) => {
+                                root.join-voice-channel(channel-id);
                             }
                             hide-invite-clicked => {
                                 root.hide-invite-card();

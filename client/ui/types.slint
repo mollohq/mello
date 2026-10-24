@@ -176,6 +176,26 @@ export struct H2hPairRow {
 // The head2head feed entry as the UI draws it. `variant` is the placement:
 // "wide" (crew of one), "versus" (a belt moved), "cell" (two to four
 // members, with seats) or "cell-full" (five or more, no seats).
+// The belt that moved, as the hero of a quiet feed (mockup frame E): who held
+// it, who holds it now, and the line that says so. All text is built in Rust.
+export struct BeltHeroData {
+    title-id: string,
+    title: string,
+    icon: image,
+    // The new holder's identity hue, for the chip and the number.
+    hue-index: int,
+    prev: H2hPerson,
+    prev-value: string,
+    holder: H2hPerson,
+    holder-value: string,
+    // "2 days ago".
+    age: string,
+    // "Sara took Night Owl from Bob".
+    headline: string,
+    // "03:40 beats 03:14." Empty when a value is not known.
+    detail: string,
+}
+
 export struct Head2headData {
     variant: string,
     member-count: int,
@@ -200,6 +220,8 @@ export struct Head2headData {
     // Invite card: the first members, and how many more there are.
     members: [H2hPerson],
     more-members: int,
+    // Belt hero (variant "belt").
+    belt: BeltHeroData,
 }
 
 // A game in progress (card-type "live-session"): the crewmates who play it
@@ -252,6 +274,7 @@ export struct FeedCardData {
     duration-human: string,   // "3m" / "9h 7m"
     peak-count: int,          // stream: peak viewers; voice: peak participants
     channel-name: string,     // voice channel display name
+    channel-id: string,       // voice channel id (the idle voice card joins it)
     participants-line: string, // "Ostkatt, b0bben +1"
     actor-avatar: image,      // streamer avatar (badge on the game icon)
     actor-has-avatar: bool,

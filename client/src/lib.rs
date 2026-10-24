@@ -43,6 +43,7 @@ mod onboarding_invite;
 mod perf_mode;
 mod platform;
 mod poll_loop;
+mod quiet_row;
 mod recent_games;
 mod settings;
 mod snapshot_cache;

@@ -17,6 +17,9 @@ pub const SEATS: i32 = 5;
 /// Most pair rows in the cell. With seats and the invite button the cell has
 /// room for two rows, without them for four (mockup frame D).
 const ROWS_WITH_SEATS: usize = 2;
+/// A cell that stands tall (two grid rows, frames E and F) has room for a
+/// third row beside the seats.
+pub const ROWS_TALL: usize = 3;
 const ROWS_FULL: usize = 4;
 /// Most octagons on the invite card. More members show as "+N".
 pub const INVITE_CARD_MEMBERS: usize = 8;
@@ -68,6 +71,17 @@ const TITLES: [TitleLook; 7] = [
         name: "One Trick",
         icon_svg: include_bytes!("../ui/icons/h2h-one-trick.svg"),
     },
+];
+
+/// The title ids in display order.
+pub const TITLE_IDS: [&str; 7] = [
+    "the_carry",
+    "night_owl",
+    "the_collector",
+    "locked_in",
+    "has_a_life",
+    "sampler",
+    "one_trick",
 ];
 
 fn look(id: &str) -> Option<&'static TitleLook> {
@@ -249,6 +263,10 @@ pub enum Placement {
     /// Five or more members: a standard cell without seats and button, and
     /// the invite card beside it.
     CellFull,
+    /// A quiet feed with no hero: the belt that moved leads, two columns wide,
+    /// and the cell stands tall beside it (frame E). A model never has this
+    /// placement. The feed builder gives it to the pair of cards.
+    Belt,
 }
 
 impl Placement {
@@ -258,6 +276,7 @@ impl Placement {
             Placement::Versus => "versus",
             Placement::Cell => "cell",
             Placement::CellFull => "cell-full",
+            Placement::Belt => "belt",
         }
     }
 }
@@ -286,6 +305,45 @@ pub struct PairRow {
     pub moved_recent: bool,
 }
 
+/// The belt that moved last, for the hero of a quiet feed (frame E).
+#[derive(Debug, Clone, PartialEq)]
+pub struct BeltMove {
+    pub title_id: String,
+    pub title: String,
+    /// The new holder, and the title as that holder has it.
+    pub holder: Person,
+    pub holder_value: String,
+    /// The holder before. The value is empty when the pair does not say.
+    pub prev: Person,
+    pub prev_value: String,
+    pub moved_ms: i64,
+}
+
+impl BeltMove {
+    /// The move is news: inside the two weeks before a crew counts as dormant
+    /// (`quiet_row::DORMANT_DAYS`). An older one is not the hero of a feed.
+    pub fn is_news(&self, now_ms: i64) -> bool {
+        now_ms - self.moved_ms < crate::quiet_row::DORMANT_DAYS * DAY_MS
+    }
+
+    /// "Sara took Night Owl from Bob".
+    pub fn headline(&self) -> String {
+        format!(
+            "{} took {} from {}",
+            self.holder.name, self.title, self.prev.name
+        )
+    }
+
+    /// "03:40 beats 03:14." Empty when a value is not known.
+    pub fn detail(&self) -> String {
+        if self.holder_value.is_empty() || self.prev_value.is_empty() {
+            String::new()
+        } else {
+            format!("{} beats {}.", self.holder_value, self.prev_value)
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Model {
     pub placement: Placement,
@@ -303,6 +361,9 @@ pub struct Model {
     pub other: Option<Person>,
     pub left_score: i32,
     pub right_score: i32,
+    /// The newest belt move of any age that involves the viewer. Only a quiet
+    /// feed with no hero draws it (`head2head_cards`).
+    pub belt: Option<BeltMove>,
 }
 
 /// A number with thousands separators: 4167 -> "4,167".
@@ -482,6 +543,68 @@ fn deciding_chip(
     Some(chip)
 }
 
+/// A held value as text: "03:40", "4,201 h".
+fn value_line(v: &Value, unit: &str) -> String {
+    let (text, unit) = value_text(v, unit);
+    if unit.is_empty() || text.is_empty() {
+        text
+    } else {
+        format!("{text} {unit}")
+    }
+}
+
+/// The newest title that changed hands, of any age, when the viewer held it
+/// before or holds it now. A move between two other members has no hero.
+fn belt_move(
+    wire: &WireFeed,
+    viewer: &Person,
+    roster: &dyn Fn(&str) -> Person,
+) -> Option<BeltMove> {
+    let t = wire
+        .titles
+        .iter()
+        .filter(|t| {
+            look(&t.title_id).is_some()
+                && t.moved_at_ms > 0
+                && !t.holder_user_id.is_empty()
+                && !t.previous_holder_user_id.is_empty()
+        })
+        .max_by_key(|t| t.moved_at_ms)?;
+    let viewer_holds = t.holder_user_id == viewer.id;
+    if !viewer_holds && t.previous_holder_user_id != viewer.id {
+        return None;
+    }
+    let other_id = if viewer_holds {
+        &t.previous_holder_user_id
+    } else {
+        &t.holder_user_id
+    };
+    // The pair says what both members have in the title, so the old holder's
+    // number is known when the viewer is one of the two.
+    let (viewer_v, other_v) = wire
+        .pairs
+        .iter()
+        .find(|p| p.a == viewer.id && &p.b == other_id)
+        .and_then(|p| p.values.iter().find(|v| v.title_id == t.title_id))
+        .map(|v| {
+            (
+                value_line(&v.a_value, &t.unit),
+                value_line(&v.b_value, &t.unit),
+            )
+        })
+        .unwrap_or_default();
+    let prev_value = if viewer_holds { other_v } else { viewer_v };
+    Some(BeltMove {
+        title_id: t.title_id.clone(),
+        title: title_name(&t.title_id).unwrap_or_default().to_string(),
+        holder: roster(&t.holder_user_id),
+        holder_value: value_line(&t.value, &t.unit),
+        prev: roster(&t.previous_holder_user_id),
+        prev_value,
+        moved_ms: t.moved_at_ms,
+    })
+}
+
 /// Now, in ms since the epoch.
 pub fn now_ms() -> i64 {
     std::time::SystemTime::now()
@@ -521,6 +644,19 @@ pub fn build_seen(
     roster: &dyn Fn(&str) -> Person,
     now_ms: i64,
     seen_ms: i64,
+) -> Option<Model> {
+    build_rows(data, viewer, roster, now_ms, seen_ms, ROWS_WITH_SEATS)
+}
+
+/// `build_seen` with the number of pair rows a cell with seats draws: two in
+/// a plain cell, `ROWS_TALL` in one that stands tall.
+pub fn build_rows(
+    data: &Value,
+    viewer: &Person,
+    roster: &dyn Fn(&str) -> Person,
+    now_ms: i64,
+    seen_ms: i64,
+    rows_with_seats: usize,
 ) -> Option<Model> {
     let wire: WireFeed = serde_json::from_value(data.clone()).ok()?;
     let known: Vec<&WireTitle> = wire
@@ -569,6 +705,7 @@ pub fn build_seen(
         other: None,
         left_score: 0,
         right_score: 0,
+        belt: belt_move(&wire, viewer, roster),
     };
 
     if wire.member_count < 2 {
@@ -645,7 +782,7 @@ pub fn build_seen(
         model.open_seats = 0;
         pairs.truncate(ROWS_FULL);
     } else {
-        pairs.truncate(ROWS_WITH_SEATS);
+        pairs.truncate(rows_with_seats);
     }
     // The chips are picked row by row, top down, so a title that decided a
     // higher row gives way to another contested title in the rows below.
@@ -780,7 +917,43 @@ pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Hea
         right_score: m.right_score,
         members: model_of(Vec::new()),
         more_members: 0,
+        belt: Default::default(),
     }
+}
+
+/// The UI struct of the belt hero (frame E), or `None` without a move.
+pub fn belt_hero_data(
+    m: &Model,
+    now_ms: i64,
+    avatar: &dyn Fn(&str) -> Option<slint::Image>,
+) -> Option<Head2headData> {
+    let b = m.belt.as_ref().filter(|b| b.is_news(now_ms))?;
+    let person = |p: &Person| H2hPerson {
+        id: p.id.as_str().into(),
+        name: p.name.as_str().into(),
+        initials: p.initials.as_str().into(),
+        hue_index: p.hue,
+        avatar: avatar(&p.id).unwrap_or_default(),
+        has_avatar: avatar(&p.id).is_some(),
+    };
+    Some(Head2headData {
+        variant: Placement::Belt.variant().into(),
+        member_count: m.member_count,
+        belt: crate::BeltHeroData {
+            title_id: b.title_id.as_str().into(),
+            title: b.title.as_str().into(),
+            icon: icon_of(&b.title_id),
+            hue_index: b.holder.hue,
+            prev: person(&b.prev),
+            prev_value: b.prev_value.as_str().into(),
+            holder: person(&b.holder),
+            holder_value: b.holder_value.as_str().into(),
+            age: crate::feed_age::ago_label(b.moved_ms, now_ms).into(),
+            headline: b.headline().into(),
+            detail: b.detail().into(),
+        },
+        ..Default::default()
+    })
 }
 
 /// The UI struct of the invite card: the first members as octagons.
@@ -880,6 +1053,8 @@ mod tests {
         assert_eq!(held_label(-3), "");
         assert_eq!(held_label(1), "held 1 day");
         assert_eq!(held_label(9), "held 9 days");
+        // Frame F: a dormant crew, 24 days on every belt.
+        assert_eq!(held_label(24), "held 24 days");
     }
 
     #[test]
@@ -1320,5 +1495,66 @@ mod tests {
         let c = invite_card_data(&members, 2, &only_u2);
         assert!(c.members.row_data(0).unwrap().has_avatar);
         assert!(!c.members.row_data(1).unwrap().has_avatar);
+    }
+
+    fn moved_title(id: &str, holder: &str, previous: &str, days: i64, value: Value) -> Value {
+        json!({
+            "title_id": id, "holder_user_id": holder, "previous_holder_user_id": previous,
+            "value": value, "unit": "", "since_ms": NOW - days * DAY_MS,
+            "moved_at_ms": NOW - days * DAY_MS,
+        })
+    }
+
+    #[test]
+    fn the_newest_move_of_any_age_is_the_belt_hero_with_both_values() {
+        // Frame E: Jonas took Night Owl from Bob two days ago.
+        let moved = moved_title("night_owl", "u2", "me", 2, json!("03:40"));
+        let data = json!({
+            "crew_id": "c", "member_count": 4, "open_seats": 1,
+            "titles": [moved, moved_title("the_carry", "u3", "u2", 9, json!(4201.0))],
+            "pairs": [{"a": "me", "b": "u2", "a_count": 3, "b_count": 4, "values": [
+                {"title_id": "night_owl", "a_value": "03:14", "b_value": "03:40"}]}],
+        });
+        let m = build(&data, &me(), &roster, NOW).expect("model");
+        assert_eq!(m.placement, Placement::Cell, "the cell stays a cell");
+        let b = m.belt.expect("a belt");
+        assert_eq!(b.headline(), "Jonas took Night Owl from Bob");
+        assert_eq!(b.detail(), "03:40 beats 03:14.");
+        assert_eq!(b.moved_ms, NOW - 2 * DAY_MS);
+        assert!(b.is_news(NOW));
+        assert!(!b.is_news(NOW + 13 * DAY_MS), "two weeks on it is not news");
+    }
+
+    #[test]
+    fn a_move_between_two_other_members_is_no_belt_hero() {
+        let moved = moved_title("night_owl", "u2", "u3", 2, json!("03:40"));
+        let data = feed(4, vec![moved], vec![pair("u2", 1, 1)], None);
+        let m = build(&data, &me(), &roster, NOW).expect("model");
+        assert!(m.belt.is_none());
+    }
+
+    #[test]
+    fn a_belt_without_the_pair_values_has_no_detail_line() {
+        let moved = moved_title("the_carry", "me", "u2", 3, json!(4201.0));
+        let data = feed(4, vec![moved], vec![pair("u2", 1, 1)], None);
+        let b = build(&data, &me(), &roster, NOW)
+            .expect("model")
+            .belt
+            .expect("a belt");
+        assert_eq!(b.headline(), "Bob took The Carry from Jonas");
+        assert_eq!(b.detail(), "");
+        assert_eq!(b.holder_value, "4,201");
+    }
+
+    #[test]
+    fn a_tall_cell_draws_a_third_pair_row() {
+        let titles = vec![title("the_carry", "u2", json!(4201.0), "h")];
+        let pairs = vec![pair("u2", 4, 3), pair("u3", 2, 5), pair("u4", 3, 3)];
+        let data = feed(4, titles, pairs, None);
+        let plain = build_rows(&data, &me(), &roster, NOW, i64::MAX, ROWS_WITH_SEATS).expect("m");
+        let tall = build_rows(&data, &me(), &roster, NOW, i64::MAX, ROWS_TALL).expect("m");
+        assert_eq!(plain.pairs.len(), 2);
+        assert_eq!(tall.pairs.len(), 3);
+        assert_eq!(tall.pairs_total, 3);
     }
 }

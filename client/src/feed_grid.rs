@@ -80,6 +80,12 @@ enum Lead {
     Hero,
     /// A game session cell, then the wide head2head card of a crew of one.
     CellWide,
+    /// The belt hero of a quiet feed (frame E): two columns and one row, the
+    /// head2head cell tall beside it, two cells under it. Four cards.
+    Belt,
+    /// Two stacked cells, the head2head cell tall and a recap tall (frame F).
+    /// Four cards.
+    TallTrio,
 }
 
 struct Layout {
@@ -97,6 +103,18 @@ impl Layout {
     }
 }
 
+/// Frame F: a head2head cell and a recap with content stand in the third and
+/// fourth place, so they are the two tall cards beside two stacked cells.
+fn tall_trio(cards: &[CardInfo], start: usize) -> bool {
+    let h2h = cards.get(start + 2).is_some_and(|c| {
+        c.card_type == "head2head" && (c.variant == "cell" || c.variant == "cell-full")
+    });
+    let recap = cards
+        .get(start + 3)
+        .is_some_and(|c| c.card_type == "recap" && c.recap_has_content);
+    h2h && recap
+}
+
 fn layout(cards: &[CardInfo], start: usize) -> Layout {
     let at = |i: usize| cards.get(i);
     let first = at(start);
@@ -109,6 +127,8 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
     let lead = match first {
         None => Lead::Hero,
         Some(_) if session_then_wide => Lead::CellWide,
+        Some(_) if variant == "belt" => Lead::Belt,
+        Some(c) if !c.is_hero && tall_trio(cards, start) => Lead::TallTrio,
         Some(c) if c.card_type == "live-session" && c.has_poster => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
@@ -128,6 +148,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         match lead {
             Lead::Plain => 0,
             Lead::Wide | Lead::CellWide => left.min(2),
+            Lead::Belt | Lead::TallTrio => left.min(4),
             Lead::FullRow => 1,
             Lead::Hero if side_recap => left.min(2),
             Lead::Hero => left.min(3),
@@ -257,16 +278,17 @@ fn arrange_cells(cards: &[CardInfo], start: usize, rest: &[usize], lives: &[usiz
     out
 }
 
-/// `session_leads`: the first session of a crew of one stands left of the wide
-/// head2head card. Off when a live session is in the feed: its cell sits there.
-fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<usize> {
+/// `no_live`: no live session is in the feed. The first session of a crew of
+/// one then stands left of the wide head2head card, and a quiet feed gets its
+/// tall cards. Off with a live session: its cell sits there.
+fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..cards.len()).collect();
     if cards.len() <= start {
         return order;
     }
 
     // 0. A session of a crew of one leads the wide head2head card (frame B).
-    if session_leads
+    if no_live
         && cards
             .get(start)
             .is_some_and(|c| c.card_type == "head2head" && c.variant == "wide")
@@ -278,6 +300,13 @@ fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<us
             let id = order.remove(p);
             order.insert(start, id);
         }
+    }
+
+    // 0b. A feed with no hero, a head2head cell and a recap with content: the
+    // two tall cards go third and fourth, two plain cells stack beside them
+    // (frame F, a crew that was away).
+    if no_live {
+        tall_trio_order(cards, &mut order, start);
     }
 
     // 1. Recent games to the first screen.
@@ -294,6 +323,8 @@ fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<us
             // The session cell and the wide card fill row 1. The list is the
             // first cell of row 2, with the skeletons beside it.
             Lead::CellWide => start + 2,
+            // The third cell of row 2, beside the two sessions (frame E).
+            Lead::Belt | Lead::TallTrio => l.row2_base + 2,
             // Next to the lead, in the side column.
             // Beside a live session, behind the head2head cell that sits there.
             Lead::Wide
@@ -320,6 +351,51 @@ fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<us
 
     clips_leave_wide(cards, &mut order, start);
     order
+}
+
+/// Put a head2head cell and a recap with content in the third and fourth
+/// place, after two plain cells, when the feed has no hero (frame F). A feed
+/// that already has a lead of its own keeps it.
+fn tall_trio_order(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
+    let at = |o: &[usize], p: usize| o.get(p).map(|&i| &cards[i]);
+    let has_lead = at(order, start).is_none_or(|c| {
+        c.is_hero
+            || matches!(
+                c.card_type.as_str(),
+                "live-session" | "invite" | "recent-games"
+            )
+            || (c.card_type == "head2head" && c.variant != "cell" && c.variant != "cell-full")
+    });
+    if has_lead {
+        return;
+    }
+    let find = |o: &[usize], f: &dyn Fn(&CardInfo) -> bool| o.iter().position(|&i| f(&cards[i]));
+    let (Some(h), Some(r)) = (
+        find(order, &|c| {
+            c.card_type == "head2head" && (c.variant == "cell" || c.variant == "cell-full")
+        }),
+        find(order, &|c| c.card_type == "recap" && c.recap_has_content),
+    ) else {
+        return;
+    };
+    // Two plain cells to stack: anything that is not a fixed card.
+    let plain: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&i| !is_fixed(&cards[i].card_type))
+        .take(2)
+        .collect();
+    if plain.len() < 2 {
+        return;
+    }
+    let (h_id, r_id) = (order[h], order[r]);
+    order.retain(|i| !plain.contains(i) && *i != h_id && *i != r_id);
+    let mut head = plain;
+    head.push(h_id);
+    head.push(r_id);
+    for (n, i) in head.into_iter().enumerate() {
+        order.insert((start + n).min(order.len()), i);
+    }
 }
 
 /// A clip leaves every wide slot. Swap it with the nearest card that is not
@@ -656,6 +732,70 @@ mod tests {
         assert_eq!(infos[5].card_type, "recent-games");
     }
 
+    fn hero_belt() -> CardInfo {
+        h2h("belt")
+    }
+
+    #[test]
+    fn the_belt_hero_takes_four_cards_and_the_list_the_third_cell_of_row_two() {
+        // Frame E: belt hero, head2head cell, catch-up and voice, then two
+        // sessions and the list.
+        let cards = vec![
+            hero_belt(),
+            h2h("cell"),
+            card("catchup"),
+            card("voice-idle"),
+            card("game-session"),
+            card("game-session"),
+            card("recent-games"),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert_eq!(l.lead, Lead::Belt);
+        assert_eq!(l.row2_base, 4);
+        assert!(wide_slots(&l, infos.len()).is_empty());
+        assert_eq!(infos[6].card_type, "recent-games");
+        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_dormant_feed_stacks_two_cells_beside_two_tall_cards() {
+        // Frame F: the server lists the recap first and the cell in the middle.
+        let mut recap = card("recap");
+        recap.recap_has_content = true;
+        let cards = vec![
+            recap,
+            card("game-session"),
+            h2h("cell"),
+            card("game-session"),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(
+            t,
+            ["game-session", "game-session", "head2head", "recap"],
+            "{t:?}"
+        );
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert_eq!(l.lead, Lead::TallTrio);
+        assert_eq!(l.row2_base, 4);
+        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_hero_keeps_the_feed_when_a_recap_and_a_cell_follow() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let mut recap = card("recap");
+        recap.recap_has_content = true;
+        let cards = vec![hero, h2h("cell"), card("session"), recap];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(layout(&infos, 0).lead, Lead::Hero);
+    }
+
     #[test]
     fn a_live_stream_moves_the_start() {
         assert_eq!(grid_start(1, 5), 2);
@@ -761,7 +901,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_session_leads_a_crew_whose_cell_leads() {
+    fn a_live_no_live_a_crew_whose_cell_leads() {
         let cards = vec![h2h("cell"), card("invite"), card("game-session"), live()];
         let t = types(&cards, &arrange(&cards, 0));
         assert_eq!(&t[..3], ["live-session", "head2head", "invite"], "{t:?}");
@@ -780,7 +920,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_stream_keeps_the_side_column_and_the_live_session_leads_the_grid() {
+    fn a_live_stream_keeps_the_side_column_and_the_live_no_live_the_grid() {
         let cards = vec![card("game-session"), card("clip"), h2h("wide"), live()];
         let t = types(&cards, &arrange(&cards, 2));
         assert_eq!(t[2], "live-session", "{t:?}");

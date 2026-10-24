@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape, CutButton } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
-import { TitleHeld, H2hPairRow, H2hPerson } from "../types.slint";
+import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
 
 export { TitleHeld }
 
@@ -781,6 +781,180 @@ export component InviteCard inherits Rectangle {
         InviteButton {
             label-text: "Share invite link";
             clicked => { root.invite-clicked(); }
+        }
+    }
+}
+
+/// The belt that moved, two columns wide (mockup frame E). It leads a quiet
+/// feed: who held the title, the title in the middle, who holds it now, and
+/// one line that says what happened. The holder before is dim.
+export component BeltHero inherits Rectangle {
+    in property <BeltHeroData> belt;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    property <color> hue: H2hHue.of(root.belt.hue-index);
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 16px;
+        padding-top: 14px;
+        spacing: 0px;
+
+        // Label left, how long ago at the right.
+        HorizontalLayout {
+            height: 16px;
+            vertical-stretch: 0;
+            CardLabel { text: "HEAD2HEAD"; vertical-alignment: center; }
+            Text {
+                horizontal-stretch: 1;
+                text: root.belt.age;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-dim;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        // The two holders and the title between them.
+        Rectangle {
+          height: 124px;
+          HorizontalLayout {
+            spacing: 14px;
+            cross-axis-alignment: center;
+
+            // Before: dim.
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 12px;
+                cross-axis-alignment: center;
+                Rectangle {
+                    width: 64px; height: 64px;
+                    opacity: 0.4;
+                    UserAvatar {
+                        size: 64px;
+                        initials: root.belt.prev.initials;
+                        avatar: root.belt.prev.avatar;
+                        has-avatar: root.belt.prev.has-avatar;
+                        color-index: root.belt.prev.hue-index;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "WAS HELD BY";
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 8.5px; letter-spacing: 1.6px; color: Theme.text-dim;
+                    }
+                    Text {
+                        text: root.belt.prev.name;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display;
+                        font-size: 20px; color: Theme.text-body;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.belt.prev-value;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+                        font-size: 30px; letter-spacing: -0.6px; color: Theme.text-dim;
+                    }
+                }
+            }
+
+            // The title: its icon and name, in the new holder's hue.
+            Rectangle {
+                width: 156px; height: 62px;
+                CutButtonShape { width: parent.width; height: parent.height; n: 7px; fill: root.hue; }
+                CutButtonShape { width: parent.width; height: parent.height; n: 7px; inset: Theme.keyline; fill: Theme.card-bg; }
+                HorizontalLayout {
+                    padding-left: 14px; padding-right: 14px;
+                    spacing: 14px;
+                    alignment: center;
+                    cross-axis-alignment: center;
+                    Image { source: root.belt.icon; colorize: root.hue; width: 26px; height: 26px; }
+                    Text {
+                        text: root.belt.title.to-uppercase();
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 10px; letter-spacing: 1.8px; color: Theme.text-body;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Now: bright, in the holder's hue.
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 12px;
+                alignment: end;
+                cross-axis-alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "NOW HELD BY";
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 8.5px; letter-spacing: 1.6px; color: Theme.text-dim;
+                        horizontal-alignment: right;
+                    }
+                    Text {
+                        text: root.belt.holder.name;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display;
+                        font-size: 20px; color: Theme.text-value;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.belt.holder-value;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+                        font-size: 30px; letter-spacing: -0.6px; color: root.hue;
+                        horizontal-alignment: right;
+                    }
+                }
+                UserAvatar {
+                    size: 64px;
+                    initials: root.belt.holder.initials;
+                    avatar: root.belt.holder.avatar;
+                    has-avatar: root.belt.holder.has-avatar;
+                    color-index: root.belt.holder.hue-index;
+                }
+            }
+        }
+
+        }
+
+        // What happened, in one line, and why.
+        VerticalLayout {
+            vertical-stretch: 0;
+            spacing: 8px;
+            Text {
+                height: 20px;
+                text: root.belt.headline;
+                font-family: Theme.font-display; font-weight: Theme.weight-display;
+                font-size: 15px; color: Theme.text-value;
+                overflow: elide;
+            }
+            Text {
+                visible: root.belt.detail != "";
+                height: root.belt.detail != "" ? 16px : 0px;
+                text: root.belt.detail;
+                font-family: Theme.font-body; font-weight: Theme.weight-sentence;
+                font-size: 12px; color: Theme.text-dim;
+                overflow: elide;
+            }
         }
     }
 }

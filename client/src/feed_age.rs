@@ -22,6 +22,50 @@ pub fn weekday_of(ms: i64) -> &'static str {
     }
 }
 
+const MONTHS: [&str; 12] = [
+    "January",
+    "February",
+    "March",
+    "April",
+    "May",
+    "June",
+    "July",
+    "August",
+    "September",
+    "October",
+    "November",
+    "December",
+];
+
+/// The day and month of an instant, UTC: "2 October". Cards older than a
+/// week carry it (frame F), where "9d ago" counted for nothing.
+pub fn date_label(ms: i64) -> String {
+    // Civil date from days since 1970-01-01 (Howard Hinnant's algorithm).
+    let z = ms.div_euclid(DAY_MS) + 719_468;
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    format!("{day} {}", MONTHS[(month - 1) as usize])
+}
+
+/// How long ago, plainly: "Today", "Yesterday", "2 days ago", "Last week",
+/// "3 weeks ago". By UTC day. Empty without a time.
+pub fn ago_label(then_ms: i64, now_ms: i64) -> String {
+    if then_ms <= 0 {
+        return String::new();
+    }
+    match days_between(then_ms, now_ms) {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        d @ 2..=6 => format!("{d} days ago"),
+        7..=13 => "Last week".to_string(),
+        d => format!("{} weeks ago", d / 7),
+    }
+}
+
 /// When a weekly recap came out, at the right of its label: "Today" on the
 /// day, the day name for the rest of the week ("Monday" on a Thursday), then
 /// "Last week" and "3 weeks ago". The feed keeps the last real recap through a
@@ -53,6 +97,27 @@ mod tests {
         assert_eq!(weekday_of(MON_5_OCT), "Monday");
         assert_eq!(weekday_of(MON_5_OCT + 3 * DAY), "Thursday");
         assert_eq!(weekday_of(0), "Thursday");
+    }
+
+    #[test]
+    fn ago_reads_as_days_then_weeks() {
+        let now = MON_5_OCT + 3_600_000;
+        assert_eq!(ago_label(now - 1_000, now), "Today");
+        assert_eq!(ago_label(MON_5_OCT - DAY, now), "Yesterday");
+        assert_eq!(ago_label(MON_5_OCT - 2 * DAY, now), "2 days ago");
+        assert_eq!(ago_label(MON_5_OCT - 8 * DAY, now), "Last week");
+        assert_eq!(ago_label(MON_5_OCT - 24 * DAY, now), "3 weeks ago");
+        assert_eq!(ago_label(0, now), "");
+    }
+
+    #[test]
+    fn a_date_reads_as_day_and_month() {
+        assert_eq!(date_label(MON_5_OCT), "5 October");
+        assert_eq!(date_label(MON_5_OCT - 3 * DAY), "2 October");
+        assert_eq!(date_label(MON_5_OCT - 6 * DAY), "29 September");
+        assert_eq!(date_label(0), "1 January");
+        // 29 February 2028.
+        assert_eq!(date_label(21_243 * DAY), "29 February");
     }
 
     #[test]

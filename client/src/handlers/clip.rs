@@ -392,10 +392,16 @@ fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
 /// Turn the `head2head` entry into its feed cards: the head2head card, and
 /// the invite card from five members on. The placement says whether the card
 /// leads the feed (wide and versus do) or keeps the server's position.
+///
+/// `hero_free`: no other entry of `this_week` is a hero. A quiet feed then
+/// leads with the belt that moved last, of any age (frame E), and the cell
+/// stands tall beside it.
 fn head2head_cards(
     ctx: &AppContext,
     e: &mello_core::crew_events::FeedEntry,
+    entries: &[mello_core::crew_events::FeedEntry],
 ) -> Option<(Placement, Vec<FeedCardData>)> {
+    let hero_free = hero_free(entries);
     let data = normalized_entry_data(&e.data);
     let (viewer, members) = h2h_roster(ctx);
     let roster = |id: &str| -> Person {
@@ -419,7 +425,25 @@ fn head2head_cards(
         .get(ctx.app.get_active_crew_id().as_str())
         .copied()
         .unwrap_or(i64::MAX);
-    let model = head2head::build_seen(&data, &viewer, &roster, now_ms, seen_ms)?;
+    let mut model = head2head::build_seen(&data, &viewer, &roster, now_ms, seen_ms)?;
+    // With no hero, the cell stands tall beside the belt hero (frame E) or
+    // beside the recap (frame F), and has room for a third row.
+    let tall = hero_free
+        && model.placement == Placement::Cell
+        && (model.belt.as_ref().is_some_and(|b| b.is_news(now_ms))
+            || entries
+                .iter()
+                .any(|e| e.entry_type == "recap" && !is_empty_recap_entry(&e.entry_type, &e.data)));
+    if tall {
+        model = head2head::build_rows(
+            &data,
+            &viewer,
+            &roster,
+            now_ms,
+            seen_ms,
+            head2head::ROWS_TALL,
+        )?;
+    }
     // The octagons wear the avatar the app already loaded for the user id,
     // and fall back to initials. A late avatar patches the card in place
     // (`refresh_head2head_cards`).
@@ -433,6 +457,23 @@ fn head2head_cards(
         head2head: head2head::to_slint(&model, &avatar),
         ..Default::default()
     }];
+    // A quiet feed with no hero: the newest belt move leads (frame E).
+    if hero_free && model.placement == Placement::Cell {
+        if let Some(hero) = head2head::belt_hero_data(&model, now_ms, &avatar) {
+            cards.insert(
+                0,
+                FeedCardData {
+                    id: format!("{}-belt", e.id).into(),
+                    card_type: "head2head".into(),
+                    role: "hero".into(),
+                    size: "lg".into(),
+                    head2head: hero,
+                    ..Default::default()
+                },
+            );
+            return Some((Placement::Belt, cards));
+        }
+    }
     // From five members the cell loses its seats and button. The invite card
     // takes over, with the viewer first and then the crew.
     if model.member_count >= head2head::SEATS {
@@ -453,6 +494,13 @@ fn head2head_cards(
         cards.remove(0);
     }
     Some((model.placement, cards))
+}
+
+/// No entry of `this_week` other than head2head is a hero.
+fn hero_free(entries: &[mello_core::crew_events::FeedEntry]) -> bool {
+    !entries
+        .iter()
+        .any(|e| e.role == "hero" && e.entry_type != "head2head")
 }
 
 /// Put the joined line on screen from the `joined` list of a feed response:
@@ -486,6 +534,187 @@ fn set_joined_line(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]
     .collect();
     ctx.app
         .set_feed_joined(Rc::new(VecModel::from(rows)).into());
+}
+
+/// What the quiet rules read from the `this_week` entries (`quiet_row.rs`).
+fn quiet_facts(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> crate::quiet_row::Facts {
+    let now_ms = crate::converters::current_time_ms();
+    let (viewer, members) = h2h_roster(ctx);
+    let name_of = |id: &str| -> String {
+        if id == viewer.id {
+            viewer.name.clone()
+        } else {
+            members
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.name.clone())
+                .unwrap_or_default()
+        }
+    };
+    let mut f = crate::quiet_row::Facts {
+        member_count: members.len().max(1) as i32,
+        now_ms,
+        live_stream: ctx.app.get_active_stream_cards().row_count() > 0,
+        ..Default::default()
+    };
+    let newest = |cur: Option<i64>, t: i64| Some(cur.map_or(t, |c| c.max(t)));
+    let mut sessions: Vec<(i64, Vec<String>)> = Vec::new();
+    for e in entries {
+        let data = normalized_entry_data(&e.data);
+        match e.entry_type.as_str() {
+            "head2head" => {
+                if let Some(n) = data.get("member_count").and_then(|v| v.as_i64()) {
+                    f.member_count = n as i32;
+                }
+                let titles = data.get("titles").and_then(|v| v.as_array());
+                for t in titles.into_iter().flatten() {
+                    let moved = t.get("moved_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if moved > 0 {
+                        f.newest_belt_move_ms = newest(f.newest_belt_move_ms, moved);
+                        f.last_activity_ms = newest(f.last_activity_ms, moved);
+                    }
+                }
+                // The first belt in display order that has a holder.
+                let held = |id: &str| {
+                    titles.and_then(|a| {
+                        a.iter().find(|t| {
+                            t.get("title_id").and_then(|v| v.as_str()) == Some(id)
+                                && t.get("holder_user_id")
+                                    .and_then(|v| v.as_str())
+                                    .is_some_and(|h| !h.is_empty())
+                        })
+                    })
+                };
+                f.top_belt = head2head::TITLE_IDS.iter().find_map(|id| {
+                    let t = held(id)?;
+                    let holder = name_of(t.get("holder_user_id")?.as_str()?);
+                    if holder.is_empty() {
+                        return None;
+                    }
+                    Some((holder, head2head::title_name(id)?.to_string()))
+                });
+            }
+            "session-preview" => {
+                f.newest_stream_ms = newest(f.newest_stream_ms, e.ts);
+                f.last_activity_ms = newest(f.last_activity_ms, e.ts);
+            }
+            // A recap sums up weeks that are over: it is not new activity.
+            "recap" if !is_empty_recap_entry(&e.entry_type, &e.data) => {
+                let t = data
+                    .get("week_end")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(e.ts);
+                f.newest_recap_ms = newest(f.newest_recap_ms, t);
+            }
+            "clip" | "catchup" => f.last_activity_ms = newest(f.last_activity_ms, e.ts),
+            "session" => {
+                f.last_activity_ms = newest(f.last_activity_ms, e.ts);
+                if derive_backend_type(&e.entry_type, &data) == "game_session" {
+                    let names = data
+                        .get("player_names")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    sessions.push((e.ts, names));
+                }
+            }
+            _ => {}
+        }
+    }
+    sessions.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    for (ts, names) in sessions {
+        if now_ms - ts > 7 * 86_400_000 {
+            continue;
+        }
+        for n in names {
+            if !n.is_empty() && !f.players_last_week.contains(&n) {
+                f.players_last_week.push(n);
+            }
+        }
+    }
+    f
+}
+
+/// The voice channel when nobody is in it, for a quiet feed (frame E): the
+/// channel, when the last call was, and the one filled white button that
+/// starts voice. `None` when a call is on or the crew has no channel.
+fn voice_idle_card(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Option<FeedCardData> {
+    let channels = ctx.app.get_voice_channels();
+    let channel = (0..channels.row_count())
+        .filter_map(|i| channels.row_data(i))
+        .find(|c| c.is_default)?;
+    if channel.member_count > 0 || channel.active {
+        return None;
+    }
+    let last_call = entries
+        .iter()
+        .filter(|e| e.entry_type == "session")
+        .filter(|e| {
+            derive_backend_type(&e.entry_type, &normalized_entry_data(&e.data)) == "voice_session"
+        })
+        .map(|e| e.ts)
+        .max();
+    Some(FeedCardData {
+        id: "voice-idle".into(),
+        card_type: "voice-idle".into(),
+        role: "standard".into(),
+        size: "md".into(),
+        channel_id: channel.id.clone(),
+        channel_name: channel.name.clone(),
+        subtitle: last_call
+            .map(|t| format!("Last call {}", crate::feed_age::date_label(t)))
+            .unwrap_or_default()
+            .into(),
+        ..Default::default()
+    })
+}
+
+/// Put the quiet row and the dormant strip on screen from the `this_week`
+/// entries. At most one of them shows (`quiet_row.rs`). Returns the idle voice
+/// card when the quiet row shows.
+fn set_quiet_state(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Option<FeedCardData> {
+    let facts = quiet_facts(ctx, entries);
+    let quiet: Vec<crate::JoinedRowData> = crate::quiet_row::quiet_row(&facts)
+        .into_iter()
+        .map(|r| crate::JoinedRowData {
+            user_id: "".into(),
+            line: r.line.into(),
+            when: r.when.into(),
+        })
+        .collect();
+    ctx.app
+        .set_feed_quiet(Rc::new(VecModel::from(quiet)).into());
+    let dormant: Vec<FeedCardData> = crate::quiet_row::dormant_strip(&facts)
+        .into_iter()
+        .map(|d| FeedCardData {
+            id: "dormant".into(),
+            card_type: "catchup".into(),
+            role: "dormant".into(),
+            title: d.text.into(),
+            timestamp: d.age.into(),
+            ..Default::default()
+        })
+        .collect();
+    ctx.app
+        .set_feed_dormant(Rc::new(VecModel::from(dormant)).into());
+    if ctx.app.get_feed_quiet().row_count() > 0 {
+        voice_idle_card(ctx, entries)
+    } else {
+        None
+    }
 }
 
 /// Build the this_week cards again from the last feed. The member list and the
@@ -547,16 +776,16 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
         return;
     }
-    let Some(entry) = resp
+    let entries: Vec<mello_core::crew_events::FeedEntry> = resp
         .sections
         .iter()
         .filter(|s| s.id == "this_week")
-        .flat_map(|s| s.entries.iter())
-        .find(|e| e.entry_type == "head2head")
-    else {
+        .flat_map(|s| s.entries.iter().cloned())
+        .collect();
+    let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") else {
         return;
     };
-    let Some((_, cards)) = head2head_cards(ctx, entry) else {
+    let Some((_, cards)) = head2head_cards(ctx, entry, &entries) else {
         return;
     };
     let feed = ctx.app.get_feed_cards();
@@ -765,9 +994,9 @@ fn build_this_week(
             continue;
         }
         if e.entry_type == "head2head" {
-            if let Some((placement, group)) = head2head_cards(ctx, e) {
+            if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
                 match placement {
-                    Placement::Wide | Placement::Versus => lead = group,
+                    Placement::Wide | Placement::Versus | Placement::Belt => lead = group,
                     Placement::Cell | Placement::CellFull => cards.extend(group),
                 }
             }
@@ -1912,6 +2141,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             *ctx.last_feed.borrow_mut() = Some(response.clone());
             set_joined_line(ctx, &response.joined);
+            let idle_voice = response
+                .sections
+                .iter()
+                .find(|s| s.id == "this_week")
+                .and_then(|section| set_quiet_state(ctx, &section.entries));
             // The feed is on screen now: what it shows counts as seen at the
             // next open. This visit keeps its own baseline, so the dot stays.
             {
@@ -1934,6 +2168,20 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
                 && !has_real_memory;
             let mut this_week = this_week;
+            // The idle voice card follows the catch-up card, or the lead.
+            if let Some(card) = idle_voice {
+                let at = this_week
+                    .iter()
+                    .position(|c| c.card_type == "catchup")
+                    .map(|p| p + 1)
+                    .unwrap_or_else(|| {
+                        this_week
+                            .iter()
+                            .take_while(|c| c.card_type == "head2head")
+                            .count()
+                    });
+                this_week.insert(at.min(this_week.len()), card);
+            }
             this_week.extend(live_session_cards(ctx));
             let cards = arranged(ctx, this_week);
 

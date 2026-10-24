@@ -7892,3 +7892,225 @@ fn a_feed_that_loads_while_a_game_runs_keeps_the_live_card() {
     assert_eq!(live_cards(&h).len(), 1);
     assert_eq!(count_of(&h, "LiveSessionCard"), 1);
 }
+
+// ── Quiet and dormant feeds (mockup frames E and F) ─────────────────────────
+
+const DAY_MS: i64 = 86_400_000;
+
+fn entry_ago(id: &str, entry_type: &str, data: serde_json::Value, ago_ms: i64) -> FeedEntry {
+    let mut e = feed_entry(id, entry_type, data);
+    e.ts = now_ms() - ago_ms;
+    e
+}
+
+fn solo_session(id: &str, player: &str, player_id: &str, ago_days: i64) -> FeedEntry {
+    entry_ago(
+        id,
+        "session",
+        serde_json::json!({
+            "game_name": "Counter-Strike 2", "player_names": [player], "player_ids": [player_id],
+            "duration_min": 160, "wins": 3, "losses": 2, "draws": 0,
+        }),
+        ago_days * DAY_MS,
+    )
+}
+
+/// A title that changed hands `days` ago, with the pair that says both values.
+fn belt_entry(days: i64) -> FeedEntry {
+    let moved_at = now_ms() - days * DAY_MS - 3_600_000;
+    let night_owl = serde_json::json!({
+        "title_id": "night_owl", "holder_user_id": "u4", "value": "03:40", "unit": "",
+        "since_ms": moved_at, "moved_at_ms": moved_at, "previous_holder_user_id": "user-1",
+    });
+    feed_entry(
+        "head2head",
+        "head2head",
+        serde_json::json!({
+            "crew_id": "crew-0", "member_count": 4, "open_seats": 1,
+            "titles": [
+                h2h_title_held("the_carry", "u2", serde_json::json!(4201.0), "h", 9),
+                night_owl,
+            ],
+            "pairs": [
+                h2h_pair_values("u2", 4, 3, vec![("the_carry", serde_json::json!(4167.0), serde_json::json!(4201.0))]),
+                h2h_pair_values("u3", 2, 5, vec![]),
+                h2h_pair_values("u4", 3, 4, vec![("night_owl", serde_json::json!("03:14"), serde_json::json!("03:40"))]),
+            ],
+            "updated_at": 1_000,
+        }),
+    )
+}
+
+fn quiet_roster(h: &Harness) {
+    set_roster(
+        h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Max"),
+            ("u4", "Sara"),
+        ],
+    );
+}
+
+fn card_types(h: &Harness) -> Vec<String> {
+    let feed = h.app().get_feed_cards();
+    (0..feed.row_count())
+        .map(|i| {
+            let c = feed.row_data(i).unwrap();
+            if c.card_type.as_str() == "head2head" {
+                format!("head2head:{}", c.head2head.variant)
+            } else {
+                c.card_type.to_string()
+            }
+        })
+        .collect()
+}
+
+/// Frame E: nothing live, no stream or belt in 24 h, no recap this week. The
+/// quiet row says so, and the belt that moved two days ago leads the feed with
+/// the head2head cell tall beside it.
+#[test]
+fn a_quiet_feed_has_a_quiet_row_and_the_belt_that_moved_leads() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 4);
+    quiet_roster(&h);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            belt_entry(2),
+            solo_session("gs-1", "Test User", "user-1", 3),
+            solo_session("gs-2", "Sara", "u4", 2),
+        ]),
+    });
+
+    let quiet = h.app().get_feed_quiet();
+    assert_eq!(quiet.row_count(), 1);
+    let row = quiet.row_data(0).unwrap();
+    assert_eq!(
+        row.line.as_str(),
+        "No crew time last week. Sara and Test User still played."
+    );
+    assert_eq!(row.when.as_str(), "Monday");
+    assert_eq!(count_of(&h, "FeedJoinedRow"), 1, "the row is drawn");
+    assert_eq!(h.app().get_feed_dormant().row_count(), 0);
+
+    let types = card_types(&h);
+    assert_eq!(
+        types[..2],
+        ["head2head:belt", "head2head:cell"],
+        "{types:?}"
+    );
+    let belt = first_card(&h).head2head.belt;
+    assert_eq!(belt.headline.as_str(), "Sara took Night Owl from Test User");
+    assert_eq!(belt.detail.as_str(), "03:40 beats 03:14.");
+    assert_eq!(belt.age.as_str(), "2 days ago");
+    assert_eq!(count_of(&h, "BeltHero"), 1);
+    assert_eq!(skeleton_cells(&h), 0, "no skeletons from three members");
+    // The cell stands tall, so it draws three pair rows beside the seat.
+    let cell = h.app().get_feed_cards().row_data(1).unwrap();
+    assert_eq!(cell.head2head.pairs.row_count(), 3);
+    assert_eq!(cell.head2head.open_seats, 1);
+}
+
+/// A recap this week is the news. The quiet row stays off.
+#[test]
+fn a_recap_this_week_ends_the_quiet() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 4);
+    quiet_roster(&h);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            belt_entry(2),
+            entry_ago(
+                "recap",
+                "recap",
+                serde_json::json!({
+                    "week_end": now_ms() - DAY_MS, "total_hangout_min": 600, "clip_count": 3,
+                    "top_members": [], "top_game": "Valorant",
+                }),
+                DAY_MS,
+            ),
+            solo_session("gs-1", "Sara", "u4", 2),
+        ]),
+    });
+    assert_eq!(h.app().get_feed_quiet().row_count(), 0);
+    assert_eq!(count_of(&h, "FeedJoinedRow"), 0);
+}
+
+/// A belt that moved in the last 24 hours is not quiet: the feed has news.
+#[test]
+fn a_belt_that_moved_today_ends_the_quiet() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 4);
+    quiet_roster(&h);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![belt_entry(0), solo_session("gs-1", "Sara", "u4", 2)]),
+    });
+    assert_eq!(h.app().get_feed_quiet().row_count(), 0);
+}
+
+/// Frame F: nobody opened m3llo for three weeks. A strip says since when and
+/// who holds a belt. The feed keeps the last real recap, labelled with its age,
+/// and the two last sessions. The recap and the cell are the two tall cards.
+#[test]
+fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 4);
+    quiet_roster(&h);
+    let recap_end = now_ms() - 21 * DAY_MS;
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            entry_ago(
+                "recap",
+                "recap",
+                serde_json::json!({
+                    "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
+                    "top_members": [], "top_game": "Rocket League", "longest_session_min": 140,
+                    "belts_held": [{"user_id": "u4", "display_name": "Sara", "count": 3, "title_ids": ["night_owl"]}],
+                }),
+                21 * DAY_MS,
+            ),
+            solo_session("gs-1", "Test User", "user-1", 24),
+            {
+                // The belts are 24 days old and moved the day of the last session.
+                let mut e = belt_entry(24);
+                e.id = "head2head".into();
+                e
+            },
+            solo_session("gs-2", "Sara", "u4", 27),
+        ]),
+    });
+
+    let strip = h.app().get_feed_dormant();
+    assert_eq!(strip.row_count(), 1);
+    let card = strip.row_data(0).unwrap();
+    assert_eq!(
+        card.title.as_str(),
+        format!(
+            "Nothing new since {}. Jonas holds The Carry.",
+            crate::feed_age::date_label(now_ms() - 24 * DAY_MS)
+        )
+    );
+    assert_eq!(card.timestamp.as_str(), "3 weeks ago");
+    assert_eq!(
+        h.app().get_feed_quiet().row_count(),
+        0,
+        "the strip stands in"
+    );
+
+    let feed = h.app().get_feed_cards();
+    let recap = (0..feed.row_count())
+        .filter_map(|i| feed.row_data(i))
+        .find(|c| c.card_type.as_str() == "recap")
+        .expect("the last recap stays");
+    assert_eq!(recap.age_label.as_str(), "3 weeks ago");
+    let types = card_types(&h);
+    assert!(
+        types.iter().any(|t| t == "head2head:cell")
+            && types.last().map(String::as_str) == Some("recap"),
+        "{types:?}"
+    );
+    assert_eq!(types[2], "head2head:cell", "{types:?}");
+    assert_eq!(skeleton_cells(&h), 0, "no skeletons");
+    assert_eq!(count_of(&h, "RecapCard"), 1);
+}
