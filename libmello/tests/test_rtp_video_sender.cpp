@@ -938,6 +938,9 @@ TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     // repairs ten times. One resend per round trip: three are queued.
     const auto big = make_large_delta_access_unit(16 * 1024);
     ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 33'333));
+    // Its first packet is on the wire: the pacer now owes about 1.2 kB, so
+    // the next packet, a repair too, waits about 0.4 s at 20 kbps.
+    ASSERT_TRUE(link.wait_for_captured_count(4, 10s));
     for (int i = 0; i < 10; ++i) {
         ASSERT_TRUE(send_rtcp(link.receiver_track(), make_nack_packet({a, b, c})));
     }
@@ -955,8 +958,8 @@ TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     const auto stats = sender.stats();
     EXPECT_GE(stats.pli_requests, 1u);
     EXPECT_GE(stats.rtx_suppressed, 27u);
-    EXPECT_GE(stats.rtx_queue_dropped, 2u);
-    EXPECT_LE(stats.rtx_sent, 1u);
+    EXPECT_EQ(stats.rtx_queue_dropped, 3u);
+    EXPECT_EQ(stats.rtx_sent, 0u);
 }
 
 // libwebrtc's first retransmit rule: a packet is resent at most once per
