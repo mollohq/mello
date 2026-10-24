@@ -639,7 +639,7 @@ mod tests {
             grid(),
             card("game-session"),
             card("session"),
-            card("catchup"),
+            card("daily-recap"),
             card("session"),
         ];
         let infos = cards.clone();
@@ -669,7 +669,7 @@ mod tests {
             card("session"),
             card("game-session"),
             card("game-session"),
-            card("catchup"),
+            card("daily-recap"),
             card("clip"),
             grid(),
         ];
@@ -711,7 +711,7 @@ mod tests {
         // a cell and the wide grid, then two cells.
         let cards = vec![
             card("recap"),
-            card("catchup"),
+            card("daily-recap"),
             card("game-session"),
             card("game-session"),
             card("clip"),
@@ -738,12 +738,12 @@ mod tests {
 
     #[test]
     fn the_belt_hero_takes_four_cards_and_the_list_the_third_cell_of_row_two() {
-        // Frame E: belt hero, head2head cell, catch-up and voice, then two
+        // Frame E: belt hero, head2head cell, daily recap and voice, then two
         // sessions and the list.
         let cards = vec![
             hero_belt(),
             h2h("cell"),
-            card("catchup"),
+            card("daily-recap"),
             card("voice-idle"),
             card("game-session"),
             card("game-session"),

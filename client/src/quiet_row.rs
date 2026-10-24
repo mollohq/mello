@@ -8,7 +8,7 @@
 //!   no recap this week. A slim row takes the place of the recap and says so
 //!   in one line, with the day the recap comes.
 //! - **Dormant** (frame F). Nothing happened for two weeks. The feed keeps the
-//!   last real cards and a catch-up strip says since when, and who holds the
+//!   last real cards and a dormant strip says since when, and who holds the
 //!   first belt.
 //!
 //! Pure functions over a few facts, so the rules need no window.

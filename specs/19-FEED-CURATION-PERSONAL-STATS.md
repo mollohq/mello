@@ -248,6 +248,39 @@ The recap also carries the head2head belts. See
 Awards not built: largest win-rate change, clutch counts where the adapter
 supplies them, head-to-head record, and longest loss streak ended.
 
+### 3.5a Daily recap
+
+A daily recap is the weekly recap for one day, smaller. The server builds it
+from the sources the weekly recap reads. See
+[crew_daily_recap.go](../backend/nakama/data/modules/crew_daily_recap.go) and
+[CLIPS.md](./features/CLIPS.md) section 7.1 for the card.
+
+- `crew_feed` puts one `daily-recap` entry in `this_week` for each of the last
+  three days (UTC), newest first. Role `standard`, size `md`.
+- The entries stand after the recap and the head2head entry, before the
+  sessions. They take no filler slot.
+- A day belongs to the UTC day of the event timestamp. The day that is not over
+  is today so far.
+- A day with no minutes and no clip has no entry (`dailyRecapHasContent`). A
+  belt that moved on that day does not make it a day. Holding titles is a
+  standing state, as in the weekly recap.
+
+| Field | Content |
+|---|---|
+| `day_start`, `day_end` | 00:00 UTC of the day and of the next day, in ms. The client names the day |
+| `total_hangout_min` | Voice and stream minutes of the day |
+| `total_game_min` | Game minutes, counted by `reportableMinutes` |
+| `total_min` | The two together. The card leads with it |
+| `session_count` | Voice, stream and game sessions with reportable minutes |
+| `clip_count` | Clips of the day, from the clips doc |
+| `top_game`, `game_id` | The game with the most reportable minutes. A tie goes to the name that sorts first |
+| `member_ids` | Members who took part, the most active first, at most eight |
+| `belts_moved` | Titles whose `moved_at_ms` is in the day, newest first, at most two. The same shape as the weekly recap |
+
+The ledger events a catch-up card showed (`moment`, `member_joined`,
+`member_left`, `chat_activity`) have no feed card. A join is the joined row.
+The client does not draw a `catchup` entry that an older server sends.
+
 ### 3.6 Per-game data degradation
 
 A card renders the stats that exist. A card must not show an empty slot.
@@ -278,6 +311,7 @@ OCR. Spec 18 tracks that source.
 | `pruneGameSessions`, `buildGameRollup`, `reportableMinutes` | `crew_feed.go` | Implemented |
 | You strip | `client/src/handlers/stats.rs`, `client/ui/panels/*` | Implemented |
 | Weekly recap belts | `crew_recaps.go` | Implemented on feat/next-gen-feed. Section 3.5 |
+| Daily recap, `buildDailyRecaps` | `crew_daily_recap.go`, `crew_feed.go`, `DailyRecapCard` | Implemented on feat/next-gen-feed. Section 3.5a |
 | Deep profile view | Client | Not built. Section 2.4 |
 | Rich telemetry session card | Client | Not built. Section 3.6 |
 
@@ -305,6 +339,13 @@ Curation, in Go, without Nakama:
 - `buildGameRollup` aggregates removed sessions. It returns false below three.
 - `reportableMinutes` overnight guard. An overnight session must not increase
   the rollup total.
+
+Daily recap, in Go (`crew_daily_recap_test.go`):
+
+- Events group by UTC day, newest day first, with their own sums.
+- A day with nothing has no entry. A belt alone does not make a day.
+- At most two belts, newest first. The top game ties go by name.
+- The entries stand after the recap and before the sessions.
 
 Stats, in Go:
 

@@ -78,7 +78,6 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 		previewCard("p1", 1, 2),
 		typedCard("clip", "clip", "clip"),
 		previewCard("p2", 21, 30),
-		typedCard("catch", "catchup", "chat_activity"),
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 
@@ -98,8 +97,8 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 	if counts["session-preview"] < 2 {
 		t.Fatalf("expected >=2 session-preview, got %d", counts["session-preview"])
 	}
-	if counts["catchup"] == 0 {
-		t.Fatal("expected a catchup")
+	if counts["catchup"] != 0 {
+		t.Fatal("the catch-up card is gone")
 	}
 }
 
@@ -166,15 +165,19 @@ func TestUnknownBackendTypeSkipped(t *testing.T) {
 	}
 }
 
-func TestTextlessMomentIsStandard(t *testing.T) {
-	cards := []feedCard{typedCard("m", "catchup", "moment")}
-	entries := buildThisWeek(cards, feedTestNowMs)
-	e := findEntry(entries, "m")
-	if e == nil {
-		t.Fatal("moment entry missing")
+// The ledger events a catch-up card showed have no card now: a join is the
+// joined row, and a day of activity is a daily recap.
+func TestCatchupEventsHaveNoCard(t *testing.T) {
+	for _, typ := range []string{"moment", "member_joined", "member_left", "chat_activity"} {
+		if ft, ok := mapCardType(typ, false); ok {
+			t.Errorf("%s maps to %q, want no card", typ, ft)
+		}
 	}
-	if e.Role != "standard" {
-		t.Fatalf("text-less moment role: got %q want standard", e.Role)
+	cards := mergedToCards([]TimelineEntry{
+		{ID: "m", Type: "moment"}, {ID: "j", Type: "member_joined"}, {ID: "c", Type: "chat_activity"},
+	})
+	if len(cards) != 0 {
+		t.Fatalf("want no cards, got %d", len(cards))
 	}
 }
 
@@ -233,7 +236,7 @@ func TestLowSignalFillersAreQuiet(t *testing.T) {
 func TestWideSlotGetsLargeSize(t *testing.T) {
 	cards := make([]feedCard, 0, 6)
 	for i := 0; i < 6; i++ {
-		cards = append(cards, typedCard("moment"+string(rune('0'+i)), "catchup", "moment"))
+		cards = append(cards, typedCard("voice"+string(rune('0'+i)), "session", "voice_session"))
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 
@@ -294,8 +297,18 @@ func TestClipOnlyFeedHasNoHero(t *testing.T) {
 			t.Fatalf("clip %q got role=%q size=%q, want standard md", e.ID, e.Role, e.Size)
 		}
 	}
-	if len(entries) != 1 {
-		t.Fatalf("want the clip emitted once, got %d entries", len(entries))
+	clips := 0
+	for _, e := range entries {
+		if e.Type == "clip" {
+			clips++
+		}
+	}
+	if clips != 1 {
+		t.Fatalf("want the clip emitted once, got %d clip entries", clips)
+	}
+	// The clip makes a day, so the day has its daily recap ahead of the fillers.
+	if len(entries) != 2 || entries[0].Type != "daily-recap" || entries[1].Type != "clip" {
+		t.Fatalf("want the daily recap then the clip, got %+v", entries)
 	}
 }
 

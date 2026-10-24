@@ -164,6 +164,8 @@ struct Snapshot {
     recent_games: RecentGamesSnap,
     /// The live session cards of the feed, in screen order.
     live_sessions: Vec<LiveSessionSnap>,
+    /// The daily recap card of the feed, if any.
+    daily_recap: DailyRecapSnap,
     /// The skeleton trio cells that show (0 to 3).
     skeleton_trio: usize,
     /// The joined line at the top of the feed, top row first.
@@ -314,6 +316,25 @@ struct Head2headSnap {
     own_avatar_key: String,
     /// The opponent octagons of the pair rows, in row order. "" for initials.
     pair_avatar_keys: Vec<String>,
+}
+
+/// The daily recap card. `present` is false when the feed has none.
+#[derive(Serialize)]
+struct DailyRecapSnap {
+    present: bool,
+    /// "Today so far", "Yesterday" or a day name.
+    day: String,
+    /// The hangout time, for example `"2h 5m"`.
+    hangout: String,
+    clips: i32,
+    sessions: i32,
+    top_game: String,
+    /// The member octagons drawn.
+    members: usize,
+    /// The place in the feed card list. 0 is the first card.
+    index: usize,
+    /// One entry for each belt: `"The Carry"`.
+    belts: Vec<String>,
 }
 
 /// A live session card (a game in progress).
@@ -615,6 +636,43 @@ fn read_invite_card(app: &MainWindow) -> InviteCardSnap {
             more_count: 0,
             with_avatar: 0,
         },
+    }
+}
+
+/// The daily recap card of the feed, read from the first such card.
+fn read_daily_recap(app: &MainWindow) -> DailyRecapSnap {
+    let feed = app.get_feed_cards();
+    let Some((index, card)) = feed
+        .iter()
+        .enumerate()
+        .find(|(_, c)| c.card_type == "daily-recap")
+    else {
+        return DailyRecapSnap {
+            present: false,
+            day: String::new(),
+            hangout: String::new(),
+            clips: 0,
+            sessions: 0,
+            top_game: String::new(),
+            members: 0,
+            index: 0,
+            belts: Vec::new(),
+        };
+    };
+    DailyRecapSnap {
+        present: true,
+        day: card.day_label.to_string(),
+        hangout: card.title.to_string(),
+        clips: card.clip_count,
+        sessions: card.day_sessions,
+        top_game: card.game_name.to_string(),
+        members: card.day_members.row_count(),
+        index,
+        belts: card
+            .belts_moved
+            .iter()
+            .map(|b| b.title.to_string())
+            .collect(),
     }
 }
 
@@ -1119,6 +1177,7 @@ fn read(app: &MainWindow) -> Snapshot {
         head2head: read_head2head(app),
         invite_card: read_invite_card(app),
         recent_games: read_recent_games(app),
+        daily_recap: read_daily_recap(app),
         live_sessions: app
             .get_feed_cards()
             .iter()

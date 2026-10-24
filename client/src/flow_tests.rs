@@ -4924,15 +4924,15 @@ fn stream_preview_removes_the_stream_skeleton() {
 
 /// Two members and a real card of another type keep the whole trio (frame B2).
 #[test]
-fn two_members_and_a_catchup_card_keep_every_skeleton() {
+fn two_members_and_a_daily_recap_keep_every_skeleton() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
 
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![feed_entry(
-            "evt-join-1",
-            "catchup",
-            serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+            "daily_0",
+            "daily-recap",
+            serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
         )]),
     });
 
@@ -4985,9 +4985,9 @@ fn solo_crew_keeps_skeletons_for_missing_card_types() {
 
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![feed_entry(
-            "evt-join-1",
-            "catchup",
-            serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+            "daily_0",
+            "daily-recap",
+            serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
         )]),
     });
 
@@ -5283,9 +5283,9 @@ fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![
             feed_entry(
-                "evt-join-1",
-                "catchup",
-                serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+                "daily_0",
+                "daily-recap",
+                serde_json::json!({ "day_start": 1, "total_min": 40, "session_count": 1 }),
             ),
             h2h_entry(
                 2,
@@ -8168,4 +8168,153 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
     assert_eq!(types[2], "head2head:cell", "{types:?}");
     assert_eq!(skeleton_cells(&h), 0, "no skeletons");
     assert_eq!(count_of(&h, "RecapCard"), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Daily recap (CLIPS 7.1)
+// ---------------------------------------------------------------------------
+
+/// A `daily-recap` entry for the UTC day `days_ago` days back, as the server
+/// builds it. `extra` overrides fields.
+fn daily_entry(days_ago: i64, extra: serde_json::Value) -> FeedEntry {
+    let day_start = (now_ms().div_euclid(DAY_MS) - days_ago) * DAY_MS;
+    let mut data = serde_json::json!({
+        "day_start": day_start, "day_end": day_start + DAY_MS,
+        "total_hangout_min": 30, "total_game_min": 95, "total_min": 125,
+        "session_count": 3, "clip_count": 1,
+        "top_game": "Rocket League", "game_id": "rocket-league",
+        "member_ids": ["user-1", "u2"],
+    });
+    for (k, v) in extra.as_object().expect("object").iter() {
+        data[k] = v.clone();
+    }
+    feed_entry(&format!("daily_{days_ago}"), "daily-recap", data)
+}
+
+fn daily_card(h: &Harness) -> Option<FeedCardData> {
+    let feed = h.app().get_feed_cards();
+    (0..feed.row_count())
+        .filter_map(|i| feed.row_data(i))
+        .find(|c| c.card_type.as_str() == "daily-recap")
+}
+
+/// The card states the day, the four numbers, the members and the belts.
+#[test]
+fn the_daily_recap_card_shows_the_day_the_numbers_the_members_and_two_belts() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![daily_entry(
+            0,
+            serde_json::json!({
+                "belts_moved": [
+                    belt_moved("the_carry", serde_json::json!(4201.0), "h"),
+                    belt_moved("night_owl", serde_json::json!("03:40"), ""),
+                    belt_moved("marathon", serde_json::json!("3 h 48"), ""),
+                ],
+            }),
+        )]),
+    });
+
+    let card = daily_card(&h).expect("a daily recap card");
+    assert_eq!(card.day_label.as_str(), "Today so far");
+    assert_eq!(card.title.as_str(), "2h 5m", "the hangout time");
+    assert_eq!(card.clip_count, 1);
+    assert_eq!(card.day_sessions, 3);
+    assert_eq!(card.game_name.as_str(), "Rocket League");
+    assert_eq!(card.day_members.row_count(), 2);
+    assert_eq!(card.belts_moved.row_count(), 2, "two belts at most");
+    assert_eq!(count_of(&h, "DailyRecapCard"), 1);
+    let texts = drawn_texts(&h);
+    for want in [
+        "DAILY RECAP",
+        "Today so far",
+        "HANGOUT",
+        "CLIPS",
+        "SESSIONS",
+        "TOP GAME",
+        "Rocket League",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
+    assert_eq!(count_of(&h, "TitleChip"), 2, "a chip for each belt");
+}
+
+/// The day word: "Today so far", "Yesterday", then the day name.
+#[test]
+fn the_daily_recap_names_its_day() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    for (days_ago, want) in [(0, "Today so far"), (1, "Yesterday")] {
+        h.emit(Event::FeedLoaded {
+            response: feed_of(vec![daily_entry(days_ago, serde_json::json!({}))]),
+        });
+        assert_eq!(daily_card(&h).expect("card").day_label.as_str(), want);
+    }
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![daily_entry(2, serde_json::json!({}))]),
+    });
+    let day_start = (now_ms().div_euclid(DAY_MS) - 2) * DAY_MS;
+    assert_eq!(
+        daily_card(&h).expect("card").day_label.as_str(),
+        crate::feed_age::weekday_of(day_start)
+    );
+}
+
+/// The server sends up to three days. The feed draws one daily recap, the
+/// newest.
+#[test]
+fn only_the_newest_daily_recap_is_drawn() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            daily_entry(0, serde_json::json!({})),
+            daily_entry(1, serde_json::json!({})),
+            daily_entry(2, serde_json::json!({})),
+        ]),
+    });
+    let types = card_types(&h);
+    assert_eq!(types.iter().filter(|t| *t == "daily-recap").count(), 1);
+    assert_eq!(
+        daily_card(&h).expect("card").day_label.as_str(),
+        "Today so far"
+    );
+    assert_eq!(count_of(&h, "DailyRecapCard"), 1);
+}
+
+/// A day with nothing has no entry, so the feed has no card for it.
+#[test]
+fn a_feed_with_no_daily_recap_draws_none() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![solo_session("gs-1", "Test User", "user-1", 5)]),
+    });
+    assert!(daily_card(&h).is_none());
+    assert_eq!(count_of(&h, "DailyRecapCard"), 0);
+}
+
+/// An older server still sends catch-up cards. They are not drawn and do not
+/// break the feed.
+#[test]
+fn a_catchup_entry_from_an_older_server_is_not_drawn() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            feed_entry(
+                "evt-join-1",
+                "catchup",
+                serde_json::json!({ "username": "kim", "display_name": "Kim" }),
+            ),
+            daily_entry(0, serde_json::json!({})),
+        ]),
+    });
+    let types = card_types(&h);
+    assert!(!types.iter().any(|t| t == "catchup"), "{types:?}");
+    assert_eq!(types.iter().filter(|t| *t == "daily-recap").count(), 1);
+    let texts = drawn_texts(&h);
+    assert!(!texts.iter().any(|t| t == "CATCH-UP"), "{texts:?}");
 }

@@ -44,15 +44,13 @@ const (
 )
 
 // feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
-// (ports isQuietRow from Timeline.swift plus the desktop priority). Moments and
-// clips are full cards and are intentionally absent here.
+// (ports isQuietRow from Timeline.swift plus the desktop priority). Clips are
+// full cards and are intentionally absent here. Joins, leaves, chat and moments
+// have no card at all (mapCardType).
 // game_session is not in this map: T0-only sessions render compact (quiet);
 // telemetry-backed sessions that survive pruning use standard size (spec 19 B2).
 var feedQuietBackendTypes = map[string]bool{
 	"voice_session": true,
-	"member_joined": true,
-	"member_left":   true,
-	"chat_activity": true,
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +63,7 @@ type FeedRequest struct {
 
 type FeedEntry struct {
 	ID   string      `json:"id"`
-	Type string      `json:"type"` // clip | recap | session-preview | session | catchup | recent-games | head2head
+	Type string      `json:"type"` // clip | recap | daily-recap | session-preview | session | recent-games | head2head
 	Role string      `json:"role"` // hero | standard | quiet | recap | locked
 	Size string      `json:"size"` // sm | md | lg
 	Ts   int64       `json:"ts"`
@@ -185,7 +183,9 @@ type feedCard struct {
 // ---------------------------------------------------------------------------
 
 // mapCardType maps a backend event type to a feed card type. ok is false for
-// unknown types, which are skipped (not coerced to catchup as the client did).
+// unknown types, which are skipped. The ledger events a catch-up card used to
+// show (moment, member_joined, member_left, chat_activity) have no card: a join
+// is the joined row, and a day of activity is a daily recap.
 func mapCardType(backendType string, hasSnapshots bool) (string, bool) {
 	switch backendType {
 	case "clip":
@@ -199,8 +199,6 @@ func mapCardType(backendType string, hasSnapshots bool) (string, bool) {
 		return "session", true
 	case "voice_session", "game_session":
 		return "session", true
-	case "moment", "member_joined", "member_left", "chat_activity":
-		return "catchup", true
 	default:
 		return "", false
 	}
@@ -661,8 +659,6 @@ func fillerPriority(c feedCard) int {
 			return 100 + q
 		}
 		return 100
-	case "catchup":
-		return 10
 	case "recent-games":
 		return 150
 	default:
@@ -699,7 +695,7 @@ func feedFirstIndexOfType(cards []feedCard, used []bool, feedType string) int {
 func pickFillerIndices(cards []feedCard, used []bool) []int {
 	picks := make([]int, 0, feedFillerSlots)
 
-	for _, ft := range []string{"clip", "session", "recent-games", "session-preview", "catchup"} {
+	for _, ft := range []string{"clip", "session", "recent-games", "session-preview"} {
 		if len(picks) >= feedFillerSlots {
 			break
 		}
@@ -826,6 +822,7 @@ func decodeCardData[T any](raw interface{}) (T, bool) {
 //   - session: needs reportable minutes. Zero-minute sessions never emit.
 //   - session-preview: needs at least one snapshot.
 //   - recent-games: needs a tile with minutes or with a member who has it.
+//   - daily-recap: needs minutes or a clip (dailyRecapHasContent).
 //
 // Every other type is its own content (a clip, a join, a lock). A payload that
 // is absent or cannot be decoded cannot be judged, so the card is kept.
@@ -845,6 +842,9 @@ func cardHasContent(feedType, backendType string, data interface{}) bool {
 			}
 		}
 		return false
+	case "daily-recap":
+		d, ok := decodeCardData[DailyRecapData](data)
+		return !ok || dailyRecapHasContent(d)
 	case "recent-games":
 		d, ok := decodeCardData[RecentGamesData](data)
 		if !ok {
@@ -1025,8 +1025,20 @@ func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*
 // 24 h and nothing ranks above it. Otherwise it follows the hero and the
 // recap, and it never takes a filler slot.
 func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData) []FeedEntry {
+	return buildThisWeekDaily(cards, nowMs, libs, h2h, nil)
+}
+
+// buildThisWeekDaily adds the daily recaps of the last three days (see
+// buildDailyRecaps). belts are the belts moved, from the holders doc. The
+// daily recaps are standard cells after the recap and the head2head entry and
+// before the sessions. They never take a filler slot.
+func buildThisWeekDaily(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData, belts []RecapBeltMoved) []FeedEntry {
 	// Empty-card rule first, so an empty card never takes a slot or a count.
 	cards = dropEmptyCards(cards)
+
+	// The daily recaps count every session of their day, before pruning, as
+	// the recent games card does.
+	dailies := buildDailyRecaps(cards, belts, nowMs)
 
 	// The recent games card counts every game session in the window, before
 	// pruning, so its header matches the week and not only the pruned part.
@@ -1066,6 +1078,8 @@ func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDo
 		used[h2hCard] = true
 		entries = append(entries, feedEntryFromCard(cards[h2hCard], "standard", "lg"))
 	}
+
+	entries = append(entries, dailies...)
 
 	fillers := pickFillerIndices(cards, used)
 	hoistRecentGames(cards, fillers)
@@ -1111,7 +1125,8 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	cards := mergedToCards(timeline)
 	nowMs := time.Now().UnixMilli()
 	h2h := crewHead2headForViewer(ctx, logger, nk, req.CrewID, userID, nowMs)
-	thisWeek := buildThisWeekFull(cards, nowMs, crewLibraryDocs(ctx, nk, req.CrewID), h2h)
+	thisWeek := buildThisWeekDaily(cards, nowMs, crewLibraryDocs(ctx, nk, req.CrewID), h2h,
+		crewBeltsMovedSince(ctx, nk, req.CrewID, nowMs-int64(feedDailyRecapDays)*dayMs))
 
 	// Items shown in this_week are excluded from the memory spine.
 	shownClipIDs := map[string]bool{}
@@ -1145,6 +1160,29 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	}
 	data, _ := json.Marshal(resp)
 	return string(data), nil
+}
+
+// crewBeltsMovedSince reads the holders doc of the crew and returns the belts
+// that moved since sinceMs, for the daily recaps. A crew with no doc has none.
+func crewBeltsMovedSince(ctx context.Context, nk runtime.NakamaModule, crewID string, sinceMs int64) []RecapBeltMoved {
+	doc, _ := readHead2headDoc(ctx, nk, crewID)
+	if doc == nil {
+		return nil
+	}
+	names := map[string]string{}
+	name := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if n, ok := names[id]; ok {
+			return n
+		}
+		n := resolveOrID(ctx, nk, id)
+		names[id] = n
+		return n
+	}
+	moved, _ := buildRecapBelts(doc, sinceMs, time.Now().UnixMilli(), name)
+	return moved
 }
 
 // feedJoinsFor is buildFeedJoins with the member set of the crew. A failure to

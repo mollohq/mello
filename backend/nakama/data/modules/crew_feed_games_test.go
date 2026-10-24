@@ -683,17 +683,22 @@ func TestBuildThisWeek_RecentGamesFollowsHead2headInABusyCrew(t *testing.T) {
 	if len(entries) < 3 || entries[0].Type != "head2head" {
 		t.Fatalf("entries: %+v", entries)
 	}
-	pos := -1
+	pos, dailies := -1, 0
 	for i, e := range entries {
 		if e.Type == "recent-games" {
 			pos = i
+		}
+		if e.Type == "daily-recap" {
+			dailies++
 		}
 		if e.Type == "clip" && e.Size == "lg" {
 			t.Fatalf("clip %s is wide", e.ID)
 		}
 	}
-	if pos < 0 || pos > 1 {
-		t.Fatalf("recent games at entry %d, want right after head2head", pos)
+	// The daily recaps stand between head2head and the sessions; the recent
+	// games card is the first of the sessions' slots.
+	if pos < 0 || pos > 1+dailies {
+		t.Fatalf("recent games at entry %d, want right after head2head and the %d daily recaps", pos, dailies)
 	}
 }
 

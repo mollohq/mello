@@ -31,7 +31,7 @@ fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
 }
 
 // The server feed type collapses the backend event type (session covers
-// voice/game/stream, catchup covers moment/join/leave/chat). The copy helpers
+// voice/game/stream). The copy helpers
 // below still key off the backend type, so recover it from the payload fields.
 // member_joined and member_left carry identical data, so leaves fold into the
 // join copy path; everything else is distinguishable.
@@ -49,15 +49,7 @@ fn derive_backend_type(feed_type: &str, data: &serde_json::Value) -> &'static st
                 "stream_session"
             }
         }
-        "catchup" => {
-            if data.get("sentiment").is_some() || data.get("text").is_some() {
-                "moment"
-            } else if data.get("message_count").is_some() {
-                "chat_activity"
-            } else {
-                "member_joined"
-            }
-        }
+        "daily-recap" => "daily_recap",
         "recent-games" => "recent_games",
         _ => "",
     }
@@ -73,12 +65,6 @@ fn extract_actor(data: &serde_json::Value, backend_type: &str) -> String {
         "weekly_recap" => data
             .get("most_active")
             .or_else(|| data.get("mvp"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "moment" | "member_joined" | "member_left" => data
-            .get("display_name")
-            .or_else(|| data.get("username"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
@@ -191,19 +177,15 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
                 format!("{}m", hangout as i64)
             }
         }
-        "moment" => {
-            let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            if text.is_empty() {
-                let sentiment = data
-                    .get("sentiment")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("moment");
-                format!("{} had a {}", actor, sentiment)
+        // The hangout time of the day, the first number of the daily recap.
+        "daily_recap" => {
+            let min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+            if min > 0 {
+                humanize_duration_min(min)
             } else {
-                text.to_string()
+                "0m".to_string()
             }
         }
-        "member_joined" => format!("{} joined the crew", actor),
         _ => String::new(),
     }
 }
@@ -609,6 +591,7 @@ fn quiet_facts(
                     .unwrap_or(e.ts);
                 f.newest_recap_ms = newest(f.newest_recap_ms, t);
             }
+            // An older server still sends catch-up cards: they are activity.
             "clip" | "catchup" => f.last_activity_ms = newest(f.last_activity_ms, e.ts),
             "session" => {
                 f.last_activity_ms = newest(f.last_activity_ms, e.ts);
@@ -701,7 +684,7 @@ fn set_quiet_state(
         .into_iter()
         .map(|d| FeedCardData {
             id: "dormant".into(),
-            card_type: "catchup".into(),
+            card_type: "dormant".into(),
             role: "dormant".into(),
             title: d.text.into(),
             timestamp: d.age.into(),
@@ -989,9 +972,22 @@ fn build_this_week(
 ) -> Vec<FeedCardData> {
     let mut lead: Vec<FeedCardData> = Vec::new();
     let mut cards: Vec<FeedCardData> = Vec::new();
+    let mut daily_shown = false;
     for e in entries {
         if is_empty_recap_entry(&e.entry_type, &e.data) {
             continue;
+        }
+        // An older server still sends catch-up cards. They are not drawn.
+        if e.entry_type == "catchup" {
+            continue;
+        }
+        // The server sends a daily recap for each of the last three days, the
+        // newest first. The feed shows one: the newest.
+        if e.entry_type == "daily-recap" {
+            if daily_shown {
+                continue;
+            }
+            daily_shown = true;
         }
         if e.entry_type == "head2head" {
             if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
@@ -1511,6 +1507,27 @@ fn resolve_game_meta(
     (game_id.to_string(), short, None)
 }
 
+/// The members of a daily recap who took part that day, in the server's order
+/// (the most active first). A member who is not in the roster any more has no
+/// octagon.
+fn daily_recap_members(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::H2hPerson> {
+    let (viewer, members) = h2h_roster(ctx);
+    data.get("member_ids")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .filter_map(|id| {
+            if id == viewer.id {
+                Some(viewer.clone())
+            } else {
+                members.iter().find(|m| m.id == id).cloned()
+            }
+        })
+        .map(|p| live_person(ctx, &p))
+        .collect()
+}
+
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
 fn build_feed_card(
@@ -1856,9 +1873,33 @@ fn build_feed_card(
     let (mvp2_av, mvp2_has_av) = resolve_avatar(ctx, &mvp2.3);
     let recap_leaderboard = extract_recap_leaderboard(ctx, &data);
     let recap_awards = extract_recap_awards(&data);
-    let recap_belts_moved = extract_recap_belts_moved(ctx, &data);
+    let mut recap_belts_moved = extract_recap_belts_moved(ctx, &data);
+    // A daily recap lists two belts at most, the server's newest first.
+    if backend_type == "daily_recap" {
+        recap_belts_moved.truncate(2);
+    }
     let recap_belts_held = extract_recap_belts_held(ctx, &data);
     let recap_games_summary = games_summary(&data);
+    let is_daily_recap = backend_type == "daily_recap";
+    let day_members = if is_daily_recap {
+        daily_recap_members(ctx, &data)
+    } else {
+        Vec::new()
+    };
+    let day_label = if is_daily_recap {
+        crate::feed_age::day_label(
+            data.get("day_start").and_then(|v| v.as_i64()).unwrap_or(0),
+            crate::converters::current_time_ms(),
+        )
+    } else {
+        String::new()
+    };
+    let day_sessions = data
+        .get("session_count")
+        .and_then(|v| v.as_i64())
+        .filter(|_| is_daily_recap)
+        .unwrap_or(0)
+        .clamp(0, i64::from(i32::MAX)) as i32;
     let was_seen = ctx
         .settings
         .borrow()
@@ -1966,6 +2007,9 @@ fn build_feed_card(
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
         belts_moved: ModelRc::new(VecModel::from(recap_belts_moved)),
+        day_label: day_label.into(),
+        day_sessions,
+        day_members: ModelRc::new(VecModel::from(day_members)),
         belts_held: ModelRc::new(VecModel::from(recap_belts_held)),
         game_record: game_record.into(),
         game_wins,
@@ -2109,6 +2153,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                             .entries
                             .iter()
                             .filter(|e| !is_empty_recap_entry(&e.entry_type, &e.data))
+                            .filter(|e| e.entry_type != "catchup" && e.entry_type != "daily-recap")
                             .map(|e| {
                                 build_feed_card(
                                     ctx,
@@ -2155,11 +2200,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
                 && !has_real_memory;
             let mut this_week = this_week;
-            // The idle voice card follows the catch-up card, or the lead.
+            // The idle voice card follows the daily recap, or the lead.
             if let Some(card) = idle_voice {
                 let at = this_week
                     .iter()
-                    .position(|c| c.card_type == "catchup")
+                    .position(|c| c.card_type == "daily-recap")
                     .map(|p| p + 1)
                     .unwrap_or_else(|| {
                         this_week
@@ -2266,7 +2311,7 @@ mod tests {
         assert_eq!(s(skeleton_trio_for([], 1, 1)), (false, true, true));
         // Two members: the trio stays under the real cards (frame B2).
         assert_eq!(s(skeleton_trio_for(["locked"], 0, 2)), all(true));
-        assert_eq!(s(skeleton_trio_for(["catchup"], 0, 2)), all(true));
+        assert_eq!(s(skeleton_trio_for(["daily-recap"], 0, 2)), all(true));
         assert_eq!(s(skeleton_trio_for(["clip"], 0, 2)), (true, false, true));
         assert_eq!(
             s(skeleton_trio_for(["head2head", "game-session"], 0, 2)),

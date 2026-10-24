@@ -320,6 +320,15 @@ export struct FeedCardData {
     recap-week: string,
     age-label: string,
 
+    // Daily recap (card-type "daily-recap"): the day ("Today so far",
+    // "Yesterday", "Tuesday"), the sessions of the day, and the members who
+    // took part, most active first. The hangout time is `title`, the clips are
+    // `clip-count`, the top game is `game-*` and the belts that moved are
+    // `belts-moved`. Built in Rust.
+    day-label: string,
+    day-sessions: int,
+    day-members: [H2hPerson],
+
     // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
     game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")
     // The parts, so a card can colour a win and a loss differently.

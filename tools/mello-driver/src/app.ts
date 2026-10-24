@@ -170,6 +170,18 @@ export type AppState = {
     pc_count: number;
     tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
   };
+  /** The daily recap card of the feed. `present` is false when the feed has none. */
+  daily_recap: {
+    present: boolean;
+    day: string;
+    hangout: string;
+    clips: number;
+    sessions: number;
+    top_game: string;
+    members: number;
+    index: number;
+    belts: string[];
+  };
   /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
   /** The joined line at the top of the feed, top row first. */

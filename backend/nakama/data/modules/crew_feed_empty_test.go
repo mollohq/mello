@@ -30,7 +30,10 @@ func TestCardHasContent(t *testing.T) {
 		{"recent games with a tile", "recent-games", "recent_games", RecentGamesData{TotalMin: 10, Games: []RecentGameTile{{GameID: "g", Minutes: 10}}}, true},
 		{"recent games, installed only", "recent-games", "recent_games", RecentGamesData{Games: []RecentGameTile{{GameID: "g", MemberIDs: []string{"u1"}}}}, true},
 		{"clip", "clip", "clip", nil, true},
-		{"catch-up", "catchup", "member_joined", nil, true},
+		{"daily recap with minutes", "daily-recap", "", DailyRecapData{TotalMin: 40, TotalHangoutMin: 40}, true},
+		{"daily recap with a clip only", "daily-recap", "", DailyRecapData{ClipCount: 1}, true},
+		{"daily recap with a belt only", "daily-recap", "", DailyRecapData{BeltsMoved: []RecapBeltMoved{{TitleID: "the_carry"}}}, false},
+		{"empty daily recap", "daily-recap", "", DailyRecapData{DayStart: 5}, false},
 		{"payload absent is kept", "session", "voice_session", nil, true},
 	}
 	for _, tc := range cases {

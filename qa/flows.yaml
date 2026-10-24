@@ -435,7 +435,7 @@ flows:
     title: "Solo crew feed: head2head wide card with own values, open seats, recent games, skeleton trio"
     priority: P1
     users: 1
-    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_says_from_this_pc_when_all_tiles_are_installed, new_empty_crew_shows_three_skeletons_and_no_cards]
+    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed, no_card_draws_a_commentary_note, new_empty_crew_shows_three_skeletons_and_no_cards]
     journeys: [qa/journeys/feed-solo-head2head.ts]
     protocol: []
     issues: []
@@ -482,6 +482,15 @@ flows:
     users: 1
     harness: [a_live_session_for_the_viewer_shows_the_pip_and_since_n_min, two_crewmates_in_the_same_game_share_one_card, the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot, the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_once]
     journeys: [qa/journeys/feed-live-session.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-09
+    title: "A day of crew activity shows as one daily recap card: the day, hangout, clips, sessions, top game, members, belts"
+    priority: P1
+    users: 2
+    harness: [the_daily_recap_card_shows_the_day_the_numbers_the_members_and_two_belts, the_daily_recap_names_its_day, only_the_newest_daily_recap_is_drawn, a_feed_with_no_daily_recap_draws_none, a_catchup_entry_from_an_older_server_is_not_drawn]
+    journeys: []
     protocol: []
     issues: []
 

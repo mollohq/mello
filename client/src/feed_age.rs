@@ -66,6 +66,19 @@ pub fn ago_label(then_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// The day of a daily recap, from the UTC start of that day: "Today so far"
+/// for the day that is not over, "Yesterday", then the day name ("Tuesday").
+pub fn day_label(day_start_ms: i64, now_ms: i64) -> String {
+    if day_start_ms <= 0 {
+        return String::new();
+    }
+    match days_between(day_start_ms, now_ms) {
+        0 => "Today so far".to_string(),
+        1 => "Yesterday".to_string(),
+        _ => weekday_of(day_start_ms).to_string(),
+    }
+}
+
 /// How old a weekly recap is, at the right of its label: "Last week", then
 /// "3 weeks ago". The feed keeps the last real recap through a quiet spell, so
 /// this label is what tells an old recap from a new one (frame F). A recap
@@ -117,6 +130,15 @@ mod tests {
         assert_eq!(date_label(0), "1 January");
         // 29 February 2028.
         assert_eq!(date_label(21_243 * DAY), "29 February");
+    }
+
+    #[test]
+    fn a_day_reads_as_today_so_far_yesterday_then_the_day_name() {
+        let now = MON_5_OCT + 15 * 3_600_000;
+        assert_eq!(day_label(MON_5_OCT, now), "Today so far");
+        assert_eq!(day_label(MON_5_OCT - DAY, now), "Yesterday");
+        assert_eq!(day_label(MON_5_OCT - 2 * DAY, now), "Saturday");
+        assert_eq!(day_label(0, now), "");
     }
 
     #[test]

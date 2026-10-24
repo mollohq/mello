@@ -1150,6 +1150,165 @@ component RecapCard inherits Rectangle {
     }
 }
 
+// Daily recap: a smaller RecapCard for one day (CLIPS 7.1). Same chrome, same
+// type. The label, the day with the members who took part, a two by two of
+// numbers (hangout, clips, sessions, top game) and up to two belts that moved
+// that day, each with the holder.
+component DailyRecapCard inherits Rectangle {
+    in property <FeedCardData> card;
+    /// Octagons that fit beside the day word, 4 px apart.
+    property <int> max-people: Math.max(0, Math.min(6, Math.floor((root.width - 28px - day-word.preferred-width - 12px) / 26px)));
+
+    clip: true;
+    background: transparent;
+    border-width: 0px;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "bl";
+        inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding: 14px;
+        padding-top: 16px;
+        spacing: 0px;
+        alignment: start;
+
+        Text {
+            height: 16px;
+            font-family: Theme.font-label;
+            text: "DAILY RECAP";
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            color: Theme.text-dim;
+            letter-spacing: Theme.track-label;
+            vertical-alignment: center;
+        }
+
+        Rectangle { height: 2px; }
+
+        // The day, and the members who took part.
+        HorizontalLayout {
+            height: 28px;
+            spacing: 8px;
+            cross-axis-alignment: center;
+            day-word := Text {
+                font-family: Theme.font-display;
+                text: card.day-label;
+                font-size: 22px;
+                font-weight: Theme.weight-display-bold;
+                letter-spacing: -0.66px;
+                color: Theme.text-primary;
+                vertical-alignment: center;
+            }
+            Rectangle { horizontal-stretch: 1; }
+            HorizontalLayout {
+                spacing: 4px;
+                for p[i] in card.day-members: Rectangle {
+                    visible: i < root.max-people;
+                    width: i < root.max-people ? 22px : 0px;
+                    height: 22px;
+                    UserAvatar { size: 22px; initials: p.initials; color-index: p.hue-index; avatar: p.avatar; has-avatar: p.has-avatar; }
+                }
+            }
+        }
+
+        Rectangle { height: 8px; }
+        Rectangle { height: 1px; background: Theme.card-border; }
+        Rectangle { height: 8px; }
+
+        // The numbers of the day, two by two (the weekly recap's .rc-nums).
+        VerticalLayout {
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.title; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.clip-count; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.day-sessions; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "SESSIONS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    if card.game-name != "": HorizontalLayout {
+                        height: 29px;
+                        spacing: 8px;
+                        cross-axis-alignment: center;
+                        GameArt {
+                            game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index;
+                            icon: card.game-icon; has-icon: card.game-has-icon;
+                            capsule: card.game-capsule; has-capsule: card.game-has-capsule;
+                            size: 29px; art-width: 52px;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: card.game-name;
+                            font-family: Theme.font-display;
+                            font-weight: Theme.weight-display;
+                            font-size: 12px;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if card.game-name != "": Text { text: "TOP GAME"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+            }
+        }
+
+        // Belts that moved that day: the holder and the title, side by side.
+        if card.belts-moved.length > 0: Rectangle { height: 10px; }
+        if card.belts-moved.length > 0: HorizontalLayout {
+            spacing: 8px;
+            height: 34px;
+            for b[i] in card.belts-moved: HorizontalLayout {
+                visible: i < 2;
+                horizontal-stretch: i < 2 ? 1 : 0;
+                max-width: i < 2 ? 10000px : 0px;
+                spacing: 4px;
+                cross-axis-alignment: center;
+                UserAvatar { size: 22px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
+                TitleChip {
+                    horizontal-stretch: 1;
+                    compact: true;
+                    dense: true;
+                    hue: H2hHue.of(b.holder-hue);
+                    icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                }
+            }
+        }
+    }
+}
+
 // Session card
 // Voice/stream session card, redesigned per designs/feed/
 // session-cards-redesign.html (Option B: game/channel-first). Typed header,
@@ -2151,12 +2310,10 @@ component LiveSessionCard inherits Rectangle {
     }
 }
 
-// Catch-up card
-component CatchupCard inherits Rectangle {
+// The dormant strip (frame F): a slim card across the top of the grid when
+// nothing happened for 14 days. The label is grey and the age is at the right.
+component DormantStrip inherits Rectangle {
     in property <FeedCardData> card;
-    /// The dormant strip (frame F): a slim card across the grid, with its age
-    /// at the right of the label.
-    property <bool> strip: card.role == "dormant";
 
     background: transparent;
     border-width: 0px;
@@ -2177,25 +2334,22 @@ component CatchupCard inherits Rectangle {
         fill: Theme.card-bg;
     }
 
-
     VerticalLayout {
         padding: 14px;
-        spacing: root.strip ? 6px : 8px;
+        spacing: 6px;
 
-        // Label left. A strip carries its age at the right. The label is
-        // grey: green is the person speaking and nothing else.
         HorizontalLayout {
             height: 16px;
             Text {
                 font-family: Theme.font-label;
-                text: "CATCH-UP";
+                text: "QUIET";
                 font-size: 10px;
                 font-weight: Theme.weight-label;
                 color: Theme.text-dim;
                 letter-spacing: Theme.track-label;
                 vertical-alignment: center;
             }
-            if root.strip: Text {
+            Text {
                 horizontal-stretch: 1;
                 font-weight: Theme.weight-sentence;
                 font-family: Theme.font-body;
@@ -2211,18 +2365,10 @@ component CatchupCard inherits Rectangle {
             font-weight: Theme.weight-display;
             font-family: Theme.font-display;
             text: card.title;
-            font-size: root.strip ? 14px : 13px;
+            font-size: 14px;
             color: Theme.text-value;
             wrap: word-wrap;
             vertical-stretch: 1;
-        }
-
-        if !root.strip: Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: card.timestamp;
-            font-size: 11px;
-            color: Theme.skel-text;
         }
     }
 }
@@ -2550,7 +2696,10 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height; card: root.card;
         start-voice-clicked(id) => { root.start-voice-clicked(id); }
     }
-    if card.card-type == "catchup": CatchupCard {
+    if card.card-type == "dormant": DormantStrip {
+        width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "daily-recap": DailyRecapCard {
         width: parent.width; height: parent.height; card: root.card;
     }
     if card.card-type == "locked": LockedCard {
@@ -2673,7 +2822,7 @@ export component CrewFeed inherits Rectangle {
     in property <[JoinedRowData]> joined-rows: [];
     /// The quiet row: one row at most, in the place of the recap (frame E).
     in property <[JoinedRowData]> quiet-rows: [];
-    /// The dormant strip: at most one catch-up card across the top (frame F).
+    /// The dormant strip: at most one strip across the top (frame F).
     in property <[FeedCardData]> dormant-cards: [];
     in property <[FeedCardData]> memory-cards: [];
     in property <[StreamCardData]> stream-cards: [];
@@ -3729,13 +3878,9 @@ export component Preview inherits Rectangle {
                 actor-name: "b0bben", actor-initials: "b0",
             },
             {
-                id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
-                title: "ostkatt and FaiL hung out in General for 45m while you were away",
-                subtitle: "",
-                actor-name: "ostkatt", actor-initials: "os",
-                game-name: "",
-                duration: "", timestamp: "6 hours ago",
-                participant-count: 0, clip-path: "",
+                id: "5", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Yesterday", title: "45m", clip-count: 0, day-sessions: 1,
+                day-members: [{ id: "u1", name: "ostkatt", initials: "os", hue-index: 0 }, { id: "u2", name: "FaiL", initials: "FA", hue-index: 1 }],
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
@@ -3845,12 +3990,9 @@ export component PreviewSessionHero inherits Rectangle {
                 participant-count: 1, clip-path: "",
             },
             {
-                id: "r2-b", card-type: "catchup", is-hero: false, is-skeleton: false,
-                title: "ostkatt and FaiL hung out in General for 45m",
-                subtitle: "",
-                actor-name: "ostkatt", actor-initials: "os",
-                game-name: "", duration: "", timestamp: "6 hours ago",
-                participant-count: 0, clip-path: "",
+                id: "r2-b", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Yesterday", title: "45m", clip-count: 0, day-sessions: 1,
+                day-members: [{ id: "u1", name: "ostkatt", initials: "os", hue-index: 0 }, { id: "u2", name: "FaiL", initials: "FA", hue-index: 1 }],
             },
             {
                 id: "r2-c", card-type: "session-preview", is-hero: false, is-skeleton: false,
@@ -3910,13 +4052,10 @@ export component PreviewSemiCold inherits Rectangle {
                 duration: "42m", timestamp: "Today",
                 participant-count: 2, clip-path: "",
             },
-            { id: "5", card-type: "catchup", is-hero: false, is-skeleton: false,
-                title: "ostkatt and b0bben hung out in General for 20m earlier today",
-                subtitle: "",
-                actor-name: "ostkatt", actor-initials: "os",
-                game-name: "",
-                duration: "", timestamp: "3 hours ago",
-                participant-count: 0, clip-path: "",
+            {
+                id: "5", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Today so far", title: "20m", clip-count: 0, day-sessions: 1,
+                day-members: [{ id: "u1", name: "ostkatt", initials: "os", hue-index: 0 }, { id: "u2", name: "b0bben", initials: "b0", hue-index: 1 }],
             },
         ];
     }
@@ -4015,7 +4154,7 @@ export component PreviewFeedFirstFriend inherits Rectangle {
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "From 2 PCs", recent-pc-count: 2,
+                title: "RECENT GAMES", subtitle: "1 session, 1 h this week", recent-pc-count: 2,
                 recent-games: [
                     { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
@@ -4097,6 +4236,13 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 ],
             },
             {
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Today so far", title: "2h 05m", clip-count: 1, day-sessions: 1,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                day-members: [bob, sara, leo],
+            },
+            {
                 id: "live-rl", card-type: "live-session", role: "standard", size: "md",
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
@@ -4133,14 +4279,6 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 part0-initials: "J", part1-initials: "M", part2-initials: "L",
             },
             {
-                id: "clip", card-type: "clip", role: "standard", size: "md",
-                title: "Leo clipped that", actor-name: "Leo", actor-initials: "L",
-                game-name: "Counter-Strike 2", timestamp: "Thursday 22:14",
-                duration: "0:31", duration-ms: 31000, participant-count: 4,
-                part0-initials: "L", part1-initials: "B", part2-initials: "J",
-                waveform: [0.5, 0.7, 0.9, 0.6, 0.3, 0.8, 1.0, 0.7, 0.4, 0.2, 0.6, 0.9, 0.8, 0.5, 0.3, 0.7, 0.9, 0.6, 0.4, 0.8, 0.95, 0.7, 0.5, 0.3, 0.2, 0.6, 0.85, 0.9, 0.7, 0.4, 0.55, 0.8, 0.6, 0.35, 0.2, 0.5, 0.75, 0.9, 0.65, 0.4, 0.3, 0.6, 0.8, 0.95, 0.7, 0.5, 0.25, 0.4, 0.7, 0.85, 0.6, 0.35, 0.5, 0.8, 0.9, 0.65, 0.4, 0.2, 0.55, 0.75, 0.9, 0.6, 0.35, 0.2],
-            },
-            {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "14 sessions, 31 h this week", recent-pc-count: 5,
                 recent-games: [
@@ -4153,6 +4291,14 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                     { game-id: "steam-1097150", game-name: "Fall Guys", monogram: "FG", hue-index: 4, hours: "34 H", when: "Last week",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"), owners: [leo, jonas] },
                 ],
+            },
+            {
+                id: "clip", card-type: "clip", role: "standard", size: "md",
+                title: "Leo clipped that", actor-name: "Leo", actor-initials: "L",
+                game-name: "Counter-Strike 2", timestamp: "Thursday 22:14",
+                duration: "0:31", duration-ms: 31000, participant-count: 4,
+                part0-initials: "L", part1-initials: "B", part2-initials: "J",
+                waveform: [0.5, 0.7, 0.9, 0.6, 0.3, 0.8, 1.0, 0.7, 0.4, 0.2, 0.6, 0.9, 0.8, 0.5, 0.3, 0.7, 0.9, 0.6, 0.4, 0.8, 0.95, 0.7, 0.5, 0.3, 0.2, 0.6, 0.85, 0.9, 0.7, 0.4, 0.55, 0.8, 0.6, 0.35, 0.2, 0.5, 0.75, 0.9, 0.65, 0.4, 0.3, 0.6, 0.8, 0.95, 0.7, 0.5, 0.25, 0.4, 0.7, 0.85, 0.6, 0.35, 0.5, 0.8, 0.9, 0.65, 0.4, 0.2, 0.55, 0.75, 0.9, 0.6, 0.35, 0.2],
             },
             {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
@@ -4398,9 +4544,11 @@ export component PreviewFeedThreeMembers inherits Rectangle {
                 part0-initials: "J", part1-initials: "M", participants-line: "Jonas and Max",
             },
             {
-                id: "catchup", card-type: "catchup", is-hero: false, is-skeleton: false,
-                title: "Max joined the crew", subtitle: "", timestamp: "5 days ago",
-                actor-name: "Max", actor-initials: "M",
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Yesterday", title: "5h 31m", clip-count: 1, day-sessions: 3,
+                game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                day-members: [bob, jonas, max],
             },
             {
                 id: "clip", card-type: "clip", role: "standard", size: "md",
@@ -4478,9 +4626,13 @@ export component PreviewFeedQuiet inherits Rectangle {
                 },
             },
             {
-                id: "catchup", card-type: "catchup", is-hero: false, is-skeleton: false,
-                title: "Sara took Night Owl. Nobody in voice since 9 October.",
-                timestamp: "2 days ago",
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Friday", title: "1h 47m", clip-count: 0, day-sessions: 1,
+                game-name: "Valorant", game-monogram: "VA", game-hue-index: 3,
+                day-members: [sara],
+                belts-moved: [
+                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
+                ],
             },
             {
                 id: "voice-idle", card-type: "voice-idle", role: "standard", size: "md",
@@ -4537,7 +4689,7 @@ export component PreviewFeedDormant inherits Rectangle {
         is-cold-start: false;
         dormant-cards: [
             {
-                id: "dormant", card-type: "catchup", role: "dormant",
+                id: "dormant", card-type: "dormant", role: "dormant",
                 title: "Nothing new since 2 October. Leo holds The Carry.",
                 timestamp: "3 weeks ago",
             },
@@ -4600,4 +4752,30 @@ export component PreviewFeedDormant inherits Rectangle {
             },
         ];
     }
+}
+
+// The daily recap alone, at the width of a cell in a three column grid and in
+// a narrow one. Today so far, with two belts that moved.
+export component PreviewDailyRecap inherits Rectangle {
+    width: 700px;
+    height: 260px;
+    background: Theme.bg-app;
+
+    property <H2hPerson> bob: { id: "u1", name: "Bob", initials: "B", hue-index: 0 };
+    property <H2hPerson> jonas: { id: "u2", name: "Jonas", initials: "J", hue-index: 1 };
+    property <H2hPerson> sara: { id: "u3", name: "Sara", initials: "S", hue-index: 3 };
+    property <H2hPerson> max: { id: "u4", name: "Max", initials: "M", hue-index: 2 };
+    property <FeedCardData> day: {
+        id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+        day-label: "Today so far", title: "2h 05m", clip-count: 1, day-sessions: 3,
+        game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
+        game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+        day-members: [bob, jonas, max],
+        belts-moved: [
+            { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
+            { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
+        ],
+    };
+    DailyRecapCard { x: 20px; y: 10px; width: 378px; height: 232px; card: root.day; }
+    DailyRecapCard { x: 420px; y: 10px; width: 260px; height: 232px; card: root.day; }
 }
