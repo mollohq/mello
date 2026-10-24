@@ -37,9 +37,32 @@ pub(super) const LINK_REBUILD: Duration = Duration::from_secs(5);
 /// Viewer: no host media for this long while the host is not paused or
 /// idle (the idle keepalive sends every 500 ms).
 pub(super) const HOST_SILENT: Duration = Duration::from_millis(700);
-/// The control-channel ping cadence of a stream link: every 8 stream ticks
-/// (128 ms), so a silence shows within about 830 ms.
-pub(super) const LINK_PING_EVERY_TICKS: u64 = 8;
+/// The control-channel ping cadence of a stream link: every 125 stream
+/// ticks (2 s), as before stage 6, for the RTT. mello-sfu forwards a
+/// viewer's control messages to the host and answers control-channel pings
+/// for voice only, so a faster ping would load the host with every viewer's
+/// pings and give no pong. The signaling socket's ping (every 128 ms,
+/// `SfuConnection`) carries the liveness.
+pub(super) const LINK_PING_EVERY_TICKS: u64 = 125;
+
+/// How long the own link of `conn` has been silent: the younger of the
+/// signaling socket's pong age and the control channel's pong age. Each
+/// counts from `connected_at` before its first pong. mello-sfu answers
+/// control-channel pings for voice only, so for a stream the socket's pong
+/// carries the liveness today; a pulled cable silences both.
+pub(super) fn own_link_silence(
+    conn: &crate::transport::SfuConnection,
+    connected_at: Instant,
+    now: Instant,
+) -> Duration {
+    let since_connect = now.saturating_duration_since(connected_at);
+    let ws = Duration::from_millis(conn.ws_silent_ms()).min(since_connect);
+    let dc = match conn.pong_age_ms() {
+        age if age < 0 => since_connect,
+        age => Duration::from_millis(age as u64),
+    };
+    ws.min(dc)
+}
 
 /// What the command loop does after an observation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -84,6 +107,10 @@ struct Rebuild {
     attempt: u32,
     next_at: Instant,
     running: bool,
+    /// When the attempt that runs started: the next one is due a schedule
+    /// step after it, not after its end. An attempt that hangs (a connect
+    /// on a pulled cable) then costs no extra gap when the cable is back.
+    started_at: Instant,
 }
 
 /// The reconnect state of one stream link.
@@ -162,6 +189,7 @@ impl StreamLink {
                 // The first attempt 500 ms after the drop, as voice.
                 next_at: (dropped_at + sfu_reconnect_delay(0)).max(now),
                 running: false,
+                started_at: now,
             });
         }
     }
@@ -195,7 +223,7 @@ impl StreamLink {
         if let Some(r) = self.rebuild.as_mut() {
             r.running = false;
             r.attempt += 1;
-            r.next_at = now + sfu_reconnect_delay(r.attempt);
+            r.next_at = (r.started_at + sfu_reconnect_delay(r.attempt)).max(now);
         }
     }
 
@@ -229,6 +257,7 @@ impl StreamLink {
         }
         if !r.running && now >= r.next_at {
             r.running = true;
+            r.started_at = now;
             actions.push(LinkAction::Rejoin);
         }
         actions
@@ -358,18 +387,24 @@ mod tests {
             "one attempt at a time"
         );
 
-        let mut now = t0 + ms(600);
-        link.on_attempt_failed(now);
-        assert!(link.observe(now + ms(999), host_seen(0)).is_empty());
+        // The next attempt is due a step after the start of the one before
+        // (500 ms here), not after its end.
+        link.on_attempt_failed(t0 + ms(600));
+        assert!(link.observe(t0 + ms(1_499), host_seen(0)).is_empty());
         assert_eq!(
-            link.observe(now + ms(1_000), host_seen(0)),
+            link.observe(t0 + ms(1_500), host_seen(0)),
             [LinkAction::Rejoin]
         );
-        now += ms(1_000);
-        link.on_attempt_failed(now);
-        assert!(link.observe(now + ms(1_999), host_seen(0)).is_empty());
+        // An attempt that hung past its step goes again at once.
+        link.on_attempt_failed(t0 + ms(4_000));
         assert_eq!(
-            link.observe(now + ms(2_000), host_seen(0)),
+            link.observe(t0 + ms(4_000), host_seen(0)),
+            [LinkAction::Rejoin]
+        );
+        link.on_attempt_failed(t0 + ms(4_100));
+        assert!(link.observe(t0 + ms(5_999), host_seen(0)).is_empty());
+        assert_eq!(
+            link.observe(t0 + ms(6_000), host_seen(0)),
             [LinkAction::Rejoin]
         );
 

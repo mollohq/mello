@@ -163,6 +163,21 @@ pub(super) struct StreamJoinLimits {
     pub session: Duration,
 }
 
+/// The connect limit of a rejoin attempt. Shorter than a first join's: a
+/// connect on a pulled cable hangs, and the next attempt (2 s after this
+/// one started) opens a new connection when the cable is back.
+const REJOIN_CONNECT_LIMIT: Duration = Duration::from_secs(2);
+
+impl StreamJoinLimits {
+    /// The limits of a rejoin attempt.
+    pub fn for_rejoin(self) -> Self {
+        Self {
+            connect: self.connect.min(REJOIN_CONNECT_LIMIT),
+            session: self.session,
+        }
+    }
+}
+
 impl Default for StreamJoinLimits {
     fn default() -> Self {
         Self {

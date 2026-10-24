@@ -863,12 +863,7 @@ impl super::Client {
             log::warn!("Stream host: ICE failed; rejoining the SFU");
             actions.extend(state.link.on_dropped(now));
         }
-        let pong_age = conn.pong_age_ms();
-        let own_silent = if pong_age < 0 {
-            now.saturating_duration_since(state.connected_at)
-        } else {
-            Duration::from_millis(pong_age as u64)
-        };
+        let own_silent = super::stream_link::own_link_silence(&conn, state.connected_at, now);
         actions.extend(state.link.observe(
             now,
             LinkObservation {
@@ -932,7 +927,7 @@ impl super::Client {
     fn start_host_rejoin(&mut self) {
         let ctx = self.voice.mello_ctx() as usize;
         let ice = self.ice_servers.clone();
-        let limits = self.stream_join_limits;
+        let limits = self.stream_join_limits.for_rejoin();
         let tx = self.stream_tasks.sender();
         let now = tokio::time::Instant::now();
         let Some(state) = self.host_link.as_mut() else {

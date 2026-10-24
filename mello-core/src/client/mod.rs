@@ -24,6 +24,8 @@ mod stream_ffi;
 mod stream_host_start;
 mod stream_link;
 #[cfg(test)]
+mod stream_reconnect_live_tests;
+#[cfg(test)]
 mod stream_reconnect_tests;
 mod stream_watch;
 // end stage 6

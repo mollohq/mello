@@ -557,7 +557,7 @@ The receiver emits TWCC feedback every ~50 ms in the transport-cc draft layout: 
 
 **Receiver (libmello):** the H.264 receiver, the receive timeline and NACK/PLI/RR/REMB/TWCC (§7.1 to §7.3). A missing packet is NACKed every max(RTT, 10 ms) until its repair deadline (the render time of the first frame after the gap plus one RTT, and not before the adaptive repair window of 300 ms to 1.5 s); complete access units go to the timeline in any order; a PLI goes out only when the timeline needs a key frame. The 3-AU window, the 120 ms stall, the 600 ms hard age and the fixed NACK budget are gone (streaming-quality stage 3). When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
-**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every 128 ms (8 stream ticks). The SFU's pong gives the RTT (`rtt_ms` in telemetry), and its age is the link's liveness signal (§11.1).
+**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s for the RTT (`rtt_ms` in telemetry). mello-sfu answers control-channel pings for voice only and forwards a viewer's control messages to the host, so on streams `rtt_ms` stays 0 today. A stream connection also pings its signaling WebSocket every 128 ms; the SFU answers every WebSocket ping, and the pong age is the link's liveness signal (§11.1).
 
 Implementation: `libmello/src/transport/rtp_video_sender.cpp`, `rtp_video_receiver_session.cpp`; Rust wrappers in `mello-core/src/stream/rtp_peer.rs`.
 
@@ -1089,10 +1089,10 @@ Host and viewer keep their SFU link on the voice schedule (`client/stream_link.r
 
 | Signal | Meaning | Action |
 |---|---|---|
-| No control-channel pong for 700 ms | Own link silent (a pulled cable) | `StreamReconnecting { role }`; the connection stays |
+| No WebSocket pong for 700 ms (and no control-channel pong) | Own link silent (a pulled cable) | `StreamReconnecting { role }`; the connection stays |
 | Pong back within 5 s | Own link back | `StreamResumed` (host at once; viewer at its next frame) |
-| Silent for 5 s, the signaling socket closed, ICE failed or closed, `PEER_SLOW` or `PEER_STALLED_RTP`, wake from sleep | The connection is gone | Rejoin the same session with a new connection: 500 ms after the drop, then 1 s, then every 2 s |
-| Viewer: no host media for 700 ms while the own link answers and the host is not paused or idle | The host is gone | `StreamReconnecting { role: viewer }`; no rejoin of its own |
+| Silent for 5 s, the signaling socket closed, ICE failed or closed, `PEER_SLOW` or `PEER_STALLED_RTP`, wake from sleep | The connection is gone | Rejoin the same session with a new connection: 500 ms after the drop, then 1 s, then every 2 s, each step counted from the start of the attempt before. A rejoin's connect step has a 2 s limit (a connect on a pulled cable hangs), so an attempt starts at most 2 s after the cable is back |
+| Viewer: no host access unit for 700 ms while the own link answers and the host is not paused or idle (the byte count does not do: the SFU's RTCP arrives with no host) | The host is gone | `StreamReconnecting { role: viewer }`; no rejoin of its own |
 | Viewer: `host_reconnecting` | The SFU holds the session for the host (30 s) | `StreamReconnecting { role: viewer }`; the leg and the last frame stay |
 | 30 s after the drop with no rejoin; viewer: 30 s with no frame | | Give up: `StreamEnded { reason: "connection_lost" }`; the host takes the session back |
 | Viewer: `session_ended` | The host ended the stream, or its hold expired | `StreamEnded { role: viewer, reason: "host_left" }`, then `StreamWatchingStopped` |

@@ -2,10 +2,11 @@
 //! native peers (streaming-quality stage 6).
 //!
 //! The fake SFU answers each stream offer with a native libmello peer of the
-//! other role, relays ICE candidates both ways, and answers the client's
-//! control-channel pings with pongs, as mello-sfu does. A test makes it
-//! silent (no pong: a pulled cable) or drops its socket (a closed
-//! connection). The client runs its real command loop with a libmello
+//! other role and relays ICE candidates both ways. Like mello-sfu, it
+//! answers the client's WebSocket pings (the WebSocket library does) and no
+//! control-channel ping of a stream peer. A test makes it silent (the socket
+//! is not read: no pong, as on a pulled cable) or drops its socket (a
+//! closed connection). The client runs its real command loop with a libmello
 //! context on the device-free audio backend.
 
 use std::ffi::{CStr, CString};
@@ -176,41 +177,6 @@ async fn wait_for_event(
 // A fake stream SFU with live native peers
 // ---------------------------------------------------------------------------
 
-/// The pong responder of one native peer.
-struct PongState {
-    peer: std::sync::atomic::AtomicUsize,
-    silent: Arc<AtomicBool>,
-}
-
-unsafe extern "C" fn on_fake_control_text(
-    user_data: *mut std::ffi::c_void,
-    text: *const std::ffi::c_char,
-    size: i32,
-) {
-    if user_data.is_null() || text.is_null() || size <= 0 {
-        return;
-    }
-    let state = &*(user_data as *const PongState);
-    if state.silent.load(Ordering::Acquire) {
-        return;
-    }
-    let bytes = std::slice::from_raw_parts(text as *const u8, size as usize);
-    let Ok(msg) = std::str::from_utf8(bytes) else {
-        return;
-    };
-    let Ok(v) = serde_json::from_str::<serde_json::Value>(msg) else {
-        return;
-    };
-    if v["type"] != "ping" {
-        return;
-    }
-    let pong = format!(r#"{{"type":"pong","ts":{}}}"#, v["ts"]);
-    let peer = state.peer.load(Ordering::Acquire) as *mut mello_sys::MelloPeerConnection;
-    if !peer.is_null() {
-        mello_sys::mello_peer_send_reliable(peer, pong.as_ptr(), pong.len() as i32);
-    }
-}
-
 unsafe extern "C" fn on_fake_candidate(
     user_data: *mut std::ffi::c_void,
     candidate: *const mello_sys::MelloIceCandidate,
@@ -237,12 +203,28 @@ struct MediaStreamSfu {
     endpoint: String,
     /// `(session_id, role, when)` of each `join_stream`.
     joins: Arc<Mutex<Vec<(String, String, Instant)>>>,
-    /// No pong from any peer while set: the link is silent.
-    silent: Arc<AtomicBool>,
+    /// Connections with an id below this are silent (a pulled cable): their
+    /// socket is not read, so no pong. A later connection (the cable back)
+    /// answers.
+    silent_below: Arc<std::sync::atomic::AtomicUsize>,
+    next_connection: Arc<std::sync::atomic::AtomicUsize>,
     /// Close the socket of every connection now, with no close frame.
     drop_all: Arc<tokio::sync::Notify>,
     /// `leave` messages received.
     leaves: Arc<Mutex<Vec<Instant>>>,
+}
+
+impl MediaStreamSfu {
+    /// Pull the cable of every connection open now.
+    fn silence(&self) {
+        let open = self.next_connection.load(Ordering::Acquire);
+        self.silent_below.store(open, Ordering::Release);
+    }
+
+    /// Plug it back in.
+    fn unsilence(&self) {
+        self.silent_below.store(0, Ordering::Release);
+    }
 }
 
 /// A fake stream SFU that takes any number of connections.
@@ -256,7 +238,8 @@ async fn media_stream_sfu() -> MediaStreamSfu {
             listener.local_addr().expect("listener has an address")
         ),
         joins: Arc::default(),
-        silent: Arc::new(AtomicBool::new(false)),
+        silent_below: Arc::default(),
+        next_connection: Arc::default(),
         drop_all: Arc::new(tokio::sync::Notify::new()),
         leaves: Arc::default(),
     };
@@ -271,6 +254,7 @@ async fn media_stream_sfu() -> MediaStreamSfu {
 }
 
 async fn serve_stream_connection(socket: tokio::net::TcpStream, sfu: MediaStreamSfu) {
+    let id = sfu.next_connection.fetch_add(1, Ordering::AcqRel);
     let Ok(mut ws) = tokio_tungstenite::accept_async(socket).await else {
         return;
     };
@@ -285,10 +269,6 @@ async fn serve_stream_connection(socket: tokio::net::TcpStream, sfu: MediaStream
         return;
     }
     let candidates: Arc<Mutex<Vec<(String, String, i32)>>> = Arc::default();
-    let pong = Arc::new(PongState {
-        peer: std::sync::atomic::AtomicUsize::new(0),
-        silent: Arc::clone(&sfu.silent),
-    });
     let mut peer: usize = 0;
     let mut early = Vec::new();
     let mut relay = tokio::time::interval(Duration::from_millis(10));
@@ -301,7 +281,10 @@ async fn serve_stream_connection(socket: tokio::net::TcpStream, sfu: MediaStream
                 dropped_by_test = true;
                 break;
             }
-            msg = ws.next() => {
+            // While silent the socket is not read: no WebSocket pong, as on
+            // a pulled cable. Like mello-sfu, the fake answers no
+            // control-channel ping of a stream peer.
+            msg = ws.next(), if id >= sfu.silent_below.load(Ordering::Acquire) => {
                 let v: serde_json::Value = match msg {
                     Some(Ok(Message::Text(t))) => match serde_json::from_str(&t) {
                         Ok(v) => v,
@@ -340,12 +323,6 @@ async fn serve_stream_connection(socket: tokio::net::TcpStream, sfu: MediaStream
                                 p,
                                 Some(on_fake_candidate),
                                 Arc::as_ptr(&candidates) as *mut std::ffi::c_void,
-                            );
-                            pong.peer.store(p as usize, Ordering::Release);
-                            mello_sys::mello_peer_set_control_text_callback(
-                                p,
-                                Some(on_fake_control_text),
-                                Arc::as_ptr(&pong) as *mut std::ffi::c_void,
                             );
                             let answer = mello_sys::mello_peer_create_answer(p, offer_c.as_ptr());
                             assert!(!answer.is_null(), "fake SFU answer");
@@ -391,11 +368,9 @@ async fn serve_stream_connection(socket: tokio::net::TcpStream, sfu: MediaStream
         tokio::time::sleep(Duration::from_secs(6)).await;
     }
     if peer != 0 {
-        pong.peer.store(0, Ordering::Release);
         // SAFETY: the peer is destroyed once; its callbacks end first.
         unsafe {
             let p = peer as *mut mello_sys::MelloPeerConnection;
-            mello_sys::mello_peer_set_control_text_callback(p, None, std::ptr::null_mut());
             mello_sys::mello_peer_set_ice_callback(p, None, std::ptr::null_mut());
             mello_sys::mello_peer_destroy(p);
         }
@@ -620,7 +595,7 @@ async fn a_short_silence_shows_reconnecting_and_resumes_on_the_same_connection()
         // Pongs flow first: the link is live.
         tokio::time::sleep(Duration::from_millis(600)).await;
         let silent_at = Instant::now();
-        sfu.silent.store(true, Ordering::Release);
+        sfu.silence();
         wait_for_event(
             &events,
             "StreamReconnecting",
@@ -630,7 +605,7 @@ async fn a_short_silence_shows_reconnecting_and_resumes_on_the_same_connection()
         .await;
         let shown_after = silent_at.elapsed();
         tokio::time::sleep(Duration::from_millis(1_500)).await;
-        sfu.silent.store(false, Ordering::Release);
+        sfu.unsilence();
         wait_for_event(
             &events,
             "StreamResumed",
@@ -731,7 +706,7 @@ async fn a_long_silence_rejoins_with_a_new_connection() {
 
     let driver = async {
         tokio::time::sleep(Duration::from_millis(300)).await;
-        sfu.silent.store(true, Ordering::Release);
+        sfu.silence();
         wait_for_event(
             &events,
             "StreamReconnecting",
@@ -739,7 +714,7 @@ async fn a_long_silence_rejoins_with_a_new_connection() {
             is_reconnecting_host,
         )
         .await;
-        // The new connection's peer answers again.
+        // The rejoin's new connection answers: the cable is back for it.
         let deadline = tokio::time::Instant::now() + Duration::from_secs(8);
         while sfu.joins.lock().expect("joins").len() < 2 {
             assert!(
@@ -748,7 +723,6 @@ async fn a_long_silence_rejoins_with_a_new_connection() {
             );
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
-        sfu.silent.store(false, Ordering::Release);
         wait_for_event(
             &events,
             "StreamResumed",
@@ -862,7 +836,7 @@ async fn a_viewer_keeps_watching_through_the_hosts_hold_and_its_own_drop() {
         token_task: None,
         token_tried_at: None,
         ticks: 0,
-        rx_bytes: 0,
+        rx_access_units: 0,
         rx_changed_at: Instant::now(),
         clicked_at: None,
     });

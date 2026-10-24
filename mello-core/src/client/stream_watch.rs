@@ -50,9 +50,6 @@ use super::FRAME_STATE_PRESENTED;
 
 /// The longest the `watch_stream` RPC may take.
 pub(super) const WATCH_RPC_LIMIT: Duration = Duration::from_secs(10);
-/// The viewer reads its receive stats for the host-silence check every 4
-/// stream ticks (64 ms).
-const HOST_MEDIA_CHECK_TICKS: u64 = 4;
 
 /// A step of a watch or of the viewer link that ended.
 pub(super) enum ViewerMsg {
@@ -102,8 +99,10 @@ pub(super) struct ViewerLinkState {
     pub token_task: Option<JoinHandle<()>>,
     pub token_tried_at: Option<tokio::time::Instant>,
     pub ticks: u64,
-    /// Host media: the receive byte count and when it last grew.
-    pub rx_bytes: u64,
+    /// Host media: the access units seen (complete or not) and when the
+    /// count last grew. Not the byte count: the SFU's RTCP counts there and
+    /// arrives with no host at all.
+    pub rx_access_units: u64,
     pub rx_changed_at: Instant,
     /// Logged once, at the first frame.
     pub clicked_at: Option<Instant>,
@@ -541,7 +540,7 @@ impl super::Client {
             token_task: None,
             token_tried_at: None,
             ticks: 0,
-            rx_bytes: 0,
+            rx_access_units: 0,
             rx_changed_at: now,
             clicked_at: Some(join.clicked_at),
         });
@@ -613,16 +612,21 @@ impl super::Client {
                 );
             }
         }
-        if state.ticks.is_multiple_of(HOST_MEDIA_CHECK_TICKS) {
+        {
+            // Every tick: the silence counts from the last access unit that
+            // arrived, not from the last frame shown (the timeline holds
+            // frames for its target delay).
             if let Ok(stats) = conn.video_stats() {
-                if stats.rx_ingress_bytes != state.rx_bytes {
-                    state.rx_bytes = stats.rx_ingress_bytes;
+                let aus =
+                    stats.rx_core_complete_access_units + stats.rx_core_incomplete_access_units;
+                if aus != state.rx_access_units {
+                    state.rx_access_units = aus;
                     state.rx_changed_at = now;
                 }
             }
         }
-        if new_frames > 0 || held {
-            // Frames came, or the host stopped on purpose: not a silence.
+        if held {
+            // The host stopped on purpose (paused or idle): not a silence.
             state.rx_changed_at = now;
         }
 
@@ -631,12 +635,7 @@ impl super::Client {
             log::warn!("Stream viewer: ICE failed; rejoining the SFU");
             actions.extend(state.link.on_dropped(now));
         }
-        let pong_age = conn.pong_age_ms();
-        let own_silent = if pong_age < 0 {
-            now.saturating_duration_since(state.connected_at)
-        } else {
-            Duration::from_millis(pong_age as u64)
-        };
+        let own_silent = super::stream_link::own_link_silence(&conn, state.connected_at, now);
         let host_silent = (frames_presented > 0 && !held)
             .then(|| now.saturating_duration_since(state.rx_changed_at));
         actions.extend(state.link.observe(
@@ -723,7 +722,7 @@ impl super::Client {
     fn start_viewer_rejoin(&mut self) {
         let ctx = self.voice.mello_ctx() as usize;
         let ice = self.ice_servers.clone();
-        let limits = self.stream_join_limits;
+        let limits = self.stream_join_limits.for_rejoin();
         let tx = self.stream_tasks.sender();
         let now = tokio::time::Instant::now();
         let Some(state) = self.viewer_link.as_mut() else {
