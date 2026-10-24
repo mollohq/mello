@@ -1375,7 +1375,7 @@ DComp presenter diagnostics:
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
 | ~~Game audio decoded on arrival, no sync~~ **Fixed (stage 7)** — NetEQ in the voice mix, in-band FEC, A/V sync with the audio as master | — | — |
-| Game-audio FEC follows the host leg only | The viewers' loss does not reach the host encoder: at the 5 % floor Opus sends no FEC (§9.3) | Small (a floor over 8 %, or the SFU forwards the worst viewer loss) |
+| Game-audio FEC follows the host leg only | The viewers' loss does not reach the host encoder: a loss on the SFU to viewer leg alone turns no FEC on (§9.3) | Small (the SFU forwards the worst viewer loss) |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
