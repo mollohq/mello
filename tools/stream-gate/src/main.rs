@@ -623,6 +623,8 @@ fn run_profile(
         put("av_markers_matched", Some(av.markers_matched as f64));
         put("audio_gaps", Some(av.gaps as f64));
         put("audio_gap_ms", Some(av.gap_ms));
+        put("audio_dropouts", Some(av.dropouts as f64));
+        put("audio_dropout_ms", Some(av.dropout_ms));
         let (mos, pesq) = audio::score_speech(
             &a.spec,
             &a.reference,
@@ -661,12 +663,32 @@ fn run_profile(
             csv.push_str(&format!("{k},{heard:.0},{ms:.1}\n"));
         }
         let _ = std::fs::write(pdir.join("av.csv"), csv);
+        let mut scsv = String::from(
+            "t_ms,av_offset_ms,video_min_ms,audio_min_ms,audio_delay_ms,video_target_ms,video_current_ms\n",
+        );
+        for x in &measured.sync_samples {
+            let t = (x.t_us as i64 - arm_us as i64) as f64 / 1000.0;
+            scsv.push_str(&format!(
+                "{t:.0},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}\n",
+                x.av_offset_ms,
+                x.video_min_ms,
+                x.audio_min_ms,
+                x.audio_delay_ms,
+                x.video_target_ms,
+                x.video_current_ms
+            ));
+        }
+        let _ = std::fs::write(pdir.join("sync.csv"), scsv);
         audio_info = json!({
             "markers_expected": av.markers_expected,
             "markers_matched": av.markers_matched,
             "offset_min_ms": av.offset_min_ms,
             "offset_max_ms": av.offset_max_ms,
             "gaps": av.gap_list.iter().map(|(t, ms)| json!({
+                "heard_ms": ((t - arm_us as f64) / 1000.0).round(),
+                "ms": ms,
+            })).collect::<Vec<_>>(),
+            "dropouts": av.dropout_list.iter().map(|(t, ms)| json!({
                 "heard_ms": ((t - arm_us as f64) / 1000.0).round(),
                 "ms": ms,
             })).collect::<Vec<_>>(),

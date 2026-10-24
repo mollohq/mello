@@ -19,7 +19,8 @@
 //! |---|---|
 //! | A/V offset of marker k | the time its burst onset is heard minus the present time of video frame k x 15 (positive: the audio is late) |
 //! | `av_within_40ms_pct` | markers heard with an offset within +-40 ms, in % of the markers whose video frame the viewer showed (a marker not heard counts as outside) |
-//! | audio gap | the pilot more than 12 dB under its median for 20 ms or more, after the first audio |
+//! | audio gap | the output silent (all of it more than 30 dB under its median level) for 20 ms or more, after the first audio: the playout ran dry or muted |
+//! | audio dropout | the pilot more than 12 dB under its median for 20 ms or more: concealment (a lost or late packet that NetEQ filled), reported, not gated |
 //! | `audio_mos` | PESQ wideband of the speech, mean over 4 s segments, aligned by the markers |
 
 use crate::metrics::{Present, SourceClock};
@@ -56,6 +57,7 @@ pub struct AudioSpec {
     pub speech_cutoff_hz: f64,
     pub gap_min_ms: f64,
     pub gap_drop_db: f64,
+    pub silence_drop_db: f64,
     pub av_window_ms: f64,
     pub segment_s: f64,
     /// The voice gate's MOS on its `mobile` profile, the reference of the
@@ -144,6 +146,7 @@ pub fn load(path: &Path) -> Result<AudioSpec, String> {
         speech_cutoff_hz: num(a, "speech_cutoff_hz")?,
         gap_min_ms: num(a, "gap_min_ms")?,
         gap_drop_db: num(a, "gap_drop_db")?,
+        silence_drop_db: num(a, "silence_drop_db")?,
         av_window_ms: num(a, "av_window_ms")?,
         segment_s: num(a, "pesq_segment_s")?,
         voice_mobile_mos,
@@ -362,6 +365,46 @@ pub fn pilot_gap_list(spec: &AudioSpec, x: &[i16]) -> (Vec<(usize, f64)>, Option
     (gaps, Some(first * 240))
 }
 
+/// Silences after the first audio: (first sample, length ms). A silence is
+/// every 5 ms window of the output more than `silence_drop_db` under the
+/// median window level, for `gap_min_ms` or more. The pilot and the
+/// markers keep the reference above it at all times, so only an output
+/// that stopped (or a concealment that faded out) is one.
+pub fn silence_list(spec: &AudioSpec, x: &[i16], first: usize) -> Vec<(usize, f64)> {
+    const WIN: usize = 240;
+    const WIN_MS: f64 = 5.0;
+    let levels: Vec<f64> = x
+        .chunks_exact(WIN)
+        .map(|c| voice_gate::dsp::rms_i16(c))
+        .collect();
+    let start = first / WIN;
+    if start >= levels.len() {
+        return Vec::new();
+    }
+    let mut sorted: Vec<f64> = levels[start..].to_vec();
+    sorted.sort_by(|a, b| a.total_cmp(b));
+    let median = sorted[sorted.len() / 2];
+    let floor = median * 10f64.powf(-spec.silence_drop_db / 20.0);
+    let min_windows = (spec.gap_min_ms / WIN_MS).ceil() as usize;
+    let mut out = Vec::new();
+    let mut run = 0usize;
+    for (i, &l) in levels[start..]
+        .iter()
+        .chain(std::iter::once(&f64::INFINITY))
+        .enumerate()
+    {
+        if l < floor {
+            run += 1;
+        } else {
+            if run >= min_windows {
+                out.push(((start + i - run) * WIN, run as f64 * WIN_MS));
+            }
+            run = 0;
+        }
+    }
+    out
+}
+
 /// What the viewer's output pulls recorded.
 #[derive(Clone, Debug, Default)]
 pub struct Capture {
@@ -389,10 +432,15 @@ pub struct AvScores {
     pub offset_abs_p95_ms: Option<f64>,
     pub offset_min_ms: Option<f64>,
     pub offset_max_ms: Option<f64>,
+    /// Silences (the gated gaps).
     pub gaps: u64,
     pub gap_ms: f64,
     /// Each gap: when it was heard (µs), its length (ms).
     pub gap_list: Vec<(f64, f64)>,
+    /// Pilot dropouts (concealment), reported.
+    pub dropouts: u64,
+    pub dropout_ms: f64,
+    pub dropout_list: Vec<(f64, f64)>,
     /// (marker k, reference sample, output sample, offset ms) of each match.
     pub matches: Vec<(u64, u64, usize, f64)>,
 }
@@ -408,13 +456,22 @@ pub fn score_av(
     end_us: u64,
 ) -> AvScores {
     let mut out = AvScores::default();
-    let (list, _) = pilot_gap_list(spec, &capture.samples);
-    out.gaps = list.len() as u64;
-    out.gap_ms = list.iter().map(|&(_, ms)| ms).sum();
-    out.gap_list = list
+    let (list, first) = pilot_gap_list(spec, &capture.samples);
+    out.dropouts = list.len() as u64;
+    out.dropout_ms = list.iter().map(|&(_, ms)| ms).sum();
+    out.dropout_list = list
         .iter()
         .filter_map(|&(n, ms)| capture.heard_us(n).map(|t| (t, ms)))
         .collect();
+    if let Some(first) = first {
+        let silences = silence_list(spec, &capture.samples, first);
+        out.gaps = silences.len() as u64;
+        out.gap_ms = silences.iter().map(|&(_, ms)| ms).sum();
+        out.gap_list = silences
+            .iter()
+            .filter_map(|&(n, ms)| capture.heard_us(n).map(|t| (t, ms)))
+            .collect();
+    }
 
     // Detector bias: where it finds the reference's first markers.
     let mono_ref: Vec<i16> = reference.stereo.iter().step_by(2).copied().collect();
@@ -781,8 +838,27 @@ mod tests {
         let av = score_av(&spec, &reference, &cap, &presents, &clock, end);
         assert_eq!(av.gaps, 1);
         assert!((av.gap_ms - 300.0).abs() <= 10.0, "gap {} ms", av.gap_ms);
+        assert_eq!(av.dropouts, 1, "a silence is also a pilot dropout");
         assert!(av.markers_matched < av.markers_expected);
         assert!(av.within_pct.unwrap_or(100.0) < 100.0);
+    }
+
+    /// Concealment that keeps the signal (here: the pilot gone, the rest
+    /// there) is a dropout, not a gap.
+    #[test]
+    fn a_lost_pilot_is_a_dropout_and_no_gap() {
+        let (spec, reference, mut cap, presents, clock) = simulate(60.0, 60.0, &[]);
+        // 40 ms of concealment-like output: a low tone, no pilot.
+        let from = 4 * SAMPLE_RATE;
+        for (j, v) in cap.samples[from..from + 1920].iter_mut().enumerate() {
+            *v = (3000.0
+                * (2.0 * std::f64::consts::PI * 400.0 * j as f64 / SAMPLE_RATE as f64).sin())
+                as i16;
+        }
+        let end = cap.pull_us.last().copied().unwrap_or(0);
+        let av = score_av(&spec, &reference, &cap, &presents, &clock, end);
+        assert_eq!(av.gaps, 0);
+        assert_eq!(av.dropouts, 1);
     }
 
     #[test]

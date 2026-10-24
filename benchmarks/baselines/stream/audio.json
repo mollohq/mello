@@ -17,6 +17,7 @@
     "speech_cutoff_hz": 7000,
     "gap_min_ms": 20,
     "gap_drop_db": 12,
+    "silence_drop_db": 30,
     "av_window_ms": 500,
     "pesq_segment_s": 4
   },

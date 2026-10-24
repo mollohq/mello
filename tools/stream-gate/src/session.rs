@@ -515,6 +515,20 @@ pub struct ViewerRecord {
     /// a time as the device thread does, and its stats at the end.
     pub audio: Option<crate::audio::Capture>,
     pub audio_stats: Option<AudioRecord>,
+    /// The viewer's A/V sync state every 100 ms (stage 7, `sync.csv`).
+    pub sync_samples: Vec<SyncSample>,
+}
+
+/// One sample of the viewer's A/V sync state.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SyncSample {
+    pub t_us: u64,
+    pub av_offset_ms: f32,
+    pub video_min_ms: f32,
+    pub audio_min_ms: f32,
+    pub audio_delay_ms: f32,
+    pub video_target_ms: f32,
+    pub video_current_ms: f32,
 }
 
 /// The viewer's game audio and A/V sync at the end of a run (stage 7).
@@ -630,6 +644,7 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec)
         timeline: None,
         audio: None,
         audio_stats: None,
+        sync_samples: Vec::new(),
     };
     let file = match std::fs::File::create(&luma_path) {
         Ok(f) => f,
@@ -732,6 +747,20 @@ fn run_viewer(rt: &tokio::runtime::Runtime, ctx_arc: Arc<Ctx>, spec: ViewerSpec)
         tick += 1;
         if tick.is_multiple_of(125) {
             conn.send_ping();
+        }
+        if spec.capture_audio && tick.is_multiple_of(6) {
+            // SAFETY: viewer is live until the stop below.
+            let mut s: mello_sys::MelloStreamStats = unsafe { std::mem::zeroed() };
+            unsafe { mello_sys::mello_stream_viewer_get_stats(viewer, &mut s) };
+            rec.sync_samples.push(SyncSample {
+                t_us: clock_us(),
+                av_offset_ms: s.av_offset_ms,
+                video_min_ms: s.av_video_min_delay_ms,
+                audio_min_ms: s.av_audio_min_delay_ms,
+                audio_delay_ms: s.audio_delay_ms,
+                video_target_ms: s.target_delay_ms,
+                video_current_ms: s.current_delay_ms,
+            });
         }
         if conn.is_video_track_open() {
             if let Ok(stats) = conn.video_stats() {

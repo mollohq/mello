@@ -164,10 +164,16 @@ pub const METRICS: &[(&str, &str, i8)] = &[
     ("av_markers_matched", "A/V markers heard", 0),
     (
         "audio_gaps",
-        "Audio gaps (pilot 12 dB down for 20 ms or more)",
+        "Audio gaps (output silent for 20 ms or more)",
         -1,
     ),
     ("audio_gap_ms", "Audio gap time (ms)", -1),
+    (
+        "audio_dropouts",
+        "Audio dropouts (pilot 12 dB down for 20 ms or more)",
+        0,
+    ),
+    ("audio_dropout_ms", "Audio dropout time (ms)", 0),
     ("audio_mos", "Game audio MOS (PESQ-WB, speech)", 1),
     (
         "audio_delay_ms",
