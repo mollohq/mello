@@ -4624,9 +4624,9 @@ fn stream_preview_removes_the_stream_skeleton() {
     assert!(h.app().get_feed_skeleton_recap());
 }
 
-/// Two or more members and one real card of any kind retire the whole trio.
+/// Two members and a real card of another type keep the whole trio (frame B2).
 #[test]
-fn two_members_and_a_real_card_hide_every_skeleton() {
+fn two_members_and_a_catchup_card_keep_every_skeleton() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
 
@@ -4638,13 +4638,36 @@ fn two_members_and_a_real_card_hide_every_skeleton() {
         )]),
     });
 
-    assert_eq!(skeleton_cells(&h), 0);
-    assert!(!h.app().get_feed_invite_line());
+    assert_eq!(skeleton_cells(&h), 3);
 }
 
-/// Members alone do not retire the trio: with no real card it all stays.
+/// At two members a cell still goes when its own card type arrives.
 #[test]
-fn three_members_with_an_empty_feed_still_show_the_trio() {
+fn two_members_lose_a_skeleton_when_its_card_arrives() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![feed_entry(
+            "evt-stream-1",
+            "session-preview",
+            serde_json::json!({
+                "streamer_name": "ostkatt",
+                "title": "Ranked",
+                "duration_min": 30,
+                "snapshot_urls": ["https://example.invalid/a.jpg"]
+            }),
+        )]),
+    });
+
+    assert_eq!(skeleton_cells(&h), 2, "voice clip and recap remain");
+    assert!(!h.app().get_feed_skeleton_stream());
+}
+
+/// From three members on the crew is no longer new: no skeleton, with or
+/// without a real card (frame C).
+#[test]
+fn three_members_hide_every_skeleton() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 3);
 
@@ -4652,7 +4675,8 @@ fn three_members_with_an_empty_feed_still_show_the_trio() {
         response: feed_of(vec![]),
     });
 
-    assert_eq!(skeleton_cells(&h), 3);
+    assert_eq!(skeleton_cells(&h), 0);
+    assert!(!h.app().get_feed_invite_line());
 }
 
 /// A solo crew with one real card keeps the skeletons of the types it lacks.
@@ -6979,34 +7003,42 @@ fn a_feed_changed_push_goes_to_the_core_as_a_command() {
 }
 
 /// A crew mate joined and the feed reloaded on a push. The crew list still
-/// says one member, the head2head entry of the feed says two: the skeleton
-/// trio goes, because a real card is there.
+/// says one member, the head2head entry of the feed says more. At two members
+/// the trio stays (frame B2). From three it goes (frame C).
 #[test]
-fn the_feed_member_count_hides_the_skeleton_trio_before_the_crew_list_catches_up() {
+fn the_feed_member_count_drives_the_skeleton_trio_before_the_crew_list_catches_up() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 1);
-    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
-    let mut feed = recent_games_feed();
-    feed.sections[0].entries.insert(
-        0,
-        h2h_entry(
-            2,
-            vec![h2h_title(
-                "the_collector",
-                "u2",
-                serde_json::json!(14),
-                "installed",
-            )],
-            vec![h2h_pair("u2", 1, 1)],
-            None,
-        ),
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Max")],
     );
-    h.emit(Event::FeedLoaded { response: feed });
-    assert_eq!(
-        skeleton_cells(&h),
-        0,
-        "two members and a real card: no trio"
-    );
+    let feed_of_members = |members: i32| {
+        let mut feed = recent_games_feed();
+        feed.sections[0].entries.insert(
+            0,
+            h2h_entry(
+                members,
+                vec![h2h_title(
+                    "the_collector",
+                    "u2",
+                    serde_json::json!(14),
+                    "installed",
+                )],
+                vec![h2h_pair("u2", 1, 1)],
+                None,
+            ),
+        );
+        feed
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_of_members(2),
+    });
+    assert_eq!(skeleton_cells(&h), 3, "two members: the trio stays");
+    h.emit(Event::FeedLoaded {
+        response: feed_of_members(3),
+    });
+    assert_eq!(skeleton_cells(&h), 0, "three members: no trio");
 }
 
 // ── live session card ───────────────────────────────────────────────

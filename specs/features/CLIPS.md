@@ -326,7 +326,7 @@ Rules:
 
 - The trio comes after the real cards. It never takes the hero slot or a card cell.
 - A cell hides when its real card type exists in the feed.
-- All three cells hide when the crew has two or more members and at least one real card of any kind.
+- All three cells hide from three members on, with or without real cards. At two members the trio stays under the real cards, and each cell still hides when its own card type exists.
 - The `locked` upsell is not a real card.
 - The trio is client state. It is not in the card model. Component: `SkeletonTrio` in `client/ui/components/skeleton_trio.slint`. Rule: `skeleton_trio_for` in `client/src/handlers/clip.rs`.
 

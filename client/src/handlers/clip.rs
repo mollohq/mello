@@ -286,15 +286,15 @@ impl SkeletonTrio {
 
 /// Decide the trio from the card types in the feed. A cell hides when its real
 /// card type exists: a stream preview or a live stream, a clip, a recap. All
-/// three hide when the crew has two or more members and at least one real card
-/// of any kind. `locked` is the m3llo+ upsell, not a real card.
+/// three hide from three members on (frame C): the crew is no longer new. At
+/// two members the trio stays under whatever real cards there are (frame B2).
+/// `locked` is the m3llo+ upsell, not a real card.
 pub(crate) fn skeleton_trio_for<'a>(
     card_types: impl IntoIterator<Item = &'a str>,
     live_streams: usize,
     member_count: i32,
 ) -> SkeletonTrio {
     let (mut stream, mut voice_clip, mut recap) = (live_streams == 0, true, true);
-    let mut any_real = live_streams > 0;
     for t in card_types {
         // Head2head and its invite card are not real cards: frame B2 keeps the
         // trio next to a versus hero.
@@ -303,7 +303,6 @@ pub(crate) fn skeleton_trio_for<'a>(
         {
             continue;
         }
-        any_real = true;
         match t {
             "session-preview" => stream = false,
             "clip" => voice_clip = false,
@@ -311,7 +310,7 @@ pub(crate) fn skeleton_trio_for<'a>(
             _ => {}
         }
     }
-    if member_count >= 2 && any_real {
+    if member_count >= 3 {
         return SkeletonTrio {
             stream: false,
             voice_clip: false,
@@ -1911,9 +1910,18 @@ mod tests {
         assert_eq!(s(skeleton_trio_for(["clip"], 0, 1)), (true, false, true));
         assert_eq!(s(skeleton_trio_for(["recap"], 0, 1)), (true, true, false));
         assert_eq!(s(skeleton_trio_for([], 1, 1)), (false, true, true));
-        assert_eq!(s(skeleton_trio_for(["locked"], 0, 5)), all(true));
-        assert_eq!(s(skeleton_trio_for(["catchup"], 0, 2)), all(false));
-        assert_eq!(s(skeleton_trio_for([], 0, 9)), all(true));
+        // Two members: the trio stays under the real cards (frame B2).
+        assert_eq!(s(skeleton_trio_for(["locked"], 0, 2)), all(true));
+        assert_eq!(s(skeleton_trio_for(["catchup"], 0, 2)), all(true));
+        assert_eq!(s(skeleton_trio_for(["clip"], 0, 2)), (true, false, true));
+        assert_eq!(
+            s(skeleton_trio_for(["head2head", "game-session"], 0, 2)),
+            all(true)
+        );
+        // Three members or more: none, with or without real cards.
+        assert_eq!(s(skeleton_trio_for([], 0, 3)), all(false));
+        assert_eq!(s(skeleton_trio_for(["locked"], 0, 5)), all(false));
+        assert_eq!(s(skeleton_trio_for([], 0, 9)), all(false));
     }
 
     #[test]
