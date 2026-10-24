@@ -22,6 +22,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"sort"
+	"sync/atomic"
 	"time"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -53,7 +54,19 @@ type pushEvent struct {
 // eventPushClock and eventPushGo are replaced by tests.
 var (
 	eventPushClock = time.Now
-	eventPushGo    = func(f func()) { go f() }
+	eventPushGo    = func(f func()) {
+		go func() {
+			// A panic in a background flush must not take the plugin down.
+			defer func() {
+				if r := recover(); r != nil {
+					eventPushPanics.Add(1)
+				}
+			}()
+			f()
+		}()
+	}
+	// eventPushPanics counts recovered panics in background flushes. Tests read it.
+	eventPushPanics atomic.Int64
 )
 
 // pushTzOffset is the offset used for a member's local time, nil when unknown.

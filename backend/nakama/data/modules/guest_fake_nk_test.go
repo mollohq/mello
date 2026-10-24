@@ -109,3 +109,9 @@ func (f *fakeGuestNk) UsersGetId(_ context.Context, ids []string, _ []string) ([
 func ctxWithUser(userID string) context.Context {
 	return context.WithValue(context.Background(), runtime.RUNTIME_CTX_USER_ID, userID)
 }
+
+// ChannelIdBuild returns a deterministic group channel id, so a background push
+// flush in a guest test does not hit the nil embedded module.
+func (f *fakeGuestNk) ChannelIdBuild(_ context.Context, _ string, target string, _ runtime.ChannelType) (string, error) {
+	return "3." + target + "..", nil
+}

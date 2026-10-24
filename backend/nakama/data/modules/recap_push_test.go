@@ -297,6 +297,11 @@ func TestRecapJobQueuesAndSendsTheMondayPush(t *testing.T) {
 	var sent []string
 	old := recapPushSend
 	recapPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, _, _ string, it RecapPushItem) {
+		// The recap job recomputes head2head, which can queue belt pushes
+		// for the moves it finds. This test checks the recap push only.
+		if it.Type != "" && it.Type != recapPushType {
+			return
+		}
 		sent = append(sent, it.UserID+": "+it.Body)
 	}
 	defer func() { recapPushSend = old }()
