@@ -52,9 +52,8 @@ impl Facts {
 
     /// No recap in the last seven days.
     fn no_recap_this_week(&self) -> bool {
-        !self
-            .newest_recap_ms
-            .is_some_and(|t| days_between(t, self.now_ms) < 7)
+        self.newest_recap_ms
+            .is_none_or(|t| days_between(t, self.now_ms) >= 7)
     }
 }
 
