@@ -313,22 +313,38 @@ public:
         return sender;
     }
 
+    // The receiver needs one monotonic timeline (rtp_h264_receiver.hpp: a
+    // time before the last one is counted as backwards_time_inputs and the
+    // packet is ignored). Packets are stamped on the transport thread, and
+    // the tick ran with the test thread's clock after the swap. A packet
+    // stamped before that tick but queued after the swap (stamped before the
+    // lock, or between the swap and the tick) reached the receiver on the
+    // next drain with an older time: ignored, so its access unit was never
+    // emitted (AnIdrQueuesBehindTheDeltasAndDropsNothing failed about once in
+    // 40 runs under CPU load here, and once in the macOS job of mello#177).
+    // Now the stamp is taken under the lock, and the tick runs at the time
+    // of the swap or of the last packet fed, whichever is later: every packet
+    // queued after the swap has a later stamp.
     void drain_receiver() {
         std::deque<std::pair<std::vector<uint8_t>, RtpH264Receiver::TimePoint>>
             pending;
+        RtpH264Receiver::TimePoint swapped_at;
         {
             std::lock_guard<std::mutex> lock(mutex_);
+            swapped_at = RtpH264Receiver::TimePoint::clock::now();
             pending.swap(ingress_queue_);
         }
 
+        RtpH264Receiver::TimePoint tick_at = swapped_at;
         for (auto& entry : pending) {
             receiver_.on_rtp_packet(
                 entry.first.data(),
                 entry.first.size(),
                 entry.second
             );
+            tick_at = std::max(tick_at, entry.second);
         }
-        receiver_.tick(RtpH264Receiver::TimePoint::clock::now());
+        receiver_.tick(tick_at);
     }
 
     bool wait_for_emitted_count(
@@ -417,14 +433,16 @@ private:
                 return;
             }
 
-            const auto now = RtpH264Receiver::TimePoint::clock::now();
             std::vector<uint8_t> packet;
             packet.reserve(binary->size());
             for (const auto byte : *binary) {
                 packet.push_back(static_cast<uint8_t>(byte));
             }
 
+            // The arrival time is taken under the lock, so the stamps of the
+            // queue never go back past a drain (drain_receiver).
             std::lock_guard<std::mutex> lock(mutex_);
+            const auto now = RtpH264Receiver::TimePoint::clock::now();
             if (const auto parsed = parse_rtp_packet(
                     packet.data(),
                     packet.size(),
@@ -897,7 +915,8 @@ TEST(RtpVideoSenderPacingTest, AnIdrLeavesInUnder50MsAtThePresetBitrate) {
 // waited for the whole frame in flight.
 TEST(RtpVideoSenderRetransmitTest, RetransmitsInterleaveWithTheAccessUnitInFlight) {
     LoopbackVideoLink link;
-    // 200 kbps ceiling: 500 kbps pacing, ~1.1 s for the 64 KiB access unit.
+    // 200 kbps ceiling: 500 kbps pacing, ~4.4 s for the 256 KiB access unit,
+    // so a stall of the test thread cannot let it finish before the check.
     RtpVideoSender sender = link.make_sender(200'000);
 
     const auto idr = make_idr_access_unit();
@@ -905,7 +924,7 @@ TEST(RtpVideoSenderRetransmitTest, RetransmitsInterleaveWithTheAccessUnitInFligh
     ASSERT_TRUE(link.wait_for_captured_count(3, 10s));
     const uint16_t cached = link.captured_rtp().front().sequence;
 
-    const auto big = make_large_delta_access_unit(64 * 1024);
+    const auto big = make_large_delta_access_unit(256 * 1024);
     ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 33'333));
     ASSERT_TRUE(link.wait_for_captured_count(6, 10s));
     ASSERT_TRUE(send_rtcp(link.receiver_track(), make_nack_packet({cached})));
@@ -923,8 +942,8 @@ TEST(RtpVideoSenderRetransmitTest, RetransmitsInterleaveWithTheAccessUnitInFligh
 // IDR replaces.
 TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     LoopbackVideoLink link;
-    // 8 kbps ceiling: 20 kbps pacing. The queued repairs cannot drain
-    // before the PLI.
+    // 8 kbps ceiling: the pacer runs at its 50 kbps floor. The queued
+    // repairs cannot drain before the PLI.
     RtpVideoSender sender = link.make_sender(8'000);
 
     const auto idr = make_idr_access_unit();
@@ -939,19 +958,26 @@ TEST(RtpVideoSenderRetransmitTest, APliDropsTheQueuedRetransmits) {
     const auto big = make_large_delta_access_unit(16 * 1024);
     ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 33'333));
     // Its first packet is on the wire: the pacer now owes about 1.2 kB, so
-    // the next packet, a repair too, waits about 0.4 s at 20 kbps.
+    // the next packet, a repair too, waits about 0.15 s at 50 kbps.
     ASSERT_TRUE(link.wait_for_captured_count(4, 10s));
+    // The ten NACKs (one compound RTCP packet) and the PLI go back to back,
+    // with no wait between them: the repairs could only leave if the
+    // transport thread stalled for the whole pacer wait between the two
+    // datagrams. (One compound with the PLI does not work: the PLI handler
+    // sees the message before the NACK handler.) Before, the test waited
+    // for the NACK count between them, and a stall of the test thread let
+    // the repairs leave.
+    std::vector<uint8_t> nacks;
     for (int i = 0; i < 10; ++i) {
-        ASSERT_TRUE(send_rtcp(link.receiver_track(), make_nack_packet({a, b, c})));
+        const auto nack = make_nack_packet({a, b, c});
+        nacks.insert(nacks.end(), nack.begin(), nack.end());
     }
-    ASSERT_TRUE(link.wait_for_stats(
-        [](const RtpVideoSenderStats& stats) { return stats.rtx_requests >= 30; },
-        sender,
-        5s
-    ));
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), nacks));
     ASSERT_TRUE(send_rtcp(link.receiver_track(), make_pli_packet()));
     ASSERT_TRUE(link.wait_for_stats(
-        [](const RtpVideoSenderStats& stats) { return stats.rtx_queue_flushes >= 1; },
+        [](const RtpVideoSenderStats& stats) {
+            return stats.rtx_requests >= 30 && stats.rtx_queue_flushes >= 1;
+        },
         sender,
         5s
     ));
@@ -976,9 +1002,14 @@ TEST(RtpVideoSenderRetransmitTest, ARepeatedNackInsideOneRoundTripResendsOnce) {
     ASSERT_TRUE(link.wait_for_captured_count(3, 10s));
     const uint16_t lost = link.captured_rtp().front().sequence;
     // No TWCC here: the round trip is unknown, so the interval is 100 ms.
+    // The five NACKs go in one compound RTCP packet, so the handler sees
+    // them together and no stall of the test thread can space them out.
+    std::vector<uint8_t> nacks;
     for (int i = 0; i < 5; ++i) {
-        ASSERT_TRUE(send_rtcp(link.receiver_track(), make_nack_packet({lost})));
+        const auto nack = make_nack_packet({lost});
+        nacks.insert(nacks.end(), nack.begin(), nack.end());
     }
+    ASSERT_TRUE(send_rtcp(link.receiver_track(), nacks));
     ASSERT_TRUE(link.wait_for_stats(
         [](const RtpVideoSenderStats& stats) {
             return stats.rtx_requests >= 5 && stats.rtx_sent >= 1;
@@ -992,15 +1023,17 @@ TEST(RtpVideoSenderRetransmitTest, ARepeatedNackInsideOneRoundTripResendsOnce) {
 }
 
 // libwebrtc's second retransmit rule: retransmits use at most the target
-// rate over 500 ms. At a 400 kbps ceiling that is 25 kB: a NACK for all 55
-// packets of a 64 KiB access unit resends about 20 of them.
+// rate over 500 ms. At a 400 kbps ceiling that is 25 kB: a NACK for all 30
+// packets of a 33 KiB access unit resends about 22 of them.
 TEST(RtpVideoSenderRetransmitTest, RetransmitsUseAtMostTheTargetRate) {
     LoopbackVideoLink link;
     RtpVideoSender sender = link.make_sender(400'000);
 
-    const auto big = make_large_delta_access_unit(64 * 1024);
+    // 33 kB: 30 packets in about 0.25 s at 1 Mbps, so the oldest is far
+    // inside the 1 s NACK cache when the NACK comes.
+    const auto big = make_large_delta_access_unit(33 * 1024);
     ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 0));
-    ASSERT_TRUE(link.wait_for_captured_count(55, 10s));
+    ASSERT_TRUE(link.wait_for_captured_count(30, 10s));
     std::vector<uint16_t> sequences;
     for (const auto& packet : link.captured_rtp()) {
         sequences.push_back(packet.sequence);
@@ -1212,14 +1245,16 @@ TEST(RtpVideoSenderAdmissionTest, QueueOverflowEntersIdrGate) {
 TEST(RtpVideoSenderAdmissionTest, AnOverflowWhileAnIdrDrainsAsksForNoSecondIdr) {
     LoopbackVideoLink link;
     std::atomic<int> idr_requests{0};
-    // 8 kbps ceiling: 20 kbps pacing. The 6 kB IDR takes about 2.4 s.
+    // 8 kbps ceiling: the pacer runs at its 50 kbps floor. The 60 kB IDR
+    // takes about 10 s, so no stall of the test thread lets it finish before
+    // the checks (6 kB took about 1 s).
     RtpVideoSender sender = link.make_sender(
         8'000,
         {},
         {},
         [&idr_requests]() { idr_requests.fetch_add(1, std::memory_order_relaxed); }
     );
-    const auto idr = make_large_idr_access_unit(6'000);
+    const auto idr = make_large_idr_access_unit(60'000);
     ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 0));
     for (int index = 0; index < 40; ++index) {
         const auto delta = make_delta_access_unit(static_cast<uint8_t>(index));

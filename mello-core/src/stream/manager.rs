@@ -343,6 +343,11 @@ pub struct StreamManager {
     // request must not swallow a viewer's 500ms PLI/join keyframe (the
     // viewer stays gated until an IDR actually arrives).
     last_viewer_keyframe_request: Instant,
+    /// A viewer key frame request that the 500 ms cooldown held back while
+    /// the deltas wait for an IDR: it goes out when the cooldown expires.
+    /// Before, the deltas waited for the 2 s recovery request instead
+    /// (a 1.8 s freeze after an outage, streaming-quality stage 6).
+    deferred_keyframe_at: Option<Instant>,
     last_pacing_telemetry: Option<PacingTelemetry>,
     last_pacing_sample_at: Instant,
     manager_video_packets_in_total: u64,
@@ -469,6 +474,7 @@ impl StreamManager {
                 - Duration::from_secs(QUEUE_KEYFRAME_REQUEST_COOLDOWN_SECS),
             last_viewer_keyframe_request: Instant::now()
                 - Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
+            deferred_keyframe_at: None,
             last_pacing_telemetry: None,
             last_pacing_sample_at: Instant::now(),
             manager_video_packets_in_total: 0,
@@ -1215,6 +1221,7 @@ impl StreamManager {
         while let Some(feedback) = self.sink.poll_video_feedback().await {
             self.handle_video_feedback(&feedback, now).await;
         }
+        self.fire_deferred_keyframe();
         if !self.viewer_remb.is_empty() {
             self.apply_remb_aggregate(now).await;
         } else {
@@ -1293,10 +1300,18 @@ impl StreamManager {
                     reason,
                     feedback.viewer_id
                 );
-                self.request_host_keyframe_with_cooldown(
-                    reason,
-                    Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
-                );
+                let cooldown = Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS);
+                if !self.request_host_keyframe_with_cooldown(reason, cooldown)
+                    && self.deferred_keyframe_at.is_none()
+                {
+                    let at = self.last_viewer_keyframe_request + cooldown;
+                    log::info!(
+                        "Stream manager keyframe request held by the cooldown: reason={} due_in_ms={}",
+                        reason,
+                        at.saturating_duration_since(now).as_millis()
+                    );
+                    self.deferred_keyframe_at = Some(at);
+                }
             }
             SinkVideoFeedbackKind::Remb { bitrate_bps } => {
                 if bitrate_bps == 0 {
@@ -1326,6 +1341,28 @@ impl StreamManager {
                 self.quality.set_gcc_target_bps(bitrate_bps);
                 self.apply_quality_bitrate(now).await;
             }
+        }
+    }
+
+    /// Send the viewer key frame request that the cooldown held back, once
+    /// the cooldown expired, while the deltas still wait for an IDR.
+    fn fire_deferred_keyframe(&mut self) {
+        let Some(at) = self.deferred_keyframe_at else {
+            return;
+        };
+        if !self.drop_delta_until_keyframe {
+            // An IDR arrived meanwhile: the request is answered.
+            self.deferred_keyframe_at = None;
+            return;
+        }
+        if Instant::now() < at {
+            return;
+        }
+        if self.request_host_keyframe_with_cooldown(
+            "deferred_viewer_request",
+            Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS),
+        ) {
+            self.deferred_keyframe_at = None;
         }
     }
 
@@ -1431,6 +1468,7 @@ impl StreamManager {
                 }
 
                 if packet.is_keyframe {
+                    self.deferred_keyframe_at = None;
                     if self.drop_delta_until_keyframe {
                         self.drop_delta_until_keyframe = false;
                         log::info!(
@@ -2624,6 +2662,53 @@ mod tests {
             "viewer_join",
             Duration::from_millis(VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS)
         ));
+        std::mem::forget(mgr);
+    }
+
+    /// A PLI inside the 500 ms viewer cooldown holds the deltas for an IDR.
+    /// The request goes out when the cooldown expires. Before stage 6's fix
+    /// it waited for the 2 s recovery request: after an outage the picture
+    /// froze about 1.8 s more.
+    #[test]
+    fn a_pli_inside_the_cooldown_is_requested_when_the_cooldown_expires() {
+        let rt = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("runtime");
+        let mut mgr = remb_test_manager(Arc::new(FakeSink::new()));
+        let feedback = |kind| SinkVideoFeedback {
+            viewer_id: SFU_CONTROL_VIEWER_ID.to_string(),
+            kind,
+        };
+
+        // A local IDR request goes out, and its IDR arrives.
+        rt.block_on(mgr.handle_video_feedback(
+            &feedback(SinkVideoFeedbackKind::LocalIdrNeeded),
+            Instant::now(),
+        ));
+        let first = mgr.last_viewer_keyframe_request;
+        mgr.drop_delta_until_keyframe = false;
+
+        // A viewer's PLI right after: inside the cooldown, deltas wait.
+        rt.block_on(
+            mgr.handle_video_feedback(&feedback(SinkVideoFeedbackKind::Pli), Instant::now()),
+        );
+        assert!(mgr.drop_delta_until_keyframe);
+        assert_eq!(
+            mgr.last_viewer_keyframe_request, first,
+            "held by the cooldown"
+        );
+
+        // The cooldown expires: the next feedback poll sends the request.
+        std::thread::sleep(Duration::from_millis(
+            VIEWER_KEYFRAME_REQUEST_COOLDOWN_MS + 20,
+        ));
+        rt.block_on(mgr.drain_sink_events());
+        assert!(
+            mgr.last_viewer_keyframe_request > first,
+            "the held request goes out when the cooldown expires"
+        );
+        assert!(mgr.deferred_keyframe_at.is_none());
         std::mem::forget(mgr);
     }
 

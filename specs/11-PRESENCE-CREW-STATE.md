@@ -771,10 +771,16 @@ Priority event (immediate to all subscribers).
     "stream_id": "stream_123",
     "streamer_id": "user_a",
     "streamer_username": "k0ji_tech",
-    "title": "PROJECT AVALON"
+    "title": "PROJECT AVALON",
+    "mode": "sfu",
+    "width": 1920,
+    "height": 1080,
+    "fps": 60
   }
 }
 ```
+
+`stream_started` comes from `stream_live`, when the host's SFU track is open (streaming-quality stage 6). It carries the mode and the encode size and rate, so a viewer starts its decoder with no second RPC. An older client's `start_stream` sends it at the start, without `fps`.
 
 Event types:
 - `stream_started`

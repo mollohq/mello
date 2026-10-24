@@ -129,3 +129,58 @@ async fn connect_sequence_sends_no_presence_update() {
         "presence at connect belongs to the session-start hook: {ids:?}"
     );
 }
+
+/// Stage 6: the source picker opening probes the SFU regions again when the
+/// last probe is a minute old, so the stream goes to the region that is
+/// fastest now. A fresh probe is not repeated.
+#[tokio::test(flavor = "current_thread")]
+async fn a_stream_start_probes_the_regions_again_when_the_ranking_is_stale() {
+    let (config, health_hits) = recording_nakama().await;
+    let health = format!(
+        "http://{}:{}/health",
+        config.nakama_host, config.nakama_port
+    );
+    let (event_tx, _events) = std::sync::mpsc::channel();
+    let voice = VoiceManager::with_test_audio_backend(event_tx.clone());
+    let mut client = Client::with_voice(
+        config,
+        event_tx,
+        voice,
+        Arc::new(Mutex::new(None)),
+        Arc::new(Mutex::new(None)),
+        Arc::new(AtomicBool::new(false)),
+        Arc::new(AtomicU8::new(0)),
+        false,
+        false,
+    );
+    client.sfu_region_list = vec![crate::transport::sfu_region::SfuRegionEndpoint {
+        region: "eu-west".into(),
+        health_url: health,
+    }];
+
+    // Probed 10 s ago: no new probe.
+    client.region_probed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(10));
+    client.probe_regions_for_stream();
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert!(
+        crate::transport::sfu_region::preferred_region(&client.sfu_regions).is_none(),
+        "a fresh ranking is not probed again"
+    );
+
+    // Probed 2 minutes ago: the picker opening probes now.
+    client.region_probed_at = Some(std::time::Instant::now() - std::time::Duration::from_secs(120));
+    client.probe_regions_for_stream();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while crate::transport::sfu_region::preferred_region(&client.sfu_regions).is_none() {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "no probe at stream start"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    assert_eq!(
+        crate::transport::sfu_region::preferred_region(&client.sfu_regions).as_deref(),
+        Some("eu-west")
+    );
+    drop(health_hits);
+}

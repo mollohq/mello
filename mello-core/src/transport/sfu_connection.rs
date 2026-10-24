@@ -4,7 +4,7 @@ use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,9 @@ pub use crate::stream::rtp_peer::PeerMediaRole;
 /// dropped server-side and counted as `stream_client_stats_oversized`, so the
 /// client checks first and logs locally rather than reporting into a void.
 const STREAM_STATS_MAX_BYTES: usize = 2048;
+/// A stream connection pings its signaling socket this often (stage 6): the
+/// pong age shows a silent link within about 830 ms.
+const STREAM_WS_PING_INTERVAL: Duration = Duration::from_millis(128);
 
 fn peer_media_role_is_stream(role: PeerMediaRole) -> bool {
     matches!(
@@ -181,6 +184,13 @@ pub struct SfuConnection {
     /// DataChannel or the video track opened or closed.
     transport_changed: Arc<tokio::sync::Notify>,
     last_signaling_activity_ms: Arc<AtomicU64>,
+    /// When the last WebSocket pong arrived (ms, `now_millis`); 0 before
+    /// the first. Stream connections ping the signaling socket every 128 ms
+    /// (streaming-quality stage 6): mello-sfu answers control-channel pings
+    /// for voice only, and the WebSocket pong is the stream link's liveness.
+    ws_pong_ms: Arc<AtomicU64>,
+    /// When the connection opened (ms, `now_millis`).
+    connected_ms: u64,
     /// Background tasks (signaling listener, stats reporter) spawned for this
     /// connection. Aborted on drop so a stale connection's tasks don't linger
     /// ticking against a dead socket.
@@ -629,6 +639,7 @@ impl SfuConnection {
 
         let (event_tx, event_rx) = mpsc::channel(256);
         let last_signaling_activity_ms = Arc::new(AtomicU64::new(now_millis()));
+        let connected_ms = now_millis();
 
         Ok(Self {
             peer: std::ptr::null_mut(),
@@ -644,6 +655,8 @@ impl SfuConnection {
             ice_state: Arc::new(AtomicI32::new(0)),
             transport_changed: Arc::new(tokio::sync::Notify::new()),
             last_signaling_activity_ms,
+            ws_pong_ms: Arc::new(AtomicU64::new(0)),
+            connected_ms,
             tasks: Mutex::new(Vec::new()),
             media_role: None,
             audio_send: Arc::new(AudioSendTarget::new()),
@@ -795,6 +808,14 @@ impl SfuConnection {
         self.ice_connection_state() == 2
     }
 
+    /// Whether ICE failed or the peer closed: the peer cannot carry media
+    /// again. libjuice 1.7 refuses an ICE restart ("ICE restart is not
+    /// supported"), so a stream rebuilds its connection instead
+    /// (streaming-quality stage 6).
+    pub fn is_ice_dead(&self) -> bool {
+        matches!(self.ice_connection_state(), 4 | 5)
+    }
+
     /// Whether the unreliable/media DataChannel is open.
     pub fn is_media_channel_open(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
@@ -837,6 +858,17 @@ impl SfuConnection {
             return -1;
         }
         unsafe { mello_sys::mello_peer_pong_age_ms(self.peer) }
+    }
+
+    /// How long the signaling socket has been silent: the age of the last
+    /// WebSocket pong, or the time since the connection opened before the
+    /// first. Only stream connections ping the socket (stage 6).
+    pub fn ws_silent_ms(&self) -> u64 {
+        let now = now_millis();
+        match self.ws_pong_ms.load(Ordering::Acquire) {
+            0 => now.saturating_sub(self.connected_ms),
+            at => now.saturating_sub(at),
+        }
     }
 
     /// Milliseconds since the last signaling message from SFU.
@@ -1533,6 +1565,7 @@ impl SfuConnection {
             ws_tx: Arc::clone(&self.ws_tx),
             activity: Arc::clone(&self.last_signaling_activity_ms),
         };
+        let ws_pong_ms = Arc::clone(&self.ws_pong_ms);
         let listener_task = tokio::spawn(async move {
             let mut open = true;
             for sig in deferred {
@@ -1559,6 +1592,9 @@ impl SfuConnection {
                     Some(result) => result,
                 };
                 match msg_result {
+                    Ok(Message::Pong(_)) => {
+                        ws_pong_ms.store(now_millis(), Ordering::Release);
+                    }
                     Ok(msg) => {
                         if let Ok(sig) = parse_ws_message(&msg) {
                             open = listener.handle(sig).await;
@@ -1580,6 +1616,30 @@ impl SfuConnection {
         });
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.push(listener_task);
+        }
+
+        // Stream links ping the signaling socket: the SFU answers a
+        // WebSocket ping on any connection (gorilla's default handler), and
+        // control-channel pings only for voice. A send waits at most 100 ms,
+        // so a stuck socket only makes the pong age grow.
+        if peer_media_role_is_stream(media_role) {
+            let ws_tx = Arc::clone(&self.ws_tx);
+            let keepalive = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(STREAM_WS_PING_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let ping = Message::Ping(now_millis().to_be_bytes().to_vec());
+                    let _ = tokio::time::timeout(Duration::from_millis(100), async {
+                        let mut tx = ws_tx.lock().await;
+                        tx.send(ping).await
+                    })
+                    .await;
+                }
+            });
+            if let Ok(mut tasks) = self.tasks.lock() {
+                tasks.push(keepalive);
+            }
         }
 
         // Step 13: Return session info
@@ -1876,11 +1936,17 @@ impl SignalListener {
                 // surface them as a disconnect to drive a full
                 // reconnect. Transient validation errors (e.g. a
                 // stray ICE candidate) are logged only.
+                // PEER_SLOW and PEER_STALLED_RTP: the SFU removes this
+                // peer next. A stream treats that as a reconnect, not an end
+                // (streaming-quality stage 6); before, it came only as the
+                // later `ws_closed`.
                 const FATAL: &[&str] = &[
                     "INVALID_TOKEN",
                     "INVALID_ROLE",
                     "SESSION_FULL",
                     "WEBRTC_ERROR",
+                    "PEER_SLOW",
+                    "PEER_STALLED_RTP",
                 ];
                 if FATAL.contains(&code) {
                     let _ = self

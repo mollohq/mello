@@ -372,6 +372,18 @@ export component MainWindow inherits Window {
     in property <int> active-stream-width: 0;
     in property <int> active-stream-height: 0;
     in property <int> active-stream-viewer-count: 0;
+    // --- stage 6 (streaming-quality): stream session states ---
+    /// The hosted stream: "" (none), "starting", "live", "reconnecting".
+    in property <string> stream-host-state: "";
+    /// The watched stream: "" (live or none), "reconnecting".
+    in property <string> stream-viewer-state: "";
+    /// A stream that ended or did not start, shown on a card for a few
+    /// seconds: "ended" or "failed", its title, whose stream, and why.
+    in property <string> stream-notice-state: "";
+    in property <string> stream-notice-title: "";
+    in property <string> stream-notice-name: "";
+    in property <string> stream-notice: "";
+    // --- end stage 6 ---
     in property <[StreamCardData]> active-stream-cards: [];
 
     // --- New crew modal ---

@@ -2,8 +2,10 @@ package main
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/heroiclabs/nakama-common/runtime"
@@ -265,4 +267,186 @@ func TestStopStream_LedgerKeepsPeakAndAllViewers(t *testing.T) {
 		return
 	}
 	t.Fatal("no stream_session event")
+}
+
+// --- streaming-quality stage 6: advertise on the open track, token refresh ---
+
+func startTestStreamOnLive(t *testing.T, nk *fakeStreamNk) string {
+	t.Helper()
+	out, err := StartStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","title":"Raid night","width":1280,"height":720,"fps":60,"advertise":"on_live"}`)
+	if err != nil {
+		t.Fatalf("start_stream: %v", err)
+	}
+	var resp struct {
+		SessionID string `json:"session_id"`
+		Advertise string `json:"advertise"`
+		Token     string `json:"sfu_token"`
+	}
+	if err := json.Unmarshal([]byte(out), &resp); err != nil || resp.SessionID == "" {
+		t.Fatalf("start_stream response %q: %v", out, err)
+	}
+	if resp.Advertise != advertiseOnLive || resp.Token == "" {
+		t.Fatalf("start_stream on_live response %q: want advertise on_live and a token", out)
+	}
+	return resp.SessionID
+}
+
+func streamLive(nk *fakeStreamNk, userID, sessionID string) (string, error) {
+	return StreamLiveRPC(ctxWithUser(userID), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","session_id":"`+sessionID+`","width":1920,"height":1080,"fps":60}`)
+}
+
+// With advertise on_live, start_stream writes only the session record: the
+// crew sees no stream until stream_live, when the host's track is open.
+func TestStartStreamOnLive_AdvertisesOnlyAtStreamLive(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStreamOnLive(t, nk)
+
+	if nk.has(StreamMetaCollection, sfuOnlyCrew, SystemUserID) ||
+		nk.has(StreamCollection, sfuOnlyCrew, sfuOnlyUser) {
+		t.Fatal("start_stream with advertise on_live advertised the stream")
+	}
+	if !nk.has(StreamSessionCol, sessionID, SystemUserID) {
+		t.Fatal("start_stream with advertise on_live wrote no session record")
+	}
+
+	if _, err := streamLive(nk, sfuOnlyUser, sessionID); err != nil {
+		t.Fatalf("stream_live: %v", err)
+	}
+	meta := readStreamMeta(context.Background(), nk, sfuOnlyCrew)
+	if meta == nil || meta.StreamID != sessionID {
+		t.Fatalf("stream_live did not advertise the stream: %+v", meta)
+	}
+	if meta.Width != 1920 || meta.Height != 1080 || meta.Fps != 60 || meta.Title != "Raid night" {
+		t.Fatalf("advertised meta %+v, want the live size 1920x1080 at 60 fps", meta)
+	}
+	if session := loadStreamSession(context.Background(), nk, sessionID); session == nil || session.Pending != nil {
+		t.Fatalf("session after stream_live %+v, want no pending advert", session)
+	}
+	// A viewer finds it and gets the live size.
+	out, err := WatchStreamRPC(ctxWithUser(streamTestViewer), testLogger(), nil, nk,
+		`{"session_id":"`+sessionID+`"}`)
+	if err != nil {
+		t.Fatalf("watch_stream: %v", err)
+	}
+	var watch struct {
+		Width  uint32 `json:"width"`
+		Height uint32 `json:"height"`
+	}
+	if err := json.Unmarshal([]byte(out), &watch); err != nil || watch.Width != 1920 || watch.Height != 1080 {
+		t.Fatalf("watch_stream response %q: want 1920x1080", out)
+	}
+}
+
+func TestStreamLive_OnlyTheHost(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStreamOnLive(t, nk)
+
+	_, err := streamLive(nk, streamTestViewer, sessionID)
+	assertRuntimeCode(t, err, 7)
+	if nk.has(StreamMetaCollection, sfuOnlyCrew, SystemUserID) {
+		t.Fatal("a stream_live by a non-host advertised the stream")
+	}
+	_, err = streamLive(nk, sfuOnlyUser, "stream_unknown")
+	assertRuntimeCode(t, err, 5)
+}
+
+// A second stream_live (a retry after a lost answer) changes nothing.
+func TestStreamLive_SecondCallChangesNothing(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStreamOnLive(t, nk)
+	if _, err := streamLive(nk, sfuOnlyUser, sessionID); err != nil {
+		t.Fatal(err)
+	}
+	watchTestStream(t, nk, streamTestViewer, sessionID)
+	if _, err := streamLive(nk, sfuOnlyUser, sessionID); err != nil {
+		t.Fatalf("second stream_live: %v", err)
+	}
+	if got := viewerCount(nk); got != 1 {
+		t.Fatalf("a second stream_live reset the viewer count to %d", got)
+	}
+}
+
+// stream_started carries the mode, size and rate: a viewer starts its
+// decoder with no second RPC.
+func TestStreamStartedPayload_CarriesModeSizeAndRate(t *testing.T) {
+	data := streamStartedPayload(streamAdvert{
+		SessionID: "s1", HostID: "h1", HostName: "alice", Title: "t",
+		Width: 1280, Height: 720, Fps: 60,
+	})
+	if data["mode"] != "sfu" || data["width"] != uint32(1280) || data["height"] != uint32(720) ||
+		data["fps"] != uint32(60) || data["stream_id"] != "s1" {
+		t.Fatalf("stream_started data %v", data)
+	}
+}
+
+// END STREAM before the track opened removes the unadvertised session.
+func TestStopStream_RemovesAnUnadvertisedStream(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStreamOnLive(t, nk)
+	if _, err := StopStreamRPC(ctxWithUser(sfuOnlyUser), testLogger(), nil, nk,
+		`{"crew_id":"`+sfuOnlyCrew+`","session_id":"`+sessionID+`"}`); err != nil {
+		t.Fatalf("stop_stream: %v", err)
+	}
+	if nk.has(StreamSessionCol, sessionID, SystemUserID) {
+		t.Fatal("stop_stream left the unadvertised session record")
+	}
+}
+
+func refreshTestToken(nk *fakeStreamNk, userID, sessionID string) (string, error) {
+	return RefreshStreamTokenRPC(ctxWithUser(userID), testLogger(), nil, nk,
+		`{"session_id":"`+sessionID+`"}`)
+}
+
+func tokenClaims(t *testing.T, token string) SFUTokenClaims {
+	t.Helper()
+	parts := strings.Split(token, ".")
+	if len(parts) != 3 {
+		t.Fatalf("token is not a JWT: %q", token)
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	var claims SFUTokenClaims
+	if err := json.Unmarshal(payload, &claims); err != nil {
+		t.Fatal(err)
+	}
+	return claims
+}
+
+// refresh_stream_token gives the host a host token and a crew member a
+// viewer token for the same session; anyone else gets nothing.
+func TestRefreshStreamToken_RolesFollowTheSession(t *testing.T) {
+	nk := seedStreamCrew(t)
+	sessionID := startTestStream(t, nk)
+
+	for _, c := range []struct {
+		user string
+		role string
+	}{{sfuOnlyUser, "host"}, {streamTestViewer, "viewer"}} {
+		out, err := refreshTestToken(nk, c.user, sessionID)
+		if err != nil {
+			t.Fatalf("refresh_stream_token for %s: %v", c.user, err)
+		}
+		var resp struct {
+			Endpoint string `json:"sfu_endpoint"`
+			Token    string `json:"sfu_token"`
+			Role     string `json:"role"`
+		}
+		if err := json.Unmarshal([]byte(out), &resp); err != nil || resp.Endpoint == "" {
+			t.Fatalf("refresh_stream_token response %q: %v", out, err)
+		}
+		claims := tokenClaims(t, resp.Token)
+		if resp.Role != c.role || claims.Role != c.role || claims.SessionID != sessionID ||
+			claims.UserID != c.user || claims.Type != "stream" {
+			t.Fatalf("token for %s: role %q claims %+v, want role %s", c.user, resp.Role, claims, c.role)
+		}
+	}
+
+	_, err := refreshTestToken(nk, "user-not-in-crew", sessionID)
+	assertRuntimeCode(t, err, 7)
+	_, err = refreshTestToken(nk, sfuOnlyUser, "stream_unknown")
+	assertRuntimeCode(t, err, 5)
 }

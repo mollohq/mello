@@ -74,6 +74,20 @@ pub struct StreamMember {
     pub role: String,
 }
 
+// --- stage 6 (streaming-quality): stream session states ---
+
+/// The side of a stream that a stream state event is about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StreamRole {
+    /// This client hosts the stream.
+    #[default]
+    Host,
+    /// This client watches the stream.
+    Viewer,
+}
+// --- end stage 6 ---
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchResult {
     pub id: String,
@@ -372,8 +386,17 @@ pub enum Event {
         session_id: String,
         mode: String,
     },
+    /// A stream ended. `role` says which side (a viewer's watched stream
+    /// ends too, before `StreamWatchingStopped`); `reason` is a short code
+    /// for the card copy: "stopped" (END STREAM or Leave), "connection_lost"
+    /// (no reconnect within 30 s), "host_left", "lost_on_server", or empty
+    /// from older code (streaming-quality stage 6).
     StreamEnded {
         crew_id: String,
+        #[serde(default)]
+        role: StreamRole,
+        #[serde(default)]
+        reason: String,
     },
     StreamViewerJoined {
         viewer_id: String,
@@ -723,6 +746,33 @@ pub enum Event {
     Error {
         message: String,
     },
+
+    // --- stage 6 (streaming-quality): stream session states ---
+    /// The host's start runs: capture init and the SFU join. The host card
+    /// shows "starting" until `StreamStarted` (the track is open) or
+    /// `StreamFailed`.
+    StreamStarting {
+        crew_id: String,
+    },
+    /// The stream link of this side went silent or dropped, or (viewer)
+    /// the host's media stopped. The stream is kept: the client reconnects
+    /// on the voice schedule, and the card shows "reconnecting" over the
+    /// last frame.
+    StreamReconnecting {
+        role: StreamRole,
+    },
+    /// The stream link is back after `StreamReconnecting`, in the same
+    /// session.
+    StreamResumed {
+        role: StreamRole,
+    },
+    /// A stream start or a watch failed before it ran. `reason` names the
+    /// cause for the user.
+    StreamFailed {
+        role: StreamRole,
+        reason: String,
+    },
+    // --- end stage 6 ---
 }
 
 #[cfg(test)]
