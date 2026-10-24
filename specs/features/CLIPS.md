@@ -231,11 +231,14 @@ Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newes
 
 Card types in the bento grid:
 
-- **Clip card** — single cell, always the standard size. Dot-matrix waveform, play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp. Tap the wave to play from that point; drag to scrub. A voice clip is never the hero and never takes the wide cell.
-- **Stream preview card** — a finished stream with snapshots. Feed type `session-preview`, drawn by `SessionPreviewCard`: poster, frames, streamer, game, duration, participants. See [STREAM-SNAPSHOTS-CLIENT.md](./STREAM-SNAPSHOTS-CLIENT.md) sections 3.1 and 4. It leads the feed for 24 hours (see hero priority).
+- **Clip card** — single cell, always the standard size. Grey label, ring and dots; an unread clip wears red. Dot-matrix waveform, play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp. Tap the wave to play from that point; drag to scrub. A voice clip is never the hero and never takes the wide cell.
+- **Stream preview card** — a finished stream with snapshots. Feed type `session-preview`, drawn by `SessionPreviewCard`. See [STREAM-SNAPSHOTS-CLIENT.md](./STREAM-SNAPSHOTS-CLIENT.md) sections 3.1 and 4. It leads the feed for 24 hours (see hero priority).
+  - As the hero (frame C) the card is footage edge to edge in two columns and two rows, cut at the top right. A STREAM tag sits at the top left. A play ring (56 px, white outline, black disc) sits at 46 % of the height. The snapshot plays from the ring, so the card has no filled white button.
+  - Bottom left: the time word in capitals ("YESTERDAY"), the title in Oxanium 28 px, then the streamer octagon, the streamer name, the game and "N watched". Bottom right: the length ("1 h 12 min") on a black chip.
+  - A standard preview keeps the poster on top and a text strip under it.
 - **Live stream card** — one person streaming now, drawn by `StreamCard`. A live stream is client state (`crew_state`), not a feed entry. The client shows it above the `this_week` cards, so it is always first.
-- **Session card** — "Your crew played Valorant for 3 hours." Game icon, participant avatars, duration, clip count. From event ledger.
-- **Catch-up card** — "ostkatt and FaiL hung out in General for 45m while you were away." Green label. Promoted from sidebar to center stage.
+- **Session card** — "Your crew played Valorant for 3 hours." Game icon, participant avatars, duration, clip count. From event ledger. A game session with a record shows the time under the game name, the record, and a footer with the octagons of who played, "Bob, solo" when one person did, and the length at the right.
+- **Catch-up card** — "ostkatt and FaiL hung out in General for 45m while you were away." Grey label: green is the person speaking and nothing else. Promoted from sidebar to center stage.
 - **Live session card** (`live-session`, `LiveSessionCard`) — a game in progress. Label NOW PLAYING with the red live pip. Red is only the pip. It shows the game art, the game name, the member octagons and "since N min". The client builds it from presence (game id, name, `started_at`) and the sensor of the viewer. It is not a ledger event.
   - One card for each game. Crewmates in the same game share one card and count from the earliest start.
   - A live stream is above the feed and comes first.
@@ -247,6 +250,8 @@ Card types in the bento grid:
 - **Recent games card** — the games the crew played or has installed, as tiles keyed by game id, newest played first. It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4). The server sends `games` (up to six, each with `member_ids`, the members who have it installed or played it), `session_count`, `total_min` and `pc_count`, the members behind the tiles.
   - One PC (the viewer is the only owner): a narrow list of three rows, beside the wide head2head card of a crew of one. The header carries "From this PC", or the week's line ("14 sessions, 31 h this week").
   - Two or more PCs: a poster grid, two columns wide. The header reads "RECENT GAMES" left and "From 2 PCs" right. Five capsule tiles sit in one row (460 by 215 art, two corners cut), the game name in Barlow 600 under each tile, and under the name a 16 px octagon for each member who owns the game. The row is capped at five. From three PCs the right side of the header is the week's line. In a one-column slot the card stays the list.
+  - From three PCs each poster carries when the game was last played ("Yesterday", "3 days ago") under the owner octagons. In a one-column slot a list row shows the same line in place of the hours, with the owner octagons at the right. A list row with TRACKED shows it at the far right when the row is 300 px or wider.
+  - Three to five posters share the row, so a quiet week gets larger posters, not a gap.
   - The grid leads row 2 under a versus hero (frame B2). Row 2 holds the grid and one card, so the session card sits beside it. Rows after it move up by one card (`feed_grid.rs`, `Layout::r2_wide`, and `row3-base` in `crew_feed.slint`).
 - **Joined line** — a slim event row above the first card, not a card (frame B2). A person icon, "Jonas joined, invited by b0bben" in Barlow 300, and the time at the right in Barlow 600, uppercase and tracked ("TODAY 23:14", or "YESTERDAY" for a join before midnight). One row for each member who joined in the last 24 hours, newest first, at most three. Without an inviter the line reads "Jonas joined". The viewer's own join and a member who left do not show. Data path: the `joined` array of the `crew_feed` response (`user_id`, `name`, `invited_by`, `invited_by_name`, `ts`), read from the `member_joined` events of the ledger (`buildFeedJoins` in `crew_feed.go`). The invite code RPC (`join_by_invite_code`) adds the caller with system authority, which runs no join hook, so it writes the `member_joined` event itself with `invited_by` set to the member whose code was used. The client draws it in `FeedJoinedRow` (`client/src/joined_line.rs`).
 - **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
@@ -261,11 +266,49 @@ The server picks the hero of `this_week` in this order. The first item that exis
 
 1. A live stream. The client shows it above the feed. The server order starts at the next item.
 2. A stream preview from the last 24 hours. The best one by quality score.
-3. A belt that moved in the last 24 hours. Not built. `beltMovedHeroIndex` is the empty hook.
+3. A belt that moved in the last 24 hours. The head2head entry is the hero (HEAD2HEAD.md section 5). `beltMovedHeroIndex` stays an empty hook: the client builds the card.
 4. A real recap, on Monday (UTC), while the recap is under 24 hours old.
 5. The best session: the best stream preview of any age.
 
 If no item exists, the feed has no hero. The latest recap then takes its own pinned slot as before.
+
+#### Grid layouts
+
+`crew_feed.slint` lays cards out by position. `feed_grid.rs` (`Lead`) mirrors every rule, and its tests keep the two in step. The grid has three columns and rows 232 px high.
+
+| Lead | Cards | Layout |
+|---|---|---|
+| Hero | first card | two columns and two rows, a side column of two cells, or one tall recap |
+| Wide | head2head wide, or a live session with poster art | two columns, one cell beside it |
+| CellWide | a session, then head2head wide | frame B: the session is the cell, then two columns |
+| FullRow | a versus card, or a hero clip | one full row |
+| Plain | head2head cell, invite card, or any card after a stream | rows of three cells |
+| Belt | belt hero, head2head cell, two cells | frame E: the hero is two columns, the cell is tall beside it, two cells under the hero |
+| TallTrio | two cells, head2head cell, recap | frame F: the two cells stack, the cell and the recap are tall |
+
+- A crew of one with a session puts the session first (CellWide). Frame A has no session, so the wide card stays first.
+- After a live stream or the two-stream hero the grid is plain rows. A card there is a cell, never a second hero.
+- Under a hero the poster grid of recent games takes the wide slot of row 3 (frames C and D). The one-PC list stays in the side column.
+- A feed with no hero, a head2head cell and a recap with content puts the cell and the recap third and fourth (TallTrio). Two plain cells stack beside them.
+- Row 2 is the last row and has free cells: the stream and voice clip skeletons fill them at the card height, and the recap skeleton is the slim row under them (frame B). A full last row keeps the trio as one row.
+- A recap holds the whole side column beside the two-stream hero.
+
+#### Two streams (frame D)
+
+Two members who stream together share the wide hero. Each stream is a strip with its own play ring, streamer octagon and game. One tag says LIVE and how many stream ("2 STREAMING"). The card has no filled white button.
+
+The client holds one remote streamer today. `CrewFeed.hero-streams` takes the two strips and nothing fills it yet. The data path for a second stream is a later phase. `two_stream_start` in `feed_grid.rs` is the grid rule for that phase.
+
+#### Quiet and dormant feeds (frames E and F)
+
+A feed with nothing new must not look broken. The rules live in `client/src/quiet_row.rs`.
+
+- **Quiet row.** A slim row with a moon, in the place of the recap. It shows when the crew has two or more members, nothing is live, no stream preview or belt move is under 24 hours old, no recap is under seven days old, and something happened in the last 14 days. The text is "No crew time last week." and, when members played, "Bob and Sara still played." The right side reads "Monday", the day the recap comes.
+- **Belt hero.** With no hero, the newest belt move that involves the viewer leads, at any age up to 14 days. The card is two columns wide. It shows who held the title, the title, who holds it now, a headline ("Sara took Night Owl from Bob") and the values ("03:40 beats 03:14."). The head2head cell stands tall beside it with a third pair row.
+- **Idle voice card.** When the quiet row shows and nobody is in the default voice channel, a card shows the channel, "Empty", the date of the last call and the one filled white button, Start voice. The red invite stays in the head2head cell, next to the open seat.
+- **Dormant strip.** Nothing happened for 14 days or more. A catch-up strip across the top says "Nothing new since 2 October. Leo holds The Carry." and how long ago, in weeks. The feed keeps the last real recap, its sessions and the head2head cell. No skeletons show and no empty card shows. A recap is a summary of past weeks, so it does not count as activity.
+- A recap carries its age at the right of its label: "Today", the day name for the rest of the week, "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
+- A session older than a week shows its date ("2 October"), not "9d ago".
 
 Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
 

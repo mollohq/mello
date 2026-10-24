@@ -178,6 +178,7 @@ Role and size:
 
 - When a belt moved in the last 24 hours, the entry is the hero (`hero`, `lg`). The hero order is: live stream, belt moved, stream preview from the last 24 hours, recap on Monday, best session.
 - Otherwise the entry is `standard`, `lg`. It follows the hero and the recap. It never takes a filler slot.
+- A quiet feed has no hero (CLIPS.md 7.1, frame E). The client then leads with the newest belt move that involves the viewer, up to 14 days old, and the cell stands tall beside it. The payload does not change: the client reads `moved_at_ms` and `previous_holder_user_id` of every title, and the values of the pair. The card has its own headline: "Sara took Night Owl from Bob".
 
 The client decides if a card renders. A card with no titles, no `own_values` and no open seats has no data.
 
@@ -190,7 +191,7 @@ A crew of one gets the wide card (frame A of the mockup). The card shows the vie
 
 ### Pair rows in the cell
 
-The cell shows the viewer's closest pairs (smallest gap first). With no open seats (five members or more) it shows up to four rows, as in frame D. With seats it shows up to two. A "+N more" line shows only when pairs remain.
+The cell shows the viewer's closest pairs (smallest gap first). With no open seats (five members or more) it shows up to four rows, as in frame D. With seats it shows up to two. A cell that stands tall (beside the belt hero or the recap, frames E and F) shows up to three. A "+N more" line shows only when pairs remain.
 
 ### Unread dot on a pair row
 
