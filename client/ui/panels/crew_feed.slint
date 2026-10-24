@@ -2543,7 +2543,8 @@ export component CrewFeed inherits Rectangle {
 
                 // Row 1: full-width hero clip OR 2:1 hero + stacked side column
                 if hero-is-full-row && cards.length > root.feed-start-index: FeedSlot {
-                    height: Theme.feed-row;
+                    // The versus card is 250 px tall (mockup B2), a hero clip one row.
+                    height: root.lead-h2h == "versus" ? 250px : Theme.feed-row;
                     card: cards[root.feed-start-index];
                     playing-path: root.clip-playing-path;
                     clip-progress: root.clip-progress;
@@ -3355,7 +3356,7 @@ export component PreviewFeedNewCrew inherits Rectangle {
 // Frame B2: the first friend joined, and a title moved a minute ago. The
 // versus card takes the hero slot. The trio stays.
 export component PreviewFeedFirstFriend inherits Rectangle {
-    width: 760px;
+    width: 900px;
     height: 640px;
     background: Theme.bg-app;
 
@@ -3376,10 +3377,10 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                     right-name: "Jonas", right-initials: "J", right-hue-index: 1,
                     left-score: 4, right-score: 3,
                     chips: [
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1, moved-recent: true },
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0, held-days: 9, held-label: "held 9 days" },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0, held-days: 1, held-label: "held 1 day" },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 0 },
                     ],
                 },
             },

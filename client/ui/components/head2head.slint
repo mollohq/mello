@@ -40,7 +40,7 @@ export component TitleChip inherits Rectangle {
 
     property <length> cut: compact ? 5px : 7px;
 
-    height: root.dense ? 34px : root.compact ? 46px : 52px;
+    height: root.dense ? 34px : root.compact ? 46px : 54px;
     background: transparent;
 
     CutButtonShape {
@@ -56,15 +56,15 @@ export component TitleChip inherits Rectangle {
 
     // Full size: icon on the left, title over number.
     if !root.compact: HorizontalLayout {
-        padding-left: 9px; padding-right: 6px;
-        spacing: 7px;
+        padding-left: 12px; padding-right: 8px;
+        spacing: 12px;
         cross-axis-alignment: center;
 
         Image {
             source: root.icon;
             colorize: root.hue;
-            width: 20px;
-            height: 20px;
+            width: 24px;
+            height: 24px;
         }
         VerticalLayout {
             alignment: center;
@@ -72,9 +72,9 @@ export component TitleChip inherits Rectangle {
             Text {
                 text: root.title.to-uppercase();
                 font-family: Theme.font-label;
-                font-size: 8.5px;
+                font-size: 9px;
                 font-weight: Theme.weight-label;
-                letter-spacing: 0.8px;
+                letter-spacing: 1.4px;
                 color: Theme.text-body;
                 overflow: elide;
             }
@@ -614,17 +614,23 @@ export component VersusHero inherits Rectangle {
     VerticalLayout {
         padding-top: 14px; padding-bottom: 14px;
         padding-left: 16px; padding-right: 16px;
-        spacing: 10px;
+        spacing: 16px;
 
+        // Label left, "Bob vs Jonas" right in Barlow 300 (mockup .lab .r).
         HorizontalLayout {
             spacing: 12px;
-            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; }
-            CardLabel {
+            height: 16px;
+            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; vertical-alignment: center; }
+            Text {
                 horizontal-stretch: 1;
                 min-width: 0px;
                 horizontal-alignment: right;
-                text: (root.left-name + " VS " + root.right-name).to-uppercase();
-                color: Theme.text-tertiary;
+                vertical-alignment: center;
+                text: root.left-name + " vs " + root.right-name;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-dim;
                 overflow: elide;
             }
         }
@@ -636,26 +642,26 @@ export component VersusHero inherits Rectangle {
 
             HorizontalLayout {
                 horizontal-stretch: 1;
-                spacing: 14px;
+                spacing: 16px;
                 alignment: start;
                 cross-axis-alignment: center;
-                UserAvatar { initials: root.left-initials; avatar: root.left-avatar; has-avatar: root.left-has-avatar; color-index: root.left-hue-index; size: 56px; }
+                UserAvatar { initials: root.left-initials; avatar: root.left-avatar; has-avatar: root.left-has-avatar; color-index: root.left-hue-index; size: 64px; }
                 Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
             }
             Text {
                 text: root.left-score + " : " + root.right-score;
                 font-family: Theme.font-display;
-                font-size: 34px;
-                font-weight: Theme.weight-display-bold;
+                font-size: 40px;
+                font-weight: Theme.weight-display;
                 color: Theme.text-value;
             }
             HorizontalLayout {
                 horizontal-stretch: 1;
-                spacing: 14px;
+                spacing: 16px;
                 alignment: end;
                 cross-axis-alignment: center;
                 Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
-                UserAvatar { initials: root.right-initials; avatar: root.right-avatar; has-avatar: root.right-has-avatar; color-index: root.right-hue-index; size: 56px; }
+                UserAvatar { initials: root.right-initials; avatar: root.right-avatar; has-avatar: root.right-has-avatar; color-index: root.right-hue-index; size: 64px; }
             }
         }
 
@@ -667,20 +673,27 @@ export component VersusHero inherits Rectangle {
             }
         }
 
-        if root.open-seats > 0: HorizontalLayout {
-            spacing: 8px;
-            cross-axis-alignment: center;
-            OpenSeatStrip { seats: root.open-seats; max-shown: 4; gap: 8px; }
-            Text {
-                text: "OPEN";
-                font-family: Theme.font-label;
-                font-size: 9px;
-                font-weight: Theme.weight-label;
-                letter-spacing: Theme.track-label;
-                color: Theme.text-dim;
+        // The seats row: a rule above, three seats, "Open" once, and the short
+        // red INVITE at the right (mockup .openrow). The wide card keeps the
+        // long label.
+        if root.open-seats > 0: VerticalLayout {
+            spacing: 10px;
+            Rectangle { height: Theme.keyline; background: Theme.card-border; }
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+                OpenSeatStrip { seats: root.open-seats; max-shown: 4; size: 28px; gap: 10px; }
+                Text {
+                    text: "OPEN";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-body;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                InviteButton { compact: true; label-text: "Invite"; clicked => { root.invite-clicked(); } }
             }
-            Rectangle { horizontal-stretch: 1; }
-            InviteButton { compact: true; clicked => { root.invite-clicked(); } }
         }
     }
 }
