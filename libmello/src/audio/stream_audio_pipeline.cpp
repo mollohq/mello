@@ -93,8 +93,8 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
         return false;
     }
     // Stage 7: in-band FEC, with the expected loss from the receiver
-    // reports (the link), as voice does. The floor is 5 %, so the encoder
-    // always spends some bits on it.
+    // reports (the link, game_loss_perc): 0 on a clean link, at least 10 %
+    // once the link loses packets.
     encoder_.set_inband_fec(1);
 
     {
@@ -103,7 +103,7 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
         pcm_accum_.clear();
         have_accum_capture_ = false;
         if (link_) link_->reset();
-        const int perc = link_ ? link_->loss_perc() : kLossPercFloor;
+        const int perc = link_ ? link_->loss_perc() : 0;
         encoder_.set_packet_loss_perc(perc);
         loss_perc_.store(perc, std::memory_order_relaxed);
     }

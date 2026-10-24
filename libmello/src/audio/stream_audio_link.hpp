@@ -9,8 +9,8 @@
 // - the capture time of each frame, by its media time. The peer puts it in
 //   the A/V sync header extension of the frame's RTP packet;
 // - the receiver reports about the audio send track. The pipeline sets the
-//   encoder's expected loss (OPUS_SET_PACKET_LOSS_PERC) from them, as voice
-//   does, so the in-band FEC follows the link.
+//   encoder's expected loss (OPUS_SET_PACKET_LOSS_PERC) from them, so the
+//   in-band FEC follows the link (game_loss_perc: not the voice floor).
 //
 // One link per MelloContext (one stream host per client). Threads: the
 // capture thread records, the peer's send thread reads, the libdatachannel
@@ -18,6 +18,7 @@
 
 #include "send_adaptation.hpp"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cstdint>
@@ -25,6 +26,21 @@
 #include <optional>
 
 namespace mello::audio {
+
+/// The game audio's lowest expected loss once the link loses packets. Opus
+/// in music mode at 96 kbps stereo sends in-band FEC (LBRR) only above about
+/// 8 % (measured: 8 % gives none, 9 % gives 85 of 100 speech packets), so
+/// the voice floor of 5 % never turns it on.
+inline constexpr int kGameLossPercFloor = 10;
+
+/// The game audio's expected loss in percent from the measured loss over
+/// 4 s (SendAdaptation::measured_loss_perc, -1: no window yet): 0 while the
+/// reports show no loss, so a clean link spends no bits on FEC; else the
+/// loss with a floor of kGameLossPercFloor and the voice cap.
+inline int game_loss_perc(int measured_loss_perc) {
+    if (measured_loss_perc <= 0) return 0;
+    return std::clamp(measured_loss_perc, kGameLossPercFloor, kLossPercCap);
+}
 
 class StreamAudioLink {
 public:
@@ -63,7 +79,7 @@ public:
         }
         std::lock_guard<std::mutex> lock(adapt_mutex_);
         adapt_.reset();
-        loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
+        loss_perc_.store(game_loss_perc(adapt_.measured_loss_perc()), std::memory_order_relaxed);
     }
 
     /// One receiver report about the audio send track (the fields of
@@ -72,12 +88,11 @@ public:
                           float jitter_ms) {
         std::lock_guard<std::mutex> lock(adapt_mutex_);
         adapt_.on_report(now_ms, expected, lost, rtt_ms, jitter_ms);
-        loss_perc_.store(adapt_.loss_perc(), std::memory_order_relaxed);
+        loss_perc_.store(game_loss_perc(adapt_.measured_loss_perc()), std::memory_order_relaxed);
         reports_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    /// The encoder's expected loss in percent: the voice rule (floor 5, cap
-    /// 30, the loss over 4 s). Any thread.
+    /// The encoder's expected loss in percent (game_loss_perc). Any thread.
     int loss_perc() const { return loss_perc_.load(std::memory_order_relaxed); }
     uint64_t reports() const { return reports_.load(std::memory_order_relaxed); }
 
@@ -94,7 +109,7 @@ private:
 
     std::mutex adapt_mutex_;
     SendAdaptation adapt_;
-    std::atomic<int> loss_perc_{kLossPercFloor};
+    std::atomic<int> loss_perc_{0};
     std::atomic<uint64_t> reports_{0};
 };
 

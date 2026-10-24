@@ -1032,13 +1032,16 @@ statistics do not count the game audio.
 
 In-band FEC. The host encoder runs `OPUS_SET_INBAND_FEC(1)`. Its expected loss
 (`OPUS_SET_PACKET_LOSS_PERC`) comes from the receiver reports about the host's
-audio send track, by the voice rule (`SendAdaptation`: the loss over 4 s,
-floor 5 %, cap 30 %), through the context's `StreamAudioLink`. These reports
-come from the SFU and cover the host leg only; the SFU does not forward the
-viewers' reports. Opus spends bits on LBRR only in SILK or hybrid mode: with
-`OPUS_SIGNAL_MUSIC` it moves there when the expected loss is over 8 %, so at
-the floor the game audio carries no FEC, and from 9 % it carries FEC in
-hybrid mode (measured: `StreamAudioHostFec.ReportedLossTurnsOnInBandFec`).
+audio send track, through the context's `StreamAudioLink`, by the game rule
+(`game_loss_perc`): 0 while the loss over 4 s (`SendAdaptation`) is 0, so a
+clean link spends no bits on FEC; else that loss with a floor of 10 % and a
+cap of 30 %. Opus spends bits on LBRR only in SILK or hybrid mode: with
+`OPUS_SIGNAL_MUSIC` it moves there when the expected loss is over 8 %, so the
+voice floor of 5 % gave the game audio no FEC; from 9 % it carries FEC in
+hybrid mode (`StreamAudioHostFec.AnyReportedLossSetsTheGameFloorAndACleanLinkPaysNothing`).
+These reports come from the SFU and cover the host leg only; the SFU does not
+forward the viewers' reports, so a loss on the SFU to viewer leg alone turns
+no FEC on.
 
 ### 9.4 A/V sync (streaming-quality stage 7)
 

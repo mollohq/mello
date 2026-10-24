@@ -725,7 +725,7 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
 }
 
 // The host encoder carries in-band FEC once the receiver reports say the
-// link loses packets (the voice rule: the loss over 4 s, floor 5 %). Before
+// link loses packets (game_loss_perc: the loss over 4 s, floor 10 %). Before
 // stage 7 FEC was off on the game audio.
 TEST(StreamAudioHostFec, ReportedLossTurnsOnInBandFec) {
     auto link = std::make_shared<mello::audio::StreamAudioLink>();
@@ -762,6 +762,72 @@ TEST(StreamAudioHostFec, ReportedLossTurnsOnInBandFec) {
     EXPECT_GT(with_lbrr, 80) << "the game-audio encoder sent no in-band FEC";
     // Each frame's capture time is in the link for the peer.
     EXPECT_EQ(link->capture_us(99 * 960), 1'000'000 + 99 * 20'000);
+}
+
+namespace {
+
+/// Feed 2 s of speech to `host`; return how many packets carry LBRR.
+int speech_packets_with_lbrr(mello::audio::StreamAudioHostPipeline& host,
+                             std::vector<std::vector<uint8_t>>& packets, int64_t from_us) {
+    const auto speech = load_speech("m1_davison.wav");
+    EXPECT_FALSE(speech.empty());
+    if (speech.empty()) return -1;
+    packets.clear();
+    std::vector<float> pcm(static_cast<size_t>(kFrame) * 2);
+    for (int k = 0; k < 100; ++k) {
+        for (int i = 0; i < kFrame; ++i) {
+            const float v =
+                static_cast<float>(speech[(static_cast<size_t>(k) * kFrame + i) % speech.size()]) / 32768.0f;
+            pcm[static_cast<size_t>(i) * 2] = v;
+            pcm[static_cast<size_t>(i) * 2 + 1] = v;
+        }
+        host.feed_float_pcm_at(pcm.data(), kFrame, 2, 48000, from_us + k * 20'000);
+    }
+    int with_lbrr = 0;
+    for (const auto& p : packets) {
+        with_lbrr += opus_packet_has_lbrr(p.data(), static_cast<opus_int32>(p.size())) > 0;
+    }
+    return with_lbrr;
+}
+
+} // namespace
+
+// The game audio's own loss rule. A clean link spends no bits on FEC: the
+// expected loss is 0. Any reported loss sets at least 10 %, because Opus in
+// music mode sends no LBRR at the voice floor of 5 % (it needs more than
+// about 8 %).
+TEST(StreamAudioHostFec, AnyReportedLossSetsTheGameFloorAndACleanLinkPaysNothing) {
+    EXPECT_EQ(mello::audio::game_loss_perc(-1), 0);
+    EXPECT_EQ(mello::audio::game_loss_perc(0), 0);
+    EXPECT_EQ(mello::audio::game_loss_perc(1), 10);
+    EXPECT_EQ(mello::audio::game_loss_perc(20), 20);
+    EXPECT_EQ(mello::audio::game_loss_perc(80), 30);
+
+    auto link = std::make_shared<mello::audio::StreamAudioLink>();
+    mello::audio::StreamAudioHostPipeline host;
+    host.set_link(link);
+    std::vector<std::vector<uint8_t>> packets;
+    ASSERT_TRUE(host.start(
+        [&packets](const uint8_t* d, int size, uint64_t) {
+            if (size > 0) packets.emplace_back(d, d + size);
+        },
+        0, /*external_source=*/true));
+    EXPECT_EQ(link->loss_perc(), 0) << "no reports yet";
+
+    // A clean link: 5 s of reports without loss.
+    for (int i = 0; i < 5; ++i) link->on_send_feedback(1000 * (i + 1), 50, 0, 40.0f, 5.0f);
+    EXPECT_EQ(link->loss_perc(), 0);
+    EXPECT_EQ(speech_packets_with_lbrr(host, packets, 1'000'000), 0) << "FEC on a clean link";
+    EXPECT_EQ(host.loss_perc(), 0);
+
+    // 1 packet in 50 lost (2 %): the floor, and the encoder sends LBRR.
+    for (int i = 5; i < 10; ++i) link->on_send_feedback(1000 * (i + 1), 50, 1, 40.0f, 5.0f);
+    EXPECT_EQ(link->loss_perc(), 10);
+    const int with_lbrr = speech_packets_with_lbrr(host, packets, 3'000'000);
+    EXPECT_EQ(host.loss_perc(), 10);
+    ASSERT_GE(packets.size(), 95u);
+    EXPECT_GT(with_lbrr, 70) << "the 10 % floor sent no in-band FEC";
+    host.stop();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
