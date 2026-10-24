@@ -1641,25 +1641,28 @@ component RecentGameTileCell inherits Rectangle {
                 color: Theme.text-value;
                 overflow: elide;
             }
-            if tile.hours != "": Text {
-                font-family: Theme.font-label;
-                font-weight: Theme.weight-label;
-                text: tile.hours.to-uppercase();
-                font-size: 9px;
-                letter-spacing: Theme.track-label;
-                color: Theme.text-dim;
-                overflow: elide;
+            // TRACKED sits on the hours line, so the name has the whole row.
+            HorizontalLayout {
+                spacing: 8px;
+                alignment: start;
+                if tile.hours != "": Text {
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    text: tile.hours.to-uppercase();
+                    font-size: 9px;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-dim;
+                    overflow: elide;
+                }
+                if tile.tracked: Text {
+                    text: "TRACKED";
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    font-size: 9px;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-value;
+                }
             }
-        }
-
-        if tile.tracked: Text {
-            horizontal-stretch: 0;
-            text: "TRACKED";
-            font-family: Theme.font-label;
-            font-weight: Theme.weight-label;
-            font-size: 8.5px;
-            letter-spacing: 1.4px;
-            color: Theme.text-value;
         }
     }
 }

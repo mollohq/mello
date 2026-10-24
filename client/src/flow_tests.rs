@@ -4430,6 +4430,54 @@ fn recent_games_tiles_read_like_the_mockup() {
     );
 }
 
+/// The name in a recent games tile has the whole row: TRACKED sits on the
+/// hours line. "Counter-Strike 2" elided to "Counter-Stri..." at 1440 px, in
+/// the card beside the wide head2head card of a solo crew.
+#[test]
+fn a_recent_games_name_is_not_elided_at_1440_and_2000_px() {
+    for width in [1440u32, 2000] {
+        let mut h = Harness::new();
+        h.app()
+            .window()
+            .set_size(slint::PhysicalSize::new(width, 900));
+        app_with_crew_of(&mut h, 1);
+        set_roster(&h, &[("user-1", "Test User")]);
+        h.emit(Event::FeedLoaded {
+            response: feed_of(vec![
+                h2h_entry(
+                    1,
+                    vec![h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h")],
+                    vec![],
+                    None,
+                ),
+                recent_games_entry(serde_json::json!([
+                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam" }
+                ])),
+            ]),
+        });
+        let find = |label: &str| {
+            ElementHandle::find_by_element_type_name(h.app(), "Text")
+                .find(|e| e.accessible_label().is_some_and(|l| l == label))
+        };
+        let name = find("Counter-Strike 2").expect("the name is drawn");
+        let tracked = find("TRACKED").expect("TRACKED is drawn");
+        // The name takes the whole row beside the 76 px art and the 12 px gap.
+        let cell = ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell")
+            .next()
+            .expect("the tile row");
+        let room = cell.size().width - 76.0 - 12.0;
+        assert!(
+            (name.size().width - room).abs() < 1.0,
+            "{width}: the name has {} px of the {room} px beside the art",
+            name.size().width
+        );
+        assert!(
+            tracked.absolute_position().y > name.absolute_position().y,
+            "{width}: TRACKED is under the name, not beside it"
+        );
+    }
+}
+
 /// When every tile is installed on this device the header note reads
 /// "From this PC" instead of the sessions line.
 #[test]
