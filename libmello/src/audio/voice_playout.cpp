@@ -933,6 +933,12 @@ struct GameAudioSource::Impl {
     uint64_t stream_resets = 0;
     uint64_t flushes = 0;
     int minimum_delay_ms = 0;
+    // delay(): the lifetime sums at the last update of own_target_ms, for
+    // the stream `own_stream` (a new stream starts again).
+    mutable const GameStream* own_stream = nullptr;
+    mutable uint64_t own_min_sum_ms = 0;
+    mutable uint64_t own_emitted = 0;
+    mutable float own_target_ms = -1.0f;
 };
 
 GameAudioSource::GameAudioSource(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
@@ -1044,8 +1050,25 @@ std::optional<GameAudioSource::Delay> GameAudioSource::delay() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     if (!impl_->stream) return std::nullopt;
     webrtc::NetEq& neteq = impl_->stream->neteq();
+    // NetEQ adds its unclamped target per emitted sample to the lifetime
+    // statistics; the mean since the last update is its own target.
+    constexpr uint64_t kOwnTargetMinSamples = 4800;  // 100 ms
+    const webrtc::NetEqLifetimeStatistics ls = neteq.GetLifetimeStatistics();
+    Impl& m = *impl_;
+    if (m.own_stream != m.stream.get()) {
+        m.own_stream = m.stream.get();
+        m.own_min_sum_ms = ls.jitter_buffer_minimum_delay_ms;
+        m.own_emitted = ls.jitter_buffer_emitted_count;
+        m.own_target_ms = -1.0f;
+    } else if (ls.jitter_buffer_emitted_count >= m.own_emitted + kOwnTargetMinSamples) {
+        m.own_target_ms = static_cast<float>(
+            static_cast<double>(ls.jitter_buffer_minimum_delay_ms - m.own_min_sum_ms) /
+            static_cast<double>(ls.jitter_buffer_emitted_count - m.own_emitted));
+        m.own_min_sum_ms = ls.jitter_buffer_minimum_delay_ms;
+        m.own_emitted = ls.jitter_buffer_emitted_count;
+    }
     return Delay{static_cast<float>(neteq.TargetDelayMs()),
-                 static_cast<float>(neteq.FilteredCurrentDelayMs())};
+                 static_cast<float>(neteq.FilteredCurrentDelayMs()), m.own_target_ms};
 }
 
 GameAudioStats GameAudioSource::stats() const {

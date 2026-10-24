@@ -181,6 +181,12 @@ public:
     struct Delay {
         float target_ms = 0.0f;
         float filtered_ms = 0.0f;
+        /// NetEQ's own target without the minimum delay (the delay
+        /// manager's target), ms: the mean over the samples NetEQ emitted
+        /// since the last update, which needs 100 ms of them; -1 before the
+        /// first. From the lifetime statistics
+        /// (jitter_buffer_minimum_delay_ms).
+        float own_target_ms = -1.0f;
     };
     std::optional<Delay> delay() const;
 

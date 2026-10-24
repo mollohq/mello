@@ -46,6 +46,9 @@ struct AudioSyncSample {
     double pending_ms = 0.0;
     /// NetEQ's target delay now, ms.
     double target_ms = 0.0;
+    /// NetEQ's own target without the minimum delay, ms (-1: not known).
+    /// An audio minimum under it does not bind.
+    double own_target_ms = -1.0;
 };
 
 /// The delay NetEQ still adds to the audio, ms: its target minus its delay
@@ -112,8 +115,11 @@ public:
     /// (positive: the audio is late). `video_delay_ms`: the timeline's
     /// current delay.
     /// `audio_delay_ms`: NetEQ's target delay now (a minimum under it does
-    /// not bind; 0 when not known).
-    Decision update(double offset_ms, double video_delay_ms, double audio_delay_ms = 0.0);
+    /// not bind; 0 when not known). `audio_own_target_ms`: NetEQ's target
+    /// without the minimum (-1 when not known): the audio minimum binds only
+    /// over it.
+    Decision update(double offset_ms, double video_delay_ms, double audio_delay_ms = 0.0,
+                    double audio_own_target_ms = -1.0);
 
     /// Forget the filter and both delays (the audio stopped).
     void reset();

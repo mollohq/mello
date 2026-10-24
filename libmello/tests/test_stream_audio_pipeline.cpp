@@ -652,6 +652,16 @@ TEST_F(StreamPlayoutTest, ThePendingDelayIsOnlyWhatNetEqStillAdds) {
     ASSERT_GT(raised.target_delay_ms, raised.filtered_delay_ms);
     EXPECT_NEAR(sample->pending_ms, raised.target_delay_ms - raised.filtered_delay_ms, 1.0);
     EXPECT_GT(sample->pending_ms, 100.0);
+    // NetEQ's own target (without the minimum) is read from its lifetime
+    // statistics, and the minimum does not move it.
+    for (int i = 0; i < 10; ++i) {
+        const auto pkt = next();
+        step(&pkt);
+    }
+    sample = playout->sync_sample();
+    ASSERT_TRUE(sample.has_value());
+    EXPECT_GE(sample->own_target_ms, 0.0) << "NetEQ's own target is not known";
+    EXPECT_LT(sample->own_target_ms, sample->target_ms - 100.0);
 }
 
 // Ten minutes of clock drift: the host's audio device runs 300 ppm fast

@@ -183,6 +183,41 @@ TEST(AvSync, TheAudioWaitsAtMostTheVideoTarget) {
     EXPECT_LE(sync.audio_min_delay_ms(), 120) << "the audio waited longer than the video's target";
 }
 
+// The video target falls (its jitter estimate) while the audio has a
+// minimum from an earlier late video. When NetEQ's own target is over that
+// minimum, the minimum does not bind: it goes at once, and the video waits
+// in the same decision instead of after decisions that change nothing.
+TEST(AvSync, ANonBindingAudioMinimumGoesAndTheVideoWaitsAtOnce) {
+    AvSync sync;
+    for (int i = 0; i < 40; ++i) sync.update(-60.0, 140.0, 60.0, 60.0);
+    const int audio_before = sync.audio_min_delay_ms();
+    ASSERT_GT(audio_before, 100) << "the late video got no audio delay";
+    // Now NetEQ's own target is over the minimum, and the audio is 60 ms
+    // late (the video target fell to 80 ms).
+    // The first change (after the filter turns) must do both.
+    for (int i = 0; i < 8 && sync.audio_min_delay_ms() == audio_before; ++i) {
+        sync.update(60.0, 80.0, audio_before + 5.0, audio_before + 5.0);
+    }
+    EXPECT_EQ(sync.audio_min_delay_ms(), 0);
+    EXPECT_GT(sync.video_min_delay_ms(), 80.0) << "the video does not wait in the same decision";
+}
+
+// A binding audio minimum (over NetEQ's own target) still comes down in
+// steps.
+TEST(AvSync, ABindingAudioMinimumComesDownInSteps) {
+    AvSync sync;
+    for (int i = 0; i < 40; ++i) sync.update(-60.0, 140.0, 60.0, 60.0);
+    const int before = sync.audio_min_delay_ms();
+    ASSERT_GT(before, 100);
+    for (int i = 0; i < 8 && sync.audio_min_delay_ms() == before; ++i) {
+        sync.update(60.0, 80.0, static_cast<double>(before), 40.0);
+    }
+    EXPECT_LT(sync.audio_min_delay_ms(), before);
+    EXPECT_GE(sync.audio_min_delay_ms(), before - 40) << "more than one step";
+    EXPECT_GT(sync.audio_min_delay_ms(), 40) << "a binding minimum went at once";
+    EXPECT_EQ(sync.video_min_delay_ms(), 0.0);
+}
+
 TEST(AvSync, AnOffsetOverOneSecondIsIgnored) {
     AvSync sync;
     for (int i = 0; i < 10; ++i) EXPECT_FALSE(sync.update(5000.0, 40.0).changed);

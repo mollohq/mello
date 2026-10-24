@@ -13,7 +13,8 @@ AvSync::AvSync() : AvSync(Config{}) {}
 
 AvSync::AvSync(Config config) : config_(config) {}
 
-AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms, double audio_delay_ms) {
+AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms, double audio_delay_ms,
+                                double audio_own_target_ms) {
     Decision d;
     d.video_min_delay_ms = video_min_ms_;
     d.audio_min_delay_ms = audio_min_delay_ms();
@@ -32,9 +33,16 @@ AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms, double 
     const double audio_before = audio_min_ms_;
     if (want > 0.0) {
         // The audio is late. First take back delay the audio got for a late
-        // video, then hold the video longer.
+        // video, then hold the video longer. A minimum at or under NetEQ's
+        // own target does not bind: it goes at once (that changes nothing
+        // audible), and the video waits in the same decision.
+        const double own = std::max(0.0, audio_own_target_ms);
+        if (audio_min_ms_ > 0.0 && audio_min_ms_ <= own + config_.binding_margin_ms) {
+            audio_min_ms_ = 0.0;
+        }
         if (audio_min_ms_ > 0.0) {
             audio_min_ms_ -= std::min({audio_min_ms_, want, config_.max_audio_step_ms});
+            if (audio_min_ms_ <= own + config_.binding_margin_ms) audio_min_ms_ = 0.0;
         } else {
             // From the delay the frames get now: a minimum under it does not
             // bind and would change nothing.
@@ -176,7 +184,8 @@ void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr
         std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
     const double offset_ms = static_cast<double>(sample->heard_at_us - *shown_us) / 1000.0 +
                              sample->pending_ms - (video_delay_ms - video_applied_ms);
-    const AvSync::Decision d = sync_.update(offset_ms, video_delay_ms, sample->target_ms);
+    const AvSync::Decision d =
+        sync_.update(offset_ms, video_delay_ms, sample->target_ms, sample->own_target_ms);
     last_measurement_us_ = now_us;
     ++stats_.measurements;
     stats_.active = true;
