@@ -173,6 +173,16 @@ TEST(AvSync, LateVideoLowersTheVideoMinimumThenDelaysTheAudio) {
     EXPECT_LE(std::abs(offset()), 30.0);
 }
 
+// A video much later than its own target (a freeze recovery, a late
+// keyframe): the audio waits at most the video's target delay, not the
+// transient.
+TEST(AvSync, TheAudioWaitsAtMostTheVideoTarget) {
+    AvSync sync;
+    for (int i = 0; i < 60; ++i) sync.update(-200.0, 120.0, 40.0);
+    EXPECT_GT(sync.audio_min_delay_ms(), 100) << "the late video got no audio delay";
+    EXPECT_LE(sync.audio_min_delay_ms(), 120) << "the audio waited longer than the video's target";
+}
+
 TEST(AvSync, AnOffsetOverOneSecondIsIgnored) {
     AvSync sync;
     for (int i = 0; i < 10; ++i) EXPECT_FALSE(sync.update(5000.0, 40.0).changed);
@@ -466,4 +476,12 @@ TEST(AvSyncInput, TheStartBufferIsTheVideoDelayOverTheAudio) {
     ASSERT_TRUE(buffer.has_value());
     EXPECT_NEAR(*buffer, static_cast<double>(*shown - heard) / 1000.0, 1.0);
     EXPECT_EQ(input.stats().audio_min_delay_ms, *buffer);
+
+    // The video 300 ms later than the audio (a late keyframe): the buffer is
+    // at most the video's target delay, not the transient.
+    const double target_ms = timeline_ptr->stats().target_delay_ms;
+    const auto capped = input.start_buffer_ms(59 * 1500, clock.now - 300'000);
+    ASSERT_TRUE(capped.has_value());
+    EXPECT_LE(*capped, target_ms + 0.5);
+    EXPECT_GE(*capped, target_ms - 0.5);
 }

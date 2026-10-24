@@ -81,7 +81,12 @@ public:
         double max_audio_step_ms = 40.0;
         /// The receive timeline's maximum delay.
         double max_video_delay_ms = 150.0;
-        /// The most the audio is delayed for a late video.
+        /// The most the audio is delayed for a late video. The audio also
+        /// waits at most the video's target delay (the timeline's target):
+        /// in steady state the video of an instant is shown that long after
+        /// its packets arrive, and the audio of the same instant arrives at
+        /// about the same time. A longer wait follows a transient (a late
+        /// keyframe, a freeze recovery) that NetEQ then has to compress away.
         double max_audio_delay_ms = 250.0;
         /// A measured offset over this is not a sync error (a stream that
         /// restarts, a clock that jumps): it is ignored.

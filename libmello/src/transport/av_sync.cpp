@@ -53,9 +53,10 @@ AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms, double 
             video_min_ms_ = std::max(0.0, video_min_ms_ - s);
         } else {
             // From NetEQ's own target: a minimum under it does not bind and
-            // would change nothing.
+            // would change nothing. At most the video's target delay.
             const double base = std::max(audio_min_ms_, audio_delay_ms);
-            audio_min_ms_ = std::min(base + s, config_.max_audio_delay_ms);
+            const double cap = std::min(config_.max_audio_delay_ms, std::max(0.0, video_delay_ms));
+            if (base < cap) audio_min_ms_ = std::min(base + s, cap);
         }
     }
     // After a change the filter starts again: the measurements in it are
@@ -115,7 +116,11 @@ std::optional<int> AvSyncInput::start_buffer_ms(uint32_t video_rtp_timestamp,
         std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
     const double want_ms = static_cast<double>(*shown_us - heard_if_now_us) / 1000.0 +
                            (ts.target_delay_ms - video_applied_ms);
-    const int buffer_ms = static_cast<int>(std::clamp(want_ms, 0.0, max_audio_delay_ms_) + 0.5);
+    // At most the video's target delay (AvSync::Config::max_audio_delay_ms):
+    // the first video frame can arrive late (a large keyframe), and a buffer
+    // for that transient NetEQ would have to compress away.
+    const double cap_ms = std::min(max_audio_delay_ms_, std::max(0.0, ts.target_delay_ms));
+    const int buffer_ms = static_cast<int>(std::clamp(want_ms, 0.0, cap_ms) + 0.5);
     sync_.start_audio(buffer_ms);
     stats_.audio_min_delay_ms = sync_.audio_min_delay_ms();
     MELLO_LOG_INFO("av_sync", "audio starts with a %d ms buffer (the video of its first packet "
