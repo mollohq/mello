@@ -65,7 +65,12 @@ component StreamCard inherits Rectangle {
     callback stop-stream-clicked();
     callback stop-watching-clicked();
 
-    property <bool> selected-card: (is-watching && card.host-id == active-streamer-id) || (is-hosting && !card.can-watch);
+    // Stage 6 (streaming-quality): the card's session state. A notice card
+    // ("ended", "failed") says for a few seconds why a stream stopped.
+    property <bool> is-notice: card.state == "ended" || card.state == "failed";
+    property <bool> starting: card.state == "starting";
+    property <bool> reconnecting: card.state == "reconnecting";
+    property <bool> selected-card: !is-notice && ((is-watching && card.host-id == active-streamer-id) || (is-hosting && !card.can-watch));
     /// Pause card copy, by why the stream paused. One place: a minimized
     /// game, one still loading, and one no method can see are three
     /// different sentences.
@@ -120,6 +125,15 @@ component StreamCard inherits Rectangle {
                     width: parent.width;
                     height: parent.height;
                     image-fit: contain;
+                }
+
+                // Reconnecting: the last frame stays under a black wash (the
+                // design system's wash over footage). On Windows the video
+                // layer draws the same wash (DCompPresenter).
+                if root.reconnecting && !show-paused: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: #00000066;
                 }
 
                 // Pause UX: opaque cover over the stale frame (and over the
@@ -201,19 +215,26 @@ component StreamCard inherits Rectangle {
                     spacing: 8px;
 
                     if !show-watch-cta: Text {
-                        text: show-hosting-state ? "YOU ARE LIVE" : root.card.streamer-name + " IS LIVE";
+                        text: root.is-notice ? root.card.title
+                            : !show-hosting-state ? root.card.streamer-name + " IS LIVE"
+                            : root.starting ? "STARTING"
+                            : root.reconnecting ? "RECONNECTING"
+                            : "YOU ARE LIVE";
                         font-family: Theme.font-label;
                         font-size: 14px;
                         font-weight: 700;
                         letter-spacing: 1.2px;
-                        color: Theme.text-primary;
+                        // Red is state: the link is down right now.
+                        color: show-hosting-state && root.reconnecting ? Theme.live : Theme.text-primary;
                         horizontal-alignment: center;
                     }
 
                     if !show-watch-cta: Text {
                         font-weight: Theme.weight-sentence;
                         font-family: Theme.font-body;
-                        text: root.card.subtitle;
+                        text: show-hosting-state && root.starting ? "Connecting to the stream server"
+                            : show-hosting-state && root.reconnecting ? "Viewers see your last frame"
+                            : root.card.subtitle;
                         font-size: 12px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
@@ -366,7 +387,7 @@ component StreamCard inherits Rectangle {
                             horizontal-stretch: 0;
                         }
 
-                        Rectangle {
+                        if !root.is-notice && !root.starting && !root.reconnecting: Rectangle {
                             horizontal-stretch: 0;
                             width: live-label.preferred-width + 14px;
                             height: 20px;
@@ -388,6 +409,23 @@ component StreamCard inherits Rectangle {
                                     vertical-alignment: center;
                                 }
                             }
+                        }
+
+                        // Stage 6: the state in place of the LIVE badge. No
+                        // fill: the stream is not live right now. Red text
+                        // for a link that is down, as the voice channel.
+                        if root.is-notice || root.starting || root.reconnecting: Text {
+                            horizontal-stretch: 0;
+                            text: root.reconnecting ? "RECONNECTING"
+                                : root.starting ? "STARTING"
+                                : root.card.state == "failed" ? "NOT LIVE"
+                                : "ENDED";
+                            font-family: Theme.font-label;
+                            font-size: 10px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            color: root.reconnecting ? Theme.live : Theme.text-secondary;
+                            vertical-alignment: center;
                         }
 
                         if show-live-frame: Rectangle {
@@ -418,8 +456,9 @@ component StreamCard inherits Rectangle {
                     }
                 }
 
-                // Right column — icons on top, leave button below
-                Rectangle {
+                // Right column — icons on top, leave button below. A notice
+                // card has no controls.
+                if !root.is-notice: Rectangle {
                     horizontal-stretch: 0;
                     width: ctrl-row.preferred-width;
 
@@ -579,6 +618,9 @@ component StreamsPreview inherits Rectangle {
     in property <bool> hosting: false;
     in property <bool> watching: false;
     in property <bool> can-watch: false;
+    in property <string> state: "";
+    in property <string> title: "";
+    in property <string> subtitle: "Display 1 (Primary)";
 
     width: 820px;
     height: 470px;
@@ -596,10 +638,12 @@ component StreamsPreview inherits Rectangle {
             {
                 host-id: "h1", session-id: "s1",
                 streamer-name: "b0bben",
-                subtitle: "Display 1 (Primary)",
+                subtitle: root.subtitle,
                 avatar-initials: "b0", avatar-color-index: 0,
                 viewer-count: 3, stream-width: 1920, stream-height: 1080,
                 can-watch: root.can-watch,
+                state: root.state,
+                title: root.title,
             },
         ];
     }
@@ -610,3 +654,26 @@ export component PreviewHosting inherits StreamsPreview { hosting: true; }
 
 /// Somebody else is live and you have not joined yet.
 export component PreviewWatchCta inherits StreamsPreview { can-watch: true; }
+
+/// Stage 6: your stream starts (capture init and the SFU join).
+export component PreviewHostStarting inherits StreamsPreview { hosting: true; state: "starting"; }
+
+/// Stage 6: your stream link is silent; the stream is kept.
+export component PreviewHostReconnecting inherits StreamsPreview { hosting: true; state: "reconnecting"; }
+
+/// Stage 6: the watched stream reconnects; the last frame stays under a wash.
+export component PreviewWatchReconnecting inherits StreamsPreview {
+    watching: true; can-watch: true; state: "reconnecting";
+}
+
+/// Stage 6: a stream that ended says why.
+export component PreviewEnded inherits StreamsPreview {
+    state: "ended"; title: "STREAM ENDED";
+    subtitle: "The connection to the stream was lost for 30 seconds.";
+}
+
+/// Stage 6: a start that failed names the cause.
+export component PreviewFailed inherits StreamsPreview {
+    state: "failed"; title: "STREAM DID NOT START";
+    subtitle: "Could not reach the stream server.";
+}

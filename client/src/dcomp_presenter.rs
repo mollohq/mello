@@ -246,6 +246,16 @@ pub struct DCompPresenter {
     cursor_shown: bool,
     /// Set by `set_content_visible` (the pause card), which takes `&self`.
     content_visible: std::cell::Cell<bool>,
+    // --- stage 6 (streaming-quality): the "reconnecting" wash ---
+    /// A black wash over the last frame while the stream reconnects. A
+    /// child of the video visual above the pointer, so the video's scale
+    /// and clip apply: a 16x16 premultiplied swap chain scaled to the
+    /// stream size. The Slint card cannot draw it: the video layer
+    /// composites above Slint content.
+    wash_visual: IDCompositionVisual,
+    wash_swap: Option<IDXGISwapChain1>,
+    wash_shown: std::cell::Cell<bool>,
+    // --- end stage 6 ---
 }
 
 impl DCompPresenter {
@@ -288,6 +298,10 @@ impl DCompPresenter {
             .map_err(|e| format!("CreateVisual (cursor): {e}"))?;
         unsafe { dcomp_visual.AddVisual(&cursor_visual, true, None::<&IDCompositionVisual>) }
             .map_err(|e| format!("AddVisual (cursor): {e}"))?;
+        let wash_visual = unsafe { dcomp_device.CreateVisual() }
+            .map_err(|e| format!("CreateVisual (wash): {e}"))?;
+        unsafe { dcomp_visual.AddVisual(&wash_visual, true, None::<&IDCompositionVisual>) }
+            .map_err(|e| format!("AddVisual (wash): {e}"))?;
 
         log::info!(
             "DComp presenter initialised: {}x{} at ({:.0},{:.0}) under HWND {:?}",
@@ -328,6 +342,9 @@ impl DCompPresenter {
             cursor_serial: 0,
             cursor_shown: false,
             content_visible: std::cell::Cell::new(true),
+            wash_visual,
+            wash_swap: None,
+            wash_shown: std::cell::Cell::new(false),
         })
     }
 
@@ -372,6 +389,7 @@ impl DCompPresenter {
             // The pointer is a child visual: it stays on screen unless it
             // goes with the video.
             self.apply_cursor_content(visible);
+            self.apply_wash_content(visible);
             let _ = self.dcomp_device.Commit();
         }
     }
@@ -414,6 +432,91 @@ impl DCompPresenter {
             self.cursor_shown = true;
             self.apply_cursor_content(self.content_visible.get());
             let _ = self.dcomp_device.Commit();
+        }
+    }
+
+    /// Show or hide the "reconnecting" wash over the last frame
+    /// (streaming-quality stage 6). The design system's wash over footage:
+    /// black at 0x66 alpha.
+    pub fn set_reconnecting_wash(&mut self, on: bool) {
+        if on && self.wash_swap.is_none() {
+            match unsafe { self.create_wash() } {
+                Ok(swap) => self.wash_swap = Some(swap),
+                Err(e) => {
+                    log::warn!("DComp reconnecting wash not available: {e}");
+                    return;
+                }
+            }
+        }
+        self.wash_shown.set(on);
+        unsafe {
+            self.apply_wash_content(self.content_visible.get());
+            let _ = self.dcomp_device.Commit();
+        }
+    }
+
+    const WASH_SIZE: u32 = 16;
+
+    unsafe fn create_wash(&self) -> Result<IDXGISwapChain1, String> {
+        let factory: IDXGIFactory2 =
+            CreateDXGIFactory1().map_err(|e| format!("CreateDXGIFactory1: {e}"))?;
+        let desc = DXGI_SWAP_CHAIN_DESC1 {
+            Width: Self::WASH_SIZE,
+            Height: Self::WASH_SIZE,
+            Format: DXGI_FORMAT_B8G8R8A8_UNORM,
+            BufferCount: 2,
+            BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
+            SwapEffect: DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
+            SampleDesc: DXGI_SAMPLE_DESC {
+                Count: 1,
+                ..Default::default()
+            },
+            AlphaMode: DXGI_ALPHA_MODE_PREMULTIPLIED,
+            ..Default::default()
+        };
+        let swap = factory
+            .CreateSwapChainForComposition(&self._device, &desc, None)
+            .map_err(|e| format!("CreateSwapChainForComposition (wash): {e}"))?;
+        // Premultiplied black at 0x66 alpha: B, G, R are 0.
+        let pixels = [0u8, 0, 0, 0x66].repeat((Self::WASH_SIZE * Self::WASH_SIZE) as usize);
+        let back: ID3D11Texture2D = swap
+            .GetBuffer(0)
+            .map_err(|e| format!("GetBuffer (wash): {e}"))?;
+        self.device_ctx.UpdateSubresource(
+            &back,
+            0,
+            None,
+            pixels.as_ptr().cast(),
+            Self::WASH_SIZE * 4,
+            0,
+        );
+        swap.Present(0, DXGI_PRESENT(0))
+            .ok()
+            .map_err(|e| format!("Present (wash): {e}"))?;
+        Ok(swap)
+    }
+
+    /// The wash covers the stream picture: scale its 16x16 surface to the
+    /// stream size, in the video visual's own pixels.
+    unsafe fn apply_wash_content(&self, video_visible: bool) {
+        match (&self.wash_swap, self.wash_shown.get() && video_visible) {
+            (Some(swap), true) => {
+                let (sw, sh) = unpack_size(self.stream_size.load(Ordering::Acquire));
+                let size = Self::WASH_SIZE as f32;
+                let matrix = windows_numerics::Matrix3x2 {
+                    M11: sw.max(1) as f32 / size,
+                    M12: 0.0,
+                    M21: 0.0,
+                    M22: sh.max(1) as f32 / size,
+                    M31: 0.0,
+                    M32: 0.0,
+                };
+                let _ = self.wash_visual.SetTransform2(&matrix);
+                let _ = self.wash_visual.SetContent(swap);
+            }
+            _ => {
+                let _ = self.wash_visual.SetContent(None);
+            }
         }
     }
 
@@ -523,12 +626,14 @@ impl DCompPresenter {
             if !visible {
                 let _ = self.dcomp_visual.SetContent(None);
                 self.apply_cursor_content(false);
+                self.apply_wash_content(false);
                 let _ = self.dcomp_device.Commit();
                 return true;
             }
 
             let _ = self.dcomp_visual.SetContent(&self.swap_chain);
             self.apply_cursor_content(self.content_visible.get());
+            self.apply_wash_content(self.content_visible.get());
 
             // Uniform scale preserving aspect ratio (contain-fit).
             let sw = stream_width as f32;

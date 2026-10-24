@@ -1,5 +1,6 @@
 use std::rc::Rc;
 
+use mello_core::events::StreamRole;
 use mello_core::{Command, Event};
 use slint::Model;
 
@@ -99,6 +100,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 mode
             );
             ctx.app.set_is_hosting(true);
+            ctx.app.set_stream_host_state("live".into());
             ctx.app.set_streamer_name(ctx.app.get_user_name());
             if ctx.app.get_stream_label().is_empty() {
                 ctx.app.set_stream_label("STREAMING".into());
@@ -114,8 +116,38 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_dbg_host_pacing_sleep_delta_ms(0);
             sync_active_stream_cards(ctx);
         }
-        Event::StreamEnded { crew_id } => {
-            log::info!("Stream ended: crew={}", crew_id);
+        // A watched stream ended: the card says why. StreamWatchingStopped
+        // follows and stops the viewer.
+        Event::StreamEnded {
+            role: StreamRole::Viewer,
+            reason,
+            ..
+        } => {
+            log::info!("Watched stream ended: {}", reason);
+            let name = ctx.app.get_active_streamer_name().to_string();
+            show_stream_notice(
+                ctx,
+                "ended",
+                "STREAM ENDED",
+                &name,
+                ended_reason_text(&reason),
+            );
+        }
+        Event::StreamEnded {
+            crew_id, reason, ..
+        } => {
+            log::info!("Stream ended: crew={} reason={}", crew_id, reason);
+            ctx.app.set_stream_host_state("".into());
+            if !reason.is_empty() && reason != "stopped" {
+                let name = ctx.app.get_user_name().to_string();
+                show_stream_notice(
+                    ctx,
+                    "ended",
+                    "STREAM ENDED",
+                    &name,
+                    ended_reason_text(&reason),
+                );
+            }
             ctx.app.set_is_hosting(false);
             ctx.app.set_is_watching(false);
             ctx.app.set_stream_paused(false);
@@ -182,6 +214,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         } => {
             log::info!("Watching stream from {} ({}x{})", host_id, width, height);
             ctx.app.set_is_watching(true);
+            ctx.app.set_stream_viewer_state("".into());
             ctx.app.set_stream_paused(false);
             ctx.app.set_stream_paused_reason("".into());
             ctx.app.set_paused_streamer_name("".into());
@@ -229,6 +262,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::StreamWatchingStopped => {
             log::info!("Stopped watching stream");
             ctx.app.set_is_watching(false);
+            ctx.app.set_stream_viewer_state("".into());
             ctx.app.set_stream_paused(false);
             ctx.app.set_stream_paused_reason("".into());
             ctx.app.set_paused_streamer_name("".into());
@@ -339,6 +373,104 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::StreamError { message } => {
             log::error!("Stream error: {}", message);
         }
+        // --- stage 6 (streaming-quality): stream session states ---
+        Event::StreamStarting { crew_id } => {
+            log::info!("Stream starting: crew={}", crew_id);
+            clear_stream_notice(ctx);
+            ctx.app.set_is_hosting(true);
+            ctx.app.set_stream_host_state("starting".into());
+            ctx.app.set_streamer_name(ctx.app.get_user_name());
+            if ctx.app.get_stream_label().is_empty() {
+                ctx.app.set_stream_label("STREAMING".into());
+            }
+            sync_active_stream_cards(ctx);
+        }
+        Event::StreamReconnecting { role } => {
+            log::warn!("Stream reconnecting: {:?}", role);
+            match role {
+                StreamRole::Host => ctx.app.set_stream_host_state("reconnecting".into()),
+                StreamRole::Viewer => {
+                    ctx.app.set_stream_viewer_state("reconnecting".into());
+                    #[cfg(target_os = "windows")]
+                    if let Some(p) = ctx.dcomp_presenter.borrow_mut().as_mut() {
+                        p.set_reconnecting_wash(true);
+                    }
+                }
+            }
+            sync_active_stream_cards(ctx);
+        }
+        Event::StreamResumed { role } => {
+            log::info!("Stream resumed: {:?}", role);
+            match role {
+                StreamRole::Host => ctx.app.set_stream_host_state("live".into()),
+                StreamRole::Viewer => {
+                    ctx.app.set_stream_viewer_state("".into());
+                    #[cfg(target_os = "windows")]
+                    if let Some(p) = ctx.dcomp_presenter.borrow_mut().as_mut() {
+                        p.set_reconnecting_wash(false);
+                    }
+                }
+            }
+            sync_active_stream_cards(ctx);
+        }
+        Event::StreamFailed { role, reason } => {
+            log::error!("Stream failed ({:?}): {}", role, reason);
+            match role {
+                StreamRole::Host => {
+                    ctx.app.set_is_hosting(false);
+                    ctx.app.set_stream_host_state("".into());
+                    ctx.app.set_stream_label("".into());
+                    let name = ctx.app.get_user_name().to_string();
+                    show_stream_notice(ctx, "failed", "STREAM DID NOT START", &name, &reason);
+                }
+                StreamRole::Viewer => {
+                    let name = ctx.app.get_active_streamer_name().to_string();
+                    show_stream_notice(ctx, "failed", "COULD NOT WATCH", &name, &reason);
+                }
+            }
+        }
+        // --- end stage 6 ---
         _ => {}
     }
+}
+
+// --- stage 6 (streaming-quality): the stream notice card ---
+
+/// How long a stream notice card stays.
+const STREAM_NOTICE_FOR: std::time::Duration = std::time::Duration::from_secs(8);
+
+/// The card copy for a `StreamEnded` reason.
+fn ended_reason_text(reason: &str) -> &'static str {
+    match reason {
+        "connection_lost" => "The connection to the stream was lost for 30 seconds.",
+        "lost_on_server" => "The server lost the stream during a reconnect.",
+        "host_left" => "The host ended the stream.",
+        _ => "The stream ended.",
+    }
+}
+
+/// Show a card that says why a stream ended or did not start, for a few
+/// seconds.
+fn show_stream_notice(ctx: &AppContext, state: &str, title: &str, name: &str, reason: &str) {
+    ctx.app.set_stream_notice_state(state.into());
+    ctx.app.set_stream_notice_title(title.into());
+    ctx.app.set_stream_notice_name(name.into());
+    ctx.app.set_stream_notice(reason.into());
+    sync_active_stream_cards(ctx);
+    let ctx = ctx.clone();
+    let shown = reason.to_string();
+    slint::Timer::single_shot(STREAM_NOTICE_FOR, move || {
+        // A newer notice stays.
+        if ctx.app.get_stream_notice().as_str() == shown {
+            clear_stream_notice(&ctx);
+            sync_active_stream_cards(&ctx);
+        }
+    });
+}
+
+fn clear_stream_notice(ctx: &AppContext) {
+    ctx.app.set_stream_notice_state("".into());
+    ctx.app.set_stream_notice_title("".into());
+    ctx.app.set_stream_notice_name("".into());
+    ctx.app.set_stream_notice("".into());
 }

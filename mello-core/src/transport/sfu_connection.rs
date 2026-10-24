@@ -795,6 +795,14 @@ impl SfuConnection {
         self.ice_connection_state() == 2
     }
 
+    /// Whether ICE failed or the peer closed: the peer cannot carry media
+    /// again. libjuice 1.7 refuses an ICE restart ("ICE restart is not
+    /// supported"), so a stream rebuilds its connection instead
+    /// (streaming-quality stage 6).
+    pub fn is_ice_dead(&self) -> bool {
+        matches!(self.ice_connection_state(), 4 | 5)
+    }
+
     /// Whether the unreliable/media DataChannel is open.
     pub fn is_media_channel_open(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
@@ -1876,11 +1884,17 @@ impl SignalListener {
                 // surface them as a disconnect to drive a full
                 // reconnect. Transient validation errors (e.g. a
                 // stray ICE candidate) are logged only.
+                // PEER_SLOW and PEER_STALLED_RTP: the SFU removes this
+                // peer next. A stream treats that as a reconnect, not an end
+                // (streaming-quality stage 6); before, it came only as the
+                // later `ws_closed`.
                 const FATAL: &[&str] = &[
                     "INVALID_TOKEN",
                     "INVALID_ROLE",
                     "SESSION_FULL",
                     "WEBRTC_ERROR",
+                    "PEER_SLOW",
+                    "PEER_STALLED_RTP",
                 ];
                 if FATAL.contains(&code) {
                     let _ = self

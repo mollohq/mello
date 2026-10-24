@@ -557,7 +557,7 @@ The receiver emits TWCC feedback every ~50 ms in the transport-cc draft layout: 
 
 **Receiver (libmello):** the H.264 receiver, the receive timeline and NACK/PLI/RR/REMB/TWCC (§7.1 to §7.3). A missing packet is NACKed every max(RTT, 10 ms) until its repair deadline (the render time of the first frame after the gap plus one RTT, and not before the adaptive repair window of 300 ms to 1.5 s); complete access units go to the timeline in any order; a PLI goes out only when the timeline needs a key frame. The 3-AU window, the 120 ms stall, the 600 ms hard age and the fixed NACK budget are gone (streaming-quality stage 3). When ULPFEC is negotiated, parity packets (`ssrc == remote_media_ssrc + 1`, PT 127) feed a recovery buffer; `send_nack` tries XOR reconstruction before emitting NACK; eager repair retries on FEC and media arrivals and on idle worker ticks when covered sequences remain missing. Recovered packets are injected outside receiver callbacks (no re-entrancy). Stats: `rx_fec_recovered`, `rx_fec_unrecoverable`.
 
-**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every ~2 s so both sides have a live RTT measurement (`rtt_ms` in telemetry).
+**Stream session DataChannel:** reliable `control` only (viewer PLI/loss metadata, cursor, ping/pong). There is no unreliable stream-video DataChannel. Host and viewer send a control-channel ping every 128 ms (8 stream ticks). The SFU's pong gives the RTT (`rtt_ms` in telemetry), and its age is the link's liveness signal (§11.1).
 
 Implementation: `libmello/src/transport/rtp_video_sender.cpp`, `rtp_video_receiver_session.cpp`; Rust wrappers in `mello-core/src/stream/rtp_peer.rs`.
 
@@ -610,7 +610,7 @@ The SFU is the only stream topology. `start_stream` and `watch_stream` always re
 | The crew metadata has `"sfu_enabled": false` (operator kill switch) | `start_stream` returns `SFU_UNAVAILABLE`. |
 | A `watch_stream` session has no SFU endpoint (a record from before the SFU was the only transport) | `SFU_UNAVAILABLE`. |
 
-The client logs the error and reports a stream error. A failed SFU connect, join or control channel on the host, or a failed session creation, stops the native host, retracts the advertised stream (`stop_stream` for the crew of the start) and reports a stream error.
+The client reports `StreamFailed { role, reason }` with a sentence for the user. A failed SFU connect, join or control channel on the host, or a failed session creation, stops the native host, retracts the started session (`stop_stream` with the crew of the start and the session id) and reports `StreamFailed`.
 
 ---
 
@@ -1043,30 +1043,72 @@ pointer hides with the video for the pause card.
 
 ### Host start
 
+Streaming-quality stage 6: the start runs off the command loop (`client/stream_host_start.rs`, built like `sfu_voice_join.rs`). StartStream returns at once; the UI gets `StreamStarting` and the host card shows "starting".
+
+| Step | Runs on | Limit | Work |
+|---|---|---|---|
+| RPC | task | 10 s | `start_stream` with `advertise: "on_live"` and `fps`: session id, SFU endpoint and token, the `capture` block |
+| Native | own thread | 10 s | Encoder check, capture backend init (hook injection included), encoder, audio. `allow_hook` comes from the `capture` block and `igdb_id` (§3.1.1) |
+| SFU | task | 5 s connect, 10 s join | WebSocket and welcome, host peer, `join_stream`, offer and answer, video track and control channel open |
+
 1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid.
-2. `mello-core` calls `start_stream` RPC to Nakama → gets session ID, mode, SFU endpoint, and the `capture` block. For a process target, `hook_allowed_for_game` turns the block and `igdb_id` into `allow_hook` (§3.1.1).
-3. `start_host` creates the libmello video pipeline (capture + preprocess + encoder) and sets up mpsc channels for encoded packets.
-4. `create_stream_session` creates a `StreamManager` with the appropriate `PacketSink` and spawns its async `run` loop. The `StreamSession` keeps the crew id of the start (`PendingStreamStart.crew_id`).
-5. `start_stream` advertises the stream before the host has started. Every start failure after it (encoder check, native start, SFU connect, join, transport, session creation) calls `stop_stream` for that crew, so no viewer sees a stream that does not exist.
+2. The RPC step runs. With `advertise: "on_live"` the backend records the session only; the crew sees nothing yet (specs/04-BACKEND.md).
+3. The native step and the SFU step run at the same time. Capture init and SFU negotiation overlap.
+4. When the native step ends, `create_stream_session` starts the `StreamManager` at once on an `SfuSink` with no connection. The manager drains the encoder from the first access unit, so the 32-AU channel cannot overflow while the SFU join runs. The sink drops what it cannot send as backpressure (no recovery mode, no key frame request).
+5. When the SFU step ends, the sink takes the connection (`SfuSink::attach`): it applies the pacing target, goog_cc limits and allocation to the new peer and asks the manager for an IDR, so the first access unit on the open track is a key frame.
+6. When both ended, the stream is live: the UI gets `StreamStarted` (the host card shows LIVE), and `stream_live {crew_id, session_id, width, height, fps, bitrate_kbps}` advertises the stream to the crew with the real encode size. `stream_started` carries `mode`, `width`, `height` and `fps`. An older backend advertised at the start; the client then sends `update_stream_resolution` as before.
+7. A failed step ends the start: the other steps are cancelled, the native host stops through its teardown guard, `stop_stream {crew_id, session_id}` takes the session back (on its own task), and the UI gets `StreamFailed { role: host, reason }`.
+
+Log lines: "Stream live N ms after the click: start_stream, capture, SFU" and, at the first access unit on the open track, "Stream start timing: click_to_first_rtp_ms=… click_to_live_ms=… rpc_ms=… capture_ms=… sfu_ms=…".
 
 ### Nakama reconnect
 
-The backend removes the stream records when the host's realtime socket ends (`OnSessionEnd` → `StreamCleanupUser`). The SFU session and the encoder keep running. After the reconnect, `resync_after_reconnect` calls `start_stream` with `crew_id` and `resume_session_id` (the live session). The backend restores the same session (specs/04-BACKEND.md §5). When it cannot, no viewer can find the stream, so the host ends it and reports a stream error. A start still on its thread during the reconnect is not re-advertised.
+The backend removes the stream records when the host's realtime socket ends (`OnSessionEnd` → `StreamCleanupUser`). The SFU session and the encoder keep running. After the reconnect, `resync_after_reconnect` calls `start_stream` with `crew_id` and `resume_session_id` (the live session), bounded by 10 s. The backend restores the same session (specs/04-BACKEND.md §5). When it cannot, no viewer can find the stream, so the host ends it (`StreamEnded { reason: "lost_on_server" }`). No answer within 10 s keeps the stream; the next resync asks again. A start in flight is not advertised yet: `stream_live` advertises it.
 
 ### Viewer start
 
-1. Viewer discovers stream via crew state (Nakama).
-2. For SFU: connects to the SFU endpoint, joins the session, negotiates WebRTC.
-3. Uses the encode resolution and bitrate returned by `watch_stream` (falling back to crew-state/default values only for older responses).
-4. Creates the decoder pipeline at the correct resolution (`mello_stream_start_viewer`).
-5. Attaches the viewer peer (`mello_stream_viewer_attach_peer`): libmello decodes and presents on its own threads from then on (§7).
-6. Creates `DCompPresenter` with the stream resolution and parent HWND (Windows) and installs its swap chain as the native presenter.
-7. `stream_tick` (16 ms) reads stats, follows the pause state and the members, and keeps the freeze clock; `ViewerCongestionController` emits REMB from native stats.
-8. `VideoRect.geometry-changed` callback keeps the DComp visual in sync with the Slint card layout.
+Streaming-quality stage 6: the watch runs off the command loop (`client/stream_watch.rs`).
+
+| Step | Runs on | Limit | Work |
+|---|---|---|---|
+| Decoder | blocking thread | | `mello_stream_start_viewer` at the size from crew state; the decoder and the presenter follow the SPS |
+| RPC | task | 10 s | `watch_stream`: SFU endpoint, viewer token, bitrate |
+| SFU | task | 5 s connect, 10 s join | WebSocket, viewer peer, `join_stream`, track and control channel open |
+
+1. Viewer discovers stream via crew state (Nakama). `stream_live` writes the real encode size there before the crew sees the stream.
+2. The decoder starts at the click, at the same time as the RPC and the SFU join, so its init overlaps ICE and DTLS. When it is up the UI gets `StreamWatching` and builds its presenter (`DCompPresenter` on Windows) while ICE runs.
+3. When both ended, libmello takes the video from the peer (`mello_stream_viewer_attach_peer`); the SFU replays its cached IDR when the leg connects (§7).
+4. `stream_tick` (16 ms) reads stats, follows the pause state and the members, and keeps the freeze clock; `ViewerCongestionController` emits REMB from native stats.
+5. `VideoRect.geometry-changed` callback keeps the DComp visual in sync with the Slint card layout.
+
+A failed step stops the decoder (on the teardown thread) and reports `StreamFailed { role: viewer, reason }`. Log line at the first frame: "Stream watch timing: click_to_first_frame_ms=…".
+
+### 11.1 Reconnect (streaming-quality stage 6)
+
+Host and viewer keep their SFU link on the voice schedule (`client/stream_link.rs`, pure decision logic with unit tests):
+
+| Signal | Meaning | Action |
+|---|---|---|
+| No control-channel pong for 700 ms | Own link silent (a pulled cable) | `StreamReconnecting { role }`; the connection stays |
+| Pong back within 5 s | Own link back | `StreamResumed` (host at once; viewer at its next frame) |
+| Silent for 5 s, the signaling socket closed, ICE failed or closed, `PEER_SLOW` or `PEER_STALLED_RTP`, wake from sleep | The connection is gone | Rejoin the same session with a new connection: 500 ms after the drop, then 1 s, then every 2 s |
+| Viewer: no host media for 700 ms while the own link answers and the host is not paused or idle | The host is gone | `StreamReconnecting { role: viewer }`; no rejoin of its own |
+| Viewer: `host_reconnecting` | The SFU holds the session for the host (30 s) | `StreamReconnecting { role: viewer }`; the leg and the last frame stay |
+| 30 s after the drop with no rejoin; viewer: 30 s with no frame | | Give up: `StreamEnded { reason: "connection_lost" }`; the host takes the session back |
+| Viewer: `session_ended` | The host ended the stream, or its hold expired | `StreamEnded { role: viewer, reason: "host_left" }`, then `StreamWatchingStopped` |
+
+- **No ICE restart on the client.** libjuice 1.7 refuses a second remote description ("ICE restart is not supported"), and libdatachannel 0.24 has no restart. The SFU's restart offer on `Failed` therefore cannot be answered; a link silent for 5 s rejoins with a new connection instead. The SFU replaces the old peer of the same user: for a host, `peer_evicted` (old peer still present) or `host_reconnected` (after the hold); for a viewer, the old leg.
+- **Host rejoin.** The new connection goes to the sink (`SfuSink::attach`): pacing, goog_cc limits and allocation apply to the new peer, and the manager forces an IDR. The encoder and the manager never stop. Viewers that left while the host was away sent their `member_left` to the old connection; the host takes them out of the count from the rejoin's `joined.members`.
+- **Viewer rejoin.** The decoder and the presenter stay, so the last frame stays on screen. The pause callback moves to the new peer and libmello takes the video from it (`mello_stream_viewer_attach_peer` again; the view holds the old peer weakly). No `leave` on the old connection: it would count the viewer out.
+- **Last frame under a wash.** While the viewer reconnects, the card shows RECONNECTING in place of the LIVE badge and a black wash (`#00000066`) over the last frame: a child visual of the DComp video visual on Windows (the video layer composites above Slint), a Slint rectangle elsewhere. The host card shows STARTING or RECONNECTING the same way.
+- **Tokens.** An SFU token lives 5 minutes. Host and viewer refresh theirs every 4 minutes in the background (`refresh_stream_token`), so a rejoin needs no backend round trip. A rejoin with an expired token asks for a new one first (5 s limit).
+- **Wake from sleep.** The realtime supervisor's wake detection also rejoins the stream links at once.
 
 ### Teardown
 
-Host: signal `StreamSession::stop_and_wait` so the manager drains sinks before peer teardown. `stop_stream` goes to the crew in `StreamSession.crew_id`, not to the crew the UI shows. The backend accepts it only from the host. Viewer: stop pipeline, release GPU resources, leave the SFU session. The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown and `stop_stream` RPC.
+Host: the UI gets `StreamEnded { role: host, reason: "stopped" }` first. Then the bounded SFU `leave` and `stop_stream {crew_id, session_id}` go on their own tasks, the leave first, so viewers get `session_ended` at once even when the backend stalls. The manager join is bounded and native teardown runs on its own thread; nothing on the loop waits on the network. `stop_stream` goes to the crew in `StreamSession.crew_id`, not to the crew the UI shows. The backend accepts it only from the host. END STREAM during a start cancels the start (§11, Host start step 7). Viewer: stop pipeline, release GPU resources, leave the SFU session (bounded, on its own task). The host also stops on user request and when the captured process quits (`target_exited`); both run the same teardown.
+
+A stream that ended for another reason, or did not start, keeps a card for 8 s that names the reason ("STREAM ENDED", "STREAM DID NOT START", "COULD NOT WATCH").
 
 ---
 
@@ -1187,6 +1229,11 @@ DComp presenter diagnostics:
 | Pacing telemetry | `mello-core/src/stream/pacer.rs` |
 | Host session setup | `mello-core/src/stream/host.rs` |
 | Viewer tick loop (stats, pause, members) | `mello-core/src/client/streaming.rs` |
+| Host start and the host's SFU rejoin, off the command loop | `mello-core/src/client/stream_host_start.rs` |
+| Watch and the viewer's SFU rejoin, off the command loop | `mello-core/src/client/stream_watch.rs` |
+| Stream link decisions: reconnecting, rejoin schedule, give-up | `mello-core/src/client/stream_link.rs` |
+| Sink with a late or changing connection (`attach`, `detach`) | `mello-core/src/stream/sink_sfu.rs` |
+| Start, rejoin and Nakama-stall tests against a fake SFU with live peers | `mello-core/src/client/stream_reconnect_tests.rs` |
 | Viewer attach, stats, native presenter hook, REMB | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
 | DComp presenter (Windows) | `client/src/dcomp_presenter.rs` |
@@ -1234,6 +1281,7 @@ DComp presenter diagnostics:
 | No D3D11VA decoder (removed in stage 3) | Intel viewers decode with OpenH264 on the CPU | Large (needs an Intel box) |
 | AMF decode slot copy untested on AMD | The array-slice copy follows the AMF samples; not run on an AMD GPU | Small |
 | macOS VideoToolbox session churn | Decode FPS drops on SPS/PPS change | Small |
+| No client ICE restart (libjuice 1.7, libdatachannel 0.24) | A network change costs a rejoin (a new connection and an IDR) instead of a restart on the same connection (§11.1) | Medium (a libjuice upgrade or patch) |
 
 ---
 

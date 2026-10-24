@@ -131,6 +131,9 @@ impl super::Client {
             if self.voice.is_active() {
                 self.voice.mark_disconnected_with_reason("sleep_wake");
             }
+            // The stream links too: host and viewer rejoin their sessions
+            // at once (streaming-quality stage 6).
+            self.on_wake_for_streams().await;
         }
 
         if decision.connection_lost_edge {

@@ -25,7 +25,9 @@ impl Client {
     pub(super) fn needs_stream_tick(&self) -> bool {
         self.stream_session.is_some()
             || self.viewer_state.is_some()
-            // An in-flight native start is polled on the stream tick.
-            || self.pending_stream_start.is_some()
+            // Stage 6: the start and watch steps report through the stream
+            // task channel; the tick keeps their UI state current.
+            || self.host_start.is_some()
+            || self.watch_join.is_some()
     }
 }

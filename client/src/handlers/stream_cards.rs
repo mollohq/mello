@@ -26,6 +26,8 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             stream_width: 0,
             stream_height: 0,
             can_watch: false,
+            state: ctx.app.get_stream_host_state(),
+            title: "".into(),
         });
     }
 
@@ -56,6 +58,36 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             stream_width: ctx.app.get_active_stream_width(),
             stream_height: ctx.app.get_active_stream_height(),
             can_watch: true,
+            state: if ctx.app.get_is_watching() {
+                ctx.app.get_stream_viewer_state()
+            } else {
+                "".into()
+            },
+            title: "".into(),
+        });
+    }
+
+    // Stage 6: a stream that ended or did not start keeps a card for a few
+    // seconds that says why (the hosted one, or the watched one).
+    let notice_state = ctx.app.get_stream_notice_state().to_string();
+    if !notice_state.is_empty() {
+        let name = ctx.app.get_stream_notice_name().to_string();
+        let id = format!("notice-{name}");
+        cards.push(StreamCardData {
+            host_id: id.clone().into(),
+            session_id: "".into(),
+            streamer_name: name.clone().into(),
+            subtitle: ctx.app.get_stream_notice(),
+            avatar: slint::Image::default(),
+            has_avatar: false,
+            avatar_initials: make_initials(&name).into(),
+            avatar_color_index: avatar_color_index(&id),
+            viewer_count: 0,
+            stream_width: 0,
+            stream_height: 0,
+            can_watch: false,
+            state: notice_state.into(),
+            title: ctx.app.get_stream_notice_title(),
         });
     }
 

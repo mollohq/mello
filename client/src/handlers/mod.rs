@@ -127,7 +127,12 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::StreamDebugStats { .. }
         | Event::StreamViewerTimeline { .. }
         | Event::StreamHostPacingStats { .. }
-        | Event::StreamError { .. } => streaming::handle(ctx, event),
+        | Event::StreamError { .. }
+        // stage 6 (streaming-quality)
+        | Event::StreamStarting { .. }
+        | Event::StreamReconnecting { .. }
+        | Event::StreamResumed { .. }
+        | Event::StreamFailed { .. } => streaming::handle(ctx, event),
 
         // Presence & crew state
         Event::CrewStateLoaded { .. }
