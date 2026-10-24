@@ -1051,7 +1051,7 @@ Streaming-quality stage 6: the start runs off the command loop (`client/stream_h
 | Native | own thread | 10 s | Encoder check, capture backend init (hook injection included), encoder, audio. `allow_hook` comes from the `capture` block and `igdb_id` (§3.1.1) |
 | SFU | task | 5 s connect, 10 s join | WebSocket and welcome, host peer, `join_stream`, offer and answer, video track and control channel open |
 
-1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid.
+1. User picks a capture source (game process, window or monitor) in the UI. For a game, the client takes `exe` and `igdb_id` from the `stream_games` row of that pid. The picker opening probes the SFU regions again when the last probe is older than 60 s (spec 10 section 7.6 has the method), so `preferred_region` in `start_stream` is the region that is fastest now; the login probe and the 10-minute cycle stay.
 2. The RPC step runs. With `advertise: "on_live"` the backend records the session only; the crew sees nothing yet (specs/04-BACKEND.md).
 3. The native step and the SFU step run at the same time. Capture init and SFU negotiation overlap.
 4. When the native step ends, `create_stream_session` starts the `StreamManager` at once on an `SfuSink` with no connection. The manager drains the encoder from the first access unit, so the 32-AU channel cannot overflow while the SFU join runs. The sink drops what it cannot send as backpressure (no recovery mode, no key frame request).

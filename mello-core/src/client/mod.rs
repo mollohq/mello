@@ -179,6 +179,12 @@ pub struct Client {
     /// Measures the SFU regions at login and every 10 minutes. Dropping it
     /// stops the task.
     region_measurer: Option<crate::transport::sfu_region::RegionMeasurer>,
+    // --- stage 6 (streaming-quality): region probe at stream start ---
+    /// The SFU regions from `get_sfu_regions`, for a probe outside the
+    /// 10-minute cycle, and when the last probe started.
+    sfu_region_list: Vec<crate::transport::sfu_region::SfuRegionEndpoint>,
+    region_probed_at: Option<Instant>,
+    // --- end stage 6 ---
     /// The SFU voice join that runs off the loop; the loop takes each step's
     /// outcome in `select!`. See `sfu_voice_join.rs`.
     sfu_voice_joins: sfu_voice_join::SfuVoiceJoins,
@@ -361,6 +367,8 @@ impl Client {
             voice_join_grant: None,
             sfu_regions: Arc::default(),
             region_measurer: None,
+            sfu_region_list: Vec::new(),
+            region_probed_at: None,
             sfu_voice_joins: sfu_voice_join::SfuVoiceJoins::default(),
             game_state: GameStateManager::new(),
             published_game: None,

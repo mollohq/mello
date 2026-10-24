@@ -760,6 +760,10 @@ impl super::Client {
     }
 
     pub(super) fn handle_list_capture_sources(&mut self) {
+        // The picker opens: a stream start follows. Probe the SFU regions
+        // now, so the start goes to the region that is fastest now
+        // (stage 6).
+        self.probe_regions_for_stream();
         let ctx = self.voice.mello_ctx();
         if ctx.is_null() {
             log::error!("Cannot enumerate capture sources: libmello not initialized");

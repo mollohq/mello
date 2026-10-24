@@ -1,6 +1,10 @@
 use crate::events::Event;
 use crate::session;
 
+/// A stream start probes the SFU regions again when the last probe is this
+/// old (streaming-quality stage 6).
+const STREAM_REGION_PROBE_AFTER: std::time::Duration = std::time::Duration::from_secs(60);
+
 impl super::Client {
     /// Called after successful auth + WS connect. Checks the protocol, starts
     /// the game services and fetches the ICE config.
@@ -39,6 +43,8 @@ impl super::Client {
         }
         match self.nakama.get_sfu_regions().await {
             Ok(regions) if !regions.is_empty() => {
+                self.sfu_region_list = regions.clone();
+                self.region_probed_at = Some(std::time::Instant::now());
                 log::info!(
                     "SFU regions to measure: {}",
                     regions
@@ -56,6 +62,41 @@ impl super::Client {
             Ok(_) => log::info!("SFU regions: the backend lists none"),
             Err(e) => log::warn!("SFU regions not available, no region preference: {}", e),
         }
+    }
+
+    /// Probe the SFU regions again before a stream starts, when the last
+    /// probe is older than [`STREAM_REGION_PROBE_AFTER`] (streaming-quality
+    /// stage 6). The source picker opening is the start: the probe runs on a
+    /// task while the user picks, and `start_stream` reads the ranking at
+    /// the click. The 10-minute cycle goes on as before.
+    pub(super) fn probe_regions_for_stream(&mut self) {
+        if self.sfu_region_list.is_empty()
+            || self
+                .region_probed_at
+                .is_some_and(|t| t.elapsed() < STREAM_REGION_PROBE_AFTER)
+        {
+            return;
+        }
+        self.region_probed_at = Some(std::time::Instant::now());
+        let regions = self.sfu_region_list.clone();
+        let ranking = std::sync::Arc::clone(&self.sfu_regions);
+        let event_tx = self.event_tx.clone();
+        tokio::spawn(async move {
+            let Ok(http) = reqwest::Client::builder().build() else {
+                return;
+            };
+            let measured = crate::transport::sfu_region::measure(&http, &regions).await;
+            log::info!(
+                "SFU region ranking at stream start: {} (preferred: {})",
+                measured.describe(),
+                measured.preferred().unwrap_or("none")
+            );
+            let entries = measured.entries().to_vec();
+            if let Ok(mut shared) = ranking.lock() {
+                *shared = measured;
+            }
+            let _ = event_tx.send(Event::SfuRegionsMeasured { regions: entries });
+        });
     }
 
     pub(super) async fn check_protocol_version(&self) {
