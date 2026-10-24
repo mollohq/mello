@@ -292,6 +292,11 @@ export struct FeedCardData {
     snapshot-playback-index: int,
     snapshot-playback-revision: int,
 
+    // Weekly recap: "Week 4" once the server counts the crew's weeks, and when
+    // the recap came out: "Monday", "3 weeks ago". Built in Rust.
+    recap-week: string,
+    age-label: string,
+
     // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
     game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")
     // The parts, so a card can colour a win and a loss differently.
@@ -319,6 +324,22 @@ export struct FeedCardData {
 
     // Live session card (card-type "live-session").
     live: LiveSessionData,
+}
+
+// One stream of the two-stream hero (mockup frame D): a member who streams
+// now. The poster is the last frame the client holds. The client holds one
+// remote streamer today, so nothing fills this yet (CLIPS 7.2).
+export struct HeroStreamData {
+    host-id: string,
+    session-id: string,
+    streamer-name: string,
+    streamer-initials: string,
+    hue-index: int,
+    avatar: image,
+    has-avatar: bool,
+    game-name: string,
+    poster: image,
+    has-poster: bool,
 }
 
 // One row of the joined line at the top of the crew feed (CLIPS 7): a member

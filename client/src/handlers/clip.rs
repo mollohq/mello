@@ -1670,6 +1670,23 @@ fn build_feed_card(
         actor_name: actor.clone().into(),
         actor_initials: make_initials(&actor).into(),
         actor_hue_index: avatar_color_index(actor_avatar_id.unwrap_or(&actor)),
+        // "Week 4" when the server counts the crew's weeks (`week_number`).
+        recap_week: data
+            .get("week_number")
+            .and_then(|v| v.as_i64())
+            .filter(|&n| n > 0)
+            .map(|n| format!("Week {n}"))
+            .unwrap_or_default()
+            .into(),
+        age_label: if backend_type == "weekly_recap" {
+            crate::feed_age::recap_age_label(
+                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+                crate::converters::current_time_ms(),
+            )
+        } else {
+            String::new()
+        }
+        .into(),
         game_name: game.into(),
         game_id: game_id.into(),
         game_short_name: game_short_name.into(),

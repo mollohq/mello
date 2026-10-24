@@ -1,5 +1,7 @@
 import { Theme } from "../theme.slint";
-import { CutButtonShape } from "cut.slint";
+import { CutButtonShape, CutShape, CutMask } from "cut.slint";
+import { UserAvatar } from "avatar.slint";
+import { HeroStreamData } from "../types.slint";
 
 // ============================================================
 //  Pieces of the stream hero (mockup frames C and D): the label chip, the
@@ -36,8 +38,10 @@ export component MediaChip inherits Rectangle {
 export component StreamTag inherits MediaChip {
     in property <string> label: "STREAM";
     in property <bool> live: false;
-    /// "2 STREAMING": the count of the hero that holds more than one stream.
+    /// "2 STREAMING": the number, in Oxanium, then the word. Both empty on a
+    /// hero that holds one stream.
     in property <string> count: "";
+    in property <string> count-label: "STREAMING";
 
     Rectangle {
         width: 6px;
@@ -58,13 +62,24 @@ export component StreamTag inherits MediaChip {
         height: 12px;
         background: #FFFFFF47;
     }
-    if root.count != "": Text {
-        text: root.count;
-        font-family: Theme.font-label;
-        font-weight: Theme.weight-label;
-        font-size: 9px;
-        letter-spacing: 1.4px;
-        color: Theme.text-primary;
+    if root.count != "": HorizontalLayout {
+        spacing: 5px;
+        cross-axis-alignment: center;
+        Text {
+            text: root.count;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display-bold;
+            font-size: 12px;
+            color: Theme.text-primary;
+        }
+        Text {
+            text: root.count-label;
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9px;
+            letter-spacing: 1.4px;
+            color: Theme.text-primary;
+        }
     }
 }
 
@@ -93,4 +108,114 @@ export component PlayRing inherits Rectangle {
 /// middle for the picture, dark at the bottom for the text.
 export component FootageWash inherits Rectangle {
     background: @linear-gradient(180deg, #00000099 0%, #00000000 26%, #00000000 40%, #000000E6 100%);
+}
+
+/// Two streams share the hero (mockup frame D): two strips, one above the
+/// other, each with its own play ring, streamer octagon and game. One tag for
+/// the card says LIVE and how many stream. The strips are footage, so the
+/// cut corner is painted back over the top one.
+export component TwoStreamHero inherits Rectangle {
+    in property <[HeroStreamData]> streams;
+    /// Plays the stream of this host.
+    callback watch-clicked(/* host_id */ string);
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: #000000;
+    }
+
+    VerticalLayout {
+        padding: Theme.keyline;
+        spacing: 2px;
+
+        for s[i] in root.streams: Rectangle {
+            clip: true;
+            background: Theme.raised;
+
+            if s.has-poster: Image {
+                width: parent.width; height: parent.height;
+                source: s.poster;
+                image-fit: cover;
+            }
+            FootageWash { width: parent.width; height: parent.height; }
+
+            PlayRing {
+                x: (parent.width - self.width) / 2;
+                y: parent.height * 0.44 - self.height / 2;
+                size: 56px;
+            }
+
+            HorizontalLayout {
+                x: 18px;
+                y: parent.height - self.height - 16px;
+                height: 40px;
+                spacing: 12px;
+                cross-axis-alignment: center;
+                UserAvatar {
+                    bg-color: #000000;
+                    initials: s.streamer-initials;
+                    avatar: s.avatar;
+                    has-avatar: s.has-avatar;
+                    color-index: s.hue-index;
+                    size: 40px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 2px;
+                    Text {
+                        text: s.streamer-name;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 17px;
+                        color: Theme.text-primary;
+                    }
+                    Text {
+                        text: s.game-name;
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        font-size: 13px;
+                        color: #A2A2A8;
+                    }
+                }
+            }
+
+            TouchArea {
+                accessible-role: button;
+                accessible-label: "Watch " + s.streamer-name;
+                mouse-cursor: pointer;
+                clicked => { root.watch-clicked(s.host-id); }
+            }
+        }
+    }
+
+    CutMask {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.bg-app;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{(self.width - Theme.notch) / 1px} 0 L \{self.width / 1px} \{Theme.notch / 1px}";
+    }
+
+    StreamTag {
+        x: 18px;
+        y: 14px;
+        label: "LIVE";
+        live: true;
+        count: root.streams.length;
+    }
 }

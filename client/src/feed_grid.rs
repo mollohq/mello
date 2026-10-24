@@ -116,6 +116,8 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         Some(c) if variant == "cell" || variant == "cell-full" || c.card_type == "invite" => {
             Lead::Plain
         }
+        // After a live stream the grid is plain rows: a card there is a cell.
+        Some(c) if start > 0 && !c.is_hero => Lead::Plain,
         Some(_) => Lead::Hero,
     };
     let side_recap = at(start + 1).is_some_and(|c| c.card_type == "recap" && c.recap_has_content);
@@ -365,6 +367,23 @@ pub fn grid_start(live_streams: usize, cards: usize) -> usize {
     }
 }
 
+/// The first grid card beside a two-stream hero (frame D): a recap with
+/// content holds the whole side column, so it is the one card there. Else the
+/// first two cards stand in it. Mirrors `stream-side-consumed` in
+/// `crew_feed.slint`.
+///
+/// The client holds one remote streamer today, so no caller passes two streams
+/// yet. The layout is drawn from mock data (`PreviewFeedFiveMembers`) and this
+/// rule is tested here, for the phase that adds the second stream.
+#[cfg_attr(not(test), allow(dead_code))]
+pub fn two_stream_start(cards: &[CardInfo]) -> usize {
+    match cards.first() {
+        None => 0,
+        Some(c) if c.card_type == "recap" && c.recap_has_content => 1,
+        Some(_) => cards.len().min(2),
+    }
+}
+
 /// Arrange the cards on screen again, for a change that does not rebuild them
 /// (a new live stream, a clip recorded here).
 pub fn arrange_model(model: &ModelRc<FeedCardData>, live_streams: usize) -> ModelRc<FeedCardData> {
@@ -594,6 +613,47 @@ mod tests {
         let cards = vec![hero, card("session"), card("recent-games")];
         let t = types(&cards, &arrange(&cards, 0));
         assert_eq!(t[1], "recent-games", "{t:?}");
+    }
+
+    #[test]
+    fn two_streams_leave_a_recap_the_whole_side_column() {
+        let mut recap = card("recap");
+        recap.recap_has_content = true;
+        assert_eq!(two_stream_start(&[recap, card("session")]), 1);
+        assert_eq!(two_stream_start(&[card("recap"), card("session")]), 2);
+        assert_eq!(
+            two_stream_start(&[card("session"), card("clip"), card("clip")]),
+            2
+        );
+        assert_eq!(two_stream_start(&[card("session")]), 1);
+        assert_eq!(two_stream_start(&[]), 0);
+    }
+
+    #[test]
+    fn after_a_stream_the_grid_is_plain_rows() {
+        // Frame D: the recap stands beside the two streams. Then three cells,
+        // a cell and the wide grid, then two cells.
+        let cards = vec![
+            card("recap"),
+            card("catchup"),
+            card("game-session"),
+            card("game-session"),
+            card("clip"),
+            grid(),
+            h2h("cell-full"),
+            card("invite"),
+        ];
+        let order = arrange(&cards, 1);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 1);
+        assert_eq!(l.lead, Lead::Plain);
+        assert_eq!(l.row2_base, 1, "row 2 starts right after the side column");
+        assert_eq!(
+            wide_slots(&l, infos.len()),
+            [5],
+            "the grid is the one wide slot"
+        );
+        assert_eq!(infos[5].card_type, "recent-games");
     }
 
     #[test]
