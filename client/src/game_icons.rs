@@ -148,19 +148,140 @@ pub fn ensure_icon(ctx: &AppContext, game_id: &str, exe_path: &str) {
     );
 }
 
-/// Show the game's icon on the NOW PLAYING bar, if one is cached.
+/// The art of one game tile, resolved by [`resolve_tile_art`]. At most one of
+/// `icon` and `capsule` is set; with neither the tile draws the monogram.
+pub struct TileArt {
+    pub icon: slint::Image,
+    pub has_icon: bool,
+    pub capsule: slint::Image,
+    pub has_capsule: bool,
+}
+
+/// Steam ids (`steam-<appid>`) that can name the local art of a game.
 ///
-/// Called on detection and again when extraction finishes, because the first
-/// play of a game has no cached icon yet — the bar would otherwise keep the
-/// initials badge until the next launch.
-pub fn push_bar_icon(ctx: &AppContext, game_id: &str) {
-    match resolve_runtime_icon(ctx, game_id) {
-        Some(img) => {
-            ctx.app.set_game_runtime_icon(img);
-            ctx.app.set_game_has_runtime_icon(true);
+/// Surfaces know a game by different ids: the stats and the live game carry
+/// the catalogue id (`brawlhalla`), the library carries the launcher id
+/// (`steam-291550`), and a card can carry only a name. Every one of them must
+/// reach the same art, so all the routes are tried, in this order: the ids as
+/// given, the launcher id of an installed game with that name, then the
+/// appids that the bundled index lists for the catalogue entry.
+pub fn art_candidates(
+    wire_id: &str,
+    game_id: &str,
+    name: &str,
+    installed: &[mello_core::events::InstalledGameInfo],
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    let mut push = |id: String| {
+        if !id.is_empty() && !out.contains(&id) {
+            out.push(id);
         }
-        None => ctx.app.set_game_has_runtime_icon(false),
+    };
+    push(wire_id.to_string());
+    push(game_id.to_string());
+    if let Some(i) = installed
+        .iter()
+        .find(|i| !name.is_empty() && i.name.trim().eq_ignore_ascii_case(name.trim()))
+    {
+        push(i.game_id.clone());
     }
+    for id in [wire_id, game_id] {
+        for appid in steam_ids_of_catalogue_game(id, name) {
+            push(appid);
+        }
+    }
+    out
+}
+
+/// `steam-<appid>` ids of the catalogue game that `id` (or else `name`) names.
+/// Cached by key: the reverse index lookup is a linear pass.
+fn steam_ids_of_catalogue_game(id: &str, name: &str) -> Vec<String> {
+    use std::cell::RefCell;
+    use std::collections::HashMap;
+    thread_local! {
+        static BUNDLE: (Option<mello_core::catalogue::Head>, Option<mello_core::catalogue::AppIdIndex>) =
+            (mello_core::catalogue::Head::bundled(), mello_core::catalogue::AppIdIndex::bundled());
+        static CACHE: RefCell<HashMap<(String, String), Vec<String>>> = RefCell::new(HashMap::new());
+    }
+    if id.is_empty() || id.starts_with("steam-") {
+        return Vec::new();
+    }
+    let key = (id.to_string(), name.to_lowercase());
+    if let Some(hit) = CACHE.with(|c| c.borrow().get(&key).cloned()) {
+        return hit;
+    }
+    let ids = BUNDLE.with(|(head, index)| {
+        let (Some(head), Some(index)) = (head, index) else {
+            return Vec::new();
+        };
+        let entry = head.by_game_id(id).or_else(|| head.by_name(name));
+        entry
+            .map(|e| index.appids_for_igdb(e.igdb_id))
+            .unwrap_or_default()
+            .into_iter()
+            .map(|a| format!("steam-{a}"))
+            .collect()
+    });
+    CACHE.with(|c| c.borrow_mut().insert(key, ids.clone()));
+    ids
+}
+
+/// The one art ladder of every game tile: the server icon (cached, or the
+/// crew copy), then the local Steam art under any id that names the game
+/// ([`art_candidates`]), then nothing, which draws the monogram. The recent
+/// games card, the session card, the live card and the NOW PLAYING pill all
+/// call this, so one game gets one kind of art everywhere.
+pub fn resolve_tile_art(ctx: &AppContext, wire_id: &str, game_id: &str, name: &str) -> TileArt {
+    let none = slint::Image::default;
+    if let Some(icon) = resolve_or_fetch_icon(ctx, game_id) {
+        return TileArt {
+            icon,
+            has_icon: true,
+            capsule: none(),
+            has_capsule: false,
+        };
+    }
+    let ids = art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow());
+    match ids.iter().find_map(|id| resolve_local_steam_art(ctx, id)) {
+        Some(capsule) => TileArt {
+            icon: none(),
+            has_icon: false,
+            capsule,
+            has_capsule: true,
+        },
+        None => TileArt {
+            icon: none(),
+            has_icon: false,
+            capsule: none(),
+            has_capsule: false,
+        },
+    }
+}
+
+/// Local Steam poster for the wide live card, under the same ids as the tile.
+pub fn resolve_poster(
+    ctx: &AppContext,
+    wire_id: &str,
+    game_id: &str,
+    name: &str,
+) -> Option<slint::Image> {
+    art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
+        .iter()
+        .find_map(|id| resolve_local_steam_poster(ctx, id))
+}
+
+/// Set the NOW PLAYING pill from the shared ladder. The pill is the game the
+/// sensor detected, so its id is both the wire id and the catalogue id.
+pub fn push_bar_art(ctx: &AppContext, game_id: &str, name: &str) {
+    let art = resolve_tile_art(ctx, game_id, game_id, name);
+    ctx.app.set_game_runtime_icon(art.icon);
+    ctx.app.set_game_has_runtime_icon(art.has_icon);
+    ctx.app.set_game_capsule(art.capsule);
+    ctx.app.set_game_has_capsule(art.has_capsule);
+    ctx.app
+        .set_game_monogram(crate::recent_games::monogram(name).into());
+    ctx.app
+        .set_game_hue_index(crate::recent_games::hue_index(game_id, name));
 }
 
 /// Extract the exe's icon on a worker thread, write the PNG disk cache, then
@@ -214,6 +335,7 @@ pub fn extract_and_cache(
                 if let Some(app) = app.upgrade() {
                     app.set_game_runtime_icon(img);
                     app.set_game_has_runtime_icon(true);
+                    app.set_game_has_capsule(false);
                 }
                 keepalive.borrow_mut().take();
             }
@@ -228,6 +350,35 @@ pub fn extract_and_cache(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn installed(id: &str, name: &str) -> mello_core::events::InstalledGameInfo {
+        mello_core::events::InstalledGameInfo {
+            game_id: id.into(),
+            name: name.into(),
+            steam_hidden: false,
+        }
+    }
+
+    #[test]
+    fn a_catalogue_id_reaches_the_steam_id_through_the_appid_index() {
+        let ids = art_candidates("brawlhalla", "brawlhalla", "Brawlhalla", &[]);
+        assert!(ids.contains(&"steam-291550".to_string()), "{ids:?}");
+        assert_eq!(ids[0], "brawlhalla");
+    }
+
+    #[test]
+    fn a_launcher_id_and_an_installed_name_are_candidates() {
+        let ids = art_candidates("steam-730", "counter-strike-2", "Counter-Strike 2", &[]);
+        assert_eq!(ids[0], "steam-730");
+        let ids = art_candidates(
+            "",
+            "x-game",
+            "Some Game",
+            &[installed("steam-42", "some game")],
+        );
+        assert!(ids.contains(&"steam-42".to_string()), "{ids:?}");
+        assert!(art_candidates("", "", "", &[]).is_empty());
+    }
 
     fn write_jpeg(path: &std::path::Path, w: u32, h: u32) {
         let img = image::RgbImage::from_pixel(w, h, image::Rgb([200, 40, 40]));

@@ -371,6 +371,20 @@ impl AppIdIndex {
         }
         None
     }
+
+    /// Every Steam appid that maps to an IGDB id (a game can have a demo or a
+    /// second listing). The reverse of [`AppIdIndex::igdb_id`]: a linear pass
+    /// over the pairs, so call it on a cache miss only.
+    pub fn appids_for_igdb(&self, igdb_id: u32) -> Vec<u32> {
+        (0..self.count)
+            .filter_map(|i| {
+                let o = i * INDEX_PAIR_LEN;
+                (u32_at(&self.bytes, o + 4)? == igdb_id)
+                    .then(|| u32_at(&self.bytes, o))
+                    .flatten()
+            })
+            .collect()
+    }
 }
 
 #[cfg(test)]
@@ -660,6 +674,15 @@ mod tests {
         assert_eq!(idx.igdb_id(730), Some(242408));
         assert_eq!(idx.igdb_id(570), Some(2963));
         assert_eq!(idx.igdb_id(1245620), Some(119133));
+    }
+
+    #[test]
+    fn index_reverses_igdb_ids_to_appids() {
+        let idx =
+            AppIdIndex::parse(&index_bytes(&[(570, 2963), (571, 2963), (730, 242408)])).unwrap();
+        assert_eq!(idx.appids_for_igdb(2963), vec![570, 571]);
+        assert_eq!(idx.appids_for_igdb(242408), vec![730]);
+        assert!(idx.appids_for_igdb(1).is_empty());
     }
 
     #[test]

@@ -1,0 +1,73 @@
+import { Theme } from "../theme.slint";
+import { GameIcon } from "game_icon.slint";
+import { CutMask, CutButtonShape } from "cut.slint";
+import { H2hHue } from "head2head.slint";
+
+/// The one game tile. Every surface that shows a game draws this: the recent
+/// games card, the session card, the live card and the NOW PLAYING pill. The
+/// art ladder is the same for all of them and is resolved in Rust
+/// (`game_icons::resolve_tile_art`): the server icon, then the local Steam
+/// art, then a two-letter monogram in the game's hue.
+export component GameArt inherits Rectangle {
+    in property <string> game-id;
+    in property <string> monogram;
+    in property <int> hue-index;
+    in property <image> icon;
+    in property <bool> has-icon;
+    in property <image> capsule;
+    in property <bool> has-capsule;
+    in property <length> size: 36px;
+    /// A header-shaped tile. Both stay at `size` when they are not set.
+    in property <length> art-width: 0px;
+    in property <length> art-height: 0px;
+    /// What is behind the tile. The cut corners are painted back with it.
+    in property <color> bg-color: Theme.card-bg;
+
+    width: art-width > 0px ? art-width : size;
+    height: art-height > 0px ? art-height : size;
+    background: transparent;
+
+    if has-icon: GameIcon {
+        x: 0px;
+        game-id: root.game-id;
+        short-name: root.monogram;
+        runtime-icon: root.icon;
+        has-runtime-icon: true;
+        bg-color: root.bg-color;
+        size: root.size;
+    }
+    if !has-icon && has-capsule: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+        Image {
+            source: root.capsule;
+            width: parent.width;
+            height: parent.height;
+            image-fit: cover;
+        }
+        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "tl"; fill: root.bg-color; }
+        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "br"; fill: root.bg-color; }
+    }
+    if !has-icon && !has-capsule: Rectangle {
+        width: parent.width;
+        height: parent.height;
+        CutButtonShape {
+            width: parent.width;
+            height: parent.height;
+            n: max(4px, root.size * 0.22);
+            fill: H2hHue.of(root.hue-index);
+        }
+        Text {
+            text: root.monogram;
+            width: parent.width;
+            height: parent.height;
+            font-family: Theme.font-display;
+            font-size: root.size > 36px ? 16px : 14px;
+            font-weight: Theme.weight-display-bold;
+            color: Theme.on-action;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
+}

@@ -8,6 +8,7 @@ import { SkeletonTrio } from "../components/skeleton_trio.slint";
 import { Head2headCardWide, Head2headCell, H2hCellSize, VersusHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
+import { GameArt } from "../components/game_art.slint";
 
 
 
@@ -1060,64 +1061,6 @@ component RecapCard inherits Rectangle {
 // session-cards-redesign.html (Option B: game/channel-first). Typed header,
 // real avatars, humanized duration, peak stat — a card must answer "who did
 // what, for how long" at a glance.
-// The square game tile of a session card. Art ladder, as in the recent games
-// card: the server icon, then the local Steam header, then a two-letter
-// monogram in the game's hue. A long name never reaches the tile.
-component GameArt inherits Rectangle {
-    in property <FeedCardData> card;
-    in property <length> size: 36px;
-    /// A header-shaped tile. Both stay at `size` when they are not set.
-    in property <length> art-width: 0px;
-    in property <length> art-height: 0px;
-
-    width: art-width > 0px ? art-width : size;
-    height: art-height > 0px ? art-height : size;
-    background: transparent;
-
-    if card.game-has-icon: GameIcon {
-        x: 0px;
-        game-id: card.game-id;
-        short-name: card.game-monogram;
-        runtime-icon: card.game-icon;
-        has-runtime-icon: true;
-        size: root.size;
-    }
-    if !card.game-has-icon && card.game-has-capsule: Rectangle {
-        width: parent.width;
-        height: parent.height;
-        clip: true;
-        Image {
-            source: card.game-capsule;
-            width: parent.width;
-            height: parent.height;
-            image-fit: cover;
-        }
-        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "tl"; fill: Theme.card-bg; }
-        CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "br"; fill: Theme.card-bg; }
-    }
-    if !card.game-has-icon && !card.game-has-capsule: Rectangle {
-        width: parent.width;
-        height: parent.height;
-        CutButtonShape {
-            width: parent.width;
-            height: parent.height;
-            n: max(4px, root.size * 0.22);
-            fill: H2hHue.of(card.game-hue-index);
-        }
-        Text {
-            text: card.game-monogram;
-            width: parent.width;
-            height: parent.height;
-            font-family: Theme.font-display;
-            font-size: root.size > 36px ? 16px : 14px;
-            font-weight: Theme.weight-display-bold;
-            color: Theme.on-action;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-    }
-}
-
 component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
@@ -1183,7 +1126,7 @@ component SessionCard inherits Rectangle {
                     height: 40px;
                     y: (parent.height - self.height) / 2;
 
-                    GameArt { card: card; size: 40px; }
+                    GameArt { game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index; icon: card.game-icon; has-icon: card.game-has-icon; capsule: card.game-capsule; has-capsule: card.game-has-capsule; size: 40px; }
                     if card.actor-has-avatar || card.actor-initials != "": UserAvatar {
                         initials: card.actor-initials;
                         avatar: card.actor-avatar;
@@ -1426,7 +1369,7 @@ component GameSessionCompactBody inherits VerticalLayout {
         spacing: 10px;
         cross-axis-alignment: center;
 
-        GameArt { card: card; size: quiet ? 32px : 36px; }
+        GameArt { game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index; icon: card.game-icon; has-icon: card.game-has-icon; capsule: card.game-capsule; has-capsule: card.game-has-capsule; size: quiet ? 32px : 36px; }
 
         VerticalLayout {
             spacing: 2px;
@@ -1559,7 +1502,7 @@ component GameSessionCard inherits Rectangle {
 
             VerticalLayout {
                 alignment: center;
-                GameArt { card: card; size: 40px; }
+                GameArt { game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index; icon: card.game-icon; has-icon: card.game-has-icon; capsule: card.game-capsule; has-capsule: card.game-has-capsule; size: 40px; }
             }
 
             VerticalLayout {
@@ -1673,54 +1616,16 @@ component RecentGameTileCell inherits Rectangle {
         spacing: 12px;
         cross-axis-alignment: center;
 
-        Rectangle {
-            width: 76px;
-            height: 36px;
-            background: transparent;
-
-            if tile.has-capsule: Rectangle {
-                width: parent.width;
-                height: parent.height;
-                clip: true;
-                Image {
-                    source: tile.capsule;
-                    width: parent.width;
-                    height: parent.height;
-                    image-fit: cover;
-                }
-                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "tl"; fill: Theme.card-bg; }
-                CutMask { width: parent.width; height: parent.height; n: 6px; corner: "br"; fill: Theme.card-bg; }
-            }
-            // A square icon keeps its shape: it sits at the left of the slot.
-            if !tile.has-capsule && tile.has-icon: GameIcon {
-                x: 0px;
-                game-id: tile.game-id;
-                short-name: tile.monogram;
-                runtime-icon: tile.game-icon;
-                has-runtime-icon: true;
-                size: 36px;
-            }
-            if !tile.has-capsule && !tile.has-icon: Rectangle {
-                width: parent.width;
-                height: parent.height;
-                CutButtonShape {
-                    width: parent.width;
-                    height: parent.height;
-                    n: 6px;
-                    fill: H2hHue.of(tile.hue-index);
-                }
-                Text {
-                    text: tile.monogram;
-                    width: parent.width;
-                    height: parent.height;
-                    font-family: Theme.font-display;
-                    font-size: 18px;
-                    font-weight: Theme.weight-display-bold;
-                    color: Theme.on-action;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                }
-            }
+        GameArt {
+            game-id: tile.game-id;
+            monogram: tile.monogram;
+            hue-index: tile.hue-index;
+            icon: tile.game-icon;
+            has-icon: tile.has-icon;
+            capsule: tile.capsule;
+            has-capsule: tile.has-capsule;
+            size: 36px;
+            art-width: 76px;
         }
 
         VerticalLayout {
@@ -2005,7 +1910,7 @@ component LiveSessionCard inherits Rectangle {
                     width: 40px;
                     height: 40px;
                     y: 0px;
-                    GameArt { card: root.card; size: 40px; }
+                    GameArt { game-id: root.card.game-id; monogram: root.card.game-monogram; hue-index: root.card.game-hue-index; icon: root.card.game-icon; has-icon: root.card.game-has-icon; capsule: root.card.game-capsule; has-capsule: root.card.game-has-capsule; size: 40px; }
                 }
             }
 

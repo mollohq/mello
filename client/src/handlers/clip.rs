@@ -612,37 +612,15 @@ pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
             let min = crate::live_session::since_min(g.started_ms, now_ms);
 
             let (game_id, _, _) = resolve_game_meta(ctx, &g.game_id, &g.game_name);
-            let (game_icon, game_has_icon) =
-                match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
-                    Some(img) => (img, true),
-                    None => (slint::Image::default(), false),
-                };
-            // The art ladder of the recent games tiles. The local Steam header
-            // is keyed by the launcher id, which the installed list knows by name.
-            let launcher_id = ctx
-                .installed_games
-                .borrow()
-                .iter()
-                .find(|i| i.name.eq_ignore_ascii_case(&g.game_name))
-                .map(|i| i.game_id.clone());
-            let (game_capsule, game_has_capsule) = if game_has_icon {
-                (slint::Image::default(), false)
-            } else {
-                launcher_id
-                    .iter()
-                    .map(String::as_str)
-                    .chain(std::iter::once(game_id.as_str()))
-                    .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
-                    .map_or((slint::Image::default(), false), |img| (img, true))
-            };
+            // The shared art ladder: the same ids and order as every tile.
+            let art = crate::game_icons::resolve_tile_art(ctx, &g.game_id, &game_id, &g.game_name);
+            let (game_icon, game_has_icon) = (art.icon, art.has_icon);
+            let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
             // Poster art for the wide slot: only a game installed on this
             // device has it, and it never leaves the device.
-            let (poster, has_poster) = launcher_id
-                .iter()
-                .map(String::as_str)
-                .chain(std::iter::once(game_id.as_str()))
-                .find_map(|id| crate::game_icons::resolve_local_steam_poster(ctx, id))
-                .map_or((slint::Image::default(), false), |img| (img, true));
+            let (poster, has_poster) =
+                crate::game_icons::resolve_poster(ctx, &g.game_id, &game_id, &g.game_name)
+                    .map_or((slint::Image::default(), false), |img| (img, true));
             FeedCardData {
                 id: format!(
                     "live-{}",
@@ -1105,21 +1083,9 @@ fn extract_recent_game_tiles(
             let wire_launcher = row.get("launcher").and_then(|v| v.as_str()).unwrap_or("");
             let (game_id, _, _) = resolve_game_meta(ctx, wire_id, game_name);
 
-            let (game_icon, has_icon) =
-                match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
-                    Some(img) => (img, true),
-                    None => (slint::Image::default(), false),
-                };
-            // The local header is tried under the id the server sent: a
-            // launcher id (`steam-730`) is what names the Steam app.
-            let (capsule, has_capsule) = if has_icon {
-                (slint::Image::default(), false)
-            } else {
-                [wire_id, game_id.as_str()]
-                    .iter()
-                    .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
-                    .map_or((slint::Image::default(), false), |img| (img, true))
-            };
+            let art = crate::game_icons::resolve_tile_art(ctx, wire_id, &game_id, game_name);
+            let (game_icon, has_icon) = (art.icon, art.has_icon);
+            let (capsule, has_capsule) = (art.capsule, art.has_capsule);
             if has_capsule {
                 local_art += 1;
             }
@@ -1316,20 +1282,9 @@ fn build_feed_card(
     ));
     // Runtime icon (exe-extracted / crew-shared) for games without bundled
     // art; a cache miss requests the crew copy once per run.
-    let (game_icon, game_has_icon) = match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
-        Some(img) => (img, true),
-        None => (slint::Image::default(), false),
-    };
-    // The rest of the tile ladder, as in the recent games card: the local
-    // Steam header under the id the server sent, then the monogram.
-    let (game_capsule, game_has_capsule) = if game_has_icon {
-        (slint::Image::default(), false)
-    } else {
-        [wire_game_id.as_str(), game_id.as_str()]
-            .iter()
-            .find_map(|id| crate::game_icons::resolve_local_steam_art(ctx, id))
-            .map_or((slint::Image::default(), false), |img| (img, true))
-    };
+    let art = crate::game_icons::resolve_tile_art(ctx, &wire_game_id, &game_id, &game);
+    let (game_icon, game_has_icon) = (art.icon, art.has_icon);
+    let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
     let game_monogram = crate::recent_games::monogram(&game);
     let game_hue_index = crate::recent_games::hue_index(&game_id, &game);
 

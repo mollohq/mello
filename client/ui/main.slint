@@ -242,6 +242,10 @@ export component MainWindow inherits Window {
     // on every play after that.
     in property <image> game-runtime-icon;
     in property <bool> game-has-runtime-icon: false;
+    in property <image> game-capsule;
+    in property <bool> game-has-capsule: false;
+    in property <string> game-monogram: "";
+    in property <int> game-hue-index: 0;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
@@ -1106,6 +1110,10 @@ export component MainWindow inherits Window {
                         game-color: root.game-color;
                         game-runtime-icon: root.game-runtime-icon;
                         game-has-runtime-icon: root.game-has-runtime-icon;
+                        game-capsule: root.game-capsule;
+                        game-has-capsule: root.game-has-capsule;
+                        game-monogram: root.game-monogram;
+                        game-hue-index: root.game-hue-index;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
                         can-stream: root.can-stream;

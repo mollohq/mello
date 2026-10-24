@@ -7043,6 +7043,116 @@ fn install_with_poster(h: &Harness, appid: &str, name: &str) -> PosterArt {
     PosterArt(root)
 }
 
+/// A Steam cache with `header.jpg` for one app, in a temp folder. The art
+/// lookup of this thread points at it. With `installed` the installed list
+/// knows the game by name, as a scan would leave it.
+fn install_with_header(h: &Harness, appid: &str, name: &str, installed: bool) -> PosterArt {
+    let root = std::env::temp_dir().join(format!(
+        "m3llo-header-{}-{appid}-{:?}",
+        std::process::id(),
+        std::thread::current().id()
+    ));
+    let _ = std::fs::remove_dir_all(&root);
+    let dir = root.join("appcache").join("librarycache").join(appid);
+    std::fs::create_dir_all(&dir).expect("header dir");
+    let mut jpg = Vec::new();
+    let art = image::RgbImage::from_pixel(92, 43, image::Rgb([40, 120, 200]));
+    image::codecs::jpeg::JpegEncoder::new(&mut jpg)
+        .encode_image(&art)
+        .expect("encode the header");
+    std::fs::write(dir.join("header.jpg"), jpg).expect("header file");
+    mello_core::library::set_steam_root_override(Some(root.clone()));
+    if installed {
+        h.ctx()
+            .installed_games
+            .borrow_mut()
+            .push(mello_core::events::InstalledGameInfo {
+                game_id: format!("steam-{appid}"),
+                name: name.into(),
+                steam_hidden: false,
+            });
+    }
+    PosterArt(root)
+}
+
+/// One game id, one kind of art on every surface. Brawlhalla has Steam art on
+/// disk. The recent games tile (library id or catalogue id), the session card
+/// and the NOW PLAYING pill all show it. Before the shared lookup, the tile
+/// and the pill showed the monogram when the id was the catalogue id.
+#[test]
+fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
+    // (installed list knows the game, id the recent games row carries)
+    for (installed, wire_id) in [
+        (true, "steam-291550"),
+        (true, "brawlhalla"),
+        (false, "brawlhalla"),
+        (false, "steam-291550"),
+    ] {
+        let mut h = Harness::new();
+        h.app()
+            .window()
+            .set_size(slint::PhysicalSize::new(1600, 1000));
+        logged_in_app(&mut h);
+        let _art = install_with_header(&h, "291550", "Brawlhalla", installed);
+        let case = format!("installed {installed}, id {wire_id}");
+
+        // Recent games tile.
+        h.emit(Event::FeedLoaded {
+            response: feed_of(vec![recent_games_entry(serde_json::json!([
+                { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
+            ]))]),
+        });
+        let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
+        assert!(tile.has_capsule, "{case}: the tile has Steam art");
+
+        // Session card.
+        let mut feed = zero_telemetry_game_session_feed();
+        feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Brawlhalla");
+        feed.sections[0].entries[0].data["game_id"] = serde_json::json!("brawlhalla");
+        h.emit(Event::FeedLoaded { response: feed });
+        let card = first_card(&h);
+        assert!(
+            card.game_has_capsule,
+            "{case}: the session card has Steam art"
+        );
+
+        // NOW PLAYING pill.
+        h.emit(game_detected("brawlhalla", "Brawlhalla", now_ms() - 60_000));
+        assert!(
+            h.app().get_game_has_capsule(),
+            "{case}: the pill has Steam art"
+        );
+        assert!(!h.app().get_game_has_runtime_icon());
+        assert_eq!(h.app().get_game_monogram().as_str(), "BR");
+    }
+}
+
+/// A game with no icon and no Steam art is the monogram on the tile and on
+/// the pill alike.
+#[test]
+fn a_game_without_art_is_the_monogram_on_tile_and_pill() {
+    let mut h = Harness::new();
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    logged_in_app(&mut h);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![recent_games_entry(serde_json::json!([
+            { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 0, "launcher": "epic" }
+        ]))]),
+    });
+    let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
+    assert!(!tile.has_capsule && !tile.has_icon);
+    h.emit(game_detected(
+        "epic-zzunknown",
+        "Zz Unknown Game",
+        now_ms() - 60_000,
+    ));
+    assert!(!h.app().get_game_has_capsule() && !h.app().get_game_has_runtime_icon());
+    assert_eq!(h.app().get_game_monogram().as_str(), tile.monogram.as_str());
+    assert_eq!(h.app().get_game_hue_index(), tile.hue_index);
+}
+
 fn solo_crew_feed(h: &mut Harness) {
     app_with_crew_of(h, 1);
     set_roster(h, &[("user-1", "Test User")]);

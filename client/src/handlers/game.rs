@@ -31,6 +31,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     started_ms: started_at_ms,
                 });
             let game_id_for_icon = game_id.clone();
+            let game_name_for_icon = game_name.clone();
             ctx.app.set_game_active(true);
             ctx.app.set_game_id(game_id.into());
             ctx.app.set_game_name(game_name.into());
@@ -51,7 +52,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Already cached from an earlier session: show it immediately.
             // A first-ever launch has nothing yet, and extract_and_cache
             // pushes it in when extraction finishes a moment later.
-            crate::game_icons::push_bar_icon(ctx, &game_id_for_icon);
+            crate::game_icons::push_bar_art(ctx, &game_id_for_icon, &game_name_for_icon);
         }
         Event::GameEnded {
             game_id,
@@ -79,6 +80,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::PostGameTimeout => {
             log::info!("[ui] post-game timeout");
             ctx.app.set_game_has_runtime_icon(false);
+            ctx.app.set_game_has_capsule(false);
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());

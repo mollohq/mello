@@ -1,6 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { GameIcon } from "../components/game_icon.slint";
+import { GameArt } from "../components/game_art.slint";
 import { CutShape, CutButtonShape, OctAvatar, OctMask } from "../components/cut.slint";
 
 /// Control-bar icon button. `on` = a live toggle, so it wears a white
@@ -175,6 +175,11 @@ export component ControlBar inherits Rectangle {
     in property <color> game-color: #2a2a30;
     in property <image> game-runtime-icon;
     in property <bool> game-has-runtime-icon: false;
+    // Local Steam art and the monogram: the rest of the shared tile ladder.
+    in property <image> game-capsule;
+    in property <bool> game-has-capsule: false;
+    in property <string> game-monogram: "";
+    in property <int> game-hue-index: 0;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     // Empty when no telemetry result; the card falls back to "How'd it go?".
     in property <string> game-summary: "";
@@ -499,12 +504,14 @@ export component ControlBar inherits Rectangle {
                     spacing: 9px;
                     cross-axis-alignment: center;
 
-                    GameIcon {
+                    GameArt {
                         game-id: game-id;
-                        short-name: game-short-name;
-                        badge-color: game-color;
-                        runtime-icon: game-runtime-icon;
-                        has-runtime-icon: game-has-runtime-icon;
+                        monogram: game-monogram;
+                        hue-index: game-hue-index;
+                        icon: game-runtime-icon;
+                        has-icon: game-has-runtime-icon;
+                        capsule: game-capsule;
+                        has-capsule: game-has-capsule;
                         size: 32px;
                     }
 
@@ -720,12 +727,14 @@ export component ControlBar inherits Rectangle {
             HorizontalLayout {
                 spacing: 16px;
                 cross-axis-alignment: center;
-                GameIcon {
+                GameArt {
                     game-id: game-id;
-                    short-name: game-short-name;
-                    badge-color: game-color;
-                    runtime-icon: game-runtime-icon;
-                    has-runtime-icon: game-has-runtime-icon;
+                    monogram: game-monogram;
+                    hue-index: game-hue-index;
+                    icon: game-runtime-icon;
+                    has-icon: game-has-runtime-icon;
+                    capsule: game-capsule;
+                    has-capsule: game-has-capsule;
                     size: 32px;
                 }
 
@@ -1037,6 +1046,7 @@ export component Preview inherits Rectangle {
         game-id: "counter-strike-2";
         game-name: "Counter-Strike 2";
         game-short-name: "CS2";
+        game-monogram: "CS";
         game-color: #DE9B35;
         can-stream: true;
         bar-state: 1;
