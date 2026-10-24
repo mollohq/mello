@@ -287,6 +287,13 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("stream_viewer_left", StreamViewerLeftRPC); err != nil {
 		return err
 	}
+	// streaming-quality stage 6: advertise on the open track, token refresh.
+	if err := initializer.RegisterRpc("stream_live", StreamLiveRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("refresh_stream_token", RefreshStreamTokenRPC); err != nil {
+		return err
+	}
 
 	// -----------------------------------------------------------------------
 	// RPCs — crew events (event ledger, catch-up, moments)

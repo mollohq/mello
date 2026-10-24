@@ -38,7 +38,18 @@ type StartStreamRequest struct {
 	// (OnSessionEnd). The server restores only what it recorded for this
 	// host and this session; it does not start a new session.
 	ResumeSessionID string `json:"resume_session_id,omitempty"`
+	// Fps is the stream's frame rate, for the stream_started push.
+	Fps uint32 `json:"fps,omitempty"`
+	// Advertise "on_live" defers the advertisement: start_stream signs the
+	// host token and records the session, and stream_live advertises it
+	// when the host's track is open (streaming-quality stage 6). Empty
+	// advertises at once, as before (older clients).
+	Advertise string `json:"advertise,omitempty"`
 }
+
+// advertiseOnLive is the StartStreamRequest.Advertise value that defers the
+// advertisement to stream_live.
+const advertiseOnLive = "on_live"
 
 // CapturePolicy is the backend `capture` block in the start_stream response
 // (streaming-reliability plan §8). Three gates must all hold before the client
@@ -140,6 +151,9 @@ type streamResumeRecord struct {
 
 type StopStreamRequest struct {
 	CrewID string `json:"crew_id"`
+	// SessionID is optional. With it, a stream that was never advertised
+	// (advertise "on_live", no stream_live yet) is removed too.
+	SessionID string `json:"session_id,omitempty"`
 }
 
 type ActiveStream struct {
@@ -150,6 +164,7 @@ type ActiveStream struct {
 	Width       uint32 `json:"width,omitempty"`
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+	Fps         uint32 `json:"fps,omitempty"`
 }
 
 // StreamMeta is the extended metadata stored in stream_meta/{crew_id}.
@@ -173,6 +188,7 @@ type StreamMeta struct {
 	Width       uint32 `json:"width,omitempty"`
 	Height      uint32 `json:"height,omitempty"`
 	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+	Fps         uint32 `json:"fps,omitempty"`
 }
 
 // peakViewers is the largest number of viewers at one time.
@@ -349,7 +365,16 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		return "", errSFUUnavailable
 	}
 
-	stream := ActiveStream{
+	session := StreamSessionMeta{
+		CrewID:      req.CrewID,
+		HostUserID:  userID,
+		Mode:        "sfu",
+		SFURegion:   region,
+		SFUEndpoint: endpoint,
+	}
+	advert := streamAdvert{
+		SessionID:   streamID,
+		CrewID:      req.CrewID,
 		HostID:      userID,
 		HostName:    users[0].GetDisplayName(),
 		Title:       req.Title,
@@ -357,41 +382,113 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		Width:       req.Width,
 		Height:      req.Height,
 		BitrateKbps: req.BitrateKbps,
+		Fps:         req.Fps,
 	}
-	streamJSON, _ := json.Marshal(stream)
+	response := map[string]interface{}{
+		"stream_id":    streamID,
+		"session_id":   streamID,
+		"mode":         "sfu",
+		"sfu_endpoint": endpoint,
+		"sfu_token":    token,
+		"capture":      loadCapturePolicy(ctx, nk),
+	}
 
-	_, err = nk.StorageWrite(ctx, []*runtime.StorageWrite{
+	if req.Advertise == advertiseOnLive {
+		// The crew learns of the stream from stream_live, when the host's
+		// track is open. Until then only the session record exists: no
+		// viewer can find the stream, and the host can join the SFU.
+		session.Pending = &advert
+		storeStreamSession(ctx, nk, streamID, session)
+		response["advertise"] = advertiseOnLive
+		logger.Info("User %s started stream %s (SFU) in crew %s region=%s; advertised when live", userID, streamID, req.CrewID, region)
+		resp, _ := json.Marshal(response)
+		return string(resp), nil
+	}
+
+	if err := advertiseStream(ctx, logger, nk, advert); err != nil {
+		logger.Error("failed to write stream state: %v", err)
+		return "", runtime.NewError("failed to start stream", 13)
+	}
+	storeStreamSession(ctx, nk, streamID, session)
+
+	logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
+	resp, _ := json.Marshal(response)
+	return string(resp), nil
+}
+
+// streamAdvert is what the crew learns about a stream: the records that
+// crew_state reads and the stream_started push.
+type streamAdvert struct {
+	SessionID   string `json:"session_id"`
+	CrewID      string `json:"crew_id"`
+	HostID      string `json:"host_id"`
+	HostName    string `json:"host_name"`
+	Title       string `json:"title,omitempty"`
+	StartedAt   int64  `json:"started_at"`
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+	Fps         uint32 `json:"fps,omitempty"`
+}
+
+// streamStartedPayload is the data of the stream_started push. It carries
+// the mode and the encode size and rate, so a viewer can start its decoder
+// with no second RPC (streaming-quality stage 6).
+func streamStartedPayload(a streamAdvert) map[string]interface{} {
+	return map[string]interface{}{
+		"stream_id":         a.SessionID,
+		"streamer_id":       a.HostID,
+		"streamer_username": a.HostName,
+		"title":             a.Title,
+		"mode":              "sfu",
+		"width":             a.Width,
+		"height":            a.Height,
+		"fps":               a.Fps,
+	}
+}
+
+// advertiseStream writes the active_streams and stream_meta records and the
+// host's presence, and pushes stream_started to the crew.
+func advertiseStream(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, a streamAdvert) error {
+	streamJSON, _ := json.Marshal(ActiveStream{
+		HostID:      a.HostID,
+		HostName:    a.HostName,
+		Title:       a.Title,
+		StartedAt:   a.StartedAt,
+		Width:       a.Width,
+		Height:      a.Height,
+		BitrateKbps: a.BitrateKbps,
+		Fps:         a.Fps,
+	})
+	if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
 			Collection:      StreamCollection,
-			Key:             req.CrewID,
-			UserID:          userID,
+			Key:             a.CrewID,
+			UserID:          a.HostID,
 			Value:           string(streamJSON),
 			PermissionRead:  2,
 			PermissionWrite: 0,
 		},
-	})
-	if err != nil {
-		logger.Error("failed to write stream state: %v", err)
-		return "", runtime.NewError("failed to start stream", 13)
+	}); err != nil {
+		return err
 	}
 
-	// Write stream metadata
-	meta := StreamMeta{
-		StreamID:         streamID,
-		CrewID:           req.CrewID,
-		StreamerID:       userID,
-		StreamerUsername: users[0].GetDisplayName(),
-		Title:            req.Title,
-		StartedAt:        now.UTC().Format(time.RFC3339),
-		Width:            req.Width,
-		Height:           req.Height,
-		BitrateKbps:      req.BitrateKbps,
-	}
-	metaJSON, _ := json.Marshal(meta)
+	metaJSON, _ := json.Marshal(StreamMeta{
+		StreamID:         a.SessionID,
+		CrewID:           a.CrewID,
+		StreamerID:       a.HostID,
+		StreamerUsername: a.HostName,
+		Title:            a.Title,
+		StartedAt:        time.Unix(a.StartedAt, 0).UTC().Format(time.RFC3339),
+		Width:            a.Width,
+		Height:           a.Height,
+		BitrateKbps:      a.BitrateKbps,
+		Fps:              a.Fps,
+	})
 	nk.StorageWrite(ctx, []*runtime.StorageWrite{
 		{
 			Collection:      StreamMetaCollection,
-			Key:             req.CrewID,
+			Key:             a.CrewID,
 			UserID:          SystemUserID,
 			Value:           string(metaJSON),
 			PermissionRead:  2,
@@ -399,46 +496,137 @@ func StartStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 		},
 	})
 
-	// Update user presence
+	now := time.Now().UTC().Format(time.RFC3339)
 	_ = WritePresence(ctx, nk, &UserPresence{
-		UserID:   userID,
+		UserID:   a.HostID,
 		Status:   StatusOnline,
-		LastSeen: now.UTC().Format(time.RFC3339),
+		LastSeen: now,
 		Activity: &Activity{
 			Type:        ActivityStreaming,
-			CrewID:      req.CrewID,
-			StreamID:    streamID,
-			StreamTitle: req.Title,
+			CrewID:      a.CrewID,
+			StreamID:    a.SessionID,
+			StreamTitle: a.Title,
 		},
-		UpdatedAt: now.UTC().Format(time.RFC3339),
+		UpdatedAt: now,
 	})
 
-	InvalidateCrewState(req.CrewID)
+	InvalidateCrewState(a.CrewID)
+	PushCrewEvent(ctx, logger, nk, a.CrewID, "stream_started", streamStartedPayload(a))
+	return nil
+}
 
-	// Push priority event: stream_started
-	PushCrewEvent(ctx, logger, nk, req.CrewID, "stream_started", map[string]interface{}{
-		"stream_id":         streamID,
-		"streamer_id":       userID,
-		"streamer_username": users[0].GetDisplayName(),
-		"title":             req.Title,
+// StreamLiveRequest is the stream_live payload: the host's track is open.
+type StreamLiveRequest struct {
+	CrewID    string `json:"crew_id"`
+	SessionID string `json:"session_id"`
+	// The encode size and rate the host runs at. Zero keeps the values of
+	// start_stream.
+	Width       uint32 `json:"width,omitempty"`
+	Height      uint32 `json:"height,omitempty"`
+	Fps         uint32 `json:"fps,omitempty"`
+	BitrateKbps uint32 `json:"bitrate_kbps,omitempty"`
+}
+
+// StreamLiveRPC advertises a stream that start_stream recorded with
+// advertise "on_live". The host calls it when its SFU track is open, so the
+// crew never sees a stream that no SFU session carries (streaming-quality
+// stage 6). Only the host of the session can call it. A second call for a
+// stream that is already advertised changes nothing.
+func StreamLiveRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	var req StreamLiveRequest
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.CrewID == "" || req.SessionID == "" {
+		return "", runtime.NewError("crew_id and session_id required", 3)
+	}
+	session := loadStreamSession(ctx, nk, req.SessionID)
+	if session == nil || session.CrewID != req.CrewID {
+		return "", runtime.NewError("stream not found", 5)
+	}
+	if session.HostUserID != userID {
+		return "", runtime.NewError("not the host of this stream", 7)
+	}
+	if session.Pending == nil {
+		if live := readStreamMeta(ctx, nk, req.CrewID); live != nil && live.StreamID == req.SessionID {
+			return `{"advertised":true}`, nil
+		}
+		return "", runtime.NewError("stream not found", 5)
+	}
+	advert := *session.Pending
+	if req.Width > 0 && req.Height > 0 {
+		advert.Width = req.Width
+		advert.Height = req.Height
+	}
+	if req.Fps > 0 {
+		advert.Fps = req.Fps
+	}
+	if req.BitrateKbps > 0 {
+		advert.BitrateKbps = req.BitrateKbps
+	}
+	if err := advertiseStream(ctx, logger, nk, advert); err != nil {
+		logger.Error("stream_live: failed to write stream state: %v", err)
+		return "", runtime.NewError("failed to advertise stream", 13)
+	}
+	session.Pending = nil
+	storeStreamSession(ctx, nk, req.SessionID, *session)
+	logger.Info("stream_live: stream %s of %s advertised in crew %s (%dx%d at %d fps)",
+		req.SessionID, userID, req.CrewID, advert.Width, advert.Height, advert.Fps)
+	return `{"advertised":true}`, nil
+}
+
+// RefreshStreamTokenRPC signs a new SFU token for a stream session: a host
+// token for its host, a viewer token for another crew member. A token lives
+// 5 minutes; a client that joins the SFU again after that asks for a new one
+// (streaming-quality stage 6). The session must still exist.
+func RefreshStreamTokenRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	if !ok {
+		return "", runtime.NewError("authentication required", 16)
+	}
+	var req struct {
+		SessionID string `json:"session_id"`
+	}
+	if err := json.Unmarshal([]byte(payload), &req); err != nil {
+		return "", runtime.NewError("invalid request", 3)
+	}
+	if req.SessionID == "" {
+		return "", runtime.NewError("session_id required", 3)
+	}
+	session := loadStreamSession(ctx, nk, req.SessionID)
+	if session == nil {
+		return "", runtime.NewError("stream not found", 5)
+	}
+	role := "viewer"
+	if session.HostUserID == userID {
+		role = "host"
+	} else if !isCrewMember(ctx, nk, session.CrewID, userID) {
+		return "", runtime.NewError("not a crew member", 7)
+	}
+	if session.SFUEndpoint == "" {
+		return "", errSFUUnavailable
+	}
+	token, err := signSFUToken(SFUTokenClaims{
+		UserID:    userID,
+		Username:  resolveUsername(ctx, nk, userID),
+		SessionID: req.SessionID,
+		Type:      "stream",
+		Role:      role,
+		CrewID:    session.CrewID,
+		Region:    session.SFURegion,
 	})
-
-	storeStreamSession(ctx, nk, streamID, StreamSessionMeta{
-		CrewID:      req.CrewID,
-		HostUserID:  userID,
-		Mode:        "sfu",
-		SFURegion:   region,
-		SFUEndpoint: endpoint,
-	})
-
-	logger.Info("User %s started stream %s (SFU) in crew %s region=%s", userID, streamID, req.CrewID, region)
+	if err != nil {
+		logger.Error("refresh_stream_token: failed to sign SFU token: %v", err)
+		return "", errSFUUnavailable
+	}
 	resp, _ := json.Marshal(map[string]interface{}{
-		"stream_id":    streamID,
-		"session_id":   streamID,
-		"mode":         "sfu",
-		"sfu_endpoint": endpoint,
+		"sfu_endpoint": session.SFUEndpoint,
 		"sfu_token":    token,
-		"capture":      loadCapturePolicy(ctx, nk),
+		"role":         role,
 	})
 	return string(resp), nil
 }
@@ -498,6 +686,16 @@ func StopStreamRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		nk.StorageDelete(ctx, []*runtime.StorageDelete{
 			{Collection: StreamSessionCol, Key: streamMeta.StreamID, UserID: SystemUserID},
 		})
+	}
+	// A stream that start_stream recorded and never advertised: only the
+	// session record exists.
+	if req.SessionID != "" && (streamMeta == nil || streamMeta.StreamID != req.SessionID) {
+		if pending := loadStreamSession(ctx, nk, req.SessionID); pending != nil &&
+			pending.HostUserID == userID && pending.Pending != nil {
+			nk.StorageDelete(ctx, []*runtime.StorageDelete{
+				{Collection: StreamSessionCol, Key: req.SessionID, UserID: SystemUserID},
+			})
+		}
 	}
 
 	// Write stream_session event to the crew event ledger
@@ -880,6 +1078,9 @@ type StreamSessionMeta struct {
 	Mode        string `json:"mode"`
 	SFURegion   string `json:"sfu_region,omitempty"`
 	SFUEndpoint string `json:"sfu_endpoint,omitempty"`
+	// Pending is the advertisement of a stream that start_stream recorded
+	// with advertise "on_live" and stream_live has not advertised yet.
+	Pending *streamAdvert `json:"pending,omitempty"`
 }
 
 func storeStreamSession(ctx context.Context, nk runtime.NakamaModule, sessionID string, meta StreamSessionMeta) {
@@ -1162,12 +1363,16 @@ func resumeStream(ctx context.Context, logger runtime.Logger, nk runtime.NakamaM
 		UpdatedAt: now,
 	})
 	InvalidateCrewState(req.CrewID)
-	PushCrewEvent(ctx, logger, nk, req.CrewID, "stream_started", map[string]interface{}{
-		"stream_id":         sessionID,
-		"streamer_id":       userID,
-		"streamer_username": rec.Meta.StreamerUsername,
-		"title":             rec.Meta.Title,
-	})
+	PushCrewEvent(ctx, logger, nk, req.CrewID, "stream_started", streamStartedPayload(streamAdvert{
+		SessionID: sessionID,
+		CrewID:    req.CrewID,
+		HostID:    userID,
+		HostName:  rec.Meta.StreamerUsername,
+		Title:     rec.Meta.Title,
+		Width:     rec.Meta.Width,
+		Height:    rec.Meta.Height,
+		Fps:       rec.Meta.Fps,
+	}))
 	logger.Info("start_stream resume: stream %s of %s advertised again in crew %s", sessionID, userID, req.CrewID)
 	return resumeStreamResponse(userID, displayName, sessionID, req.CrewID, rec.Session)
 }
