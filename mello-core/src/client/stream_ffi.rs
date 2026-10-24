@@ -354,6 +354,12 @@ pub(super) fn rtp_payload(packet: &[u8]) -> Option<&[u8]> {
 /// `SfuEvent::AudioRtp`) to the viewer's audio decoder. Returns `true` when
 /// libmello accepted it.
 ///
+/// Streaming-quality stage 7: a viewer attached to its peer
+/// (`mello_stream_viewer_attach_peer`) takes each game-audio RTP packet from
+/// the peer on the network thread, with its header and arrival time, into
+/// NetEQ. For it libmello only counts this call, so the stream tick's
+/// timing does not reach the audio.
+///
 /// # Safety
 /// `viewer` must be a valid `MelloStreamView` pointer, or null.
 pub unsafe fn feed_viewer_audio_rtp(viewer: *mut mello_sys::MelloStreamView, rtp: &[u8]) -> bool {
@@ -418,6 +424,21 @@ pub(super) struct ViewerTimelineStats {
     pub keyframe_requests: u64,
     pub loss_events: u64,
     pub waiting_for_keyframe: bool,
+    // ---- streaming-quality stage 7: game audio and A/V sync ----
+    /// NetEQ delay plus the output latency, ms (0 while no audio plays).
+    pub audio_delay_ms: f32,
+    /// Filtered A/V offset, ms: audio heard minus video shown for one capture
+    /// instant (positive: the audio is late).
+    pub av_offset_ms: f32,
+    /// Concealment (expand) since the view started, ms.
+    pub audio_expand_ms: u64,
+    /// Losses repaired from in-band FEC since the view started.
+    pub audio_fec_used: u64,
+    /// The receive timeline's minimum delay that the A/V sync set, ms.
+    pub av_video_min_delay_ms: f32,
+    /// The sync measured in the last second.
+    pub av_sync_active: bool,
+    // ---- end stage 7 ----
 }
 
 impl ViewerTimelineStats {
@@ -441,6 +462,12 @@ impl ViewerTimelineStats {
             keyframe_requests: raw.keyframe_requests,
             loss_events: raw.loss_events,
             waiting_for_keyframe: raw.waiting_for_keyframe != 0,
+            audio_delay_ms: raw.audio_delay_ms,
+            av_offset_ms: raw.av_offset_ms,
+            audio_expand_ms: raw.audio_expand_ms,
+            audio_fec_used: raw.audio_fec_used,
+            av_video_min_delay_ms: raw.av_video_min_delay_ms,
+            av_sync_active: raw.av_sync_active != 0,
         }
     }
 }
@@ -467,7 +494,43 @@ pub(super) fn timeline_report_fields(
         "kf_req": stats.keyframe_requests,
         "dec": stats.decoder,
         "dec_fps": round1(decoded_in_interval as f32 / interval_secs.max(0.001)),
+        // Stage 7: game audio and A/V sync (spec 12 section 11).
+        "a_dly": round1(stats.audio_delay_ms),
+        "av_ms": round1(stats.av_offset_ms),
+        "a_exp": stats.audio_expand_ms,
+        "a_fec": stats.audio_fec_used,
     })
+}
+
+/// The 1 s "Stream audio" log line of a viewer (streaming-quality stage 7):
+/// the game-audio delay and the A/V sync, next to "Stream timeline".
+pub(super) fn log_viewer_audio(stats: &ViewerTimelineStats) {
+    log::info!(
+        "Stream audio: delay_ms={:.1} av_offset_ms={:.1} video_min_ms={:.1} sync_active={} expand_ms={} fec_used={}",
+        stats.audio_delay_ms,
+        stats.av_offset_ms,
+        stats.av_video_min_delay_ms,
+        stats.av_sync_active,
+        stats.audio_expand_ms,
+        stats.audio_fec_used
+    );
+}
+
+/// Set the per-stream volume of a viewer's game audio: a gain of 0..2 (1 =
+/// unity), applied before the voice output gain (streaming-quality stage 7;
+/// the stream card's control is stage 9). Returns `true` when libmello took
+/// it.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer, or null.
+pub unsafe fn set_viewer_audio_volume(viewer: *mut mello_sys::MelloStreamView, gain: f32) -> bool {
+    if viewer.is_null() || !gain.is_finite() {
+        return false;
+    }
+    unsafe {
+        mello_sys::mello_stream_viewer_set_audio_volume(viewer, gain)
+            == mello_sys::MelloResult_MELLO_OK
+    }
 }
 
 /// Apply the viewer congestion controller on an SFU connection.
@@ -716,6 +779,28 @@ mod tests {
         assert_eq!(v["dec_fps"], 60.0);
         assert_eq!(v["rel"], 600);
         assert_eq!(v["drop_late"], 1);
+    }
+
+    /// Stage 7: the game-audio and A/V sync fields of `stream_client_stats`.
+    #[test]
+    fn the_report_carries_the_audio_and_sync_fields() {
+        let stats = ViewerTimelineStats {
+            audio_delay_ms: 81.26,
+            av_offset_ms: -12.04,
+            audio_expand_ms: 240,
+            audio_fec_used: 7,
+            ..Default::default()
+        };
+        let v = timeline_report_fields(&stats, 0, 10.0);
+        assert_eq!(v["a_dly"], 81.3);
+        assert_eq!(v["av_ms"], -12.0);
+        assert_eq!(v["a_exp"], 240);
+        assert_eq!(v["a_fec"], 7);
+    }
+
+    #[test]
+    fn a_volume_for_a_null_viewer_is_rejected() {
+        assert!(!unsafe { set_viewer_audio_volume(std::ptr::null_mut(), 0.5) });
     }
 
     /// Normal inter-frame jitter must not register as a freeze, or the metric

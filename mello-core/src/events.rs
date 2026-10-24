@@ -466,6 +466,17 @@ pub enum Event {
         frames_dropped_late: u64,
         decoder: String,
         decode_fps: f32,
+        // ---- streaming-quality stage 7: game audio and A/V sync ----
+        /// Game-audio delay: NetEQ plus the output latency, ms.
+        audio_delay_ms: f32,
+        /// Filtered A/V offset, ms: audio heard minus video shown for one
+        /// capture instant (positive: the audio is late).
+        av_offset_ms: f32,
+        /// Game-audio concealment (expand) since the view started, ms.
+        audio_expand_ms: u64,
+        /// Game-audio losses repaired from in-band FEC since the view started.
+        audio_fec_used: u64,
+        // ---- end stage 7 ----
     },
     StreamHostPacingStats {
         mode: String,

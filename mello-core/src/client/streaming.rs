@@ -547,7 +547,13 @@ impl super::Client {
                 frames_dropped_late: timeline.frames_dropped_late,
                 decoder: timeline.decoder.clone(),
                 decode_fps,
+                // Stage 7: game audio and A/V sync.
+                audio_delay_ms: timeline.audio_delay_ms,
+                av_offset_ms: timeline.av_offset_ms,
+                audio_expand_ms: timeline.audio_expand_ms,
+                audio_fec_used: timeline.audio_fec_used,
             });
+            super::stream_ffi::log_viewer_audio(&timeline);
 
             if let Some(stats) = native.as_ref() {
                 log_viewer_native_stats(stats);
