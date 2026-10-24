@@ -103,6 +103,7 @@ export default journey({
       expect(s.recent_games.tiles.length > 0, "the recent games card has content");
       for (const c of s.feed_cards) {
         expect(c.card_type !== "", `feed card ${c.id} has a type`);
+        expect(c.card_type !== "catchup", `feed card ${c.id} is not a catch-up card`);
       }
       await bob.checkpoint("solo-feed");
     });

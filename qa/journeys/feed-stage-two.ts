@@ -71,6 +71,22 @@ export default journey({
       expect((await bob.state()).joined_rows.length === 0, "bob does not see his own join");
     });
 
+    for (const app of [bob, alice]) {
+      await step(`${app.name} sees one daily recap for alice's session and no catch-up card`, async () => {
+        const s = await app.waitFor("the daily recap", (st) => st.daily_recap.present, 30_000);
+        const d = s.daily_recap;
+        // The session ended 23 h ago: today so far or yesterday, by the clock.
+        expect(d.day === "Today so far" || d.day === "Yesterday", `the day is today or yesterday, got "${d.day}"`);
+        expect(d.sessions === 1, `one session, got ${d.sessions}`);
+        expect(d.hangout !== "" && d.hangout !== "0m", `the hangout time shows, got "${d.hangout}"`);
+        expect(d.top_game === "Brawlhalla", `the top game is Brawlhalla, got "${d.top_game}"`);
+        expect(d.members >= 1, `at least one member octagon, got ${d.members}`);
+        expect(d.belts.length <= 2, `two belts at most, got ${d.belts.length}`);
+        expect(!s.feed_cards.some((c) => c.card_type === "catchup"), "no catch-up card");
+        expect(s.feed_cards.filter((c) => c.card_type === "daily-recap").length === 1, "one daily recap card");
+      });
+    }
+
     await step("the skeleton trio stays at two members and no card is empty", async () => {
       // Skeleton rule (client/src/handlers/clip.rs, skeleton_trio_for): a cell
       // hides when its card type exists, and all three hide from three members.

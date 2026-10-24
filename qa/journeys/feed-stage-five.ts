@@ -34,6 +34,19 @@ export default journey({
       await bob.checkpoint("five-feed");
     });
 
+    await step("one daily recap stands in the grid for the seeded sessions, no catch-up card", async () => {
+      const s = await bob.waitFor("the daily recap", (st) => st.daily_recap.present, 30_000);
+      const d = s.daily_recap;
+      expect(d.day !== "", `the card names its day, got "${d.day}"`);
+      expect(d.sessions > 0, `sessions of the day, got ${d.sessions}`);
+      expect(d.hangout !== "", "the hangout time shows");
+      expect(d.members >= 1, `member octagons, got ${d.members}`);
+      expect(d.belts.length <= 2, `two belts at most, got ${d.belts.length}`);
+      expect(!s.feed_cards.some((c) => c.card_type === "catchup"), "no catch-up card");
+      expect(s.feed_cards.filter((c) => c.card_type === "daily-recap").length === 1, "one daily recap card");
+      await bob.checkpoint("five-daily-recap");
+    });
+
     // A belt that moves between two other members is not the viewer's: no
     // hero, the cell shows a red dot on that pair until the feed is opened
     // again (client/src/head2head.rs, spec HEAD2HEAD.md "Unread").
