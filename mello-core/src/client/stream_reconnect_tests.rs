@@ -792,6 +792,17 @@ async fn end_stream_and_the_loop_do_not_wait_on_a_stalled_backend() {
         })
         .await;
         let ended_after = clicked.elapsed();
+        // stop_stream runs on its own task: wait until the fake Nakama has
+        // it, so the next command really goes in while it stalls (10 s from
+        // its arrival), and the count below does not depend on scheduling.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+        while rpc_calls(&rpcs, "stop_stream").is_empty() {
+            assert!(
+                tokio::time::Instant::now() < deadline,
+                "no stop_stream request within 5 s of END STREAM"
+            );
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
         // The loop answers the next command while stop_stream stalls.
         cmd_tx
             .send(Command::ListAudioDevices)
