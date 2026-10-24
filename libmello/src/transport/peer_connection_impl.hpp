@@ -9,11 +9,17 @@
 #include <condition_variable>
 #include <memory>
 #include <optional>
+#include <functional>
 #include "mello.h"
+#include "av_sync.hpp"
 #include "rtp_video_sender.hpp"
 #include "rtp_video_receiver_session.hpp"
 #include "voice_slot_map.hpp"
 #include "voice_send_feedback.hpp"
+
+namespace mello::audio {
+class StreamAudioLink;
+}
 
 namespace mello::transport {
 
@@ -116,6 +122,26 @@ public:
     // MelloSendFeedback, spec 10 section 7.5).
     void set_send_feedback_callback(MelloSendFeedbackCallback cb, void* user_data);
     bool get_send_feedback(MelloSendFeedback* out) const;
+
+    // ---- streaming-quality stage 7 ----
+    // Stream viewer: each game-audio RTP packet (the whole packet) with its
+    // arrival time on the steady clock, in microseconds, on the network
+    // thread, before the audio callbacks. The stream view's playout sets it
+    // (mello_stream_viewer_attach_peer). Empty: none.
+    using StreamAudioSink = std::function<void(const uint8_t* rtp, size_t size, int64_t arrival_us)>;
+    void set_stream_audio_sink(StreamAudioSink sink);
+    // Stream viewer: the A/V sync input. Every receiver session of this peer
+    // (each video session) runs it. Null: none.
+    void set_av_sync(std::shared_ptr<AvSyncInput> input);
+    // Stream host: the context's game-audio link (stream_audio_link.hpp). The
+    // audio send track puts the A/V sync extension on each frame from it and
+    // gives it the receiver reports.
+    void set_stream_audio_link(std::shared_ptr<audio::StreamAudioLink> link);
+    // Packets the A/V sync extension was put on (host) or read from (viewer).
+    uint64_t av_sync_extensions() const {
+        return av_sync_extensions_.load(std::memory_order_relaxed);
+    }
+    // ---- end stage 7 ----
 
 private:
     enum class VideoFeedbackType : uint8_t {
@@ -312,6 +338,26 @@ private:
     std::mutex feedback_mutex_;
     std::deque<QueuedVideoFeedback> feedback_queue_;
     static constexpr size_t kMaxFeedbackQueue = 64;
+
+    // ---- streaming-quality stage 7 ----
+    // The A/V sync extension value of the frame that the audio send path
+    // sends now: send_audio_message sets it, the extension handler of the
+    // send chain reads it on the same call (Track::send runs the chain on
+    // the calling thread). Guarded by av_sync_send_mutex_, a leaf.
+    struct PendingAvSync {
+        uint32_t rtp_timestamp = 0;
+        uint32_t video_rtp_timestamp = 0;
+        bool valid = false;
+    };
+    std::optional<uint32_t> take_pending_av_sync(uint32_t rtp_timestamp);
+    std::mutex av_sync_send_mutex_;
+    PendingAvSync pending_av_sync_;
+    // Guarded by mutex_.
+    StreamAudioSink stream_audio_sink_;
+    std::shared_ptr<AvSyncInput> av_sync_input_;
+    std::shared_ptr<audio::StreamAudioLink> stream_audio_link_;
+    std::atomic<uint64_t> av_sync_extensions_{0};
+    // ---- end stage 7 ----
 };
 
 } // namespace mello::transport

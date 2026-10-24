@@ -12,6 +12,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <mutex>
 #include <unordered_map>
@@ -480,38 +481,77 @@ void add_lifetime(PlayoutStats& s, const webrtc::NetEqLifetimeStatistics& lt,
     s.packet_buffer_flushes += ops.packet_buffer_flushes > 0 ? ops.packet_buffer_flushes - 1 : 0;
 }
 
+// What the engine and its game-audio sources share: NetEQ's environment
+// (field trials, clock), the decoder factory, the mixer and the counters.
+// Held by shared_ptr, so a game-audio source may outlive the engine.
+struct MixCore {
+    explicit MixCore(const std::string& delay_manager_config)
+        : env(webrtc::CreateEnvironment(std::make_unique<MelloFieldTrials>(delay_manager_config),
+                                        std::make_unique<PlayoutClock>())),
+          decoder_factory(webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>()),
+          mixer(webrtc::AudioMixerImpl::Create()) {}
+
+    webrtc::Environment env;
+    rtc::scoped_refptr<webrtc::AudioDecoderFactory> decoder_factory;
+    rtc::scoped_refptr<webrtc::AudioMixerImpl> mixer;
+    EngineCounters counters;
+};
+
+// One NetEQ for an Opus stream of the mello sender: the voice peers (mono,
+// the talk-spurt controller) and the game audio of a stream (stereo,
+// NetEQ's own DecisionLogic) both come from here.
+std::unique_ptr<webrtc::NetEq> create_opus_neteq(
+    MixCore& core, const VoicePlayout::Config& config,
+    std::unique_ptr<webrtc::NetEqControllerFactory> controller, bool stereo) {
+    webrtc::NetEq::Config c;
+    c.sample_rate_hz = kSampleRateHz;
+    c.enable_muted_state = config.enable_muted_state;
+    c.enable_fast_accelerate = config.enable_fast_accelerate;
+    auto neteq = webrtc::CustomNetEqFactory(std::move(controller))
+                     .Create(core.env, c, core.decoder_factory);
+    if (!neteq->RegisterPayloadType(
+            VoicePlayout::kOpusPayloadType,
+            webrtc::SdpAudioFormat("opus", kSampleRateHz, 2, {{"stereo", stereo ? "1" : "0"}})) ||
+        !neteq->RegisterPayloadType(kCnPayloadType,
+                                    webrtc::SdpAudioFormat("CN", kSampleRateHz, 1))) {
+        MELLO_LOG_ERROR("playout", "NetEQ payload type registration failed");
+    }
+    return neteq;
+}
+
+// Why a packet starts a new stream for a receiver that has one: a new SSRC,
+// or a timestamp far behind the newest one (the sender restarted its capture
+// clock). Null: the same stream.
+const char* new_stream_reason(uint32_t ssrc, bool has_last_timestamp, uint32_t last_timestamp,
+                              const RtpInfo& rtp) {
+    if (ssrc != rtp.ssrc) return "new SSRC";
+    if (has_last_timestamp &&
+        static_cast<int32_t>(rtp.timestamp - last_timestamp) < -kNewStreamBehindSamples) {
+        return "timestamp far behind (sender restart)";
+    }
+    return nullptr;
+}
+
 }  // namespace
 
 struct VoicePlayout::Impl {
     explicit Impl(Config cfg)
         : config(std::move(cfg)),
-          env(webrtc::CreateEnvironment(
-              std::make_unique<MelloFieldTrials>(config.delay_manager_config),
-              std::make_unique<PlayoutClock>())),
-          decoder_factory(webrtc::CreateAudioDecoderFactory<webrtc::AudioDecoderOpus>()),
-          mixer(webrtc::AudioMixerImpl::Create()) {}
+          core(std::make_shared<MixCore>(config.delay_manager_config)),
+          env(core->env),
+          decoder_factory(core->decoder_factory),
+          mixer(core->mixer),
+          counters(core->counters) {}
 
     std::unique_ptr<webrtc::NetEq> make_neteq(const std::shared_ptr<SpurtTelemetry>& spurts) {
-        webrtc::NetEq::Config c;
-        c.sample_rate_hz = kSampleRateHz;
-        c.enable_muted_state = config.enable_muted_state;
-        c.enable_fast_accelerate = config.enable_fast_accelerate;
         // NetEQ with its own DecisionLogic inside the talk-spurt controller.
-        auto neteq =
-            webrtc::CustomNetEqFactory(
-                std::make_unique<TalkSpurtControllerFactory>(
-                    spurts, TalkSpurtController::Tuning{config.talk_spurt_hold,
-                                                        config.spurt_hold_floor_ms,
-                                                        config.jump_no_expand_ms}))
-                .Create(env, c, decoder_factory);
-        if (!neteq->RegisterPayloadType(kOpusPayloadType,
-                                        webrtc::SdpAudioFormat("opus", kSampleRateHz, 2,
-                                                               {{"stereo", "0"}})) ||
-            !neteq->RegisterPayloadType(kCnPayloadType,
-                                        webrtc::SdpAudioFormat("CN", kSampleRateHz, 1))) {
-            MELLO_LOG_ERROR("playout", "NetEQ payload type registration failed");
-        }
-        return neteq;
+        return create_opus_neteq(
+            *core, config,
+            std::make_unique<TalkSpurtControllerFactory>(
+                spurts, TalkSpurtController::Tuning{config.talk_spurt_hold,
+                                                    config.spurt_hold_floor_ms,
+                                                    config.jump_no_expand_ms}),
+            /*stereo=*/false);
     }
 
     // Takes the stream out of the mixer and keeps its lifetime counts.
@@ -530,10 +570,11 @@ struct VoicePlayout::Impl {
     }
 
     Config config;
-    webrtc::Environment env;
-    rtc::scoped_refptr<webrtc::AudioDecoderFactory> decoder_factory;
-    rtc::scoped_refptr<webrtc::AudioMixerImpl> mixer;
-    EngineCounters counters;
+    std::shared_ptr<MixCore> core;
+    webrtc::Environment& env;
+    rtc::scoped_refptr<webrtc::AudioDecoderFactory>& decoder_factory;
+    rtc::scoped_refptr<webrtc::AudioMixerImpl>& mixer;
+    EngineCounters& counters;
 
     mutable std::mutex mutex;  // peers, volumes, pans, retired, next_id
     std::unordered_map<std::string, std::shared_ptr<PeerStream>> peers;
@@ -572,14 +613,8 @@ bool VoicePlayout::insert(const std::string& peer, const RtpInfo& rtp, const uin
         auto it = impl_->peers.find(peer);
         if (it != impl_->peers.end()) {
             PeerStream& s = *it->second;
-            const char* why = nullptr;
-            if (s.ssrc != rtp.ssrc) {
-                why = "new SSRC";
-            } else if (s.has_last_timestamp &&
-                       static_cast<int32_t>(rtp.timestamp - s.last_timestamp) <
-                           -kNewStreamBehindSamples) {
-                why = "timestamp far behind (sender restart)";
-            }
+            const char* why =
+                new_stream_reason(s.ssrc, s.has_last_timestamp, s.last_timestamp, rtp);
             if (why) {
                 MELLO_LOG_INFO("playout", "peer '%s': new stream (%s): ssrc %08x -> %08x, ts %u -> %u",
                                peer.c_str(), why, s.ssrc, rtp.ssrc, s.last_timestamp, rtp.timestamp);
@@ -747,5 +782,276 @@ int VoicePlayout::peer_count() const {
     std::lock_guard<std::mutex> lock(impl_->mutex);
     return static_cast<int>(impl_->peers.size());
 }
+
+// ---- streaming-quality stage 7: game audio ----
+
+namespace {
+
+// Microseconds on the playout clock: the steady clock, or the test clock of
+// mello_test_set_clock_ms (milliseconds) when one is set.
+int64_t playout_now_us() {
+    const int64_t test_now = util::g_test_clock_ms.load(std::memory_order_relaxed);
+    if (test_now >= 0) return test_now * 1000;
+    return std::chrono::duration_cast<std::chrono::microseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
+
+// What a game-audio source and its NetEQ streams share.
+struct GameShared {
+    std::atomic<float> gain{1.0f};
+    std::atomic<uint64_t> get_audio_errors{0};
+    std::mutex playout_mutex;  // a leaf; the device thread holds it briefly
+    std::optional<GameAudioSource::Playout> playout;
+};
+
+// One NetEQ of a game-audio source, as a source of the voice mixer. Stereo:
+// the game's mix keeps its channels; no pan.
+class GameStream final : public webrtc::AudioMixer::Source {
+public:
+    GameStream(EngineCounters& counters, std::shared_ptr<GameShared> shared,
+               std::unique_ptr<webrtc::NetEq> neteq, uint32_t ssrc, int id)
+        : ssrc(ssrc), counters_(counters), shared_(std::move(shared)), neteq_(std::move(neteq)),
+          id_(id) {}
+
+    AudioFrameInfo GetAudioFrameWithInfo(int sample_rate_hz, webrtc::AudioFrame* frame) override {
+        bool muted = false;
+        if (neteq_->GetAudio(&decoded_, &muted) != webrtc::NetEq::kOK) {
+            shared_->get_audio_errors.fetch_add(1, std::memory_order_relaxed);
+            return AudioFrameInfo::kError;
+        }
+        if (muted) return AudioFrameInfo::kMuted;
+        const size_t n = decoded_.samples_per_channel_;
+        const size_t ch = decoded_.num_channels_;
+        if (decoded_.sample_rate_hz_ != sample_rate_hz || ch < 1 || ch > 2 || n == 0 ||
+            n > webrtc::AudioFrame::kMaxDataSizeSamples / 2) {
+            if (!format_warned_) {
+                format_warned_ = true;
+                MELLO_LOG_WARN("playout",
+                               "unexpected game-audio frame: rate=%d ch=%zu n=%zu (mixer rate %d)",
+                               decoded_.sample_rate_hz_, ch, n, sample_rate_hz);
+            }
+            return AudioFrameInfo::kError;
+        }
+        // The sample this pull ends with, for the A/V sync. NetEQ reports
+        // none in comfort noise.
+        if (const auto ts = neteq_->GetPlayoutTimestamp()) {
+            std::lock_guard<std::mutex> lock(shared_->playout_mutex);
+            shared_->playout =
+                GameAudioSource::Playout{*ts, playout_now_us(), static_cast<int>(n)};
+        }
+
+        const float gain = shared_->gain.load(std::memory_order_relaxed) *
+                           counters_.output_gain.load(std::memory_order_relaxed);
+        frame->UpdateFrame(decoded_.timestamp_, nullptr, n, sample_rate_hz, decoded_.speech_type_,
+                           decoded_.vad_activity_, 2);
+        int16_t* dst = frame->mutable_data();
+        const int16_t* src = decoded_.data();
+        for (size_t i = 0; i < n; ++i) {
+            dst[2 * i] = scale_sample(src[i * ch], gain);
+            dst[2 * i + 1] = scale_sample(src[i * ch + (ch - 1)], gain);
+        }
+        ++counters_.contributing;
+        return AudioFrameInfo::kNormal;
+    }
+
+    int Ssrc() const override { return id_; }
+    int PreferredSampleRate() const override { return kSampleRateHz; }
+
+    webrtc::NetEq& neteq() { return *neteq_; }
+
+    // Insert-side state, guarded by GameAudioSource::Impl::mutex.
+    uint32_t ssrc = 0;
+    bool has_last_timestamp = false;
+    uint32_t last_timestamp = 0;
+
+private:
+    EngineCounters& counters_;
+    std::shared_ptr<GameShared> shared_;
+    std::unique_ptr<webrtc::NetEq> neteq_;
+    webrtc::AudioFrame decoded_;  // device thread only
+    bool format_warned_ = false;  // device thread only
+    int id_;
+};
+
+void add_game_lifetime(GameAudioStats& s, const webrtc::NetEqLifetimeStatistics& lt) {
+    s.total_samples_received += lt.total_samples_received;
+    s.concealed_samples += lt.concealed_samples;
+    s.silent_concealed_samples += lt.silent_concealed_samples;
+    s.concealment_events += lt.concealment_events;
+    s.inserted_samples_for_deceleration += lt.inserted_samples_for_deceleration;
+    s.removed_samples_for_acceleration += lt.removed_samples_for_acceleration;
+    s.fec_packets_received += lt.fec_packets_received;
+    s.fec_packets_discarded += lt.fec_packets_discarded;
+    s.packets_discarded += lt.packets_discarded;
+    s.interruption_count += static_cast<uint64_t>(std::max(0, lt.interruption_count));
+    s.total_interruption_duration_ms +=
+        static_cast<uint64_t>(std::max(0, lt.total_interruption_duration_ms));
+}
+
+// Game-audio mixer ids: above any voice peer id.
+std::atomic<int> g_next_game_id{1 << 20};
+
+}  // namespace
+
+struct GameAudioSource::Impl {
+    Impl(std::shared_ptr<MixCore> core_in, VoicePlayout::Config config_in)
+        : core(std::move(core_in)), config(std::move(config_in)) {}
+
+    // Caller holds mutex. RemoveSource waits for a Mix that runs now.
+    void retire_locked() {
+        if (!stream) return;
+        core->mixer->RemoveSource(stream.get());
+        add_game_lifetime(retired, stream->neteq().GetLifetimeStatistics());
+        stream.reset();
+    }
+
+    std::shared_ptr<MixCore> core;
+    const VoicePlayout::Config config;
+    const std::shared_ptr<GameShared> shared = std::make_shared<GameShared>();
+
+    mutable std::mutex mutex;  // stream, retired, the counters below
+    std::shared_ptr<GameStream> stream;
+    GameAudioStats retired;  // lifetime fields only
+    uint64_t packets_inserted = 0;
+    uint64_t packets_rejected = 0;
+    uint64_t insert_errors = 0;
+    uint64_t stream_resets = 0;
+    uint64_t flushes = 0;
+    int minimum_delay_ms = 0;
+};
+
+GameAudioSource::GameAudioSource(std::unique_ptr<Impl> impl) : impl_(std::move(impl)) {}
+
+GameAudioSource::~GameAudioSource() {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    impl_->retire_locked();
+}
+
+bool GameAudioSource::insert(const RtpInfo& rtp, const uint8_t* payload, size_t payload_size,
+                             int64_t receive_time_ms) {
+    Impl& m = *impl_;
+    std::shared_ptr<GameStream> stream;
+    {
+        std::lock_guard<std::mutex> lock(m.mutex);
+        if ((rtp.payload_type != VoicePlayout::kOpusPayloadType &&
+             rtp.payload_type != kCnPayloadType) ||
+            !payload || payload_size == 0) {
+            ++m.packets_rejected;
+            return false;
+        }
+        if (m.stream) {
+            if (const char* why = new_stream_reason(m.stream->ssrc, m.stream->has_last_timestamp,
+                                                    m.stream->last_timestamp, rtp)) {
+                MELLO_LOG_INFO("playout", "game audio: new stream (%s): ssrc %08x -> %08x", why,
+                               m.stream->ssrc, rtp.ssrc);
+                m.retire_locked();
+                ++m.stream_resets;
+            }
+        }
+        if (!m.stream) {
+            auto neteq =
+                create_opus_neteq(*m.core, m.config,
+                                  std::make_unique<webrtc::DefaultNetEqControllerFactory>(),
+                                  /*stereo=*/true);
+            if (m.minimum_delay_ms > 0) neteq->SetMinimumDelay(m.minimum_delay_ms);
+            m.stream = std::make_shared<GameStream>(m.core->counters, m.shared, std::move(neteq),
+                                                    rtp.ssrc, g_next_game_id.fetch_add(1));
+            m.core->mixer->AddSource(m.stream.get());
+            MELLO_LOG_INFO("playout", "game audio: NetEQ created (ssrc %08x)", rtp.ssrc);
+        }
+        GameStream& s = *m.stream;
+        if (!s.has_last_timestamp || static_cast<int32_t>(rtp.timestamp - s.last_timestamp) > 0) {
+            s.last_timestamp = rtp.timestamp;
+        }
+        s.has_last_timestamp = true;
+        ++m.packets_inserted;
+        stream = m.stream;
+    }
+
+    webrtc::RTPHeader header;
+    header.payloadType = rtp.payload_type;
+    header.sequenceNumber = rtp.sequence;
+    header.timestamp = rtp.timestamp;
+    header.ssrc = rtp.ssrc;
+    const int rc = stream->neteq().InsertPacket(
+        header, rtc::ArrayView<const uint8_t>(payload, payload_size),
+        webrtc::Timestamp::Millis(receive_time_ms));
+    if (rc != webrtc::NetEq::kOK) {
+        uint64_t n = 0;
+        {
+            std::lock_guard<std::mutex> lock(m.mutex);
+            n = ++m.insert_errors;
+        }
+        if (n <= 5 || (n % 500) == 0) {
+            MELLO_LOG_WARN("playout",
+                           "game audio: InsertPacket failed (#%llu, seq=%u ts=%u size=%zu)",
+                           static_cast<unsigned long long>(n), rtp.sequence, rtp.timestamp,
+                           payload_size);
+        }
+        return false;
+    }
+    return true;
+}
+
+void GameAudioSource::flush() {
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (!impl_->stream) return;
+    impl_->retire_locked();
+    ++impl_->flushes;
+    std::lock_guard<std::mutex> playout_lock(impl_->shared->playout_mutex);
+    impl_->shared->playout.reset();
+}
+
+void GameAudioSource::set_gain(float gain) {
+    if (!std::isfinite(gain)) return;
+    impl_->shared->gain.store(std::clamp(gain, 0.0f, VoicePlayout::kMaxPeerVolume),
+                              std::memory_order_relaxed);
+}
+
+float GameAudioSource::gain() const {
+    return impl_->shared->gain.load(std::memory_order_relaxed);
+}
+
+void GameAudioSource::set_minimum_delay_ms(int delay_ms) {
+    delay_ms = std::clamp(delay_ms, 0, 10000);
+    std::lock_guard<std::mutex> lock(impl_->mutex);
+    if (delay_ms == impl_->minimum_delay_ms) return;
+    impl_->minimum_delay_ms = delay_ms;
+    if (impl_->stream) impl_->stream->neteq().SetMinimumDelay(delay_ms);
+}
+
+std::optional<GameAudioSource::Playout> GameAudioSource::last_playout() const {
+    std::lock_guard<std::mutex> lock(impl_->shared->playout_mutex);
+    return impl_->shared->playout;
+}
+
+GameAudioStats GameAudioSource::stats() const {
+    const Impl& m = *impl_;
+    std::lock_guard<std::mutex> lock(m.mutex);
+    GameAudioStats s = m.retired;
+    s.packets_inserted = m.packets_inserted;
+    s.packets_rejected = m.packets_rejected;
+    s.insert_errors = m.insert_errors;
+    s.stream_resets = m.stream_resets;
+    s.flushes = m.flushes;
+    s.minimum_delay_ms = m.minimum_delay_ms;
+    if (m.stream) {
+        webrtc::NetEq& neteq = m.stream->neteq();
+        add_game_lifetime(s, neteq.GetLifetimeStatistics());
+        s.playing = true;
+        s.target_delay_ms = static_cast<float>(neteq.TargetDelayMs());
+        s.filtered_delay_ms = static_cast<float>(neteq.FilteredCurrentDelayMs());
+        s.buffer_ms = static_cast<float>(neteq.CurrentNetworkStatistics().current_buffer_size_ms);
+    }
+    return s;
+}
+
+std::unique_ptr<GameAudioSource> VoicePlayout::add_game_audio() {
+    return std::unique_ptr<GameAudioSource>(
+        new GameAudioSource(std::make_unique<GameAudioSource::Impl>(impl_->core, impl_->config)));
+}
+
+// ---- end stage 7 ----
 
 } // namespace mello::audio

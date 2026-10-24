@@ -79,6 +79,13 @@ public:
 
     ReferenceInfo info() const;
 
+    // Stage 7: the clip's game audio (ReferenceClip::audio_path). Chunk j
+    // of 10 ms is captured at start + j * 10 ms (the video's clock, frame 0
+    // at start) and handed over 10 ms later, when it is complete, as a
+    // capture device does. The audio loops with the clip.
+    bool provides_timed_audio() const override;
+    void set_timed_audio_callback(TimedAudioCallback cb) override;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> impl_;  // the COM objects, the file and the thread

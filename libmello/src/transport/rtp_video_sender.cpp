@@ -1780,6 +1780,27 @@ RtpVideoSender& RtpVideoSender::operator=(RtpVideoSender&& other) noexcept {
     return *this;
 }
 
+std::optional<uint32_t> RtpVideoSender::rtp_timestamp_for_capture_us(
+    uint64_t capture_us
+) const noexcept {
+    const auto state = state_;
+    if (!state) {
+        return std::nullopt;
+    }
+    std::lock_guard<std::mutex> lock(state->queue_mutex);
+    if (!state->timestamp_initialized) {
+        return std::nullopt;
+    }
+    // The rule of send_access_unit, also for a time before the first frame.
+    const uint64_t first = state->first_capture_timestamp_us;
+    if (capture_us >= first) {
+        return static_cast<uint32_t>(
+            state->rtp_start_timestamp + capture_elapsed_to_rtp_ticks(capture_us - first));
+    }
+    return static_cast<uint32_t>(
+        state->rtp_start_timestamp - capture_elapsed_to_rtp_ticks(first - capture_us));
+}
+
 SendAccessUnitResult RtpVideoSender::send_access_unit(
     const uint8_t* annex_b,
     size_t size,

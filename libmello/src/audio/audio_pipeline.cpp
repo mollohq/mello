@@ -1183,6 +1183,7 @@ void AudioPipeline::refresh_stream_delay_hint() {
     // estimator converges the rest.
     const int out_ms = playback_->output_latency_ms();
     const int in_ms = capture_->input_latency_ms();
+    output_device_latency_ms_.store(out_ms < 0 ? 0 : out_ms, std::memory_order_relaxed);
     const float ring_ms =
         static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f;
     int delay = out_ms + in_ms + static_cast<int>(ring_ms + 0.5f);

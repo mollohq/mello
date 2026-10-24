@@ -447,6 +447,7 @@ Nothing in the product selects it.
 | Callback | The same contract as DXGI and WGC: a BGRA `ID3D11Texture2D` (two slots, used in turn) and the due time in µs of the steady clock. The preprocessor then converts it back to NV12, so the encoder sees the clip's values up to rounding. |
 | Late frames | A frame handed over more than 2 ms after its due time counts as late (`mello_stream_reference_info`). The timestamp stays the due time. |
 | Clock | `mello_clock_now_us()` is the clock of the due times and of the viewer frame callback (`ts`), so a harness in the same process measures glass-to-glass. |
+| Game audio (stage 7) | `mello_test_set_reference_audio(ctx, path)`: raw 48 kHz stereo int16, one clip loop long. The source then has a second thread: 10 ms chunk j is captured at start + j × 10 ms (frame 0 at start, the video's clock) and handed over 10 ms later, when it is complete, as a capture device does, through `CaptureSource::set_timed_audio_callback` with that capture time. `provides_timed_audio()` is true, so `mello_stream_start_audio` opens no loopback device. The audio loops with the clip. |
 
 ## 5. Color Conversion
 
@@ -922,6 +923,25 @@ The pipeline holds 1 ms timer resolution (`timeBeginPeriod(1)`) while it runs on
 Windows. Counters: `frames_decoded`, `decode_errors`, `frames_presented`,
 `frames_dropped_present`, `decode_ms_last`, `decode_ms_mean`,
 `present_lateness_ms`, and the timeline's stats (`mello_stream_viewer_get_stats`).
+
+### 8.3 The A/V sync input (streaming-quality stage 7)
+
+The video follows the game audio (12-STREAMING.md §9.4). The input is on the
+receive side, not in the pipeline: `mello_stream_viewer_attach_peer` makes one
+`AvSyncInput` (`src/transport/av_sync.hpp`) over the view's audio playout and
+gives it to the peer (`PeerConnectionImpl::set_av_sync`); every receiver
+session of the peer (each video session) gets it.
+
+| Item | Rule |
+|---|---|
+| Who runs it | The receiver session's worker, every 20 ms (`kAvSyncTickInterval`); it decides every 250 ms. |
+| Measurement | The audio heard now, on the video RTP clock (the game audio's A/V sync extension), against `VideoReceiveTimeline::render_time_us` of that timestamp: when the frame of the same capture instant is shown. |
+| Output | `VideoReceiveTimeline::set_min_delay_us` (at least 1 ms, at most the timeline's 150 ms maximum; the timeline applies it again after a timing reset), and for a late video the game audio's NetEQ minimum delay. |
+| Steps | A raise of the minimum: at most 10 ms per decision. VCMTiming clamps the delay it applies to the minimum at once, so a raise moves the render times by the step at once; the current delay then follows at 100 ms/s. A lowered minimum: at most 40 ms; the current delay falls at 100 ms/s. |
+| Stats | `MelloStreamStats` stage 7 fields: `av_offset_ms` (filtered), `av_video_min_delay_ms`, `av_audio_min_delay_ms`, `av_sync_changes`, `av_sync_active`. |
+
+The timeline's interface was enough: stage 7 changed nothing in
+`video_receive_timeline.*`.
 
 ---
 

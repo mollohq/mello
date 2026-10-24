@@ -82,6 +82,7 @@ add_executable(mello_rtp_tests
     test_rtp_h264_receiver.cpp
     test_rtp_video_receiver_session.cpp
     test_video_receive_timeline.cpp
+    test_av_sync.cpp
     test_rtp_video_sender.cpp
     test_peer_rtp_roles.cpp
     test_voice_rtp_timestamps.cpp

@@ -925,16 +925,17 @@ Game audio is wired end-to-end on Windows and macOS:
 |-----------|-------|
 | Capture (Windows) | WASAPI **process** loopback (`AUDIOCLIENT_ACTIVATION_TYPE_PROCESS_LOOPBACK`), endpoint loopback as fallback |
 | Capture (macOS) | ScreenCaptureKit, on the SCStream that already captures video |
-| Encode | Opus stereo 48 kHz, 20 ms frames, `OPUS_APPLICATION_AUDIO`, ~96 kbps |
+| Encode | Opus stereo 48 kHz, 20 ms frames, `OPUS_APPLICATION_AUDIO`, ~96 kbps, in-band FEC on (`OPUS_SET_INBAND_FEC(1)`) with the expected loss from the receiver reports (§9.3) |
 | RTP payload type | 111 (Opus), same as voice but on a separate stream peer connection |
-| Host SDP | sendonly audio m-line alongside sendonly H.264 |
-| Viewer SDP | recvonly audio m-line alongside recvonly H.264 |
+| Host SDP | sendonly audio m-line alongside sendonly H.264; `a=extmap:5 urn:mello:params:rtp-hdrext:av-sync-video-ts` (§9.4) |
+| Viewer SDP | recvonly audio m-line alongside recvonly H.264; the same extmap |
 | Viewer RTP receive | `RtcpReceivingSession` on the recvonly audio track before `onMessage` (libdatachannel media-receiver pattern) |
 | SFU relay | 1 host ingress → N viewer fan-out (`fanOutAudioRTP`), queue depth 32 |
-| Viewer playout | `mello_stream_feed_audio_packet` → Opus decode → `create_audio_playback()` (stereo: WASAPI on Windows, CoreAudio on macOS), on the output device chosen for voice (`mello_set_audio_output`; the default device when none is set or the chosen one fails) |
-| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` closes the output device, which drops the queued audio, and drops packets until unmute. Unmute opens the device at the next packet with a fresh decoder. The viewer tick (`client/streaming.rs`) mutes when the pause slot turns paused and unmutes when it turns live, once per change (`pause_audio_mute_change`). A viewer that joins a paused stream gets the pause state from the host and mutes on its first tick |
+| Viewer playout | One stereo NetEQ per watched stream, a source of the voice mixer (§9.3). It plays on the voice output device (`mello_set_audio_output`) through the voice output gain and deafen, with its own volume (`mello_stream_viewer_set_audio_volume`, 0..2). A device change applies at once |
+| Viewer mute | `mello_stream_viewer_set_audio_muted(view, true)` flushes NetEQ (the queued audio goes at the next 10 ms) and drops packets until unmute. Unmute plays again from the first new packet. The viewer tick (`client/streaming.rs`) mutes when the pause slot turns paused and unmutes when it turns live, once per change (`pause_audio_mute_change`). A viewer that joins a paused stream gets the pause state from the host and mutes on its first tick |
+| A/V sync | The audio is the master: the receive timeline's minimum delay follows the audio's playout (§9.4) |
 
-Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio`. Viewer path: `AudioRtp` events (complete RTP packets from `mello_peer_set_audio_rtp_callback`; `feed_viewer_audio_rtp` strips the header) → the decoder. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
+Host path: `mello_stream_start_audio` → `MelloAudioPacketCallback` → `StreamManager::handle_audio` → `PacketSink::send_audio` → `mello_peer_send_audio_frame` (the A/V sync extension goes on in the peer's send chain). Viewer path (stage 7): the peer's audio track thread gives each complete RTP packet, with its arrival time, to the stream view that `mello_stream_viewer_attach_peer` attached (`PeerConnectionImpl::set_stream_audio_sink`) → `StreamAudioPlayout::feed_rtp` → NetEQ. The command loop is not on this path. The `AudioRtp` events still reach the stream tick; for an attached view `feed_viewer_audio_rtp` only counts them. Stream viewer receive is wired on the offered recvonly audio track (not voice `onTrack`); if `onTrack` fires for the same `mid`, callbacks move to that track instance.
 
 ### 9.0 Capture scope (Windows)
 
@@ -964,11 +965,12 @@ symptom users report and it must be attributable.
 
 ### 9.1 Inbound audio framing
 
-The viewer gets complete RTP packets from `mello_peer_set_audio_rtp_callback`
-(`SfuEvent::AudioRtp`). `client/stream_ffi.rs::feed_viewer_audio_rtp` strips
-the RTP header (`rtp_payload`: fixed header, CSRC list, header extension and
-padding) and feeds the Opus payload to the decoder. libmello adds no framing
-of its own.
+The viewer's playout takes the complete RTP packet: NetEQ needs the real
+sequence number, timestamp and SSRC (reorder, loss, FEC, a new stream). An
+attached view gets it inside libmello (above). `mello_stream_feed_audio_packet`
+stays for a view with no peer: it takes the Opus payload (the caller strips
+the header, `client/stream_ffi.rs::rtp_payload`) and the playout makes a
+header that counts the frames. libmello adds no framing of its own.
 
 ### 9.2 macOS capture (ScreenCaptureKit)
 
@@ -1003,6 +1005,82 @@ discriminate: the output buffer size drives them even when the conversion fills
 only part of each frame.
 
 **Windows smoke test (Aug 2026):** host `audio_out_hz≈50`, viewer `audio_fed_hz≈50`, `rx_audio_packets` climbing, `viewer playout started`. Same-machine host+viewer may loop back via WASAPI loopback — use headphones or separate machines for listen tests.
+
+### 9.3 Viewer playout: NetEQ in the voice mix (streaming-quality stage 7)
+
+`StreamAudioPlayout` (`libmello/src/audio/stream_audio_pipeline.cpp`) owns one
+`GameAudioSource` (`voice_playout.cpp`, made by `VoicePlayout::add_game_audio`):
+a stereo NetEQ that is a source of the voice mixer, with NetEQ's own
+`DecisionLogic` (no talk-spurt controller: game audio has no speech gate). The
+voice peers and the game audio share the NetEQ creation code
+(`create_opus_neteq`), the environment and the delay manager tuning; the voice
+statistics do not count the game audio.
+
+| What | Rule |
+|---|---|
+| Insert | Each RTP packet on the peer's audio track thread, with its arrival time. A new SSRC or a timestamp more than 2 s behind starts a new NetEQ (the voice rule). |
+| Playout | The device thread pulls 10 ms from the mixer (`AudioPipeline::render_frame`). NetEQ gives reorder, loss concealment (expand), in-band FEC, drift (accelerate, preemptive expand) and its target delay. The old ring, its overflow drops and the `underruns_` counter are gone. |
+| Gain | Per-stream volume (0..2) times the voice output gain, before the mixer's limiter. Deafen silences it with the voice. |
+| Echo canceller | The game audio is part of the mix, so it is in the AEC render reference: the viewer's mic does not send it back to the crew. |
+| Clip buffer | The clip of "all participants" (voice clips) also holds the game audio the viewer heard. |
+| Mute (pause) | Flush: the NetEQ goes out of the mix at once and packets are dropped; the first packet after unmute starts a new NetEQ. |
+| Output device | The voice output device; a change (`mello_set_audio_output`) applies at once. |
+
+In-band FEC. The host encoder runs `OPUS_SET_INBAND_FEC(1)`. Its expected loss
+(`OPUS_SET_PACKET_LOSS_PERC`) comes from the receiver reports about the host's
+audio send track, by the voice rule (`SendAdaptation`: the loss over 4 s,
+floor 5 %, cap 30 %), through the context's `StreamAudioLink`. These reports
+come from the SFU and cover the host leg only; the SFU does not forward the
+viewers' reports. Opus spends bits on LBRR only in SILK or hybrid mode: with
+`OPUS_SIGNAL_MUSIC` it moves there when the expected loss is over 8 %, so at
+the floor the game audio carries no FEC, and from 9 % it carries FEC in
+hybrid mode (measured: `StreamAudioHostFec.ReportedLossTurnsOnInBandFec`).
+
+### 9.4 A/V sync (streaming-quality stage 7)
+
+Both streams carry the host's capture time on one clock, the video RTP clock:
+
+| Stream | Capture time |
+|---|---|
+| Video | The RTP timestamp: the RTP sender derives it from the frame's capture time (`RtpVideoSender::send_access_unit`). |
+| Game audio | A header extension on every packet (`rtp_av_sync_extension.hpp`): RFC 8285 one-byte form, ID 5, URI `urn:mello:params:rtp-hdrext:av-sync-video-ts`, 4 bytes: the video RTP timestamp of the instant the audio was captured. |
+
+Why an extension and not the sender reports: the SFU forwards no host sender
+report, and its own reports map the RTP time to the time the SFU forwarded the
+packet, which holds the host's pacer queue (tens of ms, more behind a key
+frame). The extension carries the capture instant itself. The audio m-line
+declares the URI; the SFU does not negotiate it and forwards the header
+unchanged (mello-sfu `01-SFU.md` §6.1), so both ends use the fixed ID.
+
+Host. `StreamAudioHostPipeline` records the capture time of each frame by its
+media time in the context's `StreamAudioLink` (the loopback device: the arrival
+time of the buffer, smoothed; the reference source: exact). The stream host
+peer's send path looks it up for the frame it sends, asks the video sender for
+the RTP timestamp of that capture time
+(`RtpVideoSender::rtp_timestamp_for_capture_us`), and an `AvSyncExtensionHandler`
+after the packetizer writes it into the packet. No extension before the first
+video frame.
+
+Viewer. `StreamAudioPlayout::sync_sample` maps the audio heard now onto the
+video clock: the RTP timestamp of the last 10 ms NetEQ played, moved by the
+newest packet's extension, is heard one pull later plus the output latency
+(the output ring and the device). The receiver session's worker runs the sync
+(`AvSyncInput`, `av_sync.cpp`) every 20 ms; it decides every 250 ms:
+
+| Step | Rule |
+|---|---|
+| Offset | The time the audio of one capture instant is heard, minus the render time the receive timeline gives the video frame of that instant (`render_time_us`). Positive: the audio is late. |
+| Filter | libwebrtc `StreamSynchronization`: a mean over 4; a filtered offset under 30 ms changes nothing; a change is half of it. |
+| Steps | One change per decision. A raised video minimum moves at most 10 ms: VCMTiming applies it to the render time at once, so a step shows one frame 10 ms longer (the stage 3 spike: one step of 80 ms held 3 frames). An audio minimum, and a lowered video minimum, move at most 40 ms: neither moves a picture at once (NetEQ stretches the audio to its new delay; the timeline's delay falls at 100 ms/s). The applied change leaves the filter. |
+| Audio late | The audio is the master: the timeline's minimum delay (`set_min_delay_us`) rises from the timeline's target delay, to at most 150 ms (the timeline's maximum). A minimum the sync had given the audio comes back first. |
+| Video late | A minimum that binds (the target is the minimum) comes down first; then the audio waits (NetEQ's minimum delay, at most 150 ms), because the video cannot be earlier than its own target. |
+| No audio | 3 s without a measurement (a pause, no audio) sets both minimums back to none. |
+| New video session | The new timeline gets the current minimum at once; the timeline itself applies it again after a timing reset. |
+
+Drift does not build up: each packet carries its own capture time, and NetEQ
+keeps its delay against the two device clocks. A simulated 10 minutes with
+the host's audio clock 300 ppm fast move the audio's end-to-end delay by under
+10 ms (`StreamAudioSyncDrift.TenMinutesOfDriftMoveTheOffsetByUnder10Ms`).
 
 ---
 
@@ -1133,6 +1211,14 @@ event): `target_ms` (jitter + p95 decode + render delay), `jitter_ms`,
 `decoder`, `decode_fps`, `present_fps`, `tick_hz`, `rtt_ms`. The values come
 from `mello_stream_viewer_get_stats` (the stage 3 fields of `MelloStreamStats`).
 
+`Stream audio` (client, once a second, stage 7; the event fields
+`audio_delay_ms`, `av_offset_ms`, `audio_expand_ms`, `audio_fec_used` of
+`StreamViewerTimeline`): `delay_ms` (NetEQ delay plus the output latency),
+`av_offset_ms` (the filtered A/V offset: audio heard minus video shown,
+positive = audio late), `video_min_ms` (the timeline minimum the sync set),
+`sync_active`, `expand_ms` (concealment since the view started), `fec_used`
+(losses repaired from in-band FEC). The stage 7 fields of `MelloStreamStats`.
+
 `viewer_probe_tick` (probe): `dec_fps`, `native_fps`, `present_hz`, `au_received_hz` (frames the timeline released), `au_fed_hz` (frames decoded), `decode_queue_depth`, `decode_stall_ms`, `rtt_ms`, `rx_ingress_pps`, `rx_ingress_kbps`, `rx_missing_hz`, `rx_repaired_hz`, `rx_nacks_hz`, `rx_pli_hz`, `rx_jitter`, `rx_gated` (waiting for a key frame), `rx_receive_target_bps`.
 
 `viewer_probe_native_rtp`: `rx_complete`, `rx_emitted`, `rx_incomplete`, `gate_dropped`, `buffered_aus`, `receive_target_bps`.
@@ -1156,8 +1242,10 @@ over signaling (`stream_client_stats`, one per 5 s per peer, 2048-byte cap —
 `jit_ms` (jitter estimate), `dec_p95` (p95 decode ms), `rel` (frames released),
 `late` (released after the decode deadline), `drop_late` (never shown),
 `kf_req` (key-frame requests), `dec` (decoder name), `dec_fps` (decode rate over
-the report interval). `bg_drops` (the backlog guard), `rx_fec_ok` and
-`rx_fec_fail` are gone.
+the report interval), and the game audio (stage 7): `a_dly` (audio delay ms),
+`av_ms` (filtered A/V offset ms), `a_exp` (concealment ms since the view
+started), `a_fec` (losses repaired from in-band FEC). `bg_drops` (the backlog
+guard), `rx_fec_ok` and `rx_fec_fail` are gone.
 
 Four of these carry more weight than the rest:
 
@@ -1252,6 +1340,11 @@ DComp presenter diagnostics:
 | NVDEC decoder | `libmello/src/video/decoder_nvdec.cpp` |
 | H.264 receiver (repair, assembly) | `libmello/src/transport/rtp_h264_receiver.cpp` |
 | Receive timeline (FrameBuffer, VCMTiming) | `libmello/src/transport/video_receive_timeline.cpp` |
+| Game audio host and viewer playout | `libmello/src/audio/stream_audio_pipeline.cpp` |
+| Game audio NetEQ in the voice mix | `libmello/src/audio/voice_playout.cpp` (`GameAudioSource`) |
+| Host audio link (capture times, receiver reports) | `libmello/src/audio/stream_audio_link.hpp` |
+| A/V sync extension | `libmello/src/transport/rtp_av_sync_extension.hpp` |
+| A/V sync rule and input | `libmello/src/transport/av_sync.cpp` |
 | Viewer pipeline (decode thread, ring, present thread) | `libmello/src/video/video_viewer.cpp` |
 | Converter (keyed-mutex shared RGBA) | `libmello/src/video/staging_texture.cpp` |
 | C API (streaming) | `libmello/src/mello.cpp` (search `mello_stream_`) |
@@ -1273,6 +1366,8 @@ DComp presenter diagnostics:
 | ~~WGC has no frame throttling~~ **Fixed (v0.4)** — accumulator throttle delivers exactly target_fps | — | — |
 | AMF/QSV encoders less tested | No smooth experience for AMD/Intel GPU users | Medium |
 | ~~Game audio not wired~~ **Fixed** — system audio capture (WASAPI loopback / ScreenCaptureKit) → Opus → SFU relay → viewer playout | — | — |
+| ~~Game audio decoded on arrival, no sync~~ **Fixed (stage 7)** — NetEQ in the voice mix, in-band FEC, A/V sync with the audio as master | — | — |
+| Game-audio FEC follows the host leg only | The viewers' loss does not reach the host encoder: at the 5 % floor Opus sends no FEC (§9.3) | Small (a floor over 8 %, or the SFU forwards the worst viewer loss) |
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |

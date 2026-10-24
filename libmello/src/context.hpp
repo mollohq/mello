@@ -1,5 +1,6 @@
 #pragma once
 #include "audio/audio_pipeline.hpp"
+#include "audio/stream_audio_link.hpp"
 #include "video/video_pipeline.hpp"
 #include <atomic>
 #include <cstdint>
@@ -38,6 +39,10 @@ public:
         return reference_clip_;
     }
 
+    /// Streaming-quality stage 7: the link between this context's stream
+    /// host audio pipeline and its stream host peer (stream_audio_link.hpp).
+    std::shared_ptr<audio::StreamAudioLink> stream_audio_link() const { return stream_audio_link_; }
+
     void set_error(const std::string& error);
     const char* get_error() const;
 
@@ -53,6 +58,8 @@ private:
     mutable std::mutex reference_mutex_;
     std::shared_ptr<std::atomic<uint64_t>> rx_unmapped_dropped_ =
         std::make_shared<std::atomic<uint64_t>>(0);
+    std::shared_ptr<audio::StreamAudioLink> stream_audio_link_ =
+        std::make_shared<audio::StreamAudioLink>();
 };
 
 } // namespace mello
