@@ -984,6 +984,7 @@ component RecapCard inherits Rectangle {
                         TitleChip {
                             horizontal-stretch: 1;
                             compact: true;
+                            dense: true;
                             hue: H2hHue.of(b.holder-hue);
                             icon: b.icon; title: b.title; value: b.value; unit: b.unit;
                         }
@@ -4536,6 +4537,86 @@ export component PreviewFeedQuiet inherits Rectangle {
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png"), owners: [bob] },
                     { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 3, hours: "91 H", when: "2 days ago",
                       owners: [sara] },
+                ],
+            },
+        ];
+    }
+}
+
+// Frame F: four members, nobody opened m3llo for three weeks, Monday 26
+// October. A strip says since when. The feed keeps the last real recap, Week 2,
+// labelled "3 weeks ago", 24 days on every belt, and the last two sessions on
+// record. No skeletons, no empty cards. One open seat, with the red invite.
+export component PreviewFeedDormant inherits Rectangle {
+    width: 1200px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        dormant-cards: [
+            {
+                id: "dormant", card-type: "catchup", role: "dormant",
+                title: "Nothing new since 2 October. Leo holds The Carry.",
+                timestamp: "3 weeks ago",
+            },
+        ];
+        cards: [
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                game-record: "2W–2L", game-wins: 2, game-losses: 2,
+                game-streak-text: "L1", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 4,
+                duration-human: "1h 56m", timestamp: "2 October",
+                actor-name: "Bob", actor-initials: "B", participant-count: 2,
+                part0-initials: "B", part1-initials: "M",
+            },
+            {
+                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Rocket League", game-name: "Rocket League",
+                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                game-record: "3W–3L", game-wins: 3, game-losses: 3,
+                game-streak-text: "L1", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 6,
+                duration-human: "2h 20m", timestamp: "29 September",
+                actor-name: "Jonas", actor-initials: "J", actor-hue-index: 1, participant-count: 2,
+                part0-initials: "J", part1-initials: "L",
+            },
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "cell", member-count: 4, open-seats: 1,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,172", unit: "h", hue-index: 4, held-days: 24, held-label: "held 24 days" } },
+                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, held-days: 24, held-label: "held 24 days" } },
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:22", unit: "", hue-index: 1, held-days: 24, held-label: "held 24 days" } },
+                    ],
+                },
+            },
+            {
+                id: "recap", card-type: "recap", role: "recap", size: "lg", age-label: "3 weeks ago", recap-week: "Week 2",
+                title: "6h 15", subtitle: "3", duration: "2h 20",
+                game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                belts-moved: [
+                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,172", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Leo", holder-initials: "L", holder-hue: 4 },
+                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "4 h 05", unit: "", prev-name: "Max", prev-initials: "M", prev-hue: 2, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
+                ],
+                belts-held: [
+                    { name: "Jonas", initials: "J", hue: 1, count: 4 },
+                    { name: "Max", initials: "M", hue: 2, count: 4 },
+                    { name: "Leo", initials: "L", hue: 4, count: 3 },
+                    { name: "Bob", initials: "B", hue: 0, count: 3 },
                 ],
             },
         ];
