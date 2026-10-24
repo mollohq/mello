@@ -101,6 +101,16 @@ export struct RecapBeltHeldRow {
     titles: [RecapHeldTitle],
 }
 
+// A crew member shown as an octagon (the invite card).
+export struct H2hPerson {
+    id: string,
+    name: string,
+    initials: string,
+    hue-index: int,
+    avatar: image,
+    has-avatar: bool,
+}
+
 // One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
 // game id. Art ladder: the runtime icon (server or crew), else the local
 // Steam header (`capsule`), else the two-letter `monogram` in the game's hue.
@@ -116,6 +126,10 @@ export struct RecentGameTile {
     has-capsule: bool,
     hours: string,
     tracked: bool,
+    // The members who have the game installed or played it, as small
+    // octagons under the tile of the poster grid. Empty when the server
+    // does not say.
+    owners: [H2hPerson],
 }
 
 // One head2head title and who holds it. Display strings are pre-formatted in
@@ -155,16 +169,6 @@ export struct H2hPairRow {
     /// A belt of this pair moved in the last 24 h and the viewer has not
     /// opened the feed since. Draws the red dot before the label.
     moved-recent: bool,
-}
-
-// A crew member shown as an octagon (the invite card).
-export struct H2hPerson {
-    id: string,
-    name: string,
-    initials: string,
-    hue-index: int,
-    avatar: image,
-    has-avatar: bool,
 }
 
 // The head2head feed entry as the UI draws it. `variant` is the placement:
@@ -301,6 +305,10 @@ export struct FeedCardData {
 
     // Recent games card: the tiles. The header line is `subtitle`.
     recent-games: [RecentGameTile],
+    // The PCs behind the tiles: members who own or played a listed game. Two
+    // or more make the card a poster grid in a two-column slot; one is the
+    // list. 0 when the server does not say.
+    recent-pc-count: int,
 
     // Head2head card and invite card (card-type "head2head" / "invite").
     head2head: Head2headData,

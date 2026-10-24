@@ -76,10 +76,39 @@ pub fn is_installed(
         || (!name.is_empty() && installed_names.contains(&name.trim().to_lowercase()))
 }
 
-/// The right side of the card header: "From this PC" when every tile is
-/// installed on this device, else the sessions line the server built.
-pub fn header_note(all_installed: bool, sessions_line: String) -> String {
-    if all_installed {
+/// How many tiles the poster grid shows in its one row.
+pub const GRID_TILES: usize = 5;
+
+/// Whether the card is the poster grid: two or more members own the games.
+/// With one PC the card is the list (mockup frame A).
+pub fn is_grid(pc_count: i64) -> bool {
+    pc_count >= 2
+}
+
+/// The PCs behind the card: the server's count, else the distinct members
+/// across the tiles. A server that does not send `pc_count` still gives the
+/// right shape.
+pub fn pc_count_of(server: Option<i64>, owners_per_tile: &[Vec<String>]) -> i64 {
+    if let Some(n) = server.filter(|n| *n > 0) {
+        return n;
+    }
+    let mut seen: HashSet<&str> = HashSet::new();
+    for tile in owners_per_tile {
+        seen.extend(tile.iter().map(String::as_str));
+    }
+    seen.len() as i64
+}
+
+/// The right side of the card header. "From 2 PCs" for the grid of a crew of
+/// two (mockup frame B2). From three PCs the week's sessions line says more
+/// than a count. With one PC: "From this PC" when every tile is installed on
+/// this device, else the sessions line the server built.
+pub fn header_note(all_installed: bool, sessions_line: String, pc_count: i64) -> String {
+    if pc_count == 2 {
+        "From 2 PCs".to_string()
+    } else if pc_count > 2 {
+        sessions_line
+    } else if all_installed {
         "From this PC".to_string()
     } else {
         sessions_line
@@ -161,13 +190,40 @@ mod tests {
     #[test]
     fn the_header_note_is_from_this_pc_only_when_all_are_installed() {
         assert_eq!(
-            header_note(true, "14 sessions, 31 h this week".into()),
+            header_note(true, "14 sessions, 31 h this week".into(), 1),
             "From this PC"
         );
         assert_eq!(
-            header_note(false, "14 sessions, 31 h this week".into()),
+            header_note(false, "14 sessions, 31 h this week".into(), 1),
             "14 sessions, 31 h this week"
         );
-        assert_eq!(header_note(false, String::new()), "");
+        assert_eq!(header_note(false, String::new(), 0), "");
+    }
+
+    #[test]
+    fn two_pcs_read_from_2_pcs_and_three_or_more_read_the_week() {
+        assert_eq!(
+            header_note(true, "1 session, 1 h this week".into(), 2),
+            "From 2 PCs"
+        );
+        assert_eq!(
+            header_note(true, "5 sessions, 8 h this week".into(), 3),
+            "5 sessions, 8 h this week"
+        );
+    }
+
+    #[test]
+    fn the_grid_needs_two_owners_and_the_count_falls_back_to_the_tiles() {
+        assert!(!is_grid(0) && !is_grid(1));
+        assert!(is_grid(2) && is_grid(5));
+        let tiles = vec![
+            vec!["a".to_string(), "b".to_string()],
+            vec!["b".to_string()],
+        ];
+        assert_eq!(pc_count_of(None, &tiles), 2);
+        assert_eq!(pc_count_of(Some(0), &tiles), 2);
+        assert_eq!(pc_count_of(Some(4), &tiles), 4);
+        assert_eq!(pc_count_of(None, &[vec!["a".to_string()]]), 1);
+        assert_eq!(pc_count_of(None, &[]), 0);
     }
 }

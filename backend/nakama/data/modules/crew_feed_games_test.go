@@ -490,6 +490,9 @@ func TestBuildRecentGames_SnapshotOnly(t *testing.T) {
 	if card.ts != 1_760_000_500_000 {
 		t.Fatalf("card ts = %d", card.ts)
 	}
+	if d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2 (alice and bob)", d.PCCount)
+	}
 	if !cardHasContent(card.feedType, card.backendType, card.data) {
 		t.Fatal("a snapshot card has content")
 	}
@@ -553,6 +556,9 @@ func TestBuildRecentGames_SnapshotAndSessionsMerge(t *testing.T) {
 	}
 	if strings.Join(csTile.MemberIDs, ",") != "alice,carol" {
 		t.Fatalf("members = %v, want installed (alice) and played (carol)", csTile.MemberIDs)
+	}
+	if d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2 (alice installed, carol played)", d.PCCount)
 	}
 	val := tileByID(t, d, "valorant")
 	if val.Minutes != 45 {
@@ -688,5 +694,32 @@ func TestBuildThisWeek_RecentGamesFollowsHead2headInABusyCrew(t *testing.T) {
 	}
 	if pos < 0 || pos > 1 {
 		t.Fatalf("recent games at entry %d, want right after head2head", pos)
+	}
+}
+
+// The PC count is over every game, not the tiles that survive the cap, and a
+// member who owns many games counts once. One owner is a list, not a grid.
+func TestBuildRecentGames_PCCountCountsMembersNotTiles(t *testing.T) {
+	alice := []LibraryGame{}
+	for i := 0; i < 8; i++ {
+		alice = append(alice, libGame(fmt.Sprintf("steam-%d", i), fmt.Sprintf("Game %d", i), 60, int64(1_000+i)))
+	}
+	solo := map[string]*LibraryDoc{"alice": libDoc(1, alice...)}
+	card, ok := buildRecentGames(nil, solo)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if len(d.Games) != feedRecentGamesMaxTiles || d.PCCount != 1 {
+		t.Fatalf("tiles = %d, pc_count = %d, want %d tiles and 1 PC", len(d.Games), d.PCCount, feedRecentGamesMaxTiles)
+	}
+	// Bob owns only a game that the cap drops. He still counts.
+	two := map[string]*LibraryDoc{
+		"alice": libDoc(1, alice...),
+		"bob":   libDoc(1, libGame("steam-0", "Game 0", 60, 1_000)),
+	}
+	card, _ = buildRecentGames(nil, two)
+	if d = recentData(t, card); d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2", d.PCCount)
 	}
 }

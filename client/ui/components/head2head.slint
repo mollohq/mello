@@ -254,9 +254,13 @@ export component InviteButton inherits Rectangle {
     in property <bool> wrap: false;
     /// What the button says, and what a screen reader reads.
     in property <string> label-text: "Invite your crew";
+    /// What a screen reader and the harness call the button, when the short
+    /// label on it says less. The crew panel has its own "Invite", so this
+    /// keeps the name unique.
+    in property <string> a11y-label: "";
 
     accessible-role: button;
-    accessible-label: root.label-text;
+    accessible-label: root.a11y-label != "" ? root.a11y-label : root.label-text;
 
     height: wrap ? 34px : compact ? 30px : 34px;
     min-width: wrap ? 0px : label.preferred-width + (compact ? 16px : 24px);
@@ -692,7 +696,7 @@ export component VersusHero inherits Rectangle {
                     color: Theme.text-body;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                InviteButton { compact: true; label-text: "Invite"; clicked => { root.invite-clicked(); } }
+                InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
             }
         }
     }

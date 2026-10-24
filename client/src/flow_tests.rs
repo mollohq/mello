@@ -4396,6 +4396,140 @@ fn recent_games_entry(games: serde_json::Value) -> FeedEntry {
     )
 }
 
+/// A crew of two with a title that moved: the versus hero, then the recent
+/// games card, built from `games`, each with the members who own it.
+fn two_member_feed_with_games(games: serde_json::Value, pc_count: Option<i64>) -> FeedResponse {
+    let moved = serde_json::json!({
+        "title_id": "the_collector", "holder_user_id": "u2", "value": 14, "unit": "installed",
+        "since_ms": 5_000, "moved_at_ms": 5_000, "previous_holder_user_id": "user-1",
+    });
+    let mut data = serde_json::json!({ "session_count": 1, "total_min": 85, "games": games });
+    if let Some(n) = pc_count {
+        data["pc_count"] = serde_json::json!(n);
+    }
+    feed_of(vec![
+        h2h_entry(
+            2,
+            vec![
+                h2h_title("the_carry", "user-1", serde_json::json!(4167.0), "h"),
+                moved.clone(),
+            ],
+            vec![h2h_pair("u2", 1, 1)],
+            Some(moved),
+        ),
+        feed_entry("recent_games", "recent-games", data),
+    ])
+}
+
+/// Frame B2: two members own games, so the recent games card is a poster
+/// grid of at most five tiles, two columns wide, under the versus hero. Each
+/// poster carries the pips of the members who own the game.
+#[test]
+fn recent_games_is_a_poster_grid_when_two_members_own_games() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let both = serde_json::json!(["user-1", "u2"]);
+    h.emit(Event::FeedLoaded {
+        response: two_member_feed_with_games(
+            serde_json::json!([
+                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": both },
+                { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 4_000, "member_ids": both },
+                { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 756, "member_ids": ["user-1"] },
+                { "game_id": "valorant", "game_name": "Valorant", "minutes": 300, "member_ids": ["u2"] },
+                { "game_id": "steam-1097150", "game_name": "Fall Guys", "minutes": 100, "member_ids": ["u2"] },
+                { "game_id": "steam-1", "game_name": "Sixth Game", "minutes": 10, "member_ids": ["u2"] }
+            ]),
+            None,
+        ),
+    });
+
+    let feed = h.app().get_feed_cards();
+    let types: Vec<String> = (0..feed.row_count())
+        .map(|i| feed.row_data(i).unwrap().card_type.to_string())
+        .collect();
+    assert_eq!(types[..2], ["head2head", "recent-games"], "{types:?}");
+    let card = feed.row_data(1).unwrap();
+    assert_eq!(card.recent_pc_count, 2, "two members own games");
+    assert_eq!(card.subtitle.as_str(), "From 2 PCs");
+    assert_eq!(card.recent_games.row_count(), 5, "capped at five tiles");
+    let first = card.recent_games.row_data(0).unwrap();
+    assert_eq!(first.owners.row_count(), 2, "Bob and Jonas own it");
+    assert_eq!(
+        card.recent_games.row_data(2).unwrap().owners.row_count(),
+        1,
+        "one owner, one pip"
+    );
+
+    assert_eq!(
+        count_of(&h, "RecentGamePoster"),
+        5,
+        "five posters in one row"
+    );
+    assert_eq!(count_of(&h, "RecentGameTileCell"), 0, "no list rows");
+}
+
+/// Frame A and the list: when the viewer is the only owner the card stays the
+/// narrow list of three rows, even under a versus hero.
+#[test]
+fn recent_games_stays_a_list_when_the_viewer_is_the_only_owner() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let me = serde_json::json!(["user-1"]);
+    h.emit(Event::FeedLoaded {
+        response: two_member_feed_with_games(
+            serde_json::json!([
+                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": me },
+                { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 4_000, "member_ids": me },
+                { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 756, "member_ids": me },
+                { "game_id": "valorant", "game_name": "Valorant", "minutes": 300, "member_ids": me }
+            ]),
+            None,
+        ),
+    });
+
+    let card = h
+        .app()
+        .get_feed_cards()
+        .iter()
+        .find(|c| c.card_type.as_str() == "recent-games")
+        .expect("a recent games card");
+    assert_eq!(card.recent_pc_count, 1);
+    assert_ne!(card.subtitle.as_str(), "From 2 PCs");
+    assert_eq!(count_of(&h, "RecentGamePoster"), 0, "no poster grid");
+    assert_eq!(
+        count_of(&h, "RecentGameTileCell"),
+        3,
+        "the list shows three"
+    );
+}
+
+/// A server that sends `pc_count` is believed, and one that does not still
+/// gives the right shape from the tiles' owners.
+#[test]
+fn the_server_pc_count_wins_over_the_tile_owners() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: two_member_feed_with_games(
+            serde_json::json!([
+                { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "member_ids": ["user-1"] }
+            ]),
+            Some(2),
+        ),
+    });
+    let card = h
+        .app()
+        .get_feed_cards()
+        .iter()
+        .find(|c| c.card_type.as_str() == "recent-games")
+        .expect("a recent games card");
+    assert_eq!(card.recent_pc_count, 2);
+    assert_eq!(count_of(&h, "RecentGamePoster"), 1);
+}
+
 /// The tile shows hours in capitals, the launcher when the hours are unknown,
 /// "TRACKED" only for a game the sensor catalogue knows, and a two-letter
 /// monogram for a game with no art. Never the name clipped into a badge.
@@ -5015,6 +5149,9 @@ fn a_recent_belt_move_puts_the_versus_card_in_the_hero_slot() {
         "the_collector",
         "the moved title leads the chips"
     );
+    // The button says INVITE on the versus card (frame B2), and keeps the
+    // long name for a screen reader and for the harness.
+    assert!(drawn_texts(&h).iter().any(|t| t == "INVITE"));
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 

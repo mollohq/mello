@@ -92,11 +92,15 @@ type RecentGameTile struct {
 
 // RecentGamesData is the payload of the recent games card. SessionCount and
 // TotalMin feed the header line ("14 sessions, 31 h this week") and count every
-// game session in the window, not only the tiles shown.
+// game session in the window, not only the tiles shown. PCCount is the number
+// of members who have an installed or played game on the card, counted over
+// every game before the tiles are capped. The client draws a poster grid from
+// two PCs on and the list for one ("From 2 PCs", CLIPS 7).
 type RecentGamesData struct {
 	Games        []RecentGameTile `json:"games"`
 	SessionCount int              `json:"session_count"`
 	TotalMin     int              `json:"total_min"`
+	PCCount      int              `json:"pc_count"`
 }
 
 type FeedSection struct {
@@ -513,6 +517,12 @@ func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, 
 		return feedCard{}, false
 	}
 
+	owners := map[string]bool{}
+	for _, g := range games {
+		for m := range g.members {
+			owners[m] = true
+		}
+	}
 	tiles := make([]RecentGameTile, 0, len(games))
 	for key, g := range games {
 		id := g.id
@@ -574,7 +584,7 @@ func buildRecentGames(cards []feedCard, libs map[string]*LibraryDoc) (feedCard, 
 		feedType:    "recent-games",
 		backendType: "recent_games",
 		ts:          ts,
-		data:        RecentGamesData{Games: tiles, SessionCount: sessions, TotalMin: totalMin},
+		data:        RecentGamesData{Games: tiles, SessionCount: sessions, TotalMin: totalMin, PCCount: len(owners)},
 	}, true
 }
 

@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { FeedCardData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { FeedCardData, H2hPerson, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { SkeletonTrio } from "../components/skeleton_trio.slint";
@@ -1667,8 +1667,63 @@ component RecentGameTileCell inherits Rectangle {
     }
 }
 
+// One poster of the recent games grid (mockup frame B2, .mrg): header art in
+// the 460 by 215 shape with two corners cut, the game name in Oxanium under
+// it, and the owners as small octagons under the name.
+component RecentGamePoster inherits Rectangle {
+    in property <RecentGameTile> tile;
+
+    background: transparent;
+
+    VerticalLayout {
+        alignment: start;
+        spacing: 0px;
+
+        GameArt {
+            game-id: tile.game-id;
+            monogram: tile.monogram;
+            hue-index: tile.hue-index;
+            icon: tile.game-icon;
+            has-icon: tile.has-icon;
+            capsule: tile.capsule;
+            has-capsule: tile.has-capsule;
+            size: 36px;
+            art-width: root.width;
+            art-height: root.width * 215 / 460;
+        }
+        Text {
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display;
+            text: tile.game-name;
+            font-size: 12px;
+            color: Theme.text-value;
+            overflow: elide;
+        }
+        // Owners: the members who have it. Space above the name and the pips.
+        HorizontalLayout {
+            alignment: start;
+            spacing: 4px;
+            padding-top: 6px;
+            for o in tile.owners: UserAvatar {
+                initials: o.initials;
+                avatar: o.avatar;
+                has-avatar: o.has-avatar;
+                color-index: o.hue-index;
+                size: 16px;
+            }
+        }
+    }
+}
+
 component RecentGamesCard inherits Rectangle {
     in property <FeedCardData> card;
+
+    /// Poster grid when two or more members own games and the slot has two
+    /// columns. A one-column slot, or a crew of one, keeps the list.
+    property <bool> grid: root.card.recent-pc-count >= 2 && root.width >= 420px;
+    property <int> grid-max: 5;
+    property <length> grid-gap: 12px;
+    property <length> poster-width: (root.width - 32px - (root.grid-max - 1) * root.grid-gap) / root.grid-max;
 
     background: transparent;
     border-width: 0px;
@@ -1693,10 +1748,11 @@ component RecentGamesCard inherits Rectangle {
         padding: 14px;
         padding-left: 16px;
         padding-right: 16px;
-        spacing: 12px;
+        spacing: root.grid ? 10px : 12px;
         alignment: start;
 
-        // Label left, note right: "From this PC", or the week's sessions line.
+        // Label left, note right: "From this PC", "From 2 PCs", or the week's
+        // sessions line.
         HorizontalLayout {
             height: 16px;
             spacing: 8px;
@@ -1722,10 +1778,24 @@ component RecentGamesCard inherits Rectangle {
             }
         }
 
-        for tile[i] in card.recent-games: RecentGameTileCell {
-            visible: i < 3;
-            height: i < 3 ? 36px : 0px;
-            tile: tile;
+        if !root.grid: VerticalLayout {
+            spacing: 12px;
+            for tile[i] in card.recent-games: RecentGameTileCell {
+                visible: i < 3;
+                height: i < 3 ? 36px : 0px;
+                tile: tile;
+            }
+        }
+
+        // Five posters in one row, newest played first. The server sorts.
+        if root.grid: HorizontalLayout {
+            alignment: start;
+            spacing: root.grid-gap;
+            for tile[i] in card.recent-games: RecentGamePoster {
+                visible: i < root.grid-max;
+                width: i < root.grid-max ? root.poster-width : 0px;
+                tile: tile;
+            }
         }
     }
 }
@@ -2343,6 +2413,13 @@ export component CrewFeed inherits Rectangle {
         : side-is-recap ? Math.min(2, cards.length - feed-start-index)
         : Math.min(3, cards.length - feed-start-index);
     property <int> row2-base: feed-start-index + row1-consumed;
+    // The recent games poster grid leads row 2: it takes two columns, so the
+    // row holds two cards and every row after it moves up by one card. Mirrors
+    // `feed_grid.rs` (`Layout::r2_wide`).
+    property <bool> r2-grid: cards.length > row2-base
+        && cards[row2-base].card-type == "recent-games"
+        && cards[row2-base].recent-pc-count >= 2;
+    property <int> row3-base: row2-base + (r2-grid ? 2 : 3);
 
     background: transparent;
 
@@ -2664,10 +2741,10 @@ export component CrewFeed inherits Rectangle {
                         : Theme.feed-row;
                     spacing: 12px;
 
-                    for rel-idx in [0, 1, 2]: FeedSlot {
+                    for rel-idx in (root.r2-grid ? [0, 1] : [0, 1, 2]): FeedSlot {
                         property <int> card-idx: root.row2-base + rel-idx;
                         visible: cards.length > card-idx;
-                        horizontal-stretch: 1;
+                        horizontal-stretch: root.r2-grid && rel-idx == 0 ? 2 : 1;
                         card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
@@ -2685,13 +2762,13 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 3: card (1x) + wide card (2x)
-                if cards.length > root.row2-base + 3: HorizontalLayout {
+                if cards.length > root.row3-base: HorizontalLayout {
                     height: Theme.feed-row;
                     spacing: 12px;
 
                     FeedSlot {
                         horizontal-stretch: 1;
-                        card: cards[root.row2-base + 3];
+                        card: cards[root.row3-base];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -2706,9 +2783,9 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                     }
 
-                    if cards.length > root.row2-base + 4: FeedSlot {
+                    if cards.length > root.row3-base + 1: FeedSlot {
                         horizontal-stretch: 2;
-                        card: cards[root.row2-base + 4];
+                        card: cards[root.row3-base + 1];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
                         clip-paused: root.clip-paused;
@@ -2725,12 +2802,12 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 4+ for extra cards (cold start has 9 slots)
-                if cards.length > root.row2-base + 5: HorizontalLayout {
+                if cards.length > root.row3-base + 2: HorizontalLayout {
                     height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in [0, 1]: FeedSlot {
-                        property <int> card-idx: root.row2-base + 5 + rel-idx;
+                        property <int> card-idx: root.row3-base + 2 + rel-idx;
                         visible: cards.length > card-idx;
                         horizontal-stretch: 1;
                         card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
@@ -3344,9 +3421,11 @@ export component PreviewFeedNewCrew inherits Rectangle {
                 title: "RECENT GAMES", subtitle: "From this PC",
                 recent-games: [
                     { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", tracked: true,
-                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample.png") },
-                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true },
-                    { game-id: "steam-1", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H" },
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", tracked: true,
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
                 ],
             },
         ];
@@ -3359,6 +3438,10 @@ export component PreviewFeedFirstFriend inherits Rectangle {
     width: 900px;
     height: 640px;
     background: Theme.bg-app;
+
+    // The two members as the poster pips show them (same hues as the versus card).
+    property <H2hPerson> bob: { id: "u1", name: "Bob", initials: "B", hue-index: 0 };
+    property <H2hPerson> jonas: { id: "u2", name: "Jonas", initials: "J", hue-index: 1 };
 
     CrewFeed {
         width: parent.width;
@@ -3385,6 +3468,26 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                 },
             },
             {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "From 2 PCs", recent-pc-count: 2,
+                recent-games: [
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                      owners: [bob, jonas] },
+                    { game-id: "steam-252950", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "812 H",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                      owners: [bob, jonas] },
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png"),
+                      owners: [bob] },
+                    { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 3, hours: "91 H",
+                      owners: [jonas] },
+                    { game-id: "steam-1097150", game-name: "Fall Guys", monogram: "FG", hue-index: 4, hours: "34 H",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"),
+                      owners: [jonas] },
+                ],
+            },
+            {
                 id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
                 title: "Counter-Strike 2", game-name: "Counter-Strike 2",
                 game-short-name: "CS2", game-has-color: true, game-color: #5B7FA8,
@@ -3393,13 +3496,6 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                 game-winrate: "33%", game-matches: 3,
                 duration-human: "1h 25m", timestamp: "Earlier tonight",
                 actor-name: "Bob", actor-initials: "B",
-            },
-            {
-                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "1 session, 1 h this week",
-                recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "1H 25M" },
-                ],
             },
         ];
     }

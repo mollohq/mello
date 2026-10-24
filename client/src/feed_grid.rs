@@ -15,6 +15,10 @@
 //!   wide slot: the slot goes to the next card in the hero order (the wide
 //!   head2head card of a crew of one, else the card the grid leads with). The
 //!   cell sits beside the lead, in the first cell of the side column.
+//! - The recent games card is a poster grid when two or more members own
+//!   games (`recent_pc_count`). The grid takes two columns of a row. When it
+//!   leads row 2 (`r2_wide`), that row holds the grid and one card, and every
+//!   row after it moves up by one card.
 //! - The recent games card is on the first screen for every crew size. In the
 //!   plain layout (head2head cell and invite card lead) it takes the wide slot
 //!   of the second row. Next to a hero or a wide head2head it takes the first
@@ -39,6 +43,8 @@ pub struct CardInfo {
     pub has_poster: bool,
     /// A recap with content takes the side column alone.
     pub recap_has_content: bool,
+    /// The recent games card as a poster grid: two or more members own games.
+    pub recent_grid: bool,
 }
 
 impl CardInfo {
@@ -48,6 +54,7 @@ impl CardInfo {
             variant: c.head2head.variant.to_string(),
             is_hero: c.is_hero,
             has_poster: c.live.has_poster,
+            recent_grid: c.card_type == "recent-games" && c.recent_pc_count >= 2,
             recap_has_content: c.card_type == "recap"
                 && (c.leaderboard.row_count() > 0
                     || c.awards.row_count() > 0
@@ -73,6 +80,15 @@ struct Layout {
     lead: Lead,
     start: usize,
     row2_base: usize,
+    /// The poster grid leads row 2: two columns, then one card.
+    r2_wide: bool,
+}
+
+impl Layout {
+    /// The first card of row 3: row 2 holds two cards with the grid, else three.
+    fn row3_base(&self) -> usize {
+        self.row2_base + if self.r2_wide { 2 } else { 3 }
+    }
 }
 
 fn layout(cards: &[CardInfo], start: usize) -> Layout {
@@ -106,10 +122,12 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
             Lead::Hero => left.min(3),
         }
     };
+    let row2_base = start + consumed;
     Layout {
         lead,
         start,
-        row2_base: start + consumed,
+        row2_base,
+        r2_wide: at(row2_base).is_some_and(|c| c.recent_grid),
     }
 }
 
@@ -122,8 +140,11 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
     if l.lead == Lead::Wide && l.start < len {
         w.push(l.start);
     }
-    if l.row2_base + 4 < len {
-        w.push(l.row2_base + 4); // row 3: one card and a wide card
+    if l.r2_wide {
+        w.push(l.row2_base); // row 2: the poster grid and one card
+    }
+    if l.row3_base() + 1 < len {
+        w.push(l.row3_base() + 1); // row 3: one card and a wide card
     }
     w
 }
@@ -414,6 +435,64 @@ mod tests {
         ];
         let order = arrange(&cards, 0);
         assert_eq!(types(&cards, &order)[4], "game-session");
+    }
+
+    fn grid() -> CardInfo {
+        CardInfo {
+            card_type: "recent-games".into(),
+            recent_grid: true,
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn the_poster_grid_leads_row_two_under_a_versus_card() {
+        // Frame B2: the versus hero, then the grid and the session card.
+        let cards = vec![h2h("versus"), card("game-session"), grid()];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t, ["head2head", "recent-games", "game-session"]);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert!(l.r2_wide);
+        assert_eq!(wide_slots(&l, infos.len()), [1], "the grid is wide");
+        assert_eq!(l.row3_base(), 3, "row 2 holds two cards");
+    }
+
+    #[test]
+    fn the_list_stays_one_column_when_one_pc_owns_the_games() {
+        let cards = vec![h2h("versus"), card("game-session"), card("recent-games")];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert!(!l.r2_wide);
+        assert!(wide_slots(&l, infos.len()).is_empty());
+        assert_eq!(l.row3_base(), 4, "row 2 holds three cards");
+    }
+
+    #[test]
+    fn rows_after_the_poster_grid_move_up_by_one_card() {
+        let cards = vec![
+            h2h("versus"),
+            grid(),
+            card("game-session"),
+            card("session"),
+            card("catchup"),
+            card("session"),
+        ];
+        let infos = cards.clone();
+        let l = layout(&infos, 0);
+        // Row 2: the grid and the session card. Row 3: card 3 and the wide card 4.
+        assert_eq!(wide_slots(&l, infos.len()), [1, 4]);
+    }
+
+    #[test]
+    fn a_crew_of_one_keeps_the_list_beside_the_wide_head2head() {
+        // Frame A: one PC, so the list sits in the column beside the wide card.
+        let cards = vec![h2h("wide"), card("recent-games")];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert!(!layout(&infos, 0).r2_wide);
     }
 
     #[test]

@@ -1048,16 +1048,26 @@ fn recent_games_header(session_count: i64, total_min: i64) -> String {
     format!("{sessions}, {total} this week")
 }
 
+/// What the recent games card needs from the server's payload.
+struct RecentTiles {
+    tiles: Vec<RecentGameTile>,
+    /// Every tile is installed on this device.
+    all_installed: bool,
+    /// The PCs behind the tiles. Two or more make the card a poster grid.
+    pc_count: i64,
+}
+
 /// Tiles for the recent games card, keyed by game id, from the server's
 /// `games` array, and whether every tile is installed on this device.
+///
+/// Each tile carries its owners (`member_ids` of the server) as octagons, the
+/// poster grid's pips. With two or more PCs the row is capped at five tiles,
+/// sorted by last played as the server sends them.
 ///
 /// Art ladder: the runtime icon (cached or crew-shared), else the Steam header
 /// art on this disk, else the monogram. Nothing leaves the device. The log
 /// carries counts only.
-fn extract_recent_game_tiles(
-    ctx: &AppContext,
-    data: &serde_json::Value,
-) -> (Vec<RecentGameTile>, bool) {
+fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> RecentTiles {
     let installed = ctx.installed_games.borrow();
     let installed_ids: std::collections::HashSet<String> =
         installed.iter().map(|g| g.game_id.clone()).collect();
@@ -1072,10 +1082,34 @@ fn extract_recent_game_tiles(
         .and_then(|v| v.as_array())
         .cloned()
         .unwrap_or_default();
-    let (mut local_art, mut tracked_count, mut installed_count) = (0, 0, 0);
-    let tiles: Vec<RecentGameTile> = rows
+    let (viewer, members) = h2h_roster(ctx);
+    let person_of = |id: &str| -> Option<Person> {
+        if id == viewer.id {
+            Some(viewer.clone())
+        } else {
+            members.iter().find(|m| m.id == id).cloned()
+        }
+    };
+    let owner_ids: Vec<Vec<String>> = rows
         .iter()
-        .filter_map(|row| {
+        .map(|row| {
+            row.get("member_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
+                })
+                .unwrap_or_default()
+        })
+        .collect();
+    let pc_count =
+        crate::recent_games::pc_count_of(data.get("pc_count").and_then(|v| v.as_i64()), &owner_ids);
+    let (mut local_art, mut tracked_count, mut installed_count) = (0, 0, 0);
+    let mut tiles: Vec<RecentGameTile> = rows
+        .iter()
+        .zip(owner_ids.iter())
+        .filter_map(|(row, owner_ids)| {
             let game_name = row.get("game_name")?.as_str()?;
             let wire_id = row.get("game_id").and_then(|v| v.as_str()).unwrap_or("");
             let minutes = row.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
@@ -1118,10 +1152,21 @@ fn extract_recent_game_tiles(
                 has_capsule,
                 hours: crate::recent_games::hours_label(minutes, &launcher).into(),
                 tracked,
+                owners: Rc::new(VecModel::from(
+                    owner_ids
+                        .iter()
+                        .filter_map(|id| person_of(id))
+                        .map(|p| live_person(ctx, &p))
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
             })
         })
         .collect();
     let all_installed = !tiles.is_empty() && installed_count == tiles.len();
+    if crate::recent_games::is_grid(pc_count) {
+        tiles.truncate(crate::recent_games::GRID_TILES);
+    }
     log::info!(
         "[recent-games] {} tile(s), {} with local art, {} tracked, {} installed",
         tiles.len(),
@@ -1129,7 +1174,11 @@ fn extract_recent_game_tiles(
         tracked_count,
         installed_count
     );
-    (tiles, all_installed)
+    RecentTiles {
+        tiles,
+        all_installed,
+        pc_count,
+    }
 }
 
 /// Wall-time duration for game sessions; uses active time when wall time is
@@ -1360,11 +1409,17 @@ fn build_feed_card(
     } else {
         feed_type
     };
-    let (recent_games, recent_all_installed) = if is_recent_games {
+    let recent = if is_recent_games {
         extract_recent_game_tiles(ctx, &data)
     } else {
-        (Vec::new(), false)
+        RecentTiles {
+            tiles: Vec::new(),
+            all_installed: false,
+            pc_count: 0,
+        }
     };
+    let (recent_games, recent_all_installed, recent_pc_count) =
+        (recent.tiles, recent.all_installed, recent.pc_count);
     let (title, subtitle) = if is_recent_games {
         let session_count = data
             .get("session_count")
@@ -1376,6 +1431,7 @@ fn build_feed_card(
             crate::recent_games::header_note(
                 recent_all_installed,
                 recent_games_header(session_count, total_min),
+                recent_pc_count,
             ),
         )
     } else {
@@ -1644,6 +1700,7 @@ fn build_feed_card(
         game_matches,
         game_verified,
         recent_games: ModelRc::new(VecModel::from(recent_games)),
+        recent_pc_count: recent_pc_count as i32,
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,

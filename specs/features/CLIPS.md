@@ -244,7 +244,10 @@ Card types in the bento grid:
   - More games are cells behind the first row.
   - When the game ends, the live card leaves. The session card from the ledger replaces it. The two never show together.
   - The skeleton trio does not count it as a real card.
-- **Recent games card** — the games the crew played this week, as three to six tiles keyed by game id. The header carries the session count and the total time: "14 sessions, 31 h this week". It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4).
+- **Recent games card** — the games the crew played or has installed, as tiles keyed by game id, newest played first. It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4). The server sends `games` (up to six, each with `member_ids`, the members who have it installed or played it), `session_count`, `total_min` and `pc_count`, the members behind the tiles.
+  - One PC (the viewer is the only owner): a narrow list of three rows, beside the wide head2head card of a crew of one. The header carries "From this PC", or the week's line ("14 sessions, 31 h this week").
+  - Two or more PCs: a poster grid, two columns wide. The header reads "RECENT GAMES" left and "From 2 PCs" right. Five capsule tiles sit in one row (460 by 215 art, two corners cut), the game name in Barlow 600 under each tile, and under the name a 16 px octagon for each member who owns the game. The row is capped at five. From three PCs the right side of the header is the week's line. In a one-column slot the card stays the list.
+  - The grid leads row 2 under a versus hero (frame B2). Row 2 holds the grid and one card, so the session card sits beside it. Rows after it move up by one card (`feed_grid.rs`, `Layout::r2_wide`, and `row3-base` in `crew_feed.slint`).
 - **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
 - **Skeleton trio** — three dashed placeholders for an empty crew (see section 8).
 - **Invite line** — one line and one red button under the skeleton trio (see section 8).
