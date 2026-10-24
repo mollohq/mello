@@ -1186,6 +1186,8 @@ typedef struct MelloStreamStats {
     uint64_t audio_sync_extensions;  /* packets with the A/V sync extension */
     uint64_t av_sync_changes;        /* decisions that moved a delay */
     uint8_t  av_sync_active;         /* a measurement in the last second */
+    float    av_offset_last_ms;      /* the last measured A/V offset, unfiltered */
+    uint64_t av_from_shown;          /* measurements from the last shown frame (else the render time) */
     /* ---- end stage 7 ---- */
 } MelloStreamStats;
 

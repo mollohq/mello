@@ -277,6 +277,7 @@ TEST(StreamAudioHostPipeline, IgnoresEmptyAndNullInput) {
 namespace {
 
 using mello::audio::AudioPipeline;
+using mello::audio::GameAudioStats;
 using mello::audio::OpusApplication;
 using mello::audio::OpusEnc;
 using mello::audio::StreamAudioPlayout;
@@ -602,6 +603,55 @@ TEST_F(StreamPlayoutTest, TheSyncSampleMapsTheHeardAudioToTheVideoClock) {
     // (no device latency on the test backend).
     EXPECT_EQ(sample->heard_at_us, now_ms * 1000 + 10'000);
     EXPECT_EQ(playout->stats().sync_extensions, 50u);
+}
+
+// The pending delay is what NetEQ still adds to the audio. A buffer over the
+// target is heard as it is: NetEQ keeps a delay from its target up to the
+// target plus the largest arrival delay plus 20 ms, so no pending delay. A
+// raised minimum is still to come (NetEQ stretches the audio up to it).
+TEST_F(StreamPlayoutTest, ThePendingDelayIsOnlyWhatNetEqStillAdds) {
+    GameEncoder enc;
+    const uint32_t audio_base = 123'456;
+    const uint32_t video_base = 900'000;
+    int k = 0;
+    auto next = [&] {
+        const uint32_t ts = audio_base + static_cast<uint32_t>(k * kFrame);
+        auto pkt = rtp_packet(static_cast<uint16_t>(k), ts, enc.encode(tone_frame(k)),
+                              video_base + static_cast<uint32_t>(k * 1800));
+        ++k;
+        return pkt;
+    };
+    for (int i = 0; i < 100; ++i) {
+        const auto pkt = next();
+        step(&pkt);
+    }
+    // Two packets early: the buffer holds 40 ms more than the target.
+    for (int i = 0; i < 2; ++i) {
+        const auto pkt = next();
+        playout->feed_rtp(pkt.data(), pkt.size(), now_ms * 1000);
+    }
+    for (int i = 0; i < 25; ++i) {
+        const auto pkt = next();
+        step(&pkt);
+    }
+    const GameAudioStats over = playout->stats().source;
+    ASSERT_GT(over.filtered_delay_ms, over.target_delay_ms) << "the buffer is not over the target";
+    auto sample = playout->sync_sample();
+    ASSERT_TRUE(sample.has_value());
+    EXPECT_EQ(sample->pending_ms, 0.0) << "a buffer over the target is no pending delay";
+
+    // A raised minimum: the distance to it is still to come.
+    playout->set_sync_delay_ms(200);
+    {
+        const auto pkt = next();
+        step(&pkt);
+    }
+    const GameAudioStats raised = playout->stats().source;
+    sample = playout->sync_sample();
+    ASSERT_TRUE(sample.has_value());
+    ASSERT_GT(raised.target_delay_ms, raised.filtered_delay_ms);
+    EXPECT_NEAR(sample->pending_ms, raised.target_delay_ms - raised.filtered_delay_ms, 1.0);
+    EXPECT_GT(sample->pending_ms, 100.0);
 }
 
 // Ten minutes of clock drift: the host's audio device runs 300 ppm fast

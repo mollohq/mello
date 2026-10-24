@@ -37,6 +37,7 @@
 #include <functional>
 #include <memory>
 #include <mutex>
+#include <optional>
 #include <string>
 #include <thread>
 #include <vector>
@@ -68,6 +69,13 @@ struct ViewerStats {
     /// the frame was late.
     double present_lateness_ms = 0.0;
     mello::transport::TimelineStats timeline;
+    // ---- streaming-quality stage 7 ----
+    /// The last frame shown from the timeline: its RTP timestamp and its
+    /// present time (steady clock, µs). For the A/V sync.
+    bool has_last_shown = false;
+    uint32_t last_shown_rtp = 0;
+    int64_t last_shown_us = 0;
+    // ---- end stage 7 ----
 };
 
 class ViewerPipeline {
@@ -114,6 +122,9 @@ private:
         State state = State::Free;
         int64_t render_us = 0;
         uint64_t seq = 0;
+        // Stage 7: the frame's RTP timestamp, when it came from the timeline.
+        bool has_rtp = false;
+        uint32_t rtp_timestamp = 0;
 #ifdef _WIN32
         DecodedPicture picture;
 #else
@@ -129,7 +140,8 @@ private:
     void decode_thread_main();
     void present_thread_main();
     std::shared_ptr<mello::transport::VideoReceiveTimeline> current_timeline();
-    bool decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us);
+    bool decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us,
+                          std::optional<uint32_t> rtp_timestamp = std::nullopt);
     int acquire_slot_for_decode();
     void release_slot_locked(RingSlot& slot);
     void present_slot(RingSlot& slot);
@@ -174,6 +186,11 @@ private:
     std::atomic<double> decode_ms_last_{0.0};
     std::atomic<double> decode_ms_mean_{0.0};
     std::atomic<double> present_lateness_ms_{0.0};
+    // Stage 7: the last frame shown from the timeline (present thread).
+    mutable std::mutex last_shown_mutex_;
+    bool has_last_shown_ = false;
+    uint32_t last_shown_rtp_ = 0;
+    int64_t last_shown_us_ = 0;
     std::atomic<bool> attached_{false};
     mutable std::mutex timeline_stats_mutex_;
     std::shared_ptr<mello::transport::VideoReceiveTimeline> stats_timeline_;

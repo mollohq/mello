@@ -25,7 +25,6 @@
 // This header has no WebRTC include (C++17).
 
 #include <cstdint>
-#include <deque>
 #include <functional>
 #include <memory>
 #include <mutex>
@@ -42,11 +41,22 @@ struct AudioSyncSample {
     uint32_t video_rtp_timestamp = 0;
     /// Steady clock (mello_clock_now_us), microseconds.
     int64_t heard_at_us = 0;
-    /// The delay the audio is still to gain, ms: NetEQ's target minus its
-    /// delay now (a raised minimum takes NetEQ seconds of stretching). The
+    /// The delay the audio is still to gain, ms (`audio_pending_ms`). The
     /// audio is heard that much later once it is there.
     double pending_ms = 0.0;
+    /// NetEQ's target delay now, ms.
+    double target_ms = 0.0;
 };
+
+/// The delay NetEQ still adds to the audio, ms: its target minus its delay
+/// now when the delay is under the target, else 0. NetEQ (M131
+/// `DecisionLogic::ExpectedPacketAvailable`) stretches the audio up to its
+/// target (a raised minimum takes seconds), but keeps a delay from the
+/// target up to the target plus the largest arrival delay plus 20 ms: the
+/// buffer often sits 10 to 20 ms over the target and stays there.
+inline double audio_pending_ms(double target_ms, double current_ms) {
+    return target_ms > current_ms ? target_ms - current_ms : 0.0;
+}
 
 class AvSync {
 public:
@@ -96,7 +106,9 @@ public:
     /// instant is heard minus the time the video of that instant is shown
     /// (positive: the audio is late). `video_delay_ms`: the timeline's
     /// current delay.
-    Decision update(double offset_ms, double video_delay_ms);
+    /// `audio_delay_ms`: NetEQ's target delay now (a minimum under it does
+    /// not bind; 0 when not known).
+    Decision update(double offset_ms, double video_delay_ms, double audio_delay_ms = 0.0);
 
     /// Forget the filter and both delays (the audio stopped).
     void reset();
@@ -124,9 +136,13 @@ public:
     using AudioClockFn = std::function<std::optional<AudioSyncSample>()>;
     /// Sets the game audio's minimum delay, ms.
     using AudioDelayFn = std::function<void(int delay_ms)>;
-    /// How late the viewer shows a frame after its render time, ms (the
-    /// present thread's lateness of the last frame).
-    using VideoLatenessFn = std::function<double()>;
+    /// The last frame the viewer showed: its RTP timestamp and its present
+    /// time (steady clock, µs). Empty before the first.
+    struct ShownFrame {
+        uint32_t rtp_timestamp = 0;
+        int64_t shown_us = 0;
+    };
+    using VideoShownFn = std::function<std::optional<ShownFrame>()>;
 
     struct Stats {
         /// A measurement was made in the last two intervals.
@@ -134,9 +150,9 @@ public:
         /// The last measured offset and the filtered one, ms (+: audio late).
         double offset_ms = 0.0;
         double filtered_offset_ms = 0.0;
-        /// The present lateness the measurement adds, ms: the median of
-        /// the last 16 samples, within -20..60 ms.
-        double video_lateness_ms = 0.0;
+        /// Measurements made from the last shown frame (the others used the
+        /// timeline's render time).
+        uint64_t from_shown = 0;
         double video_min_delay_ms = 0.0;
         int audio_min_delay_ms = 0;
         uint64_t measurements = 0;
@@ -170,10 +186,12 @@ public:
 
     Stats stats() const;
 
-    /// The present lateness of the video (null: 0). The measurement adds
-    /// its mean to the render time: the viewer shows a frame that much
-    /// after the timeline says (a decode, the conversion, the swap chain).
-    void set_video_lateness(VideoLatenessFn fn);
+    /// The frames the viewer shows. With it the measurement reads when the
+    /// video of an instant is shown from the last shown frame (its present
+    /// time, moved by the RTP timestamps at 90 kHz), the same way the audio
+    /// side reads the last 10 ms NetEQ played. Without it (or with no frame
+    /// shown in the last 100 ms) the timeline's render time stands in.
+    void set_video_shown(VideoShownFn fn);
 
 private:
     void apply_locked(VideoReceiveTimeline& timeline, const AvSync::Decision& d);
@@ -189,11 +207,11 @@ private:
     const VideoReceiveTimeline* applied_to_ = nullptr;
     // The timeline of the last tick, for start_buffer_ms.
     std::weak_ptr<VideoReceiveTimeline> timeline_;
-    VideoLatenessFn video_lateness_;
-    // The last samples of video_lateness_ (one per decision) and their
-    // median, ms. A median: a frame shown late after a freeze is no bias.
-    std::deque<double> lateness_samples_;
-    double lateness_ms_ = 0.0;
+    VideoShownFn video_shown_;
+    /// When the video of `video_rtp_timestamp` is shown, µs: from the last
+    /// shown frame, else the timeline's render time. Caller holds mutex_.
+    std::optional<int64_t> shown_time_locked(VideoReceiveTimeline& timeline,
+                                             uint32_t video_rtp_timestamp, int64_t now_us);
     double max_audio_delay_ms_ = 0.0;
     Stats stats_;
 };

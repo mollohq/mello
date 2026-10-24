@@ -1942,12 +1942,14 @@ MelloResult mello_stream_viewer_attach_peer(MelloStreamView* view, MelloPeerConn
                 view->lateness_source = std::make_shared<MelloStreamView::LatenessSource>();
                 view->lateness_source->video = view->video.get();
             }
-            sync->set_video_lateness([source = view->lateness_source]() -> double {
+            sync->set_video_shown([source = view->lateness_source]()
+                                      -> std::optional<mello::transport::AvSyncInput::ShownFrame> {
                 std::lock_guard<std::mutex> lock(source->mutex);
-                if (!source->video) return 0.0;
+                if (!source->video) return std::nullopt;
                 mello::video::ViewerStats vs{};
                 source->video->get_viewer_stats(vs);
-                return vs.present_lateness_ms;
+                if (!vs.has_last_shown) return std::nullopt;
+                return mello::transport::AvSyncInput::ShownFrame{vs.last_shown_rtp, vs.last_shown_us};
             });
             std::weak_ptr<mello::transport::AvSyncInput> weak_sync = sync;
             view->audio_playout->set_start_buffer(
@@ -2006,6 +2008,8 @@ void mello_stream_viewer_get_stats(MelloStreamView* view, MelloStreamStats* stat
             stats->av_audio_min_delay_ms = static_cast<float>(sync.audio_min_delay_ms);
             stats->av_sync_changes       = sync.changes;
             stats->av_sync_active        = sync.active ? 1 : 0;
+            stats->av_offset_last_ms     = static_cast<float>(sync.offset_ms);
+            stats->av_from_shown         = sync.from_shown;
         }
         // ---- end stage 7 ----
     } catch (...) {

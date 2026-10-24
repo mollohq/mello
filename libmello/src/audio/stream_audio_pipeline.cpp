@@ -438,7 +438,8 @@ std::optional<transport::AudioSyncSample> StreamAudioPlayout::sync_sample() cons
     // the output ring and the device.
     const float latency_ms = output_latency_ ? output_latency_() : 0.0f;
     if (const auto d = source_->delay()) {
-        s.pending_ms = static_cast<double>(d->target_ms - d->filtered_ms);
+        s.pending_ms = transport::audio_pending_ms(d->target_ms, d->filtered_ms);
+        s.target_ms = static_cast<double>(d->target_ms);
     }
     s.heard_at_us = playout->pulled_at_us +
                     static_cast<int64_t>(playout->samples) * 1'000'000 / STREAM_AUDIO_SAMPLE_RATE +

@@ -13,7 +13,7 @@ AvSync::AvSync() : AvSync(Config{}) {}
 
 AvSync::AvSync(Config config) : config_(config) {}
 
-AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms) {
+AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms, double audio_delay_ms) {
     Decision d;
     d.video_min_delay_ms = video_min_ms_;
     d.audio_min_delay_ms = audio_min_delay_ms();
@@ -52,13 +52,18 @@ AvSync::Decision AvSync::update(double offset_ms, double video_delay_ms) {
         if (binding) {
             video_min_ms_ = std::max(0.0, video_min_ms_ - s);
         } else {
-            audio_min_ms_ = std::min(audio_min_ms_ + s, config_.max_audio_delay_ms);
+            // From NetEQ's own target: a minimum under it does not bind and
+            // would change nothing.
+            const double base = std::max(audio_min_ms_, audio_delay_ms);
+            audio_min_ms_ = std::min(base + s, config_.max_audio_delay_ms);
         }
     }
-    // The applied change is already on its way: take it out of the filter,
-    // or the old measurements in it ask for the same change again.
-    const double applied = (video_min_ms_ - video_before) - (audio_min_ms_ - audio_before);
-    *filtered_ -= applied;
+    // After a change the filter starts again: the measurements in it are
+    // from before the change, and the next ones count the change (the
+    // pending delays), so the old ones would ask for it a second time.
+    if (std::abs(video_min_ms_ - video_before) >= 0.5 || std::abs(audio_min_ms_ - audio_before) >= 0.5) {
+        filtered_.reset();
+    }
 
     d.video_min_delay_ms = video_min_ms_;
     d.audio_min_delay_ms = audio_min_delay_ms();
@@ -100,16 +105,16 @@ std::optional<int> AvSyncInput::start_buffer_ms(uint32_t video_rtp_timestamp,
     std::lock_guard<std::mutex> lock(mutex_);
     const auto timeline = timeline_.lock();
     if (!timeline) return std::nullopt;
-    const auto render_us = timeline->render_time_us(video_rtp_timestamp);
-    if (!render_us) return std::nullopt;
+    const auto shown_us = shown_time_locked(*timeline, video_rtp_timestamp, heard_if_now_us);
+    if (!shown_us) return std::nullopt;
     // Where the video goes: its target, not the delay frames get now (the
     // timeline's delay climbs at 100 ms/s while its jitter estimate settles,
     // and the audio could follow only by stretching).
     const TimelineStats ts = timeline->stats();
     const double video_applied_ms =
         std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
-    const double want_ms = static_cast<double>(*render_us - heard_if_now_us) / 1000.0 +
-                           lateness_ms_ + (ts.target_delay_ms - video_applied_ms);
+    const double want_ms = static_cast<double>(*shown_us - heard_if_now_us) / 1000.0 +
+                           (ts.target_delay_ms - video_applied_ms);
     const int buffer_ms = static_cast<int>(std::clamp(want_ms, 0.0, max_audio_delay_ms_) + 0.5);
     sync_.start_audio(buffer_ms);
     stats_.audio_min_delay_ms = sync_.audio_min_delay_ms();
@@ -136,20 +141,9 @@ void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr
     if (now_us < next_us_) return;
     next_us_ = now_us + interval_us_;
 
-    if (video_lateness_) {
-        const double l = video_lateness_();
-        if (std::isfinite(l)) {
-            lateness_samples_.push_back(l);
-            if (lateness_samples_.size() > 16) lateness_samples_.pop_front();
-            std::vector<double> sorted(lateness_samples_.begin(), lateness_samples_.end());
-            std::nth_element(sorted.begin(), sorted.begin() + sorted.size() / 2, sorted.end());
-            lateness_ms_ = std::clamp(sorted[sorted.size() / 2], -20.0, 60.0);
-            stats_.video_lateness_ms = lateness_ms_;
-        }
-    }
     const std::optional<AudioSyncSample> sample = audio_ ? audio_() : std::nullopt;
     std::optional<int64_t> shown_us;
-    if (sample) shown_us = timeline.render_time_us(sample->video_rtp_timestamp);
+    if (sample) shown_us = shown_time_locked(timeline, sample->video_rtp_timestamp, now_us);
     if (!sample || !shown_us) {
         stats_.active = last_measurement_us_ != 0 && now_us - last_measurement_us_ < 2 * interval_us_;
         if (last_measurement_us_ != 0 && now_us - last_measurement_us_ >= kIdleResetUs &&
@@ -175,10 +169,9 @@ void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr
     // (VCMTiming's current delay within the bounds) to its target.
     const double video_applied_ms =
         std::clamp(ts.current_delay_ms, std::max(1.0, sync_.video_min_delay_ms()), 150.0);
-    const double offset_ms = static_cast<double>(sample->heard_at_us - *shown_us) / 1000.0 -
-                             lateness_ms_ + sample->pending_ms -
-                             (video_delay_ms - video_applied_ms);
-    const AvSync::Decision d = sync_.update(offset_ms, video_delay_ms);
+    const double offset_ms = static_cast<double>(sample->heard_at_us - *shown_us) / 1000.0 +
+                             sample->pending_ms - (video_delay_ms - video_applied_ms);
+    const AvSync::Decision d = sync_.update(offset_ms, video_delay_ms, sample->target_ms);
     last_measurement_us_ = now_us;
     ++stats_.measurements;
     stats_.active = true;
@@ -196,9 +189,28 @@ void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr
     }
 }
 
-void AvSyncInput::set_video_lateness(VideoLatenessFn fn) {
+void AvSyncInput::set_video_shown(VideoShownFn fn) {
     std::lock_guard<std::mutex> lock(mutex_);
-    video_lateness_ = std::move(fn);
+    video_shown_ = std::move(fn);
+}
+
+std::optional<int64_t> AvSyncInput::shown_time_locked(VideoReceiveTimeline& timeline,
+                                                      uint32_t video_rtp_timestamp,
+                                                      int64_t now_us) {
+    if (video_shown_) {
+        if (const auto last = video_shown_()) {
+            // A frame shown in the last 100 ms: the video runs, so the frame
+            // of another instant is shown its media distance away.
+            if (now_us - last->shown_us < 100'000 && last->shown_us - now_us < 100'000) {
+                const int64_t ticks =
+                    static_cast<int32_t>(video_rtp_timestamp - last->rtp_timestamp);
+                ++stats_.from_shown;
+                return last->shown_us + ticks * 1000 / 90;
+            }
+            return std::nullopt;  // the video stands still: no measurement
+        }
+    }
+    return timeline.render_time_us(video_rtp_timestamp);
 }
 
 AvSyncInput::Stats AvSyncInput::stats() const {
