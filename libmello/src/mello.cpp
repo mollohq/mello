@@ -1066,6 +1066,42 @@ MelloResult mello_peer_video_set_pacing_target(
     }
 }
 
+MelloResult mello_peer_video_set_bitrate_limits(
+    MelloPeerConnection* peer,
+    uint64_t min_bps,
+    uint64_t start_bps,
+    uint64_t max_bps
+) {
+    if (!peer || max_bps == 0 || min_bps > max_bps) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_bitrate_limits(min_bps, start_bps, max_bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
+MelloResult mello_peer_video_set_max_allocated(
+    MelloPeerConnection* peer,
+    uint64_t bps
+) {
+    if (!peer || bps == 0) {
+        return MELLO_ERROR_INVALID_PARAM;
+    }
+    try {
+        auto* pc = peer_cast(peer);
+        return pc->video_set_max_allocated(bps)
+            ? MELLO_OK
+            : MELLO_ERROR_TRANSPORT_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_TRANSPORT_FAILED;
+    }
+}
+
 MelloResult mello_peer_video_set_receive_target(
     MelloPeerConnection* peer,
     uint32_t bps
@@ -1553,6 +1589,14 @@ MelloResult mello_stream_set_bitrate(MelloStreamHost* host, uint32_t bitrate_kbp
     try {
         host->video->set_bitrate(bitrate_kbps);
         return MELLO_OK;
+    } catch (...) { return MELLO_ERROR_FAILED; }
+}
+
+MelloResult mello_stream_set_resolution(MelloStreamHost* host, uint32_t width, uint32_t height) {
+    if (!host || height == 0) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        MELLO_LOG_INFO("stream", "set_resolution: %ux%u requested", width, height);
+        return host->video->set_encode_height(height) ? MELLO_OK : MELLO_ERROR_FAILED;
     } catch (...) { return MELLO_ERROR_FAILED; }
 }
 

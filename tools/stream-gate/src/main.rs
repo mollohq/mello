@@ -539,6 +539,35 @@ fn run_profile(
     }
     put("viewer_backlog_drops", Some(measured.backlog_drops as f64));
     put("tx_pli", Some(host_end.video.tx_pli_requests as f64));
+    // The stage 4 sender (report rows, no gate).
+    let hv = &host_end.video;
+    put(
+        "tx_max_idr_send_ms",
+        Some(hv.tx_max_idr_send_us as f64 / 1000.0),
+    );
+    put("tx_idr_aus", Some(hv.tx_idr_access_units_sent as f64));
+    put(
+        "tx_idr_over_50ms",
+        Some(hv.tx_idr_access_units_over_50ms as f64),
+    );
+    put(
+        "tx_rtx_pct",
+        (hv.tx_rtp_wire_bytes_sent > 0)
+            .then(|| 100.0 * hv.tx_rtx_bytes_sent as f64 / hv.tx_rtp_wire_bytes_sent as f64),
+    );
+    put(
+        "tx_probe_clusters",
+        Some(hv.tx_probe_clusters_completed as f64),
+    );
+    put("tx_padding", Some(hv.tx_padding_packets_sent as f64));
+    put("tx_send_pauses", Some(hv.tx_send_pauses as f64));
+    put("tx_reprobes", Some(hv.tx_reprobes as f64));
+    put("tx_rtx_negotiated", Some(f64::from(hv.tx_rtx_negotiated)));
+    put("tx_rtx_suppressed", Some(hv.tx_rtx_suppressed as f64));
+    put(
+        "tx_feedback_rtt_ms",
+        Some(hv.tx_feedback_rtt_us as f64 / 1000.0),
+    );
     put(
         "host_keyframes",
         Some(f64::from(host_end.stats.keyframes_sent)),
@@ -616,12 +645,32 @@ fn run_profile(
         }
     }
     let _ = std::fs::write(pdir.join("presents.csv"), csv);
-    let mut hcsv = String::from("t_ms,encoder_kbps,pacing_target_kbps,gcc_target_kbps,keyframes\n");
+    let mut hcsv = String::from(
+        "t_ms,encoder_kbps,pacing_target_kbps,gcc_target_kbps,keyframes,pacing_rate_kbps,width,height,fps,\
+         wire_bytes,rtx_bytes,plis,local_idrs,aus_dropped,queued_aus,enc_target_kbps,\
+         idrs_sent,last_idr_send_us\n",
+    );
     for s in &host_end.samples {
         let t = (s.t_us as i64 - arm_us as i64) as f64 / 1000.0;
         hcsv.push_str(&format!(
-            "{t:.0},{},{},{},{}\n",
-            s.encoder_kbps, s.pacing_target_kbps, s.gcc_target_kbps, s.keyframes
+            "{t:.0},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            s.encoder_kbps,
+            s.pacing_target_kbps,
+            s.gcc_target_kbps,
+            s.keyframes,
+            s.pacing_rate_kbps,
+            s.width,
+            s.height,
+            s.fps,
+            s.wire_bytes,
+            s.rtx_bytes,
+            s.plis,
+            s.local_idrs,
+            s.aus_dropped,
+            s.queued_aus,
+            s.enc_target_kbps,
+            s.idrs_sent,
+            s.last_idr_send_us
         ));
     }
     let _ = std::fs::write(pdir.join("host.csv"), hcsv);

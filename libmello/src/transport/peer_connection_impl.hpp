@@ -65,6 +65,8 @@ public:
     );
     bool video_take_feedback(MelloPeerVideoFeedback* feedback) noexcept;
     bool video_set_pacing_target(uint64_t bps) noexcept;
+    bool video_set_bitrate_limits(uint64_t min_bps, uint64_t start_bps, uint64_t max_bps) noexcept;
+    bool video_set_max_allocated(uint64_t bps) noexcept;
     bool video_set_receive_target(uint32_t bps) noexcept;
     void video_get_stats(MelloRtpVideoStats* stats) const noexcept;
     bool video_is_open() const noexcept;
@@ -228,6 +230,9 @@ private:
     std::vector<std::shared_ptr<rtc::Track>> incoming_tracks_;
 
     uint32_t video_ssrc_ = 0;
+    // RFC 4588 retransmission SSRC of the host's video, offered with
+    // video_ssrc_ in an ssrc-group FID.
+    uint32_t video_rtx_ssrc_ = 0;
     std::string video_cname_;
     uint32_t audio_ssrc_ = 0;
     std::string audio_cname_;
@@ -239,7 +244,14 @@ private:
     // Remote SDP advertised the TWCC RTP header extension on stream video.
     bool twcc_supported_ = false;
     // Remote SDP advertised the ULPFEC payload type (127) on stream video.
+    // Only the viewer's receive session uses it; the host sends no FEC.
     bool fec_supported_ = false;
+    // RTX payload type of the remote answer (apt 96), 0 when not negotiated.
+    uint8_t rtx_payload_type_ = 0;
+    // goog_cc limits for the sender (mello_peer_video_set_bitrate_limits).
+    uint64_t min_bitrate_bps_ = 300'000;
+    uint64_t start_bitrate_bps_ = 0;
+    uint64_t max_bitrate_bps_ = 0;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;

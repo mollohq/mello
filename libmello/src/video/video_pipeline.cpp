@@ -5,6 +5,7 @@
 #include "frame_cadence.hpp"
 #include "../util/log.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -38,6 +39,27 @@ static constexpr const char* TAG = "video/pipeline";
 // capture needs them too.
 using mello::video::kMinEncodeWidth;
 using mello::video::kMinEncodeHeight;
+
+// GOP: 4 s at the preset frame rate (streaming-quality stage 4; 2 s before).
+// The plan's 10 s holds at 4 s: on the gate's mobile profile a 10 s GOP gave
+// a glass-to-glass p95 of 2455 and 2532 ms against 437 and 1061 ms at 4 s,
+// with the same number of IDRs (PLIs drive them there) and no better VMAF,
+// fps or freeze time. Measure 10 s again when the stage 3 viewer is in.
+// IDRs on demand (join, PLI, a rung change) are unchanged.
+// MELLO_STREAM_GOP_SECONDS (1 to 60) overrides it for the GOP measurement of
+// the streaming gate.
+static uint32_t keyframe_interval_for(uint32_t fps) {
+    uint32_t seconds = 4;
+#ifdef _WIN32
+    char buf[8] = {};
+    const DWORD n = GetEnvironmentVariableA("MELLO_STREAM_GOP_SECONDS", buf, sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        const long v = std::strtol(buf, nullptr, 10);
+        if (v >= 1 && v <= 60) seconds = static_cast<uint32_t>(v);
+    }
+#endif
+    return std::max<uint32_t>(fps, 1) * seconds;
+}
 
 static uint64_t now_us() {
     return static_cast<uint64_t>(
@@ -112,13 +134,13 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
     if (target.level_capped) {
         MELLO_LOG_WARN(TAG,
-            "Encode size for %ux%u at %u fps is over H.264 level 4.2; reduced to %ux%u",
+            "Encode size for %ux%u at %u fps is over H.264 level 5.1; reduced to %ux%u",
             cap_w, cap_h, config.fps, target.width, target.height);
     }
     encode_w_ = target.width;
     encode_h_ = target.height;
-    uint32_t enc_w = encode_w_;
-    uint32_t enc_h = encode_h_;
+    uint32_t enc_w = target.width;
+    uint32_t enc_h = target.height;
 
     // Refuse a source too small to encode, naming the actual size.
     //
@@ -149,6 +171,13 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
+    preprocessor_w_ = enc_w;
+    preprocessor_h_ = enc_h;
+    preprocessor_generation_ = 0;
+    encoder_generation_ = 0;
+    encode_height_request_.store(0, std::memory_order_relaxed);
+    geometry_changes_.store(0, std::memory_order_relaxed);
+    last_bitrate_kbps_.store(config.bitrate_kbps, std::memory_order_relaxed);
 
     // 3. Encoder
     EncoderConfig enc_config{};
@@ -156,7 +185,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     enc_config.height        = enc_h;
     enc_config.fps           = config.fps;
     enc_config.bitrate_kbps  = config.bitrate_kbps;
-    enc_config.keyframe_interval = 120;
+    enc_config.keyframe_interval = keyframe_interval_for(config.fps);
     enc_config.codec         = VideoCodec::H264;
 
     encoder_ = create_best_encoder(device_, enc_config);
@@ -211,7 +240,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     enc_config.height        = encode_h_;
     enc_config.fps           = config.fps;
     enc_config.bitrate_kbps  = config.bitrate_kbps;
-    enc_config.keyframe_interval = 120;
+    enc_config.keyframe_interval = keyframe_interval_for(config.fps);
     enc_config.codec         = VideoCodec::H264;
 
     encoder_ = create_best_encoder(device_, enc_config);
@@ -326,6 +355,10 @@ void VideoPipeline::stop_host() {
     capture_.reset();
     encoder_.reset();
 #ifdef _WIN32
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.clear();
+    }
     preprocessor_.reset();
 #endif
 }
@@ -342,7 +375,7 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_control_.encode(cv_pixel_buffer, packet)) {
+    if (encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet)) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {
@@ -371,9 +404,11 @@ void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     h = encode_h_;
 }
 
-// H.264 level 4.2, the level every encoder backend configures.
-static constexpr uint64_t kLevel42MaxFrameMbs  = 8704;
-static constexpr uint64_t kLevel42MaxMbsPerSec = 522240;
+// H.264 level 5.1, the level every encoder backend configures (stage 4;
+// every current hardware decoder handles 5.1). An ultrawide source on the
+// 1080p60 preset encodes 2560x1080, not the 2288x960 of level 4.2.
+static constexpr uint64_t kLevel51MaxFrameMbs  = 36864;
+static constexpr uint64_t kLevel51MaxMbsPerSec = 983040;
 
 VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uint32_t capture_h,
                                                          uint32_t preset_h, uint32_t fps) {
@@ -395,7 +430,7 @@ VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uin
     };
     auto fits_level = [&](uint32_t w, uint32_t h) {
         const uint64_t mbs = static_cast<uint64_t>((w + 15) / 16) * ((h + 15) / 16);
-        return mbs <= kLevel42MaxFrameMbs && mbs * fps <= kLevel42MaxMbsPerSec;
+        return mbs <= kLevel51MaxFrameMbs && mbs * fps <= kLevel51MaxMbsPerSec;
     };
 
     uint32_t h = (preset_h > 0 && preset_h < cap_h) ? (preset_h & ~1u) : cap_h;
@@ -440,7 +475,19 @@ bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
 // keep the target FPS constant and leave headroom between target and actual
 // bitrate so the encoder naturally recovers after transient drops.
 void VideoPipeline::set_bitrate(uint32_t kbps) {
+    if (kbps != 0) last_bitrate_kbps_.store(kbps, std::memory_order_relaxed);
     encoder_control_.set_bitrate(kbps);
+}
+
+bool VideoPipeline::set_encode_height(uint32_t height) {
+#ifdef _WIN32
+    if (height == 0 || !host_running_.load()) return false;
+    encode_height_request_.store(height, std::memory_order_release);
+    return true;
+#else
+    (void)height;
+    return false;
+#endif
 }
 
 void VideoPipeline::get_stats(EncoderStats& out) const {
@@ -591,6 +638,8 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         cursor = &overlay;
     }
 
+    apply_geometry_request(texture);
+
     // Preprocess on the capture thread (fast GPU blit), then enqueue for encode
     auto t0 = std::chrono::steady_clock::now();
     auto result = preprocessor_->convert(texture, cursor);
@@ -613,7 +662,7 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
             source_size_changes_.fetch_add(1, std::memory_order_relaxed) + 1;
         MELLO_LOG_INFO(TAG, "source size %ux%u (change %u); encode size stays %ux%u",
                        preprocessor_->source_width(), preprocessor_->source_height(), changes,
-                       encode_w_, encode_h_);
+                       encode_w_.load(), encode_h_.load());
     }
     source_size_known_ = true;
     source_w_.store(preprocessor_->source_width(), std::memory_order_relaxed);
@@ -628,7 +677,8 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
             eq_count_--;
             eq_drops_++;
         }
-        encode_queue_[eq_head_] = {result.texture, timestamp_us};
+        encode_queue_[eq_head_] = {result.texture, timestamp_us, preprocessor_w_,
+                                   preprocessor_h_, preprocessor_generation_};
         eq_head_ = (eq_head_ + 1) % ENCODE_QUEUE_CAP;
         eq_count_++;
     }
@@ -670,6 +720,14 @@ void VideoPipeline::encode_thread_func() {
                 job = last_job;
                 job.timestamp_us = now;
                 idle_repeat = true;
+            }
+        }
+
+        if (job.generation != encoder_generation_) {
+            if (!resize_encoder(job.width, job.height, job.generation)) {
+                // The encoder is unusable at the new size. Drop the frame;
+                // the next job tries again.
+                continue;
             }
         }
 
@@ -719,6 +777,73 @@ void VideoPipeline::encode_thread_func() {
         }
         last_encode_us = now_us();
     }
+}
+
+// Capture thread. A pending geometry request becomes a new preprocessor at
+// the new encode size; the old one is retired, because the encode queue and
+// the idle keepalive can still hold its ring textures.
+void VideoPipeline::apply_geometry_request(ID3D11Texture2D* texture) {
+    const uint32_t request = encode_height_request_.exchange(0, std::memory_order_acq_rel);
+    if (request == 0 || !texture) return;
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    const EncodeSize target = encode_size_for(desc.Width, desc.Height, request,
+                                              effective_output_fps());
+    if (target.width < kMinEncodeWidth || target.height < kMinEncodeHeight) {
+        MELLO_LOG_WARN(TAG, "geometry: %ux%u is under the encoder minimum; ignored",
+                       target.width, target.height);
+        return;
+    }
+    if (target.width == preprocessor_w_ && target.height == preprocessor_h_) return;
+    auto next = std::make_unique<VideoPreprocessor>();
+    if (!next->initialize(device_, desc.Width, desc.Height, target.width, target.height)) {
+        MELLO_LOG_ERROR(TAG, "geometry: preprocessor at %ux%u failed; staying at %ux%u",
+                        target.width, target.height, preprocessor_w_, preprocessor_h_);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.push_back({std::move(preprocessor_), preprocessor_generation_});
+    }
+    preprocessor_ = std::move(next);
+    MELLO_LOG_INFO(TAG, "geometry: encode size %ux%u -> %ux%u (source %ux%u)",
+                   preprocessor_w_, preprocessor_h_, target.width, target.height,
+                   desc.Width, desc.Height);
+    preprocessor_w_ = target.width;
+    preprocessor_h_ = target.height;
+    ++preprocessor_generation_;
+}
+
+// Encode thread. The first job of a new preprocessor generation changes the
+// encoder's size; the preprocessors of older generations are then freed.
+bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t generation) {
+    EncoderConfig config{};
+    config.width = width;
+    config.height = height;
+    config.fps = effective_output_fps();
+    config.bitrate_kbps = last_bitrate_kbps_.load(std::memory_order_relaxed);
+    config.keyframe_interval = keyframe_interval_for(config_.fps);
+    config.codec = VideoCodec::H264;
+    if (!encoder_control_.resize(device_, config)) {
+        MELLO_LOG_ERROR(TAG, "geometry: the encoder cannot run at %ux%u", width, height);
+        return false;
+    }
+    encoder_generation_ = generation;
+    encode_w_ = width;
+    encode_h_ = height;
+    geometry_changes_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.erase(
+            std::remove_if(retired_preprocessors_.begin(), retired_preprocessors_.end(),
+                           [generation](const RetiredPreprocessor& r) {
+                               return r.generation < generation;
+                           }),
+            retired_preprocessors_.end());
+    }
+    MELLO_LOG_INFO(TAG, "geometry: encoder at %ux%u (generation %u), IDR", width, height,
+                   generation);
+    return true;
 }
 
 // Runs on the encode thread, immediately after a frame is encoded, so the

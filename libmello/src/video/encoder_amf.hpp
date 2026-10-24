@@ -24,6 +24,8 @@ public:
     bool        reduce_cost_tier() override;
     int         cost_tier() const override { return cost_tier_; }
     int         max_cost_tier() const override { return kMaxCostTier; }
+    bool        reconfigure_size(uint32_t width, uint32_t height) override;
+    void        set_framerate(uint32_t fps) override;
 
     static bool is_available();
 

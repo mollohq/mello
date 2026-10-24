@@ -540,6 +540,25 @@ typedef struct MelloRtpVideoStats {
     uint64_t rx_core_cumulative_loss;
     uint32_t rx_core_interarrival_jitter;
     uint8_t rx_core_gated;
+
+    /* Streaming-quality stage 4: the send side (goog_cc, pacer, RTX). */
+    uint64_t tx_pacing_rate_bps;          /* the rate the pacer runs at now */
+    uint64_t tx_rtx_bytes_sent;
+    uint64_t tx_probe_clusters_started;
+    uint64_t tx_probe_clusters_completed;
+    uint64_t tx_padding_packets_sent;
+    uint64_t tx_send_pauses;              /* media stops after 1 s without TWCC feedback */
+    uint64_t tx_idr_access_units_sent;
+    uint64_t tx_last_idr_send_us;         /* IDR enqueue to its last packet on the wire */
+    uint64_t tx_max_idr_send_us;
+    uint64_t tx_rtx_queue_flushes;        /* retransmit queue dropped on an IDR request */
+    uint64_t tx_reprobes;                 /* re-probes after an allocation raise */
+    uint64_t tx_idr_access_units_over_50ms; /* IDRs whose send took more than 50 ms */
+    uint8_t tx_send_paused;
+    uint8_t tx_rtx_negotiated;            /* RFC 4588 RTX on its own SSRC */
+    uint64_t tx_rtx_suppressed;           /* NACKed packets not resent: once per round trip, target rate */
+    uint64_t tx_feedback_rtt_us;          /* goog_cc round trip from the TWCC reports, 0 unknown */
+    uint64_t tx_encoder_target_bps;       /* goog_cc target less the retransmit rate: the encoder's */
 } MelloRtpVideoStats;
 
 /** Create a peer. `ctx` may be NULL. With a context, a voice peer counts
@@ -1319,6 +1338,41 @@ MELLO_API MelloResult mello_set_audio_input(MelloContext* ctx, const char* devic
 
 /** Set audio output device. Pass NULL to revert to system default. */
 MELLO_API MelloResult mello_set_audio_output(MelloContext* ctx, const char* device_id);
+
+/* ============================================================================
+ * Streaming-quality stage 4: the send side
+ * ============================================================================ */
+
+/** goog_cc limits of the stream host's video sender, in bits per second.
+ *  `start_bps` applies when the sender starts (0 keeps the default: 60 % of
+ *  the pacing ceiling); `min_bps` and `max_bps` apply at once. Before the
+ *  video track opens the values are stored for the sender. */
+MELLO_API MelloResult mello_peer_video_set_bitrate_limits(
+    MelloPeerConnection* peer,
+    uint64_t min_bps,
+    uint64_t start_bps,
+    uint64_t max_bps
+);
+
+/** Change the host's encode size (a geometry rung). `height` is the target
+ *  height; the width follows the source aspect and libmello rounds it to a
+ *  multiple of 16 (`width` is the caller's expectation, for the log). The
+ *  change applies at the next captured frame, and the next frame is an IDR
+ *  with SPS and PPS. `mello_stream_get_host_resolution` gives the size after
+ *  it. MELLO_ERROR_FAILED when no host runs or the platform has no geometry path
+ *  (macOS). */
+MELLO_API MelloResult mello_stream_set_resolution(
+    MelloStreamHost* host,
+    uint32_t width,
+    uint32_t height
+);
+
+/** The encoder allocation of the stream host (goog_cc max total allocated
+ *  bitrate). A value over the previous one makes goog_cc probe up to it. */
+MELLO_API MelloResult mello_peer_video_set_max_allocated(
+    MelloPeerConnection* peer,
+    uint64_t bps
+);
 
 #ifdef __cplusplus
 }

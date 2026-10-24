@@ -158,6 +158,26 @@ impl PacketSink for SfuSink {
     async fn send_stats(&self, payload: &serde_json::Value) {
         self.connection.send_stream_stats(payload).await;
     }
+
+    async fn set_bitrate_limits(&self, min_kbps: u32, start_kbps: u32, max_kbps: u32) {
+        let kbps = |v: u32| u64::from(v) * 1_000;
+        if let Err(e) = self.connection.set_video_bitrate_limits(
+            kbps(min_kbps),
+            kbps(start_kbps),
+            kbps(max_kbps),
+        ) {
+            log::warn!("SFU sink: set_video_bitrate_limits failed: {}", e);
+        }
+    }
+
+    async fn set_max_allocated_kbps(&self, kbps: u32) {
+        if let Err(e) = self
+            .connection
+            .set_video_max_allocated(u64::from(kbps) * 1_000)
+        {
+            log::warn!("SFU sink: set_video_max_allocated failed: {}", e);
+        }
+    }
 }
 
 #[cfg(test)]

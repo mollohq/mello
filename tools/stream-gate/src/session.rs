@@ -80,6 +80,27 @@ pub struct HostSample {
     pub pacing_target_kbps: u64,
     pub gcc_target_kbps: u64,
     pub keyframes: u32,
+    /// The stage 4 sender's pacing rate, and the encode size and frame rate
+    /// of the quality controller's rung.
+    pub pacing_rate_kbps: u64,
+    pub width: u32,
+    pub height: u32,
+    pub fps: u32,
+    /// Sender counters (cumulative) for the congestion timeline: wire
+    /// bytes, retransmit bytes, PLIs, local IDR requests, access units the
+    /// bounded queue dropped, and the queue depth now.
+    pub wire_bytes: u64,
+    pub rtx_bytes: u64,
+    pub plis: u64,
+    pub local_idrs: u64,
+    pub aus_dropped: u64,
+    pub queued_aus: u64,
+    /// The encoder target the sender gives Rust (goog_cc less repairs).
+    pub enc_target_kbps: u64,
+    /// The IDRs the sender has sent, and the enqueue-to-wire time of the
+    /// last one (the gate reads the exit time of each IDR from the steps).
+    pub idrs_sent: u64,
+    pub last_idr_send_us: u64,
 }
 
 pub struct Host {
@@ -286,12 +307,28 @@ fn host_loop(
             let v = conn
                 .video_stats()
                 .unwrap_or_else(|_| unsafe { std::mem::zeroed() });
+            let (mut w, mut h) = (0u32, 0u32);
+            // SAFETY: as above.
+            unsafe { mello_sys::mello_stream_get_host_resolution(native.0, &mut w, &mut h) };
             samples.push(HostSample {
                 t_us: clock_us(),
                 encoder_kbps: st.bitrate_kbps,
                 pacing_target_kbps: v.tx_pacing_target_bps / 1000,
                 gcc_target_kbps: v.tx_gcc_target_bps / 1000,
                 keyframes: st.keyframes_sent,
+                pacing_rate_kbps: v.tx_pacing_rate_bps / 1000,
+                width: w,
+                height: h,
+                fps: st.fps_actual,
+                wire_bytes: v.tx_rtp_wire_bytes_sent,
+                rtx_bytes: v.tx_rtx_bytes_sent,
+                plis: v.tx_pli_requests,
+                local_idrs: v.tx_local_idr_requests,
+                aus_dropped: v.tx_access_units_dropped,
+                queued_aus: v.tx_queued_access_units,
+                enc_target_kbps: v.tx_encoder_target_bps / 1000,
+                idrs_sent: v.tx_idr_access_units_sent,
+                last_idr_send_us: v.tx_last_idr_send_us,
             });
         }
         next += TICK;
