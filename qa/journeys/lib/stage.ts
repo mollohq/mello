@@ -65,19 +65,26 @@ export function between(events: AppEvent[], from: string, to: string): number | 
 /**
  * Wait for the feed a crew of two or more shows once the library report and
  * the contested titles have arrived: head2head, recent games tiles, titles and
- * no skeleton. `present` alone comes first and lags the content.
+ * the skeleton trio of the stage. `present` alone comes first and lags the
+ * content. The trio stays through two members (frame B2) and goes from three
+ * (frame C): pass `skeletons: 3` for a crew of two.
  */
-export async function waitForFullFeed(app: { waitFor: (label: string, p: (s: AppState) => boolean, ms: number) => Promise<AppState> }): Promise<AppState> {
+export async function waitForFullFeed(
+  app: { waitFor: (label: string, p: (s: AppState) => boolean, ms: number) => Promise<AppState> },
+  opts: { skeletons?: number } = {},
+): Promise<AppState> {
+  const trio = opts.skeletons ?? 0;
   return app.waitFor(
-    "the full feed: head2head with titles, recent_games tiles, skeleton_trio 0",
-    (s) => s.head2head.present && s.head2head.titles.length > 0 && s.recent_games.tiles.length > 0 && s.skeleton_trio === 0,
+    `the full feed: head2head with titles, recent_games tiles, skeleton_trio ${trio}`,
+    (s) => s.head2head.present && s.head2head.titles.length > 0 && s.recent_games.tiles.length > 0 && s.skeleton_trio === trio,
     15_000,
   );
 }
 
-/** The checks that every stage from two members on shares: no skeleton, no empty card. */
-export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => void): void {
-  expect(s.skeleton_trio === 0, `no skeletons from two members on, got ${s.skeleton_trio}`);
+/** The checks that every stage from two members on shares: the stage's skeleton trio, no empty card. */
+export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => void, opts: { skeletons?: number } = {}): void {
+  const trio = opts.skeletons ?? 0;
+  expect(s.skeleton_trio === trio, `skeleton_trio is ${trio} at this crew size, got ${s.skeleton_trio}`);
   for (const c of s.feed_cards) {
     expect(c.card_type !== "", `feed card ${c.id} has a type`);
     expect(c.title !== "" || c.actor_name !== "" || c.card_type === "head2head" || c.card_type === "invite" || c.card_type === "recent-games",

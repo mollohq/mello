@@ -88,6 +88,7 @@ export default journey({
       const s = await bob.waitFor("recent games tiles", (st) => st.recent_games.tiles.length > 0, 30_000);
       const rg = s.recent_games;
       expect(rg.header_note === "From this PC", `header note is "From this PC", got "${rg.header_note}"`);
+      expect(rg.shape === "list", `one PC is the narrow list, got "${rg.shape}"`);
       for (const t of rg.tiles) {
         expect(t.name !== "", "a tile has a name");
         expect(t.hours_text !== "" || t.launcher !== "", `${t.name} shows hours or a launcher`);

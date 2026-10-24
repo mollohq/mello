@@ -1,7 +1,10 @@
 // FEED-04: two members (mockup frames B2 and C). alice and bob are real apps
 // on one machine, so both report the same Brawlhalla. Seeding gives alice
 // games of her own, so the two libraries differ and titles are contested.
-// Head2head shows one pair, three open seats and the red invite.
+// Head2head shows one pair, three open seats and the red invite. Two PCs own
+// games, so recent games is a poster grid of at most five tiles with owner pips,
+// "From 2 PCs" on its header. The skeleton trio stays (frame B2). alice sees the
+// joined line for bob, who came by her invite link.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
@@ -48,13 +51,33 @@ export default journey({
       });
     }
 
-    await step("recent games is a real card, so no skeleton shows and no card is empty", async () => {
-      // Skeleton rule (client/src/handlers/clip.rs, skeleton_trio_for): two
-      // members and one real card of any kind hide the trio. The head2head
-      // card is not one. Recent games is.
+    for (const app of [bob, alice]) {
+      await step(`${app.name} sees recent games as a poster grid with owner pips from 2 PCs`, async () => {
+        const s = await app.waitFor("the poster grid", (st) => st.recent_games.shape === "grid" && st.recent_games.tiles.length > 1, 30_000);
+        const rg = s.recent_games;
+        expect(rg.pc_count === 2, `pc_count is 2, got ${rg.pc_count}`);
+        expect(rg.header_note === "From 2 PCs", `header note is "From 2 PCs", got "${rg.header_note}"`);
+        expect(rg.tiles.length <= 5, `at most five tiles in the row, got ${rg.tiles.length}`);
+        expect(rg.tiles.every((t) => t.owners >= 1), "every tile carries an owner pip");
+        expect(rg.tiles.some((t) => t.owners === 2), "a game both members own carries two pips");
+      });
+    }
+
+    await step("alice sees bob on the joined line, bob does not see his own join", async () => {
+      const a = await alice.waitFor("the joined line", (st) => st.joined_rows.length > 0, 30_000);
+      expect(a.joined_rows.length === 1, `one joined row, got ${a.joined_rows.length}`);
+      expect(/ joined, invited by /.test(a.joined_rows[0].line), `the line names the inviter: "${a.joined_rows[0].line}"`);
+      expect(/^(Today|Yesterday) \d\d:\d\d$/.test(a.joined_rows[0].when), `the time reads Today hh:mm: "${a.joined_rows[0].when}"`);
+      expect((await bob.state()).joined_rows.length === 0, "bob does not see his own join");
+    });
+
+    await step("the skeleton trio stays at two members and no card is empty", async () => {
+      // Skeleton rule (client/src/handlers/clip.rs, skeleton_trio_for): a cell
+      // hides when its card type exists, and all three hide from three members.
+      // This crew has no stream, clip or recap, so all three show.
       for (const app of [bob, alice]) {
-        await waitForFullFeed(app);
-        expectFullFeed(await app.state(), expect);
+        await waitForFullFeed(app, { skeletons: 3 });
+        expectFullFeed(await app.state(), expect, { skeletons: 3 });
         await app.checkpoint("two-feed");
       }
     });
