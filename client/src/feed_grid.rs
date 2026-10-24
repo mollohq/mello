@@ -5,6 +5,8 @@
 //! the position, so they live here and mirror the layout in `crew_feed.slint`
 //! (`row1-consumed`, `row2-base` and the row 3 wide slot):
 //!
+//! - A session of a crew of one stands left of the wide head2head card
+//!   (frame B): one cell, then two columns. `Lead::CellWide`.
 //! - A voice clip never takes a wide slot (CLIPS 7.1, plans/next-gen-feed.md
 //!   section 2).
 //! - A live session (a game in progress) with poster art takes the wide slot
@@ -74,6 +76,8 @@ enum Lead {
     Plain,
     /// A hero (two columns, two rows) with a side column.
     Hero,
+    /// A game session cell, then the wide head2head card of a crew of one.
+    CellWide,
 }
 
 struct Layout {
@@ -98,8 +102,11 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         .filter(|c| c.card_type == "head2head")
         .map(|c| c.variant.as_str())
         .unwrap_or("");
+    let session_then_wide = first.is_some_and(|c| c.card_type == "game-session")
+        && at(start + 1).is_some_and(|c| c.card_type == "head2head" && c.variant == "wide");
     let lead = match first {
         None => Lead::Hero,
+        Some(_) if session_then_wide => Lead::CellWide,
         Some(c) if c.card_type == "live-session" && c.has_poster => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
@@ -116,7 +123,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
     } else {
         match lead {
             Lead::Plain => 0,
-            Lead::Wide => left.min(2),
+            Lead::Wide | Lead::CellWide => left.min(2),
             Lead::FullRow => 1,
             Lead::Hero if side_recap => left.min(2),
             Lead::Hero => left.min(3),
@@ -139,6 +146,9 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
     }
     if l.lead == Lead::Wide && l.start < len {
         w.push(l.start);
+    }
+    if l.lead == Lead::CellWide && l.start + 1 < len {
+        w.push(l.start + 1); // the session cell, then the wide card
     }
     if l.r2_wide {
         w.push(l.row2_base); // row 2: the poster grid and one card
@@ -173,7 +183,7 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
         .filter(|&i| cards[i].card_type == "live-session")
         .collect();
     if lives.is_empty() {
-        return arrange_core(cards, start);
+        return arrange_core(cards, start, true);
     }
     let rest: Vec<usize> = (0..cards.len()).filter(|i| !lives.contains(i)).collect();
     // The first game with poster art leads. Every other game is a plain cell.
@@ -195,7 +205,7 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
     if hero {
         // The hero keeps its place. The live session is the first side cell.
         let infos: Vec<CardInfo> = rest.iter().map(|&i| cards[i].clone()).collect();
-        let mut out: Vec<usize> = arrange_core(&infos, start)
+        let mut out: Vec<usize> = arrange_core(&infos, start, false)
             .into_iter()
             .map(|j| rest[j])
             .collect();
@@ -215,7 +225,7 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
     }
     let infos: Vec<CardInfo> = seq.iter().map(|&i| cards[i].clone()).collect();
     place_more(
-        arrange_core(&infos, start)
+        arrange_core(&infos, start, false)
             .into_iter()
             .map(|j| seq[j])
             .collect(),
@@ -228,7 +238,7 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
 /// column), the others follow it.
 fn arrange_cells(cards: &[CardInfo], start: usize, rest: &[usize], lives: &[usize]) -> Vec<usize> {
     let infos: Vec<CardInfo> = rest.iter().map(|&i| cards[i].clone()).collect();
-    let mut out: Vec<usize> = arrange_core(&infos, start)
+    let mut out: Vec<usize> = arrange_core(&infos, start, false)
         .into_iter()
         .map(|j| rest[j])
         .collect();
@@ -243,10 +253,27 @@ fn arrange_cells(cards: &[CardInfo], start: usize, rest: &[usize], lives: &[usiz
     out
 }
 
-fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
+/// `session_leads`: the first session of a crew of one stands left of the wide
+/// head2head card. Off when a live session is in the feed: its cell sits there.
+fn arrange_core(cards: &[CardInfo], start: usize, session_leads: bool) -> Vec<usize> {
     let mut order: Vec<usize> = (0..cards.len()).collect();
     if cards.len() <= start {
         return order;
+    }
+
+    // 0. A session of a crew of one leads the wide head2head card (frame B).
+    if session_leads
+        && cards
+            .get(start)
+            .is_some_and(|c| c.card_type == "head2head" && c.variant == "wide")
+    {
+        if let Some(p) = order
+            .iter()
+            .position(|&i| cards[i].card_type == "game-session")
+        {
+            let id = order.remove(p);
+            order.insert(start, id);
+        }
     }
 
     // 1. Recent games to the first screen.
@@ -260,6 +287,9 @@ fn arrange_core(cards: &[CardInfo], start: usize) -> Vec<usize> {
             // The wide slot of the second row, with the head2head cell and
             // invite card in the first.
             Lead::Plain => l.row2_base + 4,
+            // The session cell and the wide card fill row 1. The list is the
+            // first cell of row 2, with the skeletons beside it.
+            Lead::CellWide => start + 2,
             // Next to the lead, in the side column.
             // Beside a live session, behind the head2head cell that sits there.
             Lead::Wide
@@ -420,7 +450,39 @@ mod tests {
             card("recent-games"),
         ];
         let order = arrange(&cards, 0);
-        assert_eq!(types(&cards, &order)[1], "recent-games");
+        // The session leads the wide card (frame B), so the list opens row 2.
+        assert_eq!(
+            &types(&cards, &order)[..3],
+            ["game-session", "head2head", "recent-games"]
+        );
+    }
+
+    #[test]
+    fn a_session_stands_left_of_the_wide_head2head_card() {
+        // Frame B: the card of the first session, then the wide card.
+        let cards = vec![h2h("wide"), card("recent-games"), card("game-session")];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t, ["game-session", "head2head", "recent-games"], "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert_eq!(l.lead, Lead::CellWide);
+        assert_eq!(
+            wide_slots(&l, infos.len()),
+            [1],
+            "the wide card is the second"
+        );
+        assert_eq!(l.row2_base, 2, "row 1 holds the session and the wide card");
+        // Arranging again changes nothing.
+        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_crew_of_one_with_no_session_keeps_the_wide_card_first() {
+        // Frame A: no session yet.
+        let cards = vec![h2h("wide"), card("recent-games")];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(t, ["head2head", "recent-games"], "{t:?}");
     }
 
     #[test]

@@ -108,7 +108,8 @@ export component SkeletonTrio inherits Rectangle {
     in property <bool> show-recap: true;
 
     background: transparent;
-    height: 150px;
+    // The recap cell alone is the slim row under the grid (mockup frame B).
+    height: root.show-stream || root.show-voice-clip ? 150px : 110px;
 
     HorizontalLayout {
         spacing: 12px;
