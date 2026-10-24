@@ -1919,17 +1919,25 @@ SendAccessUnitResult RtpVideoSender::send_access_unit(
 
     try {
         if (access_unit_info.is_idr) {
-            std::deque<State::AccessUnit> replacement;
-            replacement.push_back(std::move(access_unit));
-            const uint64_t dropped = static_cast<uint64_t>(
-                state->access_unit_queue.size()
-            );
-            state->access_unit_queue.swap(replacement);
-            state->queued_bytes_value = size;
-            state->access_units_dropped.fetch_add(
-                dropped,
-                std::memory_order_relaxed
-            );
+            // An IDR goes behind the queued access units, as libwebrtc's
+            // pacer sends every encoded frame. It replaced the queue before
+            // stage 4: on hardware clean each periodic IDR, then the IDR of
+            // the viewer's PLI right after it, dropped 3 to 6 queued access
+            // units (18 in 20 s). Only when the byte bound leaves no room for
+            // the IDR are the queued units dropped.
+            if (size > kMaxQueuedBytes - state->queued_bytes_value) {
+                const uint64_t dropped = static_cast<uint64_t>(
+                    state->access_unit_queue.size()
+                );
+                state->access_unit_queue.clear();
+                state->queued_bytes_value = 0;
+                state->access_units_dropped.fetch_add(
+                    dropped,
+                    std::memory_order_relaxed
+                );
+            }
+            state->access_unit_queue.push_back(std::move(access_unit));
+            state->queued_bytes_value += size;
             state->awaiting_idr = false;
             state->idr_in_sender.store(true, std::memory_order_relaxed);
         } else {

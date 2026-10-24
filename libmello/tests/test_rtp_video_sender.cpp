@@ -1235,6 +1235,35 @@ TEST(RtpVideoSenderAdmissionTest, AnOverflowWhileAnIdrDrainsAsksForNoSecondIdr) 
     EXPECT_GT(stats.peak_queued_access_units, RtpVideoSender::kMaxQueuedAccessUnits);
 }
 
+// An IDR goes behind the queued deltas; nothing is dropped. The old sender
+// replaced the queue with the IDR: on hardware clean the IDR of the viewer's
+// PLI, right after each periodic IDR, dropped 3 to 6 access units (18 in
+// 20 s, against the gate's 0).
+TEST(RtpVideoSenderAdmissionTest, AnIdrQueuesBehindTheDeltasAndDropsNothing) {
+    LoopbackVideoLink link;
+    // 80 kbps ceiling: 200 kbps pacing. The 8 kB delta holds the pacer for
+    // about 0.3 s, so the small deltas and the IDR queue behind it.
+    RtpVideoSender sender = link.make_sender(80'000);
+    const auto first = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender, first.data(), first.size(), 0));
+    ASSERT_TRUE(link.wait_for_emitted_count(1, 10s));
+    const auto big = make_large_delta_access_unit(8 * 1024);
+    ASSERT_TRUE(send_au_accepted(sender, big.data(), big.size(), 16'667));
+    for (int index = 0; index < 3; ++index) {
+        const auto delta = make_delta_access_unit(static_cast<uint8_t>(0x40 + index));
+        ASSERT_TRUE(send_au_accepted(sender, delta.data(), delta.size(),
+                                     static_cast<uint64_t>(index + 2) * 16'667));
+    }
+    const auto idr = make_idr_access_unit();
+    ASSERT_TRUE(send_au_accepted(sender, idr.data(), idr.size(), 5 * 16'667));
+    ASSERT_TRUE(link.wait_for_emitted_count(6, 10s));
+    const auto emitted = link.emitted();
+    ASSERT_EQ(emitted.size(), 6u);
+    EXPECT_FALSE(emitted[4].is_idr);
+    EXPECT_TRUE(emitted[5].is_idr);
+    EXPECT_EQ(sender.stats().access_units_dropped, 0u);
+}
+
 TEST(RtpVideoSenderLifetimeTest, DestroysCleanlyUnderLoad) {
     auto completed = std::async(std::launch::async, []() -> bool {
         LoopbackVideoLink link;
