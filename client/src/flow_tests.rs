@@ -5364,3 +5364,135 @@ fn empty_recap_renders_no_recap_card() {
     });
     assert!(recap_titles(&h).is_empty());
 }
+
+// --- stage 6 (streaming-quality): the stream session states on the cards ---
+
+/// `(state, subtitle, title)` of each stream card, in order.
+fn stream_cards(h: &Harness) -> Vec<(String, String, String)> {
+    h.app()
+        .get_active_stream_cards()
+        .iter()
+        .map(|c| {
+            (
+                c.state.to_string(),
+                c.subtitle.to_string(),
+                c.title.to_string(),
+            )
+        })
+        .collect()
+}
+
+/// The host card follows the stream session: STARTING until the track is
+/// open, LIVE, RECONNECTING while the link is silent, LIVE again; a stream
+/// that ends on a lost connection keeps a card that says so.
+#[test]
+fn the_host_card_follows_the_stream_session() {
+    let mut h = Harness::new();
+    h.app().set_user_name("b0bben".into());
+
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    assert!(
+        h.app().get_is_hosting(),
+        "END STREAM is there during the start"
+    );
+    assert_eq!(stream_cards(&h)[0].0, "starting");
+
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "sfu".into(),
+    });
+    assert_eq!(stream_cards(&h)[0].0, "live");
+
+    h.emit(Event::StreamReconnecting {
+        role: mello_core::events::StreamRole::Host,
+    });
+    assert_eq!(stream_cards(&h)[0].0, "reconnecting");
+    h.emit(Event::StreamResumed {
+        role: mello_core::events::StreamRole::Host,
+    });
+    assert_eq!(stream_cards(&h)[0].0, "live");
+
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "connection_lost".into(),
+    });
+    assert!(!h.app().get_is_hosting());
+    assert_eq!(
+        stream_cards(&h),
+        [(
+            "ended".to_string(),
+            "The connection to the stream was lost for 30 seconds.".to_string(),
+            "STREAM ENDED".to_string()
+        )]
+    );
+}
+
+/// END STREAM ends without a notice card: the user ended it.
+#[test]
+fn end_stream_leaves_no_notice_card() {
+    let mut h = Harness::new();
+    h.emit(Event::StreamStarted {
+        crew_id: "crew-1".into(),
+        session_id: "s1".into(),
+        mode: "sfu".into(),
+    });
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "stopped".into(),
+    });
+    assert!(stream_cards(&h).is_empty(), "{:?}", stream_cards(&h));
+}
+
+/// A start that fails names the cause on a card; the host is not hosting.
+#[test]
+fn a_failed_start_leaves_a_card_that_names_the_cause() {
+    let mut h = Harness::new();
+    h.emit(Event::StreamStarting {
+        crew_id: "crew-1".into(),
+    });
+    h.emit(Event::StreamFailed {
+        role: mello_core::events::StreamRole::Host,
+        reason: "Could not reach the stream server.".into(),
+    });
+    assert!(!h.app().get_is_hosting());
+    assert_eq!(
+        stream_cards(&h),
+        [(
+            "failed".to_string(),
+            "Could not reach the stream server.".to_string(),
+            "STREAM DID NOT START".to_string()
+        )]
+    );
+}
+
+/// The watched card shows RECONNECTING while the viewer reconnects, and
+/// stays the watched card (the last frame stays under the wash).
+#[test]
+fn the_watched_card_shows_reconnecting_and_resumes() {
+    let mut h = Harness::new();
+    h.app().set_active_streamer_id("host-1".into());
+    h.app().set_active_streamer_name("alice".into());
+    h.app().set_active_stream_session_id("s1".into());
+    h.emit(Event::StreamWatching {
+        host_id: "host-1".into(),
+        width: 1280,
+        height: 720,
+    });
+    assert_eq!(stream_cards(&h)[0].0, "");
+
+    h.emit(Event::StreamReconnecting {
+        role: mello_core::events::StreamRole::Viewer,
+    });
+    assert!(h.app().get_is_watching(), "a reconnect is not a stop");
+    assert_eq!(stream_cards(&h)[0].0, "reconnecting");
+
+    h.emit(Event::StreamResumed {
+        role: mello_core::events::StreamRole::Viewer,
+    });
+    assert_eq!(stream_cards(&h)[0].0, "");
+}

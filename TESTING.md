@@ -404,6 +404,49 @@ Output (`results.json`, and per profile `presents.csv`, `host.csv`,
 `--write-fixture FILE` encodes the first 2 s of the 720p clip with the
 OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
 
+### Stream start, watch and reconnect (streaming-quality stage 6)
+
+The gate measures the media path with the harness's own host and viewer.
+The client's start, watch and reconnect logic has its own tests. They run in
+`cargo test --workspace`:
+
+| What | Where |
+|---|---|
+| Reconnecting at 700 ms of silence, resume on the same connection within 5 s, rejoin after 5 s or a drop on the voice schedule (counted from each attempt's start), give-up 30 s after the drop; the viewer's host-silence check | `mello-core/src/client/stream_link.rs` |
+| A failed `start_stream`, capture or SFU step takes the session back and names the cause; `advertise: "on_live"`; live only when the capture and the track are up, then `stream_live` | `client/stream_reconnect_tests.rs`, `streaming.rs` (`stream_lifecycle_tests`), `stream_host_start.rs` |
+| Against a fake SFU with live native peers that answers WebSocket pings only (as mello-sfu does for streams): a short silence resumes on the same connection; a dropped socket and a 5 s silence rejoin the same session as the host, and the sink moves to the new connection with an IDR | `client/stream_reconnect_tests.rs` |
+| A 10 s backend stall: END STREAM, the SFU `leave` and the next command do not wait on `stop_stream` | `client/stream_reconnect_tests.rs` (`end_stream_and_the_loop_do_not_wait_on_a_stalled_backend`) |
+| The viewer keeps its leg on `host_reconnecting` and on its own drop; only `session_ended` ends the watch | `client/stream_watch.rs`, `stream_reconnect_tests.rs`, `streaming.rs` (`host_reconnecting_keeps_the_viewer`) |
+| The sink with a late connection: backpressure, the settings kept for the attach | `mello-core/src/stream/sink_sfu.rs` |
+| `stream_live`, `refresh_stream_token`, the deferred advert | `backend/nakama/data/modules/streaming_test.go` |
+| The SFU refuses a token for another region | mello-sfu `internal/auth/jwt_test.go` |
+
+`stream_reconnect_live` (`mello-core/src/client/stream_reconnect_live_tests.rs`)
+runs the stage 6 gate against a real mello-sfu: a host that streams monitor 0
+(hardware encoder) and a viewer (hardware decoder) in one process, with real
+command loops and a fake Nakama that hands out test-mode tokens. The host's
+signaling socket goes through a TCP proxy and every UDP flow through a proxy
+on the SFU's candidate `127.0.0.2:10000` (the gate's shim address, so no
+stream gate may run at the same time). A "cable pull" freezes the host's TCP
+and drops its UDP flows. It reports click to first RTP, Watch to first
+frame, a 3 s and a 10 s pull ("reconnecting" on the viewer within 1 s, the
+picture back within 3 s of the cable, same session) and a 35 s pull (both
+sides end with a message). Ignored by default:
+
+```bash
+# mello-sfu (the deployed SFU), from Git Bash
+GOTOOLCHAIN=go1.24.9 go build -o /tmp/sfu6/sfu.exe ./cmd/sfu
+SFU_ADMIN_PASSWORD=devpass SFU_PUBLIC_IP=127.0.0.2 SFU_ICE_TCP_PORT=0 \
+  SFU_ADDR=127.0.0.1:18443 SFU_ADMIN_ADDR=127.0.0.1:18080 SFU_REGION=test \
+  /tmp/sfu6/sfu.exe
+# mello
+MELLO_TEST_SFU=ws://127.0.0.1:18443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+  cargo test -p mello-core --lib -- --ignored --nocapture stream_reconnect_live
+```
+
+Log lines to read in a client log: "Stream start timing:
+click_to_first_rtp_ms=…" and "Stream watch timing: click_to_first_frame_ms=…".
+
 ---
 
 ## Voice quality gate
