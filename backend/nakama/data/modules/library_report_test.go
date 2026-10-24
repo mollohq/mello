@@ -146,7 +146,6 @@ func TestLibraryReport_Validation(t *testing.T) {
 		{"missing launcher", `{"games":[{"game_id":"steam-1","name":"A"}]}`},
 		{"launcher upper case", `{"games":[{"game_id":"steam-1","name":"A","launcher":"Steam"}]}`},
 		{"negative playtime", `{"games":[{"game_id":"steam-1","name":"A","launcher":"steam","playtime_min":-1}]}`},
-		{"absurd playtime", `{"games":[{"game_id":"steam-1","name":"A","launcher":"steam","playtime_min":999999999}]}`},
 		{"negative last played", `{"games":[{"game_id":"steam-1","name":"A","launcher":"steam","last_played_unix":-5}]}`},
 		{"payload too large", `{"games":[],"pad":"` + strings.Repeat("a", maxLibraryPayloadSize) + `"}`},
 	}
@@ -182,5 +181,22 @@ func TestLibraryReport_DuplicateIDsKeepTheFirst(t *testing.T) {
 	d := storedLibrary(t, nk, "u1")
 	if len(d.Games) != 1 || d.Games[0].Name != "First" {
 		t.Fatalf("games = %+v", d.Games)
+	}
+}
+
+func TestNormalizeLibraryReportClampsPlaytime(t *testing.T) {
+	over, ok := maxLibraryPlaytimeMin+1, maxLibraryPlaytimeMin
+	games, clamped, err := normalizeLibraryReport(libraryReportRequest{Games: []libraryReportGame{
+		{LibraryGame: LibraryGame{GameID: "steam-1", Name: "A", Launcher: "steam", PlaytimeMin: &over}},
+		{LibraryGame: LibraryGame{GameID: "steam-2", Name: "B", Launcher: "steam", PlaytimeMin: &ok}},
+	}})
+	if err != nil || clamped != 1 || len(games) != 2 {
+		t.Fatalf("err=%v clamped=%d games=%d", err, clamped, len(games))
+	}
+	if *games[0].PlaytimeMin != maxLibraryPlaytimeMin || *games[1].PlaytimeMin != maxLibraryPlaytimeMin {
+		t.Fatalf("playtimes %d %d, want cap", *games[0].PlaytimeMin, *games[1].PlaytimeMin)
+	}
+	if maxLibraryPlaytimeMin != 7_200_000 {
+		t.Fatalf("cap = %d, want 7,200,000 min", maxLibraryPlaytimeMin)
 	}
 }

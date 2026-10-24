@@ -26,6 +26,9 @@ const PROFILE_SEED = 0x6d33_6c6c;
  * resolves from the bundled catalogue and sends in `game_session_end`
  * (specs/17-GAME-SENSING.md, identity reconciliation).
  */
+/** Playtime of a member who takes the_carry: above any seeded value (180,000 min, 3,000 h), well under the server cap (120,000 h). */
+export const CARRY_TAKER_PLAYTIME_MIN = 400_000;
+
 export type SeedGame = { id: string; catalogueId: string; name: string; playtimeMin: number };
 
 export type SeedSession = {

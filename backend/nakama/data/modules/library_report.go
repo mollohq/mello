@@ -35,8 +35,10 @@ const (
 	maxLibraryIDLen       = 128
 	maxLibraryNameRunes   = 128
 	maxLibraryLauncherLen = 32
-	// 50 years of play, in minutes. Bounds a corrupt or hostile value.
-	maxLibraryPlaytimeMin = 50 * 365 * 24 * 60
+	// 120,000 h in minutes. Steam's highest real lifetime hours are under
+	// 100,000 h, so a larger value is corrupt or hostile. It is clamped, not
+	// rejected, so one bad entry does not lose the whole report.
+	maxLibraryPlaytimeMin = 120_000 * 60
 )
 
 // LibraryGame is one installed game as stored. Optional figures are pointers,
@@ -98,28 +100,35 @@ func validLibraryLauncher(s string) bool {
 
 // normalizeLibraryReport validates the request and returns the games to store.
 // Hidden entries are dropped. A repeated game_id keeps its first entry.
-func normalizeLibraryReport(req libraryReportRequest) ([]LibraryGame, error) {
+// A playtime above the cap is clamped; the second result counts those entries.
+func normalizeLibraryReport(req libraryReportRequest) ([]LibraryGame, int, error) {
 	if len(req.Games) > maxLibraryGames {
-		return nil, runtime.NewError("too many games, the limit is 500", 3)
+		return nil, 0, runtime.NewError("too many games, the limit is 500", 3)
 	}
+	clamped := 0
 	out := make([]LibraryGame, 0, len(req.Games))
 	seen := make(map[string]bool, len(req.Games))
 	for _, g := range req.Games {
 		if !validLibraryGameID(g.GameID) {
-			return nil, runtime.NewError("invalid game_id", 3)
+			return nil, 0, runtime.NewError("invalid game_id", 3)
 		}
 		name := strings.TrimSpace(g.Name)
 		if name == "" || utf8.RuneCountInString(name) > maxLibraryNameRunes || strings.ContainsAny(name, "\x00\r\n") {
-			return nil, runtime.NewError("invalid name", 3)
+			return nil, 0, runtime.NewError("invalid name", 3)
 		}
 		if !validLibraryLauncher(g.Launcher) {
-			return nil, runtime.NewError("invalid launcher", 3)
+			return nil, 0, runtime.NewError("invalid launcher", 3)
 		}
-		if g.PlaytimeMin != nil && (*g.PlaytimeMin < 0 || *g.PlaytimeMin > maxLibraryPlaytimeMin) {
-			return nil, runtime.NewError("invalid playtime_min", 3)
+		if g.PlaytimeMin != nil && *g.PlaytimeMin < 0 {
+			return nil, 0, runtime.NewError("invalid playtime_min", 3)
+		}
+		if g.PlaytimeMin != nil && *g.PlaytimeMin > maxLibraryPlaytimeMin {
+			v := maxLibraryPlaytimeMin
+			g.PlaytimeMin = &v
+			clamped++
 		}
 		if g.LastPlayedUnix != nil && *g.LastPlayedUnix < 0 {
-			return nil, runtime.NewError("invalid last_played_unix", 3)
+			return nil, 0, runtime.NewError("invalid last_played_unix", 3)
 		}
 		if g.Hidden != nil && *g.Hidden {
 			continue
@@ -136,7 +145,7 @@ func normalizeLibraryReport(req libraryReportRequest) ([]LibraryGame, error) {
 			LastPlayedUnix: g.LastPlayedUnix,
 		})
 	}
-	return out, nil
+	return out, clamped, nil
 }
 
 // LibraryReportRPC replaces the caller's library document. An empty list is
@@ -154,9 +163,12 @@ func LibraryReportRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	if err := json.Unmarshal([]byte(payload), &req); err != nil {
 		return "", runtime.NewError("invalid request", 3)
 	}
-	games, err := normalizeLibraryReport(req)
+	games, clamped, err := normalizeLibraryReport(req)
 	if err != nil {
 		return "", err
+	}
+	if clamped > 0 {
+		logger.Warn("library_report: user=%s clamped playtime_min on %d entries to %d", userID, clamped, maxLibraryPlaytimeMin)
 	}
 
 	changed := libraryGamesChanged(readLibraryDocs(ctx, nk, []string{userID})[userID], games)

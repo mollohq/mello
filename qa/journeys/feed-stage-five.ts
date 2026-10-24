@@ -3,7 +3,7 @@
 // members are seeded over REST.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { profiles, reportLibrary } from "./lib/seed.ts";
+import { CARRY_TAKER_PLAYTIME_MIN, profiles, reportLibrary } from "./lib/seed.ts";
 import { bobWithSeededCrew, expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 
 export default journey({
@@ -55,7 +55,7 @@ export default journey({
       // so one pair row wears the dot.
       const own = profiles(members.length, runId).find((p) => p.name === taker!.name)?.games ?? [];
       const library = own.filter((g) => g.id !== "steam-730").map((g) => ({ id: g.id, name: g.name, playtimeMin: g.playtimeMin }));
-      library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin: 20_000_000 });
+      library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin: CARRY_TAKER_PLAYTIME_MIN });
       await reportLibrary(taker!.token, library);
       const s = await bob.waitFor(
         "the_carry held by the taker and one pair row with the dot",
