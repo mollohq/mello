@@ -166,6 +166,8 @@ struct Snapshot {
     live_sessions: Vec<LiveSessionSnap>,
     /// The skeleton trio cells that show (0 to 3).
     skeleton_trio: usize,
+    /// The joined line at the top of the feed, top row first.
+    joined_rows: Vec<JoinedRowSnap>,
     /// The audio page of the settings.
     audio: AudioSnap,
     riot: RiotSnap,
@@ -340,15 +342,29 @@ struct TitleHolderSnap {
 }
 
 #[derive(Serialize)]
+struct JoinedRowSnap {
+    /// For example `"Jonas joined, invited by b0bben"`.
+    line: String,
+    /// For example `"Today 23:14"`.
+    when: String,
+}
+
+#[derive(Serialize)]
 struct RecentGamesSnap {
     /// The right side of the card header, for example `"From this PC"`.
     header_note: String,
+    /// `"grid"` (poster grid, two or more PCs) or `"list"`. Empty with no card.
+    shape: &'static str,
+    /// The PCs behind the tiles: the members who own or played a listed game.
+    pc_count: i32,
     tiles: Vec<RecentGameTileSnap>,
 }
 
 #[derive(Serialize)]
 struct RecentGameTileSnap {
     name: String,
+    /// How many owner octagons the tile carries (the pips of the grid).
+    owners: usize,
     /// The line under the name, for example `"4,167 H"` or `"EPIC"`.
     hours_text: String,
     /// Lower case: `"steam"`, `"epic"`, `"gog"`, or empty when unknown.
@@ -584,11 +600,19 @@ fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
     let Some(card) = feed.iter().find(|c| c.card_type == "recent-games") else {
         return RecentGamesSnap {
             header_note: String::new(),
+            shape: "",
+            pc_count: 0,
             tiles: Vec::new(),
         };
     };
     RecentGamesSnap {
         header_note: card.subtitle.to_string(),
+        shape: if crate::recent_games::is_grid(i64::from(card.recent_pc_count)) {
+            "grid"
+        } else {
+            "list"
+        },
+        pc_count: card.recent_pc_count,
         tiles: first_rows(&card.recent_games, |t| {
             // The tile shows the launcher in place of hours when it has none.
             let hours = t.hours.to_string();
@@ -599,6 +623,7 @@ fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
             };
             RecentGameTileSnap {
                 name: t.game_name.to_string(),
+                owners: t.owners.row_count(),
                 hours_text: hours,
                 launcher,
                 tracked: t.tracked,
@@ -1084,6 +1109,14 @@ fn read(app: &MainWindow) -> Snapshot {
                 octagons: c.live.players.row_count(),
                 with_avatar: c.live.players.iter().filter(|p| p.has_avatar).count(),
                 poster: c.live.has_poster,
+            })
+            .collect(),
+        joined_rows: app
+            .get_feed_joined()
+            .iter()
+            .map(|r| JoinedRowSnap {
+                line: r.line.to_string(),
+                when: r.when.to_string(),
             })
             .collect(),
         skeleton_trio: [

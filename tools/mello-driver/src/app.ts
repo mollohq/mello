@@ -164,10 +164,15 @@ export type AppState = {
   /** The recent games card of the feed. Empty tiles when the feed has none. */
   recent_games: {
     header_note: string;
-    tiles: { name: string; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
+    /** "grid" from two PCs on, "list" for one, "" with no card. */
+    shape: "grid" | "list" | "";
+    pc_count: number;
+    tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
   };
   /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
+  /** The joined line at the top of the feed, top row first. */
+  joined_rows: { line: string; when: string }[];
   /** The skeleton trio cells that show, 0 to 3. */
   skeleton_trio: number;
   /** The audio page of the settings. */

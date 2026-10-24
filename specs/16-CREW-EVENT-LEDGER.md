@@ -137,7 +137,7 @@ Written when a detected game session ends for a user in this crew. Requires game
 
 #### `member_joined`
 
-Written by the `AfterJoinGroup` hook.
+Written by the `AfterJoinGroup` hook, and by the `join_by_invite_code` RPC, which adds the caller with system authority and so runs no hook. Both call `recordMemberJoined`.
 
 ```json
 {
@@ -145,10 +145,14 @@ Written by the `AfterJoinGroup` hook.
     "score": 15,
     "data": {
         "username": "newplayer",
-        "display_name": "NewPlayer"
+        "display_name": "NewPlayer",
+        "invited_by": "<user id of the member whose invite code was used>",
+        "invited_by_name": "b0bben"
     }
 }
 ```
+
+`invited_by` and `invited_by_name` are absent when the joiner used no invite code. They feed the joined line at the top of the crew feed (CLIPS 7).
 
 #### `member_left`
 
@@ -573,7 +577,7 @@ initializer.RegisterRpc("post_moment", PostMomentRPC)
 |---------------|---------------|---------|
 | `voice_state.go` voice_leave | `voice_session` | Last member leaves a channel that had 2+ members (track via in-memory session start time) |
 | `streaming.go` stream_stop | `stream_session` | Stream ends |
-| `crews.go` AfterJoinGroup | `member_joined` | User joins crew |
+| `crews.go` AfterJoinGroup, `invite_codes.go` join_by_invite_code | `member_joined` | User joins crew |
 | `crews.go` AfterLeaveGroup | `member_left` | User leaves crew |
 | `crew_state.go` OnChatMessage | `chat_activity` | Aggregated, not per-message (see 6.2) |
 

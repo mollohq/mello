@@ -371,6 +371,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(empty_feed)).into());
             ctx.app.set_feed_cold_start(true);
+            ctx.app.set_feed_joined(
+                Rc::new(slint::VecModel::from(Vec::<crate::JoinedRowData>::new())).into(),
+            );
             ctx.app.set_feed_clip_count(0);
             ctx.app.set_feed_has_more(false);
             crate::converters::set_active_crew(&ctx.app, crew_id.as_str());

@@ -539,7 +539,23 @@ func AfterJoinCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	crewID := in.GetGroupId()
 	logger.Info("User %s joined crew %s", userID, crewID)
 
+	recordMemberJoined(ctx, logger, nk, crewID, userID, "")
+	queueCrewJoinPush(ctx, logger, nk, crewID, userID)
+
+	return nil
+}
+
+// recordMemberJoined writes the member_joined event of the crew ledger. Every
+// way into a crew calls it: the join hook, and the invite code RPC, which adds
+// the caller with system authority and so runs no hook. inviterID is the member
+// whose invite code was used, or "" when there is none.
+func recordMemberJoined(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID, inviterID string) {
 	displayName := resolveUsername(ctx, nk, userID)
+	data := MemberJoinedData{Username: displayName, DisplayName: displayName}
+	if inviterID != "" && inviterID != userID {
+		data.InvitedBy = inviterID
+		data.InvitedByName = resolveUsername(ctx, nk, inviterID)
+	}
 	event := CrewEvent{
 		ID:        generateEventID(),
 		CrewID:    crewID,
@@ -547,17 +563,11 @@ func AfterJoinCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 		ActorID:   userID,
 		Timestamp: time.Now().UnixMilli(),
 		Score:     15,
-		Data: MemberJoinedData{
-			Username:    displayName,
-			DisplayName: displayName,
-		},
+		Data:      data,
 	}
 	if err := AppendCrewEvent(ctx, nk, crewID, event); err != nil {
 		logger.Warn("Failed to write member_joined event for crew %s: %v", crewID, err)
 	}
-	queueCrewJoinPush(ctx, logger, nk, crewID, userID)
-
-	return nil
 }
 
 func AfterLeaveCrew(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, in *api.LeaveGroupRequest) error {

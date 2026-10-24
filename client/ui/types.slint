@@ -317,6 +317,15 @@ export struct FeedCardData {
     live: LiveSessionData,
 }
 
+// One row of the joined line at the top of the crew feed (CLIPS 7): a member
+// who joined in the last 24 hours. Both strings are formatted in Rust
+// (`joined_line.rs`): "Jonas joined, invited by b0bben" and "Today 23:14".
+export struct JoinedRowData {
+    user-id: string,
+    line: string,
+    when: string,
+}
+
 // One per-game card in the personal stats profile (spec 19 A2).
 // Display strings are pre-formatted in Rust.
 export struct GameStatsCardData {

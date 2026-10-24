@@ -33,6 +33,7 @@ mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
+mod joined_line;
 mod live_session;
 mod member_audio;
 mod notifications;

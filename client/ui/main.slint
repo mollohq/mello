@@ -26,6 +26,7 @@ import {
     StreamCardData,
     YouStripData,
     GameStatsCardData,
+    JoinedRowData,
     GameIntegrationData,
     InstalledGameData,
     InvitePersonData,
@@ -55,7 +56,7 @@ import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 import { RecapOpened } from "panels/recap_opened.slint";
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -467,6 +468,8 @@ export component MainWindow inherits Window {
     in property <bool> feed-skeleton-voice-clip: false;
     in property <bool> feed-skeleton-recap: false;
     in-out property <bool> feed-invite-line: false;
+    // Members who joined in the last 24 hours, newest first (CLIPS 7).
+    in property <[JoinedRowData]> feed-joined: [];
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
     callback feed-show-more-clicked();
@@ -1030,6 +1033,7 @@ export component MainWindow inherits Window {
                             skeleton-voice-clip: root.feed-skeleton-voice-clip;
                             skeleton-recap: root.feed-skeleton-recap;
                             invite-line: root.feed-invite-line;
+                            joined-rows: root.feed-joined;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
                             feed-show-more-clicked => {

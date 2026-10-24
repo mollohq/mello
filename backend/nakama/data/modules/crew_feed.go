@@ -108,9 +108,64 @@ type FeedSection struct {
 	Entries []FeedEntry `json:"entries"`
 }
 
+// FeedJoin is one member who joined the crew in the last 24 hours, for the
+// joined line at the top of the feed. It comes from the member_joined events
+// of the ledger. Names are the ones the event stored. InvitedBy is empty when
+// the joiner used no invite code.
+type FeedJoin struct {
+	UserID        string `json:"user_id"`
+	Name          string `json:"name"`
+	InvitedBy     string `json:"invited_by,omitempty"`
+	InvitedByName string `json:"invited_by_name,omitempty"`
+	Ts            int64  `json:"ts"`
+}
+
 type FeedResponse struct {
 	CrewID   string        `json:"crew_id"`
 	Sections []FeedSection `json:"sections"`
+	// Joined holds the members who joined in the last 24 hours, newest first,
+	// at most feedJoinedMax. One row each on the client.
+	Joined []FeedJoin `json:"joined,omitempty"`
+}
+
+const (
+	// feedJoinedWindowMs is how long a join shows on the joined line.
+	feedJoinedWindowMs = 24 * 60 * 60 * 1000
+	// feedJoinedMax is the most rows the joined line shows.
+	feedJoinedMax = 3
+)
+
+// buildFeedJoins reads the member_joined events of the timeline: the joins of
+// the last 24 hours by someone who is still a member, newest first, at most
+// three, one row for each joiner. The viewer's own join is not shown to them.
+// members is the set of current member ids. Pure, so the rule is testable.
+func buildFeedJoins(entries []TimelineEntry, members map[string]bool, viewerID string, nowMs int64) []FeedJoin {
+	joins := make([]FeedJoin, 0, feedJoinedMax)
+	seen := map[string]bool{}
+	sorted := append([]TimelineEntry(nil), entries...)
+	sort.SliceStable(sorted, func(i, j int) bool { return sorted[i].Ts > sorted[j].Ts })
+	for _, e := range sorted {
+		if e.Type != "member_joined" || e.ActorID == "" || e.ActorID == viewerID {
+			continue
+		}
+		if nowMs-e.Ts >= feedJoinedWindowMs || e.Ts > nowMs || !members[e.ActorID] || seen[e.ActorID] {
+			continue
+		}
+		seen[e.ActorID] = true
+		d, _ := decodeCardData[MemberJoinedData](e.Data)
+		name := d.DisplayName
+		if name == "" {
+			name = d.Username
+		}
+		joins = append(joins, FeedJoin{
+			UserID: e.ActorID, Name: name,
+			InvitedBy: d.InvitedBy, InvitedByName: d.InvitedByName, Ts: e.Ts,
+		})
+		if len(joins) == feedJoinedMax {
+			break
+		}
+	}
+	return joins
 }
 
 // feedCard is the internal working representation used by the pure curation
@@ -1052,7 +1107,8 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	}
 
 	// this_week: curated recent feed.
-	cards := mergedToCards(buildMergedTimeline(ctx, nk, req.CrewID))
+	timeline := buildMergedTimeline(ctx, nk, req.CrewID)
+	cards := mergedToCards(timeline)
 	nowMs := time.Now().UnixMilli()
 	h2h := crewHead2headForViewer(ctx, logger, nk, req.CrewID, userID, nowMs)
 	thisWeek := buildThisWeekFull(cards, nowMs, crewLibraryDocs(ctx, nk, req.CrewID), h2h)
@@ -1085,9 +1141,24 @@ func CrewFeedRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 			{ID: "this_week", Entries: thisWeek},
 			{ID: "memory", Entries: memory},
 		},
+		Joined: feedJoinsFor(ctx, nk, req.CrewID, timeline, userID, nowMs),
 	}
 	data, _ := json.Marshal(resp)
 	return string(data), nil
+}
+
+// feedJoinsFor is buildFeedJoins with the member set of the crew. A failure to
+// list the members gives no joined line.
+func feedJoinsFor(ctx context.Context, nk runtime.NakamaModule, crewID string, timeline []TimelineEntry, viewerID string, nowMs int64) []FeedJoin {
+	ids, err := crewMemberIDs(ctx, nk, crewID)
+	if err != nil {
+		return nil
+	}
+	members := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		members[id] = true
+	}
+	return buildFeedJoins(timeline, members, viewerID, nowMs)
 }
 
 // crewLibraryDocs reads the library documents of the crew members as the

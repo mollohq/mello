@@ -107,9 +107,15 @@ type GameSessionData struct {
 	Verified bool `json:"verified,omitempty"`
 }
 
+// MemberJoinedData is the payload of member_joined. InvitedBy is the user id of
+// the member whose invite code the joiner used, and InvitedByName their name.
+// Both are absent when the joiner came by another way. They feed the joined
+// line at the top of the crew feed (CLIPS 7).
 type MemberJoinedData struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
+	Username      string `json:"username"`
+	DisplayName   string `json:"display_name"`
+	InvitedBy     string `json:"invited_by,omitempty"`
+	InvitedByName string `json:"invited_by_name,omitempty"`
 }
 
 type MemberLeftData struct {

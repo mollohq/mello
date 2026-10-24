@@ -225,11 +225,30 @@ pub struct FeedSection {
     pub entries: Vec<FeedEntry>,
 }
 
+/// A member who joined the crew in the last 24 hours (`FeedResponse::joined`),
+/// from the member_joined events of the ledger. Newest first, at most three.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+pub struct FeedJoin {
+    #[serde(default)]
+    pub user_id: String,
+    #[serde(default)]
+    pub name: String,
+    /// The member whose invite code the joiner used. Empty when none.
+    #[serde(default)]
+    pub invited_by: String,
+    #[serde(default)]
+    pub invited_by_name: String,
+    #[serde(default)]
+    pub ts: i64,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FeedResponse {
     pub crew_id: String,
     #[serde(default)]
     pub sections: Vec<FeedSection>,
+    #[serde(default)]
+    pub joined: Vec<FeedJoin>,
 }
 
 // --- PostClip ---

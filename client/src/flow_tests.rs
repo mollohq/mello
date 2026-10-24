@@ -3999,6 +3999,7 @@ fn feed_loaded_decodes_clip_waveform() {
                     }),
                 }],
             }],
+            joined: vec![],
         },
     });
 
@@ -4266,6 +4267,7 @@ fn zero_telemetry_game_session_feed() -> mello_core::crew_events::FeedResponse {
                 }),
             }],
         }],
+        joined: vec![],
     }
 }
 
@@ -4328,6 +4330,7 @@ fn recent_games_feed() -> mello_core::crew_events::FeedResponse {
                 }),
             }],
         }],
+        joined: vec![],
     }
 }
 
@@ -4530,6 +4533,111 @@ fn the_server_pc_count_wins_over_the_tile_owners() {
     assert_eq!(count_of(&h, "RecentGamePoster"), 1);
 }
 
+fn join_of(
+    id: &str,
+    name: &str,
+    invited_by: &str,
+    ago_ms: i64,
+) -> mello_core::crew_events::FeedJoin {
+    mello_core::crew_events::FeedJoin {
+        user_id: id.into(),
+        name: name.into(),
+        invited_by: if invited_by.is_empty() {
+            "".into()
+        } else {
+            // Nobody the roster knows: the name the event stored is shown.
+            "u9".into()
+        },
+        invited_by_name: invited_by.into(),
+        ts: now_ms() - ago_ms,
+    }
+}
+
+fn feed_with_joins(joined: Vec<mello_core::crew_events::FeedJoin>) -> FeedResponse {
+    let mut feed = two_member_feed_with_games(
+        serde_json::json!([
+            { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 600, "member_ids": ["user-1", "u2"] }
+        ]),
+        None,
+    );
+    feed.joined = joined;
+    feed
+}
+
+/// Frame B2: a slim row above the versus card for a member who joined, with the
+/// inviter and the time. It shows for 24 hours, one row each, newest first, three
+/// at most. Everything older, and the viewer's own join, stays off.
+#[test]
+fn the_joined_line_shows_a_recent_joiner_above_the_cards() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_joins(vec![join_of("u2", "Jonas", "b0bben", 5 * 60_000)]),
+    });
+
+    let rows = h.app().get_feed_joined();
+    assert_eq!(rows.row_count(), 1);
+    let row = rows.row_data(0).unwrap();
+    assert_eq!(row.line.as_str(), "Jonas joined, invited by b0bben");
+    assert!(
+        row.when.starts_with("Today ") || row.when.starts_with("Yesterday "),
+        "{}",
+        row.when
+    );
+    assert_eq!(count_of(&h, "FeedJoinedRow"), 1);
+    let texts = drawn_texts(&h);
+    assert!(
+        texts.iter().any(|t| t == "Jonas joined, invited by b0bben"),
+        "{texts:?}"
+    );
+}
+
+#[test]
+fn the_joined_line_keeps_three_newest_and_drops_old_and_own_joins() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Max"),
+            ("u4", "Sara"),
+            ("u5", "Leo"),
+        ],
+    );
+    let hour = 3_600_000;
+    h.emit(Event::FeedLoaded {
+        response: feed_with_joins(vec![
+            join_of("u4", "Sara", "", 20 * hour),
+            join_of("u2", "Jonas", "", hour),
+            join_of("u5", "Leo", "", 30 * hour),
+            join_of("user-1", "Test User", "", hour / 2),
+            join_of("u3", "Max", "", 3 * hour),
+            join_of("u6", "Gus", "", 10 * hour),
+        ]),
+    });
+    let rows = h.app().get_feed_joined();
+    let lines: Vec<String> = (0..rows.row_count())
+        .map(|i| rows.row_data(i).unwrap().line.to_string())
+        .collect();
+    assert_eq!(lines, ["Jonas joined", "Max joined", "Gus joined"]);
+    assert_eq!(count_of(&h, "FeedJoinedRow"), 3);
+}
+
+#[test]
+fn no_join_in_the_last_day_gives_no_joined_line() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_joins(vec![join_of("u2", "Jonas", "", 25 * 3_600_000)]),
+    });
+    assert_eq!(h.app().get_feed_joined().row_count(), 0);
+    assert_eq!(count_of(&h, "FeedJoinedRow"), 0);
+}
+
 /// The tile shows hours in capitals, the launcher when the hours are unknown,
 /// "TRACKED" only for a game the sensor catalogue knows, and a two-letter
 /// monogram for a game with no art. Never the name clipped into a badge.
@@ -4678,6 +4786,7 @@ fn feed_of(entries: Vec<FeedEntry>) -> FeedResponse {
             id: "this_week".into(),
             entries,
         }],
+        joined: vec![],
     }
 }
 
@@ -6914,6 +7023,7 @@ fn recap_feed(data: serde_json::Value) -> mello_core::crew_events::FeedResponse 
                 data,
             }],
         }],
+        joined: vec![],
     }
 }
 

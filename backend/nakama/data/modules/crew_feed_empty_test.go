@@ -92,3 +92,56 @@ func TestMemoryEntriesDropEmptyCards(t *testing.T) {
 		t.Fatalf("memory kept %v, want recap_2, s3, c1", got)
 	}
 }
+
+// The joined line: joins of the last 24 hours, newest first, at most three,
+// one row for each joiner, current members only, never the viewer's own.
+func TestBuildFeedJoins(t *testing.T) {
+	now := feedTestNowMs
+	h := int64(60 * 60 * 1000)
+	join := func(id, actor string, ago int64, d MemberJoinedData) TimelineEntry {
+		return TimelineEntry{ID: id, Type: "member_joined", ActorID: actor, Ts: now - ago, Data: d}
+	}
+	members := map[string]bool{"bob": true, "jonas": true, "max": true, "sara": true, "leo": true}
+	entries := []TimelineEntry{
+		join("e1", "max", 5*h, MemberJoinedData{DisplayName: "Max"}),
+		join("e2", "jonas", 1*h, MemberJoinedData{DisplayName: "Jonas", InvitedBy: "bob", InvitedByName: "b0bben"}),
+		join("e3", "sara", 23*h, MemberJoinedData{Username: "sara"}),
+		join("e4", "leo", 25*h, MemberJoinedData{DisplayName: "Leo"}),                 // too old
+		join("e5", "gone", 2*h, MemberJoinedData{DisplayName: "Gone"}),                // left the crew
+		join("e6", "bob", 3*h, MemberJoinedData{DisplayName: "Bob"}),                  // the viewer
+		join("e7", "jonas", 90*60*1000, MemberJoinedData{DisplayName: "Jonas again"}), // one row each
+		{ID: "x", Type: "voice_session", ActorID: "max", Ts: now - h},
+	}
+	got := buildFeedJoins(entries, members, "bob", now)
+	if len(got) != 3 {
+		t.Fatalf("rows = %+v, want 3", got)
+	}
+	if got[0].UserID != "jonas" || got[0].Name != "Jonas" || got[0].InvitedByName != "b0bben" || got[0].InvitedBy != "bob" {
+		t.Fatalf("first row = %+v, want Jonas invited by b0bben", got[0])
+	}
+	if got[1].UserID != "max" || got[2].UserID != "sara" || got[2].Name != "sara" {
+		t.Fatalf("order = %+v, want newest first: jonas, max, sara", got)
+	}
+
+	// Four joiners in the day: the fourth waits.
+	entries = append(entries, join("e8", "leo", 30*60*1000, MemberJoinedData{DisplayName: "Leo"}))
+	if got = buildFeedJoins(entries, members, "bob", now); len(got) != 3 || got[0].UserID != "leo" {
+		t.Fatalf("rows = %+v, want 3 with Leo first", got)
+	}
+	if got = buildFeedJoins(nil, members, "bob", now); len(got) != 0 {
+		t.Fatalf("no events, rows = %+v", got)
+	}
+}
+
+// An event read back from storage is a map, not the struct.
+func TestBuildFeedJoinsReadsStoredEvents(t *testing.T) {
+	now := feedTestNowMs
+	entries := []TimelineEntry{{
+		ID: "e", Type: "member_joined", ActorID: "jonas", Ts: now - 1000,
+		Data: map[string]interface{}{"display_name": "Jonas", "invited_by": "bob", "invited_by_name": "b0bben"},
+	}}
+	got := buildFeedJoins(entries, map[string]bool{"jonas": true}, "bob", now)
+	if len(got) != 1 || got[0].InvitedByName != "b0bben" {
+		t.Fatalf("rows = %+v", got)
+	}
+}

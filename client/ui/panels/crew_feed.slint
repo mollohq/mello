@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { FeedCardData, H2hPerson, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { FeedCardData, H2hPerson, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { SkeletonTrio } from "../components/skeleton_trio.slint";
@@ -2329,8 +2329,58 @@ component FeedSlot inherits Rectangle {
     }
 }
 
+// The joined line (mockup frame B2, .qrow): a person icon, "Jonas joined,
+// invited by b0bben" in Barlow 300, and the time at the right in Barlow 600,
+// uppercase and tracked. A plain row, not a card, and not a control.
+component FeedJoinedRow inherits Rectangle {
+    in property <string> line;
+    in property <string> when;
+
+    height: 32px;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: 2px;
+        padding-right: 2px;
+        spacing: 10px;
+        alignment: stretch;
+
+        Rectangle {
+            width: 20px;
+            Image {
+                source: @image-url("../icons/user.svg");
+                colorize: Theme.text-dim;
+                width: 20px;
+                height: 20px;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+        Text {
+            horizontal-stretch: 1;
+            text: root.line;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 13px;
+            color: Theme.text-body;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+        Text {
+            text: root.when.to-uppercase();
+            font-family: Theme.font-label;
+            font-weight: Theme.weight-label;
+            font-size: 9.5px;
+            letter-spacing: Theme.track-label;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+    }
+}
+
 export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
+    /// Members who joined in the last 24 hours, newest first, at most three.
+    in property <[JoinedRowData]> joined-rows: [];
     in property <[FeedCardData]> memory-cards: [];
     in property <[StreamCardData]> stream-cards: [];
     in property <YouStripData> you-strip;
@@ -2492,6 +2542,13 @@ export component CrewFeed inherits Rectangle {
                 padding-left: 20px;
                 padding-right: 20px;
                 spacing: 12px;
+
+                // The joined line: one slim row for each member who joined in
+                // the last 24 hours, above the first card (frame B2).
+                for j in root.joined-rows: FeedJoinedRow {
+                    line: j.line;
+                    when: j.when;
+                }
 
                 // Stream cards live in the feed flow, directly under the header.
                 if stream-cards.length == 1 && cards.length > 0: HorizontalLayout {
@@ -3436,7 +3493,7 @@ export component PreviewFeedNewCrew inherits Rectangle {
 // versus card takes the hero slot. The trio stays.
 export component PreviewFeedFirstFriend inherits Rectangle {
     width: 900px;
-    height: 640px;
+    height: 700px;
     background: Theme.bg-app;
 
     // The two members as the poster pips show them (same hues as the versus card).
@@ -3451,6 +3508,7 @@ export component PreviewFeedFirstFriend inherits Rectangle {
         skeleton-voice-clip: true;
         skeleton-recap: true;
         invite-line: false;
+        joined-rows: [{ user-id: "u2", line: "Jonas joined, invited by b0bben", when: "Today 23:14" }];
         cards: [
             {
                 id: "h2h", card-type: "head2head", role: "hero", size: "lg",

@@ -455,6 +455,39 @@ fn head2head_cards(
     Some((model.placement, cards))
 }
 
+/// Put the joined line on screen from the `joined` list of a feed response:
+/// one row for each member who joined in the last 24 hours (CLIPS 7).
+fn set_joined_line(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) {
+    let (viewer, members) = h2h_roster(ctx);
+    let name_of = |id: &str| -> Option<String> {
+        let known = if id == viewer.id {
+            Some(&viewer)
+        } else {
+            members.iter().find(|m| m.id == id)
+        };
+        known
+            .map(|p| p.name.clone())
+            .filter(|n| !n.trim().is_empty())
+    };
+    let now_ms = crate::converters::current_time_ms();
+    let rows: Vec<crate::JoinedRowData> = crate::joined_line::rows(
+        joins,
+        &viewer.id,
+        now_ms,
+        mello_core::crew_events::local_tz_offset_min(now_ms),
+        &name_of,
+    )
+    .into_iter()
+    .map(|r| crate::JoinedRowData {
+        user_id: r.user_id.into(),
+        line: r.line.into(),
+        when: r.when.into(),
+    })
+    .collect();
+    ctx.app
+        .set_feed_joined(Rc::new(VecModel::from(rows)).into());
+}
+
 /// Build the this_week cards again from the last feed. The member list and the
 /// feed load in no fixed order, and the head2head and invite cards name
 /// members from the list: a feed that came first would show "Crew mate" and a
@@ -1850,6 +1883,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             *ctx.last_feed.borrow_mut() = Some(response.clone());
+            set_joined_line(ctx, &response.joined);
             // The feed is on screen now: what it shows counts as seen at the
             // next open. This visit keeps its own baseline, so the dot stays.
             {
