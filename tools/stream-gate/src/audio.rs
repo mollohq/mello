@@ -373,10 +373,7 @@ pub fn pilot_gap_list(spec: &AudioSpec, x: &[i16]) -> (Vec<(usize, f64)>, Option
 pub fn silence_list(spec: &AudioSpec, x: &[i16], first: usize) -> Vec<(usize, f64)> {
     const WIN: usize = 240;
     const WIN_MS: f64 = 5.0;
-    let levels: Vec<f64> = x
-        .chunks_exact(WIN)
-        .map(|c| voice_gate::dsp::rms_i16(c))
-        .collect();
+    let levels: Vec<f64> = x.chunks_exact(WIN).map(voice_gate::dsp::rms_i16).collect();
     let start = first / WIN;
     if start >= levels.len() {
         return Vec::new();
