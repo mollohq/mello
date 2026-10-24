@@ -698,7 +698,7 @@ public:
 #ifdef _WIN32
     bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
 #elif defined(__APPLE__)
-    bool encode(void*, EncodedPacket& out) override { return run_encode(out); }
+    bool encode(void*, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #endif
     void request_keyframe() override {
         enter();
@@ -748,6 +748,20 @@ private:
     }
 };
 
+// One encode through the control with the platform's arguments: a texture on
+// Windows, a pixel buffer and its capture time on Apple (encoder_control.hpp).
+bool encode_once(EncoderControl& control, EncodedPacket& packet) {
+#ifdef _WIN32
+    return control.encode(nullptr, packet);
+#elif defined(__APPLE__)
+    return control.encode(nullptr, 0, packet);
+#else
+    (void)control;
+    (void)packet;
+    return false;
+#endif
+}
+
 } // namespace
 
 TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
@@ -760,7 +774,7 @@ TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
         EncodedPacket packet;
         int frames = 0;
         while (!setters_done.load() || frames < 1000) {
-            control.encode(nullptr, packet);
+            encode_once(control, packet);
             if (frames % 50 == 0) control.reduce_cost_tier();
             ++frames;
         }
@@ -794,7 +808,7 @@ TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
     encoder.hold_encode.store(true);
     std::thread encode_thread([&] {
         EncodedPacket packet;
-        control.encode(nullptr, packet);
+        encode_once(control, packet);
     });
     while (!encoder.in_held_encode.load()) std::this_thread::yield();
 
