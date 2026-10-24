@@ -248,8 +248,8 @@ Card types in the bento grid:
   - When the game ends, the live card leaves. The session card from the ledger replaces it. The two never show together.
   - The skeleton trio does not count it as a real card.
 - **Recent games card** — the games the crew played or has installed, as tiles keyed by game id, newest played first. It replaces the Crew play rollup card. Data path: `crew_feed`, entry type `recent-games` (see [22-GAME-UI-SURFACES.md](../22-GAME-UI-SURFACES.md) section 3.4). The server sends `games` (up to six, each with `member_ids`, the members who have it installed or played it), `session_count`, `total_min` and `pc_count`, the members behind the tiles.
-  - One PC (the viewer is the only owner): a narrow list of three rows, beside the wide head2head card of a crew of one. The header carries "From this PC", or the week's line ("14 sessions, 31 h this week").
-  - Two or more PCs: a poster grid, two columns wide. The header reads "RECENT GAMES" left and "From 2 PCs" right. Five capsule tiles sit in one row (460 by 215 art, two corners cut), the game name in Barlow 600 under each tile, and under the name a 16 px octagon for each member who owns the game. The row is capped at five. From three PCs the right side of the header is the week's line. In a one-column slot the card stays the list.
+  - One PC (the viewer is the only owner): a narrow list of three rows, beside the wide head2head card of a crew of one. The header carries the week's line ("14 sessions, 31 h this week"), or nothing when the card has no sessions.
+  - Two or more PCs: a poster grid, two columns wide. The header reads "RECENT GAMES" left and the week's line right. Five capsule tiles sit in one row (460 by 215 art, two corners cut), the game name in Barlow 600 under each tile, and under the name a 16 px octagon for each member who owns the game. The row is capped at five. In a one-column slot the card stays the list.
   - From three PCs each poster carries when the game was last played ("Yesterday", "3 days ago") under the owner octagons. In a one-column slot a list row shows the same line in place of the hours, with the owner octagons at the right. A list row with TRACKED shows it at the far right when the row is 300 px or wider.
   - Three to five posters share the row, so a quiet week gets larger posters, not a gap.
   - The grid leads row 2 under a versus hero (frame B2). Row 2 holds the grid and one card, so the session card sits beside it. Rows after it move up by one card (`feed_grid.rs`, `Layout::r2_wide`, and `row3-base` in `crew_feed.slint`).
@@ -257,6 +257,8 @@ Card types in the bento grid:
 - **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
 - **Skeleton trio** — three dashed placeholders for an empty crew (see section 8).
 - **Invite line** — one line and one red button under the skeleton trio (see section 8).
+
+A card carries no note that explains it. A card shows data ("14 sessions, 31 h this week"), a label, a state or an action. "From this PC", "Monday" and "Head2head" at the right of a header are notes and do not show.
 
 A card with no content is never emitted. One rule in `crew_feed.go` (`cardHasContent`) applies to `this_week` and `memory`: a session with no reportable minutes, a recap with nothing in it, a stream preview with no snapshots and a recent games card with no game minutes do not appear.
 
@@ -303,11 +305,11 @@ The client holds one remote streamer today. `CrewFeed.hero-streams` takes the tw
 
 A feed with nothing new must not look broken. The rules live in `client/src/quiet_row.rs`.
 
-- **Quiet row.** A slim row with a moon, in the place of the recap. It shows when the crew has two or more members, nothing is live, no stream preview or belt move is under 24 hours old, no recap is under seven days old, and something happened in the last 14 days. The text is "No crew time last week." and, when members played, "Bob and Sara still played." The right side reads "Monday", the day the recap comes.
+- **Quiet row.** A slim row with a moon, in the place of the recap. It shows when the crew has two or more members, nothing is live, no stream preview or belt move is under 24 hours old, no recap is under seven days old, and something happened in the last 14 days. The text is "No crew time last week." and, when members played, "Bob and Sara still played." The row has no note at the right.
 - **Belt hero.** With no hero, the newest belt move that involves the viewer leads, at any age up to 14 days. The card is two columns wide. It shows who held the title, the title, who holds it now, a headline ("Sara took Night Owl from Bob") and the values ("03:40 beats 03:14."). The head2head cell stands tall beside it with a third pair row.
 - **Idle voice card.** When the quiet row shows and nobody is in the default voice channel, a card shows the channel, "Empty", the date of the last call and the one filled white button, Start voice. The red invite stays in the head2head cell, next to the open seat.
 - **Dormant strip.** Nothing happened for 14 days or more. A catch-up strip across the top says "Nothing new since 2 October. Leo holds The Carry." and how long ago, in weeks. The feed keeps the last real recap, its sessions and the head2head cell. No skeletons show and no empty card shows. A recap is a summary of past weeks, so it does not count as activity.
-- A recap carries its age at the right of its label: "Today", the day name for the rest of the week, "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
+- A recap from the current week has no age at the right of its label. An older recap says "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
 - A session older than a week shows its date ("2 October"), not "9d ago".
 
 Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).

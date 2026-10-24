@@ -370,8 +370,9 @@ struct JoinedRowSnap {
 
 #[derive(Serialize)]
 struct RecentGamesSnap {
-    /// The right side of the card header, for example `"From this PC"`.
-    header_note: String,
+    /// The right side of the card header: the week's line, for example
+    /// `"14 sessions, 31 h this week"`. Empty when the card has none.
+    header_line: String,
     /// `"grid"` (poster grid, two or more PCs) or `"list"`. Empty with no card.
     shape: &'static str,
     /// The PCs behind the tiles: the members who own or played a listed game.
@@ -622,14 +623,14 @@ fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
     let feed = app.get_feed_cards();
     let Some(card) = feed.iter().find(|c| c.card_type == "recent-games") else {
         return RecentGamesSnap {
-            header_note: String::new(),
+            header_line: String::new(),
             shape: "",
             pc_count: 0,
             tiles: Vec::new(),
         };
     };
     RecentGamesSnap {
-        header_note: card.subtitle.to_string(),
+        header_line: card.subtitle.to_string(),
         shape: if crate::recent_games::is_grid(i64::from(card.recent_pc_count)) {
             "grid"
         } else {
@@ -1382,7 +1383,7 @@ mod tests {
         assert_eq!(none["head2head"]["placement"], "none");
         assert_eq!(
             none["recent_games"],
-            json!({"header_note": "", "tiles": []})
+            json!({"header_line": "", "tiles": []})
         );
         assert_eq!(none["skeleton_trio"], 0);
 
@@ -1430,7 +1431,7 @@ mod tests {
             },
             crate::FeedCardData {
                 card_type: "recent-games".into(),
-                subtitle: "From this PC".into(),
+                subtitle: "14 sessions, 31 h this week".into(),
                 recent_games: model(vec![
                     tile("Brawlhalla", "steam-291550", "4,167 H", true),
                     tile("Fortnite", "epic-fortnite", "EPIC", false),
@@ -1458,7 +1459,7 @@ mod tests {
         );
         assert_eq!(
             s["recent_games"],
-            json!({"header_note": "From this PC", "tiles": [
+            json!({"header_line": "14 sessions, 31 h this week", "tiles": [
                 {"name": "Brawlhalla", "hours_text": "4,167 H", "launcher": "steam",
                  "tracked": true, "art": "image"},
                 {"name": "Fortnite", "hours_text": "EPIC", "launcher": "epic",

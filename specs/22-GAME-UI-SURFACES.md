@@ -183,7 +183,7 @@ The recent games card gets its data from the `crew_feed` RPC. Entry type: `recen
 - Local Steam art: `mello_core::library::local_steam_art` reads `<steam root>/appcache/librarycache/`. It tries `<appid>_header.jpg`, then `header.jpg` and `library_header.jpg` in `<appid>/` and in each hash folder under it, then `library_600x900.jpg`. It reads the disk only. Nothing is fetched or uploaded. The log carries counts only.
 - Monogram: two letters, the first letters of the first two words of the name (one word: its first two letters), on a two-corner tile in an identity hue chosen from the game id.
 - Client: `RecentGamesCard` in `crew_feed.slint`, one row per game, at most three rows. Each row has the art (76 px wide, the shape of a Steam header), the name in Oxanium, and under it the hours in capitals ("4,167 H"; one decimal under 100 hours). With no hours known it shows the launcher ("EPIC"). The right side of the row shows "TRACKED" when the game sensor catalogue knows the game (by game id, Steam appid or name). Otherwise it shows nothing.
-- Header: "RECENT GAMES" on the left. The right side is "From this PC" when every tile is installed on this device (the viewer's own library), else the sessions line (`subtitle`).
+- Header: "RECENT GAMES" on the left. The right side is the sessions line (`subtitle`), or empty. It never says where the games come from.
 - The sidebar list still uses live presence only.
 
 ---

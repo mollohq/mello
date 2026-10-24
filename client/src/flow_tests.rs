@@ -4454,7 +4454,11 @@ fn recent_games_is_a_poster_grid_when_two_members_own_games() {
     assert_eq!(types[..2], ["head2head", "recent-games"], "{types:?}");
     let card = feed.row_data(1).unwrap();
     assert_eq!(card.recent_pc_count, 2, "two members own games");
-    assert_eq!(card.subtitle.as_str(), "From 2 PCs");
+    assert_eq!(
+        card.subtitle.as_str(),
+        "1 session, 1 h this week",
+        "the week's line, not a note about the PCs"
+    );
     assert_eq!(card.recent_games.row_count(), 5, "capped at five tiles");
     let first = card.recent_games.row_data(0).unwrap();
     assert_eq!(first.owners.row_count(), 2, "Bob and Jonas own it");
@@ -4720,10 +4724,10 @@ fn a_recent_games_name_is_not_elided_at_1440_and_2000_px() {
     }
 }
 
-/// When every tile is installed on this device the header note reads
-/// "From this PC" instead of the sessions line.
+/// The header of the recent games card is the week's line or nothing. It never
+/// says where the games come from.
 #[test]
-fn recent_games_header_says_from_this_pc_when_all_tiles_are_installed() {
+fn recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed() {
     let mut h = Harness::new();
     logged_in_app(&mut h);
     h.emit(Event::InstalledGames {
@@ -4742,23 +4746,74 @@ fn recent_games_header_says_from_this_pc_when_all_tiles_are_installed() {
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![entry]),
     });
-    assert_eq!(first_card(&h).subtitle.as_str(), "From this PC");
-
-    // One tile that is not installed brings the sessions line back.
-    let games = serde_json::json!([
-        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 },
-        { "game_id": "valorant", "game_name": "Valorant", "minutes": 60 }
-    ]);
-    let mut entry = recent_games_entry(games);
-    entry.data["session_count"] = serde_json::json!(14);
-    entry.data["total_min"] = serde_json::json!(1860);
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![entry]),
-    });
     assert_eq!(
         first_card(&h).subtitle.as_str(),
         "14 sessions, 31 h this week"
     );
+
+    // A card with no sessions has no line, and still no note.
+    let games = serde_json::json!([
+        { "game_id": "counter-strike-2", "game_name": "Counter-Strike 2", "minutes": 600 }
+    ]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![recent_games_entry(games)]),
+    });
+    assert_eq!(first_card(&h).subtitle.as_str(), "");
+}
+
+/// No card draws a note that explains it. The recap, the recent games card and
+/// the quiet row state data, a label, a state or an action.
+#[test]
+fn no_card_draws_a_commentary_note() {
+    let removed = [
+        "From this PC",
+        "From 2 PCs",
+        "Monday",
+        "MONDAY",
+        "Head2head",
+        "Now",
+        "Today",
+    ];
+    let mut h = Harness::new();
+    emit_recap(
+        &mut h,
+        serde_json::json!({
+            "belts_moved": [belt_moved("the_carry", serde_json::json!(4201.0), "h")],
+            "belts_held": belts_held(),
+            "week_end": now_ms(),
+        }),
+    );
+    let texts = drawn_texts(&h);
+    for want in ["WEEKLY RECAP", "BELTS MOVED", "BELTS HELD"] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
+    for note in removed {
+        assert!(!texts.iter().any(|t| t == note), "recap draws {note}");
+    }
+
+    for pc_count in [None, Some(2)] {
+        let mut h = Harness::new();
+        app_with_crew_of(&mut h, 2);
+        set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+        let both = serde_json::json!(["user-1", "u2"]);
+        h.emit(Event::FeedLoaded {
+            response: two_member_feed_with_games(
+                serde_json::json!([
+                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 600, "member_ids": both },
+                    { "game_id": "steam-252950", "game_name": "Rocket League", "minutes": 400, "member_ids": both }
+                ]),
+                pc_count,
+            ),
+        });
+        let texts = drawn_texts(&h);
+        assert!(texts.iter().any(|t| t == "RECENT GAMES"), "{texts:?}");
+        for note in removed {
+            assert!(
+                !texts.iter().any(|t| t == note),
+                "recent games draws {note} for {pc_count:?}: {texts:?}"
+            );
+        }
+    }
 }
 
 /// App with one crew of `members` people, as the crew list reports it.
@@ -7990,7 +8045,7 @@ fn a_quiet_feed_has_a_quiet_row_and_the_belt_that_moved_leads() {
         row.line.as_str(),
         "No crew time last week. Sara and Test User still played."
     );
-    assert_eq!(row.when.as_str(), "Monday");
+    assert_eq!(row.when.as_str(), "", "the quiet row carries no note");
     assert_eq!(count_of(&h, "FeedJoinedRow"), 1, "the row is drawn");
     assert_eq!(h.app().get_feed_dormant().row_count(), 0);
 

@@ -118,22 +118,6 @@ pub fn pc_count_of(server: Option<i64>, owners_per_tile: &[Vec<String>]) -> i64 
     seen.len() as i64
 }
 
-/// The right side of the card header. "From 2 PCs" for the grid of a crew of
-/// two (mockup frame B2). From three PCs the week's sessions line says more
-/// than a count. With one PC: "From this PC" when every tile is installed on
-/// this device, else the sessions line the server built.
-pub fn header_note(all_installed: bool, sessions_line: String, pc_count: i64) -> String {
-    if pc_count == 2 {
-        "From 2 PCs".to_string()
-    } else if pc_count > 2 {
-        sessions_line
-    } else if all_installed {
-        "From this PC".to_string()
-    } else {
-        sessions_line
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -216,31 +200,6 @@ mod tests {
         ));
         assert!(!is_installed("valorant", "Valorant", &ids, &names));
         assert!(!is_installed("", "", &ids, &names));
-    }
-
-    #[test]
-    fn the_header_note_is_from_this_pc_only_when_all_are_installed() {
-        assert_eq!(
-            header_note(true, "14 sessions, 31 h this week".into(), 1),
-            "From this PC"
-        );
-        assert_eq!(
-            header_note(false, "14 sessions, 31 h this week".into(), 1),
-            "14 sessions, 31 h this week"
-        );
-        assert_eq!(header_note(false, String::new(), 0), "");
-    }
-
-    #[test]
-    fn two_pcs_read_from_2_pcs_and_three_or_more_read_the_week() {
-        assert_eq!(
-            header_note(true, "1 session, 1 h this week".into(), 2),
-            "From 2 PCs"
-        );
-        assert_eq!(
-            header_note(true, "5 sessions, 8 h this week".into(), 3),
-            "5 sessions, 8 h this week"
-        );
     }
 
     #[test]

@@ -66,19 +66,18 @@ pub fn ago_label(then_ms: i64, now_ms: i64) -> String {
     }
 }
 
-/// When a weekly recap came out, at the right of its label: "Today" on the
-/// day, the day name for the rest of the week ("Monday" on a Thursday), then
-/// "Last week" and "3 weeks ago". The feed keeps the last real recap through a
-/// quiet spell, so this label is what tells a week-old recap from a new one
-/// (frame F). `week_end_ms` is the end of the recap week, the Monday it came out.
+/// How old a weekly recap is, at the right of its label: "Last week", then
+/// "3 weeks ago". The feed keeps the last real recap through a quiet spell, so
+/// this label is what tells an old recap from a new one (frame F). A recap
+/// from the current week has no label: the day it came out is a note, not
+/// data. `week_end_ms` is the end of the recap week, the Monday it came out.
 /// Empty when the recap has no time.
 pub fn recap_age_label(week_end_ms: i64, now_ms: i64) -> String {
     if week_end_ms <= 0 {
         return String::new();
     }
     match days_between(week_end_ms, now_ms) {
-        0 => "Today".to_string(),
-        1..=6 => weekday_of(week_end_ms).to_string(),
+        0..=6 => String::new(),
         7..=13 => "Last week".to_string(),
         d => format!("{} weeks ago", d / 7),
     }
@@ -121,11 +120,11 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_reads_as_a_day_name_then_as_weeks() {
+    fn a_recap_has_no_label_in_its_week_then_reads_as_weeks() {
         let came = MON_5_OCT;
-        assert_eq!(recap_age_label(came, came + 3_600_000), "Today");
+        assert_eq!(recap_age_label(came, came + 3_600_000), "");
         // Frame D: Thursday, the recap came out on Monday.
-        assert_eq!(recap_age_label(came, came + 3 * DAY), "Monday");
+        assert_eq!(recap_age_label(came, came + 3 * DAY), "");
         assert_eq!(recap_age_label(came, came + 8 * DAY), "Last week");
         // Frame F: Monday 26 October, three weeks on.
         assert_eq!(recap_age_label(came, came + 21 * DAY), "3 weeks ago");

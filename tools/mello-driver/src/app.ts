@@ -163,7 +163,8 @@ export type AppState = {
   invite_card: { present: boolean; octagons: number; more_count: number; with_avatar: number };
   /** The recent games card of the feed. Empty tiles when the feed has none. */
   recent_games: {
-    header_note: string;
+    /** The week's line ("14 sessions, 31 h this week"), or "". Never a note about the PCs. */
+    header_line: string;
     /** "grid" from two PCs on, "list" for one, "" with no card. */
     shape: "grid" | "list" | "";
     pc_count: number;

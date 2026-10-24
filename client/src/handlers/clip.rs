@@ -692,7 +692,7 @@ fn set_quiet_state(
         .map(|r| crate::JoinedRowData {
             user_id: "".into(),
             line: r.line.into(),
-            when: r.when.into(),
+            when: "".into(),
         })
         .collect();
     ctx.app
@@ -1313,14 +1313,12 @@ fn recent_games_header(session_count: i64, total_min: i64) -> String {
 /// What the recent games card needs from the server's payload.
 struct RecentTiles {
     tiles: Vec<RecentGameTile>,
-    /// Every tile is installed on this device.
-    all_installed: bool,
     /// The PCs behind the tiles. Two or more make the card a poster grid.
     pc_count: i64,
 }
 
 /// Tiles for the recent games card, keyed by game id, from the server's
-/// `games` array, and whether every tile is installed on this device.
+/// `games` array.
 ///
 /// Each tile carries its owners (`member_ids` of the server) as octagons, the
 /// poster grid's pips. With two or more PCs the row is capped at five tiles,
@@ -1435,7 +1433,6 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
             })
         })
         .collect();
-    let all_installed = !tiles.is_empty() && installed_count == tiles.len();
     if crate::recent_games::is_grid(pc_count) {
         tiles.truncate(crate::recent_games::GRID_TILES);
     }
@@ -1446,11 +1443,7 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
         tracked_count,
         installed_count
     );
-    RecentTiles {
-        tiles,
-        all_installed,
-        pc_count,
-    }
+    RecentTiles { tiles, pc_count }
 }
 
 /// Wall-time duration for game sessions; uses active time when wall time is
@@ -1686,12 +1679,10 @@ fn build_feed_card(
     } else {
         RecentTiles {
             tiles: Vec::new(),
-            all_installed: false,
             pc_count: 0,
         }
     };
-    let (recent_games, recent_all_installed, recent_pc_count) =
-        (recent.tiles, recent.all_installed, recent.pc_count);
+    let (recent_games, recent_pc_count) = (recent.tiles, recent.pc_count);
     let (title, subtitle) = if is_recent_games {
         let session_count = data
             .get("session_count")
@@ -1700,11 +1691,7 @@ fn build_feed_card(
         let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
         (
             "RECENT GAMES".to_string(),
-            crate::recent_games::header_note(
-                recent_all_installed,
-                recent_games_header(session_count, total_min),
-                recent_pc_count,
-            ),
+            recent_games_header(session_count, total_min),
         )
     } else {
         (title, subtitle)

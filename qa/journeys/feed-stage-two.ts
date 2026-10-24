@@ -56,7 +56,7 @@ export default journey({
         const s = await app.waitFor("the poster grid", (st) => st.recent_games.shape === "grid" && st.recent_games.tiles.length > 1, 30_000);
         const rg = s.recent_games;
         expect(rg.pc_count === 2, `pc_count is 2, got ${rg.pc_count}`);
-        expect(rg.header_note === "From 2 PCs", `header note is "From 2 PCs", got "${rg.header_note}"`);
+        expect(!rg.header_line.startsWith("From "), `the header carries no note, got "${rg.header_line}"`);
         expect(rg.tiles.length <= 5, `at most five tiles in the row, got ${rg.tiles.length}`);
         expect(rg.tiles.every((t) => t.owners >= 1), "every tile carries an owner pip");
         expect(rg.tiles.some((t) => t.owners === 2), "a game both members own carries two pips");

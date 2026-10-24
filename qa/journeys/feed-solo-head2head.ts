@@ -84,10 +84,10 @@ export default journey({
       expect(c.label === "Invite your crew", `label is "Invite your crew", got "${c.label}"`);
     });
 
-    await step("recent games come from this PC", async () => {
+    await step("recent games list this PC", async () => {
       const s = await bob.waitFor("recent games tiles", (st) => st.recent_games.tiles.length > 0, 30_000);
       const rg = s.recent_games;
-      expect(rg.header_note === "From this PC", `header note is "From this PC", got "${rg.header_note}"`);
+      expect(!rg.header_line.startsWith("From "), `the header carries no note, got "${rg.header_line}"`);
       expect(rg.shape === "list", `one PC is the narrow list, got "${rg.shape}"`);
       for (const t of rg.tiles) {
         expect(t.name !== "", "a tile has a name");

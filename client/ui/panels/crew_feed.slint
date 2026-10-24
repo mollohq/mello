@@ -949,16 +949,6 @@ component RecapCard inherits Rectangle {
                         letter-spacing: Theme.track-label;
                         vertical-alignment: center;
                     }
-                    Text {
-                        horizontal-stretch: 1;
-                        font-weight: Theme.weight-sentence;
-                        font-family: Theme.font-body;
-                        text: "Head2head";
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: right;
-                        vertical-alignment: center;
-                    }
                 }
 
                 Rectangle { height: 6px; }
@@ -1012,16 +1002,6 @@ component RecapCard inherits Rectangle {
                         font-weight: Theme.weight-label;
                         color: Theme.text-dim;
                         letter-spacing: Theme.track-label;
-                        vertical-alignment: center;
-                    }
-                    Text {
-                        horizontal-stretch: 1;
-                        font-weight: Theme.weight-sentence;
-                        font-family: Theme.font-body;
-                        text: "Now";
-                        font-size: 11px;
-                        color: Theme.text-dim;
-                        horizontal-alignment: right;
                         vertical-alignment: center;
                     }
                 }
@@ -1923,8 +1903,7 @@ component RecentGamesCard inherits Rectangle {
         spacing: root.grid ? 10px : 12px;
         alignment: start;
 
-        // Label left, note right: "From this PC", "From 2 PCs", or the week's
-        // sessions line.
+        // Label left, the week's sessions line right ("14 sessions, 31 h this week").
         HorizontalLayout {
             height: 16px;
             spacing: 8px;
@@ -2676,7 +2655,7 @@ component FeedJoinedRow inherits Rectangle {
             vertical-alignment: center;
             overflow: elide;
         }
-        Text {
+        if root.when != "": Text {
             text: root.when.to-uppercase();
             font-family: Theme.font-label;
             font-weight: Theme.weight-label;
@@ -3984,7 +3963,7 @@ export component PreviewFeedNewCrew inherits Rectangle {
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "From this PC",
+                title: "RECENT GAMES", subtitle: "",
                 recent-games: [
                     { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", tracked: true,
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
@@ -4100,7 +4079,7 @@ export component PreviewFeedFiveMembers inherits Rectangle {
         ];
         cards: [
             {
-                id: "recap", card-type: "recap", role: "recap", size: "lg", age-label: "Monday", recap-week: "Week 4",
+                id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 4",
                 title: "19h 40", subtitle: "11", duration: "3h 48",
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
@@ -4334,7 +4313,7 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "From this PC",
+                title: "RECENT GAMES", subtitle: "",
                 recent-games: [
                     { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,168 H", tracked: true,
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
@@ -4467,7 +4446,7 @@ export component PreviewFeedQuiet inherits Rectangle {
         width: parent.width;
         height: parent.height;
         is-cold-start: false;
-        quiet-rows: [{ line: "No crew time last week. Bob and Sara still played.", when: "Monday" }];
+        quiet-rows: [{ line: "No crew time last week. Bob and Sara still played." }];
         cards: [
             {
                 id: "h2h-belt", card-type: "head2head", role: "hero", size: "lg",

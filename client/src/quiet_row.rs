@@ -18,8 +18,6 @@ use crate::feed_age::{date_label, days_between};
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
 /// Nothing for this many days makes a crew dormant.
 pub const DORMANT_DAYS: i64 = 14;
-/// The day a weekly recap comes out.
-pub const RECAP_DAY: &str = "Monday";
 
 /// What the rules read from the feed.
 #[derive(Debug, Clone, Default)]
@@ -57,11 +55,10 @@ impl Facts {
     }
 }
 
-/// The quiet row: the line and the day the recap comes.
+/// The quiet row: one line. It states the fact and carries no note.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct QuietRow {
     pub line: String,
-    pub when: String,
 }
 
 /// "Bob", "Bob and Sara", "Bob, Sara and Max", "Bob, Sara and 2 more".
@@ -100,10 +97,7 @@ pub fn quiet_row(f: &Facts) -> Option<QuietRow> {
             names_list(&f.players_last_week)
         ));
     }
-    Some(QuietRow {
-        line,
-        when: RECAP_DAY.to_string(),
-    })
+    Some(QuietRow { line })
 }
 
 /// The dormant strip: "Nothing new since 2 October. Leo holds The Carry." and
@@ -164,7 +158,6 @@ mod tests {
             row.line,
             "No crew time last week. Bob and Sara still played."
         );
-        assert_eq!(row.when, "Monday");
     }
 
     #[test]
