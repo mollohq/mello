@@ -143,6 +143,10 @@ component StreamCard inherits Rectangle {
     property <length> stats-height: 40px;
     /// The host's card and a watched card open different settings.
     property <string> settings-popover: show-hosting-state ? "host-settings" : "settings";
+    /// A card in the two-column grid has no room for the count badge next
+    /// to the name: the count goes into the line under it.
+    property <bool> narrow: root.width < 560px;
+    property <bool> show-count: !is-notice && card.viewer-count > 0;
     // --- end stage 9 ---
 
     background: transparent;
@@ -573,7 +577,7 @@ component StreamCard inherits Rectangle {
 
                         // Stage 9: how many watch (the design system's
                         // outline badge).
-                        if !root.is-notice && root.card.viewer-count > 0: Rectangle {
+                        if root.show-count && !root.narrow: Rectangle {
                             horizontal-stretch: 0;
                             width: watching-label.preferred-width + 14px;
 
@@ -616,7 +620,9 @@ component StreamCard inherits Rectangle {
                     Text {
                         font-weight: Theme.weight-sentence;
                         font-family: Theme.font-body;
-                        text: root.card.subtitle;
+                        text: root.show-count && root.narrow
+                            ? root.card.subtitle + " · " + root.card.viewer-count + " watching"
+                            : root.card.subtitle;
                         font-size: 11px;
                         color: Theme.text-secondary;
                         overflow: elide;
@@ -1404,5 +1410,49 @@ export component PreviewHostSettings inherits PopoverPreview {
     init => {
         StreamCardUi.anchor-right = 800px - 12px;
         StreamCardUi.anchor-bottom = 450px - 72px + 20px + 32px;
+    }
+}
+
+/// Stage 9: two streams in the grid: the watched one is narrow, with its
+/// label, its count, the stats strip and the three buttons.
+export component PreviewGridWatch inherits Rectangle {
+    width: 840px;
+    height: 360px;
+    background: Theme.bg-app;
+
+    init => {
+        StreamCardUi.format-label = "1080p60";
+        StreamCardUi.stats-shown = true;
+        StreamCardUi.stats = {
+            target-delay: "118 ms", jitter: "6 ms", decode: "2.1 ms",
+            frames-late: "12", audio-delay: "142 ms", av-offset: "-14 ms",
+        };
+    }
+
+    ActiveStreamsPanel {
+        x: 20px;
+        y: 20px;
+        width: 800px;
+        height: 320px;
+        is-watching: true;
+        active-streamer-id: "h1";
+        cards: [
+            {
+                host-id: "h1", session-id: "s1",
+                streamer-name: "Propotato_the_long_name",
+                subtitle: "Counter-Strike 2",
+                avatar-initials: "pr", avatar-color-index: 1,
+                viewer-count: 12, stream-width: 1920, stream-height: 1080,
+                can-watch: true, state: "", title: "",
+            },
+            {
+                host-id: "h2", session-id: "s2",
+                streamer-name: "ostkatt",
+                subtitle: "Valorant",
+                avatar-initials: "os", avatar-color-index: 2,
+                viewer-count: 2, stream-width: 1920, stream-height: 1080,
+                can-watch: true, state: "", title: "",
+            },
+        ];
     }
 }
