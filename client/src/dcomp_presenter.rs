@@ -17,6 +17,12 @@
 //!
 //! The device is multithread-protected: the cursor upload (UI thread) and the
 //! frame copy (present thread) share its immediate context.
+//!
+//! Streaming-quality stage 9: the visual scales the picture with a bilinear
+//! filter (it was nearest neighbour, the default) and the swap chain declares
+//! its colour space (sRGB, full range). For fullscreen the video visual moves
+//! to a second DComp target on a borderless window (`stream_fullscreen.rs`)
+//! and back; the swap chain, the present thread and the decoder stay.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -30,16 +36,18 @@ use windows::Win32::Graphics::Direct3D11::{
 };
 use windows::Win32::Graphics::DirectComposition::{
     DCompositionCreateDevice, IDCompositionDevice, IDCompositionTarget, IDCompositionVisual,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR,
+    DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR, DCOMPOSITION_BORDER_MODE_HARD,
 };
 use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM,
-    DXGI_SAMPLE_DESC,
+    DXGI_ALPHA_MODE_PREMULTIPLIED, DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709,
+    DXGI_FORMAT_B8G8R8A8_UNORM, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
 };
 use windows::Win32::Graphics::Dxgi::{
     CreateDXGIFactory1, IDXGIAdapter, IDXGIFactory1, IDXGIFactory2, IDXGIKeyedMutex,
-    IDXGISwapChain1, IDXGISwapChain2, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG,
-    DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT, DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT,
+    IDXGISwapChain1, IDXGISwapChain2, IDXGISwapChain3, DXGI_PRESENT, DXGI_SWAP_CHAIN_DESC1,
+    DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_CHAIN_FLAG_FRAME_LATENCY_WAITABLE_OBJECT,
+    DXGI_SWAP_EFFECT_FLIP_SEQUENTIAL, DXGI_USAGE_RENDER_TARGET_OUTPUT,
 };
 use windows::Win32::System::Threading::WaitForSingleObjectEx;
 
@@ -225,7 +233,7 @@ pub struct DCompPresenter {
     device_ctx: ID3D11DeviceContext,
     swap_chain: IDXGISwapChain1,
     dcomp_device: IDCompositionDevice,
-    _dcomp_target: IDCompositionTarget,
+    dcomp_target: IDCompositionTarget,
     dcomp_visual: IDCompositionVisual,
     /// The presenting half, shared with libmello's present thread.
     video: Arc<Mutex<VideoSwapChain>>,
@@ -256,6 +264,12 @@ pub struct DCompPresenter {
     wash_swap: Option<IDXGISwapChain1>,
     wash_shown: std::cell::Cell<bool>,
     // --- end stage 6 ---
+    // --- stage 9 (streaming-quality): fullscreen ---
+    /// The second target while the stream is fullscreen: the fullscreen
+    /// window's, with the video visual as its root. The window's client
+    /// size in physical pixels.
+    fullscreen: std::cell::RefCell<Option<(IDCompositionTarget, f32, f32)>>,
+    // --- end stage 9 ---
 }
 
 impl DCompPresenter {
@@ -291,6 +305,10 @@ impl DCompPresenter {
             // first frame would.
             let _ = unsafe { WaitForSingleObjectEx(waitable, 0, true) };
         }
+        // Stage 9: libmello's shared frame is 8-bit RGB, full range, sRGB
+        // transfer, BT.709 primaries. Say so, rather than leave it to the
+        // driver's default.
+        Self::set_srgb_color_space(&swap_chain);
         let stream_size = Arc::new(AtomicU64::new(pack_size(stream_width, stream_height)));
         let (dcomp_device, dcomp_target, dcomp_visual) =
             Self::create_dcomp_tree(&device, hwnd, &swap_chain, offset_x, offset_y)?;
@@ -302,6 +320,15 @@ impl DCompPresenter {
             .map_err(|e| format!("CreateVisual (wash): {e}"))?;
         unsafe { dcomp_visual.AddVisual(&wash_visual, true, None::<&IDCompositionVisual>) }
             .map_err(|e| format!("AddVisual (wash): {e}"))?;
+        // Stage 9: the wash is one colour scaled up from 16x16; a bilinear
+        // filter would fade its edges over half a source pixel (tens of
+        // screen pixels), so it keeps the nearest neighbour.
+        unsafe {
+            let _ = wash_visual.SetBitmapInterpolationMode(
+                DCOMPOSITION_BITMAP_INTERPOLATION_MODE_NEAREST_NEIGHBOR,
+            );
+            let _ = wash_visual.SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD);
+        }
 
         log::info!(
             "DComp presenter initialised: {}x{} at ({:.0},{:.0}) under HWND {:?}",
@@ -329,7 +356,7 @@ impl DCompPresenter {
             device_ctx,
             swap_chain,
             dcomp_device,
-            _dcomp_target: dcomp_target,
+            dcomp_target,
             dcomp_visual,
             video,
             geometry_size: std::cell::Cell::new(pack_size(stream_width, stream_height)),
@@ -345,6 +372,7 @@ impl DCompPresenter {
             wash_visual,
             wash_swap: None,
             wash_shown: std::cell::Cell::new(false),
+            fullscreen: std::cell::RefCell::new(None),
         })
     }
 
@@ -364,6 +392,10 @@ impl DCompPresenter {
     pub fn refresh_geometry_if_resized(&self) {
         let size = self.stream_size.load(Ordering::Acquire);
         if size == self.geometry_size.get() {
+            return;
+        }
+        if let Some((_, w, h)) = *self.fullscreen.borrow() {
+            self.apply_fullscreen_geometry(w, h);
             return;
         }
         if let Some([x, y, w, h, vy, vh]) = self.last_geometry.get() {
@@ -603,6 +635,11 @@ impl DCompPresenter {
         self.last_geometry.set(Some([
             canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h,
         ]));
+        // Stage 9: while fullscreen the card's geometry is kept for the way
+        // back and not applied.
+        if self.fullscreen.borrow().is_some() {
+            return true;
+        }
         let packed = self.stream_size.load(Ordering::Acquire);
         self.geometry_size.set(packed);
         let (stream_width, stream_height) = unpack_size(packed);
@@ -699,6 +736,141 @@ impl DCompPresenter {
     pub fn presented_frames(&self) -> u64 {
         self.video.lock().map(|v| v.presented_frames()).unwrap_or(0)
     }
+
+    // --- stage 9 (streaming-quality) ---
+
+    /// The size of the pictures the present thread shows: the size the SPS
+    /// gives the decoder. For the card's format label.
+    pub fn stream_size(&self) -> (u32, u32) {
+        unpack_size(self.stream_size.load(Ordering::Acquire))
+    }
+
+    /// True while the video is on the fullscreen window.
+    pub fn is_fullscreen(&self) -> bool {
+        self.fullscreen.borrow().is_some()
+    }
+
+    /// Move the video to `hwnd` (the fullscreen window, `width` x `height`
+    /// physical pixels): a second DComp target on the same device takes the
+    /// video visual as its root. The swap chain and the present thread do
+    /// not change, so the stream plays on through the switch.
+    pub fn show_fullscreen(&self, hwnd: isize, width: u32, height: u32) -> Result<(), String> {
+        if self.fullscreen.borrow().is_some() {
+            return Ok(());
+        }
+        let hwnd = HWND(hwnd as *mut _);
+        unsafe {
+            let target = self
+                .dcomp_device
+                .CreateTargetForHwnd(hwnd, true)
+                .map_err(|e| format!("CreateTargetForHwnd (fullscreen): {e}"))?;
+            // A visual has one parent: off the card's target, then on this one.
+            self.dcomp_target
+                .SetRoot(None::<&IDCompositionVisual>)
+                .map_err(|e| format!("SetRoot (card, none): {e}"))?;
+            if let Err(e) = target.SetRoot(&self.dcomp_visual) {
+                let _ = self.dcomp_target.SetRoot(&self.dcomp_visual);
+                let _ = self.dcomp_device.Commit();
+                return Err(format!("SetRoot (fullscreen): {e}"));
+            }
+            *self.fullscreen.borrow_mut() = Some((target, width as f32, height as f32));
+        }
+        self.apply_fullscreen_geometry(width as f32, height as f32);
+        log::info!("DComp: the stream is fullscreen ({width}x{height})");
+        Ok(())
+    }
+
+    /// Move the video back to the card: the fullscreen target goes, the
+    /// card's target takes the visual again and the card's last geometry
+    /// applies.
+    pub fn show_in_card(&self) {
+        let Some((target, _, _)) = self.fullscreen.borrow_mut().take() else {
+            return;
+        };
+        unsafe {
+            let _ = target.SetRoot(None::<&IDCompositionVisual>);
+            if let Err(e) = self.dcomp_target.SetRoot(&self.dcomp_visual) {
+                log::error!("DComp SetRoot (back to the card): {e}");
+            }
+            let _ = self.dcomp_device.Commit();
+        }
+        drop(target);
+        match self.last_geometry.get() {
+            Some([x, y, w, h, vy, vh]) => {
+                self.update_geometry(x, y, w, h, vy, vh);
+            }
+            None => self
+                .geometry_size
+                .set(self.stream_size.load(Ordering::Acquire)),
+        }
+        log::info!("DComp: the stream is back on the card");
+    }
+
+    /// Contain-fit the picture in the fullscreen window, centred, unclipped.
+    fn apply_fullscreen_geometry(&self, width: f32, height: f32) {
+        let packed = self.stream_size.load(Ordering::Acquire);
+        self.geometry_size.set(packed);
+        let (sw, sh) = unpack_size(packed);
+        if sw == 0 || sh == 0 || width <= 0.0 || height <= 0.0 {
+            return;
+        }
+        let (sw, sh) = (sw as f32, sh as f32);
+        let scale = (width / sw).min(height / sh);
+        let offset_x = (width - sw * scale) * 0.5;
+        let offset_y = (height - sh * scale) * 0.5;
+        unsafe {
+            let visible = self.content_visible.get();
+            if visible {
+                let _ = self.dcomp_visual.SetContent(&self.swap_chain);
+            }
+            self.apply_cursor_content(visible);
+            self.apply_wash_content(visible);
+            let _ = self.dcomp_visual.SetOffsetX2(offset_x);
+            let _ = self.dcomp_visual.SetOffsetY2(offset_y);
+            let matrix = windows_numerics::Matrix3x2 {
+                M11: scale,
+                M12: 0.0,
+                M21: 0.0,
+                M22: scale,
+                M31: 0.0,
+                M32: 0.0,
+            };
+            if let Err(e) = self.dcomp_visual.SetTransform2(&matrix) {
+                log::error!("DComp SetTransform (fullscreen): {e}");
+            }
+            // The whole picture shows: the card's scroll clip does not apply.
+            let _ = self
+                .dcomp_visual
+                .SetClip(None::<&windows::Win32::Graphics::DirectComposition::IDCompositionClip>);
+            if let Err(e) = self.dcomp_device.Commit() {
+                log::error!("DComp Commit (fullscreen): {e}");
+            }
+        }
+    }
+
+    /// Declare the swap chain's colour space: sRGB transfer, full range,
+    /// BT.709 primaries, the format libmello writes.
+    fn set_srgb_color_space(swap_chain: &IDXGISwapChain1) {
+        let Ok(chain3) = swap_chain.cast::<IDXGISwapChain3>() else {
+            log::warn!("DComp: no IDXGISwapChain3; the colour space stays the default");
+            return;
+        };
+        unsafe {
+            let supported = chain3
+                .CheckColorSpaceSupport(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709)
+                .unwrap_or(0);
+            // DXGI_SWAP_CHAIN_COLOR_SPACE_SUPPORT_FLAG_PRESENT
+            if supported & 1 == 0 {
+                log::warn!("DComp: the swap chain does not present sRGB full range");
+                return;
+            }
+            if let Err(e) = chain3.SetColorSpace1(DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709) {
+                log::warn!("DComp SetColorSpace1: {e}");
+            }
+        }
+    }
+
+    // --- end stage 9 ---
 
     // -- private -----------------------------------------------------------
 
@@ -852,6 +1024,20 @@ impl DCompPresenter {
 
         unsafe { visual.SetContent(swap_chain) }.map_err(|e| format!("SetContent: {e}"))?;
 
+        // Stage 9: scale the picture with a bilinear filter. The default
+        // (inherit, nearest neighbour at the root) drops whole rows and
+        // columns when the card shows a 1080p stream at a third of its size.
+        // A hard border keeps the edge pixels from fading into the card.
+        // The pointer, a child, inherits it.
+        unsafe {
+            visual
+                .SetBitmapInterpolationMode(DCOMPOSITION_BITMAP_INTERPOLATION_MODE_LINEAR)
+                .map_err(|e| format!("SetBitmapInterpolationMode: {e}"))?;
+            visual
+                .SetBorderMode(DCOMPOSITION_BORDER_MODE_HARD)
+                .map_err(|e| format!("SetBorderMode: {e}"))?;
+        }
+
         unsafe { visual.SetOffsetX2(offset_x) }.map_err(|e| format!("SetOffsetX: {e}"))?;
 
         unsafe { visual.SetOffsetY2(offset_y) }.map_err(|e| format!("SetOffsetY: {e}"))?;
@@ -905,5 +1091,73 @@ mod tests {
     #[test]
     fn adapter_lookup_without_a_luid_falls_back() {
         assert!(DCompPresenter::find_adapter(0).is_none());
+    }
+
+    /// A hidden top-level window for a DComp target.
+    fn hidden_window() -> isize {
+        use windows::core::w;
+        use windows::Win32::UI::WindowsAndMessaging::{CreateWindowExW, WINDOW_EX_STYLE, WS_POPUP};
+        let hwnd = unsafe {
+            CreateWindowExW(
+                WINDOW_EX_STYLE(0),
+                w!("STATIC"),
+                w!("dcomp test"),
+                WS_POPUP,
+                0,
+                0,
+                640,
+                360,
+                None,
+                None,
+                None,
+                None,
+            )
+        }
+        .expect("a hidden window");
+        hwnd.0 as isize
+    }
+
+    /// Stage 9: fullscreen moves the video visual to a second target and
+    /// back, on the same presenter (no new swap chain, so libmello's present
+    /// thread keeps its presenter). The card's geometry that arrives while
+    /// fullscreen is kept for the way back.
+    #[test]
+    fn the_video_moves_to_a_fullscreen_target_and_back() {
+        let luid = mello_core::video_adapter_luid();
+        if luid == 0 {
+            eprintln!("skipped: no usable GPU adapter on this machine");
+            return;
+        }
+        let (card, full) = (hidden_window(), hidden_window());
+        let presenter = DCompPresenter::new(card, 1280, 720, 0.0, 0.0, luid).expect("a presenter");
+        assert!(presenter.update_geometry(10.0, 20.0, 640.0, 360.0, 0.0, 900.0));
+        assert_eq!(presenter.stream_size(), (1280, 720));
+
+        presenter
+            .show_fullscreen(full, 1920, 1080)
+            .expect("the fullscreen target");
+        assert!(presenter.is_fullscreen());
+        // A scroll in the feed while fullscreen: kept, not applied.
+        assert!(presenter.update_geometry(10.0, 120.0, 640.0, 360.0, 0.0, 900.0));
+        assert_eq!(
+            presenter.last_geometry.get(),
+            Some([10.0, 120.0, 640.0, 360.0, 0.0, 900.0])
+        );
+        assert!(
+            presenter.show_fullscreen(full, 1920, 1080).is_ok(),
+            "a second request changes nothing"
+        );
+
+        presenter.show_in_card();
+        assert!(!presenter.is_fullscreen());
+        presenter
+            .show_fullscreen(full, 1920, 1080)
+            .expect("the window takes a target again after the way back");
+        presenter.show_in_card();
+        unsafe {
+            use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
+            let _ = DestroyWindow(HWND(card as *mut _));
+            let _ = DestroyWindow(HWND(full as *mut _));
+        }
     }
 }
