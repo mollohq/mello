@@ -531,6 +531,21 @@ export component SealedStage inherits Rectangle {
         }
     }
 
+    // The close hint, at rest. Not a control: the scrim above is the control.
+    Text {
+        text: "CLICK ANYWHERE TO CLOSE";
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 11px;
+        letter-spacing: Theme.track-label;
+        color: Theme.action-quiet;
+        horizontal-alignment: center;
+        x: 0;
+        width: root.width;
+        y: root.cy + root.bh * root.scale / 2 + 28px;
+        opacity: Ease.span(root.t, 1600ms, 2000ms) * (1 - root.back);
+    }
+
     // Sparks: thrown out in front, then fall.
     for i in 30: Particle {
         property <float> u: Ease.span(root.t, 1050ms, 2400ms);

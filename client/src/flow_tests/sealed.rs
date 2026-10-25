@@ -484,3 +484,26 @@ fn the_card_rests_from_1250_ms() {
     h.click_label("Close");
     assert!(!ui(&h).get_resting(), "it is on its way back");
 }
+
+#[test]
+fn the_centre_view_has_the_bounds_of_the_feed_panel_and_a_hint_that_is_no_control() {
+    let mut h = Harness::new();
+    open_feed(&mut h, feed_with_belts_moved(2, 30));
+    at(&h, 0);
+    h.click_label("Sealed belt, open it");
+    at(&h, 1800);
+
+    let bounds = |name: &str| {
+        let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
+        assert_eq!(found.len(), 1, "{name}");
+        (found[0].absolute_position(), found[0].size())
+    };
+    assert_eq!(
+        bounds("SealedStage"),
+        bounds("CrewFeed"),
+        "the centre view covers the feed panel and nothing else"
+    );
+    // The scrim is the only control. The hint is plain text.
+    assert_eq!(h.controls_labelled("Close").len(), 1);
+    assert!(h.controls_labelled("Click anywhere to close").is_empty());
+}

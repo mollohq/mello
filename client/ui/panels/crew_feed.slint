@@ -3721,17 +3721,27 @@ export component CrewFeed inherits Rectangle {
 
     // A sealed card in the centre of the feed. Made when a card leaves its
     // slot, gone when it is back. A recap brings its own face.
-    if SealedUi.active-kind != "": stage := SealedStage {
+    // The container clips the view to the feed panel: the scrim, the burst, the
+    // rays and the embers never reach the sidebar or the chat.
+    if SealedUi.active-kind != "": sealed-clip := Rectangle {
+        x: 0;
+        y: 0;
         width: root.width;
         height: root.height;
-        page-x: root.absolute-position.x;
-        page-y: root.absolute-position.y;
+        clip: true;
 
-        if SealedUi.active-kind == "recap": RecapCard {
+        stage := SealedStage {
             width: parent.width;
             height: parent.height;
-            card: SealedUi.recap-card;
-            count: SealedUi.active-kind == "recap" ? stage.count : 1;
+            page-x: root.absolute-position.x;
+            page-y: root.absolute-position.y;
+
+            if SealedUi.active-kind == "recap": RecapCard {
+                width: parent.width;
+                height: parent.height;
+                card: SealedUi.recap-card;
+                count: SealedUi.active-kind == "recap" ? stage.count : 1;
+            }
         }
     }
 }
