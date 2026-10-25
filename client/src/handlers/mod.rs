@@ -23,10 +23,10 @@ pub(crate) fn refresh_live_session_cards(ctx: &AppContext) {
     clip::refresh_live_session_cards(ctx);
 }
 
-/// Build the feed cards again from the last feed: a belt or a recap that was
-/// opened is not sealed any more (`sealed.rs`).
+/// Put the belt and recap cards on screen again from the last feed: a belt or
+/// a recap that was opened is not sealed any more (`sealed.rs`).
 pub(crate) fn rebuild_sealed_cards(ctx: &AppContext) {
-    clip::rebuild_feed_cards(ctx, false);
+    clip::refresh_sealed_cards(ctx);
 }
 
 pub fn handle_event(ctx: &AppContext, event: Event) {

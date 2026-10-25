@@ -531,6 +531,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-10
+    title: "A belt that moved is sealed in the feed, opens in the centre with the reveal, and returns open with the dot cleared"
+    priority: P1
+    users: 1
+    harness: [a_belt_that_moved_is_sealed_and_not_a_title_that_did_not, a_move_older_than_seven_days_is_open, a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_open, opening_a_belt_opens_it_in_every_slot, the_recap_is_sealed_by_week, opening_the_recap_stores_the_week_and_the_card_returns_open, the_versus_hero_seals_its_moved_belt_and_keeps_its_tally, a_frame_at_a_fixed_clock_time_renders, the_card_rests_from_1250_ms, the_sealed_cards_and_the_scrim_are_controls_with_a_role_and_a_label]
+    journeys: [qa/journeys/feed-sealed-reveal.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar

@@ -18,8 +18,10 @@ use crate::{BeltReveal, H2hPerson, RecapSeal};
 /// A move is sealed for this long. An older move opens silently.
 pub const SEAL_DAYS: i64 = 7;
 const DAY_MS: i64 = 86_400_000;
-/// An opened key is kept a day longer than a move can stay sealed.
-const KEEP_DAYS: i64 = SEAL_DAYS + 1;
+/// An opened key is kept until it is older than every card it can open. A
+/// recap stays sealed for 7 days after its week ends, and its key holds the
+/// start of that week: 14 days, and one day more.
+const KEEP_DAYS: i64 = 2 * SEAL_DAYS + 1;
 
 /// Columns and rows of the code of a belt. The chip shows the cells that fit.
 pub const COLS: usize = 15;
@@ -206,7 +208,7 @@ pub fn opened_keys(settings: &Settings, crew_id: &str) -> HashSet<String> {
         .unwrap_or_default()
 }
 
-/// Store a key as opened. Keys older than `KEEP_DAYS` leave the list: a move
+/// Store a key as opened. Keys older than `KEEP_DAYS` leave the list: a card
 /// that old is not sealed whatever the list says. Returns true on a change.
 pub fn mark_opened(settings: &mut Settings, crew_id: &str, key: &str, now_ms: i64) -> bool {
     let list = settings
@@ -409,7 +411,9 @@ mod tests {
         let mut s = Settings::default();
         let old = belt_key("night_owl", NOW - 20 * DAY_MS);
         let fresh = belt_key("the_carry", NOW - DAY_MS);
+        let recap = recap_key(NOW - 13 * DAY_MS);
         assert!(mark_opened(&mut s, "c1", &old, NOW - 20 * DAY_MS));
+        assert!(mark_opened(&mut s, "c1", &recap, NOW - 12 * DAY_MS));
         assert!(mark_opened(&mut s, "c1", &fresh, NOW));
         assert!(
             !mark_opened(&mut s, "c1", &fresh, NOW),
@@ -417,10 +421,25 @@ mod tests {
         );
         let keys = opened_keys(&s, "c1");
         assert!(keys.contains(&fresh));
+        assert!(!keys.contains(&old), "a key older than 15 days is dropped");
         assert!(
-            !keys.contains(&old),
-            "a key older than eight days is dropped"
+            keys.contains(&recap),
+            "the key of a recap outlives its week"
         );
         assert!(opened_keys(&s, "c2").is_empty());
+    }
+
+    #[test]
+    fn the_opened_keys_survive_a_restart() {
+        let mut s = Settings::default();
+        let key = belt_key("night_owl", NOW);
+        mark_opened(&mut s, "c1", &key, NOW);
+        // The settings file is JSON in the config dir.
+        let stored = serde_json::to_string(&s).expect("settings serialize");
+        let back: Settings = serde_json::from_str(&stored).expect("settings parse");
+        assert!(opened_keys(&back, "c1").contains(&key));
+        // A settings file from before this feature has no keys.
+        let old: Settings = serde_json::from_str("{}").expect("old settings parse");
+        assert!(opened_keys(&old, "c1").is_empty());
     }
 }

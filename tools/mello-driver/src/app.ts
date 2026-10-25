@@ -194,6 +194,8 @@ export type AppState = {
     recap: boolean;
     /** The card in the centre of the feed. */
     open_center: "belt" | "recap" | "none";
+    /** The card in the centre is at rest: the face shows and a click on the scrim closes it. */
+    resting: boolean;
   };
   /** The skeleton trio cells that show, 0 to 3. */
   skeleton_trio: number;

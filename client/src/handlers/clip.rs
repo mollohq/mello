@@ -736,14 +736,6 @@ fn set_quiet_state(
 /// members from the list: a feed that came first would show "Crew mate" and a
 /// short invite card. Called when the member list is set.
 pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
-    rebuild_feed_cards(ctx, true);
-}
-
-/// The body of `rebuild_roster_cards`. `needs_h2h`: only a feed with a
-/// head2head entry is built again, as the roster changes only that entry. A
-/// belt or a recap that opens changes the recap card and the chips, so it
-/// builds a feed with no such entry again as well.
-pub(super) fn rebuild_feed_cards(ctx: &AppContext, needs_h2h: bool) {
     let Some(resp) = ctx.last_feed.borrow().clone() else {
         return;
     };
@@ -753,7 +745,7 @@ pub(super) fn rebuild_feed_cards(ctx: &AppContext, needs_h2h: bool) {
     let Some(section) = resp.sections.iter().find(|s| s.id == "this_week") else {
         return;
     };
-    if needs_h2h && !section.entries.iter().any(|e| e.entry_type == "head2head") {
+    if !section.entries.iter().any(|e| e.entry_type == "head2head") {
         return;
     }
     let mut cards = build_this_week(ctx, &section.entries);
@@ -821,6 +813,53 @@ pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
     }
     for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
         feed.set_row_data(row, card);
+    }
+}
+
+/// Put the cards that hold a belt or a recap on screen again after a card
+/// opened (`sealed.rs`): the head2head and invite cards, and the recaps. Each
+/// replaces the row with its id, so the order of the feed does not change.
+pub(super) fn refresh_sealed_cards(ctx: &AppContext) {
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let entries: Vec<mello_core::crew_events::FeedEntry> = resp
+        .sections
+        .iter()
+        .filter(|s| s.id == "this_week")
+        .flat_map(|s| s.entries.iter().cloned())
+        .collect();
+    let mut fresh: Vec<FeedCardData> = Vec::new();
+    if let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") {
+        if let Some((_, cards)) = head2head_cards(ctx, entry, &entries) {
+            fresh.extend(cards);
+        }
+    }
+    for e in &entries {
+        if matches!(e.entry_type.as_str(), "recap" | "daily-recap")
+            && !is_empty_recap_entry(&e.entry_type, &e.data)
+        {
+            fresh.push(build_feed_card(
+                ctx,
+                &e.id,
+                &e.entry_type,
+                &e.role,
+                &e.size,
+                &e.data,
+                e.ts,
+            ));
+        }
+    }
+    let feed = ctx.app.get_feed_cards();
+    for card in fresh {
+        if let Some(row) =
+            (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id == card.id))
+        {
+            feed.set_row_data(row, card);
+        }
     }
 }
 

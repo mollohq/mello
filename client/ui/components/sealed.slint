@@ -119,6 +119,10 @@ export global SealedUi {
     out property <float> landing: root.closing ? Ease.span(Clock.now - root.t1, 340ms, 460ms) : 0;
     out property <bool> close-done: root.closing && Clock.now - root.t1 >= 460ms;
 
+    /// The card is at rest: the face shows and a click on the scrim closes it.
+    /// Reads the clock only while a card is in the centre.
+    out property <bool> resting: root.active-kind != "" && !root.closing && Clock.now - root.t0 >= 1250ms;
+
     public function launch(kind: string, slot: string, key: string, area: SealedArea) {
         root.active-kind = kind;
         root.active-slot = slot;
@@ -130,7 +134,7 @@ export global SealedUi {
     }
     /// A click on the scrim. The card closes once it is at rest.
     public function close() {
-        if (root.active-kind != "" && !root.closing && Clock.now - root.t0 >= 1250ms) {
+        if (root.resting) {
             root.closing = true;
             root.t1 = Clock.now;
         }

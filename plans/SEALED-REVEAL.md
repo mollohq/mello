@@ -117,7 +117,8 @@ The stat sentences are the Stat column of HEAD2HEAD.md section 2, in `sealed.rs`
   `feed_seen_ms`, they stay on this device. A server copy comes later.
 - A card is sealed when its key is not opened and the move is under 7 days old. An
   older card opens silently on the next feed load: no animation, no stored key.
-  A stored key older than 8 days is dropped when the feed loads.
+  A stored key older than 15 days is dropped when a card opens. A recap stays sealed
+  for 7 days after its week ends, and its key holds the week start.
 - A click on any slot of a belt opens the belt in every slot. While the belt is in the
   centre, its other slots stay sealed. They open when the card lands.
 - The key is stored when the card leaves its slot. The feed cards are built again

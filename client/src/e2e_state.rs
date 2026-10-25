@@ -300,6 +300,9 @@ struct SealedSnap {
     recap: bool,
     /// The card in the centre of the feed: `"belt"`, `"recap"` or `"none"`.
     open_center: &'static str,
+    /// The card in the centre is at rest: the face shows, and a click on the
+    /// scrim closes it. The reveal takes 1.25 s.
+    resting: bool,
 }
 
 /// Count the sealed belts and the sealed recap of the feed cards.
@@ -329,6 +332,7 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
             "recap" => "recap",
             _ => "none",
         },
+        resting: ui.get_resting(),
     }
 }
 
@@ -1484,7 +1488,7 @@ mod tests {
         let app = h.app();
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 0, "recap": false, "open_center": "none"})
+            json!({"belts": 0, "recap": false, "open_center": "none", "resting": false})
         );
         let belt = |key: &str, sealed: bool| crate::BeltReveal {
             key: key.into(),
@@ -1526,7 +1530,7 @@ mod tests {
         ]));
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 1, "recap": true, "open_center": "none"})
+            json!({"belts": 1, "recap": true, "open_center": "none", "resting": false})
         );
         // The belt in the centre is no longer sealed in the feed.
         let ui = app.global::<crate::SealedUi>();
@@ -1534,7 +1538,7 @@ mod tests {
         ui.set_active_kind("belt".into());
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 0, "recap": true, "open_center": "belt"})
+            json!({"belts": 0, "recap": true, "open_center": "belt", "resting": false})
         );
         ui.set_active_kind("recap".into());
         assert_eq!(snapshot_json(app)["sealed"]["open_center"], "recap");

@@ -383,6 +383,8 @@ export component SealedStage inherits Rectangle {
     property <float> rays-a: Ease.span(root.t, 980ms, 1250ms) * (0.85 - 0.5 * Ease.span(root.t, 1600ms, 2600ms)) * (1 - root.back);
 
     background: transparent;
+    // The burst stays inside the feed. It does not paint over the side panels.
+    clip: true;
 
     // Scrim over the feed.
     Rectangle {
