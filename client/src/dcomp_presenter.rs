@@ -1129,7 +1129,18 @@ mod tests {
             return;
         }
         let (card, full) = (hidden_window(), hidden_window());
-        let presenter = DCompPresenter::new(card, 1280, 720, 0.0, 0.0, luid).expect("a presenter");
+        // A composition swap chain needs an interactive desktop session. The
+        // CI runner is a service in session 0, where DXGI answers
+        // DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022); any other error is
+        // a real failure.
+        let presenter = match DCompPresenter::new(card, 1280, 720, 0.0, 0.0, luid) {
+            Ok(presenter) => presenter,
+            Err(e) if e.contains("0x887A0022") => {
+                eprintln!("skipped: no interactive session for a composition swap chain ({e})");
+                return;
+            }
+            Err(e) => panic!("a presenter: {e}"),
+        };
         assert!(presenter.update_geometry(10.0, 20.0, 640.0, 360.0, 0.0, 900.0));
         assert_eq!(presenter.stream_size(), (1280, 720));
 
