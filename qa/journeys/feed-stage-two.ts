@@ -4,7 +4,8 @@
 // Head2head shows one pair, three open seats and the red invite. Two PCs own
 // games, so recent games is a poster grid of at most five tiles with owner pips,
 // "From 2 PCs" on its header. The skeleton trio stays (frame B2). alice sees the
-// joined line for bob, who came by her invite link.
+// join card for bob, who came by her invite link: a standard cell after the
+// first row, with "Say hi".
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
@@ -63,12 +64,24 @@ export default journey({
       });
     }
 
-    await step("alice sees bob on the joined line, bob does not see his own join", async () => {
-      const a = await alice.waitFor("the joined line", (st) => st.joined_rows.length > 0, 30_000);
-      expect(a.joined_rows.length === 1, `one joined row, got ${a.joined_rows.length}`);
-      expect(/ joined, invited by /.test(a.joined_rows[0].line), `the line names the inviter: "${a.joined_rows[0].line}"`);
-      expect(/^(Today|Yesterday) \d\d:\d\d$/.test(a.joined_rows[0].when), `the time reads Today hh:mm: "${a.joined_rows[0].when}"`);
-      expect((await bob.state()).joined_rows.length === 0, "bob does not see his own join");
+    await step("alice sees bob as a join card in the grid, bob does not see his own join", async () => {
+      const a = await alice.waitFor("the join card", (st) => st.joined.length > 0, 30_000);
+      expect(a.joined.length === 1, `one join card, got ${a.joined.length}`);
+      const j = a.joined[0];
+      expect(/ joined$/.test(j.title), `the card says who joined: "${j.title}"`);
+      expect(/^invited by /.test(j.invited), `the card names the inviter: "${j.invited}"`);
+      expect(/^(Today|Yesterday) \d\d:\d\d$/.test(j.when), `the time reads Today hh:mm: "${j.when}"`);
+      expect(j.index > 0, `the card is in the grid flow, not the first card, got index ${j.index}`);
+      const sessions = a.feed_cards.map((c, i) => (c.card_type === "game-session" ? i : -1)).filter((i) => i >= 0);
+      expect(sessions.every((i) => j.index < i), "the card stands before the sessions");
+      expect((await bob.state()).joined.length === 0, "bob does not see his own join");
+    });
+
+    await step("alice's Say hi puts the cursor in the crew chat", async () => {
+      const name = (await alice.state()).joined[0].name;
+      await alice.click(`Say hi to ${name}`);
+      await alice.waitFor("the cursor in the chat input", (st) => st.chat_input_focused, 10_000);
+      await alice.checkpoint("two-feed-say-hi");
     });
 
     for (const app of [bob, alice]) {

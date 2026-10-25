@@ -481,7 +481,7 @@ flows:
     title: "Crew feed with 2 members: one pair, three open seats, contested titles, avatars on the octagons"
     priority: P1
     users: 2
-    harness: [crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats, head2head_octagons_show_the_loaded_avatar_and_initials_without_one, a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster]
+    harness: [crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats, head2head_octagons_show_the_loaded_avatar_and_initials_without_one, a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster, a_joiner_is_a_card_with_the_inviter_the_time_and_say_hi, the_join_card_stands_after_the_first_row_and_before_the_session, say_hi_puts_the_cursor_in_the_crew_chat, the_join_cards_keep_three_newest_and_drop_old_and_own_joins, no_join_in_the_last_day_gives_no_join_card]
     journeys: [qa/journeys/feed-stage-two.ts]
     protocol: []
     issues: []

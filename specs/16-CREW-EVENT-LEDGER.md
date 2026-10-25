@@ -152,7 +152,7 @@ Written by the `AfterJoinGroup` hook, and by the `join_by_invite_code` RPC, whic
 }
 ```
 
-`invited_by` and `invited_by_name` are absent when the joiner used no invite code. They feed the joined line at the top of the crew feed (CLIPS 7).
+`invited_by` and `invited_by_name` are absent when the joiner used no invite code. They feed the joined cards of the crew feed (CLIPS 7).
 
 #### `member_left`
 

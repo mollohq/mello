@@ -4568,11 +4568,18 @@ fn feed_with_joins(joined: Vec<mello_core::crew_events::FeedJoin>) -> FeedRespon
     feed
 }
 
-/// Frame B2: a slim row above the versus card for a member who joined, with the
-/// inviter and the time. It shows for 24 hours, one row each, newest first, three
-/// at most. Everything older, and the viewer's own join, stays off.
+fn joined_cards(h: &Harness) -> Vec<FeedCardData> {
+    h.app()
+        .get_feed_cards()
+        .iter()
+        .filter(|c| c.card_type == "joined")
+        .collect()
+}
+
+/// A join is a card in the grid, not a row above it. The joiner's octagon, "Jonas
+/// joined" in Oxanium, who invited and when, and a "Say hi" action.
 #[test]
-fn the_joined_line_shows_a_recent_joiner_above_the_cards() {
+fn a_joiner_is_a_card_with_the_inviter_the_time_and_say_hi() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
@@ -4580,25 +4587,75 @@ fn the_joined_line_shows_a_recent_joiner_above_the_cards() {
         response: feed_with_joins(vec![join_of("u2", "Jonas", "b0bben", 5 * 60_000)]),
     });
 
-    let rows = h.app().get_feed_joined();
-    assert_eq!(rows.row_count(), 1);
-    let row = rows.row_data(0).unwrap();
-    assert_eq!(row.line.as_str(), "Jonas joined, invited by b0bben");
+    let cards = joined_cards(&h);
+    assert_eq!(cards.len(), 1);
+    let c = &cards[0];
+    assert_eq!(c.title.as_str(), "Jonas joined");
+    assert_eq!(c.subtitle.as_str(), "invited by b0bben");
     assert!(
-        row.when.starts_with("Today ") || row.when.starts_with("Yesterday "),
+        c.timestamp.starts_with("Today ") || c.timestamp.starts_with("Yesterday "),
         "{}",
-        row.when
+        c.timestamp
     );
-    assert_eq!(count_of(&h, "FeedJoinedRow"), 1);
+    assert_eq!(count_of(&h, "JoinedCard"), 1);
     let texts = drawn_texts(&h);
+    for want in ["Jonas joined", "invited by b0bben", "SAY HI"] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
     assert!(
-        texts.iter().any(|t| t == "Jonas joined, invited by b0bben"),
-        "{texts:?}"
+        !texts.iter().any(|t| t.contains("joined, invited by")),
+        "the old row is gone: {texts:?}"
+    );
+}
+
+/// The card stands in the grid flow: after the first row, before the sessions.
+#[test]
+fn the_join_card_stands_after_the_first_row_and_before_the_session() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_joins(vec![join_of("u2", "Jonas", "", 5 * 60_000)]),
+    });
+    let types: Vec<String> = h
+        .app()
+        .get_feed_cards()
+        .iter()
+        .map(|c| c.card_type.to_string())
+        .collect();
+    let at = |t: &str| types.iter().position(|x| x == t);
+    let joined = at("joined").expect("a join card");
+    assert!(joined > at("head2head").unwrap(), "{types:?}");
+    if let Some(session) = at("game-session") {
+        assert!(joined < session, "before the sessions: {types:?}");
+    }
+}
+
+/// "Say hi" puts the cursor in the crew chat input. It is a white outline
+/// action, not the one filled button.
+#[test]
+fn say_hi_puts_the_cursor_in_the_crew_chat() {
+    let mut h = Harness::new();
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_joins(vec![join_of("u2", "Jonas", "", 5 * 60_000)]),
+    });
+    assert_eq!(h.app().global::<crate::ChatFocus>().get_requests(), 0);
+    h.click_label("Say hi to Jonas");
+    let chat = h.app().global::<crate::ChatFocus>();
+    assert_eq!(chat.get_requests(), 1, "one press, one request");
+    assert!(
+        chat.get_input_focused(),
+        "the chat input has the cursor after Say hi"
     );
 }
 
 #[test]
-fn the_joined_line_keeps_three_newest_and_drops_old_and_own_joins() {
+fn the_join_cards_keep_three_newest_and_drop_old_and_own_joins() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 5);
     set_roster(
@@ -4622,24 +4679,24 @@ fn the_joined_line_keeps_three_newest_and_drops_old_and_own_joins() {
             join_of("u6", "Gus", "", 10 * hour),
         ]),
     });
-    let rows = h.app().get_feed_joined();
-    let lines: Vec<String> = (0..rows.row_count())
-        .map(|i| rows.row_data(i).unwrap().line.to_string())
+    let titles: Vec<String> = joined_cards(&h)
+        .iter()
+        .map(|c| c.title.to_string())
         .collect();
-    assert_eq!(lines, ["Jonas joined", "Max joined", "Gus joined"]);
-    assert_eq!(count_of(&h, "FeedJoinedRow"), 3);
+    assert_eq!(titles, ["Jonas joined", "Max joined", "Gus joined"]);
+    assert_eq!(count_of(&h, "JoinedCard"), 3);
 }
 
 #[test]
-fn no_join_in_the_last_day_gives_no_joined_line() {
+fn no_join_in_the_last_day_gives_no_join_card() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
     h.emit(Event::FeedLoaded {
         response: feed_with_joins(vec![join_of("u2", "Jonas", "", 25 * 3_600_000)]),
     });
-    assert_eq!(h.app().get_feed_joined().row_count(), 0);
-    assert_eq!(count_of(&h, "FeedJoinedRow"), 0);
+    assert!(joined_cards(&h).is_empty());
+    assert_eq!(count_of(&h, "JoinedCard"), 0);
 }
 
 /// The tile shows hours in capitals, the launcher when the hours are unknown,
