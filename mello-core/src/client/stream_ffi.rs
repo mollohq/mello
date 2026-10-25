@@ -195,6 +195,8 @@ impl Drop for ViewerState {
             // After the callback is gone, so no packet in flight comes back:
             // the next stream must not start with this one's pointer.
             crate::stream::cursor::reset_viewer_cursor();
+            // stage 9 (streaming-quality): and not with its label.
+            crate::stream::viewer_format::reset_viewer_format();
         }
 
         // Native viewer stop joins decode threads. It runs on the teardown
@@ -291,6 +293,9 @@ pub(super) unsafe extern "C" fn stream_control_data_callback(
             .store(reason as u8, std::sync::atomic::Ordering::Release);
     } else if let Some(cursor) = crate::stream::cursor::parse_cursor_message(bytes) {
         crate::stream::cursor::apply_viewer_cursor(cursor);
+    } else {
+        // stage 9 (streaming-quality): the rung, for the card's label.
+        crate::stream::viewer_format::apply_viewer_rung_message(bytes);
     }
 }
 
@@ -722,6 +727,32 @@ mod tests {
             assert_eq!(slot.is_host_idle(), idle);
             assert!(!slot.is_paused());
         }
+    }
+
+    /// stage 9 (streaming-quality): the host's rung message on the control
+    /// channel sets the watched stream's format (the card's "720p60"); a
+    /// pause message does not change it.
+    #[test]
+    fn the_rung_message_sets_the_watched_format() {
+        use crate::stream::controller::{rung_message, Rung};
+        use crate::stream::viewer_format;
+        let _slot = viewer_format::TEST_SLOT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        viewer_format::reset_viewer_format();
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        let rung = Rung {
+            width: 854,
+            height: 480,
+            fps: 30,
+        };
+        let msg = rung_message(rung);
+        // SAFETY: the slot outlives the call.
+        unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+        assert_eq!(viewer_format::viewer_format().rung, Some(rung));
+        assert!(!slot.is_paused());
+        viewer_format::reset_viewer_format();
     }
 
     /// The 2 fps idle keepalive gives 500 ms present gaps. While the host is

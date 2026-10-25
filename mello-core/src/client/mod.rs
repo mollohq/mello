@@ -29,6 +29,9 @@ mod stream_reconnect_live_tests;
 mod stream_reconnect_tests;
 mod stream_watch;
 // end stage 6
+// stage 9 (streaming-quality): the stream card's game-audio volume
+mod stream_view_audio;
+// end stage 9
 mod streaming;
 mod tick_gating;
 mod voice;
@@ -985,6 +988,10 @@ impl Client {
             }
             Command::StopWatching => {
                 self.handle_stop_watching().await;
+            }
+            // stage 9 (streaming-quality)
+            Command::SetStreamAudioVolume { gain } => {
+                self.handle_set_stream_audio_volume(gain);
             }
 
             // --- Crew admin ---
