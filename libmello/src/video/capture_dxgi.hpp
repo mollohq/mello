@@ -19,11 +19,12 @@ public:
     bool start(uint32_t target_fps, FrameCallback callback) override;
     void stop() override;
 
-    uint32_t width()  const override { return width_; }
-    uint32_t height() const override { return height_; }
+    uint32_t width()  const override { return width_.load(std::memory_order_relaxed); }
+    uint32_t height() const override { return height_.load(std::memory_order_relaxed); }
     const char* backend_name() const override { return "DXGI-DDI"; }
 
     bool get_cursor(CursorData& out) override;
+    CursorMode cursor_mode() const override { return CursorMode::Composite; }
     bool failed() const override { return failed_.load(std::memory_order_relaxed); }
     bool stop_timed_out() const override { return detached_.load(std::memory_order_relaxed); }
 
@@ -48,8 +49,10 @@ private:
     ComPtr<IDXGIOutputDuplication> duplication_;
 
     uint32_t           monitor_index_ = 0;
-    uint32_t           width_      = 0;
-    uint32_t           height_     = 0;
+    // The output size. A display mode change rebuilds duplication at the new
+    // size on the capture thread, so other threads read atomics.
+    std::atomic<uint32_t> width_{0};
+    std::atomic<uint32_t> height_{0};
     uint32_t           target_fps_ = 60;
     std::thread        thread_;
     std::atomic<bool>  running_{false};

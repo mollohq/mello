@@ -87,12 +87,20 @@ struct ReferenceCapture::Impl {
     std::atomic<bool> running{false};
     HANDLE            timer = nullptr;
 
+    // Stage 7: the clip's audio, float stereo, one clip loop long.
+    std::vector<float> audio;
+    std::thread        audio_thread;
+    HANDLE             audio_timer = nullptr;
+    std::mutex         audio_cb_mutex;
+    CaptureSource::TimedAudioCallback audio_cb;
+
     mutable std::mutex info_mutex;
     ReferenceInfo      info{};
 
     ~Impl() {
         if (file != INVALID_HANDLE_VALUE) CloseHandle(file);
         if (timer) CloseHandle(timer);
+        if (audio_timer) CloseHandle(audio_timer);
     }
 
     bool read_frame(uint64_t index) {
@@ -117,16 +125,21 @@ struct ReferenceCapture::Impl {
     // Sleep until `due_us` on the steady clock: the waitable timer to 1 ms
     // before, then yield. A plain Sleep(1) would wake up to 15 ms late
     // without timeBeginPeriod.
-    void wait_until(uint64_t due_us) {
+    void wait_until(uint64_t due_us) { wait_on(timer, due_us, true); }
+
+    // `spin`: yield through the last millisecond for an exact wake. The
+    // audio thread does not spin: its capture times are exact anyway.
+    static void wait_on(HANDLE t, uint64_t due_us, bool spin) {
         for (;;) {
             const uint64_t now = steady_now_us();
             if (now >= due_us) return;
             const uint64_t left = due_us - now;
-            if (left > 1500 && timer) {
+            if ((left > 1500 || !spin) && t) {
+                const uint64_t sleep = spin ? left - 1000 : left;
                 LARGE_INTEGER rel{};
-                rel.QuadPart = -static_cast<LONGLONG>((left - 1000) * 10);  // 100 ns units
-                if (SetWaitableTimerEx(timer, &rel, 0, nullptr, nullptr, nullptr, 0)) {
-                    WaitForSingleObject(timer, INFINITE);
+                rel.QuadPart = -static_cast<LONGLONG>(sleep * 10);  // 100 ns units
+                if (SetWaitableTimerEx(t, &rel, 0, nullptr, nullptr, nullptr, 0)) {
+                    WaitForSingleObject(t, INFINITE);
                     continue;
                 }
             }
@@ -136,6 +149,13 @@ struct ReferenceCapture::Impl {
 };
 
 ReferenceCapture::ReferenceCapture() : impl_(std::make_unique<Impl>()) {}
+
+bool ReferenceCapture::provides_timed_audio() const { return !impl_->audio.empty(); }
+
+void ReferenceCapture::set_timed_audio_callback(TimedAudioCallback cb) {
+    std::lock_guard<std::mutex> lock(impl_->audio_cb_mutex);
+    impl_->audio_cb = std::move(cb);
+}
 
 ReferenceCapture::~ReferenceCapture() {
     stop();
@@ -176,6 +196,33 @@ bool ReferenceCapture::initialize(const GraphicsDevice& device, const CaptureSou
     m.frame_bytes = reference_frame_bytes(m.clip.width, m.clip.height);
     m.raw.resize(m.frame_bytes);
     m.nv12.resize(m.frame_bytes);
+
+    // Stage 7: the clip's audio, one loop long at 48 kHz stereo.
+    m.audio.clear();
+    if (!m.clip.audio_path.empty()) {
+        HANDLE af = CreateFileW(utf8_to_wide(m.clip.audio_path).c_str(), GENERIC_READ,
+                                FILE_SHARE_READ, nullptr, OPEN_EXISTING, 0, nullptr);
+        if (af == INVALID_HANDLE_VALUE) {
+            MELLO_LOG_ERROR(TAG, "cannot open clip audio '%s' (error %lu)",
+                            m.clip.audio_path.c_str(), GetLastError());
+            return false;
+        }
+        const uint64_t loop_frames = m.frames * 48'000ULL / m.clip.fps;
+        std::vector<int16_t> pcm(static_cast<size_t>(loop_frames * 2), 0);
+        DWORD got = 0;
+        const DWORD want = static_cast<DWORD>(pcm.size() * sizeof(int16_t));
+        const BOOL ok = ReadFile(af, pcm.data(), want, &got, nullptr);
+        CloseHandle(af);
+        if (!ok) {
+            MELLO_LOG_ERROR(TAG, "cannot read clip audio '%s'", m.clip.audio_path.c_str());
+            return false;
+        }
+        m.audio.resize(pcm.size());
+        for (size_t i = 0; i < pcm.size(); ++i) m.audio[i] = static_cast<float>(pcm[i]) / 32768.0f;
+        MELLO_LOG_INFO(TAG, "clip audio '%s': %llu of %llu frames (48 kHz stereo)",
+                       m.clip.audio_path.c_str(), static_cast<unsigned long long>(got / 4),
+                       static_cast<unsigned long long>(loop_frames));
+    }
 
     m.device = device.d3d11();
     m.device->GetImmediateContext(&m.context);
@@ -264,6 +311,14 @@ bool ReferenceCapture::initialize(const GraphicsDevice& device, const CaptureSou
         // Older Windows: a normal waitable timer, still better than Sleep.
         m.timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
     }
+    if (!m.audio.empty()) {
+        m.audio_timer = CreateWaitableTimerExW(nullptr, nullptr,
+                                               CREATE_WAITABLE_TIMER_HIGH_RESOLUTION,
+                                               TIMER_ALL_ACCESS);
+        if (!m.audio_timer) {
+            m.audio_timer = CreateWaitableTimerExW(nullptr, nullptr, 0, TIMER_ALL_ACCESS);
+        }
+    }
 
     {
         std::lock_guard<std::mutex> lock(m.info_mutex);
@@ -296,6 +351,34 @@ bool ReferenceCapture::start(uint32_t target_fps, FrameCallback callback) {
         {
             std::lock_guard<std::mutex> lock(s.info_mutex);
             s.info.start_us = start;
+        }
+        if (!s.audio.empty() && !s.audio_thread.joinable()) {
+            // Stage 7: the clip's audio on the same clock, frame 0 at start.
+            s.audio_thread = std::thread([&s, start]() {
+                constexpr uint32_t kChunk = 480;  // 10 ms
+                const size_t loop = s.audio.size() / 2;
+                std::vector<float> chunk(kChunk * 2);
+                uint64_t j = 0;
+                while (s.running.load(std::memory_order_relaxed)) {
+                    const uint64_t captured = start + j * 10'000;
+                    // Handed over when complete, as a capture device does.
+                    Impl::wait_on(s.audio_timer, captured + 10'000, false);
+                    if (!s.running.load(std::memory_order_relaxed)) break;
+                    for (uint32_t i = 0; i < kChunk; ++i) {
+                        const size_t f = static_cast<size_t>((j * kChunk + i) % loop);
+                        chunk[i * 2] = s.audio[f * 2];
+                        chunk[i * 2 + 1] = s.audio[f * 2 + 1];
+                    }
+                    {
+                        std::lock_guard<std::mutex> lock(s.audio_cb_mutex);
+                        if (s.audio_cb) {
+                            s.audio_cb(chunk.data(), kChunk, 2, 48'000,
+                                       static_cast<int64_t>(captured));
+                        }
+                    }
+                    ++j;
+                }
+            });
         }
         uint64_t n = 0;
         while (s.running.load(std::memory_order_relaxed)) {
@@ -349,6 +432,12 @@ void ReferenceCapture::stop() {
         SetWaitableTimerEx(m.timer, &now, 0, nullptr, nullptr, nullptr, 0);
     }
     if (m.thread.joinable()) m.thread.join();
+    if (m.audio_timer) {
+        LARGE_INTEGER now{};
+        now.QuadPart = -1;
+        SetWaitableTimerEx(m.audio_timer, &now, 0, nullptr, nullptr, nullptr, 0);
+    }
+    if (m.audio_thread.joinable()) m.audio_thread.join();
 }
 
 #endif

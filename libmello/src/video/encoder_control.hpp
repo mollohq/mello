@@ -44,10 +44,10 @@ public:
         return encoder_ && encoder_->encode(nv12_texture, out);
     }
 #elif defined(__APPLE__)
-    bool encode(void* cv_pixel_buffer, EncodedPacket& out) {
+    bool encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) {
         std::lock_guard<std::mutex> lock(mutex_);
         apply_pending_locked();
-        return encoder_ && encoder_->encode(cv_pixel_buffer, out);
+        return encoder_ && encoder_->encode(cv_pixel_buffer, capture_us, out);
     }
 #endif
 
@@ -76,6 +76,25 @@ public:
     void request_keyframe() {
         pending_keyframe_.store(true, std::memory_order_release);
         apply_if_free();
+    }
+
+    /// Changes the encode size: in place when the backend can
+    /// (`Encoder::reconfigure_size`), else a full re-initialize on `device`
+    /// with `config` (the new size, the current bitrate and frame rate). The
+    /// first frame after it is an IDR either way. Returns false when both
+    /// fail; the encoder is then unusable. Encode thread only.
+    bool resize(const GraphicsDevice& device, const EncoderConfig& config) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        apply_pending_locked();
+        if (!encoder_) return false;
+        if (encoder_->reconfigure_size(config.width, config.height)) {
+            encoder_->request_keyframe();
+            return true;
+        }
+        encoder_->shutdown();
+        if (!encoder_->initialize(device, config)) return false;
+        encoder_->request_keyframe();
+        return true;
     }
 
     /// Applies the pending values now. Waits for an encode that runs.

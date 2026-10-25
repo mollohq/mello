@@ -402,7 +402,7 @@ fn run_sfu_mode(
     let mut conn = rt
         .block_on(SfuConnection::connect(endpoint, token))
         .map_err(|e| format!("SFU connect failed: {}", e))?;
-    let peer_handle = unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Host) }
+    let peer_handle = unsafe { SfuConnection::create_stream_peer(ctx, StreamPeerRole::Host, &[]) }
         .map_err(|e| format!("SFU stream peer creation failed: {}", e))?;
     rt.block_on(conn.join_stream(peer_handle, session_id, role))
         .map_err(|e| format!("SFU join_stream failed: {}", e))?;

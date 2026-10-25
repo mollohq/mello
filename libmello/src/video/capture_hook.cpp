@@ -7,6 +7,8 @@
 #include <chrono>
 
 #include "../util/log.hpp"
+#include "capture_process.hpp"
+#include "cursor.hpp"
 #include "frame_cadence.hpp"
 #include "hook_launcher.hpp"
 
@@ -58,7 +60,7 @@ bool error_is_transient(uint32_t error) { return mello_hook_error_is_transient(e
 const char* error_name(uint32_t error) {
     switch (error) {
         case MELLO_HOOK_OK:                 return "ok";
-        case MELLO_HOOK_ERR_NO_DEVICE:      return "no D3D11 device on the swap chain";
+        case MELLO_HOOK_ERR_NO_DEVICE:      return "no device or command queue for the swap chain";
         case MELLO_HOOK_ERR_SHARED_TEXTURE: return "shared texture failed";
         case MELLO_HOOK_ERR_FORMAT:         return "back buffer format cannot be shared";
         case MELLO_HOOK_ERR_COPY:           return "the copy failed";
@@ -193,6 +195,11 @@ bool HookCapture::create_shared_block(uint32_t pid) {
 }
 
 void HookCapture::release_shared_block() {
+    fence_.Reset();
+    if (game_process_) {
+        CloseHandle(game_process_);
+        game_process_ = nullptr;
+    }
     if (frames_) {
         UnmapViewOfFile(const_cast<uint8_t*>(frames_));
         frames_ = nullptr;
@@ -260,6 +267,11 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     info_->off_d3d9_swapchain_present = offsets.d3d9_swapchain_present;
     info_->off_d3d9_reset = offsets.d3d9_reset;
     info_->off_d3d9_reset_ex = offsets.d3d9_reset_ex;
+    // A diagnostic and test switch: an OpenGL game sends its frames through
+    // memory even when its driver has the D3D11 interop.
+    info_->client_options = GetEnvironmentVariableA("MELLO_HOOK_GL_READBACK", nullptr, 0) > 0
+                                ? MELLO_HOOK_OPTION_GL_READBACK
+                                : 0;
     // Capture is on from the start: the hook publishes the frame size with its
     // first frame, and the stream needs that size to size its encoder.
     as_atomic_u32(&info_->capture_enabled)->store(1, std::memory_order_relaxed);
@@ -284,19 +296,32 @@ bool HookCapture::initialize(const GraphicsDevice& device, const CaptureSourceDe
     if (!wait_for_first_frame(kFirstFrameTimeoutMs)) {
         // The game has not presented yet. Start the stream at the window size
         // and let the first frame correct it.
-        if (!window_client_size(pid_, &width_, &height_)) {
+        uint32_t window_w = 0, window_h = 0;
+        if (!window_client_size(pid_, &window_w, &window_h)) {
             MELLO_LOG_WARN(TAG, "no frame and no window size for pid=%u", pid_);
             release_shared_block();
             return false;
         }
+        width_.store(window_w);
+        height_.store(window_h);
         MELLO_LOG_INFO(TAG, "hook is in pid=%u; no frame yet, starting at the window size %ux%u",
-                       pid_, width_, height_);
+                       pid_, window_w, window_h);
         return true;
     }
 
-    MELLO_LOG_INFO(TAG, "hook is in pid=%u (%d-bit), capturing %ux%u fmt=%u", pid_, bits_, width_,
-                   height_, info_->dxgi_format);
+    MELLO_LOG_INFO(TAG, "hook is in pid=%u (%d-bit), capturing %ux%u fmt=%u", pid_, bits_,
+                   width_.load(), height_.load(), info_->dxgi_format);
     return true;
+}
+
+HookCapture::Counters HookCapture::counters() const {
+    Counters out;
+    if (!info_) return out;
+    auto* info = const_cast<MelloHookInfo*>(info_);
+    out.presents_seen = as_atomic_u64(&info->presents_seen)->load(std::memory_order_relaxed);
+    out.frames_copied = as_atomic_u64(&info->frames_copied)->load(std::memory_order_relaxed);
+    out.frames_dropped = as_atomic_u64(&info->frames_dropped)->load(std::memory_order_relaxed);
+    return out;
 }
 
 uint32_t HookCapture::texture_generation() const {
@@ -335,7 +360,7 @@ bool HookCapture::wait_for_first_frame(uint32_t timeout_ms) {
         if (as_atomic_u64(&info_->frame_index)->load(std::memory_order_acquire) > 0) {
             width_ = info_->width;
             height_ = info_->height;
-            return width_ > 0 && height_ > 0;
+            return width_.load() > 0 && height_.load() > 0;
         }
         WaitForSingleObject(frame_event_, 50);
     }
@@ -400,8 +425,8 @@ bool HookCapture::refresh_memory_frames() {
     frame_bytes_ = bytes;
     frame_pitch_ = pitch;
     texture_generation_ = as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
-    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u through memory (%u bytes a frame)", width_,
-                   height_, info_->dxgi_format, bytes);
+    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u through memory (%u bytes a frame)",
+                   width_.load(), height_.load(), info_->dxgi_format, bytes);
     return true;
 }
 
@@ -411,6 +436,98 @@ bool HookCapture::upload_memory_frame(uint32_t slot) {
     // One upload, no intermediate copy: the source rows are already the pitch
     // the hook wrote them at.
     context_->UpdateSubresource(copy_.Get(), 0, nullptr, source, frame_pitch_, 0);
+    return true;
+}
+
+HANDLE HookCapture::duplicate_from_game(uint32_t value) {
+    if (!game_process_) {
+        game_process_ = OpenProcess(PROCESS_DUP_HANDLE, FALSE, pid_);
+        if (!game_process_) {
+            MELLO_LOG_ERROR(TAG, "cannot open pid=%u to take its shared handles: %lu", pid_,
+                            GetLastError());
+            return nullptr;
+        }
+    }
+    HANDLE local = nullptr;
+    if (!DuplicateHandle(game_process_, reinterpret_cast<HANDLE>(static_cast<uintptr_t>(value)),
+                         GetCurrentProcess(), &local, 0, FALSE, DUPLICATE_SAME_ACCESS)) {
+        return nullptr;
+    }
+    return local;
+}
+
+// A Direct3D 12 game: two shared textures and a shared fence, as NT handles
+// of the game's process. The local duplicates are closed once opened; the
+// opened objects keep the resources alive.
+bool HookCapture::refresh_nt_textures(uint32_t generation) {
+    for (auto& texture : shared_) texture.Reset();
+    copy_.Reset();
+    fence_.Reset();
+
+    Microsoft::WRL::ComPtr<ID3D11Device1> device1;
+    Microsoft::WRL::ComPtr<ID3D11Device5> device5;
+    if (FAILED(device_.As(&device1)) || FAILED(device_.As(&device5)) ||
+        (!context4_ && FAILED(context_.As(&context4_)))) {
+        MELLO_LOG_ERROR(TAG, "this D3D11 runtime cannot open a Direct3D 12 game's frames "
+                             "(ID3D11Device5 and ID3D11DeviceContext4 are needed)");
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    auto still_this_generation = [&] {
+        return as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire) ==
+               generation;
+    };
+    for (uint32_t i = 0; i < MELLO_HOOK_TEXTURE_COUNT; ++i) {
+        HANDLE local = duplicate_from_game(info_->shared_handles[i]);
+        HRESULT hr = E_HANDLE;
+        if (local) {
+            hr = device1->OpenSharedResource1(local, __uuidof(ID3D11Texture2D),
+                                              reinterpret_cast<void**>(shared_[i].GetAddressOf()));
+            CloseHandle(local);
+        }
+        if (FAILED(hr) || !shared_[i]) {
+            // The hook may have rebuilt (a resize) and closed these handles
+            // while this ran: try the new set at the next frame.
+            if (!still_this_generation()) return false;
+            MELLO_LOG_ERROR(TAG, "cannot open the D3D12 game's texture %u (handle=%08x): "
+                                 "hr=0x%08lx. The game is probably on another GPU.",
+                            i, info_->shared_handles[i], static_cast<unsigned long>(hr));
+            failed_.store(true, std::memory_order_relaxed);
+            return false;
+        }
+    }
+    HANDLE fence_local = duplicate_from_game(info_->fence_handle);
+    HRESULT hr = E_HANDLE;
+    if (fence_local) {
+        hr = device5->OpenSharedFence(fence_local, __uuidof(ID3D11Fence),
+                                      reinterpret_cast<void**>(fence_.GetAddressOf()));
+        CloseHandle(fence_local);
+    }
+    if (FAILED(hr) || !fence_) {
+        if (!still_this_generation()) return false;
+        MELLO_LOG_ERROR(TAG, "cannot open the D3D12 game's fence (handle=%08x): hr=0x%08lx",
+                        info_->fence_handle, static_cast<unsigned long>(hr));
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    shared_[0]->GetDesc(&desc);
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    desc.MiscFlags = 0;
+    desc.CPUAccessFlags = 0;
+    if (FAILED(device_->CreateTexture2D(&desc, nullptr, copy_.GetAddressOf()))) {
+        MELLO_LOG_ERROR(TAG, "cannot create the frame texture %ux%u", desc.Width, desc.Height);
+        failed_.store(true, std::memory_order_relaxed);
+        return false;
+    }
+    width_.store(desc.Width);
+    height_.store(desc.Height);
+    texture_generation_ = generation;
+    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u from Direct3D 12 (generation %u)",
+                   desc.Width, desc.Height, static_cast<unsigned>(desc.Format), generation);
     return true;
 }
 
@@ -427,6 +544,9 @@ bool HookCapture::refresh_textures() {
     const uint32_t generation =
         as_atomic_u32(&info_->texture_generation)->load(std::memory_order_acquire);
     if (generation == texture_generation_ && shared_[0]) return true;
+
+    if ((info_->flags & MELLO_HOOK_FLAG_NT_HANDLES) != 0) return refresh_nt_textures(generation);
+    fence_.Reset();
 
     for (auto& texture : shared_) texture.Reset();
     copy_.Reset();
@@ -469,7 +589,7 @@ bool HookCapture::refresh_textures() {
     width_ = desc.Width;
     height_ = desc.Height;
     texture_generation_ = generation;
-    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u (generation %u)", width_, height_,
+    MELLO_LOG_INFO(TAG, "hook frames are %ux%u fmt=%u (generation %u)", width_.load(), height_.load(),
                    static_cast<unsigned>(desc.Format), generation);
     return true;
 }
@@ -479,6 +599,10 @@ bool HookCapture::start(uint32_t target_fps, FrameCallback callback) {
     if (running_.load()) return true;
 
     target_fps_ = target_fps == 0 ? 60 : target_fps;
+    // The hook copies at this rate, not at the game's: a present between two
+    // due frames costs the game no copy (and on the Direct3D 9 memory path,
+    // no read-back stall).
+    as_atomic_u32(&info_->target_fps)->store(target_fps_, std::memory_order_relaxed);
     callback_ = std::move(callback);
     running_.store(true);
 
@@ -535,7 +659,10 @@ void HookCapture::capture_thread() {
             break;
         }
 
-        if (!refresh_textures()) break;
+        if (!refresh_textures()) {
+            if (failed_.load(std::memory_order_relaxed)) break;
+            continue;  // a Direct3D 12 rebuild raced the open: the next frame retries
+        }
 
         // Deliver at the target rate. The game presents at its own rate, which
         // can be several times the stream's. The decision comes before the
@@ -545,10 +672,19 @@ void HookCapture::capture_thread() {
         const uint64_t now = now_us();
         if (!frame_cadence_accepts(now, cadence_deadline_us_, target_fps_)) continue;
 
-        const uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
+        uint32_t slot = info_->texture_index % MELLO_HOOK_TEXTURE_COUNT;
         if (frames_) {
             if (!upload_memory_frame(slot)) continue;
         } else {
+            if (fence_ && context4_) {
+                // Direct3D 12: one number names the copy and its slot. Wait for
+                // that copy on the GPU, never on this thread.
+                const uint64_t value = as_atomic_u64(&info_->frame_fence_value)
+                                           ->load(std::memory_order_acquire);
+                if (value == 0) continue;
+                slot = static_cast<uint32_t>((value - 1) % MELLO_HOOK_TEXTURE_COUNT);
+                context4_->Wait(fence_.Get(), value);
+            }
             if (!shared_[slot] || !copy_) continue;
             // The copy takes the frame away from the hook's pair, so the game
             // can keep presenting into them while the pipeline reads this one.
@@ -567,6 +703,170 @@ void HookCapture::capture_thread() {
     }
 
     MELLO_LOG_INFO(TAG, "hook capture thread for pid=%u stopped", pid_);
+}
+
+namespace {
+
+// The shape of a Win32 cursor as straight-alpha BGRA, and its hotspot.
+bool cursor_shape_of(HCURSOR cursor, CursorData& shape, int32_t* hot_x, int32_t* hot_y) {
+    ICONINFO info{};
+    if (!GetIconInfo(cursor, &info)) return false;
+    struct Bitmaps {
+        ICONINFO& i;
+        ~Bitmaps() {
+            if (i.hbmColor) DeleteObject(i.hbmColor);
+            if (i.hbmMask) DeleteObject(i.hbmMask);
+        }
+    } owned{info};
+
+    HDC dc = GetDC(nullptr);
+    if (!dc) return false;
+    bool ok = false;
+    std::vector<uint8_t> bgra;
+    BITMAP bm{};
+    uint32_t width = 0, height = 0;
+    if (info.hbmColor && GetObject(info.hbmColor, sizeof(bm), &bm) && bm.bmWidth > 0 &&
+        bm.bmHeight > 0) {
+        width = static_cast<uint32_t>(bm.bmWidth);
+        height = static_cast<uint32_t>(bm.bmHeight);
+        BITMAPINFO bi{};
+        bi.bmiHeader.biSize = sizeof(bi.bmiHeader);
+        bi.bmiHeader.biWidth = bm.bmWidth;
+        bi.bmiHeader.biHeight = -bm.bmHeight;  // top-down
+        bi.bmiHeader.biPlanes = 1;
+        bi.bmiHeader.biBitCount = 32;
+        bi.bmiHeader.biCompression = BI_RGB;
+        std::vector<uint8_t> pixels(static_cast<size_t>(width) * height * 4);
+        if (GetDIBits(dc, info.hbmColor, 0, height, pixels.data(), &bi, DIB_RGB_COLORS) ==
+            static_cast<int>(height)) {
+            bool has_alpha = false;
+            for (size_t i = 3; i < pixels.size(); i += 4) {
+                if (pixels[i]) { has_alpha = true; break; }
+            }
+            ok = pointer_shape_to_bgra(PointerShapeKind::Color, width, height, width * 4,
+                                       pixels.data(), pixels.size(), bgra);
+            if (ok && !has_alpha && info.hbmMask) {
+                // An old colour cursor: no alpha, the AND mask says which
+                // pixels are the cursor.
+                const uint32_t pitch = ((width + 31) / 32) * 4;
+                std::vector<uint8_t> mask(static_cast<size_t>(pitch) * height);
+                struct { BITMAPINFOHEADER h; RGBQUAD c[2]; } mi{};
+                mi.h.biSize = sizeof(mi.h);
+                mi.h.biWidth = static_cast<LONG>(width);
+                mi.h.biHeight = -static_cast<LONG>(height);
+                mi.h.biPlanes = 1;
+                mi.h.biBitCount = 1;
+                mi.h.biCompression = BI_RGB;
+                if (GetDIBits(dc, info.hbmMask, 0, height, mask.data(),
+                              reinterpret_cast<BITMAPINFO*>(&mi), DIB_RGB_COLORS) ==
+                    static_cast<int>(height)) {
+                    for (uint32_t y = 0; y < height; ++y) {
+                        for (uint32_t x = 0; x < width; ++x) {
+                            const bool transparent =
+                                (mask[static_cast<size_t>(y) * pitch + x / 8] & (0x80 >> (x % 8))) != 0;
+                            bgra[(static_cast<size_t>(y) * width + x) * 4 + 3] = transparent ? 0 : 255;
+                        }
+                    }
+                }
+            }
+        }
+    } else if (info.hbmMask && GetObject(info.hbmMask, sizeof(bm), &bm) && bm.bmWidth > 0 &&
+               bm.bmHeight > 1) {
+        // A monochrome cursor: one bitmap, the AND mask over the XOR mask.
+        width = static_cast<uint32_t>(bm.bmWidth);
+        height = static_cast<uint32_t>(bm.bmHeight) / 2;
+        const uint32_t pitch = ((width + 31) / 32) * 4;
+        std::vector<uint8_t> mask(static_cast<size_t>(pitch) * height * 2);
+        struct { BITMAPINFOHEADER h; RGBQUAD c[2]; } mi{};
+        mi.h.biSize = sizeof(mi.h);
+        mi.h.biWidth = static_cast<LONG>(width);
+        mi.h.biHeight = -static_cast<LONG>(height * 2);
+        mi.h.biPlanes = 1;
+        mi.h.biBitCount = 1;
+        mi.h.biCompression = BI_RGB;
+        if (GetDIBits(dc, info.hbmMask, 0, height * 2, mask.data(),
+                      reinterpret_cast<BITMAPINFO*>(&mi), DIB_RGB_COLORS) ==
+            static_cast<int>(height * 2)) {
+            ok = pointer_shape_to_bgra(PointerShapeKind::Monochrome, width, height, pitch,
+                                       mask.data(), mask.size(), bgra);
+        }
+    }
+    ReleaseDC(nullptr, dc);
+    if (!ok || width > 0xFFFF || height > 0xFFFF) return false;
+
+    shape.shape_w = static_cast<uint16_t>(width);
+    shape.shape_h = static_cast<uint16_t>(height);
+    shape.shape_bgra = std::move(bgra);
+    ++shape.shape_serial;
+    *hot_x = static_cast<int32_t>(info.xHotspot);
+    *hot_y = static_cast<int32_t>(info.yHotspot);
+    return true;
+}
+
+} // namespace
+
+bool HookCapture::get_cursor(CursorData& out) {
+    CURSORINFO ci{};
+    ci.cbSize = sizeof(ci);
+    if (!GetCursorInfo(&ci)) return false;
+
+    std::lock_guard<std::mutex> lock(cursor_mutex_);
+    out.visible = false;
+
+    // The game's window, looked up again once a second: a game can replace
+    // its window when it changes display mode.
+    const uint64_t now = now_us();
+    if (!cursor_window_ || !IsWindow(cursor_window_) ||
+        now - cursor_window_checked_us_ > 1'000'000) {
+        cursor_window_ = find_main_window(pid_);
+        cursor_window_checked_us_ = now;
+    }
+    if (!cursor_window_ || (ci.flags & CURSOR_SHOWING) == 0 || !ci.hCursor) return true;
+
+    // Only a pointer over the game is in the picture. A pointer over another
+    // window on top of the game is not, and neither is one beside it.
+    HWND under = WindowFromPoint(ci.ptScreenPos);
+    DWORD under_pid = 0;
+    if (under) GetWindowThreadProcessId(GetAncestor(under, GA_ROOT), &under_pid);
+    if (under_pid != pid_) return true;
+
+    RECT client{};
+    POINT p = ci.ptScreenPos;
+    if (!GetClientRect(cursor_window_, &client) || !ScreenToClient(cursor_window_, &p)) return true;
+    const LONG client_w = client.right - client.left;
+    const LONG client_h = client.bottom - client.top;
+    if (client_w <= 0 || client_h <= 0 || p.x < 0 || p.y < 0 || p.x >= client_w ||
+        p.y >= client_h) {
+        return true;
+    }
+
+    if (ci.hCursor != cursor_handle_) {
+        cursor_handle_ = ci.hCursor;
+        if (!cursor_shape_of(ci.hCursor, cursor_shape_, &cursor_hotspot_x_, &cursor_hotspot_y_)) {
+            cursor_shape_.shape_w = cursor_shape_.shape_h = 0;
+            cursor_shape_.shape_bgra.clear();
+            ++cursor_shape_.shape_serial;
+        }
+    }
+    if (cursor_shape_.shape_bgra.empty()) return true;
+
+    // The back buffer can have another size than the window (a game that
+    // renders at 1280x720 in a 2560x1440 window), and the hook's frames have
+    // the back buffer's size.
+    const double sx = static_cast<double>(width_.load()) / client_w;
+    const double sy = static_cast<double>(height_.load()) / client_h;
+    out.x = static_cast<int32_t>(p.x * sx) - cursor_hotspot_x_;
+    out.y = static_cast<int32_t>(p.y * sy) - cursor_hotspot_y_;
+    out.visible = true;
+    out.shape_changed = false;
+    if (out.shape_serial != cursor_shape_.shape_serial) {
+        out.shape_serial = cursor_shape_.shape_serial;
+        out.shape_w = cursor_shape_.shape_w;
+        out.shape_h = cursor_shape_.shape_h;
+        out.shape_bgra = cursor_shape_.shape_bgra;
+        out.shape_changed = true;
+    }
+    return true;
 }
 
 void HookCapture::stop() {

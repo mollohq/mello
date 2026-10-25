@@ -799,6 +799,207 @@ pub(super) mod tests {
         drop(conn);
     }
 
+    /// The ICE candidates of the native answerer, as SFU `ice_candidate`
+    /// messages. The answerer's ICE callback sends them from a libdatachannel
+    /// thread.
+    type CandidateTx = tokio::sync::mpsc::UnboundedSender<serde_json::Value>;
+
+    unsafe extern "C" fn answerer_candidate(
+        user_data: *mut std::ffi::c_void,
+        candidate: *const mello_sys::MelloIceCandidate,
+    ) {
+        if user_data.is_null() || candidate.is_null() {
+            return;
+        }
+        // SAFETY: user_data is the CandidateTx box of `connecting_sfu`, which
+        // lives until after the answerer is destroyed; candidate and its
+        // strings are valid during the call.
+        let (tx, c) = unsafe { (&*(user_data as *const CandidateTx), &*candidate) };
+        let text = |p: *const std::os::raw::c_char| {
+            if p.is_null() {
+                String::new()
+            } else {
+                // SAFETY: a NUL-terminated string from libmello.
+                unsafe { std::ffi::CStr::from_ptr(p) }
+                    .to_string_lossy()
+                    .into_owned()
+            }
+        };
+        let _ = tx.send(serde_json::json!({
+            "type": "ice_candidate",
+            "data": {
+                "candidate": text(c.candidate),
+                "sdp_mid": text(c.sdp_mid),
+                "sdp_mline_index": c.sdp_mline_index,
+            }
+        }));
+    }
+
+    /// A fake SFU whose answerer is a native libmello peer that stays alive,
+    /// so the client really connects: candidates go both ways. The answerer
+    /// is sent on `answerer` (as an address) once it exists. It is destroyed
+    /// when the client closes the WebSocket.
+    async fn connecting_sfu(answerer: tokio::sync::oneshot::Sender<usize>) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("bind a local port");
+        let endpoint = format!(
+            "ws://{}/ws",
+            listener.local_addr().expect("listener has an address")
+        );
+        tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.expect("the client connects");
+            let mut ws = tokio_tungstenite::accept_async(socket)
+                .await
+                .expect("websocket handshake");
+            ws.send(text(serde_json::json!({
+                "type": "welcome",
+                "data": { "server_id": "fake", "region": "test" }
+            })))
+            .await
+            .expect("send welcome");
+            let (cand_tx, mut cand_rx) = tokio::sync::mpsc::unbounded_channel();
+            // An address, not a pointer, so the task stays Send.
+            let cand_box = Box::into_raw(Box::new(cand_tx)) as usize;
+            let mut answerer = Some(answerer);
+            let mut peer: usize = 0;
+            loop {
+                tokio::select! {
+                    msg = ws.next() => {
+                        let Some(Ok(msg)) = msg else { break };
+                        let Message::Text(t) = msg else { continue };
+                        let v: serde_json::Value =
+                            serde_json::from_str(&t).expect("client sends JSON");
+                        match v["type"].as_str() {
+                            Some("join_voice") => ws
+                                .send(text(serde_json::json!({
+                                    "type": "joined",
+                                    "data": { "session_type": "voice", "session_id": "voice:crew-1:ch-1", "members": [] }
+                                })))
+                                .await
+                                .expect("send joined"),
+                            Some("offer") if peer == 0 => {
+                                let id = std::ffi::CString::new("fake-sfu").expect("static id");
+                                let offer = std::ffi::CString::new(
+                                    v["data"]["sdp"].as_str().expect("offer sdp"),
+                                )
+                                .expect("offer has no NUL");
+                                // SAFETY: a null context is allowed; the
+                                // answerer is destroyed below, before the
+                                // callback box.
+                                let answer = unsafe {
+                                    let p = mello_sys::mello_peer_create(
+                                        std::ptr::null_mut(),
+                                        id.as_ptr(),
+                                    );
+                                    assert!(!p.is_null(), "native answerer");
+                                    mello_sys::mello_peer_set_ice_callback(
+                                        p,
+                                        Some(answerer_candidate),
+                                        cand_box as *mut std::ffi::c_void,
+                                    );
+                                    peer = p as usize;
+                                    let answer =
+                                        mello_sys::mello_peer_create_answer(p, offer.as_ptr());
+                                    assert!(!answer.is_null(), "native answer");
+                                    std::ffi::CStr::from_ptr(answer)
+                                        .to_string_lossy()
+                                        .into_owned()
+                                };
+                                ws.send(text(
+                                    serde_json::json!({ "type": "answer", "data": { "sdp": answer } }),
+                                ))
+                                .await
+                                .expect("send answer");
+                                if let Some(tx) = answerer.take() {
+                                    let _ = tx.send(peer);
+                                }
+                            }
+                            Some("ice_candidate") if peer != 0 => {
+                                let candidate = std::ffi::CString::new(
+                                    v["data"]["candidate"].as_str().unwrap_or(""),
+                                )
+                                .expect("candidate has no NUL");
+                                let mid = std::ffi::CString::new(
+                                    v["data"]["sdp_mid"].as_str().unwrap_or(""),
+                                )
+                                .expect("mid has no NUL");
+                                let c = mello_sys::MelloIceCandidate {
+                                    candidate: candidate.as_ptr(),
+                                    sdp_mid: mid.as_ptr(),
+                                    sdp_mline_index: v["data"]["sdp_mline_index"]
+                                        .as_i64()
+                                        .unwrap_or(0) as i32,
+                                };
+                                // SAFETY: the answerer is live; the strings
+                                // outlive the call.
+                                unsafe {
+                                    mello_sys::mello_peer_add_ice_candidate(
+                                        peer as *mut mello_sys::MelloPeerConnection,
+                                        &c,
+                                    );
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    Some(candidate) = cand_rx.recv() => {
+                        if ws.send(text(candidate)).await.is_err() {
+                            break;
+                        }
+                    }
+                }
+            }
+            // SAFETY: created above, destroyed once; the callback box is
+            // freed only after the answerer can no longer call it.
+            unsafe {
+                if peer != 0 {
+                    mello_sys::mello_peer_destroy(peer as *mut mello_sys::MelloPeerConnection);
+                }
+                drop(Box::from_raw(cand_box as *mut CandidateTx));
+            }
+        });
+        endpoint
+    }
+
+    /// mello-sfu 01-SFU.md section 5.3: the SFU has no data path on an
+    /// "audio" DataChannel. A voice peer opens only the reliable control channel and
+    /// is ready on it (the audio is on the RTP track). Before, the peer also
+    /// opened an unreliable "audio" channel and waited for it.
+    #[tokio::test]
+    async fn a_voice_peer_is_ready_without_an_audio_datachannel() {
+        let (answerer_tx, answerer_rx) = tokio::sync::oneshot::channel();
+        let endpoint = connecting_sfu(answerer_tx).await;
+        let conn = joined_connection(&endpoint).await;
+        let answerer = tokio::time::timeout(LIMIT, answerer_rx)
+            .await
+            .expect("the SFU answered in time")
+            .expect("answerer") as *mut mello_sys::MelloPeerConnection;
+
+        tokio::time::timeout(LIMIT, conn.wait_for_datachannel_open())
+            .await
+            .expect("ready in time")
+            .expect("the voice peer is ready without an audio DataChannel");
+
+        let deadline = std::time::Instant::now() + LIMIT;
+        // SAFETY: the answerer lives until the client closes the socket
+        // (the drop below).
+        while !unsafe { mello_sys::mello_peer_is_reliable_open(answerer) } {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the control channel did not open on the SFU side"
+            );
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+        tokio::time::sleep(Duration::from_millis(500)).await;
+        // SAFETY: as above.
+        assert!(
+            !unsafe { mello_sys::mello_peer_is_unreliable_open(answerer) },
+            "the voice peer opened an audio DataChannel"
+        );
+        drop(conn);
+    }
+
     /// A fake SFU that answers the join and the offer, then announces one
     /// passive ICE-TCP candidate on `tcp_port`, as mello-sfu does for
     /// `SFU_ICE_TCP_PORT` (01-SFU.md section 3.1).

@@ -47,6 +47,7 @@ void SendAdaptation::set_max_kbps(int kbps) {
 void SendAdaptation::reset() {
     rung_ = 0;
     loss_perc_ = kLossPercFloor;
+    measured_loss_perc_ = -1;
     reports_.clear();
     rtt_.clear();
     jitter_.clear();
@@ -178,6 +179,7 @@ void SendAdaptation::on_report(int64_t now_ms, uint32_t expected, uint32_t lost,
         const double pct = 100.0 * static_cast<double>(perc_lost) /
                            static_cast<double>(perc_expected);
         const int want = static_cast<int>(std::ceil(pct - 1e-9));
+        measured_loss_perc_ = want;
         loss_perc_ = std::clamp(want, kLossPercFloor, kLossPercCap);
     }
 

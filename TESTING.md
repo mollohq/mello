@@ -309,6 +309,26 @@ libmello/build/tests/Release/mello_rtp_tests.exe
 Run when you touch anything under `libmello/src/audio/` or `libmello/src/video/`
 (read `specs/03-LIBMELLO.md` first — threading/COM/callback invariants).
 
+Stream viewer (streaming-quality stage 3, spec 12 section 7):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `RtpH264ReceiverTest` and siblings | `test_rtp_h264_receiver.cpp` (`mello_rtp_tests`) | Assembly, out-of-order emit before an older incomplete access unit, frame ids and references, padding packets, NACK every max(RTT, 10 ms) until the repair deadline, a new RTT applies at once, a key frame still arriving is not lost, a loss is reported once after its deadline, a key frame ends older repairs, discontinuity, memory bounds. Simulated clock. |
+| `VideoReceiveTimeline`, `ReceivePath` | `test_video_receive_timeline.cpp` (`mello_rtp_tests`) | The timeline alone (release on the RTP clock, key-frame waits and retries, loss, decode error, the 150 ms cap, the minimum delay after a reset) and behind the receiver on a simulated lossy link: 2 % single losses cost no key frame, an unrepairable burst costs one, the target delay returns within 5 s after a 3 s jitter spike. |
+| `ViewerSizeChange` | `test_capture_reference.cpp` (`mello_tests`, skips under `CI`; needs the OpenH264 DLL and, for the hardware cases, NVDEC or AMF) | A stream that steps from 640x360 to 320x180 at an IDR (as after a resolution rung) shows whole pictures at each size with the software and the hardware decoder; the hardware decoder shows the picture of each access unit with that access unit, as OpenH264 does. |
+| `ViewerPipelineTest`, `ViewerConverter` | `test_video_viewer.cpp` (`mello_tests`, needs a D3D11 adapter) | A fake decoder through the real ring, present thread and converter: frames shown at their render time (interval p95 under 20 ms), only the newest due frame shown, a size change gives a new shared texture, the shared frame opens on a second device and reads under keyed-mutex key 0, the R8 (NVDEC) layout converts. |
+
+Stream game audio and A/V sync (streaming-quality stage 7, spec 12 sections
+9.3 and 9.4):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `StreamPlayoutTest` | `test_stream_audio_pipeline.cpp` (`mello_tests`) | Through a real `AudioPipeline` on the test backend, pulled 10 ms at a time: the game audio plays in the voice mix (not a voice peer), mute is silent at the next 10 ms and the first packet after unmute plays, a device change keeps the game audio, the volume scales it, reordered packets are not concealed, a lost packet is repaired from in-band FEC, the sync sample maps the heard audio onto the video clock. |
+| `StreamAudioSyncDrift` | `test_stream_audio_pipeline.cpp` | 10 simulated minutes with the host's audio clock 300 ppm fast: the audio's mean end-to-end delay (last minute against the first minute after settling) moves by under 10 ms (NetEQ accelerates; the mapping takes each packet's capture time). A guard holds each 1 s sample under 20 ms from the start (one time-stretch step plus the band); the test prints the accelerate chunk sizes. |
+| `StreamAudioHostFec` | `test_stream_audio_pipeline.cpp` | Receiver reports of 15 % loss give the encoder an expected loss of 15 % and in-band FEC in its packets; each frame's capture time reaches the link. The game loss rule: no FEC on a clean link, any loss gives at least 10 % and LBRR in the packets. |
+| `AvSyncExtension`, `AvSync`, `AvSyncInput` | `test_av_sync.cpp` (`mello_rtp_tests`) | The header extension (add to a packet with and without one, CSRCs, the two-byte form), the decision rule (dead band, steps of at most 10 ms, a late video lowers the video minimum before it delays the audio, a jump over 1 s is ignored), and the rule against the real receive timeline on a simulated clock (the minimum follows the audio both ways; no audio for 3 s resets it). |
+| `AvSyncWire` | `test_av_sync.cpp` | A stream host peer and a viewer peer in process: the game-audio packet carries the video RTP timestamp of its capture time (the frame's timestamp plus 3600 ticks for 40 ms). |
+
 ### Streaming quality gate
 
 `tools/stream-gate` plays a deterministic reference clip through the real
@@ -335,7 +355,7 @@ for a setup error and for a run on a busy machine.
 
 | Part | Where | What it does |
 |---|---|---|
-| Path | `tools/stream-gate/src/session.rs` | Reference source → D3D11 video processor (NV12 to BGRA) → preprocessor → encoder → mello-core `StreamManager` and `SfuSink` → RTP sender → shim → mello-sfu in test mode → shim → RTP receiver session → the client's viewer tick (16 ms: receive target, up to 32 AUs, backlog guard, one present) → decoder → `mello_stream_present_frame` → CPU frame callback. Host and viewers run in one process, each on its own `MelloContext`, in the client's order (native host start, then SFU connect and join). |
+| Path | `tools/stream-gate/src/session.rs` | Reference source → D3D11 video processor (NV12 to BGRA) → preprocessor → encoder → mello-core `StreamManager` and `SfuSink` → RTP sender → shim → mello-sfu in test mode → shim → RTP receiver session → receive timeline → the viewer's decode thread → its present thread at each frame's render time → CPU frame callback (the client's viewer since stage 3: `mello_stream_viewer_attach_peer`; the 16 ms loop only sets the receive target, pings and reads the SFU events). Host and viewers run in one process, each on its own `MelloContext`, in the client's order (native host start, then SFU connect and join). |
 | Clip | `tools/stream-gate/src/clip.rs` | 20 s at 60 fps, 1920x1080 and a 1280x720 cut: a panning textured background, six bouncing textured sprites, two scrolling text lines, a scene cut at 10 s, a static section from 14 s to 17 s. Integer arithmetic and a frozen generator: rendered on first use into `benchmarks/clips/` (git-ignored, 1.7 and 3.7 GB) and checked against the FNV-1a hashes in `profiles.json`. |
 | Burned-in code | `tools/stream-gate/src/code.rs` | Top-left 512x48 px: the frame index, the clip clock in ms and a CRC-16, as 16x16 blocks. The viewer reads it from every presented frame. |
 | Reference source | `libmello/src/video/capture_reference.cpp` | `MELLO_CAPTURE_REFERENCE` with `mello_test_set_reference_clip`: plays the clip at a fixed rate, frame n due at start + n/fps, never skipped, looped (spec 14 §4.7). |
@@ -346,6 +366,7 @@ for a setup error and for a run on a busy machine.
 | Profiles | `benchmarks/baselines/stream/profiles.json` | `clean`, `home-wifi` (viewer leg 2 % loss, 20 ms jitter), `mobile` (5 %, 40 ms, 250 ms spikes, reorder, 300 ppm drift), `bad` (10 % with bursts, 30 ms), `congested` (host uplink capped at 60 % of the preset with a 150 ms tail-drop queue, 5 s to 25 s), `outage` (host leg down 3 s from 8 s), `late-join` (a second viewer at 5 s, measured). 10 ms each way on every leg. |
 | Baselines | `baseline-2.1-cpu.json`, `baseline-2.1-hw.json` | Taken once, never edited. Commit, machine, GPU, driver, encoder, decoder, clip hash, seeds, SFU commit and Go, scorer versions. Both were taken on commit `c8a4bc7`, before the rebase onto the P2P removal (`f562f90`): the rebased tree is that tree minus the P2P deletions, which change no media path. |
 | Gates | `benchmarks/baselines/stream/gates.json` | Per lane and profile: VMAF floor, freeze-time ceiling, time-to-first-frame ceiling, glass-to-glass p95 ceiling, fps floor, send rate within the cap. Made by `tools/stream-gate/make_gates.py` from the baseline and repeat runs on the same commit: the baseline value minus or plus the largest of a fixed margin, a share of the value and 1.1 x the spread of the runs. A metric missing in any run (no frame presented) has no gate. |
+| Game audio (stage 7) | `tools/stream-gate/src/audio.rs`, `benchmarks/baselines/stream/audio.json` | The reference clip gets a track (`mello_test_set_reference_audio`): the voice gate corpus speech low-passed at 7 kHz, a 20 ms tone burst every 250 ms of clip time (marker k at one of 8 frequencies, 10 to 15.25 kHz, captured with video frame k x 15) and a 17.25 kHz pilot tone. The host plays it on the clip's clock with exact capture times; each viewer's context output is pulled 10 ms at a time on a fixed schedule (`mello_voice_test_pull_output`). A/V offset: each burst onset heard minus the present time of its video frame. Gaps: the output silent (30 dB under its median) for 20 ms or more; dropouts (reported): the pilot 12 dB down for 20 ms or more, which a concealed lost packet also gives. MOS: PESQ-WB on the speech, 4 s segments aligned by the markers, with the voice gate's scorer venv. Not in `inputs_fingerprint` (results.json has `audio_fingerprint`): the stage 4 baselines have no audio metrics, so they print as values. `audio.json` holds the stage 7 gates (home-wifi: 0 gaps, 95 % of the markers within +-40 ms; mobile: MOS at least the voice gate's `mobile` minus 0.2). |
 
 Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
 
@@ -363,6 +384,16 @@ Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
   byte, SFU-to-viewer retransmissions; on `congested` the send rate in the
   cap, its overshoot, the queue drops and the time until the send rate is
   at or under the cap.
+- **Game audio** (stage 7, `audio.rs`): `av_within_40ms_pct` (markers heard
+  with an offset within +-40 ms, in % of the markers whose video frame was
+  shown while the output was pulled, 0.5 s from either end; a marker not
+  heard counts as outside), `av_offset_p50_ms` and `av_offset_abs_p95_ms`,
+  `audio_gaps` and `audio_gap_ms` (silences), `audio_dropouts` and
+  `audio_dropout_ms` (concealment, not gated), `audio_mos`, and the viewer's
+  own numbers at the end (`audio_delay_ms`, `av_sync_offset_ms`,
+  `av_video_min_delay_ms`, `audio_expand_ms`, `audio_fec_used`). Per profile
+  `av.csv` has each marker's offset and `sync.csv` the viewer's sync state
+  every 100 ms.
 
 Rules:
 
@@ -395,6 +426,73 @@ Output (`results.json`, and per profile `presents.csv`, `host.csv`,
 
 `--write-fixture FILE` encodes the first 2 s of the 720p clip with the
 OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
+
+### Stream start, watch and reconnect (streaming-quality stage 6)
+
+The gate measures the media path with the harness's own host and viewer.
+The client's start, watch and reconnect logic has its own tests. They run in
+`cargo test --workspace`:
+
+| What | Where |
+|---|---|
+| Reconnecting at 700 ms of silence, resume on the same connection within 5 s, rejoin after 5 s or a drop on the voice schedule (counted from each attempt's start), give-up 30 s after the drop; the viewer's host-silence check | `mello-core/src/client/stream_link.rs` |
+| A failed `start_stream`, capture or SFU step takes the session back and names the cause; `advertise: "on_live"`; live only when the capture and the track are up, then `stream_live` | `client/stream_reconnect_tests.rs`, `streaming.rs` (`stream_lifecycle_tests`), `stream_host_start.rs` |
+| Against a fake SFU with live native peers that answers WebSocket pings only (as mello-sfu does for streams): a short silence resumes on the same connection; a dropped socket and a 5 s silence rejoin the same session as the host, and the sink moves to the new connection with an IDR | `client/stream_reconnect_tests.rs` |
+| A 10 s backend stall: END STREAM, the SFU `leave` and the next command do not wait on `stop_stream` | `client/stream_reconnect_tests.rs` (`end_stream_and_the_loop_do_not_wait_on_a_stalled_backend`) |
+| The viewer keeps its leg on `host_reconnecting` and on its own drop; only `session_ended` ends the watch | `client/stream_watch.rs`, `stream_reconnect_tests.rs`, `streaming.rs` (`host_reconnecting_keeps_the_viewer`) |
+| The sink with a late connection: backpressure, the settings kept for the attach | `mello-core/src/stream/sink_sfu.rs` |
+| `stream_live`, `refresh_stream_token`, the deferred advert | `backend/nakama/data/modules/streaming_test.go` |
+| The SFU refuses a token for another region | mello-sfu `internal/auth/jwt_test.go` |
+
+`stream_reconnect_live` (`mello-core/src/client/stream_reconnect_live_tests.rs`)
+runs the stage 6 gate against a real mello-sfu: a host that streams monitor 0
+(hardware encoder) and a viewer (hardware decoder) in one process, with real
+command loops and a fake Nakama that hands out test-mode tokens. The host's
+signaling socket goes through a TCP proxy and every UDP flow through a proxy
+on the SFU's candidate `127.0.0.2:10000` (the gate's shim address, so no
+stream gate may run at the same time). A "cable pull" freezes the host's TCP
+and drops its UDP flows. It reports click to first RTP, Watch to first
+frame, a 3 s and a 10 s pull ("reconnecting" on the viewer within 1 s, the
+picture back within 3 s of the cable, same session) and a 35 s pull (both
+sides end with a message). Ignored by default:
+
+```bash
+# mello-sfu (the deployed SFU), from Git Bash
+GOTOOLCHAIN=go1.24.9 go build -o /tmp/sfu6/sfu.exe ./cmd/sfu
+SFU_ADMIN_PASSWORD=devpass SFU_PUBLIC_IP=127.0.0.2 SFU_ICE_TCP_PORT=0 \
+  SFU_ADDR=127.0.0.1:18443 SFU_ADMIN_ADDR=127.0.0.1:18080 SFU_REGION=test \
+  /tmp/sfu6/sfu.exe
+# mello
+MELLO_TEST_SFU=ws://127.0.0.1:18443/ws MELLO_TEST_SFU_PASSWORD=devpass \
+  cargo test -p mello-core --lib -- --ignored --nocapture stream_reconnect_live
+```
+
+Log lines to read in a client log: "Stream start timing:
+click_to_first_rtp_ms=…" and "Stream watch timing: click_to_first_frame_ms=…".
+
+### The stream card (streaming-quality stage 9)
+
+The card's buttons, labels, expanded view and pop-out have UI harness journeys in
+`client/src/flow_tests.rs`, through the real `callbacks::wire_all` and
+`handlers::handle_event`. They run in `cargo test --workspace`:
+
+| What | Where |
+|---|---|
+| Watch: STARTING from the click to the first frame, then Stream volume, Stream settings, Expand, Pop out and Leave on the watched card; the viewer count from the SFU membership | `watching_a_stream_shows_starting_then_the_cards_three_buttons` |
+| Volume: 70 %, mute (gain 0, the volume stays), Escape, the value sent again on the next watch of the same host, reset | `the_stream_volume_popover_sets_mutes_and_remembers_the_host` |
+| Settings: the stats strip from `StreamViewerTimeline`; the host's quality, send rate and viewer count; the popover goes with its card | `stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host` |
+| Expand: the card over the feed area with its footer; Exit expanded view, Escape, a pause and a leave return; nothing restarts | `expand_takes_over_the_feed_and_exit_escape_pause_and_leave_return` |
+| Pop out: the window titled "alice - Mello"; "Show it here", the window's close, a pause, a failure and a leave bring the stream back; expand and pop out exclude each other; nothing restarts | `pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back` (a fake window behind `stream_popout::PopoutSurface`) |
+| Reconnect and leave: the buttons stay through a reconnect; the popover and the label go with the stream | `the_watched_card_keeps_its_buttons_through_a_reconnect_and_clears_on_leave` |
+| The format label from the rung message and the decoded height | `the_format_label_follows_the_rung_and_the_decoded_size`; `handlers::streaming::stage9_tests`; `mello-core` `stream::viewer_format` and `stream_ffi` (`the_rung_message_sets_the_watched_format`) |
+| The presenter moves the video visual to the pop-out target, fits a resize, and moves it back (needs a GPU and an interactive session; skips without either, as on the CI runner in session 0) | `dcomp_presenter::tests::the_video_moves_to_the_pop_out_target_and_back` |
+| The volume goes to the running viewer or to the decoder of a starting watch | `mello-core` `client::stream_view_audio` |
+| The host tells the UI of each viewer join and leave, once each, and of a viewer the rejoin's reconcile takes out | `mello-core` `stream_reconnect_tests::the_host_tells_the_ui_of_each_viewer_join_and_leave_and_of_a_reconcile` |
+
+The harness lays the card's footer out only after the window has a size, so
+the journeys set one (`app_with_alices_stream`). The native pop-out window
+(title, resize, maximize, another monitor, close) and the bilinear filter need
+a look on a real stream: Bob's check list in the stage 9 report.
 
 ---
 
@@ -446,7 +544,10 @@ Test hooks in `mello.h` (not for production use):
   manager field trial value (`default` = upstream),
   `MELLO_VOICE_PRE_ROLL_FRAMES` changes the sender pre-roll, and
   `MELLO_NETEQ_SPURT_HOLD=0` turns the talk-spurt hold off (talk-spurt gate,
-  below). For tuning runs and measurements, never in a committed result.
+  below). `MELLO_GAME_NETEQ_DELAY_MANAGER_CONFIG` does the same as the
+  first for the game audio of streams (stage 7; the stream gate runs on the
+  test backend). For tuning runs and measurements, never in a committed
+  result.
 
 Rules:
 

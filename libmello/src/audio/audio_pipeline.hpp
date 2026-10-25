@@ -233,6 +233,18 @@ public:
         return playback_device_id_;
     }
 
+    // ---- streaming-quality stage 7 ----
+    /// The voice mix: the game audio of a watched stream plays in it
+    /// (VoicePlayout::add_game_audio). Lives as long as this pipeline.
+    VoicePlayout& playout() { return *playout_; }
+    /// The latency after the mix, ms: the output ring now and the device
+    /// latency of the last device (re)open. Any thread.
+    float output_latency_ms() const {
+        return static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f +
+               static_cast<float>(output_device_latency_ms_.load(std::memory_order_relaxed));
+    }
+    // ---- end stage 7 ----
+
     void start_clip_buffer();
     void stop_clip_buffer();
     bool clip_buffer_active() const;
@@ -345,6 +357,9 @@ private:
     bool ring_audible_ = false;
     // Frames left in the ring, for pipeline_delay_ms() on other threads.
     std::atomic<int> ring_frames_left_{0};
+    // Stage 7: playback_->output_latency_ms() at the last device (re)open
+    // (refresh_stream_delay_hint), for output_latency_ms() on other threads.
+    std::atomic<int> output_device_latency_ms_{0};
     // Scratch for render_frame(), device thread only.
     std::array<int16_t, VoicePlayout::kFrameSamples> mono_{};
 

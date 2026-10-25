@@ -51,9 +51,9 @@ struct Packet {
 struct FakeGame {
     PROCESS_INFORMATION process{};
 
-    bool start(const std::string& directory, bool d3d9) {
+    bool start(const std::string& directory, const std::string& api_flag) {
         std::string command = "\"" + directory + "\\mello-fakegame64.exe\" --seconds 30" +
-                              (d3d9 ? " --d3d9" : "");
+                              (api_flag.empty() ? "" : " " + api_flag);
         std::wstring wide(command.begin(), command.end());
         wide.push_back(L'\0');
         STARTUPINFOW si{};
@@ -132,11 +132,12 @@ struct Decoded {
     size_t   keyframes = 0;
 };
 
-Decoded run_loopback(const std::string& directory, bool d3d9, const char* bmp_path) {
+Decoded run_loopback(const std::string& directory, const std::string& api_flag,
+                     const char* bmp_path) {
     Decoded out;
 
     FakeGame game;
-    if (!game.start(directory, d3d9)) return out;
+    if (!game.start(directory, api_flag)) return out;
 
     VideoPipeline pipeline;
     if (!pipeline.init_device() || !pipeline.encoder_available()) return out;
@@ -230,7 +231,7 @@ TEST(HookLoopback, ADirect3D11GameArrivesAtTheViewer) {
     const std::string directory = hook_directory();
     if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
 
-    const Decoded decoded = run_loopback(directory, /*d3d9=*/false, "hook_loopback_d3d11.bmp");
+    const Decoded decoded = run_loopback(directory, "", "hook_loopback_d3d11.bmp");
     ASSERT_GT(decoded.packets, 0u) << "the host encoded nothing";
     ASSERT_GT(decoded.keyframes, 0u) << "the host sent no keyframe";
     ASSERT_TRUE(decoded.ok) << "nothing decoded: a viewer would see black";
@@ -248,7 +249,39 @@ TEST(HookLoopback, ADirect3D9GameArrivesAtTheViewer) {
     const std::string directory = hook_directory();
     if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
 
-    const Decoded decoded = run_loopback(directory, /*d3d9=*/true, "hook_loopback_d3d9.bmp");
+    const Decoded decoded = run_loopback(directory, "--d3d9", "hook_loopback_d3d9.bmp");
+    ASSERT_GT(decoded.packets, 0u) << "the host encoded nothing";
+    ASSERT_GT(decoded.keyframes, 0u) << "the host sent no keyframe";
+    ASSERT_TRUE(decoded.ok) << "nothing decoded: a viewer would see black";
+
+    EXPECT_NEAR(decoded.r, 64, 12);
+    EXPECT_NEAR(decoded.g, 128, 12);
+    EXPECT_NEAR(decoded.b, 191, 12);
+}
+
+// The same, for a Direct3D 12 game: shared D3D12 textures and a fence.
+TEST(HookLoopback, ADirect3D12GameArrivesAtTheViewer) {
+    if (under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    const Decoded decoded = run_loopback(directory, "--d3d12", "hook_loopback_d3d12.bmp");
+    ASSERT_GT(decoded.packets, 0u) << "the host encoded nothing";
+    ASSERT_GT(decoded.keyframes, 0u) << "the host sent no keyframe";
+    ASSERT_TRUE(decoded.ok) << "nothing decoded: a viewer would see black";
+
+    EXPECT_NEAR(decoded.r, 64, 12);
+    EXPECT_NEAR(decoded.g, 128, 12);
+    EXPECT_NEAR(decoded.b, 191, 12);
+}
+
+// The same, for an OpenGL game.
+TEST(HookLoopback, AnOpenGLGameArrivesAtTheViewer) {
+    if (under_ci()) GTEST_SKIP() << "needs a GPU and a desktop session";
+    const std::string directory = hook_directory();
+    if (directory.empty()) GTEST_SKIP() << "set MELLO_HOOK_DIR to the hook build folder";
+
+    const Decoded decoded = run_loopback(directory, "--opengl", "hook_loopback_opengl.bmp");
     ASSERT_GT(decoded.packets, 0u) << "the host encoded nothing";
     ASSERT_GT(decoded.keyframes, 0u) << "the host sent no keyframe";
     ASSERT_TRUE(decoded.ok) << "nothing decoded: a viewer would see black";

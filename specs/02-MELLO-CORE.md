@@ -34,6 +34,9 @@ mello-core/src/
 │   ├── mic_permission.rs   # CheckMicPermission / RequestMicPermission: the OS, or a fixed e2e value
 │   ├── sfu_voice_join.rs   # SFU voice join steps, run off the command loop
 │   ├── streaming.rs        # Stream host/viewer orchestration, thumbnails
+│   ├── stream_host_start.rs # Stream start and the host's SFU rejoin, off the command loop
+│   ├── stream_watch.rs     # Stream watch and the viewer's SFU rejoin, off the command loop
+│   ├── stream_link.rs      # Stream link decisions: reconnecting, rejoin schedule, give-up
 │   ├── stream_ffi.rs       # FFI structs & unsafe C callbacks for streaming
 │   ├── presence.rs         # Profile updates, catchup, moments, game sessions
 │   └── connection.rs       # Session connect, protocol version check, token refresh
@@ -99,7 +102,7 @@ app.set_crews(...)
 | Social | `SearchUsers`, `JoinByInviteCode`, `FetchCrewAvatars` |
 | Chat | `SendMessage` |
 | Voice | `JoinVoice`, `LeaveVoice`, `SetMute`, `SetDeafen` |
-| Streaming | `StartStream`, `StopStream`, `WatchStream`, `StopWatching` |
+| Streaming | `StartStream`, `StopStream`, `WatchStream`, `StopWatching`, `SetStreamAudioVolume` (the watched stream's game-audio gain, stage 9) |
 | Voice channels | `CreateVoiceChannel`, `RenameVoiceChannel`, `DeleteVoiceChannel` |
 | Presence | `UpdatePresence`, `SetActiveCrew`, `SubscribeSidebar` |
 | Devices | `ListAudioDevices`, `SetCaptureDevice`, `SetPlaybackDevice` |
@@ -114,7 +117,7 @@ app.set_crews(...)
 | Social | `UserSearchResults`, `CrewAvatarLoaded` |
 | Chat | `ChatHistory`, `ChatMessage` |
 | Voice | `VoiceConnected`, `VoiceMemberJoined`, `VoiceActivity`, `VoiceSfuDisconnected`, `MicPermissionChanged` |
-| Streaming | `StreamStarted`, `StreamFrame`, `StreamEnded` |
+| Streaming | `StreamStarting`, `StreamStarted`, `StreamReconnecting { role }`, `StreamResumed { role }`, `StreamEnded { crew_id, role, reason }`, `StreamFailed { role, reason }`, `StreamFrame` (stage 6 states: specs/12-STREAMING.md §11) |
 | State | `CrewStateUpdate`, `SidebarUpdate`, `VoiceChannelsUpdated` |
 | Errors | `Error { message }`, `CrewCreateFailed` |
 

@@ -181,6 +181,13 @@ func newJobNk() *jobNk {
 }
 
 // seedWeek gives the crew one voice session in the week before monday.
+// upcomingMonday is the next Monday 00:00 UTC. The event ledger drops events
+// older than its rolling window by the real clock, so a fixed date in a seeded
+// test goes stale. A Monday ahead of now keeps the seeded Sunday in the window.
+func upcomingMonday() time.Time {
+	return mondayStartUTC(time.Now()).Add(7 * 24 * time.Hour)
+}
+
 func seedWeek(t *testing.T, nk runtime.NakamaModule, monday time.Time) {
 	t.Helper()
 	if err := AppendCrewEvent(context.Background(), nk, "crew", CrewEvent{
@@ -224,7 +231,7 @@ func TestRecapDueLookback(t *testing.T) {
 
 func TestWeeklyRecapJobRunsLateAfterAMissedMondayAndOnlyOnce(t *testing.T) {
 	ctx := context.Background()
-	monday := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	monday := upcomingMonday()
 	nk := newJobNk()
 	seedWeek(t, nk, monday)
 	// Wrong day of the job's own week: nothing runs on the Sunday before.
@@ -238,7 +245,7 @@ func TestWeeklyRecapJobRunsLateAfterAMissedMondayAndOnlyOnce(t *testing.T) {
 		t.Fatalf("late run: %d recaps", recapCount(nk))
 	}
 	doc, _ := readRecapsDoc(ctx, nk, "crew")
-	if doc.LastRecapWeek != "2026-W43" {
+	if doc.LastRecapWeek != isoWeekKey(monday) {
 		t.Fatalf("last_recap_week: %q", doc.LastRecapWeek)
 	}
 	r := doc.Recaps[0]
@@ -253,7 +260,7 @@ func TestWeeklyRecapJobRunsLateAfterAMissedMondayAndOnlyOnce(t *testing.T) {
 }
 
 func TestWeeklyRecapJobSkipsAWeekPastTheLookback(t *testing.T) {
-	monday := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	monday := upcomingMonday()
 	nk := newJobNk()
 	seedWeek(t, nk, monday)
 	generateDueRecaps(context.Background(), nk, testLogger(), monday.Add(5*24*time.Hour))
@@ -264,7 +271,7 @@ func TestWeeklyRecapJobSkipsAWeekPastTheLookback(t *testing.T) {
 
 func TestLateRecapLeavesOutEventsAfterTheWeek(t *testing.T) {
 	ctx := context.Background()
-	monday := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	monday := upcomingMonday()
 	nk := newJobNk()
 	seedWeek(t, nk, monday)
 	if err := AppendCrewEvent(ctx, nk, "crew", CrewEvent{
@@ -282,7 +289,7 @@ func TestLateRecapLeavesOutEventsAfterTheWeek(t *testing.T) {
 
 func TestRecapJobQueuesAndSendsTheMondayPush(t *testing.T) {
 	ctx := context.Background()
-	monday := time.Date(2026, 10, 19, 0, 0, 0, 0, time.UTC)
+	monday := upcomingMonday()
 	nk := newJobNk()
 	seedWeek(t, nk, monday)
 	// u2 takes the clipper title from u1 during the recap. u1 sits at +02:00.

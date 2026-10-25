@@ -2,10 +2,10 @@
 
 #include <future>
 #include "encoder_factory.hpp"
-#include "decoder_factory.hpp"
 #include "frame_cadence.hpp"
 #include "../util/log.hpp"
 #include <chrono>
+#include <cstdlib>
 #include <cstring>
 #include <cstdio>
 #include <algorithm>
@@ -40,73 +40,25 @@ static constexpr const char* TAG = "video/pipeline";
 using mello::video::kMinEncodeWidth;
 using mello::video::kMinEncodeHeight;
 
-// Ring-buffer helpers for decoded frames ─────────────────────────────────────
-
+// GOP: 4 s at the preset frame rate (streaming-quality stage 4; 2 s before).
+// The plan's 10 s holds at 4 s: on the gate's mobile profile a 10 s GOP gave
+// a glass-to-glass p95 of 2455 and 2532 ms against 437 and 1061 ms at 4 s,
+// with the same number of IDRs (PLIs drive them there) and no better VMAF,
+// fps or freeze time. Measure 10 s again when the stage 3 viewer is in.
+// IDRs on demand (join, PLI, a rung change) are unchanged.
+// MELLO_STREAM_GOP_SECONDS (1 to 60) overrides it for the GOP measurement of
+// the streaming gate.
+static uint32_t keyframe_interval_for(uint32_t fps) {
+    uint32_t seconds = 4;
 #ifdef _WIN32
-void VideoPipeline::push_decoded(ID3D11Texture2D* frame) {
-#elif defined(__APPLE__)
-void VideoPipeline::push_decoded(void* frame) {
-#endif
-    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
-    if (decoded_ring_count_ == DECODED_RING_CAP) {
-#ifdef __APPLE__
-        if (decoded_ring_[decoded_ring_tail_])
-            CVPixelBufferRelease((CVPixelBufferRef)decoded_ring_[decoded_ring_tail_]);
-#endif
-        decoded_ring_[decoded_ring_tail_] = nullptr;
-        decoded_ring_tail_ = (decoded_ring_tail_ + 1) % DECODED_RING_CAP;
-        decoded_ring_count_--;
+    char buf[8] = {};
+    const DWORD n = GetEnvironmentVariableA("MELLO_STREAM_GOP_SECONDS", buf, sizeof(buf));
+    if (n > 0 && n < sizeof(buf)) {
+        const long v = std::strtol(buf, nullptr, 10);
+        if (v >= 1 && v <= 60) seconds = static_cast<uint32_t>(v);
     }
-    decoded_ring_[decoded_ring_head_] = frame;
-    decoded_ring_head_ = (decoded_ring_head_ + 1) % DECODED_RING_CAP;
-    decoded_ring_count_++;
-}
-
-#ifdef _WIN32
-ID3D11Texture2D* VideoPipeline::pop_decoded() {
-#elif defined(__APPLE__)
-void* VideoPipeline::pop_decoded() {
 #endif
-    std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
-    if (decoded_ring_count_ == 0) return nullptr;
-    auto* frame = decoded_ring_[decoded_ring_tail_];
-    decoded_ring_[decoded_ring_tail_] = nullptr;
-    decoded_ring_tail_ = (decoded_ring_tail_ + 1) % DECODED_RING_CAP;
-    decoded_ring_count_--;
-    return frame;
-}
-static constexpr uint32_t NATIVE_FMT_UNKNOWN = 0;
-static constexpr uint32_t NATIVE_FMT_RGBA8 = 1;
-static constexpr uint32_t NATIVE_FMT_R8_NV12_LAYOUT = 2;
-static constexpr uint32_t NATIVE_FMT_NV12 = 3;
-
-static void save_bmp_rgba(const char* path, const uint8_t* rgba, uint32_t w, uint32_t h) {
-    FILE* f = fopen(path, "wb");
-    if (!f) return;
-
-    uint32_t row_bytes = w * 4;
-    uint32_t img_size  = row_bytes * h;
-    uint32_t file_size = 54 + img_size;
-
-    uint8_t hdr[54]{};
-    hdr[0] = 'B'; hdr[1] = 'M';
-    memcpy(hdr + 2, &file_size, 4);
-    uint32_t off = 54; memcpy(hdr + 10, &off, 4);
-    uint32_t dib = 40;  memcpy(hdr + 14, &dib, 4);
-    memcpy(hdr + 18, &w, 4);
-    int32_t neg_h = -(int32_t)h;
-    memcpy(hdr + 22, &neg_h, 4);
-    uint16_t planes = 1; memcpy(hdr + 26, &planes, 2);
-    uint16_t bpp = 32;   memcpy(hdr + 28, &bpp, 2);
-    memcpy(hdr + 34, &img_size, 4);
-    fwrite(hdr, 1, 54, f);
-
-    for (uint32_t i = 0; i < w * h; ++i) {
-        uint8_t bgra[4] = { rgba[i*4+2], rgba[i*4+1], rgba[i*4+0], rgba[i*4+3] };
-        fwrite(bgra, 1, 4, f);
-    }
-    fclose(f);
-    MELLO_LOG_INFO(TAG, "Saved debug frame: %s (%ux%u)", path, w, h);
+    return std::max<uint32_t>(fps, 1) * seconds;
 }
 
 static uint64_t now_us() {
@@ -182,13 +134,13 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
     if (target.level_capped) {
         MELLO_LOG_WARN(TAG,
-            "Encode size for %ux%u at %u fps is over H.264 level 4.2; reduced to %ux%u",
+            "Encode size for %ux%u at %u fps is over H.264 level 5.1; reduced to %ux%u",
             cap_w, cap_h, config.fps, target.width, target.height);
     }
     encode_w_ = target.width;
     encode_h_ = target.height;
-    uint32_t enc_w = encode_w_;
-    uint32_t enc_h = encode_h_;
+    uint32_t enc_w = target.width;
+    uint32_t enc_h = target.height;
 
     // Refuse a source too small to encode, naming the actual size.
     //
@@ -207,12 +159,25 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale
+    // 2. Video preprocessor: BGRA→NV12 color conversion + GPU downscale.
+    // It gets the capture size as it is, odd or not: the source is BGRA and
+    // the whole of it scales into the even NV12 encode size.
     preprocessor_ = std::make_unique<VideoPreprocessor>();
-    if (!preprocessor_->initialize(device_, cap_w, cap_h, enc_w, enc_h)) {
+    source_w_.store(capture_->width(), std::memory_order_relaxed);
+    source_h_.store(capture_->height(), std::memory_order_relaxed);
+    source_size_changes_.store(0, std::memory_order_relaxed);
+    source_size_known_ = false;
+    if (!preprocessor_->initialize(device_, capture_->width(), capture_->height(), enc_w, enc_h)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
+    preprocessor_w_ = enc_w;
+    preprocessor_h_ = enc_h;
+    preprocessor_generation_ = 0;
+    encoder_generation_ = 0;
+    encode_height_request_.store(0, std::memory_order_relaxed);
+    geometry_changes_.store(0, std::memory_order_relaxed);
+    last_bitrate_kbps_.store(config.bitrate_kbps, std::memory_order_relaxed);
 
     // 3. Encoder
     EncoderConfig enc_config{};
@@ -220,7 +185,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     enc_config.height        = enc_h;
     enc_config.fps           = config.fps;
     enc_config.bitrate_kbps  = config.bitrate_kbps;
-    enc_config.keyframe_interval = 120;
+    enc_config.keyframe_interval = keyframe_interval_for(config.fps);
     enc_config.codec         = VideoCodec::H264;
 
     encoder_ = create_best_encoder(device_, enc_config);
@@ -275,7 +240,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     enc_config.height        = encode_h_;
     enc_config.fps           = config.fps;
     enc_config.bitrate_kbps  = config.bitrate_kbps;
-    enc_config.keyframe_interval = 120;
+    enc_config.keyframe_interval = keyframe_interval_for(config.fps);
     enc_config.codec         = VideoCodec::H264;
 
     encoder_ = create_best_encoder(device_, enc_config);
@@ -390,6 +355,10 @@ void VideoPipeline::stop_host() {
     capture_.reset();
     encoder_.reset();
 #ifdef _WIN32
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.clear();
+    }
     preprocessor_.reset();
 #endif
 }
@@ -406,7 +375,7 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_control_.encode(cv_pixel_buffer, packet)) {
+    if (encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet)) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {
@@ -435,9 +404,11 @@ void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     h = encode_h_;
 }
 
-// H.264 level 4.2, the level every encoder backend configures.
-static constexpr uint64_t kLevel42MaxFrameMbs  = 8704;
-static constexpr uint64_t kLevel42MaxMbsPerSec = 522240;
+// H.264 level 5.1, the level every encoder backend configures (stage 4;
+// every current hardware decoder handles 5.1). An ultrawide source on the
+// 1080p60 preset encodes 2560x1080, not the 2288x960 of level 4.2.
+static constexpr uint64_t kLevel51MaxFrameMbs  = 36864;
+static constexpr uint64_t kLevel51MaxMbsPerSec = 983040;
 
 VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uint32_t capture_h,
                                                          uint32_t preset_h, uint32_t fps) {
@@ -459,7 +430,7 @@ VideoPipeline::EncodeSize VideoPipeline::encode_size_for(uint32_t capture_w, uin
     };
     auto fits_level = [&](uint32_t w, uint32_t h) {
         const uint64_t mbs = static_cast<uint64_t>((w + 15) / 16) * ((h + 15) / 16);
-        return mbs <= kLevel42MaxFrameMbs && mbs * fps <= kLevel42MaxMbsPerSec;
+        return mbs <= kLevel51MaxFrameMbs && mbs * fps <= kLevel51MaxMbsPerSec;
     };
 
     uint32_t h = (preset_h > 0 && preset_h < cap_h) ? (preset_h & ~1u) : cap_h;
@@ -504,7 +475,19 @@ bool VideoPipeline::idle_repeat_due(bool have_last_frame, bool kicked,
 // keep the target FPS constant and leave headroom between target and actual
 // bitrate so the encoder naturally recovers after transient drops.
 void VideoPipeline::set_bitrate(uint32_t kbps) {
+    if (kbps != 0) last_bitrate_kbps_.store(kbps, std::memory_order_relaxed);
     encoder_control_.set_bitrate(kbps);
+}
+
+bool VideoPipeline::set_encode_height(uint32_t height) {
+#ifdef _WIN32
+    if (height == 0 || !host_running_.load()) return false;
+    encode_height_request_.store(height, std::memory_order_release);
+    return true;
+#else
+    (void)height;
+    return false;
+#endif
 }
 
 void VideoPipeline::get_stats(EncoderStats& out) const {
@@ -601,6 +584,9 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     }
     out.encode_ms_mean = static_cast<float>(encode_ms_mean_.load(std::memory_order_relaxed));
     out.idle_repeat_frames = idle_repeat_frames_.load(std::memory_order_relaxed);
+    out.source_width = source_w_.load(std::memory_order_relaxed);
+    out.source_height = source_h_.load(std::memory_order_relaxed);
+    out.source_size_changes = source_size_changes_.load(std::memory_order_relaxed);
     out.gpu_name = device_.adapter_name;
 }
 
@@ -635,9 +621,28 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         request_keyframe();
     }
 
+    // Desktop duplication gives the pointer apart from the desktop image: draw
+    // it into the frame. The other backends have it in their frames already
+    // (WGC), or the viewer draws it from cursor packets (the hook).
+    CursorOverlay overlay{};
+    const CursorOverlay* cursor = nullptr;
+    if (capture_ && capture_->cursor_mode() == CursorMode::Composite &&
+        capture_->get_cursor(cursor_frame_) && cursor_frame_.visible &&
+        !cursor_frame_.shape_bgra.empty()) {
+        overlay.x = cursor_frame_.x;
+        overlay.y = cursor_frame_.y;
+        overlay.width = cursor_frame_.shape_w;
+        overlay.height = cursor_frame_.shape_h;
+        overlay.bgra = cursor_frame_.shape_bgra.data();
+        overlay.serial = cursor_frame_.shape_serial;
+        cursor = &overlay;
+    }
+
+    apply_geometry_request(texture);
+
     // Preprocess on the capture thread (fast GPU blit), then enqueue for encode
     auto t0 = std::chrono::steady_clock::now();
-    auto result = preprocessor_->convert(texture);
+    auto result = preprocessor_->convert(texture, cursor);
     auto t1 = std::chrono::steady_clock::now();
     last_convert_ms_ = std::chrono::duration<double, std::milli>(t1 - t0).count();
 
@@ -645,6 +650,23 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         MELLO_LOG_WARN(TAG, "on_captured_frame: convert() returned null");
         return;
     }
+
+    // A source of a new size (window resize, display mode change, a ladder
+    // move to a method of another size). The preprocessor already scales the
+    // whole new picture into the encode size; this records the change for
+    // the stats, where the bitrate and geometry controller reads it. The first
+    // frame only sets the size: a capture can report its window size before
+    // its first frame.
+    if (result.source_resized && source_size_known_) {
+        const uint32_t changes =
+            source_size_changes_.fetch_add(1, std::memory_order_relaxed) + 1;
+        MELLO_LOG_INFO(TAG, "source size %ux%u (change %u); encode size stays %ux%u",
+                       preprocessor_->source_width(), preprocessor_->source_height(), changes,
+                       encode_w_.load(), encode_h_.load());
+    }
+    source_size_known_ = true;
+    source_w_.store(preprocessor_->source_width(), std::memory_order_relaxed);
+    source_h_.store(preprocessor_->source_height(), std::memory_order_relaxed);
 
     // Enqueue for the encode thread (bounded, drop oldest on overflow)
     {
@@ -655,7 +677,8 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
             eq_count_--;
             eq_drops_++;
         }
-        encode_queue_[eq_head_] = {result.texture, timestamp_us};
+        encode_queue_[eq_head_] = {result.texture, timestamp_us, preprocessor_w_,
+                                   preprocessor_h_, preprocessor_generation_};
         eq_head_ = (eq_head_ + 1) % ENCODE_QUEUE_CAP;
         eq_count_++;
     }
@@ -697,6 +720,14 @@ void VideoPipeline::encode_thread_func() {
                 job = last_job;
                 job.timestamp_us = now;
                 idle_repeat = true;
+            }
+        }
+
+        if (job.generation != encoder_generation_) {
+            if (!resize_encoder(job.width, job.height, job.generation)) {
+                // The encoder is unusable at the new size. Drop the frame;
+                // the next job tries again.
+                continue;
             }
         }
 
@@ -748,10 +779,77 @@ void VideoPipeline::encode_thread_func() {
     }
 }
 
+// Capture thread. A pending geometry request becomes a new preprocessor at
+// the new encode size; the old one is retired, because the encode queue and
+// the idle keepalive can still hold its ring textures.
+void VideoPipeline::apply_geometry_request(ID3D11Texture2D* texture) {
+    const uint32_t request = encode_height_request_.exchange(0, std::memory_order_acq_rel);
+    if (request == 0 || !texture) return;
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    const EncodeSize target = encode_size_for(desc.Width, desc.Height, request,
+                                              effective_output_fps());
+    if (target.width < kMinEncodeWidth || target.height < kMinEncodeHeight) {
+        MELLO_LOG_WARN(TAG, "geometry: %ux%u is under the encoder minimum; ignored",
+                       target.width, target.height);
+        return;
+    }
+    if (target.width == preprocessor_w_ && target.height == preprocessor_h_) return;
+    auto next = std::make_unique<VideoPreprocessor>();
+    if (!next->initialize(device_, desc.Width, desc.Height, target.width, target.height)) {
+        MELLO_LOG_ERROR(TAG, "geometry: preprocessor at %ux%u failed; staying at %ux%u",
+                        target.width, target.height, preprocessor_w_, preprocessor_h_);
+        return;
+    }
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.push_back({std::move(preprocessor_), preprocessor_generation_});
+    }
+    preprocessor_ = std::move(next);
+    MELLO_LOG_INFO(TAG, "geometry: encode size %ux%u -> %ux%u (source %ux%u)",
+                   preprocessor_w_, preprocessor_h_, target.width, target.height,
+                   desc.Width, desc.Height);
+    preprocessor_w_ = target.width;
+    preprocessor_h_ = target.height;
+    ++preprocessor_generation_;
+}
+
+// Encode thread. The first job of a new preprocessor generation changes the
+// encoder's size; the preprocessors of older generations are then freed.
+bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t generation) {
+    EncoderConfig config{};
+    config.width = width;
+    config.height = height;
+    config.fps = effective_output_fps();
+    config.bitrate_kbps = last_bitrate_kbps_.load(std::memory_order_relaxed);
+    config.keyframe_interval = keyframe_interval_for(config_.fps);
+    config.codec = VideoCodec::H264;
+    if (!encoder_control_.resize(device_, config)) {
+        MELLO_LOG_ERROR(TAG, "geometry: the encoder cannot run at %ux%u", width, height);
+        return false;
+    }
+    encoder_generation_ = generation;
+    encode_w_ = width;
+    encode_h_ = height;
+    geometry_changes_.fetch_add(1, std::memory_order_relaxed);
+    {
+        std::lock_guard<std::mutex> lock(retired_mutex_);
+        retired_preprocessors_.erase(
+            std::remove_if(retired_preprocessors_.begin(), retired_preprocessors_.end(),
+                           [generation](const RetiredPreprocessor& r) {
+                               return r.generation < generation;
+                           }),
+            retired_preprocessors_.end());
+    }
+    MELLO_LOG_INFO(TAG, "geometry: encoder at %ux%u (generation %u), IDR", width, height,
+                   generation);
+    return true;
+}
+
 // Runs on the encode thread, immediately after a frame is encoded, so the
 // measurement and the reconfigure share one thread and no extra locking.
 void VideoPipeline::maybe_reduce_encoder_cost() {
-    if (!encoder_ || encoder_->cost_tier() >= 2) {
+    if (!encoder_ || encoder_->cost_tier() >= encoder_->max_cost_tier()) {
         return;
     }
 
@@ -785,352 +883,64 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
 #endif
 
 // ─────────────────────────────────────────────────────────────────────────────
-// VIEWER SIDE
+// VIEWER SIDE (streaming-quality stage 3: video_viewer.hpp)
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool VideoPipeline::start_viewer(const PipelineConfig& config, FrameCallback on_frame) {
-    if (viewer_running_.load()) {
+    if (viewer_ && viewer_->running()) {
         MELLO_LOG_WARN(TAG, "Viewer pipeline already running");
         return false;
     }
-
     if (!init_device()) return false;
-
-    config_   = config;
-    frame_cb_ = std::move(on_frame);
-
-#ifdef _WIN32
-    // Decoder
-    DecoderConfig dec_config{};
-    dec_config.width  = config.width;
-    dec_config.height = config.height;
-    dec_config.codec  = VideoCodec::H264;
-
-    decoder_ = create_best_decoder(device_, dec_config);
-    if (!decoder_) {
-        MELLO_LOG_ERROR(TAG, "No decoder available");
+    config_ = config;
+    viewer_ = std::make_unique<ViewerPipeline>();
+    viewer_->set_native_frame_callback(native_frame_cb_);
+    ViewerConfig vc;
+    vc.width = config.width;
+    vc.height = config.height;
+    vc.fps = config.fps;
+    if (!viewer_->start(device_, vc, std::move(on_frame))) {
+        viewer_.reset();
         return false;
     }
-
-    // Staging texture for VRAM → CPU handoff (format matches decoder output)
-    staging_ = std::make_unique<StagingTexture>();
-    DXGI_FORMAT frame_fmt = decoder_->frame_format();
-    uint32_t uv_offset = decoder_->coded_height();
-    const bool enable_cpu_readback = static_cast<bool>(frame_cb_);
-    if (!staging_->initialize(device_, config.width, config.height, frame_fmt, uv_offset, enable_cpu_readback)) {
-        MELLO_LOG_ERROR(TAG, "Failed to initialize staging texture");
-        return false;
-    }
-#elif defined(__APPLE__)
-    DecoderConfig dec_config{};
-    dec_config.width  = config.width;
-    dec_config.height = config.height;
-    dec_config.codec  = VideoCodec::H264;
-
-    decoder_ = create_best_decoder(device_, dec_config);
-    if (!decoder_) {
-        MELLO_LOG_ERROR(TAG, "No decoder available");
-        return false;
-    }
-#endif
-
-    if (frame_cb_) {
-        rgba_buf_.resize(static_cast<size_t>(config.width) * config.height * 4);
-    } else {
-        rgba_buf_.clear();
-        rgba_buf_.shrink_to_fit();
-    }
-
-    viewer_running_    = true;
-    viewer_start_time_ = now_us();
-    frames_decoded_    = 0;
-    decode_errors_     = 0;
-    last_present_us_   = 0;
-
-    // Async decode: feed_packet only enqueues; decode_thread_ runs
-    // decoder_->decode()/get_frame(). Reset stale queue state from any
-    // previous run, then launch.
-    if (decoder_) {
-        {
-            std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
-            decode_jobs_.clear();
-        }
-        decode_thread_ = std::thread([this] { decode_thread_func(); });
-    }
-
-    MELLO_LOG_INFO(TAG, "Viewer pipeline starting: decoder=%s codec=H264 res=%ux%u",
-        decoder_ ? decoder_->name() : "none",
-        config.width, config.height);
-
+    viewer_running_ = true;
     return true;
 }
 
 void VideoPipeline::set_native_frame_callback(NativeFrameCallback on_native_frame) {
-    native_frame_cb_ = std::move(on_native_frame);
+    native_frame_cb_ = on_native_frame;
+    if (viewer_) viewer_->set_native_frame_callback(std::move(on_native_frame));
+}
+
+void VideoPipeline::attach_receive_timeline(ViewerPipeline::TimelineProvider provider) {
+    if (viewer_) viewer_->attach_timeline(std::move(provider));
 }
 
 void VideoPipeline::stop_viewer() {
-    if (!viewer_running_.load()) return;
+    if (!viewer_) return;
     viewer_running_ = false;
-
-    // Wake the decode thread and join it BEFORE shutting down the decoder —
-    // decoder_->decode()/get_frame() may only run on the decode thread.
-    decode_jobs_cv_.notify_all();
-    if (decode_thread_.joinable()) {
-        // stop_viewer is never called from the decode thread today, but
-        // guard against self-join anyway.
-        if (decode_thread_.get_id() == std::this_thread::get_id())
-            decode_thread_.detach();
-        else
-            decode_thread_.join();
-    }
-
-    uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-
-    MELLO_LOG_INFO(TAG, "Viewer pipeline stopped: uptime=%llus frames_decoded=%llu decode_errors=%llu",
-        uptime_s, frames_decoded_.load(), decode_errors_.load());
-
-    if (decoder_) decoder_->shutdown();
-#ifdef _WIN32
-    if (staging_) staging_->shutdown();
-#endif
-    decoder_.reset();
-#ifdef _WIN32
-    staging_.reset();
-#endif
-
-    // Drop any jobs the decode thread did not consume
-    {
-        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
-        decode_jobs_.clear();
-    }
-
-    // Drain any remaining frames in the ring buffer
-    while (decoded_ring_depth() > 0) {
-#ifdef __APPLE__
-        void* buf = pop_decoded();
-        if (buf) CVPixelBufferRelease((CVPixelBufferRef)buf);
-#else
-        pop_decoded();
-#endif
-    }
-
-    rgba_buf_.clear();
+    viewer_->stop();
+    viewer_.reset();
 }
 
-// feed_packet runs on the caller's (client tick) thread and is O(copy):
-// it enqueues the packet and returns. Decode errors from the async decode
-// thread surface via the decode_errors_ counter only; the return value is
-// "accepted", matching how callers already treat it.
 bool VideoPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyframe) {
-    if (!viewer_running_.load() || !decoder_) return false;
-    {
-        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
-        if (decode_jobs_.size() >= DECODE_QUEUE_CAP) {
-            // Shed load: drop the oldest non-keyframe job (never the newest
-            // keyframe — it's the recovery point).
-            auto drop = std::find_if(decode_jobs_.begin(), decode_jobs_.end(),
-                [](const DecodeJob& j) { return !j.is_keyframe; });
-            if (drop != decode_jobs_.end()) {
-                decode_jobs_.erase(drop);
-            } else {
-                decode_jobs_.pop_front();
-            }
-        }
-        DecodeJob job;
-        job.bytes.assign(data, data + size);
-        job.is_keyframe = is_keyframe;
-        decode_jobs_.push_back(std::move(job));
-    }
-    decode_jobs_cv_.notify_one();
-    return true;
+    return viewer_ && viewer_->feed_packet(data, size, is_keyframe);
 }
 
-// Runs on decode_thread_ only. decoder_->decode() and get_frame()/
-// get_frame_buffer() must ONLY ever execute here.
-void VideoPipeline::decode_thread_func() {
-    for (;;) {
-        DecodeJob job;
-        {
-            std::unique_lock<std::mutex> lock(decode_jobs_mutex_);
-            decode_jobs_cv_.wait(lock, [this] {
-                return !decode_jobs_.empty() || !viewer_running_.load();
-            });
-            if (!viewer_running_.load() && decode_jobs_.empty()) return;
-            job = std::move(decode_jobs_.front());
-            decode_jobs_.pop_front();
-        }
-
-        DecodeFeedResult result = decoder_->decode(job.bytes.data(), job.bytes.size(), job.is_keyframe);
-        if (result == DecodeFeedResult::Error) {
-            decode_errors_++;
-            continue;
-        }
-        if (result == DecodeFeedResult::Accepted) continue;
-
-#ifdef _WIN32
-        ID3D11Texture2D* decoded = decoder_->get_frame();
-        if (!decoded) {
-            MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a texture", decoder_->name());
-            decode_errors_++;
-            continue;
-        }
-        push_decoded(decoded);
-#elif defined(__APPLE__)
-        void* decoded = decoder_->get_frame_buffer();
-        if (!decoded) {
-            MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a pixel buffer", decoder_->name());
-            decode_errors_++;
-            continue;
-        }
-        CVPixelBufferRetain((CVPixelBufferRef)decoded);
-        push_decoded(decoded);
-#endif
-
-        frames_decoded_++;
-        if (frames_decoded_.load() % 300 == 0) {
-            uint64_t uptime_s = (now_us() - viewer_start_time_) / 1'000'000;
-            MELLO_LOG_INFO(TAG, "viewer: uptime=%llus decoded=%llu decode_errors=%llu dec=%s ring=%zu",
-                uptime_s, frames_decoded_.load(), decode_errors_.load(), decoder_->name(), decoded_ring_depth());
-        }
-    }
+size_t VideoPipeline::decode_queue_depth() const {
+    return viewer_ ? viewer_->decode_queue_depth() : 0;
 }
 
-bool VideoPipeline::jitter_should_present(size_t depth, uint64_t now_us_value) const {
-    if (depth == 0) return false;
-    if (depth >= JITTER_TARGET) return true;
-    // depth == 1: present on cadence (~90% of frame interval since last
-    // present) so a steady stream keeps a one-frame cushion, and after an
-    // underrun the next frame is not artificially delayed.
-    if (last_present_us_ == 0) return true;
-    const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
-    const uint64_t interval_us = 1'000'000ULL / fps;
-    return now_us_value - last_present_us_ >= interval_us * 9 / 10;
+size_t VideoPipeline::decoded_ring_depth() const {
+    return viewer_ ? viewer_->ring_depth() : 0;
 }
 
 bool VideoPipeline::present_frame() {
-#ifdef _WIN32
-    if (!viewer_running_.load()) return false;
+    return viewer_ && viewer_->take_presented();
+}
 
-    if (!jitter_should_present(decoded_ring_depth(), now_us())) return false;
-
-    ID3D11Texture2D* frame = pop_decoded();
-    if (!frame) return false;
-    if (decoder_) {
-        decoder_->publish_d3d11_frame();
-    }
-    last_present_us_ = now_us();
-
-    // Native GPU presenter path: first try direct decoded-texture handoff.
-    if (native_frame_cb_) {
-        void* direct_handle = decoder_ ? decoder_->shared_frame_handle() : nullptr;
-        if (direct_handle) {
-            DXGI_FORMAT frame_fmt = decoder_->shared_frame_format();
-            uint32_t native_fmt = NATIVE_FMT_UNKNOWN;
-            if (frame_fmt == DXGI_FORMAT_R8_UNORM) {
-                native_fmt = NATIVE_FMT_R8_NV12_LAYOUT;
-            } else if (frame_fmt == DXGI_FORMAT_NV12) {
-                native_fmt = NATIVE_FMT_NV12;
-            } else if (frame_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) {
-                native_fmt = NATIVE_FMT_RGBA8;
-            }
-
-            if (native_fmt != NATIVE_FMT_UNKNOWN) {
-                uint32_t uv_offset = decoder_->shared_frame_uv_offset();
-                if (uv_offset == 0) uv_offset = config_.height;
-                if (native_fmt == NATIVE_FMT_RGBA8) {
-                    native_frame_cb_(
-                        direct_handle,
-                        config_.width,
-                        config_.height,
-                        native_fmt,
-                        uv_offset,
-                        now_us()
-                    );
-                    return true;
-                }
-            }
-        }
-
-        // Fallback: GPU convert to shared RGBA surface for native handle callback.
-        if (staging_->shared_rgba_handle()) {
-            staging_->copy_from(frame, false);
-            native_frame_cb_(
-                staging_->shared_rgba_handle(),
-                config_.width,
-                config_.height,
-                NATIVE_FMT_RGBA8,
-                config_.height,
-                now_us()
-            );
-            return true;
-        }
-    }
-
-    if (!frame_cb_) {
-        // Zero-copy native callback is required in this mode; no CPU RGBA fallback.
-        return false;
-    }
-
-    staging_->copy_from(frame, true);
-    staging_->read_rgba(rgba_buf_.data());
-
-    if (frames_decoded_.load() < 2 && getenv("MELLO_DUMP_FRAMES")) {
-        char path[256];
-        snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_.load());
-        save_bmp_rgba(path, rgba_buf_.data(), config_.width, config_.height);
-    }
-
-    if (frame_cb_) {
-        frame_cb_(rgba_buf_.data(), config_.width, config_.height, now_us());
-    }
-
-    return true;
-#elif defined(__APPLE__)
-    if (!viewer_running_.load()) return false;
-
-    {
-        if (!jitter_should_present(decoded_ring_depth(), now_us())) return false;
-    }
-
-    void* popped = pop_decoded();
-    if (!popped) return false;
-    last_present_us_ = now_us();
-
-    CVPixelBufferRef pb = (CVPixelBufferRef)popped;
-    CVPixelBufferLockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-
-    uint32_t w = (uint32_t)CVPixelBufferGetWidth(pb);
-    uint32_t h = (uint32_t)CVPixelBufferGetHeight(pb);
-    size_t stride = CVPixelBufferGetBytesPerRow(pb);
-    uint8_t* base = (uint8_t*)CVPixelBufferGetBaseAddress(pb);
-
-    if (base && w > 0 && h > 0) {
-        size_t needed = static_cast<size_t>(w) * h * 4;
-        if (rgba_buf_.size() < needed) rgba_buf_.resize(needed);
-
-        vImage_Buffer src  = { base, h, w, stride };
-        vImage_Buffer dest = { rgba_buf_.data(), h, w, w * 4u };
-        const uint8_t permuteMap[4] = {2, 1, 0, 3};
-        vImagePermuteChannels_ARGB8888(&src, &dest, permuteMap, kvImageNoFlags);
-
-        if (frames_decoded_.load() <= 2 && getenv("MELLO_DUMP_FRAMES")) {
-            char path[256];
-            snprintf(path, sizeof(path), "mello_viewer_frame_%llu.bmp", frames_decoded_.load());
-            save_bmp_rgba(path, rgba_buf_.data(), w, h);
-        }
-
-        if (frame_cb_) {
-            frame_cb_(rgba_buf_.data(), w, h, now_us());
-        }
-    }
-
-    CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
-    CVPixelBufferRelease(pb);
-    return true;
-#else
-    return false;
-#endif
+void VideoPipeline::get_viewer_stats(ViewerStats& out) const {
+    if (viewer_) viewer_->stats(out);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1138,23 +948,90 @@ bool VideoPipeline::present_frame() {
 // ─────────────────────────────────────────────────────────────────────────────
 
 bool VideoPipeline::get_cursor_packet(uint8_t* buf, size_t* size) {
-    if (!capture_) return false;
-
-    CursorData cd{};
-    if (!capture_->get_cursor(cd)) return false;
+#ifdef _WIN32
+    if (!capture_ || !host_running_.load() || !buf || !size) return false;
+    std::lock_guard<std::mutex> lock(cursor_packet_mutex_);
 
     CursorState cs{};
-    cs.x       = cd.x;
-    cs.y       = cd.y;
-    cs.visible = cd.visible;
-    cs.shape_w = cd.shape_w;
-    cs.shape_h = cd.shape_h;
-    cs.shape_rgba = std::move(cd.shape_rgba);
+    bool include_shape = false;
+    if (capture_->cursor_mode() != CursorMode::Packet) {
+        // The frames have the pointer, or nothing does. A viewer that drew it
+        // from packets must stop: tell it once.
+        if (!cursor_sent_visible_) return false;
+        cs.visible = false;
+        cs.x = cursor_sent_x_;
+        cs.y = cursor_sent_y_;
+    } else {
+        if (!capture_->get_cursor(cursor_packet_src_)) return false;
 
-    size_t written = serialize_cursor_packet(cs, cd.shape_changed, buf, *size);
+        // Source pixels to encode pixels: the preprocessor's rule.
+        uint32_t src_w = source_w_.load(std::memory_order_relaxed);
+        uint32_t src_h = source_h_.load(std::memory_order_relaxed);
+        if (src_w == 0 || src_h == 0) {
+            src_w = capture_->width();
+            src_h = capture_->height();
+        }
+        if (src_w == 0 || src_h == 0 || encode_w_ == 0) return false;
+        const FitRect fit = VideoPreprocessor::fit(src_w, src_h, encode_w_, encode_h_);
+        const double scale = static_cast<double>(fit.width) / src_w;
+        const uint32_t scale_milli = static_cast<uint32_t>(scale * 1000.0 + 0.5);
+
+        // The shape is scaled as the frame is, never up, at most
+        // kMaxCursorPacketSide a side. Only when it or the scale changes.
+        const CursorData& src = cursor_packet_src_;
+        if (src.shape_serial != cursor_packet_serial_ ||
+            scale_milli != cursor_packet_scale_milli_) {
+            cursor_packet_serial_ = src.shape_serial;
+            cursor_packet_scale_milli_ = scale_milli;
+            CursorState shape{};
+            if (src.shape_w > 0 && src.shape_h > 0 && !src.shape_bgra.empty()) {
+                double f = std::min(1.0, scale);
+                const uint32_t longest = std::max<uint32_t>(src.shape_w, src.shape_h);
+                if (longest * f > kMaxCursorPacketSide) f = static_cast<double>(kMaxCursorPacketSide) / longest;
+                const uint32_t w = std::max<uint32_t>(1, static_cast<uint32_t>(src.shape_w * f + 0.5));
+                const uint32_t h = std::max<uint32_t>(1, static_cast<uint32_t>(src.shape_h * f + 0.5));
+                std::vector<uint8_t> bgra = (w == src.shape_w && h == src.shape_h)
+                                                ? src.shape_bgra
+                                                : scale_bgra(src.shape_bgra, src.shape_w, src.shape_h, w, h);
+                // The packet carries RGBA.
+                for (size_t i = 0; i + 3 < bgra.size(); i += 4) std::swap(bgra[i], bgra[i + 2]);
+                shape.shape_w = static_cast<uint16_t>(w);
+                shape.shape_h = static_cast<uint16_t>(h);
+                shape.shape_rgba = std::move(bgra);
+            }
+            cursor_packet_shape_ = std::move(shape);
+            ++cursor_shape_version_;
+        }
+
+        cs.visible = src.visible && !cursor_packet_shape_.shape_rgba.empty();
+        cs.x = static_cast<int32_t>(fit.x) + static_cast<int32_t>(std::floor(src.x * scale));
+        cs.y = static_cast<int32_t>(fit.y) + static_cast<int32_t>(std::floor(src.y * scale));
+        include_shape = cs.visible && cursor_sent_version_ != cursor_shape_version_;
+        if (!include_shape && cs.visible == cursor_sent_visible_ &&
+            (!cs.visible || (cs.x == cursor_sent_x_ && cs.y == cursor_sent_y_))) {
+            return false;  // nothing new
+        }
+        if (include_shape) {
+            cs.shape_w = cursor_packet_shape_.shape_w;
+            cs.shape_h = cursor_packet_shape_.shape_h;
+            cs.shape_rgba = cursor_packet_shape_.shape_rgba;
+        }
+    }
+
+    const size_t written = serialize_cursor_packet(cs, include_shape, buf, *size);
     if (written == 0) return false;
     *size = written;
+    cursor_sent_visible_ = cs.visible;
+    cursor_sent_x_ = cs.x;
+    cursor_sent_y_ = cs.y;
+    if (include_shape) cursor_sent_version_ = cursor_shape_version_;
     return true;
+#else
+    // ScreenCaptureKit draws the pointer into its frames.
+    (void)buf;
+    (void)size;
+    return false;
+#endif
 }
 
 void VideoPipeline::apply_cursor_packet(const uint8_t* buf, size_t size) {

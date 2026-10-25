@@ -1,0 +1,37 @@
+{
+  "_comment": "Game audio of the streaming quality gate (plans/streaming-quality.md stage 7, tools/stream-gate/src/audio.rs). The reference clip's audio track: the speech of the voice gate corpus (low-passed, for PESQ), a tone burst every 250 ms of clip time (marker k at one of 8 frequencies, k mod 8; captured with video frame k x 15), and a continuous pilot tone (continuity). Not in the video inputs_fingerprint: the stage 4 baselines have no audio metrics, so the audio metrics are values, not deltas, until the next baseline. A change here changes audio_fingerprint in results.json.",
+  "audio_version": 1,
+  "speech": ["f1_farris.wav", "m2_grothmann.wav"],
+  "markers": {
+    "period_ms": 250,
+    "burst_ms": 20,
+    "ramp_ms": 2,
+    "level_dbfs": -24,
+    "freqs_hz": [10000, 10750, 11500, 12250, 13000, 13750, 14500, 15250]
+  },
+  "pilot": {
+    "freq_hz": 17250,
+    "level_dbfs": -30
+  },
+  "analysis": {
+    "speech_cutoff_hz": 7000,
+    "gap_min_ms": 20,
+    "gap_drop_db": 12,
+    "silence_drop_db": 30,
+    "av_window_ms": 500,
+    "pesq_segment_s": 4
+  },
+  "voice_mobile_mos": {
+    "mos": 2.82,
+    "source": "scripts/voice-gate.sh --only mobile on main db5978d plus stage 7, 2026-10-24, Windows x86-64 (seed 303; the voice gate's own gate reads this value)"
+  },
+  "gates": {
+    "home-wifi": {
+      "audio_gaps": { "max": 0, "note": "stage 7: zero audio gaps over 20 s" },
+      "av_within_40ms_pct": { "min": 95, "note": "stage 7: A/V offset within +-40 ms for 95 % of the session" }
+    },
+    "mobile": {
+      "audio_mos": { "below_voice_mobile_mos": 0.2, "note": "stage 7: within 0.2 of the voice gate's mobile MOS" }
+    }
+  }
+}

@@ -7,7 +7,9 @@ pub(crate) mod games;
 mod presence;
 mod stats;
 mod stream_cards;
-mod streaming;
+// stage 9: the stream card state and helpers are used by the app context,
+// the callbacks and the stream timer.
+pub(crate) mod streaming;
 mod voice;
 
 use mello_core::Event;
@@ -144,8 +146,14 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::StreamTargetExited
         | Event::StreamFrame { .. }
         | Event::StreamDebugStats { .. }
+        | Event::StreamViewerTimeline { .. }
         | Event::StreamHostPacingStats { .. }
-        | Event::StreamError { .. } => streaming::handle(ctx, event),
+        | Event::StreamError { .. }
+        // stage 6 (streaming-quality)
+        | Event::StreamStarting { .. }
+        | Event::StreamReconnecting { .. }
+        | Event::StreamResumed { .. }
+        | Event::StreamFailed { .. } => streaming::handle(ctx, event),
 
         // Presence & crew state
         Event::CrewStateLoaded { .. }

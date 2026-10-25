@@ -613,17 +613,28 @@ TEST(EncodeSize, KeepsThePresetHeightAndTheSourceAspect) {
     EXPECT_EQ(s.height, 720u);
 }
 
-// 2560x1080 is 10880 macroblocks, over the 8704 of level 4.2, which every
-// encoder backend configures. The height goes down, the aspect stays.
-TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+// Every encoder backend configures H.264 level 5.1 (streaming-quality stage
+// 4): 36864 macroblocks per frame, 983040 per second. An ultrawide source on
+// the 1080p60 preset keeps the preset height: 2576x1080 is 10948 macroblocks
+// (level 4.2 allowed 8704 and gave 2288x960).
+TEST(EncodeSize, AnUltrawideSourceKeepsThePresetHeightAtLevel51) {
     const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 60);
+    EXPECT_FALSE(s.level_capped);
+    EXPECT_EQ(s.width, 2576u);
+    EXPECT_EQ(s.height, 1080u);
+    EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
+}
+
+// Over level 5.1 the height goes down, the aspect stays: the same source at
+// 120 fps is 1313760 macroblocks per second at 1080 lines.
+TEST(EncodeSize, AnUltrawideSourceIsCappedAtTheEncoderLevel) {
+    const auto s = VideoPipeline::encode_size_for(3440, 1440, 1080, 120);
     EXPECT_TRUE(s.level_capped);
-    EXPECT_EQ(s.width, 2288u);
-    EXPECT_EQ(s.height, 960u);
+    EXPECT_LT(s.height, 1080u);
     EXPECT_NEAR(aspect(s.width, s.height), aspect(3440, 1440), 0.01);
     const uint32_t mbs = ((s.width + 15) / 16) * ((s.height + 15) / 16);
-    EXPECT_LE(mbs, 8704u);
-    EXPECT_LE(mbs * 60u, 522240u);
+    EXPECT_LE(mbs, 36864u);
+    EXPECT_LE(mbs * 120u, 983040u);
 }
 
 TEST(EncodeSize, NeverUpscales) {
@@ -687,7 +698,7 @@ public:
 #ifdef _WIN32
     bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
 #elif defined(__APPLE__)
-    bool encode(void*, EncodedPacket& out) override { return run_encode(out); }
+    bool encode(void*, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #endif
     void request_keyframe() override {
         enter();
@@ -737,6 +748,20 @@ private:
     }
 };
 
+// One encode through the control with the platform's arguments: a texture on
+// Windows, a pixel buffer and its capture time on Apple (encoder_control.hpp).
+bool encode_once(EncoderControl& control, EncodedPacket& packet) {
+#ifdef _WIN32
+    return control.encode(nullptr, packet);
+#elif defined(__APPLE__)
+    return control.encode(nullptr, 0, packet);
+#else
+    (void)control;
+    (void)packet;
+    return false;
+#endif
+}
+
 } // namespace
 
 TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
@@ -749,7 +774,7 @@ TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
         EncodedPacket packet;
         int frames = 0;
         while (!setters_done.load() || frames < 1000) {
-            control.encode(nullptr, packet);
+            encode_once(control, packet);
             if (frames % 50 == 0) control.reduce_cost_tier();
             ++frames;
         }
@@ -783,7 +808,7 @@ TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
     encoder.hold_encode.store(true);
     std::thread encode_thread([&] {
         EncodedPacket packet;
-        control.encode(nullptr, packet);
+        encode_once(control, packet);
     });
     while (!encoder.in_held_encode.load()) std::this_thread::yield();
 
@@ -819,18 +844,6 @@ TEST(EncoderControl, AnIdleEncoderTakesTheValueAtOnce) {
     control.attach(nullptr);
     control.set_bitrate(800);  // no encoder: nothing to call
     EXPECT_EQ(encoder.rate_a.load(), 2500u);
-}
-
-// AMF and QSV forced an IDR on every bitrate change; NVENC only on a down-step
-// of more than 25 %. All three now share the rule.
-TEST(EncoderControl, OnlyALargeDownStepForcesAKeyframe) {
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 1100)) << "an up-step";
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 950)) << "a routine estimator step";
-    EXPECT_FALSE(bitrate_step_forces_idr(1000, 750)) << "exactly 25 %";
-    EXPECT_TRUE(bitrate_step_forces_idr(1000, 749));
-    EXPECT_TRUE(bitrate_step_forces_idr(8000, 2000));
-    EXPECT_FALSE(bitrate_step_forces_idr(0, 2000)) << "no previous bitrate";
-    EXPECT_TRUE(bitrate_step_forces_idr(4'000'000'000u, 1)) << "no overflow";
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1012,6 +1025,191 @@ TEST(CaptureLadder, TheHookIsNotJudgedOnFrameCount) {
     EXPECT_FALSE(ladder::expects_continuous_frames(LadderStep::Hook));
 }
 
+namespace {
+
+// A capture backend with no device. It delivers a frame every few
+// milliseconds on its own thread, after a first-frame delay, the way the hook
+// delivers after its injection and the game's next present.
+class FakeLadderBackend : public CaptureSource {
+public:
+    struct Shared {
+        std::atomic<bool> running{false};
+        std::atomic<int>  starts{0};
+    };
+
+    FakeLadderBackend(uintptr_t id, int first_frame_delay_ms, bool delivers, Shared* shared)
+        : id_(id), delay_ms_(first_frame_delay_ms), delivers_(delivers), shared_(shared) {}
+    ~FakeLadderBackend() override { stop(); }
+
+    bool initialize(const GraphicsDevice&, const CaptureSourceDesc&) override { return true; }
+    bool start(uint32_t, FrameCallback callback) override {
+        running_ = true;
+        shared_->running = true;
+        shared_->starts.fetch_add(1);
+        thread_ = std::thread([this, callback] {
+            const auto first = std::chrono::steady_clock::now() +
+                               std::chrono::milliseconds(delay_ms_);
+            while (running_.load() && std::chrono::steady_clock::now() < first) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+            while (running_.load()) {
+                if (delivers_) {
+                    const uint64_t now = static_cast<uint64_t>(
+                        std::chrono::duration_cast<std::chrono::microseconds>(
+                            std::chrono::steady_clock::now().time_since_epoch())
+                            .count());
+                    callback(reinterpret_cast<ID3D11Texture2D*>(id_), now);
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(4));
+            }
+        });
+        return true;
+    }
+    void stop() override {
+        running_ = false;
+        if (thread_.joinable()) thread_.join();
+        shared_->running = false;
+    }
+    uint32_t width() const override { return 640; }
+    uint32_t height() const override { return 360; }
+    const char* backend_name() const override { return id_ == 1 ? "Fake-old" : "Fake-next"; }
+
+private:
+    uintptr_t         id_;
+    int               delay_ms_;
+    bool              delivers_;
+    Shared*           shared_;
+    std::atomic<bool> running_{false};
+    std::thread       thread_;
+};
+
+struct Delivery {
+    uintptr_t id;
+    std::chrono::steady_clock::time_point at;
+};
+
+// Records what reached the pipeline, and whether two backends ever reached it
+// at the same time.
+struct DeliveryLog {
+    std::mutex            mutex;
+    std::vector<Delivery> frames;
+    std::atomic<int>      inside{0};
+    std::atomic<bool>     overlapped{false};
+
+    CaptureSource::FrameCallback callback() {
+        return [this](ID3D11Texture2D* texture, uint64_t) {
+            if (inside.fetch_add(1) != 0) overlapped = true;
+            {
+                std::lock_guard<std::mutex> lock(mutex);
+                frames.push_back({reinterpret_cast<uintptr_t>(texture),
+                                  std::chrono::steady_clock::now()});
+            }
+            inside.fetch_sub(1);
+        };
+    }
+
+    // The longest time with no frame at all, between `from` and `to`.
+    std::chrono::milliseconds longest_gap(std::chrono::steady_clock::time_point from,
+                                          std::chrono::steady_clock::time_point to) {
+        std::lock_guard<std::mutex> lock(mutex);
+        auto last = from;
+        std::chrono::steady_clock::duration longest{0};
+        for (const Delivery& d : frames) {
+            if (d.at < from || d.at > to) continue;
+            longest = (std::max)(longest, d.at - last);
+            last = d.at;
+        }
+        longest = (std::max)(longest, to - last);
+        return std::chrono::duration_cast<std::chrono::milliseconds>(longest);
+    }
+
+    size_t count_from(uintptr_t id, std::chrono::steady_clock::time_point after) {
+        std::lock_guard<std::mutex> lock(mutex);
+        return static_cast<size_t>(std::count_if(frames.begin(), frames.end(), [&](const Delivery& d) {
+            return d.id == id && d.at > after;
+        }));
+    }
+};
+
+}  // namespace
+
+// A hook attempt takes seconds before its first frame: the injection, then the
+// game's next present. The ladder stopped the running method first, so the
+// viewer saw no frames for all that time, every 30 s while a game sat in
+// exclusive fullscreen (scorecard 4.1). The next method now starts beside the
+// old one, which keeps the stream until the next one delivers.
+TEST(CaptureLadder, ASwapToASlowMethodLeavesNoGap) {
+    FakeLadderBackend::Shared old_state, next_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::Hook, LadderStep::WgcWindow},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &old_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 400, true, &next_state);
+        },
+        /*start_index=*/1));
+
+    DeliveryLog log;
+    ASSERT_TRUE(capture.start(60, log.callback()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+
+    const auto moved_at = std::chrono::steady_clock::now();
+    ASSERT_TRUE(capture.move_for_test(0, /*keep_old_until_first_frame=*/true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto checked_at = std::chrono::steady_clock::now();
+
+    // The fakes deliver every 4 ms (16 ms with a coarse timer). The next
+    // method takes 400 ms for its first frame; stopping the old one first
+    // shows that whole wait as a gap.
+    EXPECT_LT(log.longest_gap(moved_at - std::chrono::milliseconds(100), checked_at).count(), 100)
+        << "the stream had no frames while the next method started";
+    EXPECT_STREQ(capture.backend_name(), "Fake-next");
+    EXPECT_GT(log.count_from(2, moved_at), 0u) << "the next method never reached the pipeline";
+    EXPECT_FALSE(old_state.running.load()) << "the old method kept running after the swap";
+    EXPECT_FALSE(log.overlapped.load()) << "two methods reached the pipeline at once";
+    EXPECT_TRUE(capture.consume_swap_event());
+
+    capture.stop();
+}
+
+// A better method that never delivers costs nothing: the method that has the
+// stream keeps delivering through the whole attempt and after it.
+TEST(CaptureLadder, AFailedSwapKeepsTheOldMethodDelivering) {
+    FakeLadderBackend::Shared old_state, next_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::Hook, LadderStep::WgcWindow},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &old_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 0, /*delivers=*/false, &next_state);
+        },
+        /*start_index=*/1));
+
+    DeliveryLog log;
+    ASSERT_TRUE(capture.start(60, log.callback()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+
+    const auto moved_at = std::chrono::steady_clock::now();
+    EXPECT_FALSE(capture.move_for_test(0, /*keep_old_until_first_frame=*/true));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    const auto checked_at = std::chrono::steady_clock::now();
+
+    EXPECT_LT(log.longest_gap(moved_at, checked_at).count(), 100)
+        << "the old method stopped delivering during the attempt";
+    EXPECT_EQ(next_state.starts.load(), 1) << "the next method was not tried";
+    EXPECT_FALSE(next_state.running.load()) << "the failed method was left running";
+    EXPECT_TRUE(old_state.running.load());
+    EXPECT_EQ(old_state.starts.load(), 1) << "the old method was stopped and started again";
+    EXPECT_STREQ(capture.backend_name(), "Fake-old");
+    EXPECT_FALSE(capture.consume_swap_event());
+
+    capture.stop();
+}
+
 // What a still stream tells the person watching. A wrong answer here shows a
 // pause card over a live game, or leaves a frozen picture unexplained.
 TEST(CaptureState, TheHookKeepsStreamingAMinimizedGame) {
@@ -1188,7 +1386,7 @@ TEST(HookPolicy, AnUnreadableModuleListIsRefused) {
 // Native present for NV12 decoders. The Windows client registers no CPU frame
 // callback, so a viewer sees only what reaches the native callback, through
 // StagingTexture::shared_rgba_handle(). Before stage 2 that handle existed only
-// for the R8 layout of NVDEC. AMF, D3D11VA and OpenH264 emit NV12, so
+// for the R8 layout of NVDEC. AMF and OpenH264 emit NV12, so
 // present_frame returned false on every frame: no picture on any viewer
 // without an NVIDIA GPU. No hardware decoder here: an NV12 texture with a
 // known colour stands in for the decoded frame.
@@ -1252,21 +1450,27 @@ TEST(NativePresent, AnNv12DecoderGetsASharedRgbaFrame) {
     auto texture = make_nv12(test.device.d3d11(), kW, kH, y, u, v);
     ASSERT_TRUE(texture);
 
+    DecodedPicture picture;
+    picture.texture = texture;
+    picture.format = DXGI_FORMAT_NV12;
+    picture.width = kW;
+    picture.height = kH;
+
     // The Windows client: a native callback and no CPU readback.
     StagingTexture native_only;
-    ASSERT_TRUE(native_only.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, false));
+    ASSERT_TRUE(native_only.initialize(test.device, false));
+    ASSERT_TRUE(native_only.convert(picture, false));
     EXPECT_NE(native_only.shared_rgba_handle(), nullptr)
         << "an NV12 decoder has no native present path";
-    native_only.copy_from(texture.Get(), false);
     native_only.shutdown();
 
     // The same conversion, read back to check the picture.
     StagingTexture staging;
-    ASSERT_TRUE(staging.initialize(test.device, kW, kH, DXGI_FORMAT_NV12, 0, true));
+    ASSERT_TRUE(staging.initialize(test.device, true));
+    ASSERT_TRUE(staging.convert(picture, true));
     ASSERT_NE(staging.shared_rgba_handle(), nullptr);
-    staging.copy_from(texture.Get(), true);
     std::vector<uint8_t> rgba(static_cast<size_t>(kW) * kH * 4);
-    staging.read_rgba(rgba.data());
+    ASSERT_TRUE(staging.read_rgba(rgba.data()));
     staging.shutdown();
 
     const int c = y - 16, d = u - 128, e = v - 128;
@@ -1332,3 +1536,78 @@ TEST(CaptureLadder, ExclusiveFullscreenIsReported) {
     EXPECT_TRUE(ladder::should_report_failure(true));
 }
 #endif // _WIN32 ladder tests
+
+#ifdef _WIN32
+#include "video/encoder_amf.hpp"
+#include "video/encoder_nvenc.hpp"
+#include "video/encoder_qsv.hpp"
+
+// The cost tiers ran on NVENC only: an AMD or Intel host that could not hold
+// the frame budget dropped frames with no quality feature given up. AMF and
+// QSV now have tiers driven by the same overload signal, and the pipeline stops
+// at each backend's own last tier.
+TEST(EncoderCostTier, EveryHardwareBackendHasTwoTiers) {
+    EXPECT_EQ(NvencEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(AmfEncoder().max_cost_tier(), 2);
+    EXPECT_EQ(QsvEncoder().max_cost_tier(), 2);
+}
+
+TEST(EncoderCostTier, AmfTakesThePresetDownThenTheAdaptiveFeaturesOff) {
+    const auto t0 = AmfEncoder::tier_settings(0);
+    EXPECT_EQ(t0.quality_preset, -1) << "tier 0 is the init configuration";
+    EXPECT_FALSE(t0.adaptive_off);
+
+    const auto t1 = AmfEncoder::tier_settings(1);
+    EXPECT_EQ(t1.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED);
+    EXPECT_FALSE(t1.adaptive_off) << "one feature at a time";
+
+    const auto t2 = AmfEncoder::tier_settings(2);
+    EXPECT_EQ(t2.quality_preset, AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED)
+        << "a later tier keeps what an earlier one gave up";
+    EXPECT_TRUE(t2.adaptive_off);
+}
+
+TEST(EncoderCostTier, QsvTargetUsageOnlyGoesTowardsSpeed) {
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(0), MFX_TARGETUSAGE_BALANCED);
+    EXPECT_EQ(QsvEncoder::target_usage_for_tier(2), MFX_TARGETUSAGE_BEST_SPEED);
+    for (int tier = 0; tier < QsvEncoder::kMaxCostTier; ++tier) {
+        EXPECT_GT(QsvEncoder::target_usage_for_tier(tier + 1),
+                  QsvEncoder::target_usage_for_tier(tier));
+    }
+}
+
+// Streaming-quality stage 4, backend parity: every backend's VBV is half a
+// second of the peak rate (1.25 x the bitrate), at least four frames. AMF and
+// QSV had one frame (8 Mbps at 60 fps: 133 kbit), which starved IDRs.
+TEST(EncoderVbv, HalfASecondOfThePeakRateOnEveryBackend) {
+    EXPECT_EQ(vbv_bits_for(8'000, 60), 5'000'000u);
+    EXPECT_EQ(vbv_bits_for(5'000, 30), 3'125'000u);
+    // Four frames when that is more: 300 kbps at 1 fps.
+    EXPECT_EQ(vbv_bits_for(300, 1), 1'200'000u);
+    EXPECT_EQ(QsvEncoder::vbv_kb_for(8'000, 60), 625u);
+    EXPECT_EQ(QsvEncoder::vbv_kb_for(300, 60), 24u);
+}
+
+// QSV hands oneVPL a texture with no frame allocator and an unaligned height:
+// it has never run on an Intel GPU, so the factory skips it unless
+// MELLO_ENABLE_QSV=1 (stage 4, until an Intel box tests it).
+TEST(EncoderFactory, QsvIsSkippedWithoutTheOptIn) {
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", nullptr);
+    EXPECT_FALSE(QsvEncoder::enabled());
+    EXPECT_FALSE(QsvEncoder::is_available());
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", "1");
+    EXPECT_TRUE(QsvEncoder::enabled());
+    SetEnvironmentVariableA("MELLO_ENABLE_QSV", nullptr);
+}
+
+// An encoder without a session refuses a tier and stays at 0: the pipeline
+// may ask before the first encode.
+TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {
+    AmfEncoder amf;
+    EXPECT_FALSE(amf.reduce_cost_tier());
+    EXPECT_EQ(amf.cost_tier(), 0);
+    QsvEncoder qsv;
+    EXPECT_FALSE(qsv.reduce_cost_tier());
+    EXPECT_EQ(qsv.cost_tier(), 0);
+}
+#endif // _WIN32

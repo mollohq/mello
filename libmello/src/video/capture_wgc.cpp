@@ -131,7 +131,7 @@ bool WgcCapture::initialize_monitor(const GraphicsDevice& device, HMONITOR monit
     width_  = static_cast<uint32_t>(size.Width);
     height_ = static_cast<uint32_t>(size.Height);
     MELLO_LOG_INFO(TAG, "Source: Monitor(hmonitor=0x%p) backend=WGC resolution=%ux%u",
-        monitor, width_, height_);
+        monitor, width_.load(), height_.load());
     return true;
 }
 
@@ -175,7 +175,7 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
     height_ = static_cast<uint32_t>(size.Height);
 
     MELLO_LOG_INFO(TAG, "Source: Window(hwnd=0x%p) backend=WGC resolution=%ux%u",
-        hwnd, width_, height_);
+        hwnd, width_.load(), height_.load());
     return true;
 }
 
@@ -225,14 +225,16 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
         winrt_device,
         winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
         3,
-        {static_cast<int32_t>(width_), static_cast<int32_t>(height_)});
+        {static_cast<int32_t>(width_.load()), static_cast<int32_t>(height_.load())});
 
     frame_pool_.FrameArrived({this, &WgcCapture::on_frame_arrived});
 
     session_ = frame_pool_.CreateCaptureSession(item_);
 
-    // Disable cursor compositing — we handle cursor as a separate channel
-    session_.IsCursorCaptureEnabled(false);
+    // WGC draws the pointer into the frames itself, where the pointer is over
+    // the captured window or monitor (CursorMode::InFrame). With it off, no
+    // viewer saw a pointer at all: nothing drew it anywhere else.
+    session_.IsCursorCaptureEnabled(true);
 
     // No yellow capture border on Windows 11. Every WGC stream showed it,
     // which also made WGC look worse than DXGI in side-by-side tests.
@@ -317,6 +319,32 @@ void WgcCapture::on_frame_arrived(
 
     auto frame = pool.TryGetNextFrame();
     if (!frame) return;
+
+    // The window changed size. The pool still makes textures of the old size,
+    // so this frame is cropped or padded: drop it and make the pool again at
+    // the new size. The next frame has the whole window. The preprocessor
+    // scales the new size into the encode size, which stays fixed.
+    const auto content = frame.ContentSize();
+    if (content.Width > 0 && content.Height > 0 &&
+        (static_cast<uint32_t>(content.Width) != width_.load(std::memory_order_relaxed) ||
+         static_cast<uint32_t>(content.Height) != height_.load(std::memory_order_relaxed))) {
+        frame.Close();
+        try {
+            pool.Recreate(create_winrt_device(device_.Get()),
+                          winrt::Windows::Graphics::DirectX::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+                          3, content);
+        } catch (const winrt::hresult_error& e) {
+            MELLO_LOG_ERROR(TAG, "WGC: frame pool recreate at %dx%d failed: hr=0x%08X",
+                            content.Width, content.Height, static_cast<unsigned>(e.code()));
+            return;
+        }
+        MELLO_LOG_INFO(TAG, "WGC: %s resized %ux%u -> %dx%d; frame pool recreated",
+                       monitor_ ? "monitor" : "window", width_.load(), height_.load(),
+                       content.Width, content.Height);
+        width_.store(static_cast<uint32_t>(content.Width), std::memory_order_relaxed);
+        height_.store(static_cast<uint32_t>(content.Height), std::memory_order_relaxed);
+        return;
+    }
 
     auto surface = frame.Surface();
 

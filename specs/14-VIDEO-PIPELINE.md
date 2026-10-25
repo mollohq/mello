@@ -22,13 +22,14 @@ This spec covers the complete libmello video pipeline: screen capture, GPU-side 
         │  All transfers stay in VRAM on the same D3D11 device
 ```
 
-**Viewer pipeline:**
+**Viewer pipeline (streaming-quality stage 3):**
 ```
-┌──────────────┐     ┌──────────────┐     ┌────────────────┐     ┌──────────────┐
-│ H.264 RTP AU │────▶│   HW Decode  │────▶│ Shared Texture │────▶│    DComp     │
-│ complete only│     │NVDEC/AMF/    │     │ latest-frame   │     │  Presenter   │
-│ NACK/PLI/REMB│     │  D3D11VA     │     │ wins           │     │  (Windows)   │
-└──────────────┘     └──────────────┘     └────────────────┘     └──────────────┘
+┌──────────────┐   ┌──────────────┐   ┌──────────────┐   ┌────────────────┐   ┌──────────────┐
+│ H.264 RTP AU │──▶│   Receive    │──▶│  HW Decode   │──▶│ Present thread │──▶│    DComp     │
+│ any order,   │   │   timeline   │   │ NVDEC/AMF/   │   │ render time,   │   │  swap chain  │
+│ NACK repair  │   │ FrameBuffer, │   │ OpenH264,    │   │ keyed-mutex    │   │ (waitable)   │
+│              │   │ VCMTiming    │   │ 3 slots      │   │ shared RGBA    │   │              │
+└──────────────┘   └──────────────┘   └──────────────┘   └────────────────┘   └──────────────┘
 ```
 
 Transport, AU gating, and presentation ownership are normative in
@@ -297,7 +298,12 @@ private:
 } // namespace mello::video
 ```
 
-**Cursor handling in DXGI:** `IDXGIOutputDuplication::AcquireNextFrame()` returns cursor shape and position separately from the desktop texture in `DXGI_OUTDUPL_FRAME_INFO`. The cursor data is extracted and forwarded as a cursor packet (§6) — it is never composited into the captured texture.
+**Display mode change:** duplication is revoked and rebuilt at the new size;
+the preprocessor scales the new desktop into the fixed encode size. The rebuild
+refused a new size until streaming-quality stage 8, and the stream gave up
+after about 10 s.
+
+**Cursor handling in DXGI:** `AcquireNextFrame` gives the pointer position and shape apart from the desktop image, which has no pointer. The backend turns every shape kind into straight-alpha BGRA (`pointer_shape_to_bgra`, `cursor.cpp`) and reports `CursorMode::Composite`; the preprocessor draws it into a copy of the frame (`VideoPreprocessor::convert` with a `CursorOverlay`). See `12-STREAMING.md` §10.
 
 ### 4.4 Windows Graphics Capture (WGC) Backend
 
@@ -348,7 +354,11 @@ private:
 } // namespace mello::video
 ```
 
-**WGC and cursor:** WGC composites the cursor into the captured texture by default. To match the DXGI path (cursor as separate channel), WGC capture must disable cursor capture via `GraphicsCaptureSession::IsCursorCaptureEnabled = false` and read cursor position via `GetCursorInfo()` instead.
+**Window resize:** a frame whose `ContentSize` differs from the pool size is
+dropped, and the pool is made again (`Recreate`) at the new size. The next
+frame has the whole window.
+
+**WGC and cursor:** `IsCursorCaptureEnabled(true)`. WGC draws the pointer into the captured texture where it is over the window or monitor (`CursorMode::InFrame`). Until streaming-quality stage 8 it was off, and no viewer saw a pointer.
 
 ### 4.5 ProcessCapture and the Capture Ladder
 
@@ -369,6 +379,12 @@ Exclusive fullscreen is detected with `SHQueryUserNotificationState`. It does
 not swap to DXGI: no screen method sees exclusive fullscreen. It rebuilds the
 current method and restarts the ladder from the top, so the hook gets another
 chance.
+
+A method change starts the next backend before it stops the old one. Each
+backend delivers through a callback with its own token, and only the active
+token reaches the pipeline. A walk back up keeps the old backend until the next
+one delivers its first frame (2 s at most); on failure the next backend stops
+and the old one keeps the stream. `ProcessCapture::activate` has the rules.
 
 Every method change raises `consume_swap_event()`, and the pipeline forces a
 keyframe so the viewer can resync. `state()` reports what the capture is doing
@@ -431,6 +447,7 @@ Nothing in the product selects it.
 | Callback | The same contract as DXGI and WGC: a BGRA `ID3D11Texture2D` (two slots, used in turn) and the due time in µs of the steady clock. The preprocessor then converts it back to NV12, so the encoder sees the clip's values up to rounding. |
 | Late frames | A frame handed over more than 2 ms after its due time counts as late (`mello_stream_reference_info`). The timestamp stays the due time. |
 | Clock | `mello_clock_now_us()` is the clock of the due times and of the viewer frame callback (`ts`), so a harness in the same process measures glass-to-glass. |
+| Game audio (stage 7) | `mello_test_set_reference_audio(ctx, path)`: raw 48 kHz stereo int16, one clip loop long. The source then has a second thread: 10 ms chunk j is captured at start + j × 10 ms (frame 0 at start, the video's clock) and handed over 10 ms later, when it is complete, as a capture device does, through `CaptureSource::set_timed_audio_callback` with that capture time. `provides_timed_audio()` is true, so `mello_stream_start_audio` opens no loopback device. The audio loops with the clip. |
 
 ## 5. Color Conversion
 
@@ -496,6 +513,15 @@ The D3D11 Video Processor handles scaling automatically when `content_desc.Input
 
 In `VideoPipeline::start_host()`, `encode_size_for` sets the encode size from the capture size and `PipelineConfig::height` (the preset height). The width follows the source aspect, so the scale never stretches the picture. The rules are in `12-STREAMING.md` §3.2. All dimensions are even-aligned for NV12 compatibility.
 
+The rectangles are always explicit (`VideoPreprocessor::fit`): the source
+rectangle is the whole source, the destination rectangle keeps its aspect
+inside the output, and the output background is studio black (Y 16, Cb and
+Cr 128, given in YCbCr: given as RGB black the NVIDIA driver wrote Y 0). When a
+frame arrives at a new size, `convert` makes the video processor again for the
+new input size and keeps the NV12 ring textures, which the encoder registered.
+`ConvertResult::source_resized` tells the pipeline, which counts the change in
+`source_size_changes`.
+
 This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 = 40% fewer pixels), improving quality per bit and lowering bandwidth.
 
 ---
@@ -508,8 +534,9 @@ This reduces encoded pixel count significantly (e.g. 2036×1392 → 1584×1080 =
 
 Low-latency encode profile (mandatory for all hardware encoders):
 - No B-frames (`num_b_frames = 0`)
-- Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = max × 0.5` with a floor of 4 frames of bits, `vbvInitialDelay = vbv / 2`)
-- Keyframe interval: 120 frames (2 seconds at 60fps) under normal conditions
+- Rate control: VBR with moderate headroom (`max = avg × 1.25`, `vbv = max × 0.5` with a floor of 4 frames of bits, `vbvInitialDelay = vbv / 2`) on every backend (`vbv_bits_for` in `encoder.hpp`; AMF and QSV had one frame before streaming-quality stage 4)
+- Keyframe interval: 4 seconds (4 x the preset frame rate) plus IDRs on demand (streaming-quality stage 4; 2 s before; 10 s held at 4 s, see 12-STREAMING)
+- H.264 level 5.1 on NVENC, AMF and QSV
 - Look-ahead: disabled
 
 The VBR headroom of 1.25× allows keyframes slightly more bits without large bandwidth spikes. The half-second VBV keeps rate control tight for interactive latency while leaving IDRs enough room — a one-frame VBV visibly starves keyframes. This applies to both initial configuration and dynamic `set_bitrate()` reconfiguration.
@@ -536,7 +563,7 @@ struct EncoderConfig {
     uint32_t   height;
     uint32_t   fps;
     uint32_t   bitrate_kbps;
-    uint32_t   keyframe_interval = 120;
+    uint32_t   keyframe_interval = 120;   // the pipeline sets 4 x fps
     VideoCodec codec = VideoCodec::H264;
 };
 
@@ -753,274 +780,169 @@ If `EncoderFactory` exhausts all hardware candidates without success, it returns
 
 ## 7. Decoding
 
+Streaming-quality stage 3. The decoders run on the viewer pipeline's decode
+thread (`ViewerPipeline`, `video_viewer.hpp`), which takes frames from the
+viewer's receive timeline (12-STREAMING.md §7.2). This section covers the GPU
+side: the decoder interface, the output slots and each decoder.
+
 ### 7.1 Abstract Decoder Interface
 
 ```cpp
-// src/video/decoder.hpp
+// src/video/decoder.hpp (abridged)
 
-#pragma once
-#include "graphics_device.hpp"
-#include <d3d11.h>
-#include <cstdint>
-
-namespace mello::video {
-
-struct DecoderConfig {
-    uint32_t   width;
-    uint32_t   height;
-    VideoCodec codec = VideoCodec::H264;
+struct DecodedPicture {                 // Windows
+    ComPtr<ID3D11Texture2D> texture;    // keeps the slot texture alive
+    DXGI_FORMAT format;                 // NV12, or R8 with the NV12 layout
+    uint32_t width, height;             // visible size, from the SPS
+    uint32_t uv_row;                    // R8 layout: first chroma row
 };
 
 class Decoder {
 public:
-    virtual ~Decoder() = default;
-
-    virtual bool initialize(const GraphicsDevice& device, const DecoderConfig& config) = 0;
+    static constexpr int kOutputSlots = 3;
+    virtual bool initialize(const GraphicsDevice&, const DecoderConfig&) = 0;
     virtual void shutdown() = 0;
-
-    /// Feed an encoded packet. Returns true if a frame is ready (call get_frame).
-    virtual bool decode(const uint8_t* data, size_t size, bool is_keyframe) = 0;
-
-    /// Get decoded frame as NV12 texture in VRAM.
-    /// Valid until the next call to decode().
-    virtual ID3D11Texture2D* get_frame() = 0;
-
-    virtual bool        supports_codec(VideoCodec codec) const = 0;
+    // FrameReady: the picture is in output slot `slot`.
+    virtual DecodeFeedResult decode(const uint8_t* data, size_t size,
+                                    bool is_keyframe, int slot) = 0;
+#ifdef _WIN32
+    virtual bool picture(int slot, DecodedPicture& out) const = 0;
+#elif defined(__APPLE__)
+    virtual void* get_frame_buffer() = 0;   // CVPixelBufferRef, BGRA
+#endif
     virtual const char* name() const = 0;
 };
-
-} // namespace mello::video
 ```
+
+Each decoder owns `kOutputSlots` textures and writes each picture into the slot
+the caller names. The viewer's ring has the same 3 slots, so a slot the present
+thread converts is never the slot of the next decode. A new picture size (a new
+SPS) makes a new texture for a slot; the `ComPtr` in the ring keeps the old one
+alive until the present thread lets it go.
+
+All calls run on the decode thread. D3D11 work on the shared device is safe
+across the decode and present threads because the device context is
+multithread-protected (§2.2).
 
 ### 7.2 DecoderFactory
 
-```cpp
-// src/video/decoder_factory.hpp
+Order: NVDEC, AMF, OpenH264 (H.264 only; AV1 is never negotiated).
+`MELLO_SOFT_DECODER=1` makes OpenH264 the only candidate (the CPU lane of the
+streaming quality gate).
 
-#pragma once
-#include "decoder.hpp"
-#include <memory>
-#include <vector>
-
-namespace mello::video {
-
-/// Priority order: NVDEC → AMF → D3D11VA → OpenH264 (H.264 SW) / dav1d (AV1 SW)
-/// MELLO_SOFT_DECODER=1 (test lane): OpenH264 only.
-std::unique_ptr<Decoder> create_best_decoder(
-    const GraphicsDevice& device,
-    const DecoderConfig&  config
-);
-
-std::vector<const char*> enumerate_decoders(const GraphicsDevice& device);
-
-} // namespace mello::video
-```
+There is no D3D11VA decoder. The earlier one was a stub: it sent the raw access
+unit as one bitstream buffer with no DXVA picture parameters and no slice
+control, decoded nothing, and was chosen on Intel before OpenH264. Stage 3
+removed it (plan decision: delete unless an Intel box is on hand for a full
+implementation). An Intel viewer decodes with OpenH264. `MELLO_DECODER_D3D11VA`
+stays in `mello.h` for ABI stability and is never reported.
 
 ### 7.3 NVDEC Decoder
 
-Uses NVIDIA Video Codec SDK decode API. Outputs decoded NV12 frames as `ID3D11Texture2D` on the shared device.
+CUDA-D3D11 interop, no host copy:
 
-```cpp
-// src/video/decoder_nvdec.hpp
-
-#pragma once
-#include "decoder.hpp"
-#include <nvcuvid.h>
-
-namespace mello::video {
-
-class NvdecDecoder : public Decoder {
-public:
-    bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
-    void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    ID3D11Texture2D* get_frame() override;
-    bool             supports_codec(VideoCodec codec) const override;
-    const char*      name() const override { return "NVDEC"; }
-
-    static bool is_available();
-
-private:
-    CUvideodecoder   decoder_    = nullptr;
-    CUvideoparser    parser_     = nullptr;
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> frame_tex_;
-};
-
-} // namespace mello::video
-```
+- The CUDA context is created on the CUDA device of libmello's adapter
+  (`cuD3D11GetDevice`), so the registered textures are visible to it.
+- Each output slot is an R8 texture, `width` × `height × 3/2`, with the NV12
+  layout: luma rows, then interleaved chroma rows from row `height`.
+  `cuGraphicsD3D11RegisterResource` registers it once.
+- The parser callbacks only record the surface to show
+  (`ulMaxDisplayDelay = 0`). After `cuvidParseVideoData` returns, still on the
+  decode thread with the CUDA context current, the decoder maps the surface
+  (`cuvidMapVideoFrame64`), maps the slot texture
+  (`cuGraphicsMapResources`), copies luma and chroma with two `cuMemcpy2D`
+  (device to array) and unmaps both. The unmap orders the copy before any later
+  D3D11 use of the texture. `plan_nvdec_host_copy` (`nvdec_host_layout.hpp`)
+  gives the rows of the two copies, so a stream with a larger coded height
+  cannot write past the slot.
+- The display size comes from the sequence callback (`display_area`).
+- Each packet is one access unit and carries `CUVID_PKT_ENDOFPICTURE`: the
+  parser shows the picture in the same `cuvidParseVideoData` call. Without
+  the flag it shows each picture only when the next access unit comes, one
+  frame late.
+- A size change (an SPS at a new size) makes the decoder again in the
+  sequence callback. A picture of the old sequence still waiting to be shown
+  in that call indexes a surface of the old decoder; it is not shown. The
+  slots take the new size at their next copy (`ensure_slot`), the converter
+  makes the shared RGBA texture again at the new size, and the presenter
+  resizes its swap chain to it.
 
 ### 7.4 AMF Decoder
 
-Uses AMD AMF decode component. Outputs `AMFSurface` with `AMF_SURFACE_DX11` memory — unwrapped to `ID3D11Texture2D` for the pipeline.
+The AMF output surface is a slice of a texture array in AMF's pool. The decoder
+copies the slice (`AMFTextureArrayIndexGUID` private data on the texture) into
+the slot's NV12 texture with `CopySubresourceRegion`, so the surface goes back
+to the pool at once. Not verified on an AMD GPU in stage 3 (Bob's check).
 
-```cpp
-// src/video/decoder_amf.hpp
+### 7.5 OpenH264 Decoder
 
-#pragma once
-#include "decoder.hpp"
-#include <AMF/components/VideoDecoderUVD.h>
+The Cisco DLL decodes on the CPU (`DecodeFrameNoDelay`). The I420 picture is
+interleaved to NV12 and uploaded into the slot's NV12 texture with
+`UpdateSubresource`. The picture size comes from the decoder's buffer info.
 
-namespace mello::video {
+### 7.6 VideoToolbox Decoder (macOS)
 
-class AmfDecoder : public Decoder {
-public:
-    bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
-    void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    ID3D11Texture2D* get_frame() override;
-    bool             supports_codec(VideoCodec codec) const override;
-    const char*      name() const override { return "AMF-Decode"; }
-
-    static bool is_available();
-
-private:
-    amf::AMFContextPtr   context_  = nullptr;
-    amf::AMFComponentPtr decoder_  = nullptr;
-};
-
-} // namespace mello::video
-```
-
-### 7.5 D3D11VA Decoder (Intel + Generic Hardware Fallback)
-
-D3D11VA is the Windows hardware decode API and works across all GPU vendors. This is the correct path for Intel iGPU decoding (rather than oneVPL, which adds unnecessary complexity on the decode side). It also serves as the generic hardware fallback for any GPU not covered by NVDEC or AMF.
-
-```cpp
-// src/video/decoder_d3d11va.hpp
-
-#pragma once
-#include "decoder.hpp"
-#include <d3d11.h>
-#include <wrl/client.h>
-
-namespace mello::video {
-
-class D3D11vaDecoder : public Decoder {
-public:
-    bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
-    void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    ID3D11Texture2D* get_frame() override;
-    bool             supports_codec(VideoCodec codec) const override;
-    const char*      name() const override { return "D3D11VA"; }
-
-    static bool is_available();
-
-private:
-    Microsoft::WRL::ComPtr<ID3D11VideoDevice>        video_device_;
-    Microsoft::WRL::ComPtr<ID3D11VideoContext>        video_context_;
-    Microsoft::WRL::ComPtr<ID3D11VideoDecoder>        decoder_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>           frame_tex_;
-};
-
-} // namespace mello::video
-```
-
-### 7.6 Software Decoders (OpenH264 + dav1d)
-
-Two software decode libraries cover the fallback path, one per codec. Both are BSD-licensed and compatible with Mello's Apache 2.0 licence. FFmpeg is not used.
-
-**OpenH264** (Cisco, BSD 2-clause) — H.264 software decode. Cisco distributes pre-built binaries and covers MPEG-LA patent licensing for those binaries. Mello must distribute the official Cisco-built `openh264.dll` rather than building from source to remain within the patent covenant.
-
-**dav1d** (VideoLAN, BSD 2-clause) — AV1 software decode. No patent concerns. Statically linkable or distributed as a DLL. Fastest available AV1 software decoder; real-time 1080p is achievable on modest hardware.
-
-Both decoders output a CPU-side frame buffer (I420/YUV420P) which is converted to RGBA and uploaded to a staging texture for the Slint handoff — the same CPU copy path used by all software decoders. The codec field in `DecoderConfig` determines which library is instantiated.
-
-```cpp
-// src/video/decoder_software.hpp
-
-#pragma once
-#include "decoder.hpp"
-#include <wrl/client.h>
-
-// OpenH264
-#include <wels/codec_api.h>
-
-// dav1d
-#include <dav1d/dav1d.h>
-
-namespace mello::video {
-
-/// Software decoder — OpenH264 for H.264, dav1d for AV1.
-/// Instantiated by DecoderFactory only when all hardware decoders fail.
-class SoftwareDecoder : public Decoder {
-public:
-    bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
-    void             shutdown() override;
-    bool             decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    ID3D11Texture2D* get_frame() override;
-    bool             supports_codec(VideoCodec codec) const override { return true; }
-    const char*      name() const override;   // "OpenH264" or "dav1d" depending on codec
-
-private:
-    VideoCodec codec_ = VideoCodec::H264;
-
-    // OpenH264 (H.264 path)
-    ISVCDecoder* oh264_decoder_ = nullptr;
-
-    // dav1d (AV1 path)
-    Dav1dContext*   dav1d_ctx_   = nullptr;
-    Dav1dPicture    dav1d_pic_{};
-
-    // CPU→GPU upload for Slint handoff
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>      upload_tex_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext>   context_;
-};
-
-} // namespace mello::video
-```
-
-**Distribution:**
-- `openh264.dll` — must be the official Cisco pre-built binary (for patent coverage). Distributed alongside `mello.exe`.
-- `dav1d.dll` — can be built from source via vcpkg (`x64-windows` triplet) or statically linked (`x64-windows-static`). No patent obligations.
+Unchanged by stage 3 except the slot argument, which it ignores: the ring
+retains each `CVPixelBuffer` the decoder hands out.
 
 ---
 
-## 8. Staging Texture (Viewer → Slint Handoff)
+## 8. Viewer Conversion and Present
 
-The one unavoidable copy in the viewer pipeline: decoded NV12 frame in VRAM → CPU-accessible RGBA buffer for Slint. A staging texture is used instead of `Map()`-ing the decoder surface directly, which would stall the GPU pipeline.
+### 8.1 StagingTexture (the converter)
 
 ```cpp
-// src/video/staging_texture.hpp
-
-#pragma once
-#include "graphics_device.hpp"
-#include <d3d11.h>
-#include <wrl/client.h>
-#include <cstdint>
-#include <vector>
-
-namespace mello::video {
-
+// src/video/staging_texture.hpp (abridged)
 class StagingTexture {
 public:
-    bool initialize(const GraphicsDevice& device, uint32_t width, uint32_t height);
-
-    /// Async GPU copy: decoded NV12 VRAM surface → staging texture.
-    /// Non-blocking — returns immediately.
-    void copy_from(ID3D11Texture2D* nv12_source);
-
-    /// Map staging texture and convert NV12 → RGBA into `out`.
-    /// Blocks until the async copy above is complete (typically 0–1ms).
-    /// `out` must be pre-allocated: width * height * 4 bytes.
-    void read_rgba(uint8_t* out);
-
-    void shutdown();
-
-private:
-    Microsoft::WRL::ComPtr<ID3D11Device>        device_;
-    Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>     staging_; // CPU_READ, STAGING usage
-
-    uint32_t width_  = 0;
-    uint32_t height_ = 0;
+    bool initialize(const GraphicsDevice&, bool enable_cpu_readback);
+    // Picture → shared RGBA texture (keyed mutex), and staging when asked.
+    bool convert(const DecodedPicture& picture, bool copy_to_cpu);
+    bool read_rgba(uint8_t* out);      // last converted frame, w*h*4
+    void* shared_rgba_handle() const;  // NT handle, key 0
 };
-
-} // namespace mello::video
 ```
 
-`copy_from()` issues a `CopyResource()` call (GPU → GPU, async). `read_rgba()` calls `Map()` on the staging texture, performs NV12→RGBA conversion in a tight CPU loop, then `Unmap()`. The result is passed to mello-core's `FrameCallback`, which wraps it in a `SharedPixelBuffer` for Slint as shown in `01-CLIENT.md §6.3`.
+The present thread converts the picture that is due with a compute shader
+(`CSMain` for the R8 layout, `CSMainNv12` for NV12; BT.709 studio swing) into a
+private RGBA texture, then copies it into the shared RGBA texture while it holds
+the shared texture's keyed mutex (key 0, 100 ms timeout). The presenter reads
+the shared texture under the same key. The targets follow the picture size; a
+new size gives a new NT handle. Source views are cached per source texture (at
+most 8); a cached view holds its texture, so a recycled address cannot reach a
+stale view.
+
+### 8.2 ViewerPipeline
+
+| Thread | Work |
+|---|---|
+| Decode | `VideoReceiveTimeline::poll`: decode a released frame into a free ring slot (or the slot of the oldest frame not on screen), report the decode time or the error; wait as the timeline says. Without a timeline (`feed_packet`) a fed access unit decodes at once and is due at once. |
+| Present | Sleep until the render time of the next ready frame, show the newest due frame, drop older due frames, convert, call the native frame callback (or read back for the CPU callback). |
+
+The pipeline holds 1 ms timer resolution (`timeBeginPeriod(1)`) while it runs on
+Windows. Counters: `frames_decoded`, `decode_errors`, `frames_presented`,
+`frames_dropped_present`, `decode_ms_last`, `decode_ms_mean`,
+`present_lateness_ms`, and the timeline's stats (`mello_stream_viewer_get_stats`).
+
+### 8.3 The A/V sync input (streaming-quality stage 7)
+
+The video follows the game audio (12-STREAMING.md §9.4). The input is on the
+receive side, not in the pipeline: `mello_stream_viewer_attach_peer` makes one
+`AvSyncInput` (`src/transport/av_sync.hpp`) over the view's audio playout and
+gives it to the peer (`PeerConnectionImpl::set_av_sync`); every receiver
+session of the peer (each video session) gets it.
+
+| Item | Rule |
+|---|---|
+| Who runs it | The receiver session's worker, every 20 ms (`kAvSyncTickInterval`); it decides every 250 ms, every 100 ms while the last offset is outside +-40 ms. |
+| Measurement | The audio heard now, on the video RTP clock (the game audio's A/V sync extension), against the time the frame of the same capture instant is shown: the last shown frame (`ViewerStats::last_shown_rtp`, `last_shown_us`, set by the present thread) moved by the RTP timestamps at 90 kHz. With no shown frame `VideoReceiveTimeline::render_time_us` stands in. The timeline's target minus its current delay counts in as the delay the video still has to reach. |
+| Start buffer | `AvSyncInput::start_buffer_ms`: the audio playout asks it when it starts, with the newest held packet; it answers from the render time at the timeline's target delay. |
+| Output | `VideoReceiveTimeline::set_min_delay_us` (at least 1 ms, at most the timeline's 150 ms maximum; the timeline applies it again after a timing reset), and for a late video the game audio's NetEQ minimum delay. |
+| Steps | A raise of the minimum: at most 10 ms per decision. VCMTiming clamps the delay it applies to the minimum at once, so a raise moves the render times by the step at once; the current delay then follows at 100 ms/s. A lowered minimum: at most 40 ms; the current delay falls at 100 ms/s. |
+| Stats | `MelloStreamStats` stage 7 fields: `av_offset_ms` (filtered), `av_video_min_delay_ms`, `av_audio_min_delay_ms`, `av_sync_changes`, `av_sync_active`. |
+
+The timeline's interface was enough: stage 7 changed nothing in
+`video_receive_timeline.*`.
 
 ---
 
@@ -1143,7 +1065,7 @@ typedef struct MelloStreamStats {
     uint32_t keyframes_sent;
     uint64_t bytes_sent;
     char     encoder_name[32];  // "NVENC", "AMF", "QSV-oneVPL"
-    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "D3D11VA", "OpenH264", "dav1d"
+    char     decoder_name[32];  // "NVDEC", "AMF-Decode", "OpenH264", "VideoToolbox"
 } MelloStreamStats;
 
 void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
@@ -1211,9 +1133,9 @@ libmello/src/video/
 ├── decoder_factory.hpp / .cpp      # Probe + instantiate best decoder
 ├── decoder_nvdec.hpp / .cpp        # NVIDIA NVDEC
 ├── decoder_amf.hpp / .cpp          # AMD AMF decode
-├── decoder_d3d11va.hpp / .cpp      # D3D11VA (Intel + generic HW)
-├── decoder_software.hpp / .cpp     # OpenH264 (H.264) + dav1d (AV1) fallback
-├── staging_texture.hpp / .cpp      # VRAM→CPU handoff for Slint
+├── decoder_openh264.hpp / .cpp     # OpenH264 (H.264) software fallback
+├── video_viewer.hpp / .cpp         # Viewer: decode thread, 3-slot ring, present thread
+├── staging_texture.hpp / .cpp      # Converter: picture → keyed-mutex shared RGBA
 └── cursor.hpp / .cpp               # Cursor packet encode/decode
 ```
 
@@ -1309,7 +1231,7 @@ Log the SDK-specific error code and, where available, a description. Include the
 ```
 [video/encoder] ERROR: NVENC encode failed: NV_ENC_ERR_INVALID_PARAM (seq=14302)
 [video/decoder] ERROR: NVDEC decode failed: CUDA_ERROR_INVALID_VALUE (seq=9871 keyframe=false)
-[video/decoder] ERROR: D3D11VA decode failed: hr=0x88960003 (seq=2201)
+[video/decoder] ERROR: AMF decode: SubmitInput failed: 9 (seq=2201)
 ```
 
 ### 13.7 Keyframe Events

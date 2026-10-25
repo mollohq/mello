@@ -41,13 +41,24 @@ struct EncodePhaseTiming {
     double lock_ms = 0.0;
 };
 
-/// True when a bitrate change must force an IDR: a down-step of more than
-/// 25 %. Congestion can leave a damaged reference chain, and a keyframe
-/// resyncs it. A routine estimator step must not give a keyframe, or a ramp
-/// of small steps becomes a keyframe storm. Every backend uses this rule.
-inline bool bitrate_step_forces_idr(uint32_t from_kbps, uint32_t to_kbps) {
-    return from_kbps > 0 &&
-           static_cast<uint64_t>(to_kbps) * 4 < static_cast<uint64_t>(from_kbps) * 3;
+// A bitrate change never forces an IDR (streaming-quality stage 4). Until
+// stage 4 a down-step of more than 25 % did, to resync a reference chain
+// that congestion could have broken. With goog_cc the target moves by more
+// than 25 % at every congestion event, and each IDR (6 to 10 times a delta
+// frame) then overloaded the link that had just shrunk: 55 IDRs in 30 s on
+// the gate's congested profile. A broken reference chain is the receiver's
+// to report (PLI), as in libwebrtc.
+
+/// The VBV of every backend, in bits: half a second of the peak rate (1.25 x
+/// the bitrate), at least four frames of the bitrate. A one-frame VBV starves
+/// IDRs and pumps the quality (AMF and QSV had one frame before
+/// streaming-quality stage 4; NVENC's compute_vbv_bits is this rule).
+inline uint64_t vbv_bits_for(uint32_t bitrate_kbps, uint32_t fps) {
+    const uint64_t avg = static_cast<uint64_t>(bitrate_kbps) * 1000;
+    const uint64_t peak = avg + avg / 4;
+    const uint64_t frames = fps > 0 ? fps : 60;
+    const uint64_t four_frames = avg * 4 / frames;
+    return peak / 2 > four_frames ? peak / 2 : four_frames;
 }
 
 struct EncoderStats {
@@ -67,8 +78,11 @@ public:
 #ifdef _WIN32
     virtual bool        encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) = 0;
 #elif defined(__APPLE__)
-    /// Encode one frame from a CVPixelBufferRef (passed as void*). BGRA input accepted.
-    virtual bool        encode(void* cv_pixel_buffer, EncodedPacket& out) = 0;
+    /// Encode one frame from a CVPixelBufferRef (passed as void*). BGRA input
+    /// accepted. `capture_us` is the frame's capture time: the presentation
+    /// time of the frame (stage 4; it was frame count / fps, which is wrong
+    /// at the 30 fps rung and after a dropped frame).
+    virtual bool        encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) = 0;
 #endif
 
     virtual void        request_keyframe() = 0;
@@ -92,6 +106,10 @@ public:
     /// 0 = full quality. Higher means features have been given up.
     virtual int  cost_tier() const { return 0; }
 
+    /// The last tier `reduce_cost_tier` can reach. 0 for a backend with no
+    /// tiers. The pipeline stops asking at this tier (`video_pipeline.cpp`).
+    virtual int  max_cost_tier() const { return 0; }
+
     /// Phase breakdown of the most recent encode. Default zeroed for backends
     /// that do not instrument it.
     virtual void get_phase_timing(EncodePhaseTiming& out) const { out = {}; }
@@ -104,6 +122,16 @@ public:
     ///
     /// Default no-op for backends without runtime framerate control.
     virtual void set_framerate(uint32_t fps) { (void)fps; }
+
+    /// Change the encode size in place, with an IDR. Returns false when the
+    /// backend cannot (the default) or the driver refuses; the pipeline then
+    /// re-initializes the encoder on the same device at the new size
+    /// (streaming-quality stage 4, geometry rungs).
+    virtual bool reconfigure_size(uint32_t width, uint32_t height) {
+        (void)width;
+        (void)height;
+        return false;
+    }
 };
 
 } // namespace mello::video

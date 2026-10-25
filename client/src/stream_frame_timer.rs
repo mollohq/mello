@@ -1,4 +1,13 @@
-//! 16ms stream frame presenter — timer runs only while watching a stream.
+//! The stream UI timer — runs only while watching a stream.
+//!
+//! Streaming-quality stage 3: on Windows this timer presents nothing.
+//! libmello's present thread shows each frame at its render time through the
+//! DComp swap chain (`DCompPresenter::frame_presenter`). The timer only keeps
+//! the UI-thread side of the picture current: the host's pointer (a child
+//! visual), the geometry after a stream size change, and the debug fps.
+//! Off Windows the decoded RGBA still reaches Slint here (the macOS viewer has
+//! no compositor path yet). Stage 9: it also keeps the card's format label
+//! and ends the card's "starting" at the first frame.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -14,8 +23,7 @@ use crate::MainWindow;
 
 struct TickCtx {
     app_weak: slint::Weak<MainWindow>,
-    // Windows presents via native_frame_slot + DComp below; the RGBA copy
-    // path (and this slot) is the non-Windows fallback.
+    // Off Windows the RGBA copy path (and this slot) is the display path.
     #[cfg(not(target_os = "windows"))]
     frame_slot: FrameSlot,
     frame_consumed: Arc<AtomicBool>,
@@ -24,9 +32,7 @@ struct TickCtx {
     frame_timer_last_log: Cell<Instant>,
     frame_timer_presented: Cell<u64>,
     #[cfg(target_os = "windows")]
-    native_frame_slot: mello_core::NativeFrameSlot,
-    #[cfg(target_os = "windows")]
-    last_surface_sequence: Cell<u64>,
+    last_presented_total: Cell<u64>,
     #[cfg(target_os = "windows")]
     dcomp_presenter: Rc<std::cell::RefCell<Option<crate::dcomp_presenter::DCompPresenter>>>,
 }
@@ -37,22 +43,25 @@ fn on_frame_tick(ctx: &TickCtx) {
         .set(ctx.frame_timer_ticks.get().saturating_add(1));
 
     #[cfg(target_os = "windows")]
-    if let Ok(slot) = ctx.native_frame_slot.lock() {
-        if let Some(frame) = *slot {
-            if frame.sequence != ctx.last_surface_sequence.get() {
-                ctx.last_surface_sequence.set(frame.sequence);
-                if let Some(ref mut presenter) = *ctx.dcomp_presenter.borrow_mut() {
-                    if presenter.present_shared_texture(
-                        frame.shared_handle,
-                        frame.width,
-                        frame.height,
-                    ) {
-                        ctx.frame_timer_presented
-                            .set(ctx.frame_timer_presented.get().saturating_add(1));
-                    }
-                }
+    if let Some(ref mut presenter) = *ctx.dcomp_presenter.borrow_mut() {
+        // The host's pointer, when the host sends one (the game capture hook).
+        presenter.update_cursor(&mello_core::stream::cursor::viewer_cursor());
+        // A new stream size from the present thread needs a new scale.
+        presenter.refresh_geometry_if_resized();
+        let total = presenter.presented_frames();
+        // Stage 9: the card's label ("720p60") and the end of "starting".
+        if let Some(app) = app_for_tick.as_ref() {
+            if total > 0 {
+                crate::handlers::streaming::mark_first_frame(app);
             }
+            crate::handlers::streaming::refresh_stream_format(app, presenter.stream_size().1);
         }
+        ctx.frame_timer_presented.set(
+            ctx.frame_timer_presented
+                .get()
+                .saturating_add(total.saturating_sub(ctx.last_presented_total.get())),
+        );
+        ctx.last_presented_total.set(total);
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -65,6 +74,9 @@ fn on_frame_tick(ctx: &TickCtx) {
                 app.set_stream_frame(slint::Image::from_rgba8(buf));
                 ctx.frame_timer_presented
                     .set(ctx.frame_timer_presented.get().saturating_add(1));
+                // Stage 9: the card's label and the end of "starting".
+                crate::handlers::streaming::mark_first_frame(app);
+                crate::handlers::streaming::refresh_stream_format(app, h);
             }
         }
     }
@@ -84,7 +96,7 @@ fn on_frame_tick(ctx: &TickCtx) {
 
         #[cfg(target_os = "windows")]
         log::info!(
-            "DComp stream: present_fps={:.1} tick_hz={:.1}",
+            "DComp stream: present_fps={:.1} ui_tick_hz={:.1}",
             present_fps,
             ctx.frame_timer_ticks.get() as f32 / elapsed
         );
@@ -113,7 +125,6 @@ impl StreamFrameTimer {
         #[cfg(not(target_os = "windows"))] frame_slot: FrameSlot,
         frame_consumed: Arc<AtomicBool>,
         frame_lifecycle: FrameLifecycleSlot,
-        #[cfg(target_os = "windows")] native_frame_slot: mello_core::NativeFrameSlot,
         #[cfg(target_os = "windows")] dcomp_presenter: Rc<
             std::cell::RefCell<Option<crate::dcomp_presenter::DCompPresenter>>,
         >,
@@ -131,9 +142,7 @@ impl StreamFrameTimer {
                 frame_timer_last_log: Cell::new(Instant::now()),
                 frame_timer_presented: Cell::new(0),
                 #[cfg(target_os = "windows")]
-                native_frame_slot,
-                #[cfg(target_os = "windows")]
-                last_surface_sequence: Cell::new(0),
+                last_presented_total: Cell::new(0),
                 #[cfg(target_os = "windows")]
                 dcomp_presenter,
             }),
@@ -147,6 +156,8 @@ impl StreamFrameTimer {
         self.running.set(watching);
         if watching {
             let ctx = self.tick_ctx.clone();
+            #[cfg(target_os = "windows")]
+            ctx.last_presented_total.set(0);
             self.timer.start(
                 slint::TimerMode::Repeated,
                 std::time::Duration::from_millis(16),

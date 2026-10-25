@@ -429,6 +429,11 @@ export struct StreamCardData {
     stream-width: int,
     stream-height: int,
     can-watch: bool,
+    // stage 6 (streaming-quality): "" or "live", "starting",
+    // "reconnecting"; "ended" and "failed" for a notice card, which shows
+    // `title` and the reason in `subtitle` for a few seconds.
+    state: string,
+    title: string,
 }
 
 export struct MemberData {
@@ -616,3 +621,63 @@ export global VideoRect {
     // All in logical pixels; Rust multiplies by scale_factor.
     callback geometry-changed(float, float, float, float, float, float);
 }
+
+// --- stage 9 (streaming-quality): the stream card's controls ---
+
+/// The watched stream's receive values, once a second
+/// (`StreamViewerTimeline`), for the stats strip on the card.
+/// Each value is formatted by Rust ("118 ms", "+8 ms").
+export struct StreamStatsData {
+    target-delay: string,
+    jitter: string,
+    decode: string,
+    frames-late: string,
+    audio-delay: string,
+    av-offset: string,
+}
+
+/// The state behind the stream card's three buttons and their popovers. A
+/// global, so the card (inside the feed) and the popovers (over the window)
+/// share it. Rust owns the values; the card reads them and calls back. The
+/// previews set them, so they are in-out.
+export global StreamCardUi {
+    // Game-audio volume of the watched stream, for this user only: 0..200 %.
+    // The mute keeps the volume.
+    in-out property <int> volume: 100;
+    in-out property <bool> muted: false;
+    // The open popover: "" (none), "volume" or "settings". The button that
+    // opens one sets it, with the anchor: the right and bottom edges of
+    // that button, in window coordinates.
+    in-out property <string> popover: "";
+    in-out property <length> anchor-right;
+    in-out property <length> anchor-bottom;
+    // The right edge of the card: in the expanded view the popovers open
+    // beside the card, over the chat column, not over the picture.
+    in-out property <length> anchor-card-right;
+    // The viewer's stats strip on the card.
+    in-out property <bool> stats-shown: false;
+    in-out property <StreamStatsData> stats;
+    // "720p60": the watched picture's height from the SPS and the frame
+    // rate of the host's rung. Empty until known.
+    in-out property <string> format-label: "";
+    // The watch started and no frame is shown yet.
+    in-out property <bool> viewer-starting: false;
+    // The watched card takes over the feed area (the expanded view).
+    in-out property <bool> expanded: false;
+    // The watched stream plays in its own window (the pop-out).
+    in-out property <bool> popped-out: false;
+    // The watchable card, for the expanded view.
+    in-out property <StreamCardData> watched-card;
+    // The hosted stream: its quality preset and what it sends.
+    in-out property <string> host-quality: "";
+    in-out property <string> host-sending: "";
+
+    callback volume-changed(int);
+    callback mute-changed(bool);
+    callback stats-toggled(bool);
+    // true: expand (or open the pop-out); false: back to the card.
+    callback expand-requested(bool);
+    callback popout-requested(bool);
+}
+
+// --- end stage 9 ---

@@ -25,14 +25,12 @@
 # header-only inputs of rate_control_settings.h; none of their sources are
 # compiled.
 #
-# Stage 4 spike: only tests/test_goog_cc_spike.cpp links this target.
-# Apple clang is unverified: OFF on Apple until a Mac build runs, then stage 4 turns it on.
-if(APPLE)
-    set(MELLO_WEBRTC_GOOG_CC_DEFAULT OFF)
-else()
-    set(MELLO_WEBRTC_GOOG_CC_DEFAULT ON)
-endif()
-option(MELLO_WEBRTC_GOOG_CC "Build the vendored WebRTC goog_cc congestion controller" ${MELLO_WEBRTC_GOOG_CC_DEFAULT})
+# The stream sender uses it through GoogCcController
+# (src/transport/goog_cc_controller.cpp, the object library mello_goog_cc
+# below). ON on every platform: Bob built the overlay with Apple clang in
+# Release on 2026-10-22 (streaming-quality handoff section 5.1). With the
+# option OFF the sender paces at its ceiling and runs no estimator.
+option(MELLO_WEBRTC_GOOG_CC "Build the vendored WebRTC goog_cc congestion controller" ON)
 
 if(MELLO_WEBRTC_GOOG_CC)
     if(NOT MELLO_WEBRTC_NETEQ)
@@ -108,4 +106,39 @@ if(MELLO_WEBRTC_GOOG_CC)
             -Wno-unused-parameter -Wno-sign-compare -Wno-missing-field-initializers
         )
     endif()
+
+    # The one libmello file that includes goog_cc headers. NDEBUG: the
+    # vendored targets compile with NDEBUG in every build type (WAP_DEFINES),
+    # and RTC_DCHECK_IS_ON changes the layout of some rtc_base classes. A
+    # consumer that includes their headers must see the same NDEBUG state,
+    # or a Debug build mixes two layouts (the macOS segfault of handoff
+    # section 5.1). So this object library compiles with GOOG_CC_DEFINES
+    # (NDEBUG included), whatever the build type of libmello. Nothing else
+    # in libmello or its tests includes a goog_cc header.
+    add_library(mello_goog_cc OBJECT
+        ${CMAKE_CURRENT_LIST_DIR}/../src/transport/goog_cc_controller.cpp
+    )
+    set_target_properties(mello_goog_cc PROPERTIES
+        CXX_STANDARD 20
+        CXX_STANDARD_REQUIRED ON
+        POSITION_INDEPENDENT_CODE ON
+    )
+    target_compile_definitions(mello_goog_cc PRIVATE ${GOOG_CC_DEFINES} MELLO_HAS_GOOG_CC=1)
+    target_include_directories(mello_goog_cc BEFORE PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/compat
+    )
+    target_include_directories(mello_goog_cc PRIVATE
+        ${CMAKE_CURRENT_LIST_DIR}/../src
+        ${CMAKE_CURRENT_LIST_DIR}/../include
+    )
+    target_link_libraries(mello_goog_cc PRIVATE webrtc_goog_cc)
+    if(MSVC)
+        target_compile_options(mello_goog_cc PRIVATE /EHsc /wd4100 /wd4244 /wd4267)
+    endif()
+
+    install(TARGETS webrtc_goog_cc
+        ARCHIVE DESTINATION lib
+        LIBRARY DESTINATION lib
+        RUNTIME DESTINATION bin
+    )
 endif()

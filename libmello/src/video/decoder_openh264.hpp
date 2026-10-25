@@ -18,8 +18,8 @@ public:
 
     bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void             shutdown() override;
-    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) override;
-    ID3D11Texture2D* get_frame() override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) override;
+    bool             picture(int slot, DecodedPicture& out) const override;
     bool             supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
     const char*      name() const override { return "OpenH264"; }
 
@@ -27,7 +27,16 @@ private:
     wels_abi::ISVCDecoder* decoder_ = nullptr;
     DecoderConfig config_{};
 
-    Microsoft::WRL::ComPtr<ID3D11Texture2D>    upload_tex_;
+    // One NV12 texture per output slot, at the size of the last picture
+    // written into it. A new size makes a new texture; the old one lives on
+    // while the present thread still holds it.
+    struct Slot {
+        Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+    Slot slots_[kOutputSlots];
+
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Device>        device_;
 

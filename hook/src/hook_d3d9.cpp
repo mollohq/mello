@@ -465,6 +465,13 @@ void capture_present(IDirect3DDevice9* device) {
             back->Release();
             return;
         }
+        // Hand over the slot of the last copy as soon as it retired, on every
+        // present, and copy again only when a frame is due.
+        publish_retired_slot(state);
+        if (!state.copy_due(qpc_now())) {
+            back->Release();
+            return;
+        }
         const uint32_t slot = g_res.next;
         const HRESULT hr =
             device->StretchRect(back, nullptr, g_res.shared_surf[slot], nullptr, D3DTEXF_NONE);
@@ -492,7 +499,7 @@ void capture_present(IDirect3DDevice9* device) {
             state.count_drop();
             return;
         }
-        publish_retired_slot(state);
+        state.count_copy();
         if (g_res.has_pending) state.count_drop();
         g_res.pending = slot;
         g_res.pending_qpc = static_cast<uint64_t>(qpc_now());
@@ -505,6 +512,14 @@ void capture_present(IDirect3DDevice9* device) {
     // read-back surfaces and the frame block survived. Recreate that one
     // surface; anything else missing means the full rebuild above already ran.
     if (!g_res.resolve && !build_resolve_only(device, desc)) {
+        back->Release();
+        return;
+    }
+
+    // The read-back stalls the game's render thread, so it runs only when a
+    // frame is due: 60 stalls a second for a 60 fps stream, not one per
+    // present.
+    if (!state.copy_due(qpc_now())) {
         back->Release();
         return;
     }
@@ -555,6 +570,7 @@ void capture_present(IDirect3DDevice9* device) {
     }
     readback->UnlockRect();
 
+    state.count_copy();
     g_res.next = (slot + 1) % MELLO_HOOK_TEXTURE_COUNT;
     state.publish_frame(slot, static_cast<uint64_t>(qpc_now()));
     state.signal_frame();

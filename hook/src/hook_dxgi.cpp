@@ -10,6 +10,7 @@
 
 #include <detours/detours.h>
 
+#include "hook_d3d12.hpp"
 #include "hook_log.hpp"
 #include "hook_state.hpp"
 
@@ -212,42 +213,65 @@ bool build_resources(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
 // take the largest back buffer, which is the game's own output rather than a
 // launcher or an overlay.
 bool is_target_swap_chain(IDXGISwapChain* swap, const DXGI_SWAP_CHAIN_DESC& desc) {
-    if (!g_res.ready || g_res.swap == identity_of(swap)) return true;
     const uint64_t candidate = static_cast<uint64_t>(desc.BufferDesc.Width) * desc.BufferDesc.Height;
+    // A Direct3D 12 swap chain of the same game that is larger wins.
+    if (candidate <= d3d12_target_area()) return false;
+    if (!g_res.ready || g_res.swap == identity_of(swap)) return true;
     const uint64_t current = static_cast<uint64_t>(g_res.width) * g_res.height;
     return candidate > current;
 }
 
-// The body of the present hook. Runs on the game's present thread.
-void capture_present(IDXGISwapChain* swap) {
+// The body of the present hook. Runs on the game's present thread. Returns
+// true for the Direct3D 12 swap chain that is captured.
+bool capture_present(IDXGISwapChain* swap) {
     HookState& state = HookState::instance();
     if (!state.capture_wanted()) {
         if (g_res.ready) {
             log_line("client stopped asking for frames; releasing capture resources");
             release_resources();
         }
-        return;
+        // Waits for no GPU work: a copy still in flight keeps them until a
+        // later present.
+        d3d12_release_when_idle();
+        return false;
     }
 
     DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(swap->GetDesc(&desc))) return;
-    if (desc.BufferDesc.Width == 0 || desc.BufferDesc.Height == 0) return;
-    if (!is_target_swap_chain(swap, desc)) return;
+    if (FAILED(swap->GetDesc(&desc))) return false;
+    if (desc.BufferDesc.Width == 0 || desc.BufferDesc.Height == 0) return false;
+
+    // A Direct3D 12 swap chain has no D3D11 device: its own path copies it.
+    IUnknown* const identity = identity_of(swap);
+    if (!(g_res.ready && g_res.swap == identity)) {
+        const uint64_t d3d11_area =
+            g_res.ready ? static_cast<uint64_t>(g_res.width) * g_res.height : 0;
+        if (d3d12_capture_present(swap, identity, desc, d3d11_area, state) ==
+            D3d12Present::Handled) {
+            // Only the captured swap chain may name the presenting queue: a
+            // smaller one (a launcher) can present on another queue.
+            return d3d12_is_target(identity);
+        }
+    }
+    if (!is_target_swap_chain(swap, desc)) return false;
 
     const bool changed = !g_res.ready || g_res.swap != identity_of(swap) ||
                          g_res.width != desc.BufferDesc.Width ||
                          g_res.height != desc.BufferDesc.Height ||
                          g_res.format != desc.BufferDesc.Format;
     if (changed && !build_resources(swap, desc)) {
-        return;
+        return false;
     }
+
+    // Copy at the stream's rate, not the game's. A present between two due
+    // frames costs the game nothing more than this check.
+    if (!state.copy_due(qpc_now())) return false;
 
     ID3D11Texture2D* back = nullptr;
     if (FAILED(swap->GetBuffer(0, __uuidof(ID3D11Texture2D),
                                reinterpret_cast<void**>(&back))) ||
         !back) {
         state.count_drop();
-        return;
+        return false;
     }
 
     const uint32_t index = g_res.next;
@@ -264,8 +288,10 @@ void capture_present(IDXGISwapChain* swap) {
     g_res.context->Flush();
 
     g_res.next = (index + 1) % MELLO_HOOK_TEXTURE_COUNT;
+    state.count_copy();
     state.publish_frame(index, static_cast<uint64_t>(qpc_now()));
     state.signal_frame();
+    return false;
 }
 
 void note_fault(const char* where) {
@@ -275,31 +301,44 @@ void note_fault(const char* where) {
         log_line("fault in %s; capture is off and the game keeps running", where);
     }
     release_resources();
+    d3d12_abandon();
 }
 
 // Runs `capture_present` with the reentrancy guard and the exception guard. A
-// fault here disables capture; it never reaches the game.
-void guarded_capture(IDXGISwapChain* swap, const char* where) {
+// fault here disables capture; it never reaches the game. Returns true for a
+// Direct3D 12 swap chain.
+bool guarded_capture(IDXGISwapChain* swap, const char* where) {
     HookState::instance().count_present();
-    if (g_disabled.load(std::memory_order_relaxed)) return;
-    if (g_in_capture.exchange(true, std::memory_order_acquire)) return;
+    if (g_disabled.load(std::memory_order_relaxed)) return false;
+    if (g_in_capture.exchange(true, std::memory_order_acquire)) return false;
+    bool d3d12 = false;
     __try {
-        capture_present(swap);
+        d3d12 = capture_present(swap);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         note_fault(where);
+        d3d12 = false;
     }
     g_in_capture.store(false, std::memory_order_release);
+    return d3d12;
 }
 
 HRESULT STDMETHODCALLTYPE hooked_present(IDXGISwapChain* swap, UINT sync, UINT flags) {
-    guarded_capture(swap, "Present");
-    return g_real_present(swap, sync, flags);
+    // Inside the real Present of a D3D12 swap chain, a queue DXGI submits to
+    // on this thread is the swap chain's own (hook_d3d12.cpp).
+    const bool d3d12 = guarded_capture(swap, "Present");
+    if (d3d12) d3d12_mark_presenting(true);
+    const HRESULT hr = g_real_present(swap, sync, flags);
+    if (d3d12) d3d12_mark_presenting(false);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE hooked_present1(IDXGISwapChain1* swap, UINT sync, UINT flags,
                                           const DXGI_PRESENT_PARAMETERS* params) {
-    guarded_capture(swap, "Present1");
-    return g_real_present1(swap, sync, flags, params);
+    const bool d3d12 = guarded_capture(swap, "Present1");
+    if (d3d12) d3d12_mark_presenting(true);
+    const HRESULT hr = g_real_present1(swap, sync, flags, params);
+    if (d3d12) d3d12_mark_presenting(false);
+    return hr;
 }
 
 HRESULT STDMETHODCALLTYPE hooked_resize_buffers(IDXGISwapChain* swap, UINT count, UINT width,

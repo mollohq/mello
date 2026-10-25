@@ -4,7 +4,7 @@ use std::ffi::{CStr, CString};
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
 use std::sync::mpsc as std_mpsc;
 use std::sync::{Arc, Mutex};
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use futures::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
@@ -26,6 +26,9 @@ pub use crate::stream::rtp_peer::PeerMediaRole;
 /// dropped server-side and counted as `stream_client_stats_oversized`, so the
 /// client checks first and logs locally rather than reporting into a void.
 const STREAM_STATS_MAX_BYTES: usize = 2048;
+/// A stream connection pings its signaling socket this often (stage 6): the
+/// pong age shows a silent link within about 830 ms.
+const STREAM_WS_PING_INTERVAL: Duration = Duration::from_millis(128);
 
 fn peer_media_role_is_stream(role: PeerMediaRole) -> bool {
     matches!(
@@ -146,6 +149,18 @@ pub enum SfuEvent {
     Disconnected {
         reason: String,
     },
+    /// Stream viewer: the host disconnected without a leave. The SFU holds
+    /// the session for `hold_ms` for a host rejoin; the viewer keeps its
+    /// connection (mello-sfu 01-SFU.md section 4.1, session hold).
+    HostReconnecting {
+        user_id: String,
+        hold_ms: u64,
+    },
+    /// Stream viewer: a host joined during the hold. Its media comes on the
+    /// viewer's existing connection.
+    HostReconnected {
+        user_id: String,
+    },
 }
 
 type WsStream =
@@ -169,6 +184,13 @@ pub struct SfuConnection {
     /// DataChannel or the video track opened or closed.
     transport_changed: Arc<tokio::sync::Notify>,
     last_signaling_activity_ms: Arc<AtomicU64>,
+    /// When the last WebSocket pong arrived (ms, `now_millis`); 0 before
+    /// the first. Stream connections ping the signaling socket every 128 ms
+    /// (streaming-quality stage 6): mello-sfu answers control-channel pings
+    /// for voice only, and the WebSocket pong is the stream link's liveness.
+    ws_pong_ms: Arc<AtomicU64>,
+    /// When the connection opened (ms, `now_millis`).
+    connected_ms: u64,
     /// Background tasks (signaling listener, stats reporter) spawned for this
     /// connection. Aborted on drop so a stale connection's tasks don't linger
     /// ticking against a dead socket.
@@ -536,12 +558,15 @@ impl SfuConnection {
     }
 
     /// Create a stream PeerConnection with an explicit host/viewer media role.
+    /// `ice_servers` are the `get_ice_servers` URLs, as for `create_peer`;
+    /// empty keeps libmello's default STUN servers.
     ///
     /// # Safety
-    /// `ctx` must be a valid, non-null `MelloContext` pointer.
+    /// `ctx` must be a valid `MelloContext` pointer or null.
     pub unsafe fn create_stream_peer(
         ctx: *mut mello_sys::MelloContext,
         role: StreamPeerRole,
+        ice_servers: &[String],
     ) -> Result<PeerHandle, StreamError> {
         let media_role = role.to_media_role();
         let peer_id_c = CString::new("sfu").expect("CString::new failed");
@@ -558,6 +583,10 @@ impl SfuConnection {
                 role
             )));
         }
+        // The same STUN and TURN servers as the voice peer: a network that
+        // blocks the SFU's UDP port can still relay the stream (spec 10
+        // section 7.6). Stream peers used to get none.
+        unsafe { set_peer_ice_servers(peer, ice_servers) };
         Ok(PeerHandle {
             peer,
             peer_id_c,
@@ -610,6 +639,7 @@ impl SfuConnection {
 
         let (event_tx, event_rx) = mpsc::channel(256);
         let last_signaling_activity_ms = Arc::new(AtomicU64::new(now_millis()));
+        let connected_ms = now_millis();
 
         Ok(Self {
             peer: std::ptr::null_mut(),
@@ -625,6 +655,8 @@ impl SfuConnection {
             ice_state: Arc::new(AtomicI32::new(0)),
             transport_changed: Arc::new(tokio::sync::Notify::new()),
             last_signaling_activity_ms,
+            ws_pong_ms: Arc::new(AtomicU64::new(0)),
+            connected_ms,
             tasks: Mutex::new(Vec::new()),
             media_role: None,
             audio_send: Arc::new(AudioSendTarget::new()),
@@ -776,6 +808,14 @@ impl SfuConnection {
         self.ice_connection_state() == 2
     }
 
+    /// Whether ICE failed or the peer closed: the peer cannot carry media
+    /// again. libjuice 1.7 refuses an ICE restart ("ICE restart is not
+    /// supported"), so a stream rebuilds its connection instead
+    /// (streaming-quality stage 6).
+    pub fn is_ice_dead(&self) -> bool {
+        matches!(self.ice_connection_state(), 4 | 5)
+    }
+
     /// Whether the unreliable/media DataChannel is open.
     pub fn is_media_channel_open(&self) -> bool {
         unsafe { mello_sys::mello_peer_is_unreliable_open(self.peer) }
@@ -820,6 +860,17 @@ impl SfuConnection {
         unsafe { mello_sys::mello_peer_pong_age_ms(self.peer) }
     }
 
+    /// How long the signaling socket has been silent: the age of the last
+    /// WebSocket pong, or the time since the connection opened before the
+    /// first. Only stream connections ping the socket (stage 6).
+    pub fn ws_silent_ms(&self) -> u64 {
+        let now = now_millis();
+        match self.ws_pong_ms.load(Ordering::Acquire) {
+            0 => now.saturating_sub(self.connected_ms),
+            at => now.saturating_sub(at),
+        }
+    }
+
     /// Milliseconds since the last signaling message from SFU.
     pub fn signaling_idle_ms(&self) -> u64 {
         let last = self.last_signaling_activity_ms.load(Ordering::Relaxed);
@@ -836,7 +887,8 @@ impl SfuConnection {
 
     /// Wait for ICE and the role-appropriate transport surfaces to be ready.
     ///
-    /// Voice peers require unreliable media + reliable control DataChannels.
+    /// Voice peers require the reliable control DataChannel (the audio is on
+    /// the RTP track; there is no voice media DataChannel).
     /// Stream peers require reliable control + an open native RTP video track.
     /// Returns an error if ICE fails/closes or a 5-second timeout expires.
     ///
@@ -994,6 +1046,39 @@ impl SfuConnection {
         Ok(())
     }
 
+    /// goog_cc limits of the stream host's video sender, in bits per second
+    /// (streaming-quality stage 4). `start_bps` 0 keeps the default.
+    pub fn set_video_bitrate_limits(
+        &self,
+        min_bps: u64,
+        start_bps: u64,
+        max_bps: u64,
+    ) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "set_video_bitrate_limits")?;
+        let result = unsafe {
+            mello_sys::mello_peer_video_set_bitrate_limits(self.peer, min_bps, start_bps, max_bps)
+        };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_bitrate_limits failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// The encoder allocation of the stream host's video sender, in bits per
+    /// second (streaming-quality stage 4). A raise makes the sender re-probe.
+    pub fn set_video_max_allocated(&self, bps: u64) -> Result<(), StreamError> {
+        self.require_stream_role(PeerMediaRole::StreamHost, "set_video_max_allocated")?;
+        let result = unsafe { mello_sys::mello_peer_video_set_max_allocated(self.peer, bps) };
+        if result != mello_sys::MelloResult_MELLO_OK {
+            return Err(StreamError::SfuSendFailed(
+                "set_video_max_allocated failed".into(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Set the stream-viewer receive target in bits per second.
     pub fn set_video_receive_target(&self, bps: u32) -> Result<(), StreamError> {
         self.require_stream_role(PeerMediaRole::StreamViewer, "set_video_receive_target")?;
@@ -1027,7 +1112,12 @@ impl SfuConnection {
 
     fn transport_ready(&self, role: PeerMediaRole) -> bool {
         match role {
-            PeerMediaRole::Voice => self.is_media_channel_open() && self.is_control_channel_open(),
+            // The audio track opens when DTLS-SRTP is up. The control
+            // channel opens after it, because SCTP runs over the same DTLS
+            // session: an open control channel also means an open audio
+            // track. The SFU has no data path on an "audio" DataChannel
+            // (mello-sfu 01-SFU.md section 5.3).
+            PeerMediaRole::Voice => self.is_control_channel_open(),
             PeerMediaRole::StreamHost | PeerMediaRole::StreamViewer => {
                 self.is_control_channel_open() && self.is_video_track_open()
             }
@@ -1037,8 +1127,7 @@ impl SfuConnection {
     fn transport_timeout_message(&self, role: PeerMediaRole, ice_state: i32) -> String {
         match role {
             PeerMediaRole::Voice => format!(
-                "DataChannel open timeout (5s): media_open={} control_open={} ice_state={}",
-                self.is_media_channel_open(),
+                "DataChannel open timeout (5s): control_open={} ice_state={}",
                 self.is_control_channel_open(),
                 ice_state
             ),
@@ -1476,6 +1565,7 @@ impl SfuConnection {
             ws_tx: Arc::clone(&self.ws_tx),
             activity: Arc::clone(&self.last_signaling_activity_ms),
         };
+        let ws_pong_ms = Arc::clone(&self.ws_pong_ms);
         let listener_task = tokio::spawn(async move {
             let mut open = true;
             for sig in deferred {
@@ -1502,6 +1592,9 @@ impl SfuConnection {
                     Some(result) => result,
                 };
                 match msg_result {
+                    Ok(Message::Pong(_)) => {
+                        ws_pong_ms.store(now_millis(), Ordering::Release);
+                    }
                     Ok(msg) => {
                         if let Ok(sig) = parse_ws_message(&msg) {
                             open = listener.handle(sig).await;
@@ -1523,6 +1616,30 @@ impl SfuConnection {
         });
         if let Ok(mut tasks) = self.tasks.lock() {
             tasks.push(listener_task);
+        }
+
+        // Stream links ping the signaling socket: the SFU answers a
+        // WebSocket ping on any connection (gorilla's default handler), and
+        // control-channel pings only for voice. A send waits at most 100 ms,
+        // so a stuck socket only makes the pong age grow.
+        if peer_media_role_is_stream(media_role) {
+            let ws_tx = Arc::clone(&self.ws_tx);
+            let keepalive = tokio::spawn(async move {
+                let mut tick = tokio::time::interval(STREAM_WS_PING_INTERVAL);
+                tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+                loop {
+                    tick.tick().await;
+                    let ping = Message::Ping(now_millis().to_be_bytes().to_vec());
+                    let _ = tokio::time::timeout(Duration::from_millis(100), async {
+                        let mut tx = ws_tx.lock().await;
+                        tx.send(ping).await
+                    })
+                    .await;
+                }
+            });
+            if let Ok(mut tasks) = self.tasks.lock() {
+                tasks.push(keepalive);
+            }
         }
 
         // Step 13: Return session info
@@ -1819,11 +1936,17 @@ impl SignalListener {
                 // surface them as a disconnect to drive a full
                 // reconnect. Transient validation errors (e.g. a
                 // stray ICE candidate) are logged only.
+                // PEER_SLOW and PEER_STALLED_RTP: the SFU removes this
+                // peer next. A stream treats that as a reconnect, not an end
+                // (streaming-quality stage 6); before, it came only as the
+                // later `ws_closed`.
                 const FATAL: &[&str] = &[
                     "INVALID_TOKEN",
                     "INVALID_ROLE",
                     "SESSION_FULL",
                     "WEBRTC_ERROR",
+                    "PEER_SLOW",
+                    "PEER_STALLED_RTP",
                 ];
                 if FATAL.contains(&code) {
                     let _ = self
@@ -1843,6 +1966,42 @@ impl SignalListener {
                     })
                     .await;
                 return false;
+            }
+            "host_reconnecting" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                let hold_ms = sig
+                    .data
+                    .get("hold_ms")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                log::info!(
+                    "SFU: host {} reconnecting, session held for {} ms",
+                    user_id,
+                    hold_ms
+                );
+                // The connection stays: the session is held, not ended.
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::HostReconnecting { user_id, hold_ms })
+                    .await;
+            }
+            "host_reconnected" => {
+                let user_id = sig
+                    .data
+                    .get("user_id")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("")
+                    .to_string();
+                log::info!("SFU: host {} reconnected", user_id);
+                let _ = self
+                    .event_tx
+                    .send(SfuEvent::HostReconnected { user_id })
+                    .await;
             }
             "left" => {
                 // The SFU acknowledged our `leave` and closes the socket.
@@ -2136,7 +2295,7 @@ unsafe fn set_peer_ice_servers(peer: *mut mello_sys::MelloPeerConnection, urls: 
             ptrs.len() as std::os::raw::c_int,
         )
     };
-    log::info!("SFU voice peer: {} ICE server URL(s) set", urls.len());
+    log::info!("SFU peer: {} ICE server URL(s) set", urls.len());
 }
 
 fn rtp_peer_error_to_stream_error(err: RtpPeerError) -> StreamError {
@@ -2491,6 +2650,43 @@ mod tests {
         );
         // SAFETY: created above, destroyed once.
         unsafe { mello_sys::mello_peer_destroy(handle.peer) };
+    }
+
+    /// Stream peers get the same ICE servers as the voice peer: the TURN
+    /// server gets an Allocate request from a host and from a viewer peer.
+    #[tokio::test]
+    async fn create_stream_peer_gives_the_ice_servers_to_libdatachannel() {
+        for role in [StreamPeerRole::Host, StreamPeerRole::Viewer] {
+            let turn = tokio::net::UdpSocket::bind("127.0.0.1:0")
+                .await
+                .expect("bind a local UDP port");
+            let port = turn.local_addr().expect("socket has an address").port();
+            let ice = [format!(
+                "turn:user%3A1:secret@127.0.0.1:{port}?transport=udp"
+            )];
+            // SAFETY: a null context is allowed.
+            let handle =
+                unsafe { SfuConnection::create_stream_peer(std::ptr::null_mut(), role, &ice) }
+                    .expect("stream peer");
+            // SAFETY: the peer is live until the destroy below.
+            let offer = unsafe { mello_sys::mello_peer_create_offer(handle.peer) };
+            assert!(!offer.is_null(), "offer");
+
+            let mut buf = [0u8; 1500];
+            let (n, _) =
+                tokio::time::timeout(std::time::Duration::from_secs(5), turn.recv_from(&mut buf))
+                    .await
+                    .unwrap_or_else(|_| panic!("{role:?}: the TURN server got no request"))
+                    .expect("recv");
+            assert!(n >= 20, "a STUN message");
+            assert_eq!(
+                &buf[0..2],
+                &[0x00, 0x03],
+                "{role:?}: a TURN Allocate request"
+            );
+            // SAFETY: created above, destroyed once.
+            unsafe { mello_sys::mello_peer_destroy(handle.peer) };
+        }
     }
 
     #[test]

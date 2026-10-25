@@ -5,6 +5,7 @@
 
 #ifdef _WIN32
 #include <d3d11.h>
+#include <wrl/client.h>
 #endif
 
 namespace mello::video {
@@ -21,35 +22,49 @@ enum class DecodeFeedResult {
     FrameReady,
 };
 
+#ifdef _WIN32
+/// One decoded picture in GPU memory. The texture reference keeps it alive
+/// while the present thread converts it, also after the decoder made a new
+/// texture for its slot (a size change).
+struct DecodedPicture {
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
+    /// DXGI_FORMAT_NV12, or DXGI_FORMAT_R8_UNORM with the NV12 layout (luma
+    /// rows, then the interleaved chroma rows from `uv_row`).
+    DXGI_FORMAT format = DXGI_FORMAT_NV12;
+    /// Visible size of the picture.
+    uint32_t width = 0;
+    uint32_t height = 0;
+    /// R8 layout: the row where the chroma starts. 0 for NV12.
+    uint32_t uv_row = 0;
+};
+#endif
+
+/// A hardware or software H.264 decoder that writes each picture into one of
+/// `kOutputSlots` output slots, chosen by the caller for each decode. The
+/// viewer pipeline keeps a ring of the same size: a slot that the present
+/// thread reads is never the slot of the next decode. Streaming-quality
+/// stage 3 (spec 14 section 5).
+///
+/// Threads: initialize, decode, picture and shutdown run on the decode
+/// thread only (after initialize).
 class Decoder {
 public:
+    static constexpr int kOutputSlots = 3;
+
     virtual ~Decoder() = default;
 
     virtual bool initialize(const GraphicsDevice& device, const DecoderConfig& config) = 0;
     virtual void shutdown() = 0;
 
-    virtual DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) = 0;
+    /// Decode one access unit. FrameReady: a picture is in output slot `slot`.
+    virtual DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) = 0;
 
 #ifdef _WIN32
-    virtual ID3D11Texture2D* get_frame() = 0;
-
-    /// Returns the DXGI format of the frame texture (NV12 by default, R8 for zero-copy NVDEC).
-    virtual DXGI_FORMAT frame_format() const { return DXGI_FORMAT_NV12; }
-
-    /// Macroblock-aligned height (UV plane offset in decoded NV12 surface). 0 = same as config height.
-    virtual uint32_t coded_height() const { return 0; }
-
-    /// Optional shared-handle path for native GPU presentation.
-    virtual void* shared_frame_handle() const { return nullptr; }
-    virtual DXGI_FORMAT shared_frame_format() const { return DXGI_FORMAT_UNKNOWN; }
-    virtual uint32_t shared_frame_uv_offset() const { return 0; }
-
-    /// Finalize D3D11 texture updates after CUDA/async decode. Must run on the
-    /// thread that owns the D3D11 immediate context (present/feed thread).
-    virtual void publish_d3d11_frame() {}
+    /// The picture of output slot `slot` after a FrameReady.
+    virtual bool picture(int slot, DecodedPicture& out) const = 0;
 #elif defined(__APPLE__)
-    /// Returns the latest decoded frame as a CVPixelBufferRef (BGRA). Caller must NOT release it.
-    /// Valid until the next call to decode().
+    /// The latest decoded frame as a CVPixelBufferRef (BGRA). The caller
+    /// retains it if it keeps it. Valid until the next call to decode().
     virtual void* get_frame_buffer() = 0;
 #endif
 

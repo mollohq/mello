@@ -9,11 +9,17 @@
 #include <condition_variable>
 #include <memory>
 #include <optional>
+#include <functional>
 #include "mello.h"
+#include "av_sync.hpp"
 #include "rtp_video_sender.hpp"
 #include "rtp_video_receiver_session.hpp"
 #include "voice_slot_map.hpp"
 #include "voice_send_feedback.hpp"
+
+namespace mello::audio {
+class StreamAudioLink;
+}
 
 namespace mello::transport {
 
@@ -65,9 +71,21 @@ public:
     );
     bool video_take_feedback(MelloPeerVideoFeedback* feedback) noexcept;
     bool video_set_pacing_target(uint64_t bps) noexcept;
+    bool video_set_bitrate_limits(uint64_t min_bps, uint64_t start_bps, uint64_t max_bps) noexcept;
+    bool video_set_max_allocated(uint64_t bps) noexcept;
     bool video_set_receive_target(uint32_t bps) noexcept;
     void video_get_stats(MelloRtpVideoStats* stats) const noexcept;
     bool video_is_open() const noexcept;
+
+    // ---- streaming-quality stage 3 ----
+    // The receive timeline of the current viewer session, or null. The viewer
+    // pipeline polls it on its decode thread. A new session (the video track
+    // opened again) has a new timeline: callers ask again when theirs stops.
+    std::shared_ptr<VideoReceiveTimeline> video_receive_timeline() const {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return rtp_video_receiver_ ? rtp_video_receiver_->timeline() : nullptr;
+    }
+    // ---- end stage 3 ----
 
     void send_ping();
     float rtt_ms() const { return rtt_ms_.load(std::memory_order_relaxed); }
@@ -104,6 +122,26 @@ public:
     // MelloSendFeedback, spec 10 section 7.5).
     void set_send_feedback_callback(MelloSendFeedbackCallback cb, void* user_data);
     bool get_send_feedback(MelloSendFeedback* out) const;
+
+    // ---- streaming-quality stage 7 ----
+    // Stream viewer: each game-audio RTP packet (the whole packet) with its
+    // arrival time on the steady clock, in microseconds, on the network
+    // thread, before the audio callbacks. The stream view's playout sets it
+    // (mello_stream_viewer_attach_peer). Empty: none.
+    using StreamAudioSink = std::function<void(const uint8_t* rtp, size_t size, int64_t arrival_us)>;
+    void set_stream_audio_sink(StreamAudioSink sink);
+    // Stream viewer: the A/V sync input. Every receiver session of this peer
+    // (each video session) runs it. Null: none.
+    void set_av_sync(std::shared_ptr<AvSyncInput> input);
+    // Stream host: the context's game-audio link (stream_audio_link.hpp). The
+    // audio send track puts the A/V sync extension on each frame from it and
+    // gives it the receiver reports.
+    void set_stream_audio_link(std::shared_ptr<audio::StreamAudioLink> link);
+    // Packets the A/V sync extension was put on (host) or read from (viewer).
+    uint64_t av_sync_extensions() const {
+        return av_sync_extensions_.load(std::memory_order_relaxed);
+    }
+    // ---- end stage 7 ----
 
 private:
     enum class VideoFeedbackType : uint8_t {
@@ -218,6 +256,9 @@ private:
     std::vector<std::shared_ptr<rtc::Track>> incoming_tracks_;
 
     uint32_t video_ssrc_ = 0;
+    // RFC 4588 retransmission SSRC of the host's video, offered with
+    // video_ssrc_ in an ssrc-group FID.
+    uint32_t video_rtx_ssrc_ = 0;
     std::string video_cname_;
     uint32_t audio_ssrc_ = 0;
     std::string audio_cname_;
@@ -229,7 +270,14 @@ private:
     // Remote SDP advertised the TWCC RTP header extension on stream video.
     bool twcc_supported_ = false;
     // Remote SDP advertised the ULPFEC payload type (127) on stream video.
+    // Only the viewer's receive session uses it; the host sends no FEC.
     bool fec_supported_ = false;
+    // RTX payload type of the remote answer (apt 96), 0 when not negotiated.
+    uint8_t rtx_payload_type_ = 0;
+    // goog_cc limits for the sender (mello_peer_video_set_bitrate_limits).
+    uint64_t min_bitrate_bps_ = 300'000;
+    uint64_t start_bitrate_bps_ = 0;
+    uint64_t max_bitrate_bps_ = 0;
 
     std::string local_sdp_;
     std::mutex sdp_mutex_;
@@ -290,6 +338,26 @@ private:
     std::mutex feedback_mutex_;
     std::deque<QueuedVideoFeedback> feedback_queue_;
     static constexpr size_t kMaxFeedbackQueue = 64;
+
+    // ---- streaming-quality stage 7 ----
+    // The A/V sync extension value of the frame that the audio send path
+    // sends now: send_audio_message sets it, the extension handler of the
+    // send chain reads it on the same call (Track::send runs the chain on
+    // the calling thread). Guarded by av_sync_send_mutex_, a leaf.
+    struct PendingAvSync {
+        uint32_t rtp_timestamp = 0;
+        uint32_t video_rtp_timestamp = 0;
+        bool valid = false;
+    };
+    std::optional<uint32_t> take_pending_av_sync(uint32_t rtp_timestamp);
+    std::mutex av_sync_send_mutex_;
+    PendingAvSync pending_av_sync_;
+    // Guarded by mutex_.
+    StreamAudioSink stream_audio_sink_;
+    std::shared_ptr<AvSyncInput> av_sync_input_;
+    std::shared_ptr<audio::StreamAudioLink> stream_audio_link_;
+    std::atomic<uint64_t> av_sync_extensions_{0};
+    // ---- end stage 7 ----
 };
 
 } // namespace mello::transport

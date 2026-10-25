@@ -9,7 +9,6 @@
 #ifdef _WIN32
 #include "decoder_nvdec.hpp"
 #include "decoder_amf.hpp"
-#include "decoder_d3d11va.hpp"
 #include "decoder_openh264.hpp"
 #elif defined(__APPLE__)
 #include "decoder_videotoolbox.hpp"
@@ -65,15 +64,10 @@ std::unique_ptr<Decoder> create_best_decoder(
         MELLO_LOG_DEBUG(TAG, "Probing AMF decode... not available (AMD driver not found)");
     }
 
-    // 3. D3D11VA (Intel + generic HW)
-    if (D3d11vaDecoder::is_available(device.d3d11())) {
-        auto dec = std::make_unique<D3d11vaDecoder>();
-        if (dec->initialize(device, config)) return dec;
-    } else {
-        MELLO_LOG_DEBUG(TAG, "Probing D3D11VA... not available");
-    }
-
-    // 4. Software fallback — H.264 only. AV1 is never negotiated
+    // 3. Software fallback. An Intel GPU lands here: the D3D11VA decoder was
+    // a stub that decoded nothing (no DXVA picture parameters) and was
+    // removed in streaming-quality stage 3, so Intel viewers get OpenH264
+    // until a full D3D11VA implementation exists. H.264 only: AV1 is never negotiated
     // (signaling requires H264; VideoCodec::AV1 is never assigned), so no
     // AV1 software decoder ships. dav1d was removed for installed size.
     if (config.codec == VideoCodec::AV1) {
@@ -111,7 +105,6 @@ std::vector<const char*> enumerate_decoders(const GraphicsDevice& device) {
 #ifdef _WIN32
     if (NvdecDecoder::is_available())                    result.push_back("NVDEC");
     if (AmfDecoder::is_available())                      result.push_back("AMF-Decode");
-    if (D3d11vaDecoder::is_available(device.d3d11()))    result.push_back("D3D11VA");
     if (OpenH264Decoder::is_available())                 result.push_back("OpenH264");
 #elif defined(__APPLE__)
     (void)device;

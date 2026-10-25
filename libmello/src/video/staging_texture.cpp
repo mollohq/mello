@@ -11,11 +11,18 @@ namespace mello::video {
 
 static constexpr const char* TAG = "video/staging";
 
+// How long the converter waits for the presenter to give the shared
+// texture back. The presenter holds it only for one CopyResource.
+static constexpr DWORD kKeyedMutexTimeoutMs = 100;
+// Source textures with cached views. The ring has 3 slots; a size change
+// adds 3 more for a while.
+static constexpr size_t kMaxCachedSources = 8;
+
 // HLSL compute shader, two entry points with one conversion:
 // - CSMain reads an NV12-layout R8 texture (NVDEC): Y rows, then UV rows from
 //   row uv_y.
-// - CSMainNv12 reads a DXGI_FORMAT_NV12 texture (AMF, D3D11VA, OpenH264)
-//   through two views: R8 on the luma plane, R8G8 on the chroma plane.
+// - CSMainNv12 reads a DXGI_FORMAT_NV12 texture (AMF, OpenH264) through two
+//   views: R8 on the luma plane, R8G8 on the chroma plane.
 static const char* CS_SOURCE = R"(
 Texture2D<float>  nv12   : register(t0);
 Texture2D<float>  luma   : register(t1);
@@ -25,7 +32,7 @@ RWTexture2D<float4> rgba : register(u0);
 cbuffer CB : register(b0) {
     uint vid_w;
     uint vid_h;
-    uint uv_y;  // UV plane row offset (coded_height, may differ from vid_h due to macroblock alignment)
+    uint uv_y;  // UV plane row offset of the R8 layout
 };
 
 float4 yuv_to_rgba(float y_raw, float u_raw, float v_raw) {
@@ -71,405 +78,271 @@ typedef HRESULT(WINAPI* D3DCompileFunc)(
     const char*, const char*, UINT, UINT,
     ID3DBlob**, ID3DBlob**);
 
-bool StagingTexture::init_gpu_converter() {
+struct ConvertConstants {
+    uint32_t w, h, uv_y, pad;
+};
+
+bool StagingTexture::init_shaders() {
     HMODULE dll = LoadLibraryA("d3dcompiler_47.dll");
     if (!dll) {
-        MELLO_LOG_WARN(TAG, "d3dcompiler_47.dll not found, using CPU fallback");
+        MELLO_LOG_ERROR(TAG, "d3dcompiler_47.dll not found: the viewer cannot convert frames");
         return false;
     }
-
     auto compile_fn = reinterpret_cast<D3DCompileFunc>(GetProcAddress(dll, "D3DCompile"));
     if (!compile_fn) {
         FreeLibrary(dll);
         return false;
     }
 
-    ID3DBlob* blob_raw = nullptr;
-    ID3DBlob* errors_raw = nullptr;
-    const char* entry = format_ == DXGI_FORMAT_NV12 ? "CSMainNv12" : "CSMain";
-    HRESULT hr = compile_fn(
-        CS_SOURCE, strlen(CS_SOURCE), "nv12_to_rgba.hlsl", nullptr, nullptr,
-        entry, "cs_5_0", 0, 0, &blob_raw, &errors_raw);
-
-    if (FAILED(hr)) {
-        if (errors_raw) {
-            MELLO_LOG_ERROR(TAG, "Shader compile error: %s", (char*)errors_raw->GetBufferPointer());
-            errors_raw->Release();
-        }
-        if (blob_raw) blob_raw->Release();
-        FreeLibrary(dll);
-        return false;
-    }
-
-    hr = device_->CreateComputeShader(blob_raw->GetBufferPointer(), blob_raw->GetBufferSize(), nullptr, &cs_);
-
-    // Release blobs before unloading the compiler DLL (vtable lives in that DLL)
-    blob_raw->Release();
-    if (errors_raw) errors_raw->Release();
-    FreeLibrary(dll);
-
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "CreateComputeShader failed: 0x%08X", hr);
-        return false;
-    }
-
-    // RGBA output texture (GPU, UAV-bindable)
-    D3D11_TEXTURE2D_DESC rgba_desc{};
-    rgba_desc.Width  = width_;
-    rgba_desc.Height = video_height_;
-    rgba_desc.MipLevels = 1;
-    rgba_desc.ArraySize = 1;
-    rgba_desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
-    rgba_desc.SampleDesc.Count = 1;
-    rgba_desc.Usage = D3D11_USAGE_DEFAULT;
-    rgba_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
-    shared_rgba_handle_ = nullptr;
-
-    // Try to create a shared UAV-capable RGBA target so compute can write directly
-    // into the texture the presenter opens (skip one CopyResource per frame).
-    D3D11_TEXTURE2D_DESC shared_desc = rgba_desc;
-    shared_desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS | D3D11_BIND_SHADER_RESOURCE;
-    shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
-    hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_rgba_tex_);
-    if (SUCCEEDED(hr)) {
-        Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_res;
-        hr = shared_rgba_tex_.As(&dxgi_res);
+    auto build = [&](const char* entry, Microsoft::WRL::ComPtr<ID3D11ComputeShader>& out) {
+        ID3DBlob* blob = nullptr;
+        ID3DBlob* errors = nullptr;
+        HRESULT hr = compile_fn(CS_SOURCE, strlen(CS_SOURCE), "nv12_to_rgba.hlsl", nullptr, nullptr,
+                                entry, "cs_5_0", 0, 0, &blob, &errors);
         if (FAILED(hr)) {
-            MELLO_LOG_WARN(TAG, "Query IDXGIResource1 on shared texture failed: 0x%08X", hr);
-            shared_rgba_tex_.Reset();
-        } else {
-            HANDLE h = nullptr;
-            hr = dxgi_res->CreateSharedHandle(
-                nullptr,
-                DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
-                nullptr,
-                &h
-            );
-            if (FAILED(hr) || !h) {
-                MELLO_LOG_WARN(TAG, "CreateSharedHandle failed: 0x%08X", hr);
-                shared_rgba_tex_.Reset();
-            } else {
-                shared_rgba_handle_ = reinterpret_cast<void*>(h);
-                rgba_tex_ = shared_rgba_tex_;
-                MELLO_LOG_INFO(TAG, "Shared RGBA texture initialized for in-scene zero-copy renderer");
+            if (errors) {
+                MELLO_LOG_ERROR(TAG, "Shader compile error: %s", (char*)errors->GetBufferPointer());
+                errors->Release();
             }
-        }
-    } else {
-        MELLO_LOG_WARN(TAG, "CreateTexture2D (shared RGBA UAV) failed: 0x%08X", hr);
-    }
-
-    if (!rgba_tex_) {
-        hr = device_->CreateTexture2D(&rgba_desc, nullptr, &rgba_tex_);
-        if (FAILED(hr)) {
-            MELLO_LOG_ERROR(TAG, "CreateTexture2D (RGBA) failed: 0x%08X", hr);
+            if (blob) blob->Release();
             return false;
         }
-    }
+        hr = device_->CreateComputeShader(blob->GetBufferPointer(), blob->GetBufferSize(), nullptr, &out);
+        // Release the blobs before the compiler DLL goes (their vtable lives there).
+        blob->Release();
+        if (errors) errors->Release();
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "CreateComputeShader failed: 0x%08X", hr);
+            return false;
+        }
+        return true;
+    };
+    const bool ok = build("CSMain", cs_r8_) && build("CSMainNv12", cs_nv12_);
+    FreeLibrary(dll);
+    if (!ok) return false;
 
-    hr = device_->CreateUnorderedAccessView(rgba_tex_.Get(), nullptr, &rgba_uav_);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "CreateUAV failed: 0x%08X", hr);
-        return false;
-    }
-
-    // Constant buffer (video_width, video_height, uv_y_offset)
-    struct { uint32_t w, h, uv_y, pad; } cb_data = { width_, video_height_, uv_y_offset_, 0 };
     D3D11_BUFFER_DESC cb_desc{};
-    cb_desc.ByteWidth = sizeof(cb_data);
-    cb_desc.Usage = D3D11_USAGE_IMMUTABLE;
+    cb_desc.ByteWidth = sizeof(ConvertConstants);
+    cb_desc.Usage = D3D11_USAGE_DEFAULT;
     cb_desc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
-    D3D11_SUBRESOURCE_DATA cb_init{ &cb_data, 0, 0 };
-
-    hr = device_->CreateBuffer(&cb_desc, &cb_init, &cb_);
+    HRESULT hr = device_->CreateBuffer(&cb_desc, nullptr, &cb_);
     if (FAILED(hr)) {
         MELLO_LOG_ERROR(TAG, "CreateBuffer (CB) failed: 0x%08X", hr);
         return false;
     }
-
     return true;
 }
 
-bool StagingTexture::initialize(const GraphicsDevice& device, uint32_t width, uint32_t video_height,
-                                DXGI_FORMAT format, uint32_t uv_y_offset, bool enable_cpu_readback) {
+bool StagingTexture::initialize(const GraphicsDevice& device, bool enable_cpu_readback) {
     device_ = device.d3d11();
     device_->GetImmediateContext(&context_);
-    width_        = width;
-    video_height_ = video_height;
-    uv_y_offset_  = uv_y_offset ? uv_y_offset : video_height;
-    format_       = format;
     cpu_readback_enabled_ = enable_cpu_readback;
-
-    // GPU compute shader path for both decoder layouts. It also creates the
-    // shared RGBA texture, which is the only native present path for a
-    // decoder that has no shared handle of its own: without it, a viewer with
-    // a non-NVIDIA GPU gets no picture.
-    if (format == DXGI_FORMAT_R8_UNORM || format == DXGI_FORMAT_NV12) {
-        gpu_convert_ = init_gpu_converter();
+    if (!init_shaders()) {
+        return false;
     }
-
-    DXGI_FORMAT staging_fmt;
-    uint32_t    staging_h;
-
-    if (gpu_convert_) {
-        // Staging is RGBA — compute shader produces RGBA on GPU
-        staging_fmt = DXGI_FORMAT_R8G8B8A8_UNORM;
-        staging_h   = video_height;
-    } else if (format == DXGI_FORMAT_R8_UNORM) {
-        staging_fmt = DXGI_FORMAT_R8_UNORM;
-        staging_h   = video_height + video_height / 2;
-    } else {
-        staging_fmt = DXGI_FORMAT_NV12;
-        staging_h   = video_height;
-    }
-
-    if (cpu_readback_enabled_) {
-        D3D11_TEXTURE2D_DESC desc{};
-        desc.Width  = width;
-        desc.Height = staging_h;
-        desc.MipLevels = 1;
-        desc.ArraySize = 1;
-        desc.Format = staging_fmt;
-        desc.SampleDesc.Count = 1;
-        desc.Usage = D3D11_USAGE_STAGING;
-        desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-
-        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &staging_);
-        if (FAILED(hr)) {
-            MELLO_LOG_ERROR(TAG, "Failed to create staging texture: hr=0x%08X", hr);
-            return false;
-        }
-    } else {
-        staging_.Reset();
-    }
-
-    const char* path_str = gpu_convert_ ? "GPU compute" : "CPU";
-    const char* fmt_str  = (staging_fmt == DXGI_FORMAT_R8G8B8A8_UNORM) ? "RGBA"
-                         : (staging_fmt == DXGI_FORMAT_R8_UNORM) ? "R8" : "NV12";
-    MELLO_LOG_INFO(TAG, "Staging texture initialized: %ux%u %s (video %ux%u, uv_offset=%u, convert=%s, cpu_readback=%s)",
-        width, staging_h, fmt_str, width, video_height, uv_y_offset_, path_str,
-        cpu_readback_enabled_ ? "on" : "off");
+    MELLO_LOG_INFO(TAG, "Viewer converter ready (GPU compute, keyed-mutex shared RGBA, cpu_readback=%s)",
+                   cpu_readback_enabled_ ? "on" : "off");
     return true;
 }
 
-void StagingTexture::debug_trace_source(ID3D11Texture2D* source) {
-    // Read back raw R8 source to verify NV12 values and trace the conversion
-    D3D11_TEXTURE2D_DESC src_desc{};
-    source->GetDesc(&src_desc);
-
-    D3D11_TEXTURE2D_DESC stg_desc = src_desc;
-    stg_desc.Usage = D3D11_USAGE_STAGING;
-    stg_desc.BindFlags = 0;
-    stg_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
-
-    Microsoft::WRL::ComPtr<ID3D11Texture2D> dbg_staging;
-    if (FAILED(device_->CreateTexture2D(&stg_desc, nullptr, &dbg_staging))) return;
-
-    context_->CopyResource(dbg_staging.Get(), source);
-
-    D3D11_MAPPED_SUBRESOURCE m{};
-    if (FAILED(context_->Map(dbg_staging.Get(), 0, D3D11_MAP_READ, 0, &m))) return;
-
-    const uint8_t* data = static_cast<const uint8_t*>(m.pData);
-    uint32_t cx = width_ / 2;
-    uint32_t cy = video_height_ / 2;
-
-    // Sample a few pixels from Y and UV planes
-    uint8_t y_tl = data[0];
-    uint8_t y_c  = data[cy * m.RowPitch + cx];
-    uint8_t y_br = data[(video_height_ - 1) * m.RowPitch + (width_ - 1)];
-
-    const uint8_t* uv_base = data + m.RowPitch * uv_y_offset_;
-    uint8_t u_c = uv_base[(cy / 2) * m.RowPitch + (cx & ~1u)];
-    uint8_t v_c = uv_base[(cy / 2) * m.RowPitch + (cx & ~1u) + 1];
-
-    // Manual BT.709 conversion
-    int c = y_c - 16;
-    int d = u_c - 128;
-    int e = v_c - 128;
-    int exp_r = std::clamp((298 * c + 459 * e + 128) >> 8, 0, 255);
-    int exp_g = std::clamp((298 * c -  55 * d - 136 * e + 128) >> 8, 0, 255);
-    int exp_b = std::clamp((298 * c + 541 * d + 128) >> 8, 0, 255);
-
-    MELLO_LOG_DEBUG(TAG, "TRACE src R8: pitch=%u Y[0,0]=%u Y[center]=%u Y[br]=%u UV[center]=(%u,%u) "
-        "-> expected RGBA=(%d,%d,%d,255)",
-        m.RowPitch, y_tl, y_c, y_br, u_c, v_c, exp_r, exp_g, exp_b);
-
-    context_->Unmap(dbg_staging.Get(), 0);
-}
-
-void StagingTexture::copy_from(ID3D11Texture2D* source, bool copy_to_cpu_staging) {
-    if (gpu_convert_) {
-        const bool nv12_source = format_ == DXGI_FORMAT_NV12;
-        if (read_count_ < 3 && !nv12_source) {
-            debug_trace_source(source);
-        }
-
-        // Create/cache the source views: one R8 view for the R8 layout, or an
-        // R8 view of the luma plane and an R8G8 view of the chroma plane.
-        if (source != src_tex_cached_) {
-            src_srv_.Reset();
-            chroma_srv_.Reset();
-            D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
-            srv_desc.Format = DXGI_FORMAT_R8_UNORM;
-            srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
-            srv_desc.Texture2D.MipLevels = 1;
-            HRESULT hr = device_->CreateShaderResourceView(source, &srv_desc, &src_srv_);
-            if (SUCCEEDED(hr) && nv12_source) {
-                srv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
-                hr = device_->CreateShaderResourceView(source, &srv_desc, &chroma_srv_);
-            }
-            if (FAILED(hr)) {
-                MELLO_LOG_ERROR(TAG, "Source view for the GPU convert failed: 0x%08X", hr);
-                src_srv_.Reset();
-                chroma_srv_.Reset();
-            }
-            src_tex_cached_ = source;
-        }
-        if (!src_srv_) return;
-
-        // Dispatch compute shader: decoded frame → RGBA
-        ID3D11UnorderedAccessView* uavs[] = { rgba_uav_.Get() };
-        ID3D11Buffer* cbs[] = { cb_.Get() };
-
-        context_->CSSetShader(cs_.Get(), nullptr, 0);
-        if (nv12_source) {
-            ID3D11ShaderResourceView* srvs[] = { src_srv_.Get(), chroma_srv_.Get() };
-            context_->CSSetShaderResources(1, 2, srvs);
-        } else {
-            ID3D11ShaderResourceView* srvs[] = { src_srv_.Get() };
-            context_->CSSetShaderResources(0, 1, srvs);
-        }
-        context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
-        context_->CSSetConstantBuffers(0, 1, cbs);
-
-        uint32_t gx = (width_ + 15) / 16;
-        uint32_t gy = (video_height_ + 15) / 16;
-        context_->Dispatch(gx, gy, 1);
-
-        // Unbind
-        ID3D11ShaderResourceView* null_srv[] = { nullptr, nullptr, nullptr };
-        ID3D11UnorderedAccessView* null_uav[] = { nullptr };
-        context_->CSSetShaderResources(0, 3, null_srv);
-        context_->CSSetUnorderedAccessViews(0, 1, null_uav, nullptr);
-
-        // Mirror RGBA output into shared GPU texture for native presenter when
-        // compute target is not directly shared.
-        if (shared_rgba_tex_ && shared_rgba_tex_.Get() != rgba_tex_.Get()) {
-            context_->CopyResource(shared_rgba_tex_.Get(), rgba_tex_.Get());
-        }
-
-        // Copy RGBA result to staging for CPU readback path.
-        if (copy_to_cpu_staging && staging_) {
-            context_->CopyResource(staging_.Get(), rgba_tex_.Get());
-        }
-    } else {
-        if (copy_to_cpu_staging && staging_) {
-            context_->CopyResource(staging_.Get(), source);
-        }
-    }
-}
-
-void StagingTexture::read_rgba(uint8_t* out) {
-    if (!staging_) {
-        MELLO_LOG_ERROR(TAG, "read_rgba requested but CPU staging texture is not initialized");
-        return;
-    }
-    auto t0 = std::chrono::steady_clock::now();
-
-    D3D11_MAPPED_SUBRESOURCE mapped{};
-    HRESULT hr = context_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
-    if (FAILED(hr)) {
-        MELLO_LOG_ERROR(TAG, "Map failed: hr=0x%08X", hr);
-        return;
-    }
-
-    auto t1 = std::chrono::steady_clock::now();
-    auto stall_ms = std::chrono::duration<float, std::milli>(t1 - t0).count();
-    if (stall_ms > 50.0f) {
-        MELLO_LOG_WARN(TAG, "Map() stall %.1fms -- possible GPU pipeline pressure", stall_ms);
-    }
-
-    if (gpu_convert_) {
-        // Staging is RGBA — just memcpy rows (account for pitch != width*4)
-        const uint8_t* src = static_cast<const uint8_t*>(mapped.pData);
-        uint32_t row_bytes = width_ * 4;
-
-        if (read_count_ < 3) {
-            uint32_t cx = width_ / 2;
-            uint32_t cy = video_height_ / 2;
-            const uint8_t* center = src + cy * mapped.RowPitch + cx * 4;
-            MELLO_LOG_DEBUG(TAG, "read_rgba[%llu]: pitch=%u RGBA[center]=(%u,%u,%u,%u)",
-                read_count_, mapped.RowPitch, center[0], center[1], center[2], center[3]);
-        }
-
-        if (mapped.RowPitch == row_bytes) {
-            memcpy(out, src, row_bytes * video_height_);
-        } else {
-            for (uint32_t row = 0; row < video_height_; ++row) {
-                memcpy(out + row * row_bytes, src + row * mapped.RowPitch, row_bytes);
-            }
-        }
-    } else {
-        // CPU NV12→RGBA fallback
-        const uint8_t* y_plane  = static_cast<const uint8_t*>(mapped.pData);
-        const uint8_t* uv_plane = y_plane + mapped.RowPitch * uv_y_offset_;
-
-        if (read_count_ < 3) {
-            uint32_t cx = width_ / 2;
-            uint32_t cy = video_height_ / 2;
-            uint8_t y_tl = y_plane[0];
-            uint8_t y_c  = y_plane[cy * mapped.RowPitch + cx];
-            uint8_t u_c  = uv_plane[(cy / 2) * mapped.RowPitch + (cx & ~1u)];
-            uint8_t v_c  = uv_plane[(cy / 2) * mapped.RowPitch + (cx & ~1u) + 1];
-            MELLO_LOG_DEBUG(TAG, "read_rgba[%llu]: pitch=%u Y[0,0]=%u Y[center]=%u UV[center]=(%u,%u)",
-                read_count_, mapped.RowPitch, y_tl, y_c, u_c, v_c);
-        }
-
-        for (uint32_t row = 0; row < video_height_; ++row) {
-            const uint8_t* y_row  = y_plane + row * mapped.RowPitch;
-            const uint8_t* uv_row = uv_plane + (row / 2) * mapped.RowPitch;
-            uint8_t* dst = out + row * width_ * 4;
-
-            for (uint32_t col = 0; col < width_; ++col) {
-                uint8_t y = y_row[col];
-                uint8_t u = uv_row[(col & ~1u)];
-                uint8_t v = uv_row[(col & ~1u) + 1];
-
-                // BT.709 YUV -> RGB (studio-swing Y 16-235, UV 16-240)
-                int c = y - 16;
-                int d = u - 128;
-                int e = v - 128;
-
-                int r = (298 * c + 459 * e + 128) >> 8;
-                int g = (298 * c -  55 * d - 136 * e + 128) >> 8;
-                int b = (298 * c + 541 * d + 128) >> 8;
-
-                dst[col * 4 + 0] = static_cast<uint8_t>(std::clamp(r, 0, 255));
-                dst[col * 4 + 1] = static_cast<uint8_t>(std::clamp(g, 0, 255));
-                dst[col * 4 + 2] = static_cast<uint8_t>(std::clamp(b, 0, 255));
-                dst[col * 4 + 3] = 255;
-            }
-        }
-    }
-
-    read_count_++;
-    context_->Unmap(staging_.Get(), 0);
-}
-
-void StagingTexture::shutdown() {
+void StagingTexture::release_targets() {
     if (shared_rgba_handle_) {
         ::CloseHandle(reinterpret_cast<HANDLE>(shared_rgba_handle_));
     }
     shared_rgba_handle_ = nullptr;
-    shared_rgba_tex_.Reset();
-    src_srv_.Reset();
-    chroma_srv_.Reset();
-    src_tex_cached_ = nullptr;
-    cb_.Reset();
+    shared_mutex_.Reset();
+    shared_tex_.Reset();
     rgba_uav_.Reset();
     rgba_tex_.Reset();
-    cs_.Reset();
     staging_.Reset();
+    width_ = 0;
+    height_ = 0;
+}
+
+bool StagingTexture::ensure_targets(uint32_t width, uint32_t height) {
+    if (rgba_tex_ && width == width_ && height == height_) return true;
+    release_targets();
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = width;
+    desc.Height = height;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_R8G8B8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_UNORDERED_ACCESS;
+    HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &rgba_tex_);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "CreateTexture2D (RGBA %ux%u) failed: 0x%08X", width, height, hr);
+        release_targets();
+        return false;
+    }
+    hr = device_->CreateUnorderedAccessView(rgba_tex_.Get(), nullptr, &rgba_uav_);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "CreateUnorderedAccessView failed: 0x%08X", hr);
+        release_targets();
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC shared_desc = desc;
+    shared_desc.BindFlags = D3D11_BIND_SHADER_RESOURCE;
+    shared_desc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX | D3D11_RESOURCE_MISC_SHARED_NTHANDLE;
+    hr = device_->CreateTexture2D(&shared_desc, nullptr, &shared_tex_);
+    Microsoft::WRL::ComPtr<IDXGIResource1> dxgi_res;
+    HANDLE handle = nullptr;
+    if (SUCCEEDED(hr)) hr = shared_tex_.As(&shared_mutex_);
+    if (SUCCEEDED(hr)) hr = shared_tex_.As(&dxgi_res);
+    if (SUCCEEDED(hr)) {
+        hr = dxgi_res->CreateSharedHandle(nullptr, DXGI_SHARED_RESOURCE_READ | DXGI_SHARED_RESOURCE_WRITE,
+                                          nullptr, &handle);
+    }
+    if (FAILED(hr) || !handle) {
+        MELLO_LOG_ERROR(TAG, "Shared RGBA texture (keyed mutex) failed: 0x%08X", hr);
+        release_targets();
+        return false;
+    }
+    shared_rgba_handle_ = handle;
+    ++shared_generation_;
+
+    if (cpu_readback_enabled_) {
+        D3D11_TEXTURE2D_DESC staging_desc = desc;
+        staging_desc.BindFlags = 0;
+        staging_desc.Usage = D3D11_USAGE_STAGING;
+        staging_desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+        hr = device_->CreateTexture2D(&staging_desc, nullptr, &staging_);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "Staging texture failed: 0x%08X", hr);
+            release_targets();
+            return false;
+        }
+    }
+
+    width_ = width;
+    height_ = height;
+    MELLO_LOG_INFO(TAG, "Viewer frame targets %ux%u (shared texture #%u)", width, height, shared_generation_);
+    return true;
+}
+
+StagingTexture::SourceViews* StagingTexture::views_for(const DecodedPicture& picture) {
+    ++use_counter_;
+    for (SourceViews& v : views_) {
+        if (v.texture.Get() == picture.texture.Get()) {
+            v.last_use = use_counter_;
+            return &v;
+        }
+    }
+    SourceViews fresh;
+    fresh.texture = picture.texture;
+    fresh.last_use = use_counter_;
+    D3D11_SHADER_RESOURCE_VIEW_DESC srv_desc{};
+    srv_desc.Format = DXGI_FORMAT_R8_UNORM;
+    srv_desc.ViewDimension = D3D11_SRV_DIMENSION_TEXTURE2D;
+    srv_desc.Texture2D.MipLevels = 1;
+    HRESULT hr = device_->CreateShaderResourceView(picture.texture.Get(), &srv_desc, &fresh.first);
+    if (SUCCEEDED(hr) && picture.format == DXGI_FORMAT_NV12) {
+        srv_desc.Format = DXGI_FORMAT_R8G8_UNORM;
+        hr = device_->CreateShaderResourceView(picture.texture.Get(), &srv_desc, &fresh.chroma);
+    }
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "Source view for the GPU convert failed: 0x%08X", hr);
+        return nullptr;
+    }
+    if (views_.size() >= kMaxCachedSources) {
+        auto oldest = std::min_element(views_.begin(), views_.end(),
+                                       [](const SourceViews& a, const SourceViews& b) {
+                                           return a.last_use < b.last_use;
+                                       });
+        *oldest = std::move(fresh);
+        return &*oldest;
+    }
+    views_.push_back(std::move(fresh));
+    return &views_.back();
+}
+
+bool StagingTexture::convert(const DecodedPicture& picture, bool copy_to_cpu) {
+    if (!cs_r8_ || !picture.texture || picture.width == 0 || picture.height == 0) return false;
+    if (!ensure_targets(picture.width, picture.height)) return false;
+    SourceViews* views = views_for(picture);
+    if (!views) return false;
+
+    const bool nv12 = picture.format == DXGI_FORMAT_NV12;
+    const ConvertConstants constants{picture.width, picture.height,
+                                     nv12 ? 0u : (picture.uv_row ? picture.uv_row : picture.height), 0};
+    context_->UpdateSubresource(cb_.Get(), 0, nullptr, &constants, 0, 0);
+
+    ID3D11UnorderedAccessView* uavs[] = {rgba_uav_.Get()};
+    ID3D11Buffer* cbs[] = {cb_.Get()};
+    if (nv12) {
+        context_->CSSetShader(cs_nv12_.Get(), nullptr, 0);
+        ID3D11ShaderResourceView* srvs[] = {views->first.Get(), views->chroma.Get()};
+        context_->CSSetShaderResources(1, 2, srvs);
+    } else {
+        context_->CSSetShader(cs_r8_.Get(), nullptr, 0);
+        ID3D11ShaderResourceView* srvs[] = {views->first.Get()};
+        context_->CSSetShaderResources(0, 1, srvs);
+    }
+    context_->CSSetUnorderedAccessViews(0, 1, uavs, nullptr);
+    context_->CSSetConstantBuffers(0, 1, cbs);
+    context_->Dispatch((picture.width + 15) / 16, (picture.height + 15) / 16, 1);
+
+    ID3D11ShaderResourceView* null_srv[] = {nullptr, nullptr, nullptr};
+    ID3D11UnorderedAccessView* null_uav[] = {nullptr};
+    context_->CSSetShaderResources(0, 3, null_srv);
+    context_->CSSetUnorderedAccessViews(0, 1, null_uav, nullptr);
+
+    // Into the shared texture under its keyed mutex: the presenter reads it
+    // under the same key, so it never sees half a frame.
+    const HRESULT acquired = shared_mutex_->AcquireSync(0, kKeyedMutexTimeoutMs);
+    if (acquired != S_OK) {
+        MELLO_LOG_WARN(TAG, "Shared frame busy (keyed mutex 0x%08X): frame skipped", acquired);
+        return false;
+    }
+    context_->CopyResource(shared_tex_.Get(), rgba_tex_.Get());
+    shared_mutex_->ReleaseSync(0);
+
+    if (copy_to_cpu && staging_) {
+        context_->CopyResource(staging_.Get(), rgba_tex_.Get());
+    }
+    return true;
+}
+
+bool StagingTexture::read_rgba(uint8_t* out) {
+    if (!staging_ || !out) {
+        return false;
+    }
+    const auto t0 = std::chrono::steady_clock::now();
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    HRESULT hr = context_->Map(staging_.Get(), 0, D3D11_MAP_READ, 0, &mapped);
+    if (FAILED(hr)) {
+        MELLO_LOG_ERROR(TAG, "Map failed: hr=0x%08X", hr);
+        return false;
+    }
+    const float stall_ms =
+        std::chrono::duration<float, std::milli>(std::chrono::steady_clock::now() - t0).count();
+    if (stall_ms > 50.0f) {
+        MELLO_LOG_WARN(TAG, "Map() stall %.1fms -- possible GPU pipeline pressure", stall_ms);
+    }
+    const uint8_t* src = static_cast<const uint8_t*>(mapped.pData);
+    const uint32_t row_bytes = width_ * 4;
+    if (mapped.RowPitch == row_bytes) {
+        memcpy(out, src, static_cast<size_t>(row_bytes) * height_);
+    } else {
+        for (uint32_t row = 0; row < height_; ++row) {
+            memcpy(out + static_cast<size_t>(row) * row_bytes, src + static_cast<size_t>(row) * mapped.RowPitch,
+                   row_bytes);
+        }
+    }
+    context_->Unmap(staging_.Get(), 0);
+    return true;
+}
+
+void StagingTexture::shutdown() {
+    release_targets();
+    views_.clear();
+    cb_.Reset();
+    cs_r8_.Reset();
+    cs_nv12_.Reset();
     context_.Reset();
     device_.Reset();
 }

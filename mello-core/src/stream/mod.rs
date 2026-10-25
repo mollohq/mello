@@ -1,9 +1,10 @@
 pub mod config;
 pub mod congestion;
+pub mod controller;
+pub mod cursor;
 pub mod error;
 pub mod host;
 pub mod input;
-pub mod ladder;
 pub mod manager;
 pub mod members;
 pub mod pacer;
@@ -12,6 +13,8 @@ pub mod rtp_peer;
 pub mod sink;
 pub mod sink_sfu;
 pub mod teardown;
+// stage 9 (streaming-quality): the watched stream's format label
+pub mod viewer_format;
 
 pub use config::{Codec, QualityPreset, StreamConfig};
 pub use error::StreamError;

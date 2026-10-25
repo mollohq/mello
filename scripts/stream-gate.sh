@@ -122,6 +122,27 @@ if [ -z "${MELLO_SFU_DIR:-}" ]; then
     export MELLO_SFU_DIR="$ROOT/../mello-sfu"
 fi
 
+# Stage 7: the game audio's MOS (PESQ wideband on the clip's speech) uses the
+# voice gate's pinned scorer in target/voice-gate/pyenv (scripts/voice-gate.sh
+# makes it). Without it the gate reports audio_mos as missing, and the mobile
+# MOS gate fails. Set VOICE_GATE_PYTHON to use another interpreter.
+if [ -z "${VOICE_GATE_PYTHON:-}" ]; then
+    VENV="$ROOT/target/voice-gate/pyenv"
+    for cand in "$VENV/Scripts/python.exe" "$VENV/bin/python"; do
+        if [ -x "$cand" ]; then
+            if ! "$cand" -c 'import pesq' >/dev/null 2>&1; then
+                "$cand" -m pip install --quiet --disable-pip-version-check \
+                    -r scripts/voice-gate-requirements.txt >&2 || true
+            fi
+            export VOICE_GATE_PYTHON="$cand"
+            break
+        fi
+    done
+    if [ -z "${VOICE_GATE_PYTHON:-}" ]; then
+        printf 'stream-gate: WARNING: no voice gate scorer venv (run scripts/voice-gate.sh once); no audio MOS\n' >&2
+    fi
+fi
+
 # A release build: the gate measures the timing of the host manager, the
 # pacer and the viewer tick, which ship optimized.
 cargo build --release --quiet -p stream-gate

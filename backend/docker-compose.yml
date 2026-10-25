@@ -162,7 +162,10 @@ services:
       SFU_ADDR: ":8443"
       SFU_ADMIN_ADDR: ":8080"
       SFU_PUBLIC_IP: "${SFU_PUBLIC_IP:-127.0.0.1}"
-      SFU_REGION: "local"
+      # The backend's region name: the SFU refuses a token signed for
+      # another region (mello-sfu 01-SFU.md section 7.1). SFU_ENDPOINT_EU
+      # points here, so the backend signs eu-west.
+      SFU_REGION: "eu-west"
       SFU_SERVER_ID: "sfu-local"
       SFU_LOG_LEVEL: "debug"
       SFU_JWT_PUB_KEY: "/certs/jwt_pub.pem"

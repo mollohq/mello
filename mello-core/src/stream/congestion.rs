@@ -76,12 +76,18 @@ impl CongestionSample {
         }
     }
 
+    /// Loss after repair (streaming-quality stage 4): a sequence that went
+    /// missing and came back (a NACK repair, or a reordered packet) is not
+    /// loss. `accepted_packets` counts the repaired packets too. The window
+    /// can repair a sequence that went missing in the window before; the
+    /// count then floors at 0.
     pub fn loss_ratio(&self) -> f32 {
-        let denom = self.accepted_packets.saturating_add(self.missing_sequences);
+        let lost = self.missing_sequences.saturating_sub(self.repaired_packets);
+        let denom = self.accepted_packets.saturating_add(lost);
         if denom == 0 {
             return 0.0;
         }
-        self.missing_sequences as f32 / denom as f32
+        lost as f32 / denom as f32
     }
 
     pub fn jitter_ms(&self) -> f32 {
@@ -98,6 +104,8 @@ enum CongestionAction {
 
 /// Viewer-side receive-target controller driven by native RTP stats deltas.
 pub struct ViewerCongestionController {
+    /// The previous sample also had jitter over `JITTER_MILD_MS`.
+    jitter_high_last: bool,
     floor_bps: u32,
     ceiling_bps: u32,
     current_target_bps: u32,
@@ -114,6 +122,7 @@ impl ViewerCongestionController {
         let floor_bps = StreamConfigFloor::bps(codec);
         let initial = ceiling_bps.max(floor_bps).min(ceiling_bps);
         Self {
+            jitter_high_last: false,
             floor_bps,
             ceiling_bps,
             current_target_bps: initial,
@@ -155,6 +164,7 @@ impl ViewerCongestionController {
         self.last_sample_at = Some(now);
 
         let action = self.classify_sample(&delta);
+        self.jitter_high_last = delta.jitter_ms() > JITTER_MILD_MS;
         match action {
             CongestionAction::StepDownSevere => {
                 self.consecutive_good_samples = 0;
@@ -196,7 +206,13 @@ impl ViewerCongestionController {
         {
             return CongestionAction::StepDownSevere;
         }
-        if loss >= LOSS_MILD_THRESHOLD || delta.jitter_ms() > JITTER_MILD_MS {
+        // Jitter steps down only when it holds for two samples (1 s). The
+        // receiver's RFC 3550 jitter counts every packet, and the fragments
+        // of one large frame (an IDR) spread over its send time, so one IDR
+        // lifts it for one sample. Stage 3 owns the per-frame jitter of the
+        // receiver; this is the controller's part.
+        let jitter_high = delta.jitter_ms() > JITTER_MILD_MS;
+        if loss >= LOSS_MILD_THRESHOLD || (jitter_high && self.jitter_high_last) {
             return CongestionAction::StepDownMild;
         }
         CongestionAction::Hold
@@ -312,7 +328,7 @@ mod tests {
     }
 
     #[test]
-    fn high_jitter_triggers_mild_step_down() {
+    fn high_jitter_for_two_samples_triggers_mild_step_down() {
         let mut controller = controller_with_ceiling(4_000);
         let base = Instant::now();
         let _ = advance(&mut controller, CongestionSample::default(), base, 0);
@@ -320,8 +336,57 @@ mod tests {
             interarrival_jitter: 2_000, // ~22.2 ms
             ..Default::default()
         };
-        let emit = advance(&mut controller, stats, base, 500);
+        let _ = advance(&mut controller, stats, base, 500);
+        assert_eq!(
+            controller.current_target_bps(),
+            4_000_000,
+            "one sample holds"
+        );
+        let emit = advance(&mut controller, stats, base, 1_000);
         assert_eq!(emit, Some(3_400_000));
+    }
+
+    /// Stage 4: one IDR's fragment spread lifts the RFC 3550 jitter for one
+    /// sample. It used to step the target down 15 % each time.
+    #[test]
+    fn one_sample_of_high_jitter_holds() {
+        let mut controller = controller_with_ceiling(4_000);
+        let base = Instant::now();
+        let _ = advance(&mut controller, CongestionSample::default(), base, 0);
+        let spike = CongestionSample {
+            interarrival_jitter: 2_700, // 30 ms
+            ..Default::default()
+        };
+        let _ = advance(&mut controller, spike, base, 500);
+        let _ = advance(&mut controller, CongestionSample::default(), base, 1_000);
+        assert_eq!(controller.current_target_bps(), 4_000_000);
+    }
+
+    /// Stage 4: loss after repair. Ten sequences went missing and NACK
+    /// brought all ten back: no step down. The old rule counted the misses
+    /// and cut the target 25 %.
+    #[test]
+    fn repaired_loss_is_not_loss() {
+        let mut controller = controller_with_ceiling(4_000);
+        let base = Instant::now();
+        let _ = advance(&mut controller, CongestionSample::default(), base, 0);
+        let stats = CongestionSample {
+            accepted_packets: 100,
+            missing_sequences: 10,
+            repaired_packets: 10,
+            ..Default::default()
+        };
+        let _ = advance(&mut controller, stats, base, 500);
+        assert_eq!(controller.current_target_bps(), 4_000_000);
+        // Six of ten unrepaired is 6 % loss: severe.
+        let stats = CongestionSample {
+            accepted_packets: 194,
+            missing_sequences: 20,
+            repaired_packets: 14,
+            ..Default::default()
+        };
+        let emit = advance(&mut controller, stats, base, 1_000);
+        assert_eq!(emit, Some(3_000_000));
     }
 
     #[test]
@@ -356,13 +421,14 @@ mod tests {
         let _ = advance(&mut controller, CongestionSample::default(), base, 0);
         for i in 0..8 {
             let stats = CongestionSample {
-                incomplete_access_units: 1,
+                incomplete_access_units: i + 1, // the counters are cumulative
                 accepted_packets: i * 10,
                 ..Default::default()
             };
             let _ = advance(&mut controller, stats, base, 500 + i * 500);
         }
-        assert_eq!(controller.current_target_bps(), 1_500_000);
+        // The floor is 300 kbps since stage 4 (1.5 Mbps before).
+        assert_eq!(controller.current_target_bps(), 300_000);
     }
 
     #[test]
@@ -422,15 +488,6 @@ mod tests {
                 delta: CongestionSample {
                     accepted_packets: 96,
                     missing_sequences: 4,
-                    ..Default::default()
-                },
-                start_kbps: 4_000,
-                expected_kbps: 3_400,
-            },
-            Case {
-                name: "jitter_above_twenty_ms",
-                delta: CongestionSample {
-                    interarrival_jitter: 1_900,
                     ..Default::default()
                 },
                 start_kbps: 4_000,

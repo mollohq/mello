@@ -20,6 +20,18 @@ mod sfu_reconnect_live_tests;
 mod sfu_voice_join;
 mod stats_emit;
 mod stream_ffi;
+// stage 6 (streaming-quality): start, watch and reconnect off the loop
+mod stream_host_start;
+mod stream_link;
+#[cfg(test)]
+mod stream_reconnect_live_tests;
+#[cfg(test)]
+mod stream_reconnect_tests;
+mod stream_watch;
+// end stage 6
+// stage 9 (streaming-quality): the stream card's game-audio volume
+mod stream_view_audio;
+// end stage 9
 mod streaming;
 mod tick_gating;
 mod voice;
@@ -48,7 +60,10 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_rtp;
+// Stage 7: the per-stream game-audio volume.
+pub use stream_ffi::set_viewer_audio_volume;
 use stream_ffi::ViewerState;
+pub use stream_ffi::{set_native_presenter, NativePresentFn};
 
 /// LUID of the GPU adapter libmello decodes on, as `(HighPart << 32) | LowPart`.
 /// Zero when no adapter is usable, and always zero off Windows.
@@ -124,10 +139,27 @@ pub struct Client {
     stream_session: Option<StreamSession>,
     stream_host_sink: Option<Arc<dyn PacketSink>>,
     stream_sfu_connection: Option<Arc<SfuConnection>>,
-    /// Native host start in flight on its own thread. Polled on the stream
-    /// tick; never awaited. See `PendingStreamStart` in streaming.rs.
-    pending_stream_start: Option<crate::client::streaming::PendingStreamStart>,
     viewer_state: Option<ViewerState>,
+    // --- stage 6 (streaming-quality): stream work off the command loop ---
+    /// A host start in flight; its steps report through `stream_tasks`.
+    host_start: Option<stream_host_start::HostStart>,
+    /// The hosted stream's SFU link: silence, rejoin, token refresh.
+    host_link: Option<stream_host_start::HostLinkState>,
+    /// The hosted stream's sink as itself: a rejoin attaches the new
+    /// connection to it.
+    stream_host_sfu_sink: Option<Arc<crate::stream::sink_sfu::SfuSink>>,
+    /// A watch in flight.
+    watch_join: Option<stream_watch::WatchJoin>,
+    /// The watched stream's SFU link.
+    viewer_link: Option<stream_watch::ViewerLinkState>,
+    /// Reports of the stream tasks; the loop takes them in `select!`.
+    stream_tasks: streaming::StreamTasks,
+    /// The SFU step limits of a stream join (tests shorten them).
+    stream_join_limits: streaming::StreamJoinLimits,
+    /// Names each start, watch and link, so a report of a cancelled one is
+    /// dropped.
+    stream_generation: u64,
+    // --- end stage 6 ---
     ice_servers: Vec<String>,
     /// Actual encode resolution (set after host pipeline starts).
     stream_encode_width: u32,
@@ -154,6 +186,12 @@ pub struct Client {
     /// Measures the SFU regions at login and every 10 minutes. Dropping it
     /// stops the task.
     region_measurer: Option<crate::transport::sfu_region::RegionMeasurer>,
+    // --- stage 6 (streaming-quality): region probe at stream start ---
+    /// The SFU regions from `get_sfu_regions`, for a probe outside the
+    /// 10-minute cycle, and when the last probe started.
+    sfu_region_list: Vec<crate::transport::sfu_region::SfuRegionEndpoint>,
+    region_probed_at: Option<Instant>,
+    // --- end stage 6 ---
     /// The SFU voice join that runs off the loop; the loop takes each step's
     /// outcome in `select!`. See `sfu_voice_join.rs`.
     sfu_voice_joins: sfu_voice_join::SfuVoiceJoins,
@@ -198,9 +236,6 @@ pub struct Client {
     clip_tick_counter: u8,
     host_pacing_last: Option<PacingTelemetry>,
     host_pacing_last_at: Instant,
-    /// Stream-tick counter driving the ~2s control-channel ping on the SFU
-    /// host connection (125 ticks at the 16ms stream tick).
-    host_sfu_ping_ticks: u64,
     /// Realtime WS reconnect/liveness state machine (backoff, edge detection,
     /// sleep/wake gap, heartbeat cadence). Pure decision logic, unit-tested in
     /// `reconnect.rs`; `connection_tick` is its IO adapter.
@@ -327,8 +362,15 @@ impl Client {
             stream_session: None,
             stream_host_sink: None,
             stream_sfu_connection: None,
-            pending_stream_start: None,
             viewer_state: None,
+            host_start: None,
+            host_link: None,
+            stream_host_sfu_sink: None,
+            watch_join: None,
+            viewer_link: None,
+            stream_tasks: streaming::StreamTasks::default(),
+            stream_join_limits: streaming::StreamJoinLimits::default(),
+            stream_generation: 0,
             stream_encode_width: 0,
             stream_encode_height: 0,
             stream_bitrate_kbps: 0,
@@ -347,6 +389,8 @@ impl Client {
             voice_join_grant: None,
             sfu_regions: Arc::default(),
             region_measurer: None,
+            sfu_region_list: Vec::new(),
+            region_probed_at: None,
             sfu_voice_joins: sfu_voice_join::SfuVoiceJoins::default(),
             game_state: GameStateManager::new(),
             published_game: None,
@@ -377,7 +421,6 @@ impl Client {
             clip_tick_counter: 0,
             host_pacing_last: None,
             host_pacing_last_at: Instant::now(),
-            host_sfu_ping_ticks: 0,
             reconnect: reconnect::ReconnectSupervisor::new(),
             browser_flows: browser_flow::BrowserFlows::default(),
             mic_permission: mic_permission::MicPermissionSource::from_env(),
@@ -532,6 +575,12 @@ impl Client {
                 outcome = self.browser_flows.finished() => {
                     let _step = watchdog.step("browser_flow_finished");
                     self.on_browser_flow_finished(outcome).await;
+                }
+                // Stage 6: a stream start, watch, rejoin or token step
+                // ended. Never completes while no stream task reports.
+                msg = self.stream_tasks.next() => {
+                    let _step = watchdog.step("stream_task");
+                    self.on_stream_task(msg).await;
                 }
                 _ = voice_tick.tick(), if self.needs_voice_tick() => {
                     let _step = watchdog.step("voice_tick");
@@ -994,6 +1043,10 @@ impl Client {
             }
             Command::StopWatching => {
                 self.handle_stop_watching().await;
+            }
+            // stage 9 (streaming-quality)
+            Command::SetStreamAudioVolume { gain } => {
+                self.handle_set_stream_audio_volume(gain);
             }
 
             // --- Crew admin ---

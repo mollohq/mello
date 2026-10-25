@@ -14,7 +14,7 @@ public:
     bool initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void shutdown() override;
 
-    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe) override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) override;
     void*            get_frame_buffer() override;
 
     bool        supports_codec(VideoCodec codec) const override;

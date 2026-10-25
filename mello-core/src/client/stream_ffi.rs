@@ -3,22 +3,11 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use crate::stream::congestion::{CongestionSample, ViewerCongestionController};
-use crate::stream::rtp_peer::{ReceivedAccessUnit, RtpPeerError};
+use crate::stream::rtp_peer::RtpPeerError;
 
 use super::FrameSlot;
 use super::NativeFrameSlot;
-use super::NativeSurfaceFrame;
 use super::FRAME_STATE_READY;
-
-/// Maximum native RTP access units polled per stream tick to avoid starvation.
-pub(super) const MAX_AU_POLLS_PER_TICK: usize = 32;
-
-/// Initial Annex-B receive buffer capacity; grown in place on small-buffer retry.
-pub(super) const VIEWER_AU_RECV_BUF_INITIAL: usize = 256 * 1024;
-
-/// Decode-queue depth above which the viewer backlog guard (spec 12-STREAMING
-/// §7.7) drops incoming delta AUs instead of feeding them. Keyframes always feed.
-pub(super) const DECODE_QUEUE_BACKLOG_THRESHOLD: i32 = 4;
 
 pub(super) struct FrameCallbackData {
     #[cfg_attr(target_os = "windows", allow(dead_code))]
@@ -27,9 +16,19 @@ pub(super) struct FrameCallbackData {
     pub frame_consumed: Arc<std::sync::atomic::AtomicBool>,
     pub frame_lifecycle: Arc<std::sync::atomic::AtomicU8>,
     pub surface_frame_seq: Arc<std::sync::atomic::AtomicU64>,
+    /// One count per frame a frame callback delivered (native or CPU). A
+    /// present that leaves it unchanged delivered no new frame.
+    pub delivered_frames: Arc<std::sync::atomic::AtomicU64>,
 }
 
 /// State for the viewer-side streaming pipeline.
+///
+/// Streaming-quality stage 3: libmello runs the viewer by itself
+/// (`mello_stream_viewer_attach_peer`). The receive timeline releases each
+/// frame, the decode thread decodes it, and the present thread calls the
+/// frame callbacks at the frame's render time. The stream tick only reads
+/// stats, follows the pause state and the members, and keeps the freeze
+/// clock.
 pub(super) struct ViewerState {
     /// The C++ viewer pipeline handle. None until the decoder is initialized.
     pub viewer: Option<*mut mello_sys::MelloStreamView>,
@@ -56,33 +55,15 @@ pub(super) struct ViewerState {
     /// connection's peer (kept alive by our `sfu_connection` Arc through
     /// `Drop`, so unregister is safe there).
     pub pause_cb_peer: *mut mello_sys::MelloPeerConnection,
+    /// New frames the present thread showed (the frame callbacks ran).
     pub frames_presented: u64,
     pub stream_tick_count: u64,
-    pub present_attempts: u64,
-    pub present_forced_attempts: u64,
-    pub present_skipped_unconsumed: u64,
-    /// Complete access units fed to the decoder this session.
-    pub transport_packets: u64,
-    /// Annex-B bytes fed to the decoder this session.
-    pub transport_bytes: u64,
-    /// Times the AU receive buffer was grown after a small-buffer retry.
-    pub au_buffer_grows: u64,
-    pub au_poll_errors: u64,
-    pub au_feed_failures: u64,
-    /// Delta AUs dropped by the backlog guard (spec §7.7) this session.
-    pub backlog_guard_drops: u64,
     pub congestion: ViewerCongestionController,
     pub debug_last_emit: Instant,
     pub debug_last_tick_count: u64,
-    pub debug_last_present_attempts: u64,
-    pub debug_last_present_forced_attempts: u64,
-    pub debug_last_present_skipped_unconsumed: u64,
-    pub debug_last_packets: u64,
     pub debug_last_bytes: u64,
     pub debug_last_frames_presented: u64,
-    pub debug_last_backlog_guard_drops: u64,
-    pub last_present_attempt: Instant,
-    pub au_recv_buf: Vec<u8>,
+    pub debug_last_frames_decoded: u64,
     pub audio_packets_received: u64,
     /// Freeze accounting. Every other viewer metric is a proxy for what the user
     /// perceives; a freeze is the thing itself — a visible stall in the picture.
@@ -101,6 +82,14 @@ pub(super) struct ViewerState {
     pub stats_last_frames_presented: u64,
     pub stats_last_freeze_count: u64,
     pub stats_last_freeze_ms: u64,
+    pub stats_last_frames_decoded: u64,
+    /// Shared with the frame callbacks (`FrameCallbackData::delivered_frames`).
+    pub delivered_frames: Arc<std::sync::atomic::AtomicU64>,
+    /// `delivered_frames` at the last tick.
+    pub last_delivered_frames: u64,
+    /// The game audio playout is muted for the host's pause
+    /// (`mello_stream_viewer_set_audio_muted`).
+    pub audio_muted: bool,
 }
 
 /// A present gap longer than this counts as a visible freeze. Two 60fps frame
@@ -108,6 +97,57 @@ pub(super) struct ViewerState {
 /// still well under the 600ms AU hard-age cap, so it fires before the receiver
 /// gives up on an access unit rather than after.
 pub(super) const FREEZE_THRESHOLD_MS: u64 = 150;
+
+/// The mute call the viewer makes for the host's pause state: `Some(true)`
+/// when the stream pauses, `Some(false)` when it resumes, `None` when the
+/// playout already matches.
+pub(super) fn pause_audio_mute_change(paused: bool, audio_muted: &mut bool) -> Option<bool> {
+    if paused == *audio_muted {
+        return None;
+    }
+    *audio_muted = paused;
+    Some(paused)
+}
+
+/// New frames the present thread showed since the last tick: the frame
+/// callbacks count each one (`delivered_frames`). A tick with none leaves the
+/// freeze clock running; a repeat of an unchanged frame is never counted.
+pub(super) fn new_frames_since(delivered: u64, last_delivered: &mut u64) -> u64 {
+    let new = delivered.saturating_sub(*last_delivered);
+    *last_delivered = delivered;
+    new
+}
+
+/// One stream tick of the freeze clock. `held` is true while the host holds
+/// the picture on purpose: paused, or idle (the capture delivers no new
+/// frames and the 2 fps keepalive gives 500 ms gaps). A held picture is not
+/// a stall: the clock restarts and nothing accrues. Returns true when the
+/// caller must restart its last-frame time.
+pub(super) fn freeze_clock_tick(
+    held: bool,
+    first_frame_seen: bool,
+    gap_ms: u64,
+    in_freeze: &mut bool,
+    freeze_count: &mut u64,
+    freeze_ms_total: &mut u64,
+    accounted_ms: &mut u64,
+) -> bool {
+    if held {
+        *in_freeze = false;
+        *accounted_ms = 0;
+        return true;
+    }
+    if first_frame_seen {
+        note_present_gap(
+            gap_ms,
+            in_freeze,
+            freeze_count,
+            freeze_ms_total,
+            accounted_ms,
+        );
+    }
+    false
+}
 
 /// Fold a present-loop observation into the freeze counters.
 ///
@@ -138,12 +178,6 @@ pub(super) fn note_present_gap(
 unsafe impl Send for ViewerState {}
 unsafe impl Sync for ViewerState {}
 
-impl ViewerState {
-    pub fn new_au_recv_buf() -> Vec<u8> {
-        vec![0_u8; VIEWER_AU_RECV_BUF_INITIAL]
-    }
-}
-
 impl Drop for ViewerState {
     fn drop(&mut self) {
         // The viewer's pause callback goes first, on this thread. It touches the
@@ -158,6 +192,11 @@ impl Drop for ViewerState {
                 }
                 self._pause_cb_data = std::ptr::null_mut();
             }
+            // After the callback is gone, so no packet in flight comes back:
+            // the next stream must not start with this one's pointer.
+            crate::stream::cursor::reset_viewer_cursor();
+            // stage 9 (streaming-quality): and not with its label.
+            crate::stream::viewer_format::reset_viewer_format();
         }
 
         // Native viewer stop joins decode threads. It runs on the teardown
@@ -193,6 +232,8 @@ impl Drop for ViewerState {
 pub(super) struct PauseSlot {
     paused: std::sync::atomic::AtomicU8,
     reason: std::sync::atomic::AtomicU8,
+    /// The host's idle keepalive state (`[0x04, 0x04, idle]`).
+    host_idle: std::sync::atomic::AtomicU8,
 }
 
 impl PauseSlot {
@@ -200,7 +241,13 @@ impl PauseSlot {
         Self {
             paused: std::sync::atomic::AtomicU8::new(0),
             reason: std::sync::atomic::AtomicU8::new(0),
+            host_idle: std::sync::atomic::AtomicU8::new(0),
         }
+    }
+
+    /// True while the host re-encodes the last picture (idle keepalive).
+    pub fn is_host_idle(&self) -> bool {
+        self.host_idle.load(std::sync::atomic::Ordering::Acquire) != 0
     }
 
     pub fn is_paused(&self) -> bool {
@@ -217,9 +264,11 @@ impl PauseSlot {
     }
 }
 
-/// Reliable-control data callback. Only pause messages (`0x04/0x03`) are
-/// handled; everything else (cursor future use, stray binary pongs) is
-/// ignored fast so the hot data path never blocks here.
+/// Reliable-control data callback. Pause (`0x04/0x03`) and host idle
+/// (`0x04/0x04`) messages go to the slot, cursor messages (`0x04/0x02`, the
+/// hook's pointer) to the viewer pointer the presenter draws
+/// (`stream::cursor`); everything else (stray binary pongs) is ignored fast so
+/// the hot data path never blocks here.
 pub(super) unsafe extern "C" fn stream_control_data_callback(
     user_data: *mut std::ffi::c_void,
     data: *const u8,
@@ -230,12 +279,23 @@ pub(super) unsafe extern "C" fn stream_control_data_callback(
         return;
     }
     let bytes = std::slice::from_raw_parts(data, size as usize);
+    if let Some(idle) = crate::stream::pause::parse_idle_message(bytes) {
+        let slot = &*(user_data as *const PauseSlot);
+        slot.host_idle
+            .store(u8::from(idle), std::sync::atomic::Ordering::Release);
+        return;
+    }
     if let Some((paused, reason)) = crate::stream::pause::parse_pause_message_full(bytes) {
         let slot = &*(user_data as *const PauseSlot);
         slot.paused
             .store(u8::from(paused), std::sync::atomic::Ordering::Release);
         slot.reason
             .store(reason as u8, std::sync::atomic::Ordering::Release);
+    } else if let Some(cursor) = crate::stream::cursor::parse_cursor_message(bytes) {
+        crate::stream::cursor::apply_viewer_cursor(cursor);
+    } else {
+        // stage 9 (streaming-quality): the rung, for the card's label.
+        crate::stream::viewer_format::apply_viewer_rung_message(bytes);
     }
 }
 
@@ -299,6 +359,12 @@ pub(super) fn rtp_payload(packet: &[u8]) -> Option<&[u8]> {
 /// `SfuEvent::AudioRtp`) to the viewer's audio decoder. Returns `true` when
 /// libmello accepted it.
 ///
+/// Streaming-quality stage 7: a viewer attached to its peer
+/// (`mello_stream_viewer_attach_peer`) takes each game-audio RTP packet from
+/// the peer on the network thread, with its header and arrival time, into
+/// NetEQ. For it libmello only counts this call, so the stream tick's
+/// timing does not reach the audio.
+///
 /// # Safety
 /// `viewer` must be a valid `MelloStreamView` pointer, or null.
 pub unsafe fn feed_viewer_audio_rtp(viewer: *mut mello_sys::MelloStreamView, rtp: &[u8]) -> bool {
@@ -321,106 +387,155 @@ pub unsafe fn feed_viewer_audio_rtp(viewer: *mut mello_sys::MelloStreamView, rtp
 pub(super) struct StreamHostHandle(pub *mut mello_sys::MelloStreamHost);
 unsafe impl Send for StreamHostHandle {}
 
-/// Outcome of polling and feeding viewer ingress for one stream tick.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) struct ViewerIngressTick {
-    pub access_units_fed: u32,
-    pub bytes_fed: u64,
-    pub buffer_grows: u32,
-}
-
-/// Feed one complete Annex-B access unit to the native decoder.
+/// Give the viewer's video to libmello: the viewer pipeline takes released
+/// frames from the receive timeline of `peer` and presents them on its own
+/// threads. Returns `false` when libmello refused.
 ///
 /// # Safety
-/// `viewer` must be a valid `MelloStreamView` pointer.
-pub(super) unsafe fn feed_access_unit_to_decoder(
+/// `viewer` must be a live `MelloStreamView` and `peer` a live peer.
+pub(super) unsafe fn attach_viewer_peer(
     viewer: *mut mello_sys::MelloStreamView,
-    annex_b: &[u8],
-    is_idr: bool,
+    peer: NonNull<mello_sys::MelloPeerConnection>,
 ) -> bool {
-    if viewer.is_null() || annex_b.is_empty() {
+    if viewer.is_null() {
         return false;
     }
-    mello_sys::mello_stream_feed_packet(
-        viewer,
-        annex_b.as_ptr(),
-        i32::try_from(annex_b.len()).unwrap_or(i32::MAX),
-        is_idr,
-    )
+    mello_sys::mello_stream_viewer_attach_peer(viewer, peer.as_ptr())
+        == mello_sys::MelloResult_MELLO_OK
 }
 
-/// Poll up to [`MAX_AU_POLLS_PER_TICK`] complete access units from an SFU viewer
-/// connection and feed each to the decoder.
-pub(super) fn poll_sfu_viewer_access_units(
-    vs: &mut ViewerState,
-    viewer: *mut mello_sys::MelloStreamView,
-    conn: &crate::transport::SfuConnection,
-) -> ViewerIngressTick {
-    let mut tick = ViewerIngressTick {
-        access_units_fed: 0,
-        bytes_fed: 0,
-        buffer_grows: 0,
-    };
+/// The viewer pipeline's statistics (stage 3 fields of `MelloStreamStats`).
+///
+/// # Safety
+/// `viewer` must be a live `MelloStreamView`.
+pub(super) unsafe fn viewer_stats(viewer: *mut mello_sys::MelloStreamView) -> ViewerTimelineStats {
+    let mut raw: mello_sys::MelloStreamStats = std::mem::zeroed();
+    mello_sys::mello_stream_viewer_get_stats(viewer, &mut raw);
+    ViewerTimelineStats::from_native(&raw)
+}
 
-    for _ in 0..MAX_AU_POLLS_PER_TICK {
-        let before_len = vs.au_recv_buf.len();
-        let au = match conn.poll_received_access_unit(&mut vs.au_recv_buf) {
-            Ok(Some(au)) => au,
-            Ok(None) => break,
-            Err(e) => {
-                vs.au_poll_errors = vs.au_poll_errors.saturating_add(1);
-                log::warn!("SFU viewer AU poll failed: {}", e);
-                break;
-            }
-        };
-        if vs.au_recv_buf.len() > before_len {
-            vs.au_buffer_grows = vs.au_buffer_grows.saturating_add(1);
-            tick.buffer_grows = tick.buffer_grows.saturating_add(1);
-        }
-        if feed_one_access_unit(vs, viewer, &au) {
-            tick.access_units_fed = tick.access_units_fed.saturating_add(1);
-            tick.bytes_fed = tick.bytes_fed.saturating_add(vs.au_recv_buf.len() as u64);
+/// What the stream tick reads from the viewer pipeline once a second.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub(super) struct ViewerTimelineStats {
+    pub decoder: String,
+    pub target_delay_ms: f32,
+    pub jitter_ms: f32,
+    pub decode_ms_p95: f32,
+    pub frames_released: u64,
+    pub frames_late: u64,
+    pub frames_dropped_late: u64,
+    pub frames_decoded: u64,
+    pub frames_presented: u64,
+    pub keyframe_requests: u64,
+    pub loss_events: u64,
+    pub waiting_for_keyframe: bool,
+    // ---- streaming-quality stage 7: game audio and A/V sync ----
+    /// NetEQ delay plus the output latency, ms (0 while no audio plays).
+    pub audio_delay_ms: f32,
+    /// Filtered A/V offset, ms: audio heard minus video shown for one capture
+    /// instant (positive: the audio is late).
+    pub av_offset_ms: f32,
+    /// Concealment (expand) since the view started, ms.
+    pub audio_expand_ms: u64,
+    /// Losses repaired from in-band FEC since the view started.
+    pub audio_fec_used: u64,
+    /// The receive timeline's minimum delay that the A/V sync set, ms.
+    pub av_video_min_delay_ms: f32,
+    /// The sync measured in the last second.
+    pub av_sync_active: bool,
+    // ---- end stage 7 ----
+}
+
+impl ViewerTimelineStats {
+    fn from_native(raw: &mello_sys::MelloStreamStats) -> Self {
+        let name: Vec<u8> = raw
+            .decoder_name
+            .iter()
+            .take_while(|c| **c != 0)
+            .map(|c| *c as u8)
+            .collect();
+        Self {
+            decoder: String::from_utf8_lossy(&name).into_owned(),
+            target_delay_ms: raw.target_delay_ms,
+            jitter_ms: raw.jitter_ms,
+            decode_ms_p95: raw.decode_ms_p95,
+            frames_released: raw.frames_released,
+            frames_late: raw.frames_late,
+            frames_dropped_late: raw.frames_dropped_late,
+            frames_decoded: raw.frames_decoded,
+            frames_presented: raw.frames_presented,
+            keyframe_requests: raw.keyframe_requests,
+            loss_events: raw.loss_events,
+            waiting_for_keyframe: raw.waiting_for_keyframe != 0,
+            audio_delay_ms: raw.audio_delay_ms,
+            av_offset_ms: raw.av_offset_ms,
+            audio_expand_ms: raw.audio_expand_ms,
+            audio_fec_used: raw.audio_fec_used,
+            av_video_min_delay_ms: raw.av_video_min_delay_ms,
+            av_sync_active: raw.av_sync_active != 0,
         }
     }
-
-    tick
 }
 
-/// Backlog-guard drop decision (spec §7.7): shed delta AUs while the decode
-/// queue is backlogged so a sustained network burst can't bury the decoder;
-/// keyframes always feed so the reference chain can recover.
-fn should_drop_for_backlog(decode_queue_depth: i32, is_keyframe: bool) -> bool {
-    !is_keyframe && decode_queue_depth > DECODE_QUEUE_BACKLOG_THRESHOLD
+/// One decimal, in f64 so the JSON shows 31.3 and not 31.299999237060547.
+fn round1(v: f32) -> f64 {
+    (f64::from(v) * 10.0).round() / 10.0
 }
 
-fn feed_one_access_unit(
-    vs: &mut ViewerState,
-    viewer: *mut mello_sys::MelloStreamView,
-    au: &ReceivedAccessUnit,
-) -> bool {
-    // No viewer→host keyframe-request channel exists yet, so the guard only
-    // drops; the native receiver's automatic PLI remains the IDR trigger.
-    let decode_queue_depth = unsafe { mello_sys::mello_stream_viewer_decode_queue_depth(viewer) };
-    if should_drop_for_backlog(decode_queue_depth, au.is_idr) {
-        vs.backlog_guard_drops = vs.backlog_guard_drops.saturating_add(1);
+/// The abbreviated viewer fields of `stream_client_stats` (spec 12
+/// section 11): the timeline and the decoder over the report interval.
+pub(super) fn timeline_report_fields(
+    stats: &ViewerTimelineStats,
+    decoded_in_interval: u64,
+    interval_secs: f32,
+) -> serde_json::Value {
+    serde_json::json!({
+        "tgt_ms": round1(stats.target_delay_ms),
+        "jit_ms": round1(stats.jitter_ms),
+        "dec_p95": round1(stats.decode_ms_p95),
+        "rel": stats.frames_released,
+        "late": stats.frames_late,
+        "drop_late": stats.frames_dropped_late,
+        "kf_req": stats.keyframe_requests,
+        "dec": stats.decoder,
+        "dec_fps": round1(decoded_in_interval as f32 / interval_secs.max(0.001)),
+        // Stage 7: game audio and A/V sync (spec 12 section 11).
+        "a_dly": round1(stats.audio_delay_ms),
+        "av_ms": round1(stats.av_offset_ms),
+        "a_exp": stats.audio_expand_ms,
+        "a_fec": stats.audio_fec_used,
+    })
+}
+
+/// The 1 s "Stream audio" log line of a viewer (streaming-quality stage 7):
+/// the game-audio delay and the A/V sync, next to "Stream timeline".
+pub(super) fn log_viewer_audio(stats: &ViewerTimelineStats) {
+    log::info!(
+        "Stream audio: delay_ms={:.1} av_offset_ms={:.1} video_min_ms={:.1} sync_active={} expand_ms={} fec_used={}",
+        stats.audio_delay_ms,
+        stats.av_offset_ms,
+        stats.av_video_min_delay_ms,
+        stats.av_sync_active,
+        stats.audio_expand_ms,
+        stats.audio_fec_used
+    );
+}
+
+/// Set the per-stream volume of a viewer's game audio: a gain of 0..2 (1 =
+/// unity), applied before the voice output gain (streaming-quality stage 7;
+/// the stream card's control is stage 9). Returns `true` when libmello took
+/// it.
+///
+/// # Safety
+/// `viewer` must be a valid `MelloStreamView` pointer, or null.
+pub unsafe fn set_viewer_audio_volume(viewer: *mut mello_sys::MelloStreamView, gain: f32) -> bool {
+    if viewer.is_null() || !gain.is_finite() {
         return false;
     }
-    let ok = unsafe { feed_access_unit_to_decoder(viewer, &vs.au_recv_buf, au.is_idr) };
-    if ok {
-        vs.transport_packets = vs.transport_packets.saturating_add(1);
-        vs.transport_bytes = vs
-            .transport_bytes
-            .saturating_add(vs.au_recv_buf.len() as u64);
-    } else {
-        vs.au_feed_failures = vs.au_feed_failures.saturating_add(1);
-        if au.is_idr {
-            log::warn!(
-                "feed_packet failed for IDR access unit ({} bytes)",
-                vs.au_recv_buf.len()
-            );
-        }
+    unsafe {
+        mello_sys::mello_stream_viewer_set_audio_volume(viewer, gain)
+            == mello_sys::MelloResult_MELLO_OK
     }
-    ok
 }
 
 /// Apply the viewer congestion controller on an SFU connection.
@@ -507,6 +622,24 @@ pub(super) unsafe extern "C" fn on_viewer_frame(
             .store(false, std::sync::atomic::Ordering::Release);
         data.frame_lifecycle
             .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
+        data.delivered_frames
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+    }
+}
+
+/// Presents one native frame. Runs on libmello's present thread, at the
+/// frame's render time; it must finish within a frame interval.
+pub type NativePresentFn = Box<dyn FnMut(&super::NativeSurfaceFrame) -> bool + Send>;
+
+static NATIVE_PRESENTER: std::sync::Mutex<Option<NativePresentFn>> = std::sync::Mutex::new(None);
+
+/// Install the presenter of native frames (the client's DComp swap chain), or
+/// remove it with `None`. Removal waits for a present in progress, so after it
+/// returns nothing calls the old presenter.
+pub fn set_native_presenter(presenter: Option<NativePresentFn>) {
+    match NATIVE_PRESENTER.lock() {
+        Ok(mut slot) => *slot = presenter,
+        Err(poisoned) => *poisoned.into_inner() = presenter,
     }
 }
 
@@ -523,28 +656,34 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
         return;
     }
     let data = &*(user_data as *const FrameCallbackData);
-    if let Ok(mut slot) = data.native_frame_slot.lock() {
-        // MelloNativeFrameFormat is u32 on macOS (clang) but i32 on Windows (MSVC);
-        // cast is necessary for Windows, no-op on macOS.
-        #[allow(clippy::unnecessary_cast)]
-        let fmt = format as u32;
-        let sequence = data
+    // libmello's present thread calls this at the frame's render time:
+    // present now. The slot keeps the latest descriptor for diagnostics.
+    #[allow(clippy::unnecessary_cast)]
+    let frame = super::NativeSurfaceFrame {
+        sequence: data
             .surface_frame_seq
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel)
-            .saturating_add(1);
-        *slot = Some(NativeSurfaceFrame {
-            sequence,
-            width: w,
-            height: h,
-            shared_handle: shared_handle as usize,
-            format: fmt,
-            uv_y_offset,
-            timestamp: ts,
-        });
+            .saturating_add(1),
+        width: w,
+        height: h,
+        shared_handle: shared_handle as usize,
+        format: format as u32,
+        uv_y_offset,
+        timestamp: ts,
+    };
+    if let Ok(mut presenter) = NATIVE_PRESENTER.lock() {
+        if let Some(present) = presenter.as_mut() {
+            present(&frame);
+        }
+    }
+    if let Ok(mut slot) = data.native_frame_slot.lock() {
+        *slot = Some(frame);
         data.frame_consumed
             .store(false, std::sync::atomic::Ordering::Release);
         data.frame_lifecycle
             .store(FRAME_STATE_READY, std::sync::atomic::Ordering::Release);
+        data.delivered_frames
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
     }
 }
 
@@ -552,9 +691,147 @@ pub(super) unsafe extern "C" fn on_viewer_native_frame(
 mod tests {
     use super::*;
 
+    /// A pause message on the control channel mutes the game audio once; the
+    /// resume unmutes it once. This is the state change that drives
+    /// `mello_stream_viewer_set_audio_muted` in the viewer tick; libmello has
+    /// no getter, so the C call itself is not observed here.
     #[test]
-    fn max_au_polls_per_tick_is_bounded() {
-        assert_eq!(MAX_AU_POLLS_PER_TICK, 32);
+    fn the_pause_message_mutes_and_the_resume_unmutes_the_game_audio() {
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        let mut audio_muted = false;
+        let mut deliver = |msg: &[u8]| {
+            // SAFETY: the slot outlives the call.
+            unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+            pause_audio_mute_change(slot.is_paused(), &mut audio_muted)
+        };
+
+        // Paused, as the host sends it to a viewer that joins late: v2 with
+        // the reason, then v1.
+        assert_eq!(deliver(&[0x04, 0x03, 0x01, 0x01]), Some(true));
+        assert_eq!(deliver(&[0x04, 0x03, 0x01]), None, "already muted");
+        assert_eq!(deliver(&[0x04, 0x04, 0x01]), None, "idle is not a pause");
+        assert_eq!(deliver(&[0x04, 0x03, 0x00, 0x00]), Some(false));
+        assert_eq!(deliver(&[0x04, 0x03, 0x00]), None, "already unmuted");
+    }
+
+    /// The host's idle message sets the slot's idle flag and leaves the
+    /// pause state alone.
+    #[test]
+    fn the_idle_control_message_sets_the_host_idle_flag() {
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        for (msg, idle) in [([0x04u8, 0x04, 0x01], true), ([0x04, 0x04, 0x00], false)] {
+            // SAFETY: the slot outlives the call.
+            unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+            assert_eq!(slot.is_host_idle(), idle);
+            assert!(!slot.is_paused());
+        }
+    }
+
+    /// stage 9 (streaming-quality): the host's rung message on the control
+    /// channel sets the watched stream's format (the card's "720p60"); a
+    /// pause message does not change it.
+    #[test]
+    fn the_rung_message_sets_the_watched_format() {
+        use crate::stream::controller::{rung_message, Rung};
+        use crate::stream::viewer_format;
+        let _slot = viewer_format::TEST_SLOT
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        viewer_format::reset_viewer_format();
+        let slot = Arc::new(PauseSlot::new());
+        let raw = Arc::as_ptr(&slot) as *mut std::ffi::c_void;
+        let rung = Rung {
+            width: 854,
+            height: 480,
+            fps: 30,
+        };
+        let msg = rung_message(rung);
+        // SAFETY: the slot outlives the call.
+        unsafe { stream_control_data_callback(raw, msg.as_ptr(), msg.len() as i32, true) };
+        assert_eq!(viewer_format::viewer_format().rung, Some(rung));
+        assert!(!slot.is_paused());
+        viewer_format::reset_viewer_format();
+    }
+
+    /// The 2 fps idle keepalive gives 500 ms present gaps. While the host is
+    /// idle they are not freezes; the same gaps from a live host are.
+    #[test]
+    fn idle_keepalive_gaps_are_not_freezes() {
+        for (held, want) in [(true, 0u64), (false, 1)] {
+            let (mut in_freeze, mut count, mut total, mut accounted) = (false, 0u64, 0u64, 0u64);
+            let restart = freeze_clock_tick(
+                held,
+                true,
+                500,
+                &mut in_freeze,
+                &mut count,
+                &mut total,
+                &mut accounted,
+            );
+            assert_eq!(restart, held);
+            assert_eq!(count, want, "held={held}");
+        }
+    }
+
+    /// Only frames the present thread showed count: a tick without a frame
+    /// callback has no new frame and does not end a freeze.
+    #[test]
+    fn only_frames_the_present_thread_showed_count() {
+        let mut last = 0u64;
+        assert_eq!(new_frames_since(1, &mut last), 1);
+        assert_eq!(new_frames_since(1, &mut last), 0, "same frame again");
+        assert_eq!(
+            new_frames_since(4, &mut last),
+            3,
+            "three frames between ticks"
+        );
+    }
+
+    /// The abbreviated stage 3 fields of `stream_client_stats`.
+    #[test]
+    fn the_report_carries_the_timeline_fields() {
+        let stats = ViewerTimelineStats {
+            decoder: "NVDEC".into(),
+            target_delay_ms: 31.27,
+            jitter_ms: 4.04,
+            decode_ms_p95: 2.0,
+            frames_released: 600,
+            frames_late: 3,
+            frames_dropped_late: 1,
+            keyframe_requests: 0,
+            ..Default::default()
+        };
+        let v = timeline_report_fields(&stats, 600, 10.0);
+        assert_eq!(v["tgt_ms"], 31.3);
+        assert_eq!(v["jit_ms"], 4.0);
+        assert_eq!(v["dec"], "NVDEC");
+        assert_eq!(v["dec_fps"], 60.0);
+        assert_eq!(v["rel"], 600);
+        assert_eq!(v["drop_late"], 1);
+    }
+
+    /// Stage 7: the game-audio and A/V sync fields of `stream_client_stats`.
+    #[test]
+    fn the_report_carries_the_audio_and_sync_fields() {
+        let stats = ViewerTimelineStats {
+            audio_delay_ms: 81.26,
+            av_offset_ms: -12.04,
+            audio_expand_ms: 240,
+            audio_fec_used: 7,
+            ..Default::default()
+        };
+        let v = timeline_report_fields(&stats, 0, 10.0);
+        assert_eq!(v["a_dly"], 81.3);
+        assert_eq!(v["av_ms"], -12.0);
+        assert_eq!(v["a_exp"], 240);
+        assert_eq!(v["a_fec"], 7);
+    }
+
+    #[test]
+    fn a_volume_for_a_null_viewer_is_rejected() {
+        assert!(!unsafe { set_viewer_audio_volume(std::ptr::null_mut(), 0.5) });
     }
 
     /// Normal inter-frame jitter must not register as a freeze, or the metric
@@ -601,41 +878,6 @@ mod tests {
     }
 
     #[test]
-    fn viewer_au_recv_buf_has_sane_initial_capacity() {
-        let buf = ViewerState::new_au_recv_buf();
-        assert_eq!(buf.len(), VIEWER_AU_RECV_BUF_INITIAL);
-        assert!(buf.len() >= 64 * 1024);
-    }
-
-    #[test]
-    fn backlog_guard_drops_delta_above_threshold() {
-        assert!(should_drop_for_backlog(
-            DECODE_QUEUE_BACKLOG_THRESHOLD + 1,
-            false
-        ));
-        assert!(should_drop_for_backlog(i32::MAX, false));
-    }
-
-    #[test]
-    fn backlog_guard_feeds_delta_at_or_below_threshold() {
-        assert!(!should_drop_for_backlog(
-            DECODE_QUEUE_BACKLOG_THRESHOLD,
-            false
-        ));
-        assert!(!should_drop_for_backlog(0, false));
-        assert!(!should_drop_for_backlog(-1, false));
-    }
-
-    #[test]
-    fn backlog_guard_never_drops_keyframes() {
-        assert!(!should_drop_for_backlog(
-            DECODE_QUEUE_BACKLOG_THRESHOLD + 1,
-            true
-        ));
-        assert!(!should_drop_for_backlog(i32::MAX, true));
-    }
-
-    #[test]
     fn rtp_payload_skips_csrcs_extension_and_padding() {
         // Plain header.
         let plain = [0x80, 111, 0, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0xAA, 0xBB];
@@ -657,18 +899,5 @@ mod tests {
     fn rtp_audio_with_a_null_viewer_is_rejected() {
         let plain = [0x80, 111, 0, 1, 0, 0, 0, 0, 0, 0, 0, 7, 0xAA];
         assert!(!unsafe { feed_viewer_audio_rtp(std::ptr::null_mut(), &plain) });
-    }
-
-    #[test]
-    fn feed_access_unit_to_decoder_rejects_null_viewer() {
-        let ok = unsafe { feed_access_unit_to_decoder(std::ptr::null_mut(), b"annexb", true) };
-        assert!(!ok);
-    }
-
-    #[test]
-    fn feed_access_unit_to_decoder_rejects_empty_payload() {
-        let viewer = std::ptr::dangling_mut::<mello_sys::MelloStreamView>();
-        let ok = unsafe { feed_access_unit_to_decoder(viewer, &[], true) };
-        assert!(!ok);
     }
 }

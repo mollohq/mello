@@ -3,7 +3,7 @@
 #include "capture_source.hpp"
 #include "encoder.hpp"
 #include "encoder_control.hpp"
-#include "decoder.hpp"
+#include "video_viewer.hpp"
 #include "cursor.hpp"
 #include <memory>
 #include <functional>
@@ -17,7 +17,6 @@
 
 #ifdef _WIN32
 #include "video_preprocessor.hpp"
-#include "staging_texture.hpp"
 #endif
 
 namespace mello::video {
@@ -57,8 +56,8 @@ public:
     ///
     /// The height is the preset height, the width follows the source aspect
     /// and is rounded to a multiple of 16. The size never goes above the
-    /// capture size. When the size is over H.264 level 4.2 (8704 macroblocks
-    /// per frame, 522240 per second), the height goes down until it fits and
+    /// capture size. When the size is over H.264 level 5.1 (36864 macroblocks
+    /// per frame, 983040 per second), the height goes down until it fits and
     /// `level_capped` is set. Pure, so it is testable without a GPU.
     struct EncodeSize {
         uint32_t width = 0;
@@ -106,6 +105,21 @@ public:
     /// `fps` is clamped to the configured capture rate; 0 restores it.
     void set_output_fps(uint32_t fps);
     uint32_t output_fps() const { return output_fps_.load(std::memory_order_relaxed); }
+
+    /// Change the encode size to the height `height` (a geometry rung of the
+    /// stage 4 quality controller). The width follows the current source
+    /// aspect (`encode_size_for`). Any thread; returns at once. The capture
+    /// thread makes a new preprocessor at the new size at the next frame; the
+    /// encode thread then changes the encoder's size (NVENC reconfigures in
+    /// place, every other backend, and NVENC when the driver refuses, is
+    /// re-initialized on the same device) and the next frame is an IDR with
+    /// SPS and PPS. The old preprocessor is freed when the encoder no longer
+    /// reads its textures. A request for the current size changes nothing,
+    /// and a new source aspect needs a new request. Returns false when no
+    /// host runs or the height is 0. Windows only; false on other platforms.
+    bool set_encode_height(uint32_t height);
+    /// Geometry changes applied since the host started.
+    uint32_t geometry_changes() const { return geometry_changes_.load(std::memory_order_relaxed); }
 
     /// True when a captured frame should be passed downstream under the current
     /// decimation target. Static and pure so the cadence is testable without a
@@ -169,6 +183,13 @@ public:
         std::string capture_history;
         // Cumulative present-to-capture delay, 1 ms buckets.
         std::array<uint32_t, PresentDelayHistogram::kBuckets> present_delay_hist{};
+        // The source size of the latest captured frame, and how many times it
+        // changed after the first frame. The encode size stays fixed: the
+        // whole source scales into it. The counter is the signal for a
+        // geometry change (streaming-quality stage 4 reacts to it).
+        uint32_t    source_width        = 0;
+        uint32_t    source_height       = 0;
+        uint32_t    source_size_changes = 0;
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
@@ -177,26 +198,36 @@ public:
     /// system audio alongside video (ScreenCaptureKit). Valid until stop_host().
     CaptureSource* capture() const { return capture_.get(); }
 
-    // VIEWER SIDE
+    // VIEWER SIDE (streaming-quality stage 3). The work runs in
+    // ViewerPipeline (video_viewer.hpp): a decode thread fed by the viewer's
+    // receive timeline, a 3-slot ring and a present thread that calls the
+    // frame callbacks at each frame's render time.
     bool start_viewer(const PipelineConfig& config, FrameCallback on_frame);
     void stop_viewer();
+    /// Take frames from the receive timeline of the viewer's peer.
+    void attach_receive_timeline(ViewerPipeline::TimelineProvider provider);
+    /// Without a timeline: decode this access unit now, show it at once.
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
+    /// True when the present thread showed a frame since the last call. The
+    /// present thread calls the frame callbacks by itself.
     bool present_frame();
-    // Decode input backlog: compressed jobs waiting for the decode thread.
-    // This is what the viewer backlog guard (via FFI
-    // mello_stream_viewer_decode_queue_depth) and probe telemetry want.
-    size_t decode_queue_depth() const {
-        std::lock_guard<std::mutex> lock(decode_jobs_mutex_);
-        return decode_jobs_.size();
-    }
-    // Decoded frames waiting in the present ring (used by the present path).
-    size_t decoded_ring_depth() const {
-        std::lock_guard<std::mutex> lock(decoded_ring_mutex_);
-        return decoded_ring_count_;
-    }
+    /// Access units fed without a timeline that wait for decode.
+    size_t decode_queue_depth() const;
+    /// Decoded frames waiting in the ring for their render time.
+    size_t decoded_ring_depth() const;
     void set_native_frame_callback(NativeFrameCallback on_native_frame);
+    void get_viewer_stats(ViewerStats& out) const;
 
     // CURSOR
+    /// The next cursor packet for the viewers, or false when there is nothing
+    /// new. Only a backend whose frames have no pointer and must not get one
+    /// (CursorMode::Packet, the hook) sends position and shape. The position
+    /// is in encode pixels, and the shape is scaled as the frame is (at most
+    /// kMaxCursorPacketSide a side), so the viewer draws it over the decoded
+    /// picture as it is. When the stream moves to a backend that has the
+    /// pointer in its frames, one hidden packet tells the viewer to stop
+    /// drawing. A packet with a shape follows every shape change. Any one
+    /// thread (the stream manager polls it).
     bool get_cursor_packet(uint8_t* buf, size_t* size);
     void apply_cursor_packet(const uint8_t* buf, size_t size);
     void get_cursor_state(CursorState& out) const;
@@ -224,14 +255,12 @@ private:
     // Every call into encoder_ that can run beside the encode path goes
     // through this: encode, cost tiers, bitrate, framerate, keyframes.
     EncoderControl                       encoder_control_;
-    std::unique_ptr<Decoder>             decoder_;
 #ifdef _WIN32
     std::unique_ptr<VideoPreprocessor>   preprocessor_;
-    std::unique_ptr<StagingTexture>      staging_;
 #endif
+    std::unique_ptr<ViewerPipeline>      viewer_;
 
     PacketCallback  packet_cb_;
-    FrameCallback   frame_cb_;
     NativeFrameCallback native_frame_cb_;
     PipelineConfig  config_{};
 
@@ -242,9 +271,51 @@ private:
     mutable std::mutex cursor_mutex_;
     CursorState        viewer_cursor_;
 
-    // Encode dimensions (even-aligned from capture)
-    uint32_t encode_w_ = 0;
-    uint32_t encode_h_ = 0;
+    // Host pointer. `cursor_frame_` belongs to the capture thread (drawn into
+    // the frame for CursorMode::Composite). The packet state below belongs to
+    // the get_cursor_packet caller, under `cursor_packet_mutex_`.
+    CursorData           cursor_frame_;
+    std::mutex           cursor_packet_mutex_;
+    CursorData           cursor_packet_src_;
+    CursorState          cursor_packet_shape_;      // RGBA, scaled to encode pixels
+    uint32_t             cursor_packet_serial_ = 0;  // source serial of that shape
+    uint32_t             cursor_packet_scale_milli_ = 0;
+    uint32_t             cursor_shape_version_ = 0;  // bumps when the scaled shape changes
+    uint32_t             cursor_sent_version_ = 0;
+    bool                 cursor_sent_visible_ = false;
+    int32_t              cursor_sent_x_ = 0;
+    int32_t              cursor_sent_y_ = 0;
+
+    // Encode dimensions (even-aligned from capture). Written at start and on
+    // the encode thread at a geometry change, read by the stats and cursor
+    // callers.
+    std::atomic<uint32_t> encode_w_{0};
+    std::atomic<uint32_t> encode_h_{0};
+
+    // Geometry change (set_encode_height). The request is a height; 0 = none.
+    std::atomic<uint32_t> encode_height_request_{0};
+    // The last encoder bitrate asked for, for a full encoder re-initialize.
+    std::atomic<uint32_t> last_bitrate_kbps_{0};
+    std::atomic<uint32_t> geometry_changes_{0};
+#ifdef _WIN32
+    // Capture thread: the size and generation of the current preprocessor.
+    uint32_t preprocessor_w_ = 0;
+    uint32_t preprocessor_h_ = 0;
+    uint32_t preprocessor_generation_ = 0;
+    // Encode thread: the generation the encoder runs at.
+    uint32_t encoder_generation_ = 0;
+    // Preprocessors of earlier sizes. The encode thread frees one when it
+    // runs at a later generation: until then a queued job (and the idle
+    // keepalive picture) can still be one of its ring textures.
+    struct RetiredPreprocessor {
+        std::unique_ptr<VideoPreprocessor> preprocessor;
+        uint32_t generation = 0;
+    };
+    std::mutex retired_mutex_;
+    std::vector<RetiredPreprocessor> retired_preprocessors_;
+    void apply_geometry_request(ID3D11Texture2D* texture);
+    bool resize_encoder(uint32_t width, uint32_t height, uint32_t generation);
+#endif
 
     // Async encode thread: capture enqueues, encode thread dequeues
     struct EncodeJob {
@@ -254,6 +325,11 @@ private:
         void* texture = nullptr;
 #endif
         uint64_t timestamp_us = 0;
+        // The encode size of the texture and the preprocessor generation
+        // that made it (geometry changes).
+        uint32_t width = 0;
+        uint32_t height = 0;
+        uint32_t generation = 0;
     };
     static constexpr size_t ENCODE_QUEUE_CAP = 2;
     std::array<EncodeJob, ENCODE_QUEUE_CAP> encode_queue_{};
@@ -312,6 +388,12 @@ private:
     // caller; keeping the time math out of here avoids a second clock policy.
     std::atomic<uint64_t> frames_captured_{0};
     std::atomic<uint64_t> last_capture_us_{0};
+    // Source size of the latest converted frame and the count of changes after
+    // the first one. Written on the capture thread, read by the stats caller.
+    std::atomic<uint32_t> source_w_{0};
+    std::atomic<uint32_t> source_h_{0};
+    std::atomic<uint32_t> source_size_changes_{0};
+    bool                  source_size_known_ = false;  // capture thread only
 
     // Decimation target. 0 means "no decimation" (encode every captured frame).
     // Read on the capture thread, written from the control thread.
@@ -326,61 +408,6 @@ private:
     uint64_t next_emit_deadline_us_ = 0;
     double   last_convert_ms_  = 0;
     double   last_encode_ms_   = 0;
-    uint64_t viewer_start_time_ = 0;
-    // Written on the decode thread, read on others (stop_viewer, present
-    // debug dumps) — atomic.
-    std::atomic<uint64_t> frames_decoded_{0};
-    std::atomic<uint64_t> decode_errors_{0};
-
-    std::vector<uint8_t> rgba_buf_;
-
-    static constexpr size_t DECODED_RING_CAP = 3;
-    mutable std::mutex decoded_ring_mutex_;
-#ifdef _WIN32
-    std::array<ID3D11Texture2D*, DECODED_RING_CAP> decoded_ring_{};
-#elif defined(__APPLE__)
-    std::array<void*, DECODED_RING_CAP> decoded_ring_{}; // CVPixelBufferRef
-#endif
-    size_t decoded_ring_head_ = 0; // next write slot
-    size_t decoded_ring_tail_ = 0; // next read slot
-    size_t decoded_ring_count_ = 0;
-
-    // Async decode: feed_packet enqueues, decode_thread_ dequeues and runs
-    // decoder_->decode()/get_frame() — those may ONLY ever run on
-    // decode_thread_.
-    struct DecodeJob {
-        std::vector<uint8_t> bytes;
-        bool is_keyframe = false;
-    };
-    static constexpr size_t DECODE_QUEUE_CAP = 8;
-    mutable std::mutex decode_jobs_mutex_;
-    std::condition_variable decode_jobs_cv_;
-    std::deque<DecodeJob> decode_jobs_;
-    std::thread decode_thread_;
-    void decode_thread_func();
-
-    // Continuous jitter regulator: present immediately when the ring holds
-    // >= JITTER_TARGET frames (we are ahead), otherwise at frame cadence
-    // (~90% of the configured frame interval since the last present). No
-    // one-shot priming latch — underflow recovers without a stall.
-    static constexpr size_t JITTER_TARGET = 2;
-    uint64_t last_present_us_ = 0;
-
-    bool jitter_should_present(size_t depth, uint64_t now_us) const;
-
-    void push_decoded(
-#ifdef _WIN32
-        ID3D11Texture2D* frame
-#elif defined(__APPLE__)
-        void* frame
-#endif
-    );
-
-#ifdef _WIN32
-    ID3D11Texture2D* pop_decoded();
-#elif defined(__APPLE__)
-    void* pop_decoded();
-#endif
 };
 
 } // namespace mello::video

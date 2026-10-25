@@ -45,7 +45,17 @@ use stream_gate::profile::{self, GateFile, Lane, Profile};
 use stream_gate::report::{self, Metrics};
 use stream_gate::session::{self, clock_us, Ctx, Host, ViewerRecord, ViewerSpec};
 use stream_gate::shim::{Plan, Shim};
-use stream_gate::{clip, score, sfu};
+use stream_gate::{audio, clip, score, sfu};
+
+/// Stage 7: the clip's game audio and how to score it.
+struct AudioRun {
+    spec: audio::AudioSpec,
+    reference: audio::ReferenceAudio,
+    /// The raw track the host plays (mello_test_set_reference_audio).
+    track: PathBuf,
+    /// The PESQ scorer (scripts/voice-gate-score.py).
+    script: PathBuf,
+}
 
 struct Args {
     lane: String,
@@ -303,6 +313,7 @@ fn run_profile(
     out_dir: &Path,
     no_vmaf: bool,
     keep: bool,
+    audio_run: Option<&AudioRun>,
 ) -> Result<Run, String> {
     let load_start = stream_gate::load::sample(&[sfu.raw_handle()]);
     let pdir = out_dir.join(run_name);
@@ -334,6 +345,21 @@ fn run_profile(
     if r != mello_sys::MelloResult_MELLO_OK {
         return Err(format!("mello_test_set_reference_clip: {r}"));
     }
+    // Stage 7: the clip's game audio (or none).
+    let track_c = match audio_run {
+        Some(a) => Some(
+            std::ffi::CString::new(a.track.to_string_lossy().as_bytes())
+                .map_err(|e| e.to_string())?,
+        ),
+        None => None,
+    };
+    // SAFETY: the host context is live; the path is copied.
+    unsafe {
+        mello_sys::mello_test_set_reference_audio(
+            ctxs[0].0,
+            track_c.as_ref().map_or(std::ptr::null(), |c| c.as_ptr()),
+        )
+    };
 
     let host = Host::start(
         rt,
@@ -343,6 +369,7 @@ fn run_profile(
         &session_id,
         lane.bitrate_kbps,
         lane.fps,
+        audio_run.is_some(),
         || shim.expect("host"),
     )?;
     let (w, h) = (host.width, host.height);
@@ -368,6 +395,7 @@ fn run_profile(
         receive_kbps: lane.bitrate_kbps,
         end_us,
         out_dir: pdir.clone(),
+        capture_audio: audio_run.is_some(),
     };
     let v1 = session::spawn_viewer(Arc::clone(rt), Arc::clone(&ctxs[1]), spec("viewer1"));
     let mut v2 = None;
@@ -539,6 +567,35 @@ fn run_profile(
     }
     put("viewer_backlog_drops", Some(measured.backlog_drops as f64));
     put("tx_pli", Some(host_end.video.tx_pli_requests as f64));
+    // The stage 4 sender (report rows, no gate).
+    let hv = &host_end.video;
+    put(
+        "tx_max_idr_send_ms",
+        Some(hv.tx_max_idr_send_us as f64 / 1000.0),
+    );
+    put("tx_idr_aus", Some(hv.tx_idr_access_units_sent as f64));
+    put(
+        "tx_idr_over_50ms",
+        Some(hv.tx_idr_access_units_over_50ms as f64),
+    );
+    put(
+        "tx_rtx_pct",
+        (hv.tx_rtp_wire_bytes_sent > 0)
+            .then(|| 100.0 * hv.tx_rtx_bytes_sent as f64 / hv.tx_rtp_wire_bytes_sent as f64),
+    );
+    put(
+        "tx_probe_clusters",
+        Some(hv.tx_probe_clusters_completed as f64),
+    );
+    put("tx_padding", Some(hv.tx_padding_packets_sent as f64));
+    put("tx_send_pauses", Some(hv.tx_send_pauses as f64));
+    put("tx_reprobes", Some(hv.tx_reprobes as f64));
+    put("tx_rtx_negotiated", Some(f64::from(hv.tx_rtx_negotiated)));
+    put("tx_rtx_suppressed", Some(hv.tx_rtx_suppressed as f64));
+    put(
+        "tx_feedback_rtt_ms",
+        Some(hv.tx_feedback_rtt_us as f64 / 1000.0),
+    );
     put(
         "host_keyframes",
         Some(f64::from(host_end.stats.keyframes_sent)),
@@ -547,6 +604,111 @@ fn run_profile(
         "host_frames_late",
         Some(host_end.reference.late_frames as f64),
     );
+
+    // Stage 7: the game audio and the A/V sync of the measured viewer.
+    let mut audio_info = Value::Null;
+    if let (Some(a), Some(cap)) = (audio_run, measured.audio.as_ref()) {
+        let av = audio::score_av(
+            &a.spec,
+            &a.reference,
+            cap,
+            &presents_of(measured),
+            &clock,
+            measured.end_us,
+        );
+        put("av_within_40ms_pct", av.within_pct);
+        put("av_offset_p50_ms", av.offset_p50_ms);
+        put("av_offset_abs_p95_ms", av.offset_abs_p95_ms);
+        put("av_markers_expected", Some(av.markers_expected as f64));
+        put("av_markers_matched", Some(av.markers_matched as f64));
+        put("audio_gaps", Some(av.gaps as f64));
+        put("audio_gap_ms", Some(av.gap_ms));
+        put("audio_dropouts", Some(av.dropouts as f64));
+        put("audio_dropout_ms", Some(av.dropout_ms));
+        let (mos, pesq) = audio::score_speech(
+            &a.spec,
+            &a.reference,
+            cap,
+            &av,
+            &audio::SpeechJob {
+                start_us: reference.start_us,
+                dir: &pdir,
+                profile: run_name,
+                script: &a.script,
+            },
+        );
+        put("audio_mos", mos);
+        if let Some(st) = measured.audio_stats {
+            put("audio_delay_ms", Some(f64::from(st.delay_ms)));
+            put("av_sync_offset_ms", Some(f64::from(st.av_offset_ms)));
+            put(
+                "av_video_min_delay_ms",
+                Some(f64::from(st.av_video_min_delay_ms)),
+            );
+            put(
+                "av_audio_min_delay_ms",
+                Some(f64::from(st.av_audio_min_delay_ms)),
+            );
+            put("audio_expand_ms", Some(st.expand_ms as f64));
+            put("audio_fec_used", Some(st.fec_used as f64));
+            put("audio_packets", Some(st.packets as f64));
+            put("audio_sync_extensions", Some(st.sync_extensions as f64));
+        }
+        // Each marker's offset, with when it was heard (ms after the arm).
+        let mut csv = String::from("marker,heard_ms,offset_ms\n");
+        for (k, _, at, ms) in &av.matches {
+            let heard = cap
+                .heard_us(*at)
+                .map_or(-1.0, |t| (t - arm_us as f64) / 1000.0);
+            csv.push_str(&format!("{k},{heard:.0},{ms:.1}\n"));
+        }
+        let _ = std::fs::write(pdir.join("av.csv"), csv);
+        let mut scsv = String::from(
+            "t_ms,av_offset_ms,video_min_ms,audio_min_ms,audio_delay_ms,video_target_ms,video_current_ms,offset_last_ms,from_shown\n",
+        );
+        for x in &measured.sync_samples {
+            let t = (x.t_us as i64 - arm_us as i64) as f64 / 1000.0;
+            scsv.push_str(&format!(
+                "{t:.0},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1},{:.1}\n",
+                x.av_offset_ms,
+                x.video_min_ms,
+                x.audio_min_ms,
+                x.audio_delay_ms,
+                x.video_target_ms,
+                x.video_current_ms,
+                x.offset_last_ms,
+                x.from_shown
+            ));
+        }
+        let _ = std::fs::write(pdir.join("sync.csv"), scsv);
+        audio_info = json!({
+            "markers_expected": av.markers_expected,
+            "markers_matched": av.markers_matched,
+            "offset_min_ms": av.offset_min_ms,
+            "offset_max_ms": av.offset_max_ms,
+            "gaps": av.gap_list.iter().map(|(t, ms)| json!({
+                "heard_ms": ((t - arm_us as f64) / 1000.0).round(),
+                "ms": ms,
+            })).collect::<Vec<_>>(),
+            "dropouts": av.dropout_list.iter().map(|(t, ms)| json!({
+                "heard_ms": ((t - arm_us as f64) / 1000.0).round(),
+                "ms": ms,
+            })).collect::<Vec<_>>(),
+            "pulls": cap.pull_us.len(),
+            "pesq": pesq,
+            "viewer": measured.audio_stats.map(|st| json!({
+                "delay_ms": st.delay_ms,
+                "av_offset_ms": st.av_offset_ms,
+                "av_video_min_delay_ms": st.av_video_min_delay_ms,
+                "av_audio_min_delay_ms": st.av_audio_min_delay_ms,
+                "packets": st.packets,
+                "expand_ms": st.expand_ms,
+                "fec_used": st.fec_used,
+                "sync_extensions": st.sync_extensions,
+                "sync_changes": st.sync_changes,
+            })),
+        });
+    }
 
     // Visual scores on the measured viewer's new frames.
     let pairs: Vec<score::Pair> = d
@@ -616,12 +778,32 @@ fn run_profile(
         }
     }
     let _ = std::fs::write(pdir.join("presents.csv"), csv);
-    let mut hcsv = String::from("t_ms,encoder_kbps,pacing_target_kbps,gcc_target_kbps,keyframes\n");
+    let mut hcsv = String::from(
+        "t_ms,encoder_kbps,pacing_target_kbps,gcc_target_kbps,keyframes,pacing_rate_kbps,width,height,fps,\
+         wire_bytes,rtx_bytes,plis,local_idrs,aus_dropped,queued_aus,enc_target_kbps,\
+         idrs_sent,last_idr_send_us\n",
+    );
     for s in &host_end.samples {
         let t = (s.t_us as i64 - arm_us as i64) as f64 / 1000.0;
         hcsv.push_str(&format!(
-            "{t:.0},{},{},{},{}\n",
-            s.encoder_kbps, s.pacing_target_kbps, s.gcc_target_kbps, s.keyframes
+            "{t:.0},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{},{}\n",
+            s.encoder_kbps,
+            s.pacing_target_kbps,
+            s.gcc_target_kbps,
+            s.keyframes,
+            s.pacing_rate_kbps,
+            s.width,
+            s.height,
+            s.fps,
+            s.wire_bytes,
+            s.rtx_bytes,
+            s.plis,
+            s.local_idrs,
+            s.aus_dropped,
+            s.queued_aus,
+            s.enc_target_kbps,
+            s.idrs_sent,
+            s.last_idr_send_us
         ));
     }
     let _ = std::fs::write(pdir.join("host.csv"), hcsv);
@@ -669,6 +851,18 @@ fn run_profile(
                 "present_max_ms": v.present_max_ms,
                 "callback_max_ms": v.callback_max_ms,
                 "aus_idr": v.aus_idr,
+                "timeline": v.timeline.map(|t| json!({
+                    "target_delay_ms": t.target_delay_ms,
+                    "jitter_ms": t.jitter_ms,
+                    "decode_ms_p95": t.decode_ms_p95,
+                    "frames_released": t.frames_released,
+                    "frames_late": t.frames_late,
+                    "frames_dropped_late": t.frames_dropped_late,
+                    "frames_decoded": t.frames_decoded,
+                    "frames_presented": t.frames_presented,
+                    "keyframe_requests": t.keyframe_requests,
+                    "loss_events": t.loss_events,
+                })),
                 "rx": v.video.as_ref().map(|x| json!({
                     "ingress_packets": x.rx_ingress_packets,
                     "ingress_overflows": x.rx_ingress_overflows,
@@ -689,7 +883,7 @@ fn run_profile(
                     "wrong_ssrc": x.rx_core_wrong_ssrc_packets,
                     "invalid_h264": x.rx_core_invalid_h264_packets,
                 })),
-                "wrong_size_frames": v.wrong_size,
+                "scaled_frames": v.scaled_frames,
             })
         })
         .collect();
@@ -717,6 +911,7 @@ fn run_profile(
             },
         },
         "viewers": viewers_json,
+        "audio": audio_info,
         "wire": flows.iter().map(|f| json!({
             "role": f.role,
             "up": { "offered_packets": f.up.offered_packets, "offered_bytes": f.up.offered_bytes,
@@ -860,6 +1055,7 @@ struct Runner<'a> {
     no_vmaf: bool,
     keep: bool,
     script: &'a Path,
+    audio: Option<&'a AudioRun>,
     /// The scorer's answer of a batch that ran VMAF.
     vmaf_detail: Option<score::VmafScores>,
     /// Runs during which other processes used more CPU than
@@ -891,6 +1087,7 @@ impl Runner<'_> {
                 self.out_dir,
                 self.no_vmaf,
                 self.keep,
+                self.audio,
             )?;
             eprintln!(
                 "{:.1} s (fps {}, freeze {} ms, g2g p95 {} ms)",
@@ -1126,6 +1323,27 @@ fn real_main() -> Result<bool, String> {
     let decoders = names(&ctxs[1], false);
 
     let script = root.join("scripts/stream-gate-score.py");
+    // Stage 7: the clip's game audio, built from the voice gate corpus.
+    let audio_run = if custom_clip {
+        None
+    } else {
+        let spec = audio::load(&base_dir.join("audio.json"))?;
+        let loop_samples = (u64::from(clip_spec.frames) * audio::SAMPLE_RATE as u64
+            / u64::from(clip_spec.fps.max(1))) as usize;
+        let reference = audio::build(
+            &spec,
+            &root.join("libmello/tests/fixtures/voice"),
+            loop_samples,
+        )?;
+        let track = audio::track_path(&out_dir, &spec, loop_samples);
+        audio::write_raw(&track, &reference)?;
+        Some(AudioRun {
+            spec,
+            reference,
+            track,
+            script: root.join("scripts/voice-gate-score.py"),
+        })
+    };
     let mut runner = Runner {
         rt: &rt,
         ctxs: &ctxs,
@@ -1139,6 +1357,7 @@ fn real_main() -> Result<bool, String> {
         no_vmaf: args.no_vmaf || custom_clip,
         keep: args.keep,
         script: &script,
+        audio: audio_run.as_ref(),
         vmaf_detail: None,
         busy: Vec::new(),
     };
@@ -1175,6 +1394,9 @@ fn real_main() -> Result<bool, String> {
         runner.vmaf_available(),
         baseline.as_ref(),
     );
+    if let Some(a) = &audio_run {
+        gate_results.extend(audio::evaluate(&a.spec, &results));
+    }
 
     // A failing profile runs twice more and the gates read the median of
     // its three runs: one run of a real-time path can land in its tail. The
@@ -1231,6 +1453,9 @@ fn real_main() -> Result<bool, String> {
             baseline.as_ref(),
         );
         gate_results = g;
+        if let Some(a) = &audio_run {
+            gate_results.extend(audio::evaluate(&a.spec, &results));
+        }
         notes = n;
         notes.push(format!(
             "Median of three runs (the first failed a gate): {}.",
@@ -1323,7 +1548,7 @@ fn real_main() -> Result<bool, String> {
             "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
         },
         "method": {
-            "path": "reference clip (MELLO_CAPTURE_REFERENCE) -> D3D11 video processor -> preprocessor -> encoder -> mello-core manager and SfuSink -> RTP sender -> shim (UDP proxy, host leg) -> mello-sfu in test mode -> shim (viewer leg) -> RTP receiver session -> client viewer tick (16 ms) -> decoder -> mello_stream_present_frame -> CPU frame callback",
+            "path": "reference clip (MELLO_CAPTURE_REFERENCE) -> D3D11 video processor -> preprocessor -> encoder -> mello-core manager and SfuSink -> RTP sender -> shim (UDP proxy, host leg) -> mello-sfu in test mode -> shim (viewer leg) -> RTP receiver session -> receive timeline (stage 3) -> viewer decode thread -> present thread at each render time -> CPU frame callback",
             "lane": format!("{}: clip {}, {} kbps at {} fps, preset {}, {}", lane.name, lane.clip, lane.bitrate_kbps, lane.fps, lane.preset,
                 if lane.soft { "OpenH264 encode and decode (MELLO_SOFT_ENCODER=1, MELLO_SOFT_DECODER=1)" } else { "hardware encode and decode" }),
             "shim": format!("netmodel shim version {}; base delay {} ms each way per leg", stream_gate::netmodel::SHIM_VERSION, gf.profiles.first().map_or(0.0, |p| p.host.base_delay_ms)),
@@ -1331,6 +1556,14 @@ fn real_main() -> Result<bool, String> {
             "vmaf": format!("vmaf_v0.6.1 on luma, every {} new frame(s)", gf.analysis.vmaf_subsample),
         },
         "profiles": Value::Object(profiles_json),
+        "audio": audio_run.as_ref().map(|a| json!({
+            "audio_fingerprint": a.spec.fingerprint,
+            "audio_version": a.spec.version,
+            "speech": a.spec.speech,
+            "voice_mobile_mos": a.spec.voice_mobile_mos,
+            "voice_mobile_mos_source": a.spec.voice_mobile_mos_source,
+            "method": "the viewer context's mixed output pulled 10 ms at a time on a fixed schedule (mello_voice_test_pull_output); markers: tone-burst onsets against the present time of their video frame; gaps: the pilot tone; MOS: PESQ-WB on the speech, 4 s segments aligned by the markers",
+        })),
         "spread": Value::Object(spread),
         "gates": report::gates_json(&gate_results),
         "runtime_s": (started.elapsed().as_secs_f64() * 10.0).round() / 10.0,
