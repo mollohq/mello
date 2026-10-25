@@ -54,6 +54,10 @@ void OpusEnc::set_packet_loss_perc(int percent) {
     if (encoder_) opus_encoder_ctl(encoder_, OPUS_SET_PACKET_LOSS_PERC(percent));
 }
 
+void OpusEnc::set_inband_fec(int mode) {
+    if (encoder_) opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(mode));
+}
+
 // --- Decoder ---
 
 OpusDec::OpusDec() = default;

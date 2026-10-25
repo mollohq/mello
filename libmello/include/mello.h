@@ -1066,10 +1066,13 @@ MELLO_API void mello_stream_set_native_frame_callback(
     void*                     user_data
 );
 
-/** Feed an encoded game-audio packet received from the host for playback.
- *  The playout opens the output device chosen with mello_set_audio_output
- *  (the default device when none is set), at the first packet and after an
- *  unmute. A packet fed while muted is dropped and returns MELLO_OK. */
+/** Feed an encoded game-audio packet (the Opus payload, no RTP header)
+ *  received from the host for playback. The game audio plays in the voice
+ *  mix on the voice output device (mello_set_audio_output). A view attached
+ *  to its peer (mello_stream_viewer_attach_peer) takes each RTP packet from
+ *  the peer on the network thread (streaming-quality stage 7): for such a
+ *  view this call only counts the packet and returns MELLO_OK. A packet fed
+ *  while muted is dropped and returns MELLO_OK. */
 MELLO_API MelloResult mello_stream_feed_audio_packet(
     MelloStreamView* view,
     const uint8_t*   data,
@@ -1077,9 +1080,9 @@ MELLO_API MelloResult mello_stream_feed_audio_packet(
 );
 
 /** Mute or unmute the game audio of a stream view (for a paused stream).
- *  Mute closes the output device, which drops the audio already queued, so
- *  playback goes silent at once; packets fed while muted are dropped. Unmute
- *  opens the device again at the next packet. Any thread. */
+ *  Mute drops the audio already queued (NetEQ is flushed), so playback goes
+ *  silent at once; packets that arrive while muted are dropped. Unmute plays
+ *  again from the first new packet. Any thread. */
 MELLO_API MelloResult mello_stream_viewer_set_audio_muted(MelloStreamView* view, bool muted);
 
 /* ---- Stats ---- */
@@ -1169,6 +1172,23 @@ typedef struct MelloStreamStats {
     uint64_t loss_events;          /* a packet missed its repair deadline */
     uint8_t  waiting_for_keyframe;
     /* ---- end stage 3 ---- */
+    /* ---- streaming-quality stage 7: game audio and A/V sync ----
+     * Filled by mello_stream_viewer_get_stats; zero in the host stats.
+     * Appended fields: existing offsets unchanged. */
+    float    audio_delay_ms;         /* NetEQ delay plus the output latency; 0 while no audio plays */
+    float    av_offset_ms;           /* filtered A/V offset: audio heard minus video shown, + = audio late */
+    float    av_video_min_delay_ms;  /* the receive timeline's minimum delay the sync set */
+    float    av_audio_min_delay_ms;  /* NetEQ's minimum delay the sync set (a late video) */
+    float    audio_volume;           /* per-stream gain, 0..2 */
+    uint64_t audio_packets;          /* game-audio RTP packets into NetEQ */
+    uint64_t audio_expand_ms;        /* concealment (expand) since the view started */
+    uint64_t audio_fec_used;         /* lost packets repaired from in-band FEC */
+    uint64_t audio_sync_extensions;  /* packets with the A/V sync extension */
+    uint64_t av_sync_changes;        /* decisions that moved a delay */
+    uint8_t  av_sync_active;         /* a measurement in the last second */
+    float    av_offset_last_ms;      /* the last measured A/V offset, unfiltered */
+    uint64_t av_from_shown;          /* measurements from the last shown frame (else the render time) */
+    /* ---- end stage 7 ---- */
 } MelloStreamStats;
 
 MELLO_API void mello_stream_get_stats(MelloStreamHost* host, MelloStreamStats* stats);
@@ -1373,6 +1393,24 @@ MELLO_API MelloResult mello_peer_video_set_max_allocated(
     MelloPeerConnection* peer,
     uint64_t bps
 );
+
+/* ---- streaming-quality stage 7: game audio and A/V sync ---- */
+
+/** The per-stream volume of a view's game audio: a gain of 0..2 (1 =
+ *  unity), applied before the voice output gain and the mixer's limiter.
+ *  Kept across mute. Any thread. For the stream card's volume control
+ *  (streaming-quality stage 9). */
+MELLO_API MelloResult mello_stream_viewer_set_audio_volume(MelloStreamView* view, float gain);
+
+/** Test only. The game audio of the reference clip
+ *  (mello_test_set_reference_clip): raw 48 kHz stereo int16 little endian,
+ *  one clip loop long. A host on MELLO_CAPTURE_REFERENCE then plays it with
+ *  the clip, on the clip's clock, and mello_stream_start_audio takes it
+ *  instead of a capture device. Empty or null path: no audio. Call after
+ *  mello_test_set_reference_clip. */
+MELLO_API MelloResult mello_test_set_reference_audio(MelloContext* ctx, const char* path_utf8);
+
+/* ---- end stage 7 ---- */
 
 #ifdef __cplusplus
 }

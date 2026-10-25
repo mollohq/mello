@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <functional>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace rtc {
@@ -162,6 +163,13 @@ public:
     bool set_max_allocated_bps(uint64_t bitrate_bps) noexcept;
     bool is_open() const noexcept;
     RtpVideoSenderStats stats() const noexcept;
+
+    // ---- streaming-quality stage 7 ----
+    // The RTP timestamp that a frame captured at `capture_us` (the capture
+    // clock of send_access_unit) gets: the A/V sync extension of the game
+    // audio carries it. Empty before the first access unit. Any thread.
+    std::optional<uint32_t> rtp_timestamp_for_capture_us(uint64_t capture_us) const noexcept;
+    // ---- end stage 7 ----
 
 private:
     struct State;

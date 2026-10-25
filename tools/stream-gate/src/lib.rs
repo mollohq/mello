@@ -9,6 +9,7 @@
 //! latency and visual scores; `report` prints them against the frozen
 //! baseline and checks the gates. Run it with `scripts/stream-gate.sh`.
 
+pub mod audio;
 pub mod clip;
 pub mod code;
 pub mod load;

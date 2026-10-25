@@ -2,6 +2,8 @@
 #include "incoming_audio_sender.hpp"
 
 #include "twcc.hpp"
+#include "rtp_av_sync_extension.hpp"
+#include "../audio/stream_audio_link.hpp"
 #include "ulpfec.hpp"
 #include "../util/log.hpp"
 
@@ -43,6 +45,13 @@ constexpr char kVideoProfile[] = "4d00";
 
 int64_t steady_now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()
+    ).count();
+}
+
+// Stage 7: the steady clock of mello_clock_now_us.
+int64_t steady_now_us() {
+    return std::chrono::duration_cast<std::chrono::microseconds>(
         std::chrono::steady_clock::now().time_since_epoch()
     ).count();
 }
@@ -339,6 +348,39 @@ private:
     const uint32_t ssrc_;
     const std::shared_ptr<SendFeedbackTracker> tracker_;
     const Deliver deliver_;
+};
+
+// Stage 7: puts the A/V sync extension (rtp_av_sync_extension.hpp) on each
+// game-audio RTP packet of a stream host, right after the packetizer. The
+// value comes from the send path of the same call (`lookup` by the RTP
+// timestamp); a packet with no value goes out unchanged.
+class AvSyncExtensionHandler final : public rtc::MediaHandler {
+public:
+    using Lookup = std::function<std::optional<uint32_t>(uint32_t rtp_timestamp)>;
+
+    explicit AvSyncExtensionHandler(Lookup lookup) : lookup_(std::move(lookup)) {}
+
+    void outgoing(rtc::message_vector& messages, const rtc::message_callback& /*send*/) override {
+        for (auto& message : messages) {
+            if (!message || message->type != rtc::Message::Binary || message->size() < 12) {
+                continue;
+            }
+            const auto* b = reinterpret_cast<const uint8_t*>(message->data());
+            // RTCP (packet types 192..223) goes on unchanged.
+            if ((b[0] >> 6) != 2 || (b[1] >= 192 && b[1] <= 223)) {
+                continue;
+            }
+            const uint32_t rtp_timestamp = (static_cast<uint32_t>(b[4]) << 24)
+                | (static_cast<uint32_t>(b[5]) << 16)
+                | (static_cast<uint32_t>(b[6]) << 8) | b[7];
+            if (const auto video = lookup_(rtp_timestamp)) {
+                add_av_sync_extension(*message, *video);
+            }
+        }
+    }
+
+private:
+    const Lookup lookup_;
 };
 #endif
 
@@ -686,6 +728,12 @@ rtc::Description::Audio PeerConnectionImpl::make_stream_audio_description(
 ) const {
     rtc::Description::Audio audio(mid, direction);
     audio.addOpusCodec(kAudioPayloadType, "minptime=10;useinbandfec=1");
+    // Stage 7: the A/V sync extension of the game audio. The SFU does not
+    // answer it; it forwards the header unchanged, so the ID is fixed.
+    audio.addExtMap(rtc::Description::Media::ExtMap(
+        kAvSyncExtensionId,
+        kAvSyncExtensionUri
+    ));
     if (direction_is_send(direction)) {
         const uint32_t ssrc = audio_ssrc_ != 0 ? audio_ssrc_ : generate_ssrc();
         const std::string cname = audio_cname_.empty() ? generate_cname() : audio_cname_;
@@ -794,6 +842,16 @@ void PeerConnectionImpl::attach_opus_send_packetizer(
     // (send_audio_frame). Keep its random start to offset the media time.
     audio_rtp_start_timestamp_.store(rtpConfig->startTimestamp, std::memory_order_release);
     const auto packetizer = std::make_shared<rtc::OpusRtpPacketizer>(rtpConfig);
+    if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
+        // Stage 7: the A/V sync extension, before the sender report counts
+        // the bytes.
+        std::weak_ptr<PeerConnectionImpl> weak_peer = weak_from_this();
+        packetizer->addToChain(std::make_shared<AvSyncExtensionHandler>(
+            [weak_peer](uint32_t rtp_timestamp) -> std::optional<uint32_t> {
+                const auto self = weak_peer.lock();
+                return self ? self->take_pending_av_sync(rtp_timestamp) : std::nullopt;
+            }));
+    }
     packetizer->addToChain(std::make_shared<rtc::RtcpSrReporter>(rtpConfig));
     // The remote end's receiver reports about this track: loss and round
     // trip of the send leg, for the encoder adaptation (spec 10 section 7.5).
@@ -1066,6 +1124,11 @@ void PeerConnectionImpl::try_start_video_pipeline(
             track,
             config
         );
+        {
+            // Stage 7: the A/V sync runs in every video session.
+            std::lock_guard<std::mutex> lock(mutex_);
+            receiver->set_av_sync(av_sync_input_);
+        }
         if (!receiver->is_open()
             || (receive_target_bps != 0
                 && !receiver->set_receive_target(receive_target_bps))) {
@@ -1242,6 +1305,7 @@ void PeerConnectionImpl::deliver_incoming_audio(
 ) {
     MelloAudioTrackCallback rtp_callback = nullptr;
     void* rtp_user_data = nullptr;
+    StreamAudioSink stream_sink;
     {
         std::lock_guard<std::mutex> lock(mutex_);
         if (!is_current_pc_generation(generation)) {
@@ -1249,6 +1313,18 @@ void PeerConnectionImpl::deliver_incoming_audio(
         }
         rtp_callback = audio_rtp_cb_;
         rtp_user_data = audio_rtp_ud_;
+        if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_VIEWER) {
+            stream_sink = stream_audio_sink_;
+        }
+    }
+
+    // Stage 7: the stream view plays the game audio from here, on this
+    // thread with the arrival time, not from the stream tick.
+    if (stream_sink && bytes && total > 0) {
+        if (read_av_sync_extension(bytes, static_cast<size_t>(total))) {
+            av_sync_extensions_.fetch_add(1, std::memory_order_relaxed);
+        }
+        stream_sink(bytes, static_cast<size_t>(total), steady_now_us());
     }
 
     // The whole RTP packet, so NetEQ sees the real sequence, timestamp and
@@ -1874,6 +1950,20 @@ void PeerConnectionImpl::deliver_send_feedback(const MelloSendFeedback& feedback
                         feedback.interval_lost, feedback.interval_expected,
                         feedback.cumulative_lost, feedback.jitter_ms, feedback.rtt_ms);
     }
+    // Stage 7: a stream host's game-audio encoder follows the reports.
+    if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
+        std::shared_ptr<audio::StreamAudioLink> link;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            link = stream_audio_link_;
+        }
+        if (link) {
+            link->on_send_feedback(steady_now_ms(), feedback.interval_expected,
+                                   feedback.interval_lost,
+                                   feedback.rtt_fresh ? feedback.rtt_ms : -1.0f,
+                                   feedback.jitter_ms);
+        }
+    }
     // Hold the lock for the whole call: a clear that runs now waits until
     // the callback returns, so the caller can then free the user data.
     std::lock_guard<std::mutex> lock(send_feedback_cb_mutex_);
@@ -1881,6 +1971,37 @@ void PeerConnectionImpl::deliver_send_feedback(const MelloSendFeedback& feedback
         send_feedback_cb_(send_feedback_ud_, &feedback);
     }
 }
+
+// ---- streaming-quality stage 7 ----
+
+std::optional<uint32_t> PeerConnectionImpl::take_pending_av_sync(uint32_t rtp_timestamp) {
+    std::lock_guard<std::mutex> lock(av_sync_send_mutex_);
+    if (!pending_av_sync_.valid || pending_av_sync_.rtp_timestamp != rtp_timestamp) {
+        return std::nullopt;
+    }
+    av_sync_extensions_.fetch_add(1, std::memory_order_relaxed);
+    return pending_av_sync_.video_rtp_timestamp;
+}
+
+void PeerConnectionImpl::set_stream_audio_sink(StreamAudioSink sink) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stream_audio_sink_ = std::move(sink);
+}
+
+void PeerConnectionImpl::set_av_sync(std::shared_ptr<AvSyncInput> input) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    av_sync_input_ = input;
+    if (rtp_video_receiver_) {
+        rtp_video_receiver_->set_av_sync(std::move(input));
+    }
+}
+
+void PeerConnectionImpl::set_stream_audio_link(std::shared_ptr<audio::StreamAudioLink> link) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    stream_audio_link_ = std::move(link);
+}
+
+// ---- end stage 7 ----
 
 void PeerConnectionImpl::set_voice_recv_slots(int count) {
     voice_recv_slots_.store(std::clamp(count, 0, 64), std::memory_order_release);
@@ -2044,6 +2165,25 @@ bool PeerConnectionImpl::send_audio_message(
             // RTP timestamp = packetizer start + media time (48 kHz), mod 2^32.
             const uint32_t rtp_timestamp =
                 audio_rtp_start_timestamp_.load(std::memory_order_acquire) + *timestamp;
+            // Stage 7: the stream host's A/V sync extension. The frame's
+            // capture time from the link, as the video RTP timestamp of a
+            // frame captured then.
+            std::optional<uint32_t> video_rtp_timestamp;
+            if (role_ == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                if (stream_audio_link_ && rtp_video_sender_) {
+                    if (const auto capture_us = stream_audio_link_->capture_us(*timestamp)) {
+                        video_rtp_timestamp = rtp_video_sender_->rtp_timestamp_for_capture_us(
+                            static_cast<uint64_t>(*capture_us));
+                    }
+                }
+            }
+            {
+                std::lock_guard<std::mutex> lock(av_sync_send_mutex_);
+                pending_av_sync_.rtp_timestamp = rtp_timestamp;
+                pending_av_sync_.video_rtp_timestamp = video_rtp_timestamp.value_or(0);
+                pending_av_sync_.valid = video_rtp_timestamp.has_value();
+            }
             track->sendFrame(
                 reinterpret_cast<const std::byte*>(data),
                 static_cast<size_t>(size),

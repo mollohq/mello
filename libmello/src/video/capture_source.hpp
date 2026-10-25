@@ -30,6 +30,10 @@ struct ReferenceClip {
     uint32_t    height = 0;     ///< even
     uint32_t    fps    = 60;    ///< the rate the source plays the clip at
     bool        nv12   = false; ///< false: I420 (Y, U, V planes); true: NV12
+    /// Stage 7: the clip's game audio, raw 48 kHz stereo int16 little
+    /// endian, one clip loop long (shorter: silence to the end; longer: cut).
+    /// Empty: no audio.
+    std::string audio_path;
 };
 
 struct CaptureSourceDesc {
@@ -131,6 +135,18 @@ public:
     /// this (ScreenCaptureKit). On Windows game audio comes from a separate
     /// WASAPI loopback device, so the default is a no-op.
     virtual void set_audio_callback(AudioCallback cb) { (void)cb; }
+
+    /// Streaming-quality stage 7: interleaved float PCM with the capture time
+    /// of its first frame (steady clock, microseconds), from a backend that
+    /// makes the audio of its own picture (the reference source).
+    using TimedAudioCallback = std::function<void(const float* samples, uint32_t frame_count,
+                                                 uint32_t channels, uint32_t sample_rate,
+                                                 int64_t capture_us)>;
+    /// True when this backend gives game audio through the timed callback;
+    /// then the stream host opens no audio device of its own.
+    virtual bool provides_timed_audio() const { return false; }
+    /// Route that audio to `cb` (null: stop). Safe before or after start().
+    virtual void set_timed_audio_callback(TimedAudioCallback cb) { (void)cb; }
     // Backends with runtime source/backend switching can raise a swap event.
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }

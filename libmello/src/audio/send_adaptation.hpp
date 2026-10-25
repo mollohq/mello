@@ -125,6 +125,11 @@ public:
     int bitrate_kbps() const { return rungs_[rung_]; }
     int max_kbps() const { return rungs_.front(); }
     int loss_perc() const { return loss_perc_; }
+    /// The loss over the loss_perc() window in percent, rounded up, before
+    /// the floor and the cap; -1 until a window holds kMinExpected packets.
+    /// A window without enough packets keeps the last value. For the game
+    /// audio's own rule (StreamAudioLink).
+    int measured_loss_perc() const { return measured_loss_perc_; }
     /// Rung index, 0 = top.
     int rung() const { return rung_; }
     const std::vector<int>& rungs() const { return rungs_; }
@@ -161,6 +166,7 @@ private:
     std::vector<int> rungs_;
     int rung_ = 0;
     int loss_perc_ = kLossPercFloor;
+    int measured_loss_perc_ = -1;
     std::deque<Report> reports_;
     std::deque<Sample> rtt_;
     std::deque<Sample> jitter_;

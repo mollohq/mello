@@ -1,5 +1,6 @@
 #pragma once
 
+#include "av_sync.hpp"
 #include "rtp_h264_receiver.hpp"
 #include "video_receive_timeline.hpp"
 
@@ -181,6 +182,13 @@ public:
 
     bool is_open() const noexcept;
     RtpVideoReceiverSessionStats stats() const noexcept;
+
+    // ---- streaming-quality stage 7 ----
+    // The A/V sync input of this viewer (av_sync.hpp). The worker runs it
+    // every 20 ms (it decides once per its own interval) and it sets the
+    // timeline's minimum delay. Null: no sync. Any thread.
+    void set_av_sync(std::shared_ptr<AvSyncInput> input) noexcept;
+    // ---- end stage 7 ----
 
 private:
     struct State;

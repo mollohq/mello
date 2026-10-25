@@ -30,6 +30,8 @@ namespace {
 using SteadyClock = std::chrono::steady_clock;
 
 constexpr auto kReceiverTickInterval = std::chrono::milliseconds(1);
+// Stage 7: how often the worker runs the A/V sync input.
+constexpr auto kAvSyncTickInterval = std::chrono::milliseconds(20);
 // Core stats are copied for other threads at this cadence, not every tick.
 constexpr auto kStatsPublishInterval = std::chrono::milliseconds(20);
 constexpr auto kPliCooldown = std::chrono::milliseconds(1000);
@@ -979,6 +981,7 @@ struct RtpVideoReceiverSession::State
         auto next_report =
             SteadyClock::now() + config.receiver_report_interval;
         auto next_twcc = SteadyClock::now() + kTwccReportInterval;
+        auto next_av_sync = SteadyClock::now() + kAvSyncTickInterval;
 
         try {
             reset_receiver();
@@ -1070,6 +1073,19 @@ struct RtpVideoReceiverSession::State
                 }
 
                 inject_queued_fec_recoveries(now);
+
+                // Stage 7: the A/V sync sets the timeline's minimum delay.
+                if (now >= next_av_sync) {
+                    next_av_sync = now + kAvSyncTickInterval;
+                    std::shared_ptr<AvSyncInput> sync;
+                    {
+                        std::lock_guard<std::mutex> lock(av_sync_mutex);
+                        sync = av_sync;
+                    }
+                    if (sync) {
+                        sync->tick(timeline, timeline->now_us());
+                    }
+                }
 
                 const uint64_t requested_generation =
                     receive_target_generation.load(std::memory_order_acquire);
@@ -1184,6 +1200,9 @@ struct RtpVideoReceiverSession::State
     // The viewer timeline. Shared with the viewer pipeline, which polls it on
     // its decode thread (PeerConnectionImpl::video_receive_timeline).
     std::shared_ptr<VideoReceiveTimeline> timeline;
+    // Stage 7: the A/V sync input (set_av_sync), read by the worker.
+    mutable std::mutex av_sync_mutex;
+    std::shared_ptr<AvSyncInput> av_sync;
     std::atomic<bool> keyframe_requested{false};
     std::atomic<uint64_t> keyframe_requests_absorbed{0};
     uint32_t applied_rtt_us = 0;  // worker thread
@@ -1446,6 +1465,14 @@ std::shared_ptr<VideoReceiveTimeline>
 RtpVideoReceiverSession::timeline() const noexcept {
     const auto state = state_;
     return state ? state->timeline : nullptr;
+}
+
+void RtpVideoReceiverSession::set_av_sync(std::shared_ptr<AvSyncInput> input) noexcept {
+    if (!state_) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(state_->av_sync_mutex);
+    state_->av_sync = std::move(input);
 }
 
 void RtpVideoReceiverSession::request_keyframe() noexcept {

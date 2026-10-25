@@ -206,6 +206,12 @@ void ViewerPipeline::stats(ViewerStats& out) const {
     out.decode_ms_last = decode_ms_last_.load();
     out.decode_ms_mean = decode_ms_mean_.load();
     out.present_lateness_ms = present_lateness_ms_.load();
+    {
+        std::lock_guard<std::mutex> lock(last_shown_mutex_);
+        out.has_last_shown = has_last_shown_;
+        out.last_shown_rtp = last_shown_rtp_;
+        out.last_shown_us = last_shown_us_;
+    }
     std::lock_guard<std::mutex> lock(timeline_stats_mutex_);
     if (stats_timeline_) out.timeline = stats_timeline_->stats();
 }
@@ -269,7 +275,8 @@ void ViewerPipeline::decode_thread_main() {
         switch (d.kind) {
         case TimelineDecision::Kind::Release: {
             const int64_t t0 = now_us();
-            const bool ok = decode_into_ring(d.frame.annex_b, d.frame.keyframe, d.frame.render_time_us);
+            const bool ok = decode_into_ring(d.frame.annex_b, d.frame.keyframe,
+                                             d.frame.render_time_us, d.frame.rtp_timestamp);
             const int64_t decode_us = now_us() - t0;
             if (ok) {
                 timeline->on_decoded(decode_us);
@@ -337,7 +344,8 @@ void ViewerPipeline::release_slot_locked(RingSlot& slot) {
     slot.state = RingSlot::State::Free;
 }
 
-bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us) {
+bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us,
+                                      std::optional<uint32_t> rtp_timestamp) {
     if (!decoder_ || bytes.empty()) return false;
     const int slot_index = acquire_slot_for_decode();
     if (slot_index < 0) return false;
@@ -372,6 +380,8 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     slot.pixel_buffer = buffer;
 #endif
     slot.render_us = render_us;
+    slot.has_rtp = rtp_timestamp.has_value();
+    slot.rtp_timestamp = rtp_timestamp.value_or(0);
     slot.seq = next_seq_++;
     slot.state = RingSlot::State::Ready;
     lock.unlock();
@@ -494,6 +504,12 @@ void ViewerPipeline::present_slot(RingSlot& slot) {
     if (shown) {
         frames_presented_.fetch_add(1, std::memory_order_relaxed);
         presented_since_take_.store(true, std::memory_order_release);
+        if (slot.has_rtp) {
+            std::lock_guard<std::mutex> lock(last_shown_mutex_);
+            has_last_shown_ = true;
+            last_shown_rtp_ = slot.rtp_timestamp;
+            last_shown_us_ = t;
+        }
     }
 }
 

@@ -317,6 +317,17 @@ Stream viewer (streaming-quality stage 3, spec 12 section 7):
 | `ViewerSizeChange` | `test_capture_reference.cpp` (`mello_tests`, skips under `CI`; needs the OpenH264 DLL and, for the hardware cases, NVDEC or AMF) | A stream that steps from 640x360 to 320x180 at an IDR (as after a resolution rung) shows whole pictures at each size with the software and the hardware decoder; the hardware decoder shows the picture of each access unit with that access unit, as OpenH264 does. |
 | `ViewerPipelineTest`, `ViewerConverter` | `test_video_viewer.cpp` (`mello_tests`, needs a D3D11 adapter) | A fake decoder through the real ring, present thread and converter: frames shown at their render time (interval p95 under 20 ms), only the newest due frame shown, a size change gives a new shared texture, the shared frame opens on a second device and reads under keyed-mutex key 0, the R8 (NVDEC) layout converts. |
 
+Stream game audio and A/V sync (streaming-quality stage 7, spec 12 sections
+9.3 and 9.4):
+
+| Suite | File | What it proves |
+|---|---|---|
+| `StreamPlayoutTest` | `test_stream_audio_pipeline.cpp` (`mello_tests`) | Through a real `AudioPipeline` on the test backend, pulled 10 ms at a time: the game audio plays in the voice mix (not a voice peer), mute is silent at the next 10 ms and the first packet after unmute plays, a device change keeps the game audio, the volume scales it, reordered packets are not concealed, a lost packet is repaired from in-band FEC, the sync sample maps the heard audio onto the video clock. |
+| `StreamAudioSyncDrift` | `test_stream_audio_pipeline.cpp` | 10 simulated minutes with the host's audio clock 300 ppm fast: the audio's mean end-to-end delay (last minute against the first minute after settling) moves by under 10 ms (NetEQ accelerates; the mapping takes each packet's capture time). A guard holds each 1 s sample under 20 ms from the start (one time-stretch step plus the band); the test prints the accelerate chunk sizes. |
+| `StreamAudioHostFec` | `test_stream_audio_pipeline.cpp` | Receiver reports of 15 % loss give the encoder an expected loss of 15 % and in-band FEC in its packets; each frame's capture time reaches the link. The game loss rule: no FEC on a clean link, any loss gives at least 10 % and LBRR in the packets. |
+| `AvSyncExtension`, `AvSync`, `AvSyncInput` | `test_av_sync.cpp` (`mello_rtp_tests`) | The header extension (add to a packet with and without one, CSRCs, the two-byte form), the decision rule (dead band, steps of at most 10 ms, a late video lowers the video minimum before it delays the audio, a jump over 1 s is ignored), and the rule against the real receive timeline on a simulated clock (the minimum follows the audio both ways; no audio for 3 s resets it). |
+| `AvSyncWire` | `test_av_sync.cpp` | A stream host peer and a viewer peer in process: the game-audio packet carries the video RTP timestamp of its capture time (the frame's timestamp plus 3600 ticks for 40 ms). |
+
 ### Streaming quality gate
 
 `tools/stream-gate` plays a deterministic reference clip through the real
@@ -354,6 +365,7 @@ for a setup error and for a run on a busy machine.
 | Profiles | `benchmarks/baselines/stream/profiles.json` | `clean`, `home-wifi` (viewer leg 2 % loss, 20 ms jitter), `mobile` (5 %, 40 ms, 250 ms spikes, reorder, 300 ppm drift), `bad` (10 % with bursts, 30 ms), `congested` (host uplink capped at 60 % of the preset with a 150 ms tail-drop queue, 5 s to 25 s), `outage` (host leg down 3 s from 8 s), `late-join` (a second viewer at 5 s, measured). 10 ms each way on every leg. |
 | Baselines | `baseline-2.1-cpu.json`, `baseline-2.1-hw.json` | Taken once, never edited. Commit, machine, GPU, driver, encoder, decoder, clip hash, seeds, SFU commit and Go, scorer versions. Both were taken on commit `c8a4bc7`, before the rebase onto the P2P removal (`f562f90`): the rebased tree is that tree minus the P2P deletions, which change no media path. |
 | Gates | `benchmarks/baselines/stream/gates.json` | Per lane and profile: VMAF floor, freeze-time ceiling, time-to-first-frame ceiling, glass-to-glass p95 ceiling, fps floor, send rate within the cap. Made by `tools/stream-gate/make_gates.py` from the baseline and repeat runs on the same commit: the baseline value minus or plus the largest of a fixed margin, a share of the value and 1.1 x the spread of the runs. A metric missing in any run (no frame presented) has no gate. |
+| Game audio (stage 7) | `tools/stream-gate/src/audio.rs`, `benchmarks/baselines/stream/audio.json` | The reference clip gets a track (`mello_test_set_reference_audio`): the voice gate corpus speech low-passed at 7 kHz, a 20 ms tone burst every 250 ms of clip time (marker k at one of 8 frequencies, 10 to 15.25 kHz, captured with video frame k x 15) and a 17.25 kHz pilot tone. The host plays it on the clip's clock with exact capture times; each viewer's context output is pulled 10 ms at a time on a fixed schedule (`mello_voice_test_pull_output`). A/V offset: each burst onset heard minus the present time of its video frame. Gaps: the output silent (30 dB under its median) for 20 ms or more; dropouts (reported): the pilot 12 dB down for 20 ms or more, which a concealed lost packet also gives. MOS: PESQ-WB on the speech, 4 s segments aligned by the markers, with the voice gate's scorer venv. Not in `inputs_fingerprint` (results.json has `audio_fingerprint`): the stage 4 baselines have no audio metrics, so they print as values. `audio.json` holds the stage 7 gates (home-wifi: 0 gaps, 95 % of the markers within +-40 ms; mobile: MOS at least the voice gate's `mobile` minus 0.2). |
 
 Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
 
@@ -371,6 +383,16 @@ Metrics (definitions in `tools/stream-gate/src/metrics.rs`):
   byte, SFU-to-viewer retransmissions; on `congested` the send rate in the
   cap, its overshoot, the queue drops and the time until the send rate is
   at or under the cap.
+- **Game audio** (stage 7, `audio.rs`): `av_within_40ms_pct` (markers heard
+  with an offset within +-40 ms, in % of the markers whose video frame was
+  shown while the output was pulled, 0.5 s from either end; a marker not
+  heard counts as outside), `av_offset_p50_ms` and `av_offset_abs_p95_ms`,
+  `audio_gaps` and `audio_gap_ms` (silences), `audio_dropouts` and
+  `audio_dropout_ms` (concealment, not gated), `audio_mos`, and the viewer's
+  own numbers at the end (`audio_delay_ms`, `av_sync_offset_ms`,
+  `av_video_min_delay_ms`, `audio_expand_ms`, `audio_fec_used`). Per profile
+  `av.csv` has each marker's offset and `sync.csv` the viewer's sync state
+  every 100 ms.
 
 Rules:
 
@@ -497,7 +519,10 @@ Test hooks in `mello.h` (not for production use):
   manager field trial value (`default` = upstream),
   `MELLO_VOICE_PRE_ROLL_FRAMES` changes the sender pre-roll, and
   `MELLO_NETEQ_SPURT_HOLD=0` turns the talk-spurt hold off (talk-spurt gate,
-  below). For tuning runs and measurements, never in a committed result.
+  below). `MELLO_GAME_NETEQ_DELAY_MANAGER_CONFIG` does the same as the
+  first for the game audio of streams (stage 7; the stream gate runs on the
+  test backend). For tuning runs and measurements, never in a committed
+  result.
 
 Rules:
 

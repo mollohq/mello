@@ -140,6 +140,73 @@ pub const METRICS: &[(&str, &str, i8)] = &[
         "CPU used by other processes during the run (%)",
         -1,
     ),
+    // Stage 7: game audio and A/V sync (audio.json; no baseline values yet).
+    (
+        "av_within_40ms_pct",
+        "A/V markers within +-40 ms (% of the shown ones)",
+        1,
+    ),
+    (
+        "av_offset_p50_ms",
+        "A/V offset p50, audio minus video (ms)",
+        0,
+    ),
+    (
+        "av_offset_abs_p95_ms",
+        "A/V offset p95 of the magnitude (ms)",
+        -1,
+    ),
+    (
+        "av_markers_expected",
+        "A/V markers whose video was shown",
+        0,
+    ),
+    ("av_markers_matched", "A/V markers heard", 0),
+    (
+        "audio_gaps",
+        "Audio gaps (output silent for 20 ms or more)",
+        -1,
+    ),
+    ("audio_gap_ms", "Audio gap time (ms)", -1),
+    (
+        "audio_dropouts",
+        "Audio dropouts (pilot 12 dB down for 20 ms or more)",
+        0,
+    ),
+    ("audio_dropout_ms", "Audio dropout time (ms)", 0),
+    ("audio_mos", "Game audio MOS (PESQ-WB, speech)", 1),
+    (
+        "audio_delay_ms",
+        "Game audio delay at the end (NetEQ + output, ms)",
+        0,
+    ),
+    (
+        "av_sync_offset_ms",
+        "A/V offset the viewer measured (filtered, ms)",
+        0,
+    ),
+    (
+        "av_video_min_delay_ms",
+        "Video minimum delay the A/V sync set (ms)",
+        0,
+    ),
+    (
+        "av_audio_min_delay_ms",
+        "Audio minimum delay the A/V sync set (ms)",
+        0,
+    ),
+    ("audio_expand_ms", "Game audio concealment (ms)", -1),
+    (
+        "audio_fec_used",
+        "Game audio losses repaired from in-band FEC",
+        0,
+    ),
+    ("audio_packets", "Game audio packets into NetEQ", 0),
+    (
+        "audio_sync_extensions",
+        "Game audio packets with the A/V sync extension",
+        0,
+    ),
 ];
 
 pub type Metrics = BTreeMap<String, Option<f64>>;
@@ -335,6 +402,10 @@ const SUMMARY: &[(&str, &str)] = &[
     ("viewer_rtx_pct", "v RTX %"),
     ("rx_pli", "PLI"),
     ("bitrate_reaction_s", "react s"),
+    ("av_within_40ms_pct", "A/V 40 %"),
+    ("av_offset_p50_ms", "A/V p50"),
+    ("audio_gaps", "a gaps"),
+    ("audio_mos", "a MOS"),
 ];
 
 pub fn summary_table(

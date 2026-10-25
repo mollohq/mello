@@ -24,6 +24,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
+#include <optional>
 #include <string>
 
 namespace mello::audio {
@@ -91,6 +92,115 @@ struct PlayoutStats {
     float spurt_hold_ms = 0.0f;
 };
 
+// ---- streaming-quality stage 7: game audio ----
+
+/// Statistics of one stream's game audio (GameAudioSource). Lifetime fields
+/// keep the counts of NetEQ instances that a flush or a new stream replaced.
+struct GameAudioStats {
+    uint64_t packets_inserted = 0;
+    /// Not RTP, or not the Opus payload type.
+    uint64_t packets_rejected = 0;
+    uint64_t insert_errors = 0;
+    /// A new SSRC or a timestamp far behind (the host restarted its audio).
+    uint64_t stream_resets = 0;
+    /// flush() calls that dropped audio (a pause).
+    uint64_t flushes = 0;
+    // NetEqLifetimeStatistics, summed. Samples per channel at 48 kHz.
+    uint64_t total_samples_received = 0;
+    uint64_t concealed_samples = 0;
+    uint64_t silent_concealed_samples = 0;
+    uint64_t concealment_events = 0;
+    uint64_t inserted_samples_for_deceleration = 0;
+    uint64_t removed_samples_for_acceleration = 0;
+    uint64_t fec_packets_received = 0;
+    uint64_t fec_packets_discarded = 0;
+    uint64_t packets_discarded = 0;
+    uint64_t interruption_count = 0;
+    uint64_t total_interruption_duration_ms = 0;
+    // Now. Zero while no stream plays.
+    bool playing = false;
+    float target_delay_ms = 0.0f;
+    float filtered_delay_ms = 0.0f;
+    float buffer_ms = 0.0f;
+    /// The minimum delay set through set_minimum_delay_ms (A/V sync).
+    int minimum_delay_ms = 0;
+};
+
+/// The game audio of one watched stream: one stereo NetEQ, a source of the
+/// voice mixer with its own gain (streaming-quality stage 7, spec 12
+/// section 9). NetEQ gives it reorder, loss concealment, in-band FEC, drift
+/// and a target delay. It plays on the voice output device, after the
+/// voice output gain and before the mixer's limiter, and the voice deafen
+/// silences it.
+///
+/// Made by VoicePlayout::add_game_audio(). Destroying it takes it out of
+/// the mix (it waits for a mix that runs now). It may outlive the
+/// VoicePlayout that made it.
+///
+/// Threads: insert() any thread (in production the network thread);
+/// flush(), set_gain(), set_minimum_delay_ms(), stats() and
+/// last_playout() any thread. The device thread pulls it through the mix.
+class GameAudioSource {
+public:
+    ~GameAudioSource();
+    GameAudioSource(const GameAudioSource&) = delete;
+    GameAudioSource& operator=(const GameAudioSource&) = delete;
+
+    /// Insert one Opus packet. Creates the NetEQ at the first packet after
+    /// construction or after flush(). A new SSRC, or a timestamp more than
+    /// 2 s behind the newest one, starts a new NetEQ. Returns false when the
+    /// packet was rejected or NetEQ refused it.
+    bool insert(const RtpInfo& rtp, const uint8_t* payload, size_t payload_size,
+                int64_t receive_time_ms);
+
+    /// Drop the audio NetEQ holds: the source plays nothing until the next
+    /// packet, which starts a new NetEQ. For a paused stream.
+    void flush();
+
+    /// Per-stream gain, clamped to 0..VoicePlayout::kMaxPeerVolume.
+    void set_gain(float gain);
+    float gain() const;
+
+    /// NetEQ's minimum delay (A/V sync: the video is late). Clamped to
+    /// 0..10000 ms. Kept across flush() and new streams.
+    void set_minimum_delay_ms(int delay_ms);
+
+    /// The last 10 ms that the mix pulled from this source with audio in it:
+    /// the RTP timestamp of its last sample (NetEq::GetPlayoutTimestamp),
+    /// the steady time of the pull in microseconds (the test clock when one
+    /// is set) and the samples per channel it had.
+    struct Playout {
+        uint32_t rtp_timestamp = 0;
+        int64_t pulled_at_us = 0;
+        int samples = 0;
+    };
+    std::optional<Playout> last_playout() const;
+
+    /// NetEQ's target delay and its filtered delay now, ms. Empty while no
+    /// stream plays. Cheaper than stats().
+    struct Delay {
+        float target_ms = 0.0f;
+        float filtered_ms = 0.0f;
+        /// NetEQ's own target without the minimum delay (the delay
+        /// manager's target), ms: the mean over the samples NetEQ emitted
+        /// since the last update, which needs 100 ms of them; -1 before the
+        /// first. From the lifetime statistics
+        /// (jitter_buffer_minimum_delay_ms).
+        float own_target_ms = -1.0f;
+    };
+    std::optional<Delay> delay() const;
+
+    GameAudioStats stats() const;
+
+private:
+    friend class VoicePlayout;
+    struct Impl;
+    explicit GameAudioSource(std::unique_ptr<Impl> impl);
+    std::unique_ptr<Impl> impl_;
+};
+
+// ---- end stage 7 ----
+
 class VoicePlayout {
 public:
     /// 10 ms at 48 kHz.
@@ -104,6 +214,9 @@ public:
     struct Config {
         /// Value of the field trial WebRTC-Audio-NetEqDelayManagerConfig.
         std::string delay_manager_config;
+        /// The same for the game audio of streams (stage 7). Empty: the
+        /// upstream defaults.
+        std::string game_delay_manager_config;
         /// NetEq::Config::enable_muted_state: a peer silent for a long time
         /// costs no decode and does not mix.
         bool enable_muted_state = true;
@@ -128,6 +241,8 @@ public:
     /// reorder_forget_factor:0.98", chosen with the voice gate (TESTING.md,
     /// NetEQ tuning).
     static const char* default_delay_manager_config();
+    /// The game audio's tuning that ships (stage 7): upstream's defaults.
+    static const char* default_game_delay_manager_config();
 
     explicit VoicePlayout(Config config);
     ~VoicePlayout();
@@ -173,6 +288,13 @@ public:
     int peer_count() const;
     /// PlayoutStats::late_frames without the peer lock (device thread).
     uint64_t late_frames() const;
+
+    // ---- streaming-quality stage 7 ----
+    /// A new game-audio source in this mix (one per watched stream). The
+    /// voice statistics (stats(), peer_count(), late_frames()) do not count
+    /// it. Any thread.
+    std::unique_ptr<GameAudioSource> add_game_audio();
+    // ---- end stage 7 ----
 
 private:
     struct Impl;

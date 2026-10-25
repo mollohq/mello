@@ -57,6 +57,8 @@ use std::sync::Arc;
 use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_rtp;
+// Stage 7: the per-stream game-audio volume.
+pub use stream_ffi::set_viewer_audio_volume;
 use stream_ffi::ViewerState;
 pub use stream_ffi::{set_native_presenter, NativePresentFn};
 

@@ -14,9 +14,12 @@
 #endif
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
+#include "audio/stream_audio_link.hpp"
+#include "transport/av_sync.hpp"
 #include "util/log.hpp"
 #include "util/test_clock.hpp"
 #include <climits>
+#include <cmath>
 #include <cstring>
 #include <cstdlib>
 #include <memory>
@@ -132,6 +135,7 @@ static void stream_audio_teardown(MelloStreamHost* host) {
     if (host->video) {
         if (auto* capture = host->video->capture()) {
             capture->set_audio_callback(nullptr);
+            capture->set_timed_audio_callback(nullptr);
         }
     }
     if (host->audio_pipeline) {
@@ -148,7 +152,24 @@ struct MelloStreamView {
     void*                    user_data;
     MelloNativeFrameCallback native_callback;
     void*                    native_user_data;
-    std::unique_ptr<mello::audio::StreamAudioPlayout> audio_playout;
+    /// Shared: the attached peer's audio sink and the A/V sync hold it
+    /// weakly (streaming-quality stage 7).
+    std::shared_ptr<mello::audio::StreamAudioPlayout> audio_playout;
+    // ---- stage 7 ----
+    /// The peer of mello_stream_viewer_attach_peer: its network thread feeds
+    /// the playout. Weak: the peer may go first.
+    std::weak_ptr<mello::transport::PeerConnectionImpl> audio_peer;
+    std::shared_ptr<mello::transport::AvSyncInput> av_sync;
+    std::atomic<bool> audio_attached{false};
+    /// The view's video for the A/V sync's present lateness; stop clears it
+    /// under the lock before the video goes.
+    struct LatenessSource {
+        std::mutex mutex;
+        mello::video::VideoPipeline* video = nullptr;
+    };
+    std::shared_ptr<LatenessSource> lateness_source;
+    std::atomic<uint64_t> audio_packets_counted{0};
+    // ---- end stage 7 ----
 };
 
 extern "C" {
@@ -679,6 +700,11 @@ MelloPeerConnection* mello_peer_create_for_role(
             impl->set_unmapped_drop_counter(
                 ctx_cast(ctx)->rx_unmapped_dropped_counter()
             );
+            // Stage 7: the stream host's audio track carries the A/V sync
+            // extension and feeds the game-audio encoder's loss.
+            if (role == MELLO_PEER_MEDIA_ROLE_STREAM_HOST) {
+                impl->set_stream_audio_link(ctx_cast(ctx)->stream_audio_link());
+            }
         }
         return new MelloPeerConnection{std::move(impl)};
     } catch (...) {
@@ -1631,12 +1657,27 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         auto pipeline = std::make_unique<mello::audio::StreamAudioHostPipeline>();
         MelloAudioPacketCallback cb = host->audio_callback;
         void* ud = host->audio_user_data;
+        // Stage 7: the capture times and the receiver reports go through
+        // the context's link to the host peer.
+        pipeline->set_link(host->ctx->stream_audio_link());
+        auto* source = host->video->capture();
+        const bool timed_source = source && source->provides_timed_audio();
         if (!pipeline->start(
                 [cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
                     if (cb) cb(ud, data, size, ts_us);
                 },
-                host->capture_pid)) {
+                host->capture_pid,
+                timed_source)) {
             return MELLO_ERROR_FAILED;
+        }
+        if (timed_source) {
+            // The reference source makes the audio of its own clip, with
+            // exact capture times.
+            auto* raw = pipeline.get();
+            source->set_timed_audio_callback(
+                [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate, int64_t at) {
+                    raw->feed_float_pcm_at(s, frames, ch, rate, at);
+                });
         }
 
         // macOS has no loopback device: ScreenCaptureKit carries game audio on
@@ -1683,10 +1724,11 @@ MelloStreamView* mello_stream_start_viewer(
 
         auto* view = new MelloStreamView{
             c, std::make_unique<mello::video::VideoPipeline>(), on_frame, user_data, nullptr, nullptr};
-        // Game audio plays on the output device the user chose for voice. The
-        // device opens at the first audio packet, not here.
-        view->audio_playout = std::make_unique<mello::audio::StreamAudioPlayout>(
-            [c] { return c->audio().playback_device_id(); });
+        // Game audio plays in the voice mix, on the voice output device
+        // (streaming-quality stage 7): one NetEQ, a mixer source of its own.
+        view->audio_playout = std::make_shared<mello::audio::StreamAudioPlayout>(
+            [c] { return c->audio().playout().add_game_audio(); },
+            [c] { return c->audio().output_latency_ms(); });
 
         mello::video::VideoPipeline::FrameCallback cb{};
         if (on_frame) {
@@ -1707,6 +1749,15 @@ MelloStreamView* mello_stream_start_viewer(
 void mello_stream_stop_viewer(MelloStreamView* view) {
     if (!view) return;
     try {
+        // Stage 7: the peer stops feeding the playout and running the sync.
+        if (const auto peer = view->audio_peer.lock()) {
+            peer->set_stream_audio_sink({});
+            peer->set_av_sync(nullptr);
+        }
+        if (view->lateness_source) {
+            std::lock_guard<std::mutex> lock(view->lateness_source->mutex);
+            view->lateness_source->video = nullptr;
+        }
         if (view->audio_playout) {
             view->audio_playout->stop();
             view->audio_playout.reset();
@@ -1788,6 +1839,12 @@ MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t*
     if (!view || !data || size <= 0) return MELLO_ERROR_INVALID_PARAM;
     try {
         if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
+        if (view->audio_attached.load(std::memory_order_acquire)) {
+            // Stage 7: the peer feeds the playout itself, with each packet's
+            // header and arrival time. This call only counts.
+            view->audio_packets_counted.fetch_add(1, std::memory_order_relaxed);
+            return MELLO_OK;
+        }
         return view->audio_playout->feed_packet(data, size) ? MELLO_OK : MELLO_ERROR_FAILED;
     } catch (...) {
         return MELLO_ERROR_FAILED;
@@ -1862,6 +1919,50 @@ MelloResult mello_stream_viewer_attach_peer(MelloStreamView* view, MelloPeerConn
                 const auto pc = weak_peer.lock();
                 return pc ? pc->video_receive_timeline() : nullptr;
             });
+        // ---- stage 7: game audio from the peer, and the A/V sync ----
+        if (view->audio_playout) {
+            std::weak_ptr<mello::audio::StreamAudioPlayout> weak_playout = view->audio_playout;
+            peer->impl->set_stream_audio_sink(
+                [weak_playout](const uint8_t* rtp, size_t size, int64_t arrival_us) {
+                    if (const auto playout = weak_playout.lock()) {
+                        playout->feed_rtp(rtp, size, arrival_us);
+                    }
+                });
+            auto sync = std::make_shared<mello::transport::AvSyncInput>(
+                [weak_playout]() -> std::optional<mello::transport::AudioSyncSample> {
+                    const auto playout = weak_playout.lock();
+                    return playout ? playout->sync_sample() : std::nullopt;
+                },
+                [weak_playout](int delay_ms) {
+                    if (const auto playout = weak_playout.lock()) {
+                        playout->set_sync_delay_ms(delay_ms);
+                    }
+                });
+            if (!view->lateness_source) {
+                view->lateness_source = std::make_shared<MelloStreamView::LatenessSource>();
+                view->lateness_source->video = view->video.get();
+            }
+            sync->set_video_shown([source = view->lateness_source]()
+                                      -> std::optional<mello::transport::AvSyncInput::ShownFrame> {
+                std::lock_guard<std::mutex> lock(source->mutex);
+                if (!source->video) return std::nullopt;
+                mello::video::ViewerStats vs{};
+                source->video->get_viewer_stats(vs);
+                if (!vs.has_last_shown) return std::nullopt;
+                return mello::transport::AvSyncInput::ShownFrame{vs.last_shown_rtp, vs.last_shown_us};
+            });
+            std::weak_ptr<mello::transport::AvSyncInput> weak_sync = sync;
+            view->audio_playout->set_start_buffer(
+                [weak_sync](uint32_t video_ts, int64_t heard_if_now_us) -> std::optional<int> {
+                    const auto s = weak_sync.lock();
+                    return s ? s->start_buffer_ms(video_ts, heard_if_now_us) : std::nullopt;
+                });
+            peer->impl->set_av_sync(sync);
+            view->av_sync = std::move(sync);
+            view->audio_peer = weak_peer;
+            view->audio_attached.store(true, std::memory_order_release);
+        }
+        // ---- end stage 7 ----
         return MELLO_OK;
     } catch (...) {
         return MELLO_ERROR_FAILED;
@@ -1890,12 +1991,58 @@ void mello_stream_viewer_get_stats(MelloStreamView* view, MelloStreamStats* stat
         stats->keyframe_requests   = vs.timeline.keyframe_requests;
         stats->loss_events         = vs.timeline.losses;
         stats->waiting_for_keyframe = vs.timeline.keyframe_required ? 1 : 0;
+        // ---- stage 7 ----
+        if (view->audio_playout) {
+            const auto as = view->audio_playout->stats();
+            stats->audio_delay_ms        = as.delay_ms;
+            stats->audio_volume          = view->audio_playout->volume();
+            stats->audio_packets         = as.packets_fed;
+            stats->audio_expand_ms       = static_cast<uint64_t>(as.expand_ms + 0.5);
+            stats->audio_fec_used        = as.fec_used;
+            stats->audio_sync_extensions = as.sync_extensions;
+        }
+        if (view->av_sync) {
+            const auto sync = view->av_sync->stats();
+            stats->av_offset_ms          = static_cast<float>(sync.filtered_offset_ms);
+            stats->av_video_min_delay_ms = static_cast<float>(sync.video_min_delay_ms);
+            stats->av_audio_min_delay_ms = static_cast<float>(sync.audio_min_delay_ms);
+            stats->av_sync_changes       = sync.changes;
+            stats->av_sync_active        = sync.active ? 1 : 0;
+            stats->av_offset_last_ms     = static_cast<float>(sync.offset_ms);
+            stats->av_from_shown         = sync.from_shown;
+        }
+        // ---- end stage 7 ----
     } catch (...) {
         memset(stats, 0, sizeof(MelloStreamStats));
     }
 }
 
 /* ---- end stage 3 ---- */
+
+/* ---- streaming-quality stage 7 ---- */
+
+MelloResult mello_stream_viewer_set_audio_volume(MelloStreamView* view, float gain) {
+    if (!view || !std::isfinite(gain)) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        if (!view->audio_playout) return MELLO_ERROR_NOT_INITIALIZED;
+        view->audio_playout->set_volume(gain);
+        MELLO_LOG_INFO("stream_audio", "viewer volume %.2f", view->audio_playout->volume());
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_test_set_reference_audio(MelloContext* ctx, const char* path_utf8) {
+    if (!ctx) return MELLO_ERROR_INVALID_PARAM;
+    auto* c = ctx_cast(ctx);
+    mello::video::ReferenceClip clip = c->reference_clip();
+    clip.audio_path = path_utf8 ? path_utf8 : "";
+    c->set_reference_clip(clip);
+    return MELLO_OK;
+}
+
+/* ---- end stage 7 ---- */
 
 int mello_stream_get_cursor_packet(MelloStreamHost* host, uint8_t* buf, int buf_size) {
     if (!host || !buf || buf_size <= 0) return 0;

@@ -254,6 +254,7 @@ set(MELLO_SOURCES
     src/transport/peer_connection.cpp
     src/transport/rtp_h264_receiver.cpp
     src/transport/rtp_video_receiver_session.cpp
+    src/transport/av_sync.cpp
     src/transport/rtp_video_sender.cpp
     src/transport/twcc.cpp
     src/transport/ulpfec.cpp
