@@ -266,6 +266,7 @@ TEST(StreamAudioHostPipeline, IgnoresEmptyAndNullInput) {
 #include <cstring>
 #include <fstream>
 #include <iterator>
+#include <map>
 #include <memory>
 #include <string>
 #include <vector>
@@ -691,6 +692,13 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
     };
     const int64_t network_ms = 30;
     std::vector<double> offsets;  // heard time minus capture time, ms
+    // NetEQ's accelerate removes one "pitch period" per operation, chosen
+    // by autocorrelation in a lag range of about 2.5 to 15 ms. For this
+    // 400 Hz tone every multiple of 2.5 ms in that range correlates the
+    // same, so the platform's arithmetic (the Opus SIMD path, libm's sin)
+    // picks the chunk: 5, 10 or 12.5 ms. The chunks removed, in 0.1 ms.
+    std::map<int, int> accelerate_chunks;
+    uint64_t removed_before = 0;
     int64_t k = 0;
     int16_t block[VoicePlayout::kFrameSamples * VoicePlayout::kChannels];
     for (int64_t t = 0; t <= kRunMs; ++t) {
@@ -705,6 +713,11 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
         }
         if (t % 10 == 0) {
             mix.mix(block);
+            const uint64_t removed = playout.stats().source.removed_samples_for_acceleration;
+            if (removed != removed_before) {
+                ++accelerate_chunks[static_cast<int>((removed - removed_before) * 10 / 48)];
+                removed_before = removed;
+            }
             if (t % 1000 == 0) {
                 if (const auto s = playout.sync_sample()) {
                     // The capture time of the heard audio on the host clock,
@@ -726,6 +739,23 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
     for (size_t i = 5; i < offsets.size(); ++i) worst = std::max(worst, std::abs(offsets[i] - first));
     std::printf("10 min drift: end-to-end %.1f ms at 5 s, %.1f ms at 600 s, worst change %.1f ms\n",
                 first, offsets.back(), worst);
+    // The drift itself: the mean end-to-end delay of the last minute
+    // against the first minute after NetEQ settles. The time stretch moves
+    // the delay inside NetEQ's band in chunks (above), and the means take
+    // that out; a delay that runs away does not average out.
+    auto mean_of = [&offsets](size_t from, size_t to) {
+        double sum = 0.0;
+        for (size_t i = from; i < to; ++i) sum += offsets[i];
+        return sum / static_cast<double>(to - from);
+    };
+    const double first_minute = mean_of(5, 65);
+    const double last_minute = mean_of(offsets.size() - 60, offsets.size());
+    std::printf("10 min drift: mean %.1f ms over 5..65 s, %.1f ms over the last 60 s, change %.1f ms\n",
+                first_minute, last_minute, last_minute - first_minute);
+    for (const auto& [chunk, count] : accelerate_chunks) {
+        std::printf("10 min drift: accelerate removed %.1f ms x %d\n", chunk / 10.0, count);
+    }
+    EXPECT_LT(std::abs(last_minute - first_minute), 10.0);
     EXPECT_LT(worst, 10.0) << "first " << first << " ms, last " << offsets.back() << " ms";
     // Without NetEQ's drift handling the buffer would grow 300 ppm x 600 s
     // = 180 ms; the stretch went somewhere.
