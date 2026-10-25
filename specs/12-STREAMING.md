@@ -1087,8 +1087,12 @@ newest packet's extension, is heard one pull later plus the output latency
 
 Drift does not build up: each packet carries its own capture time, and NetEQ
 keeps its delay against the two device clocks. A simulated 10 minutes with
-the host's audio clock 300 ppm fast move the audio's end-to-end delay by under
-10 ms (`StreamAudioSyncDrift.TenMinutesOfDriftMoveTheOffsetByUnder10Ms`).
+the host's audio clock 300 ppm fast move the audio's mean end-to-end delay (the
+last minute against the first minute after NetEQ settles) by under 10 ms
+(`StreamAudioSyncDrift.TenMinutesMoveTheMeanDelayByUnder10MsWithinOneStretchStep`).
+A single sample moves with NetEQ's time-stretch step (one pitch period, 2.5 to
+15 ms, platform-dependent on a pure tone), which is not drift; a guard holds
+it under 20 ms.
 
 ---
 

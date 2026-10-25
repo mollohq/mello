@@ -669,8 +669,10 @@ TEST_F(StreamPlayoutTest, ThePendingDelayIsOnlyWhatNetEqStillAdds) {
 // against its capture clock, and the viewer's device pulls on its own
 // clock. NetEQ keeps its delay (time stretch), and the sync mapping, which
 // takes the capture time from each packet, does not drift: after 10
-// simulated minutes the A/V offset it measures moved by under 10 ms.
-TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
+// simulated minutes the mean end-to-end delay moved by under 10 ms (the
+// stage 7 gate). A guard holds each single 1 s sample within one time-
+// stretch step of where it started.
+TEST(StreamAudioSyncDrift, TenMinutesMoveTheMeanDelayByUnder10MsWithinOneStretchStep) {
     mello::util::set_test_clock_ms(kClockOrigin);
     VoicePlayout::Config cfg;
     cfg.delay_manager_config = VoicePlayout::default_delay_manager_config();
@@ -732,17 +734,17 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
     }
     mello::util::set_test_clock_ms(-1);
     ASSERT_GT(offsets.size(), 500u);
-    // After NetEQ settles (5 s), the end-to-end delay of the audio stays
-    // within 10 ms of where it was: no drift accumulates over 10 minutes.
+    // The worst change of a single 1 s sample against the sample at 5 s.
     const double first = offsets[5];
     double worst = 0.0;
     for (size_t i = 5; i < offsets.size(); ++i) worst = std::max(worst, std::abs(offsets[i] - first));
     std::printf("10 min drift: end-to-end %.1f ms at 5 s, %.1f ms at 600 s, worst change %.1f ms\n",
                 first, offsets.back(), worst);
-    // The drift itself: the mean end-to-end delay of the last minute
-    // against the first minute after NetEQ settles. The time stretch moves
-    // the delay inside NetEQ's band in chunks (above), and the means take
-    // that out; a delay that runs away does not average out.
+    // The drift itself (the stage 7 gate): the mean end-to-end delay of
+    // the last minute against the first minute after NetEQ settles. The
+    // time stretch moves the delay inside NetEQ's band in chunks (above),
+    // and the means take that out; a delay that runs away does not average
+    // out.
     auto mean_of = [&offsets](size_t from, size_t to) {
         double sum = 0.0;
         for (size_t i = from; i < to; ++i) sum += offsets[i];
@@ -755,8 +757,15 @@ TEST(StreamAudioSyncDrift, TenMinutesOfDriftMoveTheOffsetByUnder10Ms) {
     for (const auto& [chunk, count] : accelerate_chunks) {
         std::printf("10 min drift: accelerate removed %.1f ms x %d\n", chunk / 10.0, count);
     }
-    EXPECT_LT(std::abs(last_minute - first_minute), 10.0);
-    EXPECT_LT(worst, 10.0) << "first " << first << " ms, last " << offsets.back() << " ms";
+    EXPECT_LT(std::abs(last_minute - first_minute), 10.0)
+        << "the end-to-end delay drifted over 10 minutes";
+    // A guard, not the drift gate. A single sample moves with NetEQ's time-
+    // stretch step: accelerate removes one pitch period (2.5 to 15 ms; on a
+    // pure tone every multiple of the period correlates the same, so the
+    // platform's arithmetic picks it: Windows 8.8 ms, macOS 13.8 ms) once
+    // the delay reaches its band's upper limit. One maximum step plus the
+    // band is 20 ms; more is a delay that jumps.
+    EXPECT_LT(worst, 20.0) << "first " << first << " ms, last " << offsets.back() << " ms";
     // Without NetEQ's drift handling the buffer would grow 300 ppm x 600 s
     // = 180 ms; the stretch went somewhere.
     const auto st = playout.stats();
