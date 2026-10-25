@@ -7,6 +7,7 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use crate::app_context::AppContext;
 use crate::converters::{avatar_color_index, make_initials};
 use crate::head2head::{self, Person, Placement};
+use crate::sealed::{self, Seal};
 use crate::{
     FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapHeldTitle, RecapLbRow,
     RecentGameTile,
@@ -351,6 +352,19 @@ pub(super) fn refresh_feed_skeletons(ctx: &AppContext) {
     app.set_feed_invite_line(trio.any() && !invite_hidden && !active.is_empty() && !has_h2h_invite);
 }
 
+/// Run `f` with the seal of the active crew: the belts the user opened, and
+/// the time. Sealed belts and recaps are drawn from it (`sealed.rs`).
+fn with_seal<R>(ctx: &AppContext, f: impl FnOnce(&Seal) -> R) -> R {
+    let crew = ctx.app.get_active_crew_id().to_string();
+    let opened = sealed::opened_keys(&ctx.settings.borrow(), &crew);
+    let is_open = |k: &str| opened.contains(k);
+    f(&Seal {
+        enabled: true,
+        now_ms: head2head::now_ms(),
+        opened: &is_open,
+    })
+}
+
 /// The viewer and the roster of the active crew, for naming the user ids of
 /// the head2head entry.
 fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
@@ -407,7 +421,21 @@ fn head2head_cards(
         .get(ctx.app.get_active_crew_id().as_str())
         .copied()
         .unwrap_or(i64::MAX);
-    let mut model = head2head::build_seen(&data, &viewer, &roster, now_ms, seen_ms)?;
+    // An opened belt does not mark its pair row unread.
+    let opened = sealed::opened_keys(
+        &ctx.settings.borrow(),
+        ctx.app.get_active_crew_id().as_str(),
+    );
+    let is_open = |k: &str| opened.contains(k);
+    let mut model = head2head::build_rows_sealed(
+        &data,
+        &viewer,
+        &roster,
+        now_ms,
+        seen_ms,
+        head2head::ROWS_WITH_SEATS,
+        &is_open,
+    )?;
     // With no hero, the cell stands tall beside the belt hero (frame E) or
     // beside the recap (frame F), and has room for a third row.
     let tall = hero_free
@@ -417,13 +445,14 @@ fn head2head_cards(
                 .iter()
                 .any(|e| e.entry_type == "recap" && !is_empty_recap_entry(&e.entry_type, &e.data)));
     if tall {
-        model = head2head::build_rows(
+        model = head2head::build_rows_sealed(
             &data,
             &viewer,
             &roster,
             now_ms,
             seen_ms,
             head2head::ROWS_TALL,
+            &is_open,
         )?;
     }
     // The octagons wear the avatar the app already loaded for the user id,
@@ -436,7 +465,9 @@ fn head2head_cards(
         card_type: "head2head".into(),
         role: e.role.as_str().into(),
         size: e.size.as_str().into(),
-        head2head: head2head::to_slint(&model, &avatar),
+        head2head: with_seal(ctx, |seal| {
+            head2head::to_slint_sealed(&model, &avatar, seal)
+        }),
         ..Default::default()
     }];
     // A quiet feed with no hero: the newest belt move leads (frame E).
@@ -1103,7 +1134,11 @@ fn extract_recap_leaderboard(ctx: &AppContext, data: &serde_json::Value) -> Vec<
 /// Rows of the Belts moved section: one for each title that changed hands in
 /// the recap week, from `belts_moved`. Names come from the recap, so a member
 /// who left the crew still has one.
-fn extract_recap_belts_moved(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecapBeltMovedRow> {
+fn extract_recap_belts_moved(
+    ctx: &AppContext,
+    data: &serde_json::Value,
+    seal: &Seal,
+) -> Vec<RecapBeltMovedRow> {
     let arr = match data.get("belts_moved").and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return Vec::new(),
@@ -1125,7 +1160,25 @@ fn extract_recap_belts_moved(ctx: &AppContext, data: &serde_json::Value) -> Vec<
             let prev_name = str_of(v, "previous_holder_name");
             let (holder_avatar, holder_has_avatar) = resolve_avatar(ctx, &holder_id);
             let (prev_avatar, prev_has_avatar) = resolve_avatar(ctx, &prev_id);
+            let belt = {
+                let cache = ctx.avatar_cache.borrow();
+                let moved_ms = v.get("moved_at_ms").and_then(|n| n.as_i64()).unwrap_or(0);
+                let value = v.get("value").unwrap_or(&serde_json::Value::Null);
+                sealed::reveal_of(
+                    &sealed::Move {
+                        title_id: &title_id,
+                        moved_ms,
+                        holder: &Person::new(&holder_id, &holder_name),
+                        prev: &Person::new(&prev_id, &prev_name),
+                        value,
+                        unit: &str_of(v, "unit"),
+                    },
+                    &|id| cache.get(id).cloned(),
+                    seal,
+                )
+            };
             RecapBeltMovedRow {
+                belt,
                 title: title.into(),
                 icon,
                 value: value.into(),
@@ -1873,7 +1926,7 @@ fn build_feed_card(
     let (mvp2_av, mvp2_has_av) = resolve_avatar(ctx, &mvp2.3);
     let recap_leaderboard = extract_recap_leaderboard(ctx, &data);
     let recap_awards = extract_recap_awards(&data);
-    let mut recap_belts_moved = extract_recap_belts_moved(ctx, &data);
+    let mut recap_belts_moved = with_seal(ctx, |seal| extract_recap_belts_moved(ctx, &data, seal));
     // A daily recap lists two belts at most, the server's newest first.
     if backend_type == "daily_recap" {
         recap_belts_moved.truncate(2);
@@ -1935,6 +1988,13 @@ fn build_feed_card(
             .map(|n| format!("Week {n}"))
             .unwrap_or_default()
             .into(),
+        recap_seal: if backend_type == "weekly_recap" {
+            let week_start = data.get("week_start").and_then(|v| v.as_i64()).unwrap_or(0);
+            let week_end = data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0);
+            with_seal(ctx, |seal| sealed::recap_seal(week_start, week_end, seal))
+        } else {
+            Default::default()
+        },
         age_label: if backend_type == "weekly_recap" {
             crate::feed_age::recap_age_label(
                 data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),

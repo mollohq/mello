@@ -4775,6 +4775,7 @@ fn no_card_draws_a_commentary_note() {
         "Today",
     ];
     let mut h = Harness::new();
+    open_recap(&h, 1);
     emit_recap(
         &mut h,
         serde_json::json!({
@@ -6943,6 +6944,15 @@ fn belts_held() -> serde_json::Value {
         {"user_id": "user-1", "display_name": "Jonas", "count": 3, "title_ids": ["the_carry", "clipper", "mouth"]},
         {"user_id": "user-2", "display_name": "Bob", "count": 1, "title_ids": ["night_owl"]},
     ])
+}
+
+/// The user opened the recap of the week that starts at `week_start`, so the
+/// feed draws the card and not the sealed one.
+fn open_recap(h: &Harness, week_start: i64) {
+    h.settings()
+        .borrow_mut()
+        .sealed_opened
+        .insert("crew-0".into(), vec![crate::sealed::recap_key(week_start)]);
 }
 
 fn emit_recap(h: &mut Harness, extra: serde_json::Value) {

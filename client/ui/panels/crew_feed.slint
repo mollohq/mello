@@ -1,12 +1,14 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { BeltReveal, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 import { Head2headCardWide, Head2headCell, H2hCellSize, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
+import { SealedBelt, SealedRecap } from "../components/sealed.slint";
+import { SealedFixtures } from "../previews/sealed_fixtures.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { GameArt } from "../components/game_art.slint";
@@ -970,13 +972,28 @@ component RecapCard inherits Rectangle {
                             opacity: 0.4;
                             UserAvatar { size: 28px; initials: b.prev-initials; color-index: b.prev-hue; avatar: b.prev-avatar; has-avatar: b.prev-has-avatar; }
                         }
-                        UserAvatar { size: 28px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
-                        TitleChip {
+                        // Sealed: the new holder is a muted octagon with "?" until the
+                        // belt is opened.
+                        UserAvatar {
+                            size: 28px;
+                            muted: b.belt.sealed;
+                            initials: b.belt.sealed ? "?" : b.holder-initials;
+                            color-index: b.holder-hue;
+                            avatar: b.holder-avatar;
+                            has-avatar: !b.belt.sealed && b.holder-has-avatar;
+                        }
+                        if !b.belt.sealed: TitleChip {
                             horizontal-stretch: 1;
                             compact: true;
                             dense: true;
                             hue: H2hHue.of(b.holder-hue);
                             icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                        }
+                        if b.belt.sealed: SealedBelt {
+                            horizontal-stretch: 1;
+                            height: 34px;
+                            tight: true;
+                            belt: b.belt;
                         }
                       }
                     }
@@ -1296,13 +1313,26 @@ component DailyRecapCard inherits Rectangle {
                 max-width: i < 2 ? 10000px : 0px;
                 spacing: 4px;
                 cross-axis-alignment: center;
-                UserAvatar { size: 22px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
-                TitleChip {
+                UserAvatar {
+                    size: 22px;
+                    muted: b.belt.sealed;
+                    initials: b.belt.sealed ? "?" : b.holder-initials;
+                    color-index: b.holder-hue;
+                    avatar: b.holder-avatar;
+                    has-avatar: !b.belt.sealed && b.holder-has-avatar;
+                }
+                if !b.belt.sealed: TitleChip {
                     horizontal-stretch: 1;
                     compact: true;
                     dense: true;
                     hue: H2hHue.of(b.holder-hue);
                     icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                }
+                if b.belt.sealed: SealedBelt {
+                    horizontal-stretch: 1;
+                    height: 34px;
+                    tight: true;
+                    belt: b.belt;
                 }
             }
         }
@@ -2652,8 +2682,13 @@ component FeedSlot inherits Rectangle {
         play-clicked(id) => { root.play-clicked(id); }
         seek-ms(m) => { root.seek-clip-ms(m); }
     }
-    if card.card-type == "recap": RecapCard {
+    if card.card-type == "recap" && !card.recap-seal.sealed: RecapCard {
         width: parent.width; height: parent.height; card: root.card;
+    }
+    if card.card-type == "recap" && card.recap-seal.sealed: SealedRecap {
+        width: parent.width; height: parent.height;
+        seal: root.card.recap-seal;
+        week: root.card.recap-week != "" ? root.card.recap-week : "This week";
     }
     if card.card-type == "session-preview": SessionPreviewCard {
         width: parent.width; height: parent.height;
@@ -4204,6 +4239,24 @@ export component PreviewFeedFiveMembers inherits Rectangle {
     property <H2hPerson> max: { id: "u4", name: "Max", initials: "M", hue-index: 2 };
     property <H2hPerson> leo: { id: "u5", name: "Leo", initials: "L", hue-index: 4 };
 
+    /// The moved belts and the recap show sealed (PreviewFeedSealed).
+    in property <bool> sealed: false;
+    property <BeltReveal> carry: {
+        key: "the_carry:1307", sealed: root.sealed, seed: 1307, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
+        title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), hue-index: 1, kind: 0, amount: 4201, unit: "h",
+        stat: "Most hours in the top shared game.", holder: root.jonas, prev: root.bob,
+    };
+    property <BeltReveal> marathon: {
+        key: "marathon:911", sealed: root.sealed, seed: 911, code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells,
+        title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), hue-index: 2, kind: 1, amount: 228,
+        stat: "Longest single game session.", holder: root.max, prev: root.sara,
+    };
+    property <BeltReveal> owl: {
+        key: "night_owl:2281", sealed: root.sealed, seed: 2281, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), hue-index: 3, kind: 2, amount: 220,
+        stat: "Latest local time of a last session.", holder: root.sara, prev: root.bob,
+    };
+
     CrewFeed {
         width: parent.width;
         height: parent.height;
@@ -4219,13 +4272,14 @@ export component PreviewFeedFiveMembers inherits Rectangle {
         cards: [
             {
                 id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 4",
+                recap-seal: { key: "recap:4421", sealed: root.sealed, seed: 4421, bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim },
                 title: "19h 40", subtitle: "11", duration: "3h 48",
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
-                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2 },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
+                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: root.carry },
+                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2, belt: root.marathon },
+                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3, belt: root.owl },
                 ],
                 belts-held: [
                     { name: "Max", initials: "M", hue: 2, count: 4 },
@@ -4307,11 +4361,11 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days" } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
                         { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day" } },
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2 } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
                     ],
                 },
             },
@@ -4324,6 +4378,11 @@ export component PreviewFeedFiveMembers inherits Rectangle {
             },
         ];
     }
+}
+
+/// Frame D with the moved belts and the weekly recap sealed.
+export component PreviewFeedSealed inherits PreviewFeedFiveMembers {
+    sealed: true;
 }
 
 // A live stream holds the hero while the crew is one person. The wide card

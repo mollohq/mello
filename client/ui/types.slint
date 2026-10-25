@@ -65,6 +65,51 @@ export struct RecapAwardRow {
     detail: string,
 }
 
+// A crew member shown as an octagon (the invite card).
+export struct H2hPerson {
+    id: string,
+    name: string,
+    initials: string,
+    hue-index: int,
+    avatar: image,
+    has-avatar: bool,
+}
+
+// A belt that moved, as the sealed chip and the centre view draw it (plan
+// SEALED-REVEAL.md). One move has one `key` and one `seed`, so the code is the
+// same in every slot. `code` is the Path commands of the 15 by 6 cells, 4 units
+// square on a pitch of 5. `cells` holds the same cells, for the charge.
+// `kind` is how the value counts up: 0 count, 1 hours and minutes, 2 clock.
+export struct BeltReveal {
+    /// "title_id:moved_at_ms". Empty: this chip is not a belt move.
+    key: string,
+    sealed: bool,
+    seed: int,
+    code: string,
+    cells: [bool],
+    title: string,
+    icon: image,
+    /// Identity hue of the new holder.
+    hue-index: int,
+    kind: int,
+    amount: float,
+    decimals: int,
+    unit: string,
+    stat: string,
+    holder: H2hPerson,
+    prev: H2hPerson,
+}
+
+// The sealed state of a weekly recap. `bright` and `dim` are Path commands of
+// the field, in a box of 160 by 248 units.
+export struct RecapSeal {
+    key: string,
+    sealed: bool,
+    seed: int,
+    bright: string,
+    dim: string,
+}
+
 // A head2head title that changed hands in the recap week. Value and unit are
 // split as on TitleChip. Hues are identity hue indexes of the two members.
 export struct RecapBeltMovedRow {
@@ -82,6 +127,7 @@ export struct RecapBeltMovedRow {
     holder-hue: int,
     holder-avatar: image,
     holder-has-avatar: bool,
+    belt: BeltReveal,
 }
 
 // One title a member holds, for the full-screen recap.
@@ -99,16 +145,6 @@ export struct RecapBeltHeldRow {
     has-avatar: bool,
     count: int,
     titles: [RecapHeldTitle],
-}
-
-// A crew member shown as an octagon (the invite card).
-export struct H2hPerson {
-    id: string,
-    name: string,
-    initials: string,
-    hue-index: int,
-    avatar: image,
-    has-avatar: bool,
 }
 
 // One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
@@ -149,6 +185,9 @@ export struct TitleHeld {
     /// "held 9 days", "held 1 day", or "" under one day. Built in Rust.
     held-label: string,
     moved-recent: bool,
+    /// The move behind the chip. `belt.key` is empty for a title that never
+    /// changed hands, or when the chip shows a member who does not hold it.
+    belt: BeltReveal,
 }
 
 // One row of the head2head cell: the viewer against one member.
@@ -319,6 +358,8 @@ export struct FeedCardData {
     // the recap came out: "Monday", "3 weeks ago". Built in Rust.
     recap-week: string,
     age-label: string,
+    /// The weekly recap seal. `recap-seal.key` is empty on any other card.
+    recap-seal: RecapSeal,
 
     // Daily recap (card-type "daily-recap"): the day ("Today so far",
     // "Yesterday", "Tuesday"), the sessions of the day, and the members who

@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape, CutButton } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
+import { SealedBelt } from "sealed.slint";
 import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
 
 export { TitleHeld }
@@ -147,18 +148,23 @@ export component TitleChip inherits Rectangle {
 }
 
 /// A TitleChip with how long the holder has held the title under it. The
-/// label is empty under one day, and then the chip stands alone.
+/// label is empty under one day, and then the chip stands alone. A belt that
+/// moved and is not opened is sealed: the chip hides what it holds, and the
+/// held label waits.
 export component HeldChip inherits Rectangle {
     in property <TitleHeld> t;
     in property <bool> compact: false;
     in property <bool> dense: false;
 
+    property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
+    property <bool> sealed: root.t.belt.sealed;
+
     background: transparent;
-    height: chip.height + (root.t.held-label != "" && !root.dense ? 16px : 0px);
+    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.sealed ? 16px : 0px);
 
     // No layout here: a layout would give the chip a preferred width and
     // skew the equal columns of the grid it sits in.
-    chip := TitleChip {
+    if !root.sealed: chip := TitleChip {
         x: 0px; y: 0px;
         width: parent.width;
         compact: root.compact;
@@ -166,9 +172,16 @@ export component HeldChip inherits Rectangle {
         hue: H2hHue.of(root.t.hue-index);
         icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
     }
-    if root.t.held-label != "" && !root.dense: Text {
+    if root.sealed: SealedBelt {
+        x: 0px; y: 0px;
+        width: parent.width;
+        height: root.chip-height;
+        belt: root.t.belt;
+        tight: root.compact || root.dense;
+    }
+    if root.t.held-label != "" && !root.dense && !root.sealed: Text {
         x: 2px;
-        y: chip.height + 3px;
+        y: root.chip-height + 3px;
         width: parent.width - 2px;
         text: root.t.held-label;
         font-family: Theme.font-label;

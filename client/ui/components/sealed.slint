@@ -1,0 +1,206 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape } from "cut.slint";
+import { BeltReveal, RecapSeal } from "../types.slint";
+
+// ============================================================
+//  Sealed cards (plan SEALED-REVEAL.md). A belt that moved, and the weekly
+//  recap, show sealed in the feed: a field of code cells and one red key.
+//  Red is the unread state. Nothing on a sealed card tells what it holds.
+//
+//  The cells are one Path each, built in Rust (`sealed.rs`). A sealed card
+//  reads no clock, so a feed full of them costs no redraw.
+// ============================================================
+
+/// What every sealed belt looks like: the silhouette of `TitleChip`, a data
+/// matrix and one red key. The code comes from the move, so the same belt shows
+/// the same code in every slot. The chip shows the cells that fit.
+export component SealedChip inherits Rectangle {
+    in property <BeltReveal> belt;
+    /// The compact and dense chip: a 5 px cut, 10 px padding, a 10 px key.
+    in property <bool> tight: false;
+    /// The pointer is over the chip.
+    in property <bool> hot: false;
+
+    property <length> pad: root.tight ? 10px : 12px;
+    property <length> key: root.tight ? 10px : 12px;
+    // At most the 15 by 6 cells of the code. Wider rows show the same size.
+    property <int> rows: Math.min(6, Math.floor((root.height - (root.tight ? 14px : 18px)) / 5px));
+    property <int> cols: Math.min(15, Math.floor((root.width - root.pad * 2 - root.key - 8px + 1px) / 5px));
+
+    background: transparent;
+
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.tight ? 5px : 7px;
+        fill: root.hot ? Theme.action-line-hover : Theme.graphic-med;
+    }
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.tight ? 5px : 7px;
+        inset: Theme.keyline;
+        fill: Theme.surface;
+    }
+
+    // The code. The Path is always 15 by 6; the box shows the cells that fit.
+    Rectangle {
+        x: root.pad;
+        y: (parent.height - self.height) / 2;
+        width: root.cols * 5px - 1px;
+        height: root.rows * 5px - 1px;
+        clip: true;
+
+        Path {
+            x: 0px;
+            y: 0px;
+            width: 75px;
+            height: 30px;
+            viewbox-width: 75;
+            viewbox-height: 30;
+            commands: root.belt.code;
+            fill: Theme.action-quiet;
+        }
+    }
+
+    // The key: the unread state.
+    Rectangle {
+        x: root.pad + root.cols * 5px - 1px + 9px;
+        y: (parent.height - self.height) / 2;
+        width: root.key;
+        height: root.key;
+        background: Theme.live;
+    }
+}
+
+/// A sealed belt in a slot: the chip, lifted when the pointer is over it, and
+/// the control that opens it.
+export component SealedBelt inherits Rectangle {
+    callback clicked();
+    in property <BeltReveal> belt;
+    in property <bool> tight: false;
+
+    background: transparent;
+
+    SealedChip {
+        y: ta.has-hover ? -3px : 0px;
+        animate y { duration: 120ms; easing: ease-out; }
+        width: parent.width;
+        height: parent.height;
+        belt: root.belt;
+        tight: root.tight;
+        hot: ta.has-hover;
+    }
+
+    ta := TouchArea {
+        accessible-role: button;
+        accessible-label: "Sealed belt, open it";
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+/// The sealed weekly recap: the shape of the recap card, a sparse field of
+/// code cells with one red key, and the week under the label. The proportions
+/// follow the sketch Bob picked, relative to the card size.
+export component SealedRecap inherits Rectangle {
+    callback clicked();
+    in property <RecapSeal> seal;
+    /// "Week 4", or "This week" before the server counts the weeks.
+    in property <string> week: "This week";
+    /// The pointer is over the card. Also set by the centre view for the back.
+    in property <bool> hot: false;
+    /// 0 to 1 while the field clears from the key, at the start of the opening.
+    in property <float> clear: 0;
+    /// The card answers a click. The copy in the centre view does not.
+    in property <bool> interactive: true;
+
+    property <length> cell: root.width * 5 / 160;
+    property <length> key-size: root.width * 9 / 160;
+    property <length> key-x: root.width * (14 + 10 * 11 + 2.5) / 160;
+    property <length> key-y: root.height * (8 + 15 * 12 + 2.5) / 248;
+
+    background: transparent;
+
+    // Everything but the control lifts 4 px in 140 ms under the pointer.
+    face := Rectangle {
+        y: ta.has-hover ? -4px : 0px;
+        animate y { duration: 140ms; easing: ease-out; }
+        width: parent.width;
+        height: parent.height;
+        background: transparent;
+
+        CutShape {
+            width: parent.width; height: parent.height;
+            n: Theme.notch; corner: "bl";
+            fill: root.hot || ta.has-hover ? Theme.action-line-hover : Theme.graphic-med;
+        }
+        CutShape {
+            width: parent.width; height: parent.height;
+            n: Theme.notch; corner: "bl"; inset: Theme.keyline;
+            fill: Theme.surface;
+        }
+
+        // The field. Two paths, one for each level of the cells, in a box of 160
+        // by 248 units that follows the card.
+        Path {
+            x: 0px; y: 0px;
+            width: parent.width; height: parent.height;
+            viewbox-width: 160;
+            viewbox-height: 248;
+            commands: root.seal.dim;
+            fill: Theme.card-border;
+        }
+        Path {
+            x: 0px; y: 0px;
+            width: parent.width; height: parent.height;
+            viewbox-width: 160;
+            viewbox-height: 248;
+            commands: root.seal.bright;
+            fill: Theme.action-quiet;
+        }
+
+        // The key: the unread state.
+        Rectangle {
+            x: root.key-x - self.width / 2;
+            y: root.key-y - self.height / 2;
+            width: root.key-size;
+            height: root.key-size;
+            background: Theme.live;
+            transform-scale: 1 + 0.35 * root.clear;
+        }
+
+        VerticalLayout {
+            x: 28px;
+            y: 26px;
+            width: parent.width - 56px;
+            spacing: 6px;
+            alignment: start;
+
+            Text {
+                text: "WEEKLY RECAP";
+                font-family: Theme.font-label;
+                font-size: 11px;
+                font-weight: Theme.weight-label;
+                letter-spacing: Theme.track-label;
+                color: Theme.text-secondary;
+            }
+            Text {
+                text: root.week;
+                font-family: Theme.font-display;
+                font-size: 40px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.text-primary;
+                overflow: elide;
+            }
+        }
+
+    }
+
+    ta := TouchArea {
+        enabled: root.interactive;
+        accessible-enabled: root.interactive;
+        accessible-role: button;
+        accessible-label: "Sealed recap, open it";
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}

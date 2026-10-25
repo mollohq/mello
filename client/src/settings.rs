@@ -66,6 +66,9 @@ pub struct Settings {
     /// When the user last opened each crew's feed (ms, by crew id). A head2head
     /// belt that moved after this is unread.
     pub feed_seen_ms: std::collections::HashMap<String, i64>,
+    /// The sealed belts and recaps the user opened (`sealed.rs`), by crew id.
+    /// A key is `title_id:moved_at_ms` or `recap:<week_start_ms>`.
+    pub sealed_opened: std::collections::HashMap<String, Vec<String>>,
     /// The `feed_seen_ms` of a crew as it was when the feed opened. Unread is
     /// judged against this for the whole visit. Not stored.
     #[serde(skip)]
@@ -127,6 +130,7 @@ impl Default for Settings {
             hidden_invite_crew_ids: Vec::new(),
             seen_session_ids: Vec::new(),
             feed_seen_ms: Default::default(),
+            sealed_opened: Default::default(),
             feed_baseline_ms: Default::default(),
             disabled_game_integrations: Vec::new(),
             hidden_games: Vec::new(),

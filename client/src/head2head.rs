@@ -10,13 +10,14 @@ use serde::Deserialize;
 use serde_json::Value;
 
 use crate::converters::{avatar_color_index, make_initials};
+use crate::sealed::Seal;
 use crate::{H2hPairRow, H2hPerson, Head2headData, TitleHeld};
 
 /// Seats head2head shows, as in the backend. A crew of five or more has none.
 pub const SEATS: i32 = 5;
 /// Most pair rows in the cell. With seats and the invite button the cell has
 /// room for two rows, without them for four (mockup frame D).
-const ROWS_WITH_SEATS: usize = 2;
+pub const ROWS_WITH_SEATS: usize = 2;
 /// A cell that stands tall (two grid rows, frames E and F) has room for a
 /// third row beside the seats.
 pub const ROWS_TALL: usize = 3;
@@ -281,6 +282,17 @@ impl Placement {
     }
 }
 
+/// A title that changed hands, for the sealed chip and the centre view.
+#[derive(Debug, Clone, PartialEq)]
+pub struct Moved {
+    pub title_id: String,
+    pub moved_ms: i64,
+    pub holder: Person,
+    pub prev: Person,
+    pub value: Value,
+    pub unit: String,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Chip {
     pub id: String,
@@ -291,6 +303,9 @@ pub struct Chip {
     pub holder_hue: i32,
     pub held_days: i32,
     pub moved_recent: bool,
+    /// The move behind the chip, when the chip shows the crew holder of a
+    /// title that changed hands.
+    pub moved: Option<Moved>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -440,6 +455,7 @@ fn own_chip(o: &WireOwnValue, viewer: &Person) -> Chip {
         holder_hue: viewer.hue,
         held_days: 0,
         moved_recent: false,
+        moved: None,
     }
 }
 
@@ -460,7 +476,24 @@ fn chip_of(t: &WireTitle, roster: &dyn Fn(&str) -> Person, now_ms: i64, moved: b
             0
         },
         moved_recent: moved,
+        moved: moved_of(t, roster),
     }
+}
+
+/// The move of a title, when it changed hands and this client knows the title.
+fn moved_of(t: &WireTitle, roster: &dyn Fn(&str) -> Person) -> Option<Moved> {
+    (t.moved_at_ms > 0
+        && look(&t.title_id).is_some()
+        && !t.holder_user_id.is_empty()
+        && !t.previous_holder_user_id.is_empty())
+    .then(|| Moved {
+        title_id: t.title_id.clone(),
+        moved_ms: t.moved_at_ms,
+        holder: roster(&t.holder_user_id),
+        prev: roster(&t.previous_holder_user_id),
+        value: t.value.clone(),
+        unit: t.unit.clone(),
+    })
 }
 
 /// Whether the higher value holds the title. Only has_a_life goes to the
@@ -539,6 +572,7 @@ fn deciding_chip(
     if crew.holder_user_id != holder {
         chip.held_days = 0;
         chip.moved_recent = false;
+        chip.moved = None;
     }
     Some(chip)
 }
@@ -615,12 +649,21 @@ pub fn now_ms() -> i64 {
 
 /// Whether a belt held by one of the two members moved in the last 24 h and
 /// after `seen_ms`, the last time the viewer opened the crew feed.
-fn moved_recent(titles: &[WireTitle], a: &str, b: &str, now_ms: i64, seen_ms: i64) -> bool {
+/// A belt the user opened no longer counts: opening it clears the dot.
+fn moved_recent(
+    titles: &[WireTitle],
+    a: &str,
+    b: &str,
+    now_ms: i64,
+    seen_ms: i64,
+    opened: &dyn Fn(&str) -> bool,
+) -> bool {
     titles.iter().any(|t| {
         (t.holder_user_id == a || t.holder_user_id == b)
             && t.moved_at_ms > 0
             && t.moved_at_ms > seen_ms
             && now_ms - t.moved_at_ms < DAY_MS
+            && !opened(&crate::sealed::belt_key(&t.title_id, t.moved_at_ms))
     })
 }
 
@@ -638,6 +681,7 @@ pub fn build(
 /// Build the model from the entry data. `None` when the data does not parse.
 /// A move after `seen_ms` (the viewer's last feed open for this crew) is
 /// unread and marks its pair row.
+#[cfg(test)]
 pub fn build_seen(
     data: &Value,
     viewer: &Person,
@@ -650,6 +694,7 @@ pub fn build_seen(
 
 /// `build_seen` with the number of pair rows a cell with seats draws: two in
 /// a plain cell, `ROWS_TALL` in one that stands tall.
+#[cfg(test)]
 pub fn build_rows(
     data: &Value,
     viewer: &Person,
@@ -657,6 +702,28 @@ pub fn build_rows(
     now_ms: i64,
     seen_ms: i64,
     rows_with_seats: usize,
+) -> Option<Model> {
+    build_rows_sealed(
+        data,
+        viewer,
+        roster,
+        now_ms,
+        seen_ms,
+        rows_with_seats,
+        &|_| false,
+    )
+}
+
+/// `build_rows` that knows which belts the user opened (`opened` takes the
+/// key of a move). An opened belt does not mark its pair row unread.
+pub fn build_rows_sealed(
+    data: &Value,
+    viewer: &Person,
+    roster: &dyn Fn(&str) -> Person,
+    now_ms: i64,
+    seen_ms: i64,
+    rows_with_seats: usize,
+    opened: &dyn Fn(&str) -> bool,
 ) -> Option<Model> {
     let wire: WireFeed = serde_json::from_value(data.clone()).ok()?;
     let known: Vec<&WireTitle> = wire
@@ -684,7 +751,14 @@ pub fn build_rows(
                     you_count: p.a_count,
                     them_count: p.b_count,
                     deciding: None,
-                    moved_recent: moved_recent(&wire.titles, &viewer.id, &p.b, now_ms, seen_ms),
+                    moved_recent: moved_recent(
+                        &wire.titles,
+                        &viewer.id,
+                        &p.b,
+                        now_ms,
+                        seen_ms,
+                        opened,
+                    ),
                 },
                 p,
             )
@@ -836,8 +910,26 @@ pub fn held_label(days: i32) -> String {
     }
 }
 
-fn title_held(c: &Chip) -> TitleHeld {
+fn title_held(c: &Chip, avatar: &dyn Fn(&str) -> Option<slint::Image>, seal: &Seal) -> TitleHeld {
     TitleHeld {
+        belt: c
+            .moved
+            .as_ref()
+            .map(|m| {
+                crate::sealed::reveal_of(
+                    &crate::sealed::Move {
+                        title_id: &m.title_id,
+                        moved_ms: m.moved_ms,
+                        holder: &m.holder,
+                        prev: &m.prev,
+                        value: &m.value,
+                        unit: &m.unit,
+                    },
+                    avatar,
+                    seal,
+                )
+            })
+            .unwrap_or_default(),
         id: c.id.as_str().into(),
         icon: icon_of(&c.id),
         title: c.name.as_str().into(),
@@ -855,8 +947,19 @@ fn model_of<T: Clone + 'static>(items: Vec<T>) -> slint::ModelRc<T> {
     slint::ModelRc::new(slint::VecModel::from(items))
 }
 
-/// The UI struct of the head2head card.
+/// The UI struct of the head2head card, with nothing sealed.
+#[cfg(test)]
 pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Head2headData {
+    to_slint_sealed(m, avatar, &Seal::off())
+}
+
+/// The UI struct of the head2head card. A chip of a belt that moved and is not
+/// opened is sealed (`seal`).
+pub fn to_slint_sealed(
+    m: &Model,
+    avatar: &dyn Fn(&str) -> Option<slint::Image>,
+    seal: &Seal,
+) -> Head2headData {
     let pic = |id: &str| avatar(id).unwrap_or_default();
     let has = |id: &str| avatar(id).is_some();
     let pairs: Vec<H2hPairRow> = m
@@ -877,7 +980,11 @@ pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Hea
             them_count: p.them_count,
             has_chip: p.deciding.is_some(),
             moved_recent: p.moved_recent,
-            chip: p.deciding.as_ref().map(title_held).unwrap_or_default(),
+            chip: p
+                .deciding
+                .as_ref()
+                .map(|c| title_held(c, avatar, seal))
+                .unwrap_or_default(),
         })
         .collect();
     let (right_id, right_name, right_initials, right_hue) = m
@@ -890,8 +997,18 @@ pub fn to_slint(m: &Model, avatar: &dyn Fn(&str) -> Option<slint::Image>) -> Hea
         member_count: m.member_count,
         open_seats: m.open_seats,
         belt_moved_recent: m.belt_moved_recent,
-        titles: model_of(m.titles.iter().map(title_held).collect()),
-        chips: model_of(m.chips.iter().map(title_held).collect()),
+        titles: model_of(
+            m.titles
+                .iter()
+                .map(|c| title_held(c, avatar, seal))
+                .collect(),
+        ),
+        chips: model_of(
+            m.chips
+                .iter()
+                .map(|c| title_held(c, avatar, seal))
+                .collect(),
+        ),
         pairs: model_of(pairs),
         left_id: m.viewer.id.as_str().into(),
         left_name: m.viewer.name.as_str().into(),
@@ -1523,6 +1640,91 @@ mod tests {
         assert_eq!(b.moved_ms, NOW - 2 * DAY_MS);
         assert!(b.is_news(NOW));
         assert!(!b.is_news(NOW + 13 * DAY_MS), "two weeks on it is not news");
+    }
+
+    fn sealed_data(days: i64) -> Value {
+        json!({
+            "crew_id": "c", "member_count": 3, "open_seats": 2,
+            "titles": [moved_title("night_owl", "u2", "u3", days, json!("03:40"))],
+            "pairs": [{"a": "me", "b": "u2", "a_count": 0, "b_count": 1, "values": [
+                {"title_id": "night_owl", "a_value": "01:00", "b_value": "03:40"}]}],
+        })
+    }
+
+    fn chip_belts(d: &Head2headData) -> Vec<(String, bool)> {
+        use slint::Model;
+        d.pairs
+            .iter()
+            .filter(|p| p.has_chip)
+            .map(|p| (p.chip.belt.key.to_string(), p.chip.belt.sealed))
+            .collect()
+    }
+
+    #[test]
+    fn a_chip_of_a_belt_that_moved_is_sealed_until_opened() {
+        let data = sealed_data(1);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let key = crate::sealed::belt_key("night_owl", NOW - DAY_MS);
+        let none = |_: &str| false;
+        let seal = Seal {
+            enabled: true,
+            now_ms: NOW,
+            opened: &none,
+        };
+        let d = to_slint_sealed(&m, &|_| None, &seal);
+        assert_eq!(chip_belts(&d), vec![(key.clone(), true)]);
+        // Opened: the same key, not sealed.
+        let opened = |k: &str| k == key;
+        let seal = Seal {
+            enabled: true,
+            now_ms: NOW,
+            opened: &opened,
+        };
+        let d = to_slint_sealed(&m, &|_| None, &seal);
+        assert_eq!(chip_belts(&d), vec![(key, false)]);
+        // Nothing seals without a seal.
+        assert!(!chip_belts(&to_slint(&m, &|_| None))[0].1);
+    }
+
+    #[test]
+    fn a_move_of_seven_days_opens_silently() {
+        let m = build(&sealed_data(7), &me(), &roster, NOW).unwrap();
+        let none = |_: &str| false;
+        let seal = Seal {
+            enabled: true,
+            now_ms: NOW,
+            opened: &none,
+        };
+        assert!(!chip_belts(&to_slint_sealed(&m, &|_| None, &seal))[0].1);
+        let m = build(&sealed_data(6), &me(), &roster, NOW).unwrap();
+        assert!(chip_belts(&to_slint_sealed(&m, &|_| None, &seal))[0].1);
+    }
+
+    #[test]
+    fn the_belt_carries_the_value_to_count_up_and_both_people() {
+        use slint::Model;
+        let m = build(&sealed_data(1), &me(), &roster, NOW).unwrap();
+        let d = to_slint(&m, &|_| None);
+        let b = d.pairs.row_data(0).unwrap().chip.belt;
+        assert_eq!((b.kind, b.amount as i32, b.decimals), (2, 220, 0));
+        assert_eq!(b.holder.name.as_str(), roster("u2").name);
+        assert_eq!(b.prev.name.as_str(), roster("u3").name);
+        assert_eq!(b.stat.as_str(), "Latest local time of a last session.");
+        assert_eq!(b.cells.row_count(), 90);
+    }
+
+    #[test]
+    fn opening_a_belt_clears_the_dot_on_its_pair_rows() {
+        let data = sealed_data(0);
+        let key = crate::sealed::belt_key("night_owl", NOW);
+        // The data above moved at NOW - 0 days: after the last open (seen 0).
+        let seen = NOW - 1000;
+        let unread =
+            build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, 2, &|_| false).unwrap();
+        assert!(unread.pairs[0].moved_recent);
+        let read =
+            build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, 2, &|k| k == key).unwrap();
+        assert!(!read.pairs[0].moved_recent);
     }
 
     #[test]
