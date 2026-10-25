@@ -108,16 +108,6 @@ fn stored_keys(h: &Harness) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// Let the card of a belt fly, rest and land. The clock starts at 0.
-fn open_and_close(h: &mut Harness) {
-    at(h, 0);
-    h.click_label("Sealed belt, open it");
-    at(h, 1500);
-    h.click_label("Close");
-    at(h, 2100);
-    h.pump();
-}
-
 fn sealed_controls(h: &Harness) -> usize {
     h.controls_labelled("Sealed belt, open it").len()
 }
