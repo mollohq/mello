@@ -166,6 +166,8 @@ struct Snapshot {
     live_sessions: Vec<LiveSessionSnap>,
     /// The daily recap card of the feed, if any.
     daily_recap: DailyRecapSnap,
+    /// Sealed belts and recap in the feed, and the card in the centre.
+    sealed: SealedSnap,
     /// The skeleton trio cells that show (0 to 3).
     skeleton_trio: usize,
     /// The joined line at the top of the feed, top row first.
@@ -286,6 +288,48 @@ struct BeltHeroSnap {
     headline: String,
     detail: String,
     age: String,
+}
+
+/// The sealed cards of the feed (plan `SEALED-REVEAL.md`).
+#[derive(Serialize)]
+struct SealedSnap {
+    /// Different sealed belts in the feed. A belt in two slots counts once. The
+    /// belt in the centre does not count.
+    belts: usize,
+    /// The weekly recap is sealed.
+    recap: bool,
+    /// The card in the centre of the feed: `"belt"`, `"recap"` or `"none"`.
+    open_center: &'static str,
+}
+
+/// Count the sealed belts and the sealed recap of the feed cards.
+fn read_sealed(app: &MainWindow) -> SealedSnap {
+    let ui = app.global::<crate::SealedUi>();
+    let active = ui.get_active_key();
+    let mut keys: Vec<String> = Vec::new();
+    let mut recap = false;
+    let mut add = |b: &crate::BeltReveal| {
+        let key = b.key.to_string();
+        if b.sealed && b.key != active && !keys.contains(&key) {
+            keys.push(key);
+        }
+    };
+    for c in app.get_feed_cards().iter() {
+        let h = &c.head2head;
+        h.pairs.iter().for_each(|p| add(&p.chip.belt));
+        h.chips.iter().for_each(|t| add(&t.belt));
+        c.belts_moved.iter().for_each(|b| add(&b.belt));
+        recap |= c.recap_seal.sealed && c.recap_seal.key != active;
+    }
+    SealedSnap {
+        belts: keys.len(),
+        recap,
+        open_center: match ui.get_active_kind().as_str() {
+            "belt" => "belt",
+            "recap" => "recap",
+            _ => "none",
+        },
+    }
 }
 
 /// The head2head card of the feed. `present` is false when the feed has none;
@@ -1175,6 +1219,7 @@ fn read(app: &MainWindow) -> Snapshot {
             duration_ms: app.get_clip_duration_ms(),
         },
         head2head: read_head2head(app),
+        sealed: read_sealed(app),
         invite_card: read_invite_card(app),
         recent_games: read_recent_games(app),
         daily_recap: read_daily_recap(app),
@@ -1434,6 +1479,68 @@ mod tests {
     }
 
     #[test]
+    fn the_snapshot_counts_sealed_belts_once_and_reports_the_centre_card() {
+        let h = Harness::new();
+        let app = h.app();
+        assert_eq!(
+            snapshot_json(app)["sealed"],
+            json!({"belts": 0, "recap": false, "open_center": "none"})
+        );
+        let belt = |key: &str, sealed: bool| crate::BeltReveal {
+            key: key.into(),
+            sealed,
+            ..Default::default()
+        };
+        let chip = |key: &str, sealed: bool| crate::TitleHeld {
+            belt: belt(key, sealed),
+            ..Default::default()
+        };
+        let row = |key: &str, sealed: bool| crate::H2hPairRow {
+            has_chip: true,
+            chip: chip(key, sealed),
+            ..Default::default()
+        };
+        app.set_feed_cards(model(vec![
+            crate::FeedCardData {
+                card_type: "head2head".into(),
+                head2head: crate::Head2headData {
+                    pairs: model(vec![row("night_owl:1", true), row("the_carry:2", false)]),
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            crate::FeedCardData {
+                card_type: "recap".into(),
+                recap_seal: crate::RecapSeal {
+                    key: "recap:7".into(),
+                    sealed: true,
+                    ..Default::default()
+                },
+                // The same belt as the pair row: counted once.
+                belts_moved: model(vec![crate::RecapBeltMovedRow {
+                    belt: belt("night_owl:1", true),
+                    ..Default::default()
+                }]),
+                ..Default::default()
+            },
+        ]));
+        assert_eq!(
+            snapshot_json(app)["sealed"],
+            json!({"belts": 1, "recap": true, "open_center": "none"})
+        );
+        // The belt in the centre is no longer sealed in the feed.
+        let ui = app.global::<crate::SealedUi>();
+        ui.set_active_key("night_owl:1".into());
+        ui.set_active_kind("belt".into());
+        assert_eq!(
+            snapshot_json(app)["sealed"],
+            json!({"belts": 0, "recap": true, "open_center": "belt"})
+        );
+        ui.set_active_kind("recap".into());
+        assert_eq!(snapshot_json(app)["sealed"]["open_center"], "recap");
+    }
+
+    #[test]
     fn the_snapshot_reads_head2head_recent_games_and_the_skeleton_trio() {
         let h = Harness::new();
         let app = h.app();
@@ -1442,7 +1549,7 @@ mod tests {
         assert_eq!(none["head2head"]["placement"], "none");
         assert_eq!(
             none["recent_games"],
-            json!({"header_line": "", "tiles": []})
+            json!({"header_line": "", "shape": "", "pc_count": 0, "tiles": []})
         );
         assert_eq!(none["skeleton_trio"], 0);
 
@@ -1518,11 +1625,11 @@ mod tests {
         );
         assert_eq!(
             s["recent_games"],
-            json!({"header_line": "14 sessions, 31 h this week", "tiles": [
+            json!({"header_line": "14 sessions, 31 h this week", "shape": "list", "pc_count": 0, "tiles": [
                 {"name": "Brawlhalla", "hours_text": "4,167 H", "launcher": "steam",
-                 "tracked": true, "art": "image"},
+                 "owners": 0, "tracked": true, "art": "image"},
                 {"name": "Fortnite", "hours_text": "EPIC", "launcher": "epic",
-                 "tracked": false, "art": "monogram"}]})
+                 "owners": 0, "tracked": false, "art": "monogram"}]})
         );
         assert_eq!(s["skeleton_trio"], 2);
     }

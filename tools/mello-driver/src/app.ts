@@ -186,6 +186,15 @@ export type AppState = {
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
   /** The joined line at the top of the feed, top row first. */
   joined_rows: { line: string; when: string }[];
+  /** Sealed belts and recap in the feed, and the card in the centre. */
+  sealed: {
+    /** Different sealed belts in the feed. A belt in two slots counts once. The belt in the centre does not count. */
+    belts: number;
+    /** The weekly recap is sealed. */
+    recap: boolean;
+    /** The card in the centre of the feed. */
+    open_center: "belt" | "recap" | "none";
+  };
   /** The skeleton trio cells that show, 0 to 3. */
   skeleton_trio: number;
   /** The audio page of the settings. */
