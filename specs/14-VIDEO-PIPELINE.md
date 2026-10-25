@@ -934,7 +934,7 @@ session of the peer (each video session) gets it.
 
 | Item | Rule |
 |---|---|
-| Who runs it | The receiver session's worker, every 20 ms (`kAvSyncTickInterval`); it decides every 250 ms. |
+| Who runs it | The receiver session's worker, every 20 ms (`kAvSyncTickInterval`); it decides every 250 ms, every 100 ms while the last offset is outside +-40 ms. |
 | Measurement | The audio heard now, on the video RTP clock (the game audio's A/V sync extension), against the time the frame of the same capture instant is shown: the last shown frame (`ViewerStats::last_shown_rtp`, `last_shown_us`, set by the present thread) moved by the RTP timestamps at 90 kHz. With no shown frame `VideoReceiveTimeline::render_time_us` stands in. The timeline's target minus its current delay counts in as the delay the video still has to reach. |
 | Start buffer | `AvSyncInput::start_buffer_ms`: the audio playout asks it when it starts, with the newest held packet; it answers from the render time at the timeline's target delay. |
 | Output | `VideoReceiveTimeline::set_min_delay_us` (at least 1 ms, at most the timeline's 150 ms maximum; the timeline applies it again after a timing reset), and for a late video the game audio's NetEQ minimum delay. |

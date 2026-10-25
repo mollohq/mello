@@ -174,6 +174,14 @@ public:
     static constexpr int64_t kDefaultIntervalUs = 250'000;
     /// Without a measurement for this long, the delays go back to none.
     static constexpr int64_t kIdleResetUs = 3'000'000;
+    /// Far out of sync (the last offset outside +-kFarOffsetMs, the stage 7
+    /// gate's window) the next decision comes after kFarIntervalUs, not the
+    /// interval. A step of the video minimum stays 10 ms (one frame shown
+    /// 10 ms longer); at 100 ms per decision the video follows at 100 ms/s,
+    /// the rate at which the timeline lowers its own delay. At 250 ms a
+    /// 60 ms error took 1.5 s.
+    static constexpr double kFarOffsetMs = 40.0;
+    static constexpr int64_t kFarIntervalUs = 100'000;
 
     AvSyncInput(AudioClockFn audio, AudioDelayFn set_audio_delay,
                 AvSync::Config config = AvSync::Config{},

@@ -187,6 +187,9 @@ void AvSyncInput::tick(const std::shared_ptr<VideoReceiveTimeline>& timeline_ptr
     const AvSync::Decision d =
         sync_.update(offset_ms, video_delay_ms, sample->target_ms, sample->own_target_ms);
     last_measurement_us_ = now_us;
+    if (std::abs(offset_ms) >= kFarOffsetMs) {
+        next_us_ = now_us + std::min(interval_us_, kFarIntervalUs);
+    }
     ++stats_.measurements;
     stats_.active = true;
     stats_.offset_ms = offset_ms;

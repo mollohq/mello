@@ -1072,7 +1072,7 @@ Viewer. `StreamAudioPlayout::sync_sample` maps the audio heard now onto the
 video clock: the RTP timestamp of the last 10 ms NetEQ played, moved by the
 newest packet's extension, is heard one pull later plus the output latency
 (the output ring and the device). The receiver session's worker runs the sync
-(`AvSyncInput`, `av_sync.cpp`) every 20 ms; it decides every 250 ms:
+(`AvSyncInput`, `av_sync.cpp`) every 20 ms; it decides every 250 ms, and every 100 ms while the last offset is outside +-40 ms (`kFarOffsetMs`: a step of the video minimum stays 10 ms, so the video then follows at 100 ms/s, the rate at which the timeline lowers its own delay):
 
 | Step | Rule |
 |---|---|

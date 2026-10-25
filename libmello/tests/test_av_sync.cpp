@@ -278,7 +278,7 @@ TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
         [&](int ms) { audio_extra_ms = ms; });
 
     int64_t id = 0;
-    auto run_ms = [&](int64_t ms) {
+    auto run_ms = [&](int64_t ms, bool sync = true) {
         const int64_t until = clock.now + ms * 1000;
         while (clock.now < until) {
             // Frame id arrives at start + id * 16.667 ms with the RTP
@@ -294,12 +294,12 @@ TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
                     timeline.on_decoded(1000);
                 }
             }
-            input.tick(timeline_ptr, clock.now);
+            if (sync) input.tick(timeline_ptr, clock.now);
             clock.now += 1000;
         }
     };
 
-    run_ms(200);
+    run_ms(200, /*sync=*/false);
     const double before = timeline.stats().current_delay_ms;
     ASSERT_LT(before, 40.0) << "the timeline's own delay";
     run_ms(8800);
@@ -310,6 +310,24 @@ TEST(AvSyncInput, TheTimelineFollowsTheAudio) {
     EXPECT_GT(stats.video_min_delay_ms, before + 50.0) << "the video minimum did not follow";
     EXPECT_EQ(stats.audio_min_delay_ms, 0);
     EXPECT_GE(timeline.stats().current_delay_ms, stats.video_min_delay_ms - 1.0);
+
+    // The audio 60 ms later at once (the video target fell, say): back
+    // within 40 ms in under 1 s, in 10 ms steps of the video minimum.
+    audio_e2e_ms += 60.0;
+    const double min_before = stats.video_min_delay_ms;
+    int64_t back_ms = -1;
+    bool seen_far = false;
+    for (int64_t t = 0; t < 3000 && back_ms < 0; t += 20) {
+        run_ms(20);
+        const double off = input.stats().offset_ms;
+        if (off >= 40.0) seen_far = true;
+        if (seen_far && off < 40.0) back_ms = t;
+    }
+    ASSERT_TRUE(seen_far) << "the late audio was not measured";
+    EXPECT_GE(back_ms, 0) << "not back within 40 ms in 3 s";
+    EXPECT_LT(back_ms, 1000) << "the far offset took " << back_ms << " ms";
+    stats = input.stats();
+    EXPECT_GT(stats.video_min_delay_ms, min_before + 30.0);
 
     // Now the audio is faster than the video: the video minimum comes back
     // down.
