@@ -251,8 +251,18 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let ctx = ctx.clone();
-        ui.on_fullscreen_requested(move || {
-            crate::stream_fullscreen::enter(&ctx);
+        ui.on_expand_requested(move |on| {
+            crate::handlers::streaming::set_expanded(&ctx, on);
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        ui.on_popout_requested(move |on| {
+            if on {
+                crate::stream_popout::open(&ctx);
+            } else {
+                crate::stream_popout::close(&ctx, "the card asked");
+            }
         });
     }
     // --- end stage 9 ---

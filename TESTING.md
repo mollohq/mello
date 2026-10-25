@@ -471,26 +471,27 @@ click_to_first_rtp_ms=…" and "Stream watch timing: click_to_first_frame_ms=…
 
 ### The stream card (streaming-quality stage 9)
 
-The card's buttons, labels and fullscreen have UI harness journeys in
+The card's buttons, labels, expanded view and pop-out have UI harness journeys in
 `client/src/flow_tests.rs`, through the real `callbacks::wire_all` and
 `handlers::handle_event`. They run in `cargo test --workspace`:
 
 | What | Where |
 |---|---|
-| Watch: STARTING from the click to the first frame, then Stream volume, Stream settings, Fullscreen and Leave on the watched card; the viewer count from the SFU membership | `watching_a_stream_shows_starting_then_the_cards_three_buttons` |
+| Watch: STARTING from the click to the first frame, then Stream volume, Stream settings, Expand, Pop out and Leave on the watched card; the viewer count from the SFU membership | `watching_a_stream_shows_starting_then_the_cards_three_buttons` |
 | Volume: 70 %, mute (gain 0, the volume stays), Escape, the value sent again on the next watch of the same host, reset | `the_stream_volume_popover_sets_mutes_and_remembers_the_host` |
 | Settings: the stats strip from `StreamViewerTimeline`; the host's quality, send rate and viewer count; the popover goes with its card | `stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host` |
-| Fullscreen: no new watch on the switch; Escape, a pause and a leave return to the card | `fullscreen_keeps_the_stream_and_escape_pause_and_leave_return` (a fake window behind `stream_fullscreen::FullscreenSurface`) |
+| Expand: the card over the feed area with its footer; Exit expanded view, Escape, a pause and a leave return; nothing restarts | `expand_takes_over_the_feed_and_exit_escape_pause_and_leave_return` |
+| Pop out: the window titled "alice - Mello"; "Show it here", the window's close, a pause, a failure and a leave bring the stream back; expand and pop out exclude each other; nothing restarts | `pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back` (a fake window behind `stream_popout::PopoutSurface`) |
 | Reconnect and leave: the buttons stay through a reconnect; the popover and the label go with the stream | `the_watched_card_keeps_its_buttons_through_a_reconnect_and_clears_on_leave` |
 | The format label from the rung message and the decoded height | `the_format_label_follows_the_rung_and_the_decoded_size`; `handlers::streaming::stage9_tests`; `mello-core` `stream::viewer_format` and `stream_ffi` (`the_rung_message_sets_the_watched_format`) |
-| The presenter moves the video visual to a second DComp target and back (needs a GPU; skips without one) | `dcomp_presenter::tests::the_video_moves_to_a_fullscreen_target_and_back` |
+| The presenter moves the video visual to the pop-out target, fits a resize, and moves it back (needs a GPU and an interactive session; skips without either, as on the CI runner in session 0) | `dcomp_presenter::tests::the_video_moves_to_the_pop_out_target_and_back` |
 | The volume goes to the running viewer or to the decoder of a starting watch | `mello-core` `client::stream_view_audio` |
 | The host tells the UI of each viewer join and leave, once each, and of a viewer the rejoin's reconcile takes out | `mello-core` `stream_reconnect_tests::the_host_tells_the_ui_of_each_viewer_join_and_leave_and_of_a_reconcile` |
 
 The harness lays the card's footer out only after the window has a size, so
-the journeys set one (`app_with_alices_stream`). The native fullscreen window
-(Escape, double-click, Alt+F4, the monitor) and the bilinear filter need a
-look on a real stream: Bob's check list in the stage 9 report.
+the journeys set one (`app_with_alices_stream`). The native pop-out window
+(title, resize, maximize, another monitor, close) and the bilinear filter need
+a look on a real stream: Bob's check list in the stage 9 report.
 
 ---
 

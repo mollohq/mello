@@ -140,7 +140,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             crew_id, reason, ..
         } => {
             log::info!("Stream ended: crew={} reason={}", crew_id, reason);
-            // Stage 9: the fullscreen window goes before the presenter.
+            // Stage 9: the pop-out window goes before the presenter.
             end_watched_card(ctx, "the stream ended");
             end_hosted_card(ctx);
             ctx.app.set_stream_host_state("".into());
@@ -279,7 +279,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         }
         Event::StreamWatchingStopped => {
             log::info!("Stopped watching stream");
-            // Stage 9: the fullscreen window goes before the presenter.
+            // Stage 9: the pop-out window goes before the presenter.
             end_watched_card(ctx, "stopped watching");
             ctx.app.set_is_watching(false);
             ctx.app.set_stream_viewer_state("".into());
@@ -328,10 +328,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 reason
             );
             if paused {
-                // Stage 9: the card's pause card says why; the fullscreen
-                // window cannot. A stream that joins paused shows no frame,
-                // so it is not "starting" any more either.
-                crate::stream_fullscreen::exit(ctx, "the stream paused");
+                // Stage 9: the card's pause card says why; the pop-out
+                // window cannot, and the expanded view shows the normal
+                // card again. A stream that joins paused shows no frame, so
+                // it is not "starting" any more either.
+                crate::stream_popout::close(ctx, "the stream paused");
+                set_expanded(ctx, false);
                 ctx.app
                     .global::<crate::StreamCardUi>()
                     .set_viewer_starting(false);
@@ -606,10 +608,11 @@ fn start_watched_card(ctx: &crate::app_context::AppContext, host_id: &str) {
     }
 }
 
-/// The watched card goes: its fullscreen window, popover, label and stats
-/// go with it.
+/// The watched card goes: its pop-out window, expanded view, popover,
+/// label and stats go with it.
 fn end_watched_card(ctx: &crate::app_context::AppContext, why: &str) {
-    crate::stream_fullscreen::exit(ctx, why);
+    crate::stream_popout::close(ctx, why);
+    set_expanded(ctx, false);
     let ui = ctx.app.global::<crate::StreamCardUi>();
     if matches!(ui.get_popover().as_str(), "volume" | "settings") {
         ui.set_popover("".into());
@@ -634,6 +637,25 @@ fn show_stream_audio(ctx: &crate::app_context::AppContext, audio: StreamAudio) {
     let ui = ctx.app.global::<crate::StreamCardUi>();
     ui.set_volume(i32::from(audio.volume));
     ui.set_muted(audio.muted);
+}
+
+/// Expand the watched card over the feed area, or back. Only a watched
+/// picture that is not paused expands; the pop-out window closes first (the
+/// two exclude each other). The video visual follows the expanded card's
+/// geometry, so nothing restarts.
+pub fn set_expanded(ctx: &crate::app_context::AppContext, on: bool) {
+    let ui = ctx.app.global::<crate::StreamCardUi>();
+    if on {
+        if !ctx.app.get_is_watching() || ctx.app.get_stream_paused() {
+            return;
+        }
+        crate::stream_popout::close(ctx, "the card expands");
+        ui.set_popover("".into());
+    }
+    if ui.get_expanded() != on {
+        log::info!("Stream card: expanded {on}");
+        ui.set_expanded(on);
+    }
 }
 
 /// The card's volume slider: store the value for the watched host and

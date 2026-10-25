@@ -410,6 +410,9 @@ export global StreamCardUi {
     in-out property <string> popover: "";
     in-out property <length> anchor-right;
     in-out property <length> anchor-bottom;
+    // The right edge of the card: in the expanded view the popovers open
+    // beside the card, over the chat column, not over the picture.
+    in-out property <length> anchor-card-right;
     // The viewer's stats strip on the card.
     in-out property <bool> stats-shown: false;
     in-out property <StreamStatsData> stats;
@@ -418,8 +421,12 @@ export global StreamCardUi {
     in-out property <string> format-label: "";
     // The watch started and no frame is shown yet.
     in-out property <bool> viewer-starting: false;
-    // The watched stream is on the fullscreen window.
-    in-out property <bool> fullscreen: false;
+    // The watched card takes over the feed area (the expanded view).
+    in-out property <bool> expanded: false;
+    // The watched stream plays in its own window (the pop-out).
+    in-out property <bool> popped-out: false;
+    // The watchable card, for the expanded view.
+    in-out property <StreamCardData> watched-card;
     // The hosted stream: its quality preset and what it sends.
     in-out property <string> host-quality: "";
     in-out property <string> host-sending: "";
@@ -427,7 +434,9 @@ export global StreamCardUi {
     callback volume-changed(int);
     callback mute-changed(bool);
     callback stats-toggled(bool);
-    callback fullscreen-requested();
+    // true: expand (or open the pop-out); false: back to the card.
+    callback expand-requested(bool);
+    callback popout-requested(bool);
 }
 
 // --- end stage 9 ---

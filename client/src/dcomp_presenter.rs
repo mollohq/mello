@@ -20,8 +20,8 @@
 //!
 //! Streaming-quality stage 9: the visual scales the picture with a bilinear
 //! filter (it was nearest neighbour, the default) and the swap chain declares
-//! its colour space (sRGB, full range). For fullscreen the video visual moves
-//! to a second DComp target on a borderless window (`stream_fullscreen.rs`)
+//! its colour space (sRGB, full range). For the pop-out window the video
+//! visual moves to a second DComp target on that window (`stream_popout.rs`)
 //! and back; the swap chain, the present thread and the decoder stay.
 
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -264,11 +264,11 @@ pub struct DCompPresenter {
     wash_swap: Option<IDXGISwapChain1>,
     wash_shown: std::cell::Cell<bool>,
     // --- end stage 6 ---
-    // --- stage 9 (streaming-quality): fullscreen ---
-    /// The second target while the stream is fullscreen: the fullscreen
-    /// window's, with the video visual as its root. The window's client
+    // --- stage 9 (streaming-quality): the pop-out window ---
+    /// The second target while the stream is in the pop-out window: that
+    /// window's, with the video visual as its root, and the window's client
     /// size in physical pixels.
-    fullscreen: std::cell::RefCell<Option<(IDCompositionTarget, f32, f32)>>,
+    window_target: std::cell::RefCell<Option<(IDCompositionTarget, f32, f32)>>,
     // --- end stage 9 ---
 }
 
@@ -372,7 +372,7 @@ impl DCompPresenter {
             wash_visual,
             wash_swap: None,
             wash_shown: std::cell::Cell::new(false),
-            fullscreen: std::cell::RefCell::new(None),
+            window_target: std::cell::RefCell::new(None),
         })
     }
 
@@ -394,8 +394,8 @@ impl DCompPresenter {
         if size == self.geometry_size.get() {
             return;
         }
-        if let Some((_, w, h)) = *self.fullscreen.borrow() {
-            self.apply_fullscreen_geometry(w, h);
+        if let Some((_, w, h)) = *self.window_target.borrow() {
+            self.apply_window_geometry(w, h);
             return;
         }
         if let Some([x, y, w, h, vy, vh]) = self.last_geometry.get() {
@@ -635,9 +635,9 @@ impl DCompPresenter {
         self.last_geometry.set(Some([
             canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h,
         ]));
-        // Stage 9: while fullscreen the card's geometry is kept for the way
-        // back and not applied.
-        if self.fullscreen.borrow().is_some() {
+        // Stage 9: while the stream is in the pop-out window the card's
+        // geometry is kept for the way back and not applied.
+        if self.window_target.borrow().is_some() {
             return true;
         }
         let packed = self.stream_size.load(Ordering::Acquire);
@@ -745,17 +745,18 @@ impl DCompPresenter {
         unpack_size(self.stream_size.load(Ordering::Acquire))
     }
 
-    /// True while the video is on the fullscreen window.
-    pub fn is_fullscreen(&self) -> bool {
-        self.fullscreen.borrow().is_some()
+    /// True while the video is in the pop-out window.
+    pub fn is_in_window(&self) -> bool {
+        self.window_target.borrow().is_some()
     }
 
-    /// Move the video to `hwnd` (the fullscreen window, `width` x `height`
-    /// physical pixels): a second DComp target on the same device takes the
-    /// video visual as its root. The swap chain and the present thread do
-    /// not change, so the stream plays on through the switch.
-    pub fn show_fullscreen(&self, hwnd: isize, width: u32, height: u32) -> Result<(), String> {
-        if self.fullscreen.borrow().is_some() {
+    /// Move the video to `hwnd` (the pop-out window, its client area
+    /// `width` x `height` physical pixels): a second DComp target on the
+    /// same device takes the video visual as its root. The swap chain and
+    /// the present thread do not change, so the stream plays on through the
+    /// switch.
+    pub fn show_in_window(&self, hwnd: isize, width: u32, height: u32) -> Result<(), String> {
+        if self.window_target.borrow().is_some() {
             return Ok(());
         }
         let hwnd = HWND(hwnd as *mut _);
@@ -763,7 +764,7 @@ impl DCompPresenter {
             let target = self
                 .dcomp_device
                 .CreateTargetForHwnd(hwnd, true)
-                .map_err(|e| format!("CreateTargetForHwnd (fullscreen): {e}"))?;
+                .map_err(|e| format!("CreateTargetForHwnd (pop-out): {e}"))?;
             // A visual has one parent: off the card's target, then on this one.
             self.dcomp_target
                 .SetRoot(None::<&IDCompositionVisual>)
@@ -771,20 +772,32 @@ impl DCompPresenter {
             if let Err(e) = target.SetRoot(&self.dcomp_visual) {
                 let _ = self.dcomp_target.SetRoot(&self.dcomp_visual);
                 let _ = self.dcomp_device.Commit();
-                return Err(format!("SetRoot (fullscreen): {e}"));
+                return Err(format!("SetRoot (pop-out): {e}"));
             }
-            *self.fullscreen.borrow_mut() = Some((target, width as f32, height as f32));
+            *self.window_target.borrow_mut() = Some((target, width as f32, height as f32));
         }
-        self.apply_fullscreen_geometry(width as f32, height as f32);
-        log::info!("DComp: the stream is fullscreen ({width}x{height})");
+        self.apply_window_geometry(width as f32, height as f32);
+        log::info!("DComp: the stream is in the pop-out window ({width}x{height})");
         Ok(())
     }
 
-    /// Move the video back to the card: the fullscreen target goes, the
-    /// card's target takes the visual again and the card's last geometry
-    /// applies.
+    /// The pop-out window has a new client size: fit the picture again.
+    pub fn resize_window(&self, width: u32, height: u32) {
+        {
+            let mut target = self.window_target.borrow_mut();
+            let Some((_, w, h)) = target.as_mut() else {
+                return;
+            };
+            *w = width as f32;
+            *h = height as f32;
+        }
+        self.apply_window_geometry(width as f32, height as f32);
+    }
+
+    /// Move the video back to the card: the pop-out target goes, the card's
+    /// target takes the visual again and the card's last geometry applies.
     pub fn show_in_card(&self) {
-        let Some((target, _, _)) = self.fullscreen.borrow_mut().take() else {
+        let Some((target, _, _)) = self.window_target.borrow_mut().take() else {
             return;
         };
         unsafe {
@@ -806,8 +819,9 @@ impl DCompPresenter {
         log::info!("DComp: the stream is back on the card");
     }
 
-    /// Contain-fit the picture in the fullscreen window, centred, unclipped.
-    fn apply_fullscreen_geometry(&self, width: f32, height: f32) {
+    /// Contain-fit the picture in the pop-out window's client area, centred,
+    /// unclipped: the window's black background shows as bars.
+    fn apply_window_geometry(&self, width: f32, height: f32) {
         let packed = self.stream_size.load(Ordering::Acquire);
         self.geometry_size.set(packed);
         let (sw, sh) = unpack_size(packed);
@@ -836,14 +850,14 @@ impl DCompPresenter {
                 M32: 0.0,
             };
             if let Err(e) = self.dcomp_visual.SetTransform2(&matrix) {
-                log::error!("DComp SetTransform (fullscreen): {e}");
+                log::error!("DComp SetTransform (pop-out): {e}");
             }
             // The whole picture shows: the card's scroll clip does not apply.
             let _ = self
                 .dcomp_visual
                 .SetClip(None::<&windows::Win32::Graphics::DirectComposition::IDCompositionClip>);
             if let Err(e) = self.dcomp_device.Commit() {
-                log::error!("DComp Commit (fullscreen): {e}");
+                log::error!("DComp Commit (pop-out): {e}");
             }
         }
     }
@@ -1117,18 +1131,19 @@ mod tests {
         hwnd.0 as isize
     }
 
-    /// Stage 9: fullscreen moves the video visual to a second target and
+    /// Stage 9: the pop-out moves the video visual to a second target and
     /// back, on the same presenter (no new swap chain, so libmello's present
-    /// thread keeps its presenter). The card's geometry that arrives while
-    /// fullscreen is kept for the way back.
+    /// thread keeps its presenter). A resize of the window fits the picture
+    /// again; the card's geometry that arrives meanwhile is kept for the way
+    /// back.
     #[test]
-    fn the_video_moves_to_a_fullscreen_target_and_back() {
+    fn the_video_moves_to_the_pop_out_target_and_back() {
         let luid = mello_core::video_adapter_luid();
         if luid == 0 {
             eprintln!("skipped: no usable GPU adapter on this machine");
             return;
         }
-        let (card, full) = (hidden_window(), hidden_window());
+        let (card, popout) = (hidden_window(), hidden_window());
         // A composition swap chain needs an interactive desktop session. The
         // CI runner is a service in session 0, where DXGI answers
         // DXGI_ERROR_NOT_CURRENTLY_AVAILABLE (0x887A0022); any other error is
@@ -1145,30 +1160,40 @@ mod tests {
         assert_eq!(presenter.stream_size(), (1280, 720));
 
         presenter
-            .show_fullscreen(full, 1920, 1080)
-            .expect("the fullscreen target");
-        assert!(presenter.is_fullscreen());
-        // A scroll in the feed while fullscreen: kept, not applied.
+            .show_in_window(popout, 1280, 720)
+            .expect("the pop-out target");
+        assert!(presenter.is_in_window());
+        presenter.resize_window(1920, 1080);
+        assert_eq!(
+            presenter
+                .window_target
+                .borrow()
+                .as_ref()
+                .map(|(_, w, h)| (*w, *h)),
+            Some((1920.0, 1080.0)),
+            "a resize keeps the new client size"
+        );
+        // A scroll in the feed while popped out: kept, not applied.
         assert!(presenter.update_geometry(10.0, 120.0, 640.0, 360.0, 0.0, 900.0));
         assert_eq!(
             presenter.last_geometry.get(),
             Some([10.0, 120.0, 640.0, 360.0, 0.0, 900.0])
         );
         assert!(
-            presenter.show_fullscreen(full, 1920, 1080).is_ok(),
+            presenter.show_in_window(popout, 1920, 1080).is_ok(),
             "a second request changes nothing"
         );
 
         presenter.show_in_card();
-        assert!(!presenter.is_fullscreen());
+        assert!(!presenter.is_in_window());
         presenter
-            .show_fullscreen(full, 1920, 1080)
+            .show_in_window(popout, 1920, 1080)
             .expect("the window takes a target again after the way back");
         presenter.show_in_card();
         unsafe {
             use windows::Win32::UI::WindowsAndMessaging::DestroyWindow;
             let _ = DestroyWindow(HWND(card as *mut _));
-            let _ = DestroyWindow(HWND(full as *mut _));
+            let _ = DestroyWindow(HWND(popout as *mut _));
         }
     }
 }

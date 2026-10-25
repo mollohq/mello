@@ -104,6 +104,18 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
         });
     }
 
+    // Stage 9: the expanded view shows the watchable card.
+    {
+        use slint::ComponentHandle as _;
+        let watched = cards
+            .iter()
+            .find(|c| c.can_watch)
+            .cloned()
+            .unwrap_or_default();
+        ctx.app
+            .global::<crate::StreamCardUi>()
+            .set_watched_card(watched);
+    }
     ctx.app
         .set_active_stream_cards(Rc::new(slint::VecModel::from(cards)).into());
 }

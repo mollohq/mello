@@ -825,15 +825,21 @@ still aliases with a bilinear filter; a scaled copy on the present thread
 (checked with `CheckColorSpaceSupport`): libmello's shared frame is 8-bit RGB,
 full range, sRGB transfer, BT.709 primaries.
 
-**Fullscreen (stage 9).** `show_fullscreen(hwnd, w, h)` creates a second
-DComp target on the same device for the fullscreen window
-(`client/src/stream_fullscreen.rs`), takes the video visual off the card's
-target and sets it as the root of the new one, contain-fit and unclipped.
-`show_in_card` reverses it and applies the card's last geometry; geometry
-that arrives while fullscreen is kept, not applied. The swap chain, the
-present thread and the decoder do not change, so the stream plays on
-through the switch. A stream size change while fullscreen fits the new size
-to the window.
+**Pop-out window (stage 9).** `show_in_window(hwnd, w, h)` creates a second
+DComp target on the same device for the pop-out window
+(`client/src/stream_popout.rs`), takes the video visual off the card's
+target and sets it as the root of the new one, contain-fit in the client
+area and unclipped; `resize_window` fits it again after a resize or a move to
+a monitor with another scale. `show_in_card` reverses it and applies the
+card's last geometry; geometry that arrives while popped out is kept, not
+applied. The swap chain, the present thread and the decoder do not change, so
+the stream plays on through the switch. A stream size change while popped
+out fits the new size to the window.
+
+**Expanded view (stage 9).** No second target: the watched card is drawn
+again over the feed area (`ExpandedStreamCard`, main.slint), and only that
+card's `geo-tracker` exists while it shows. The video visual follows its
+geometry through `VideoRect.geometry-changed` as it follows the feed's card.
 
 **Geometry sync:** The Slint stream card contains a zero-size `geo-tracker` element with properties bound to `media-rect.absolute-position` and dimensions. Slint `changed` handlers fire a `VideoRect.geometry-changed` callback synchronously during every layout pass (scroll, resize, reflow). Rust wires this callback to `DCompPresenter::update_geometry`, which:
 
@@ -867,7 +873,7 @@ host's `stream_viewer_left` RPC run on their own tasks.
 
 ### 7.9 The stream card (streaming-quality stage 9)
 
-The card in the feed (`client/ui/panels/active_streams_panel.slint`) has three
+The card in the feed (`client/ui/panels/active_streams_panel.slint`) has four
 buttons in its footer, each with an accessible label. The state behind them
 is the Slint global `StreamCardUi` (`client/ui/types.slint`), so the card and
 its popovers share it without new properties through `CrewFeed`. Rust owns
@@ -877,12 +883,15 @@ the values (`client/src/handlers/streaming.rs`, `callbacks/streaming.rs`).
 |---|---|---|
 | Stream volume | on the watched card | Opens the volume popover: 0 to 200 % with a detent at 100 %, a mute switch and a reset, built like the member volume popover (spec 01 §4.1). The value is the gain of the watched stream's game audio: `Command::SetStreamAudioVolume { gain }` → `mello_stream_viewer_set_audio_volume` on the view (the running viewer, or the decoder of a watch whose join has not finished). The mute is a gain of 0: the host's pause owns `mello_stream_viewer_set_audio_muted`, and a gain keeps the playout running, so an unmute is in sync at once. Kept per host for the life of the app and sent again on `StreamWatching` (a new view starts at unity); a restart clears it. The icon shows `volume-x` while muted or at 0 %. |
 | Stream settings | on the watched card and the hosted card | Viewer: a switch for the stats strip. Host: the quality preset the stream started with and what the pacer sends now (`StreamHostPacingStats.out_kbps`). The host cannot change the preset mid-stream yet (§14). |
-| Fullscreen | on the watched card, not while paused | The stream on a borderless window over the monitor of the app window, owned by it, black where the picture's aspect leaves room (§7.7). Escape, a double-click or Alt+F4 on it brings the stream back to the card, as do a pause (the card's pause card explains it; the window cannot), a leave and the end of the stream. A double-click on the picture in the card also opens it. |
+| Expand ("Exit expanded view" while expanded) | on the watched card, not while paused | The watched card takes over the feed area of the main window (`ExpandedStreamCard` over `CrewFeed`): the other cards are hidden; the sidebar, the chat, the control bar and the window chrome stay; the footer keeps its buttons. The same button or Escape returns; so do a pause, a leave, the end and a failure. A double-click on the picture toggles it. The video follows the card's geometry (§7.7), so nothing restarts. |
+| Pop out ("Close the stream window" while popped out) | on the watched card, not while paused | The stream in a normal top-level window: a title bar "<host> - Mello", resizable, movable to another monitor, the system's maximize, black bars to the stream's aspect, the app's icons (`stream_popout.rs`, §7.7). The card shows "PLAYING IN A WINDOW" with a "Show it here" button. Closing the window, the button, a pause, a leave, the end and a failure bring the stream back to the card. The volume and the settings stay on the card; the window has no Slint content. Expand and pop out exclude each other: one closes the other first. |
 
 The popovers open on the window under the button that opened them, the right
 edges aligned, and move up near the bottom of the window. The footer is under
 the picture, so they do not cover the video layer, which composites above
-Slint (§14).
+Slint (§14). In the expanded view the footer is at the bottom of the feed
+area, so the popovers open beside the card, over the chat column, their
+bottom at the button's.
 
 **Labels.**
 
@@ -1398,7 +1407,8 @@ DComp presenter diagnostics:
 | Viewer attach, stats, native presenter hook, REMB | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
 | DComp presenter (Windows) | `client/src/dcomp_presenter.rs` |
-| Fullscreen window (Windows) | `client/src/stream_fullscreen.rs` |
+| Pop-out window (Windows) | `client/src/stream_popout.rs` |
+| Expanded view | `ExpandedStreamCard` in `client/ui/panels/active_streams_panel.slint`, placed in `client/ui/main.slint` |
 | Stream card state, volume, labels, stats | `client/src/handlers/streaming.rs`, `client/src/handlers/stream_cards.rs`, `StreamCardUi` in `client/ui/types.slint` |
 | The watched stream's format slot (rung message) | `mello-core/src/stream/viewer_format.rs` |
 | The watched stream's volume command | `mello-core/src/client/stream_view_audio.rs` |
@@ -1448,6 +1458,8 @@ DComp presenter diagnostics:
 | Input passthrough not implemented | No remote control | Large |
 | DComp visual uses overlay, not true underlay | Video composites on top of Slint content: a Slint popup, menu or modal over the picture is hidden under it, and the pause card needs the content detach. The card's popovers open under the footer. Slint renders with the Skia CPU rasterizer into the window's redirection surface (12-NATIVE-PLATFORM §3.1), which every DComp target composites above, and `WS_EX_NOREDIRECTIONBITMAP` would remove that surface and the UI with it. A true underlay needs the UI in a DComp visual above the video (Skia on wgpu with a visual the app supplies, which the spec rejects for its RAM), or the video in an owned window under a hole in the main window. Open for Bob (stage 9 report). | Large |
 | The host cannot change the quality preset mid-stream | The card's settings show the preset; a change needs a runtime preset command in mello-core (the stage 4 controller's ceiling, the encode size and fps) | Medium |
+| The pop-out window has no controls of its own | Volume, settings and expand stay on the card in the main window; the window shows only the picture (no pause card, so a pause brings the stream back) | Small (Slint content over the picture needs the underlay above) |
+| No pop-out on macOS | The macOS viewer has no compositor path (row above); Pop out logs and does nothing there. The expanded view works (the card draws the frame) | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
 | End-to-end certification matrix pending | Performance targets not yet certified across LAN/loss/multi-viewer gates | Medium |
 | macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer); the present thread hands RGBA to the Slint timer | Medium |
@@ -1492,4 +1504,4 @@ Optional local loopback smoke:
 - DPI change (drag between monitors): video repositions correctly, no crash.
 - watch-stream init failures surface as explicit UI/log errors and stop watching cleanly.
 - No video D3D11 device exists when not streaming.
-- Stage 9: the card's Fullscreen button shows the stream on the monitor of the app with no pause; Escape brings it back to the card, still playing; the format label reads the stream's rung ("720p60") and changes with a rung; the stream volume and mute act on the game audio only.
+- Stage 9: Expand fills the feed area and Escape returns, with no pause in the picture; Pop out opens "<host> - Mello", which resizes, maximizes and moves to another monitor with the picture fitted, and its close brings the stream back to the card, still playing; the format label reads the stream's rung ("720p60") and changes with a rung; the stream volume and mute act on the game audio only.

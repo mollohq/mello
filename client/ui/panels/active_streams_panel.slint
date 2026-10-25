@@ -141,6 +141,18 @@ component StreamCard inherits Rectangle {
         && card.host-id == active-streamer-id && StreamCardUi.viewer-starting;
     property <bool> show-stats: show-live-frame && StreamCardUi.stats-shown;
     property <length> stats-height: 40px;
+    /// This card is the expanded view's (main.slint), not one in the feed.
+    in property <bool> expanded-view: false;
+    /// The watched stream plays in the pop-out window: the card says so.
+    property <bool> popped: show-live-frame && StreamCardUi.popped-out;
+    /// Only one card drives the video layer's geometry: the expanded view's
+    /// while it shows, the feed's otherwise, none while popped out.
+    property <bool> track-geometry: !root.popped
+        && (root.expanded-view || !StreamCardUi.expanded);
+    /// The feed's watched card under the expanded view: hidden, so it has
+    /// no controls (they would answer for the expanded card).
+    property <bool> under-expanded-view: !root.expanded-view && StreamCardUi.expanded
+        && show-live-frame;
     /// The host's card and a watched card open different settings.
     property <string> settings-popover: show-hosting-state ? "host-settings" : "settings";
     /// A card in the two-column grid has no room for the count badge next
@@ -200,14 +212,13 @@ component StreamCard inherits Rectangle {
                 }
 
                 // Stage 9: the video layer shows nothing before the first
-                // frame and nothing while the stream is fullscreen, so this
-                // text under it shows then.
-                if !show-paused && (root.viewer-starting || StreamCardUi.fullscreen): VerticalLayout {
+                // frame, so this text under it shows then.
+                if !show-paused && !root.popped && root.viewer-starting: VerticalLayout {
                     alignment: center;
                     spacing: 8px;
 
                     Text {
-                        text: StreamCardUi.fullscreen ? "FULLSCREEN" : "STARTING";
+                        text: "STARTING";
                         font-family: Theme.font-label;
                         font-size: 14px;
                         font-weight: 700;
@@ -217,13 +228,76 @@ component StreamCard inherits Rectangle {
                     }
 
                     Text {
-                        text: StreamCardUi.fullscreen ? "Press Escape to show the stream here again"
-                            : "Connecting to " + root.card.streamer-name + "'s stream";
+                        text: "Connecting to " + root.card.streamer-name + "'s stream";
                         font-family: Theme.font-body;
                         font-weight: Theme.weight-sentence;
                         font-size: 12px;
                         color: Theme.text-secondary;
                         horizontal-alignment: center;
+                    }
+                }
+
+                // Stage 9: the stream plays in its own window; the video
+                // layer is there, so the card says so and brings it back.
+                if !show-paused && root.popped: VerticalLayout {
+                    alignment: center;
+                    spacing: 8px;
+
+                    Text {
+                        text: "PLAYING IN A WINDOW";
+                        font-family: Theme.font-label;
+                        font-size: 14px;
+                        font-weight: 700;
+                        letter-spacing: 1.2px;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                    }
+
+                    Text {
+                        text: root.card.streamer-name + "'s stream is in its own window";
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        horizontal-alignment: center;
+                    }
+
+                    Rectangle {
+                        height: 34px;
+
+                        Rectangle {
+                            width: back-label.preferred-width + 28px;
+                            height: parent.height;
+                            x: (parent.width - self.width) / 2;
+                            background: transparent;
+
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: Theme.cut;
+                                fill: back-ta.has-hover ? Theme.action-press : Theme.action;
+                            }
+
+                            back-label := Text {
+                                text: "Show it here";
+                                font-family: Theme.font-label;
+                                font-size: 11px;
+                                font-weight: Theme.weight-label;
+                                letter-spacing: Theme.track-label;
+                                color: Theme.on-action;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            back-ta := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Show it here";
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    StreamCardUi.popout-requested(false);
+                                }
+                            }
+                        }
                     }
                 }
 
@@ -272,7 +346,8 @@ component StreamCard inherits Rectangle {
                     }
                 }
 
-                geo-tracker := Rectangle {
+                // Stage 9: one card at a time drives the video layer.
+                if root.track-geometry: geo-tracker := Rectangle {
                     width: 0;
                     height: 0;
                     property <float> track-x: media-rect.absolute-position.x / 1px;
@@ -420,11 +495,12 @@ component StreamCard inherits Rectangle {
                 }
             }
 
-            // Stage 9: a double-click on the picture shows it fullscreen.
-            if show-live-frame && !show-paused && !StreamCardUi.fullscreen: TouchArea {
-                // a11y: none (a double-click shortcut; the Fullscreen button is the control)
+            // Stage 9: a double-click on the picture expands it, or back.
+            if show-live-frame && !show-paused && !root.popped: TouchArea {
+                // a11y: none (a double-click shortcut; the Expand button is the control)
                 double-clicked => {
-                    StreamCardUi.fullscreen-requested();
+                    StreamCardUi.popover = "";
+                    StreamCardUi.expand-requested(!StreamCardUi.expanded);
                 }
             }
         }
@@ -631,7 +707,7 @@ component StreamCard inherits Rectangle {
 
                 // Right column — icons on top, leave button below. A notice
                 // card has no controls.
-                if !root.is-notice: Rectangle {
+                if !root.is-notice && !root.under-expanded-view: Rectangle {
                     horizontal-stretch: 0;
                     width: ctrl-row.preferred-width;
 
@@ -654,6 +730,7 @@ component StreamCard inherits Rectangle {
                                 clicked => {
                                     StreamCardUi.anchor-right = self.absolute-position.x + self.width;
                                     StreamCardUi.anchor-bottom = self.absolute-position.y + self.height;
+                                    StreamCardUi.anchor-card-right = root.absolute-position.x + root.width;
                                     StreamCardUi.popover = StreamCardUi.popover == "volume" ? "" : "volume";
                                 }
                             }
@@ -665,17 +742,34 @@ component StreamCard inherits Rectangle {
                                 clicked => {
                                     StreamCardUi.anchor-right = self.absolute-position.x + self.width;
                                     StreamCardUi.anchor-bottom = self.absolute-position.y + self.height;
+                                    StreamCardUi.anchor-card-right = root.absolute-position.x + root.width;
                                     StreamCardUi.popover = StreamCardUi.popover == root.settings-popover
                                         ? "" : root.settings-popover;
                                 }
                             }
 
+                            // Expand over the feed area, or back. From the
+                            // pop-out it brings the stream back first.
                             if show-live-frame && !show-paused: StreamIconButton {
-                                icon: @image-url("../icons/maximize.svg");
-                                label: "Fullscreen";
+                                icon: StreamCardUi.expanded
+                                    ? @image-url("../icons/minimize.svg")
+                                    : @image-url("../icons/maximize.svg");
+                                label: StreamCardUi.expanded ? "Exit expanded view" : "Expand";
+                                on: StreamCardUi.expanded;
                                 clicked => {
                                     StreamCardUi.popover = "";
-                                    StreamCardUi.fullscreen-requested();
+                                    StreamCardUi.expand-requested(!StreamCardUi.expanded);
+                                }
+                            }
+
+                            // The stream in its own window, or back.
+                            if show-live-frame && !show-paused: StreamIconButton {
+                                icon: @image-url("../icons/external-link.svg");
+                                label: StreamCardUi.popped-out ? "Close the stream window" : "Pop out";
+                                on: StreamCardUi.popped-out;
+                                clicked => {
+                                    StreamCardUi.popover = "";
+                                    StreamCardUi.popout-requested(!StreamCardUi.popped-out);
                                 }
                             }
                         }
@@ -1230,6 +1324,70 @@ export component StreamSettingsPopover inherits Rectangle {
     }
 }
 
+// ============================================================
+//  Stage 9 (streaming-quality): the expanded view.
+//
+//  The watched card over the whole feed area (main.slint places it over
+//  CrewFeed): the sidebar, the chat and the control bar stay. Its footer
+//  keeps the buttons; Expand turns into "Exit expanded view", and Escape
+//  returns too. The DComp video layer follows this card's geometry while it
+//  shows (the feed's card stops tracking), so the stream plays on.
+// ============================================================
+export component ExpandedStreamCard inherits Rectangle {
+    in property <bool> is-watching: false;
+    in property <string> active-streamer-id: "";
+    in property <image> stream-frame;
+    in property <bool> stream-paused: false;
+    in property <string> stream-paused-reason: "";
+    callback stop-watching-clicked();
+
+    background: Theme.bg-app;
+
+    init => {
+        keys.focus();
+    }
+
+    // The feed under it is hidden: no click reaches it.
+    TouchArea {
+        // a11y: none (input blocker: the feed under the expanded view)
+        clicked => { keys.focus(); }
+    }
+
+    keys := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                StreamCardUi.expand-requested(false);
+                return accept;
+            }
+            reject
+        }
+
+        StreamCard {
+            x: 20px;
+            y: 16px;
+            width: parent.width - 40px;
+            height: parent.height - 32px;
+            media-height: self.height - 72px;
+            card: StreamCardUi.watched-card;
+            expanded-view: true;
+            is-watching: root.is-watching;
+            active-streamer-id: root.active-streamer-id;
+            stream-frame: root.stream-frame;
+            stream-paused: root.stream-paused;
+            stream-paused-reason: root.stream-paused-reason;
+            viewport-abs-y: self.absolute-position.y / 1px;
+            viewport-height: self.height / 1px;
+            stop-watching-clicked => {
+                root.stop-watching-clicked();
+            }
+        }
+    }
+}
+
 // Headless preview:
 //   slint-viewer --screenshot out.png --component PreviewHosting \
 //     client/ui/panels/active_streams_panel.slint
@@ -1245,7 +1403,7 @@ component StreamsPreview inherits Rectangle {
     in property <string> format: "";
     in property <bool> stats: false;
     in property <bool> starting-watch: false;
-    in property <bool> fullscreen: false;
+    in property <bool> popped-out: false;
     in property <bool> muted: false;
     in property <string> popover: "";
 
@@ -1257,7 +1415,7 @@ component StreamsPreview inherits Rectangle {
         StreamCardUi.format-label = root.format;
         StreamCardUi.stats-shown = root.stats;
         StreamCardUi.viewer-starting = root.starting-watch;
-        StreamCardUi.fullscreen = root.fullscreen;
+        StreamCardUi.popped-out = root.popped-out;
         StreamCardUi.muted = root.muted;
         StreamCardUi.popover = root.popover;
         StreamCardUi.stats = {
@@ -1338,9 +1496,37 @@ export component PreviewWatchStarting inherits StreamsPreview {
     can-watch: true; starting-watch: true; viewers: 2;
 }
 
-/// Stage 9: the stream is on the fullscreen window.
-export component PreviewWatchFullscreen inherits StreamsPreview {
-    watching: true; can-watch: true; format: "720p60"; fullscreen: true;
+/// Stage 9: the stream plays in the pop-out window; the card says so.
+export component PreviewWatchPoppedOut inherits StreamsPreview {
+    watching: true; can-watch: true; format: "720p60"; popped-out: true;
+}
+
+/// Stage 9: the expanded view over a feed area of 1100 x 760 (a 1440 x 900
+/// window less the sidebar, the chat and the control bar).
+export component PreviewWatchExpanded inherits Rectangle {
+    width: 1100px;
+    height: 760px;
+    background: Theme.bg-app;
+
+    init => {
+        StreamCardUi.expanded = true;
+        StreamCardUi.format-label = "1080p60";
+        StreamCardUi.watched-card = {
+            host-id: "h1", session-id: "s1",
+            streamer-name: "b0bben",
+            subtitle: "Counter-Strike 2",
+            avatar-initials: "b0", avatar-color-index: 0,
+            viewer-count: 3, stream-width: 1920, stream-height: 1080,
+            can-watch: true, state: "", title: "",
+        };
+    }
+
+    ExpandedStreamCard {
+        width: parent.width;
+        height: parent.height;
+        is-watching: true;
+        active-streamer-id: "h1";
+    }
 }
 
 /// Stage 9: the stream's game audio is muted.
@@ -1387,9 +1573,9 @@ component PopoverPreview inherits Rectangle {
 export component PreviewVolumePopover inherits PopoverPreview {
     which: "volume";
     init => {
-        // Under the volume button: the first of three 32 px buttons, 4 px
+        // Under the volume button: the first of four 32 px buttons, 4 px
         // apart, 12 px from the right edge of the card, in the footer.
-        StreamCardUi.anchor-right = 800px - 12px - 2 * 36px;
+        StreamCardUi.anchor-right = 800px - 12px - 3 * 36px;
         StreamCardUi.anchor-bottom = 450px - 72px + 4px + 32px + 13px;
     }
 }
@@ -1398,7 +1584,7 @@ export component PreviewVolumePopover inherits PopoverPreview {
 export component PreviewViewerSettings inherits PopoverPreview {
     which: "settings";
     init => {
-        StreamCardUi.anchor-right = 800px - 12px - 36px;
+        StreamCardUi.anchor-right = 800px - 12px - 2 * 36px;
         StreamCardUi.anchor-bottom = 450px - 72px + 4px + 32px + 13px;
     }
 }

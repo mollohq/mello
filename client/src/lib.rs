@@ -42,8 +42,8 @@ mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
 mod stream_frame_timer;
-// stage 9 (streaming-quality): the watched stream on a fullscreen window
-mod stream_fullscreen;
+// stage 9 (streaming-quality): the watched stream in its own window
+mod stream_popout;
 #[cfg(any(test, feature = "testkit"))]
 pub mod testkit;
 mod updater;
@@ -606,7 +606,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         #[cfg(target_os = "windows")]
         taskbar_toolbar: taskbar_toolbar.clone(),
         stream_card: Rc::new(RefCell::new(Default::default())),
-        stream_fullscreen: Rc::new(RefCell::new(Default::default())),
+        stream_popout: Rc::new(RefCell::new(Default::default())),
     };
 
     // --- Wire all callbacks ---

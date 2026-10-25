@@ -5499,29 +5499,29 @@ fn the_watched_card_shows_reconnecting_and_resumes() {
 
 // --- stage 9 (streaming-quality): the stream card's buttons and labels ---
 
-/// The fullscreen window as the UI harness sees it: it records what the
-/// card asked.
+/// The pop-out window as the UI harness sees it: it records what the card
+/// asked, with the window title.
 #[derive(Default)]
-struct FakeFullscreen {
-    calls: std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>,
+struct FakePopout {
+    calls: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
 }
 
-impl crate::stream_fullscreen::FullscreenSurface for FakeFullscreen {
-    fn enter(&mut self, _ctx: &crate::app_context::AppContext) -> Result<(), String> {
-        self.calls.borrow_mut().push("enter");
+impl crate::stream_popout::PopoutSurface for FakePopout {
+    fn open(&mut self, _ctx: &crate::app_context::AppContext, title: &str) -> Result<(), String> {
+        self.calls.borrow_mut().push(format!("open {title}"));
         Ok(())
     }
 
-    fn exit(&mut self, _ctx: &crate::app_context::AppContext) {
-        self.calls.borrow_mut().push("exit");
+    fn close(&mut self, _ctx: &crate::app_context::AppContext) {
+        self.calls.borrow_mut().push("close".into());
     }
 }
 
-type FullscreenCalls = std::rc::Rc<std::cell::RefCell<Vec<&'static str>>>;
+type PopoutCalls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
 
 /// The app with alice's stream in the crew, not watched yet, and a fake
-/// fullscreen window. Returns what the fake records.
-fn app_with_alices_stream(h: &mut Harness) -> FullscreenCalls {
+/// pop-out window. Returns what the fake records.
+fn app_with_alices_stream(h: &mut Harness) -> PopoutCalls {
     use mello_core::crew_state::{CrewState, StreamState};
     logged_in_app(h);
     // The card lays its footer out only after the window has a size: the
@@ -5549,10 +5549,10 @@ fn app_with_alices_stream(h: &mut Harness) -> FullscreenCalls {
             ..Default::default()
         },
     });
-    let fake = FakeFullscreen::default();
+    let fake = FakePopout::default();
     let calls = fake.calls.clone();
     h.ctx()
-        .stream_fullscreen
+        .stream_popout
         .borrow_mut()
         .set_surface(Box::new(fake));
     calls
@@ -5608,7 +5608,8 @@ fn watching_a_stream_shows_starting_then_the_cards_three_buttons() {
     app_with_alices_stream(&mut h);
     assert!(
         h.controls_labelled("Stream volume").is_empty()
-            && h.controls_labelled("Fullscreen").is_empty(),
+            && h.controls_labelled("Expand").is_empty()
+            && h.controls_labelled("Pop out").is_empty(),
         "a card you do not watch has nothing to control"
     );
 
@@ -5631,7 +5632,13 @@ fn watching_a_stream_shows_starting_then_the_cards_three_buttons() {
         height: 720,
     });
     assert!(card_ui(&h).get_viewer_starting(), "no frame shows yet");
-    for label in ["Stream volume", "Stream settings", "Fullscreen", "Leave"] {
+    for label in [
+        "Stream volume",
+        "Stream settings",
+        "Expand",
+        "Pop out",
+        "Leave",
+    ] {
         assert!(
             !h.controls_labelled(label).is_empty(),
             "the watched card has {label:?}"
@@ -5805,19 +5812,7 @@ fn stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host() {
     );
 }
 
-/// ★ Fullscreen: the button moves the stream to the fullscreen window and
-/// the window's Escape brings it back, with no new watch: the decoder and
-/// the presenter stay. A pause and a leave also bring it back.
-#[test]
-fn fullscreen_keeps_the_stream_and_escape_pause_and_leave_return() {
-    let mut h = Harness::new();
-    let calls = app_with_alices_stream(&mut h);
-    watch_alice(&mut h);
-    let _ = h.commands();
-
-    h.click_label("Fullscreen");
-    assert_eq!(*calls.borrow(), ["enter"]);
-    assert!(card_ui(&h).get_fullscreen());
+fn no_restart(h: &mut Harness) {
     let cmds = h.commands();
     assert!(
         !cmds
@@ -5826,23 +5821,54 @@ fn fullscreen_keeps_the_stream_and_escape_pause_and_leave_return() {
         "the switch restarts nothing: {cmds:?}"
     );
     assert!(h.app().get_is_watching());
+}
 
-    // The window's Escape: the native window procedure calls this.
-    crate::stream_fullscreen::exit(h.ctx(), "Escape");
-    assert_eq!(*calls.borrow(), ["enter", "exit"]);
-    assert!(!card_ui(&h).get_fullscreen());
-    assert!(h.app().get_is_watching(), "the stream plays on in the card");
+/// Whether the expanded view is on screen (main.slint over the feed).
+fn expanded_view_shows(h: &Harness) -> bool {
+    ElementHandle::find_by_element_type_name(h.app(), "ExpandedStreamCard")
+        .next()
+        .is_some()
+}
 
-    h.click_label("Fullscreen");
+/// ★ Expand: the watched card takes over the feed area and keeps its
+/// footer; the same button, now "Exit expanded view", and Escape bring it
+/// back; nothing restarts. A pause and a leave return to the normal card.
+#[test]
+fn expand_takes_over_the_feed_and_exit_escape_pause_and_leave_return() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    let _ = h.commands();
+
+    h.click_label("Expand");
+    assert!(card_ui(&h).get_expanded());
+    assert!(expanded_view_shows(&h), "the card covers the feed area");
+    assert!(
+        !h.controls_labelled("Exit expanded view").is_empty()
+            && !h.controls_labelled("Leave").is_empty(),
+        "the footer and its buttons stay"
+    );
+    no_restart(&mut h);
+
+    h.click_label("Exit expanded view");
+    assert!(!card_ui(&h).get_expanded());
+    assert!(!expanded_view_shows(&h));
+    no_restart(&mut h);
+
+    h.click_label("Expand");
+    press_escape(&mut h);
+    assert!(!card_ui(&h).get_expanded(), "Escape returns");
+
+    h.click_label("Expand");
     h.emit(Event::StreamPaused {
         host_id: "host-1".into(),
         paused: true,
         reason: "minimized".into(),
     });
-    assert_eq!(*calls.borrow(), ["enter", "exit", "enter", "exit"]);
+    assert!(!card_ui(&h).get_expanded(), "a pause shows the normal card");
     assert!(
-        h.controls_labelled("Fullscreen").is_empty(),
-        "a paused stream has no picture to show"
+        h.controls_labelled("Expand").is_empty(),
+        "a paused stream has no picture to expand"
     );
     h.emit(Event::StreamPaused {
         host_id: "host-1".into(),
@@ -5850,14 +5876,82 @@ fn fullscreen_keeps_the_stream_and_escape_pause_and_leave_return() {
         reason: "".into(),
     });
 
-    h.click_label("Fullscreen");
+    h.click_label("Expand");
+    h.click_label("Leave");
     h.emit(Event::StreamWatchingStopped);
-    assert_eq!(
-        *calls.borrow(),
-        ["enter", "exit", "enter", "exit", "enter", "exit"],
-        "a leave closes the window before the presenter goes"
+    assert!(!card_ui(&h).get_expanded(), "a leave ends it");
+    assert!(!expanded_view_shows(&h));
+}
+
+/// ★ Pop out: the stream opens in its own window titled after the host; the
+/// card says "Playing in a window" and its button brings it back; nothing
+/// restarts. Closing the window, a pause, the end and a leave bring it back
+/// too. The pop-out and the expanded view exclude each other.
+#[test]
+fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
+    let mut h = Harness::new();
+    let calls = app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    let _ = h.commands();
+
+    h.click_label("Pop out");
+    assert_eq!(*calls.borrow(), ["open alice - Mello"]);
+    assert!(card_ui(&h).get_popped_out());
+    assert!(
+        !h.controls_labelled("Show it here").is_empty(),
+        "the card says the stream is in a window and brings it back"
     );
-    assert!(!card_ui(&h).get_fullscreen());
+    assert!(
+        !h.controls_labelled("Stream volume").is_empty()
+            && !h.controls_labelled("Stream settings").is_empty(),
+        "the volume and the settings stay on the card"
+    );
+    no_restart(&mut h);
+
+    h.click_label("Show it here");
+    assert_eq!(*calls.borrow(), ["open alice - Mello", "close"]);
+    assert!(!card_ui(&h).get_popped_out());
+
+    // The window's close button: the native window procedure calls this.
+    h.click_label("Pop out");
+    crate::stream_popout::close(h.ctx(), "the window closed");
+    assert!(!card_ui(&h).get_popped_out());
+    assert!(h.app().get_is_watching(), "the stream plays on in the card");
+
+    // Exclusive: expanding brings the stream back from the window; popping
+    // out leaves the expanded view.
+    h.click_label("Pop out");
+    h.click_label("Expand");
+    assert!(card_ui(&h).get_expanded() && !card_ui(&h).get_popped_out());
+    h.click_label("Pop out");
+    assert!(!card_ui(&h).get_expanded() && card_ui(&h).get_popped_out());
+
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: true,
+        reason: "minimized".into(),
+    });
+    assert!(!card_ui(&h).get_popped_out(), "a pause brings it back");
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: false,
+        reason: "".into(),
+    });
+
+    h.click_label("Pop out");
+    h.emit(Event::StreamFailed {
+        role: mello_core::events::StreamRole::Viewer,
+        reason: "The stream server closed the session.".into(),
+    });
+    assert!(!card_ui(&h).get_popped_out(), "a failure brings it back");
+
+    h.click_label("Pop out");
+    h.click_label("Leave");
+    h.emit(Event::StreamWatchingStopped);
+    assert!(!card_ui(&h).get_popped_out(), "a leave brings it back");
+    let closes = calls.borrow().iter().filter(|c| *c == "close").count();
+    let opens = calls.borrow().len() - closes;
+    assert_eq!(opens, closes, "every window closed: {:?}", calls.borrow());
 }
 
 /// ★ Reconnect: the watched card keeps its buttons through a reconnect, and

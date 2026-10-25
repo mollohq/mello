@@ -423,10 +423,19 @@ flows:
     issues: []
 
   - id: STREAM-05
-    title: Watch a stream fullscreen, Escape returns to the card
+    title: Expand a watched stream over the feed, exit with the button or Escape
     priority: P1
     users: 2
-    harness: [fullscreen_keeps_the_stream_and_escape_pause_and_leave_return]
+    harness: [expand_takes_over_the_feed_and_exit_escape_pause_and_leave_return]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: STREAM-07
+    title: Pop a watched stream out into its own window, close it to bring it back
+    priority: P1
+    users: 2
+    harness: [pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back]
     journeys: []
     protocol: []
     issues: []
