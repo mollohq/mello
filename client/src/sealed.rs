@@ -19,7 +19,6 @@ use crate::{BeltReveal, H2hPerson, RecapSeal};
 pub const SEAL_DAYS: i64 = 7;
 const DAY_MS: i64 = 86_400_000;
 /// An opened key is kept a day longer than a move can stay sealed.
-#[allow(dead_code)] // used when a card opens (plan section 4)
 const KEEP_DAYS: i64 = SEAL_DAYS + 1;
 
 /// Columns and rows of the code of a belt. The chip shows the cells that fit.
@@ -88,25 +87,38 @@ pub fn cells_path(cells: &[bool]) -> String {
     out
 }
 
-/// The sparse field of the sealed recap as two paths, in a box of 160 by 248
-/// units: the bright cells and the dim cells. The key cell is left out.
-pub fn recap_field(seed: i32) -> (String, String) {
+/// The level of each cell of the sealed recap field, row by row: 0 none,
+/// 1 dim, 2 bright. The key cell and the cells above the skip are 0.
+pub fn recap_levels(seed: i32) -> Vec<i32> {
     const KEY_COL: usize = 10;
     const KEY_ROW: usize = 15;
+    (0..RECAP_COLS * RECAP_ROWS)
+        .map(|i| {
+            let (c, r) = (i % RECAP_COLS, i / RECAP_COLS);
+            let v = hash(i as f64 * 1.37 + f64::from(seed) * 57.1 + 0.31);
+            // No cells above 70 of 248.
+            if 8 + r * 12 < 70 || v <= 0.76 || (c == KEY_COL && r == KEY_ROW) {
+                0
+            } else if v > 0.93 {
+                2
+            } else {
+                1
+            }
+        })
+        .collect()
+}
+
+/// The field of the sealed recap as two paths, in a box of 160 by 248 units:
+/// the bright cells and the dim cells.
+pub fn recap_field(levels: &[i32]) -> (String, String) {
     let (mut bright, mut dim) = (String::new(), String::new());
-    for i in 0..RECAP_COLS * RECAP_ROWS {
-        let (c, r) = (i % RECAP_COLS, i / RECAP_COLS);
-        let v = hash(i as f64 * 1.37 + f64::from(seed) * 57.1 + 0.31);
-        let (x, y) = (14 + c * 11, 8 + r * 12);
-        // No cells above 70 of 248.
-        if y < 70 || v <= 0.76 || (c == KEY_COL && r == KEY_ROW) {
-            continue;
-        }
+    for (i, level) in levels.iter().enumerate() {
+        let (x, y) = (14 + (i % RECAP_COLS) * 11, 8 + (i / RECAP_COLS) * 12);
         let cell = format!("M{x} {y}h5v5h-5z");
-        if v > 0.93 {
-            bright.push_str(&cell);
-        } else {
-            dim.push_str(&cell);
+        match level {
+            2 => bright.push_str(&cell),
+            1 => dim.push_str(&cell),
+            _ => {}
         }
     }
     (bright, dim)
@@ -196,7 +208,6 @@ pub fn opened_keys(settings: &Settings, crew_id: &str) -> HashSet<String> {
 
 /// Store a key as opened. Keys older than `KEEP_DAYS` leave the list: a move
 /// that old is not sealed whatever the list says. Returns true on a change.
-#[allow(dead_code)] // used when a card opens (plan section 4)
 pub fn mark_opened(settings: &mut Settings, crew_id: &str, key: &str, now_ms: i64) -> bool {
     let list = settings
         .sealed_opened
@@ -213,7 +224,6 @@ pub fn mark_opened(settings: &mut Settings, crew_id: &str, key: &str, now_ms: i6
 }
 
 /// The time inside a key: the move time, or the week start of a recap.
-#[allow(dead_code)] // used when a card opens (plan section 4)
 fn key_time_ms(key: &str) -> Option<i64> {
     key.rsplit(':').next()?.parse().ok()
 }
@@ -273,8 +283,10 @@ pub fn reveal_of(
 pub fn recap_seal(week_start_ms: i64, week_end_ms: i64, seal: &Seal) -> RecapSeal {
     let key = recap_key(week_start_ms);
     let seed = recap_seed(week_start_ms);
-    let (bright, dim) = recap_field(seed);
+    let levels = recap_levels(seed);
+    let (bright, dim) = recap_field(&levels);
     RecapSeal {
+        levels: slint::ModelRc::new(slint::VecModel::from(levels)),
         sealed: week_start_ms > 0 && seal.is_sealed(&key, week_end_ms),
         key: key.into(),
         seed,
@@ -317,7 +329,7 @@ mod tests {
 
     #[test]
     fn the_recap_field_has_no_cell_above_the_skip_and_none_on_the_key() {
-        let (bright, dim) = recap_field(recap_seed(NOW));
+        let (bright, dim) = recap_field(&recap_levels(recap_seed(NOW)));
         assert!(!dim.is_empty());
         for cell in bright
             .split('M')

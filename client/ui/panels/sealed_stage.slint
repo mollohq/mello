@@ -1,0 +1,569 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { H2hHue } from "../components/head2head.slint";
+import { BeltReveal } from "../types.slint";
+import { Clock, Ease, SealedUi, SealedFmt, SealedRecap } from "../components/sealed.slint";
+
+// ============================================================
+//  The centre view of a sealed card (plan SEALED-REVEAL.md section 3).
+//
+//  A card leaves its slot, the feed dims, the card charges, flips and bursts in
+//  the hue of the new holder, then shows what it holds. A click on the scrim
+//  sends it back to its slot, open.
+//
+//  The view is made with `if` when a card leaves its slot and gone when it is
+//  back. Everything here reads `Clock.now`, so nothing runs while the feed
+//  waits with sealed cards. Never animate the blur, size or colour of a drop
+//  shadow: Slint draws a new offscreen surface for each frame. The glow is a
+//  fixed shadow with an animated opacity, and the particles are radial
+//  gradients.
+// ============================================================
+
+/// Arc-length walk round the button silhouette (top-left and bottom-right cut),
+/// clockwise from the end of the top-left cut. The embers use it to leave the
+/// edge of the big belt.
+global PerimB {
+    public pure function total(w: float, h: float, c: float) -> float {
+        return 2 * w + 2 * h - 4 * c + 2 * c * Math.sqrt(2);
+    }
+    public pure function wrap(s: float, w: float, h: float, c: float) -> float {
+        let p = total(w, h, c);
+        let m = Math.mod(s, p);
+        return m < 0 ? m + p : m;
+    }
+    public pure function px(s0: float, w: float, h: float, c: float) -> float {
+        let s = wrap(s0, w, h, c);
+        let q = Math.sqrt(2);
+        let a = w - c;
+        let b = a + h - c;
+        let d = b + c * q;
+        let e = d + w - c;
+        let f = e + h - c;
+        return s < a ? c + s
+            : s < b ? w
+            : s < d ? w - (s - b) / q
+            : s < e ? (w - c) - (s - d)
+            : s < f ? 0
+            : (s - f) / q;
+    }
+    public pure function py(s0: float, w: float, h: float, c: float) -> float {
+        let s = wrap(s0, w, h, c);
+        let q = Math.sqrt(2);
+        let a = w - c;
+        let b = a + h - c;
+        let d = b + c * q;
+        let e = d + w - c;
+        let f = e + h - c;
+        return s < a ? 0
+            : s < b ? s - a
+            : s < d ? (h - c) + (s - b) / q
+            : s < e ? h
+            : s < f ? h - (s - e)
+            : c - (s - f) / q;
+    }
+    public pure function nx(s0: float, w: float, h: float, c: float) -> float {
+        let s = wrap(s0, w, h, c);
+        let q = Math.sqrt(2);
+        let a = w - c;
+        let b = a + h - c;
+        let d = b + c * q;
+        let e = d + w - c;
+        let f = e + h - c;
+        return s < a ? 0 : s < b ? 1 : s < d ? 0.7071 : s < e ? 0 : s < f ? -1 : -0.7071;
+    }
+    public pure function ny(s0: float, w: float, h: float, c: float) -> float {
+        let s = wrap(s0, w, h, c);
+        let q = Math.sqrt(2);
+        let a = w - c;
+        let b = a + h - c;
+        let d = b + c * q;
+        let e = d + w - c;
+        let f = e + h - c;
+        return s < a ? -1 : s < b ? 0 : s < d ? 0.7071 : s < e ? 1 : s < f ? 0 : -0.7071;
+    }
+}
+
+/// A particle placed by its centre: set x and y to the centre point. The glow
+/// is a radial gradient on the particle, a shader setting that needs no
+/// offscreen surface. The default radius is half the diagonal, so 70 % is the
+/// edge of the box.
+component Particle inherits Rectangle {
+    in property <length> size: 4px;
+    in property <color> tint: Theme.on-media;
+    width: 0;
+    height: 0;
+
+    Rectangle {
+        x: -root.size * 2;
+        y: -root.size * 2;
+        width: root.size * 4;
+        height: root.size * 4;
+        background: @radial-gradient(circle, Theme.on-media 0%, root.tint 14%, root.tint.with-alpha(0.5) 20%, root.tint.with-alpha(0.15) 40%, root.tint.with-alpha(0) 70%);
+    }
+}
+
+component Label inherits Text {
+    font-family: Theme.font-label;
+    font-weight: Theme.weight-label;
+    font-size: 10px;
+    letter-spacing: Theme.track-label;
+    color: Theme.text-secondary;
+    vertical-alignment: center;
+}
+
+// Back of the big belt: the chip at 8 times. Same seed and grid (15 by 6), so
+// the code of the chip grows into the centre card. One Path until the charge,
+// then one Rectangle for each cell, to clear the cells outward from the key.
+component BigBeltBack inherits Rectangle {
+    in property <BeltReveal> belt;
+    in property <float> clear: 0;
+
+    CutButtonShape { width: parent.width; height: parent.height; n: 36px; fill: Theme.graphic-med; }
+    CutButtonShape { width: parent.width; height: parent.height; n: 36px; inset: 2px; fill: Theme.surface; }
+
+    if root.clear <= 0: Path {
+        x: 36px;
+        y: 84px;
+        width: 600px;
+        height: 240px;
+        viewbox-width: 75;
+        viewbox-height: 30;
+        commands: root.belt.code;
+        fill: Theme.action-quiet;
+    }
+
+    // The matrix is 15 by 6 cells, 32 px square on a 40 px pitch. The key sits
+    // 32 px after the last column.
+    if root.clear > 0: Rectangle {
+        for on[i] in root.belt.cells: Rectangle {
+            property <int> c: Math.mod(i, 15);
+            property <int> r: Math.floor(i / 15);
+            property <float> dx: (36px + self.c * 40px + 16px - 716px) / 1px;
+            property <float> dy: (84px + self.r * 40px + 16px - 200px) / 1px;
+            // From the key outward: radius `clear * 740 - 40`, 140 soft.
+            property <float> fade: Ease.clamp01((Math.sqrt(self.dx * self.dx + self.dy * self.dy) - (root.clear * 740 - 40)) / 140);
+            visible: on && self.fade > 0;
+            x: 36px + self.c * 40px;
+            y: 84px + self.r * 40px;
+            width: 32px;
+            height: 32px;
+            background: Theme.action-quiet;
+            opacity: self.fade;
+        }
+    }
+
+    // The key: the unread state.
+    Rectangle {
+        x: 668px;
+        y: 152px;
+        width: 96px;
+        height: 96px;
+        background: Theme.live;
+        transform-scale: 1 + 0.3 * root.clear;
+    }
+}
+
+// Face of the big belt. `t` is the time since the card left its slot.
+component BigBeltFace inherits Rectangle {
+    in property <BeltReveal> belt;
+    in property <duration> t;
+
+    property <color> hue: H2hHue.of(root.belt.hue-index);
+    property <float> count: Ease.out-cubic(Ease.span(root.t, 1150ms, 2050ms));
+    property <float> pop: Ease.out-back(Ease.span(root.t, 1250ms, 1650ms));
+    property <float> line: Ease.span(root.t, 1500ms, 1900ms);
+
+    CutButtonShape { width: parent.width; height: parent.height; n: 36px; fill: root.hue; }
+    CutButtonShape { width: parent.width; height: parent.height; n: 36px; inset: 2px; fill: Theme.card-bg; }
+
+    // A faint wash of the hue from the side of the holder.
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 36px;
+        inset: 2px;
+        fill: @linear-gradient(90deg, root.hue.with-alpha(0) 45%, root.hue.with-alpha(0.14) 100%);
+    }
+
+    VerticalLayout {
+        x: 56px;
+        y: 48px;
+        width: 470px;
+        spacing: 6px;
+        alignment: start;
+
+        Label { text: "HEAD2HEAD  ·  BELT MOVED"; font-size: 13px; letter-spacing: 2.4px; }
+        Rectangle { height: 8px; }
+
+        HorizontalLayout {
+            spacing: 18px;
+            alignment: start;
+            cross-axis-alignment: center;
+            Image {
+                source: root.belt.icon;
+                colorize: root.hue;
+                width: 52px;
+                height: 52px;
+            }
+            Text {
+                text: root.belt.title;
+                vertical-alignment: center;
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display-bold;
+                font-size: 50px;
+                color: Theme.text-primary;
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 10px;
+            alignment: start;
+            Text {
+                text: SealedFmt.belt(root.belt.kind, root.belt.amount * root.count, root.belt.decimals);
+                font-family: Theme.font-display;
+                font-weight: Theme.weight-display-bold;
+                font-size: 120px;
+                color: Theme.text-primary;
+            }
+            if root.belt.unit != "": Text {
+                text: root.belt.unit;
+                vertical-alignment: bottom;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 34px;
+                color: Theme.text-secondary;
+            }
+        }
+
+        Text {
+            text: root.belt.stat;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 18px;
+            color: Theme.text-body;
+        }
+    }
+
+    // The new holder, on the right.
+    VerticalLayout {
+        x: 540px;
+        y: 0;
+        width: 210px;
+        height: parent.height;
+        alignment: center;
+        spacing: 12px;
+
+        HorizontalLayout {
+            alignment: center;
+            Rectangle {
+                width: 112px;
+                height: 112px;
+                UserAvatar {
+                    size: 112px;
+                    initials: root.belt.holder.initials;
+                    avatar: root.belt.holder.avatar;
+                    has-avatar: root.belt.holder.has-avatar;
+                    color-index: root.belt.holder.hue-index;
+                    transform-scale: 0.4 + 0.6 * root.pop;
+                    opacity: Ease.clamp01(root.pop * 3);
+                }
+            }
+        }
+
+        Text {
+            text: root.belt.holder.name;
+            horizontal-alignment: center;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display;
+            font-size: 34px;
+            color: Theme.text-primary;
+            opacity: Ease.clamp01(root.pop * 3);
+            overflow: elide;
+        }
+
+        HorizontalLayout {
+            alignment: center;
+            spacing: 8px;
+            opacity: root.line;
+            Text {
+                text: "took it from";
+                vertical-alignment: center;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 16px;
+                color: Theme.text-body;
+            }
+            Rectangle {
+                width: 22px;
+                opacity: 0.6;
+                UserAvatar {
+                    y: (parent.height - self.height) / 2;
+                    size: 22px;
+                    initials: root.belt.prev.initials;
+                    avatar: root.belt.prev.avatar;
+                    has-avatar: root.belt.prev.has-avatar;
+                    color-index: root.belt.prev.hue-index;
+                }
+            }
+            Text {
+                text: root.belt.prev.name;
+                vertical-alignment: center;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-label;
+                font-size: 16px;
+                color: Theme.text-body;
+                overflow: elide;
+            }
+        }
+    }
+}
+
+/// The centre view. Put the face of a recap card inside it as the child: it
+/// shows from the flip, and `count` runs 0 to 1 for its numbers.
+export component SealedStage inherits Rectangle {
+    /// The page's own position, to turn window coordinates into page ones.
+    in property <length> page-x;
+    in property <length> page-y;
+    /// True from the flip: the face replaces the back.
+    out property <bool> face: root.t >= 1030ms;
+    /// 0 to 1: the numbers of a recap count up.
+    out property <float> count: Ease.out-cubic(Ease.span(root.t, 1150ms, 2050ms));
+
+    property <bool> is-recap: SealedUi.active-kind == "recap";
+    property <color> hue: root.is-recap ? Theme.action : H2hHue.of(SealedUi.belt.hue-index);
+    property <duration> t: Clock.now - SealedUi.t0;
+    property <duration> tc: SealedUi.closing ? Clock.now - SealedUi.t1 : -1ms;
+    property <bool> done: SealedUi.close-done;
+
+    changed done => {
+        if (root.done) {
+            SealedUi.landed();
+        }
+    }
+
+    // ---- Flight: slot to centre and back ------------------------------
+    property <float> fly: Ease.in-out-cubic(Ease.span(root.t, 0ms, 520ms));
+    property <float> back: SealedUi.closing ? Ease.in-out-cubic(Ease.span(root.tc, 0ms, 460ms)) : 0;
+    property <float> k: root.fly * (1 - root.back);
+    property <length> bw: root.is-recap ? SealedUi.from.w : 800px;
+    property <length> bh: root.is-recap ? SealedUi.from.h : 400px;
+    property <float> s0: SealedUi.from.h / root.bh;
+    // The recap is near full height already: it moves to the centre and grows
+    // only as far as the pop leaves room for.
+    property <float> s1: root.is-recap ? min(1.1, (root.height - 70px) / root.bh / 1.06) : 1;
+    property <length> fx: SealedUi.from.x - root.page-x + SealedUi.from.w / 2;
+    property <length> fy: SealedUi.from.y - root.page-y + SealedUi.from.h / 2;
+    property <length> tx: root.width / 2;
+    property <length> ty: root.height / 2 - 14px;
+    property <length> cx: root.fx + (root.tx - root.fx) * root.k;
+    property <length> cy: root.fy + (root.ty - root.fy) * root.k;
+    property <float> scale: root.s0 + (root.s1 - root.s0) * root.k;
+    property <angle> tilt: Math.sin(root.k * 180deg) * (SealedUi.closing ? 5deg : -7deg);
+
+    // ---- Reveal ---------------------------------------------------------
+    //    0 -  520 ms  flight
+    //  520 -  860 ms  shake, grow, the white glow builds, the cells clear
+    //  860 - 1200 ms  flip; the face from 1030 ms
+    // 1030 - 1800 ms  flash, ring, streaks, sparks, rays in the hue of the holder
+    // 1150 - 2050 ms  count-up, the holder pops in
+    // 1250 ms +       rest: embers on the edge, a click on the scrim closes
+    property <float> antic: Ease.span(root.t, 520ms, 860ms);
+    property <float> flip: Ease.in-out-cubic(Ease.span(root.t, 860ms, 1200ms));
+    property <float> squash: max(0.02, abs(Math.cos(root.flip * 180deg)));
+    property <float> settle: Ease.span(root.t, 1200ms, 1600ms);
+    property <float> pop: 1 + 0.05 * Ease.out-cubic(root.antic) - 0.05 * Ease.out-back(root.settle) + 0.05 * Math.sin(root.flip * 180deg);
+    property <float> shaking: root.t >= 520ms && root.t < 860ms ? root.antic : 0;
+    property <length> shake-x: (Math.sin(root.t / 1ms * 1.9rad) + 0.5 * Math.sin(root.t / 1ms * 3.1rad)) * 5px * root.shaking;
+    property <angle> shake-r: Math.sin(root.t / 1ms * 2.3rad) * 1.6deg * root.shaking;
+    property <float> flash: root.t >= 1030ms ? Math.pow(1 - Ease.span(root.t, 1030ms, 1260ms), 2) : 0;
+    property <float> burst-u: Ease.span(root.t, 1030ms, 1750ms);
+    property <bool> bursting: root.t >= 1030ms && root.burst-u < 1;
+    property <bool> resting: root.t >= 1250ms;
+    property <float> rays-a: Ease.span(root.t, 980ms, 1250ms) * (0.85 - 0.5 * Ease.span(root.t, 1600ms, 2600ms)) * (1 - root.back);
+
+    background: transparent;
+
+    // Scrim over the feed.
+    Rectangle {
+        background: Theme.media-ground;
+        opacity: 0.8 * root.k;
+    }
+
+    // The scrim closes the view once the card is at rest. It also holds the
+    // wheel, so the feed under it does not scroll.
+    TouchArea {
+        accessible-role: button;
+        accessible-label: "Close";
+        scroll-event(e) => { accept }
+        clicked => { SealedUi.close(); }
+    }
+
+    // Rays behind the card. Each is a triangle from the centre of the card,
+    // built from its angle: no transform, so every renderer draws it. The fade
+    // is a radial gradient from the centre, 600 px long.
+    for i in 14: Path {
+        property <angle> a: i * (360deg / 14) + root.t / 1ms * 0.012deg;
+        property <float> sx: Math.sin(self.a - 4.6deg) * 600;
+        property <float> sy: -Math.cos(self.a - 4.6deg) * 600;
+        property <float> ex: Math.sin(self.a + 4.6deg) * 600;
+        property <float> ey: -Math.cos(self.a + 4.6deg) * 600;
+        visible: root.t >= 980ms && root.rays-a > 0;
+        x: root.cx - 600px;
+        y: root.cy - 600px;
+        width: 1200px;
+        height: 1200px;
+        viewbox-width: 1200;
+        viewbox-height: 1200;
+        commands: "M 600 600 L \{600 + self.sx} \{600 + self.sy} L \{600 + self.ex} \{600 + self.ey} Z";
+        fill: @radial-gradient(circle, root.hue.with-alpha(0.5) 0%, root.hue.with-alpha(0.1) 39%, root.hue.with-alpha(0) 70%);
+        opacity: root.rays-a;
+    }
+
+    // Back light at the flip.
+    Rectangle {
+        visible: root.flash > 0;
+        x: root.cx - 520px;
+        y: root.cy - 520px;
+        width: 1040px;
+        height: 1040px;
+        background: @radial-gradient(circle, root.hue.with-alpha(0.7 * root.flash) 0%, root.hue.with-alpha(0) 60%);
+    }
+
+    // Shock ring.
+    Rectangle {
+        property <length> r: (180 + 520 * Ease.out-cubic(root.burst-u)) * 1px;
+        visible: root.bursting;
+        x: root.cx - self.r;
+        y: root.cy - self.r;
+        width: self.r * 2;
+        height: self.r * 2;
+        border-radius: self.r;
+        border-width: (5 * (1 - root.burst-u) + 0.5) * 1px;
+        border-color: Theme.on-media.mix(root.hue, 1 - root.burst-u).with-alpha(1 - root.burst-u);
+    }
+
+    // Streaks, from behind the card outward. A stroked line from the angle and
+    // the distance, so no transform.
+    for i in 40: Path {
+        property <float> life: 550 + Ease.hash(i * 4.1) * 450;
+        property <float> u: Ease.span(root.t, 1030ms, 1030ms + self.life * 1ms);
+        property <angle> a: i * 9deg + Ease.hash(i + 0.5) * 8deg;
+        property <float> d0: 180 + (60 + Ease.hash(i * 2.3) * 420) * Ease.out-cubic(self.u);
+        property <float> d1: self.d0 + 6 + 26 * (1 - self.u);
+        visible: root.t >= 1030ms && self.u < 1;
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+        viewbox-width: root.width / 1px;
+        viewbox-height: root.height / 1px;
+        commands: "M \{root.cx / 1px + Math.sin(self.a) * self.d0} \{root.cy / 1px - Math.cos(self.a) * self.d0} L \{root.cx / 1px + Math.sin(self.a) * self.d1} \{root.cy / 1px - Math.cos(self.a) * self.d1}";
+        stroke: Theme.on-media.mix(root.hue, 1 - self.u);
+        stroke-width: 3px;
+        opacity: 1 - self.u;
+    }
+
+    // ---- The card -------------------------------------------------------
+    Rectangle {
+        x: root.cx - root.bw / 2 + root.shake-x;
+        y: root.cy - root.bh / 2;
+        width: root.bw;
+        height: root.bh;
+        transform-scale-x: root.scale * root.pop * root.squash;
+        transform-scale-y: root.scale * root.pop;
+        transform-rotation: root.tilt + root.shake-r;
+        opacity: SealedUi.closing ? 1 - Ease.span(root.tc, 380ms, 460ms) : Ease.span(root.t, 0ms, 70ms);
+
+        // Glow under the card. The blur never changes, only the opacity, so
+        // Slint draws the shadow once and reuses it. White until the flip, then
+        // the hue of the holder.
+        Rectangle {
+            opacity: root.face ? 0 : 0.25 + 0.75 * root.antic;
+            drop-shadow-blur: 48px;
+            drop-shadow-color: Theme.on-media.with-alpha(0.6);
+        }
+        Rectangle {
+            opacity: root.face ? (1 - 0.5 * root.settle) * (1 - root.back) : 0;
+            drop-shadow-blur: 48px;
+            drop-shadow-color: root.hue.with-alpha(0.8);
+        }
+
+        if !root.face && !root.is-recap: BigBeltBack {
+            width: parent.width;
+            height: parent.height;
+            belt: SealedUi.belt;
+            clear: root.antic;
+        }
+        if root.face && !root.is-recap: BigBeltFace {
+            width: parent.width;
+            height: parent.height;
+            belt: SealedUi.belt;
+            t: root.t;
+        }
+        if !root.face && root.is-recap: SealedRecap {
+            width: parent.width;
+            height: parent.height;
+            seal: SealedUi.recap-card.recap-seal;
+            week: SealedUi.recap-card.recap-week != "" ? SealedUi.recap-card.recap-week : "This week";
+            interactive: false;
+            clear: root.antic;
+        }
+
+        // The face of a recap: the recap card, set by the parent.
+        Rectangle {
+            visible: root.face && root.is-recap;
+            @children
+        }
+
+        // Fake depth: the side turning away darkens.
+        Rectangle {
+            background: Theme.media-ground;
+            opacity: (1 - root.squash) * 0.7;
+        }
+
+        // White flash as the face lands.
+        Rectangle {
+            background: Theme.on-media;
+            opacity: root.flash * 0.75;
+        }
+    }
+
+    // Sparks: thrown out in front, then fall.
+    for i in 30: Particle {
+        property <float> u: Ease.span(root.t, 1050ms, 2400ms);
+        property <float> tau: self.u * 1.35;
+        property <angle> a: Ease.hash(i * 6.7 + 0.2) * 360deg;
+        property <float> v: 180 + Ease.hash(i * 8.3) * 260;
+        property <float> r0: 230;
+        visible: root.t >= 1050ms && self.u < 1;
+        size: (2.5 + Ease.hash(i * 1.9) * 3) * 1px;
+        x: root.cx + Math.sin(self.a) * (self.r0 + self.v * self.tau) * 1px;
+        y: root.cy + (-Math.cos(self.a) * (self.r0 + self.v * self.tau) + 0.5 * 300 * self.tau * self.tau) * 1px;
+        tint: Theme.on-media.mix(root.hue.brighter(0.4), 1 - self.u);
+        opacity: 1 - self.u * self.u;
+    }
+
+    // Embers on the big belt at rest. A gradient glow, no shadows.
+    for i in (root.is-recap ? 0 : 80): Particle {
+        property <float> W: 800;
+        property <float> H: 400;
+        property <float> C: 36;
+        property <float> P: PerimB.total(self.W, self.H, self.C);
+        property <float> T: 1100 + Ease.hash(i * 1.37 + 0.1) * 1100;
+        property <float> tt: root.t / 1ms + Ease.hash(i * 7.11 + 0.3) * self.T;
+        property <float> cyc: Math.floor(self.tt / self.T);
+        property <float> u: (self.tt - self.cyc * self.T) / self.T;
+        property <float> s: Ease.hash(i * 3.7 + self.cyc * 17.13) * self.P;
+        property <float> out: self.u * (8 + Ease.hash(i * 5.3) * 22);
+        property <float> rise: self.u * self.u * 42;
+        property <float> sway: Math.sin(self.u * 540deg + i * 1rad) * 4;
+        property <float> on: Ease.span(root.t, 1100ms, 1800ms) * (1 - root.back);
+        visible: root.resting && self.on > 0;
+        size: (2 + Ease.hash(i * 9.1) * 3) * (1 - self.u * 0.6) * 1px;
+        x: root.cx - 400px + (PerimB.px(self.s, self.W, self.H, self.C) + PerimB.nx(self.s, self.W, self.H, self.C) * self.out + self.sway) * 1px;
+        y: root.cy - 200px + (PerimB.py(self.s, self.W, self.H, self.C) + PerimB.ny(self.s, self.W, self.H, self.C) * self.out - self.rise) * 1px;
+        tint: Theme.on-media.mix(root.hue.brighter(0.4), 1 - Ease.clamp01(self.u * 2.5));
+        opacity: (self.u < 0.12 ? self.u / 0.12 : (1 - self.u) / 0.88) * self.on;
+    }
+}

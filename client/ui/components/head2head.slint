@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape, CutButton } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
-import { SealedBelt } from "sealed.slint";
+import { BeltSlot, SealedUi } from "sealed.slint";
 import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
 
 export { TitleHeld }
@@ -150,36 +150,41 @@ export component TitleChip inherits Rectangle {
 /// A TitleChip with how long the holder has held the title under it. The
 /// label is empty under one day, and then the chip stands alone. A belt that
 /// moved and is not opened is sealed: the chip hides what it holds, and the
-/// held label waits.
+/// held label waits until the belt is open (`BeltSlot`).
 export component HeldChip inherits Rectangle {
     in property <TitleHeld> t;
     in property <bool> compact: false;
     in property <bool> dense: false;
+    /// Names the slot for the card that leaves it (`BeltSlot`). Empty for a
+    /// chip that is never sealed.
+    in property <string> slot-id: "";
 
     property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
-    property <bool> sealed: root.t.belt.sealed;
+    property <bool> waiting: SealedUi.hides(root.t.belt);
 
     background: transparent;
-    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.sealed ? 16px : 0px);
+    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.waiting ? 16px : 0px);
 
     // No layout here: a layout would give the chip a preferred width and
     // skew the equal columns of the grid it sits in.
-    if !root.sealed: chip := TitleChip {
-        x: 0px; y: 0px;
-        width: parent.width;
-        compact: root.compact;
-        dense: root.dense;
-        hue: H2hHue.of(root.t.hue-index);
-        icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
-    }
-    if root.sealed: SealedBelt {
+    BeltSlot {
         x: 0px; y: 0px;
         width: parent.width;
         height: root.chip-height;
         belt: root.t.belt;
+        slot-id: root.slot-id;
         tight: root.compact || root.dense;
+
+        TitleChip {
+            x: 0px; y: 0px;
+            width: parent.width;
+            compact: root.compact;
+            dense: root.dense;
+            hue: H2hHue.of(root.t.hue-index);
+            icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
+        }
     }
-    if root.t.held-label != "" && !root.dense && !root.sealed: Text {
+    if root.t.held-label != "" && !root.dense && !root.waiting: Text {
         x: 2px;
         y: root.chip-height + 3px;
         width: parent.width - 2px;
@@ -498,6 +503,7 @@ component PairRow inherits Rectangle {
             }
         }
         if root.pair.has-chip: HeldChip {
+            slot-id: "pair-" + root.pair.id;
             compact: true;
             dense: root.dense;
             width: 108px;
@@ -697,9 +703,10 @@ export component VersusHero inherits Rectangle {
 
         HorizontalLayout {
             spacing: 8px;
-            for ch in root.titles: HeldChip {
+            for ch[i] in root.titles: HeldChip {
                 horizontal-stretch: 1;
                 t: ch;
+                slot-id: "versus-" + i;
             }
         }
 

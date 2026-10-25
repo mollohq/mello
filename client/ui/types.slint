@@ -108,6 +108,9 @@ export struct RecapSeal {
     seed: int,
     bright: string,
     dim: string,
+    /// The level of each of the 13 by 20 cells: 0 none, 1 dim, 2 bright. The
+    /// centre view draws these cell by cell while the field clears.
+    levels: [int],
 }
 
 // A head2head title that changed hands in the recap week. Value and unit are
@@ -360,6 +363,10 @@ export struct FeedCardData {
     age-label: string,
     /// The weekly recap seal. `recap-seal.key` is empty on any other card.
     recap-seal: RecapSeal,
+    /// The numbers of the weekly recap that count up in the centre view.
+    recap-hangout-min: int,
+    recap-clips: int,
+    recap-longest-min: int,
 
     // Daily recap (card-type "daily-recap"): the day ("Today so far",
     // "Yesterday", "Tuesday"), the sessions of the day, and the members who

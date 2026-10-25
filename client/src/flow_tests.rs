@@ -7027,7 +7027,7 @@ fn recap_card_caps_moved_belts_at_three_and_opens_full_screen_with_all() {
         3,
         "the card shows three of the four rows: a clipped row is absent from queries"
     );
-    h.click_label("Open weekly recap");
+    h.click_label("See the week");
     assert_eq!(
         count_of(&h, "RecapOpened"),
         1,
@@ -7052,7 +7052,7 @@ fn recap_without_belts_shows_neither_section() {
     assert_eq!(card.belts_moved.row_count(), 0);
     assert_eq!(card.belts_held.row_count(), 0);
     assert_eq!(count_of(&h, "TitleChip"), 0);
-    h.click_label("Open weekly recap");
+    h.click_label("See the week");
     assert_eq!(
         count_of(&h, "TitleChip"),
         0,

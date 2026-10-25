@@ -2,6 +2,7 @@ import { Theme, MelloScrollArea } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { TitleChip, H2hHue } from "../components/head2head.slint";
+import { SealedBelt, SealedUi } from "../components/sealed.slint";
 import { FeedCardData, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle } from "../types.slint";
 
 // ============================================================
@@ -179,10 +180,17 @@ export component RecapOpened inherits Rectangle {
                 for b in root.card.belts-moved: HorizontalLayout {
                     spacing: 28px;
                     cross-axis-alignment: center;
-                    TitleChip {
+                    // A belt that is still sealed in the feed stays sealed here.
+                    if !SealedUi.hides(b.belt): TitleChip {
                         width: 220px;
                         hue: H2hHue.of(b.holder-hue);
                         icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                    }
+                    if SealedUi.hides(b.belt): SealedBelt {
+                        width: 220px;
+                        height: 54px;
+                        belt: b.belt;
+                        live: false;
                     }
                     HorizontalLayout {
                         horizontal-stretch: 1;
@@ -203,11 +211,18 @@ export component RecapOpened inherits Rectangle {
                         horizontal-stretch: 1;
                         spacing: 12px;
                         cross-axis-alignment: center;
-                        UserAvatar { size: 40px; initials: b.holder-initials; color-index: b.holder-hue; avatar: b.holder-avatar; has-avatar: b.holder-has-avatar; }
+                        UserAvatar {
+                            size: 40px;
+                            muted: SealedUi.hides(b.belt);
+                            initials: SealedUi.hides(b.belt) ? "?" : b.holder-initials;
+                            color-index: b.holder-hue;
+                            avatar: b.holder-avatar;
+                            has-avatar: !SealedUi.hides(b.belt) && b.holder-has-avatar;
+                        }
                         VerticalLayout {
                             spacing: 2px;
                             Kicker { text: "NOW HELD BY"; }
-                            Text { text: b.holder-name; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display; color: Theme.text-primary; }
+                            Text { text: SealedUi.hides(b.belt) ? "Sealed" : b.holder-name; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display; color: Theme.text-primary; }
                         }
                     }
                 }

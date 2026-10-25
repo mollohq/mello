@@ -736,6 +736,14 @@ fn set_quiet_state(
 /// members from the list: a feed that came first would show "Crew mate" and a
 /// short invite card. Called when the member list is set.
 pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
+    rebuild_feed_cards(ctx, true);
+}
+
+/// The body of `rebuild_roster_cards`. `needs_h2h`: only a feed with a
+/// head2head entry is built again, as the roster changes only that entry. A
+/// belt or a recap that opens changes the recap card and the chips, so it
+/// builds a feed with no such entry again as well.
+pub(super) fn rebuild_feed_cards(ctx: &AppContext, needs_h2h: bool) {
     let Some(resp) = ctx.last_feed.borrow().clone() else {
         return;
     };
@@ -745,7 +753,7 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
     let Some(section) = resp.sections.iter().find(|s| s.id == "this_week") else {
         return;
     };
-    if !section.entries.iter().any(|e| e.entry_type == "head2head") {
+    if needs_h2h && !section.entries.iter().any(|e| e.entry_type == "head2head") {
         return;
     }
     let mut cards = build_this_week(ctx, &section.entries);
@@ -1988,6 +1996,27 @@ fn build_feed_card(
             .map(|n| format!("Week {n}"))
             .unwrap_or_default()
             .into(),
+        recap_hangout_min: if backend_type == "weekly_recap" {
+            recap_lead_minutes(&data).round() as i32
+        } else {
+            0
+        },
+        recap_clips: if backend_type == "weekly_recap" {
+            data.get("clip_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .clamp(0, i64::from(i32::MAX)) as i32
+        } else {
+            0
+        },
+        recap_longest_min: if backend_type == "weekly_recap" {
+            data.get("longest_session_min")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0)
+                .round() as i32
+        } else {
+            0
+        },
         recap_seal: if backend_type == "weekly_recap" {
             let week_start = data.get("week_start").and_then(|v| v.as_i64()).unwrap_or(0);
             let week_end = data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0);

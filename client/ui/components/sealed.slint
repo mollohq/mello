@@ -1,6 +1,6 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "cut.slint";
-import { BeltReveal, RecapSeal } from "../types.slint";
+import { BeltReveal, RecapSeal, FeedCardData } from "../types.slint";
 
 // ============================================================
 //  Sealed cards (plan SEALED-REVEAL.md). A belt that moved, and the weekly
@@ -10,6 +10,143 @@ import { BeltReveal, RecapSeal } from "../types.slint";
 //  The cells are one Path each, built in Rust (`sealed.rs`). A sealed card
 //  reads no clock, so a feed full of them costs no redraw.
 // ============================================================
+
+/// One clock for every effect of the centre view. A normal run reads
+/// `animation-tick()`. The tests set `manual` and step `manual-now`, so a frame
+/// at 1400 ms looks the same on every run. Read `now` only while an effect
+/// runs: a binding that reads it redraws the window on each frame.
+export global Clock {
+    in property <bool> manual: false;
+    in property <duration> manual-now: 0ms;
+    out property <duration> now: manual ? manual-now : animation-tick();
+}
+
+/// Easing as plain functions of a 0 to 1 float. `animate` drives property
+/// transitions only. A timeline is math over the clock.
+export global Ease {
+    public pure function clamp01(x: float) -> float {
+        return clamp(x, 0, 1);
+    }
+    public pure function out-cubic(x: float) -> float {
+        return 1 - Math.pow(1 - clamp01(x), 3);
+    }
+    public pure function in-out-cubic(x: float) -> float {
+        let v = clamp01(x);
+        return v < 0.5 ? 4 * v * v * v : 1 - Math.pow(-2 * v + 2, 3) / 2;
+    }
+    public pure function out-back(x: float) -> float {
+        let v = clamp01(x);
+        let c1 = 1.70158;
+        let c3 = c1 + 1;
+        return 1 + c3 * Math.pow(v - 1, 3) + c1 * Math.pow(v - 1, 2);
+    }
+    /// 0 before `a`, 1 after `b`, linear between.
+    public pure function span(t: duration, a: duration, b: duration) -> float {
+        return clamp01((t - a) / (b - a));
+    }
+    /// A stable pseudo random 0 to 1 for an index: the classic GLSL hash. The
+    /// particles use it. The code of a belt comes from Rust (`sealed.rs`).
+    public pure function hash(n: float) -> float {
+        let v = Math.sin(n * 12.9898rad) * 43758.5453;
+        return v - Math.floor(v);
+    }
+}
+
+/// Number formats of the centre view. The value of a belt counts up, so the
+/// formats take the number and not a display string.
+export global SealedFmt {
+    public pure function pad2(v: int) -> string {
+        return v < 10 ? "0\{v}" : "\{v}";
+    }
+    public pure function pad3(v: int) -> string {
+        return v < 10 ? "00\{v}" : v < 100 ? "0\{v}" : "\{v}";
+    }
+    /// A count with thousands separated: 4172 is "4,172".
+    public pure function group(n: int) -> string {
+        return n >= 1000000
+            ? "\{Math.floor(n / 1000000)},\{pad3(Math.floor(Math.mod(n, 1000000) / 1000))},\{pad3(Math.mod(n, 1000))}"
+            : n >= 1000 ? "\{Math.floor(n / 1000)},\{pad3(Math.mod(n, 1000))}"
+            : "\{n}";
+    }
+    /// `kind` 0 is a count (one decimal when `decimals` is 1), 1 is hours and
+    /// minutes ("4 h 05"), 2 is a clock of the day ("03:22").
+    public pure function belt(kind: int, v: float, decimals: int) -> string {
+        let tenths = Math.round(v * 10);
+        return kind == 0
+            ? (decimals == 1 ? "\{group(Math.floor(tenths / 10))}.\{Math.mod(tenths, 10)}" : group(Math.round(v)))
+            : kind == 1 ? "\{Math.floor(Math.round(v) / 60)} h \{pad2(Math.mod(Math.round(v), 60))}"
+            : "\{pad2(Math.mod(Math.floor(Math.round(v) / 60), 24))}:\{pad2(Math.mod(Math.round(v), 60))}";
+    }
+    /// Minutes as the recap card writes them while they count up.
+    public pure function minutes(m: int) -> string {
+        return m >= 60 ? "\{Math.floor(m / 60)}h \{pad2(Math.mod(m, 60))}m" : "\{m}m";
+    }
+}
+
+/// Where a card leaves from, in window coordinates.
+export struct SealedArea {
+    x: length,
+    y: length,
+    w: length,
+    h: length,
+}
+
+/// The card in the centre of the feed. One card at a time. The state of the
+/// opened belts is in Rust (`sealed.rs`): `opened` stores the key when a card
+/// leaves its slot, and `landed` runs when it is back, so Rust builds the
+/// feed cards again before the keys here clear.
+export global SealedUi {
+    /// "belt", "recap" or "" for no card in the centre.
+    in-out property <string> active-kind: "";
+    /// The key of the card in the centre. Every slot with this key stays sealed
+    /// until the card lands, except the slot it left.
+    in-out property <string> active-key: "";
+    /// The slot the card left. It shows empty until the card lands.
+    in-out property <string> active-slot: "";
+    in-out property <BeltReveal> belt;
+    /// The recap card in the centre.
+    in-out property <FeedCardData> recap-card;
+    in-out property <SealedArea> from;
+    in-out property <duration> t0;
+    in-out property <bool> closing: false;
+    in-out property <duration> t1;
+
+    callback opened(string);
+    callback landed();
+
+    /// 0 to 1 at the end of the return: the slot fades in as the card lands.
+    /// Reads the clock only while a card is on its way back.
+    out property <float> landing: root.closing ? Ease.span(Clock.now - root.t1, 340ms, 460ms) : 0;
+    out property <bool> close-done: root.closing && Clock.now - root.t1 >= 460ms;
+
+    public function launch(kind: string, slot: string, key: string, area: SealedArea) {
+        root.active-kind = kind;
+        root.active-slot = slot;
+        root.active-key = key;
+        root.from = area;
+        root.t0 = Clock.now;
+        root.closing = false;
+        root.opened(key);
+    }
+    /// A click on the scrim. The card closes once it is at rest.
+    public function close() {
+        if (root.active-kind != "" && !root.closing && Clock.now - root.t0 >= 1250ms) {
+            root.closing = true;
+            root.t1 = Clock.now;
+        }
+    }
+    /// The slots of a belt show it sealed while it is sealed in the feed, and
+    /// while the card is in the centre.
+    public pure function hides(b: BeltReveal) -> bool {
+        return b.key != "" && (b.sealed || b.key == root.active-key);
+    }
+    public function clear() {
+        root.active-kind = "";
+        root.active-key = "";
+        root.active-slot = "";
+        root.closing = false;
+    }
+}
 
 /// What every sealed belt looks like: the silhouette of `TitleChip`, a data
 /// matrix and one red key. The code comes from the move, so the same belt shows
@@ -72,11 +209,12 @@ export component SealedChip inherits Rectangle {
 }
 
 /// A sealed belt in a slot: the chip, lifted when the pointer is over it, and
-/// the control that opens it.
+/// the control that opens it. Not `live` while another card is in the centre.
 export component SealedBelt inherits Rectangle {
     callback clicked();
     in property <BeltReveal> belt;
     in property <bool> tight: false;
+    in property <bool> live: true;
 
     background: transparent;
 
@@ -91,10 +229,60 @@ export component SealedBelt inherits Rectangle {
     }
 
     ta := TouchArea {
+        enabled: root.live;
+        accessible-enabled: root.live;
         accessible-role: button;
         accessible-label: "Sealed belt, open it";
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
+    }
+}
+
+/// A belt in a slot. It is sealed until opened, empty while its card is in the
+/// centre (and the other slots of the belt stay sealed), then open. The open
+/// chip is the child: the parent draws it as it does for any title.
+export component BeltSlot inherits Rectangle {
+    in property <BeltReveal> belt;
+    /// Names the slot: the card leaves from this one, and returns to it.
+    in property <string> slot-id;
+    in property <bool> tight: false;
+
+    property <bool> mine: root.belt.key != "" && SealedUi.active-key == root.belt.key;
+    property <bool> away: root.mine && SealedUi.active-slot == root.slot-id;
+    // The model still says sealed until the card lands and Rust builds it again.
+    property <bool> sealed-look: root.mine ? !root.away : root.belt.sealed;
+
+    background: transparent;
+
+    // The slot while its card is in the centre.
+    if root.away: CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.tight ? 5px : 7px;
+        stroke: Theme.card-border;
+        stroke-width: Theme.keyline;
+    }
+
+    if root.sealed-look: SealedBelt {
+        width: parent.width; height: parent.height;
+        belt: root.belt;
+        tight: root.tight;
+        live: root.belt.sealed && SealedUi.active-kind == "";
+        clicked => {
+            SealedUi.belt = root.belt;
+            SealedUi.launch("belt", root.slot-id, root.belt.key, {
+                x: root.absolute-position.x,
+                y: root.absolute-position.y,
+                w: root.width,
+                h: root.height,
+            });
+        }
+    }
+
+    // The open chip. While the card returns it fades in.
+    Rectangle {
+        visible: !root.sealed-look && (!root.away || SealedUi.closing);
+        opacity: root.away ? SealedUi.landing : 1;
+        @children
     }
 }
 
@@ -114,6 +302,7 @@ export component SealedRecap inherits Rectangle {
     in property <bool> interactive: true;
 
     property <length> cell: root.width * 5 / 160;
+    property <float> diag: Math.sqrt((root.width / 1px) * (root.width / 1px) + (root.height / 1px) * (root.height / 1px));
     property <length> key-size: root.width * 9 / 160;
     property <length> key-x: root.width * (14 + 10 * 11 + 2.5) / 160;
     property <length> key-y: root.height * (8 + 15 * 12 + 2.5) / 248;
@@ -140,8 +329,9 @@ export component SealedRecap inherits Rectangle {
         }
 
         // The field. Two paths, one for each level of the cells, in a box of 160
-        // by 248 units that follows the card.
-        Path {
+        // by 248 units that follows the card. While it clears from the key (the
+        // charge of the centre view) one Rectangle draws each cell.
+        if root.clear <= 0: Path {
             x: 0px; y: 0px;
             width: parent.width; height: parent.height;
             viewbox-width: 160;
@@ -149,13 +339,32 @@ export component SealedRecap inherits Rectangle {
             commands: root.seal.dim;
             fill: Theme.card-border;
         }
-        Path {
+        if root.clear <= 0: Path {
             x: 0px; y: 0px;
             width: parent.width; height: parent.height;
             viewbox-width: 160;
             viewbox-height: 248;
             commands: root.seal.bright;
             fill: Theme.action-quiet;
+        }
+        if root.clear > 0: Rectangle {
+            for lv[i] in root.seal.levels: Rectangle {
+                property <int> c: Math.mod(i, 13);
+                property <int> r: Math.floor(i / 13);
+                property <length> cx: root.width * (14 + self.c * 11) / 160;
+                property <length> cy: root.height * (8 + self.r * 12) / 248;
+                property <float> dx: (self.cx + root.width * 2.5 / 160 - root.key-x) / 1px;
+                property <float> dy: (self.cy + root.height * 2.5 / 248 - root.key-y) / 1px;
+                // The last cells go as `clear` reaches 1, as the flip starts.
+                property <float> fade: Ease.clamp01((Math.sqrt(self.dx * self.dx + self.dy * self.dy) - root.clear * (root.diag * 0.82 - 80)) / 80);
+                visible: lv > 0 && self.fade > 0;
+                x: self.cx;
+                y: self.cy;
+                width: root.width * 5 / 160;
+                height: root.height * 5 / 248;
+                background: lv == 2 ? Theme.action-quiet : Theme.card-border;
+                opacity: self.fade;
+            }
         }
 
         // The key: the unread state.

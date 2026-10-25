@@ -7,7 +7,8 @@ import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 import { Head2headCardWide, Head2headCell, H2hCellSize, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
-import { SealedBelt, SealedRecap } from "../components/sealed.slint";
+import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease, Clock } from "../components/sealed.slint";
+import { SealedStage } from "./sealed_stage.slint";
 import { SealedFixtures } from "../previews/sealed_fixtures.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
@@ -735,6 +736,9 @@ export global RecapView {
 // Weekly recap card
 component RecapCard inherits Rectangle {
     in property <FeedCardData> card;
+    /// 0 to 1 while the numbers count up in the centre view. In the feed it is 1
+    /// and the card shows the text of `card`.
+    in property <float> count: 1;
     /// Rows of Belts moved the card shows. The full-screen recap shows all.
     property <int> max-belt-rows: 3;
     /// Members of Belts held the card shows: as many as fit the width, each
@@ -828,13 +832,13 @@ component RecapCard inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    Text { text: card.title; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: root.count >= 1 ? card.title : SealedFmt.minutes(Math.round(card.recap-hangout-min * root.count)); font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    Text { text: card.subtitle != "" ? card.subtitle : "0"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: card.subtitle == "" ? "0" : root.count >= 1 ? card.subtitle : "\{Math.round(card.recap-clips * root.count)}"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
                 }
             }
@@ -844,7 +848,7 @@ component RecapCard inherits Rectangle {
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    if card.duration != "": Text { text: card.duration; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    if card.duration != "": Text { text: root.count >= 1 ? card.duration : SealedFmt.minutes(Math.round(card.recap-longest-min * root.count)); font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     if card.duration != "": Text { text: "LONGEST"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
                 }
                 VerticalLayout {
@@ -973,27 +977,28 @@ component RecapCard inherits Rectangle {
                             UserAvatar { size: 28px; initials: b.prev-initials; color-index: b.prev-hue; avatar: b.prev-avatar; has-avatar: b.prev-has-avatar; }
                         }
                         // Sealed: the new holder is a muted octagon with "?" until the
-                        // belt is opened.
+                        // belt is open.
                         UserAvatar {
                             size: 28px;
-                            muted: b.belt.sealed;
-                            initials: b.belt.sealed ? "?" : b.holder-initials;
+                            muted: SealedUi.hides(b.belt);
+                            initials: SealedUi.hides(b.belt) ? "?" : b.holder-initials;
                             color-index: b.holder-hue;
                             avatar: b.holder-avatar;
-                            has-avatar: !b.belt.sealed && b.holder-has-avatar;
+                            has-avatar: !SealedUi.hides(b.belt) && b.holder-has-avatar;
                         }
-                        if !b.belt.sealed: TitleChip {
-                            horizontal-stretch: 1;
-                            compact: true;
-                            dense: true;
-                            hue: H2hHue.of(b.holder-hue);
-                            icon: b.icon; title: b.title; value: b.value; unit: b.unit;
-                        }
-                        if b.belt.sealed: SealedBelt {
+                        BeltSlot {
                             horizontal-stretch: 1;
                             height: 34px;
                             tight: true;
                             belt: b.belt;
+                            slot-id: "recap-" + i;
+                            TitleChip {
+                                width: parent.width;
+                                compact: true;
+                                dense: true;
+                                hue: H2hHue.of(b.holder-hue);
+                                icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                            }
                         }
                       }
                     }
@@ -1042,7 +1047,7 @@ component RecapCard inherits Rectangle {
                                 UserAvatar { size: 28px; initials: h.initials; color-index: h.hue; avatar: h.avatar; has-avatar: h.has-avatar; }
                             }
                             Text {
-                                text: h.count;
+                                text: root.count >= 1 ? h.count : Math.round(h.count * Ease.span(root.count * 1s, 0.2s + i * 0.1s, 0.6s + i * 0.1s));
                                 font-family: Theme.font-display;
                                 font-size: 22px;
                                 font-weight: Theme.weight-display-bold;
@@ -1156,13 +1161,44 @@ component RecapCard inherits Rectangle {
         }
     }
 
-    TouchArea {
+    // Opens the recap full screen (`RecapOpened`). The card holds the news of
+    // the week, so the control stays at the foot.
+    Rectangle {
+        x: parent.width - self.width - 14px;
+        y: parent.height - self.height - 12px;
+        width: see-label.preferred-width + 24px;
+        height: 28px;
         accessible-role: button;
-        accessible-label: "Open weekly recap";
-        mouse-cursor: pointer;
-        clicked => {
-            RecapView.card = root.card;
-            RecapView.open = true;
+        accessible-label: "See the week";
+
+        CutButtonShape {
+            width: parent.width; height: parent.height;
+            n: 6px;
+            fill: see-ta.has-hover ? Theme.action : Theme.action-line;
+        }
+        CutButtonShape {
+            width: parent.width; height: parent.height;
+            n: 6px; inset: Theme.keyline;
+            fill: Theme.card-bg;
+        }
+        see-label := Text {
+            width: parent.width;
+            height: parent.height;
+            text: "SEE THE WEEK";
+            font-family: Theme.font-label;
+            font-size: 9px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 1.2px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        see-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                RecapView.card = root.card;
+                RecapView.open = true;
+            }
         }
     }
 }
@@ -1315,24 +1351,25 @@ component DailyRecapCard inherits Rectangle {
                 cross-axis-alignment: center;
                 UserAvatar {
                     size: 22px;
-                    muted: b.belt.sealed;
-                    initials: b.belt.sealed ? "?" : b.holder-initials;
+                    muted: SealedUi.hides(b.belt);
+                    initials: SealedUi.hides(b.belt) ? "?" : b.holder-initials;
                     color-index: b.holder-hue;
                     avatar: b.holder-avatar;
-                    has-avatar: !b.belt.sealed && b.holder-has-avatar;
+                    has-avatar: !SealedUi.hides(b.belt) && b.holder-has-avatar;
                 }
-                if !b.belt.sealed: TitleChip {
-                    horizontal-stretch: 1;
-                    compact: true;
-                    dense: true;
-                    hue: H2hHue.of(b.holder-hue);
-                    icon: b.icon; title: b.title; value: b.value; unit: b.unit;
-                }
-                if b.belt.sealed: SealedBelt {
+                BeltSlot {
                     horizontal-stretch: 1;
                     height: 34px;
                     tight: true;
                     belt: b.belt;
+                    slot-id: "daily-" + i;
+                    TitleChip {
+                        width: parent.width;
+                        compact: true;
+                        dense: true;
+                        hue: H2hHue.of(b.holder-hue);
+                        icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                    }
                 }
             }
         }
@@ -2631,6 +2668,46 @@ component LockedCard inherits Rectangle {
 }
 
 // Dispatcher: renders the correct card based on card-type
+// The weekly recap in its slot: sealed until opened, empty while its card is in
+// the centre, then the recap card.
+component RecapSlot inherits Rectangle {
+    in property <FeedCardData> card;
+
+    property <bool> mine: root.card.recap-seal.key != "" && SealedUi.active-key == root.card.recap-seal.key;
+    // The model still says sealed until the card lands and Rust builds it again.
+    property <bool> sealed-look: root.card.recap-seal.sealed && !root.mine;
+
+    background: transparent;
+
+    if root.mine: CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "bl";
+        stroke: Theme.card-border;
+        stroke-width: Theme.keyline;
+    }
+
+    if root.sealed-look: SealedRecap {
+        width: parent.width; height: parent.height;
+        seal: root.card.recap-seal;
+        week: root.card.recap-week != "" ? root.card.recap-week : "This week";
+        interactive: SealedUi.active-kind == "";
+        clicked => {
+            SealedUi.recap-card = root.card;
+            SealedUi.launch("recap", "recap", root.card.recap-seal.key, {
+                x: root.absolute-position.x,
+                y: root.absolute-position.y,
+                w: root.width,
+                h: root.height,
+            });
+        }
+    }
+
+    if !root.sealed-look && (!root.mine || SealedUi.closing): RecapCard {
+        width: parent.width; height: parent.height; card: root.card;
+        opacity: root.mine ? SealedUi.landing : 1;
+    }
+}
+
 component FeedSlot inherits Rectangle {
     // A card that outgrows its slot must be cut off at the slot edge, not
     // painted over the gap below it. This is `overflow: hidden` in the mockup.
@@ -2682,13 +2759,8 @@ component FeedSlot inherits Rectangle {
         play-clicked(id) => { root.play-clicked(id); }
         seek-ms(m) => { root.seek-clip-ms(m); }
     }
-    if card.card-type == "recap" && !card.recap-seal.sealed: RecapCard {
+    if card.card-type == "recap": RecapSlot {
         width: parent.width; height: parent.height; card: root.card;
-    }
-    if card.card-type == "recap" && card.recap-seal.sealed: SealedRecap {
-        width: parent.width; height: parent.height;
-        seal: root.card.recap-seal;
-        week: root.card.recap-week != "" ? root.card.recap-week : "This week";
     }
     if card.card-type == "session-preview": SessionPreviewCard {
         width: parent.width; height: parent.height;
@@ -3646,6 +3718,22 @@ export component CrewFeed inherits Rectangle {
             }
         }
     }
+
+    // A sealed card in the centre of the feed. Made when a card leaves its
+    // slot, gone when it is back. A recap brings its own face.
+    if SealedUi.active-kind != "": stage := SealedStage {
+        width: root.width;
+        height: root.height;
+        page-x: root.absolute-position.x;
+        page-y: root.absolute-position.y;
+
+        if SealedUi.active-kind == "recap": RecapCard {
+            width: parent.width;
+            height: parent.height;
+            card: SealedUi.recap-card;
+            count: SealedUi.active-kind == "recap" ? stage.count : 1;
+        }
+    }
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -4241,17 +4329,17 @@ export component PreviewFeedFiveMembers inherits Rectangle {
 
     /// The moved belts and the recap show sealed (PreviewFeedSealed).
     in property <bool> sealed: false;
-    property <BeltReveal> carry: {
+    out property <BeltReveal> carry: {
         key: "the_carry:1307", sealed: root.sealed, seed: 1307, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
         title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), hue-index: 1, kind: 0, amount: 4201, unit: "h",
         stat: "Most hours in the top shared game.", holder: root.jonas, prev: root.bob,
     };
-    property <BeltReveal> marathon: {
+    out property <BeltReveal> marathon: {
         key: "marathon:911", sealed: root.sealed, seed: 911, code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells,
         title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), hue-index: 2, kind: 1, amount: 228,
         stat: "Longest single game session.", holder: root.max, prev: root.sara,
     };
-    property <BeltReveal> owl: {
+    out property <BeltReveal> owl: {
         key: "night_owl:2281", sealed: root.sealed, seed: 2281, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
         title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), hue-index: 3, kind: 2, amount: 220,
         stat: "Latest local time of a last session.", holder: root.sara, prev: root.bob,
@@ -4383,6 +4471,31 @@ export component PreviewFeedFiveMembers inherits Rectangle {
 /// Frame D with the moved belts and the weekly recap sealed.
 export component PreviewFeedSealed inherits PreviewFeedFiveMembers {
     sealed: true;
+}
+
+/// The centre view of the Carry at 1400 ms on a fixed clock: just after the
+/// flip, the burst in the hue of Jonas, the value counting up.
+export component PreviewRevealFrame inherits Rectangle {
+    width: 1200px;
+    height: 1290px;
+    background: Theme.bg-app;
+
+    feed := PreviewFeedSealed {
+        width: parent.width;
+        height: parent.height;
+    }
+
+    init => {
+        Clock.manual = true;
+        Clock.manual-now = 1400ms;
+        SealedUi.belt = feed.carry;
+        SealedUi.active-key = feed.carry.key;
+        SealedUi.active-slot = "pair-";
+        SealedUi.from = { x: 666px, y: 1090px, w: 108px, h: 46px };
+        SealedUi.t0 = 0ms;
+        SealedUi.closing = false;
+        SealedUi.active-kind = "belt";
+    }
 }
 
 // A live stream holds the hero while the crew is one person. The wide card

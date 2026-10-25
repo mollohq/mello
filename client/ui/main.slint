@@ -14,6 +14,8 @@ import {
     SearchUserData,
     FeedCardData,
     TitleHeld,
+    BeltReveal,
+    RecapSeal,
     H2hPairRow,
     H2hPerson,
     Head2headData,
@@ -42,6 +44,7 @@ import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
 import { CrewFeed, RecapView } from "panels/crew_feed.slint";
+import { Clock, SealedUi } from "components/sealed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
@@ -63,7 +66,7 @@ export { StreamCardUi, StreamStatsData }
 // --- end stage 9 ---
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
