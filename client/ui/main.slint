@@ -44,6 +44,11 @@ import { InviteShareModal } from "panels/invite_share_modal.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
+// --- stage 9 (streaming-quality): the stream card's popovers ---
+import { StreamCardUi, StreamStatsData } from "types.slint";
+import { StreamVolumePopover, StreamSettingsPopover, ExpandedStreamCard } from "panels/active_streams_panel.slint";
+export { StreamCardUi, StreamStatsData }
+// --- end stage 9 ---
 
 
 export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
@@ -1072,6 +1077,23 @@ export component MainWindow inherits Window {
                                 root.session-preview-request-frame(sid, idx);
                             }
                         }
+
+                        // --- stage 9 (streaming-quality): the expanded view ---
+                        // The watched card over the whole feed area; the
+                        // sidebar, the chat and the control bar stay.
+                        if StreamCardUi.expanded && root.is-watching: ExpandedStreamCard {
+                            width: parent.width;
+                            height: parent.height;
+                            is-watching: root.is-watching;
+                            active-streamer-id: root.active-streamer-id;
+                            stream-frame: root.stream-frame;
+                            stream-paused: root.stream-paused;
+                            stream-paused-reason: root.stream-paused-reason;
+                            stop-watching-clicked => {
+                                root.stop-watching();
+                            }
+                        }
+                        // --- end stage 9 ---
                     }
 
                     ControlBar {
@@ -1882,6 +1904,69 @@ export component MainWindow inherits Window {
             }
             close-requested => {
                 root.volume-member-id = "";
+            }
+        }
+    }
+
+    // ===================== STREAM CARD POPOVERS (stage 9) =====================
+    // Under the card button that opened them (StreamCardUi.anchor-*), with
+    // the right edges aligned. The card's footer is under the picture, so
+    // they open below it, outside the video layer. Near the bottom of the
+    // window they move up.
+    if root.logged-in && StreamCardUi.popover != "": Rectangle {
+        x: 0px;
+        y: 0px;
+        width: root.width;
+        height: root.height;
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the popover closes it)
+            clicked => {
+                StreamCardUi.popover = "";
+            }
+        }
+
+        if StreamCardUi.popover == "volume": StreamVolumePopover {
+            // The expanded card's footer is at the bottom of the feed area:
+            // the popover opens beside the card, over the chat column.
+            x: StreamCardUi.expanded
+                ? max(8px, min(StreamCardUi.anchor-card-right + 28px, root.width - self.width - 8px))
+                : max(8px, min(StreamCardUi.anchor-right - self.width, root.width - self.width - 8px));
+            y: StreamCardUi.expanded
+                ? max(8px, min(StreamCardUi.anchor-bottom - self.height, root.height - self.height - 8px))
+                : max(8px, min(StreamCardUi.anchor-bottom + 6px, root.height - self.height - 8px));
+            name: root.active-streamer-name;
+            volume: StreamCardUi.volume;
+            muted: StreamCardUi.muted;
+            volume-changed(v) => {
+                StreamCardUi.volume-changed(v);
+            }
+            mute-changed(m) => {
+                StreamCardUi.mute-changed(m);
+            }
+            close-requested => {
+                StreamCardUi.popover = "";
+            }
+        }
+
+        if StreamCardUi.popover == "settings" || StreamCardUi.popover == "host-settings": StreamSettingsPopover {
+            // The expanded card's footer is at the bottom of the feed area:
+            // the popover opens beside the card, over the chat column.
+            x: StreamCardUi.expanded
+                ? max(8px, min(StreamCardUi.anchor-card-right + 28px, root.width - self.width - 8px))
+                : max(8px, min(StreamCardUi.anchor-right - self.width, root.width - self.width - 8px));
+            y: StreamCardUi.expanded
+                ? max(8px, min(StreamCardUi.anchor-bottom - self.height, root.height - self.height - 8px))
+                : max(8px, min(StreamCardUi.anchor-bottom + 6px, root.height - self.height - 8px));
+            hosting: StreamCardUi.popover == "host-settings";
+            stats-shown: StreamCardUi.stats-shown;
+            host-quality: StreamCardUi.host-quality;
+            host-sending: StreamCardUi.host-sending;
+            stats-toggled(on) => {
+                StreamCardUi.stats-toggled(on);
+            }
+            close-requested => {
+                StreamCardUi.popover = "";
             }
         }
     }

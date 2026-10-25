@@ -141,6 +141,10 @@ pub(super) struct HostLinkState {
     pub ticks: u64,
     /// Logged once, when the first access unit went out.
     pub start_timing: Option<StartTiming>,
+    /// Stage 9 (streaming-quality): the viewers the UI was last told of
+    /// (`StreamViewerJoined` / `StreamViewerLeft`), for the hosted card's
+    /// count.
+    pub reported_viewers: std::collections::BTreeSet<String>,
 }
 
 impl Drop for HostLinkState {
@@ -738,6 +742,7 @@ impl super::Client {
             token_task: None,
             token_tried_at: None,
             ticks: 0,
+            reported_viewers: Default::default(),
             start_timing: Some(StartTiming {
                 clicked_at: start.clicked_at,
                 rpc_ms: start.rpc_ms.unwrap_or_default(),
@@ -828,6 +833,7 @@ impl super::Client {
     /// silence, rejoin on the schedule, refresh the token, log the start
     /// timing once.
     pub(super) async fn host_link_tick(&mut self) {
+        self.report_host_viewer_changes();
         let Some(conn) = self.stream_sfu_connection.clone() else {
             return;
         };
@@ -1024,7 +1030,7 @@ impl super::Client {
 
     /// A viewer that left while the host was away sent its `member_left`
     /// to the old connection: take it out of the count now.
-    async fn reconcile_host_viewers(&mut self, viewers: &[String]) {
+    pub(super) async fn reconcile_host_viewers(&mut self, viewers: &[String]) {
         let Some(sink) = self.stream_host_sfu_sink.clone() else {
             return;
         };
@@ -1036,6 +1042,27 @@ impl super::Client {
             }
         }
     }
+
+    // --- stage 9 (streaming-quality): the hosted card's viewer count ---
+
+    /// Tell the UI which viewers joined and left since the last tick. The
+    /// sink's viewer set is the source: it takes `member_joined` and
+    /// `member_left` once each (`sfu_membership_dedup_source_gate`), and a
+    /// rejoin's reconcile takes a viewer that left while the host was away
+    /// out of it. One tick after the change, before the next membership poll.
+    pub(super) fn report_host_viewer_changes(&mut self) {
+        let Some(sink) = self.stream_host_sfu_sink.clone() else {
+            return;
+        };
+        let Some(state) = self.host_link.as_mut() else {
+            return;
+        };
+        for event in host_viewer_events(&mut state.reported_viewers, sink.viewer_ids()) {
+            let _ = self.event_tx.send(event);
+        }
+    }
+
+    // --- end stage 9 ---
 
     /// Refresh the host's SFU token in the background every 4 minutes, so
     /// a rejoin after a drop needs no backend round trip.
@@ -1068,6 +1095,30 @@ impl super::Client {
             let _ = tx.send(StreamTaskMsg::Host(HostMsg::Token { generation, result }));
         }));
     }
+}
+
+/// Stage 9: the join and leave events that bring `reported` to `now`, in
+/// id order; `reported` is `now` after.
+fn host_viewer_events(
+    reported: &mut std::collections::BTreeSet<String>,
+    now: Vec<String>,
+) -> Vec<Event> {
+    let now: std::collections::BTreeSet<String> = now.into_iter().collect();
+    let mut events = Vec::new();
+    for viewer_id in reported.difference(&now) {
+        log::info!("Stream host: viewer {viewer_id} left the count");
+        events.push(Event::StreamViewerLeft {
+            viewer_id: viewer_id.clone(),
+        });
+    }
+    for viewer_id in now.difference(reported) {
+        log::info!("Stream host: viewer {viewer_id} joined the count");
+        events.push(Event::StreamViewerJoined {
+            viewer_id: viewer_id.clone(),
+        });
+    }
+    *reported = now;
+    events
 }
 
 #[cfg(test)]

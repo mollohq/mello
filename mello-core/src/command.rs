@@ -360,6 +360,14 @@ pub enum Command {
         height: u32,
     },
     StopWatching,
+    // --- stage 9 (streaming-quality): the stream card's controls ---
+    /// The volume of the watched stream's game audio, for this user only:
+    /// 0.0 silent (the card's mute), 1.0 unity, up to 2.0. libmello keeps
+    /// it on the view; the card sends it again when a new watch starts.
+    SetStreamAudioVolume {
+        gain: f32,
+    },
+    // --- end stage 9 ---
 
     // --- Crew admin ---
     UpdateCrew {

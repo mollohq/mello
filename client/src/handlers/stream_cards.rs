@@ -6,6 +6,15 @@ use crate::StreamCardData;
 
 pub fn sync_active_stream_cards(ctx: &AppContext) {
     let mut cards: Vec<StreamCardData> = Vec::new();
+    // Stage 9: the live counts. The hosted card counts the viewers that
+    // mello-core reports; the watched card counts the SFU membership and
+    // falls back to the crew state's count (the backend's `viewer_ids`)
+    // until the first snapshot.
+    let backend_count = ctx.app.get_active_stream_viewer_count();
+    let (host_viewers, watched_viewers) = {
+        let state = ctx.stream_card.borrow();
+        (state.host_viewers.len(), state.watched_viewers)
+    };
 
     if ctx.app.get_is_hosting() {
         let host_id = ctx.app.get_user_id().to_string();
@@ -22,7 +31,8 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             has_avatar: host_has_avatar,
             avatar_initials: make_initials(&host_name).into(),
             avatar_color_index: avatar_color_index(&host_id),
-            viewer_count: ctx.app.get_active_stream_viewer_count(),
+            // The live viewers: mello-core reports each join and leave.
+            viewer_count: host_viewers as i32,
             stream_width: 0,
             stream_height: 0,
             can_watch: false,
@@ -54,7 +64,10 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             has_avatar,
             avatar_initials: make_initials(&active_streamer_name).into(),
             avatar_color_index: avatar_color_index(&active_host_id),
-            viewer_count: ctx.app.get_active_stream_viewer_count(),
+            viewer_count: match watched_viewers {
+                Some(n) if ctx.app.get_is_watching() => n as i32,
+                _ => backend_count,
+            },
             stream_width: ctx.app.get_active_stream_width(),
             stream_height: ctx.app.get_active_stream_height(),
             can_watch: true,
@@ -91,6 +104,18 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
         });
     }
 
+    // Stage 9: the expanded view shows the watchable card.
+    {
+        use slint::ComponentHandle as _;
+        let watched = cards
+            .iter()
+            .find(|c| c.can_watch)
+            .cloned()
+            .unwrap_or_default();
+        ctx.app
+            .global::<crate::StreamCardUi>()
+            .set_watched_card(watched);
+    }
     ctx.app
         .set_active_stream_cards(Rc::new(slint::VecModel::from(cards)).into());
 }

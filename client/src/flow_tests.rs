@@ -5496,3 +5496,517 @@ fn the_watched_card_shows_reconnecting_and_resumes() {
     });
     assert_eq!(stream_cards(&h)[0].0, "");
 }
+
+// --- stage 9 (streaming-quality): the stream card's buttons and labels ---
+
+/// The pop-out window as the UI harness sees it: it records what the card
+/// asked, with the window title.
+#[derive(Default)]
+struct FakePopout {
+    calls: std::rc::Rc<std::cell::RefCell<Vec<String>>>,
+}
+
+impl crate::stream_popout::PopoutSurface for FakePopout {
+    fn open(&mut self, _ctx: &crate::app_context::AppContext, title: &str) -> Result<(), String> {
+        self.calls.borrow_mut().push(format!("open {title}"));
+        Ok(())
+    }
+
+    fn close(&mut self, _ctx: &crate::app_context::AppContext) {
+        self.calls.borrow_mut().push("close".into());
+    }
+}
+
+type PopoutCalls = std::rc::Rc<std::cell::RefCell<Vec<String>>>;
+
+/// The app with alice's stream in the crew, not watched yet, and a fake
+/// pop-out window. Returns what the fake records.
+fn app_with_alices_stream(h: &mut Harness) -> PopoutCalls {
+    use mello_core::crew_state::{CrewState, StreamState};
+    logged_in_app(h);
+    // The card lays its footer out only after the window has a size: the
+    // controls on its right are absent from queries before.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1440, 900));
+    h.app().set_user_id("user-1".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::CrewStateLoaded {
+        state: CrewState {
+            crew_id: "crew-1".into(),
+            name: "Crew".into(),
+            stream: Some(StreamState {
+                active: true,
+                stream_id: Some("s1".into()),
+                streamer_id: Some("host-1".into()),
+                streamer_username: Some("alice".into()),
+                title: Some("Valorant".into()),
+                viewer_count: 2,
+                width: 1280,
+                height: 720,
+                ..Default::default()
+            }),
+            ..Default::default()
+        },
+    });
+    let fake = FakePopout::default();
+    let calls = fake.calls.clone();
+    h.ctx()
+        .stream_popout
+        .borrow_mut()
+        .set_surface(Box::new(fake));
+    calls
+}
+
+/// Click Watch on alice's card and let the decoder come up.
+fn watch_alice(h: &mut Harness) {
+    h.click_label("Watch alice");
+    h.emit(Event::StreamWatching {
+        host_id: "host-1".into(),
+        width: 1280,
+        height: 720,
+    });
+}
+
+fn stream_volumes(h: &mut Harness) -> Vec<f32> {
+    h.commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::SetStreamAudioVolume { gain } => Some(gain),
+            _ => None,
+        })
+        .collect()
+}
+
+fn card_ui(h: &Harness) -> crate::StreamCardUi<'_> {
+    h.app().global::<crate::StreamCardUi>()
+}
+
+fn timeline(frames_released: u64) -> Event {
+    Event::StreamViewerTimeline {
+        target_delay_ms: 118.4,
+        jitter_ms: 6.2,
+        decode_ms_p95: 2.06,
+        frames_released,
+        frames_late: 0,
+        frames_dropped_late: 0,
+        decoder: "NVDEC".into(),
+        decode_fps: 60.0,
+        audio_delay_ms: 141.6,
+        av_offset_ms: 8.4,
+        audio_expand_ms: 0,
+        audio_fec_used: 0,
+    }
+}
+
+/// ★ Watch: the click says STARTING until the first frame; the watched card
+/// then has the three buttons and the viewer count. Before stage 9 the
+/// buttons had no handler and Maximize had no label.
+#[test]
+fn watching_a_stream_shows_starting_then_the_cards_three_buttons() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    assert!(
+        h.controls_labelled("Stream volume").is_empty()
+            && h.controls_labelled("Expand").is_empty()
+            && h.controls_labelled("Pop out").is_empty(),
+        "a card you do not watch has nothing to control"
+    );
+
+    h.click_label("Watch alice");
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::WatchStream { host_id, .. } if host_id == "host-1")),
+        "Watch asks core to watch"
+    );
+    assert!(card_ui(&h).get_viewer_starting(), "STARTING from the click");
+    assert!(
+        h.controls_labelled("Watch alice").is_empty(),
+        "no second Watch while it starts"
+    );
+
+    h.emit(Event::StreamWatching {
+        host_id: "host-1".into(),
+        width: 1280,
+        height: 720,
+    });
+    assert!(card_ui(&h).get_viewer_starting(), "no frame shows yet");
+    for label in [
+        "Stream volume",
+        "Stream settings",
+        "Expand",
+        "Pop out",
+        "Leave",
+    ] {
+        assert!(
+            !h.controls_labelled(label).is_empty(),
+            "the watched card has {label:?}"
+        );
+    }
+
+    h.emit(timeline(1));
+    assert!(
+        !card_ui(&h).get_viewer_starting(),
+        "the first frame ends it"
+    );
+
+    h.emit(Event::StreamMembersChanged {
+        members: vec![
+            mello_core::events::StreamMember {
+                user_id: "host-1".into(),
+                role: "host".into(),
+            },
+            mello_core::events::StreamMember {
+                user_id: "bob".into(),
+                role: "viewer".into(),
+            },
+            mello_core::events::StreamMember {
+                user_id: "carol".into(),
+                role: "viewer".into(),
+            },
+        ],
+    });
+    assert_eq!(
+        h.app()
+            .get_active_stream_cards()
+            .row_data(0)
+            .expect("the watched card")
+            .viewer_count,
+        3,
+        "bob, carol and you watch"
+    );
+}
+
+/// ★ Volume: the popover sets the stream's game-audio gain; the mute keeps
+/// the volume; the value comes back when you watch the same host again.
+#[test]
+fn the_stream_volume_popover_sets_mutes_and_remembers_the_host() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    assert!(
+        stream_volumes(&mut h).is_empty(),
+        "unity needs no command: a new view starts at unity"
+    );
+
+    h.click_label("Stream volume");
+    assert_eq!(card_ui(&h).get_popover(), "volume");
+    let slider = h
+        .controls_labelled("Stream volume for alice")
+        .into_iter()
+        .find(|e| e.accessible_role() == Some(i_slint_backend_testing::AccessibleRole::Slider))
+        .expect("the popover's slider");
+    slider.set_accessible_value("70");
+    h.pump();
+    assert_eq!(stream_volumes(&mut h), vec![0.7]);
+    assert_eq!(card_ui(&h).get_volume(), 70, "the popover shows it");
+
+    h.click_label("Mute the stream");
+    assert_eq!(stream_volumes(&mut h), vec![0.0]);
+    assert!(card_ui(&h).get_muted());
+    assert_eq!(card_ui(&h).get_volume(), 70, "the volume stays");
+
+    press_escape(&mut h);
+    assert_eq!(card_ui(&h).get_popover(), "", "Escape closes it");
+
+    h.click_label("Leave");
+    assert!(h
+        .commands()
+        .iter()
+        .any(|c| matches!(c, Command::StopWatching)));
+    h.emit(Event::StreamWatchingStopped);
+    watch_alice(&mut h);
+    assert_eq!(
+        stream_volumes(&mut h),
+        vec![0.0],
+        "the new view gets the muted stream of alice at once"
+    );
+
+    h.click_label("Stream volume");
+    h.click_label("Mute the stream");
+    h.click_label("Reset stream volume to 100%");
+    assert_eq!(stream_volumes(&mut h), vec![0.7, 1.0]);
+}
+
+/// ★ Settings: a viewer turns the stats strip on; it shows the 1 s
+/// timeline values. The host sees the quality and the send rate, and its
+/// viewers.
+#[test]
+fn stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+
+    h.click_label("Stream settings");
+    assert_eq!(card_ui(&h).get_popover(), "settings");
+    h.click_label("Show stream stats");
+    assert!(card_ui(&h).get_stats_shown());
+    h.emit(timeline(60));
+    let stats = card_ui(&h).get_stats();
+    assert_eq!(
+        (
+            stats.target_delay.as_str(),
+            stats.jitter.as_str(),
+            stats.decode.as_str(),
+            stats.audio_delay.as_str(),
+            stats.av_offset.as_str()
+        ),
+        ("118 ms", "6 ms", "2.1 ms", "142 ms", "+8 ms")
+    );
+    assert!(
+        visible_texts(&h).iter().any(|t| t == "118 ms"),
+        "the strip shows on the card"
+    );
+
+    let mut host = Harness::new();
+    logged_in_app(&mut host);
+    host.app().set_stream_preset(1);
+    host.emit(Event::StreamStarting {
+        crew_id: "crew-0".into(),
+    });
+    host.emit(Event::StreamStarted {
+        crew_id: "crew-0".into(),
+        session_id: "s1".into(),
+        mode: "sfu".into(),
+    });
+    host.emit(Event::StreamHostPacingStats {
+        mode: "sfu".into(),
+        target_kbps: 8000,
+        out_kbps: 6200.0,
+        paced_bytes: 0,
+        sleep_count: 0,
+        sleep_ms_total: 0,
+        sleep_count_delta: 0,
+        sleep_ms_delta: 0,
+    });
+    assert!(
+        host.controls_labelled("Stream volume").is_empty(),
+        "the host hears no game audio of its own stream"
+    );
+    host.click_label("Stream settings");
+    assert_eq!(card_ui(&host).get_popover(), "host-settings");
+    assert_eq!(card_ui(&host).get_host_quality(), "HIGH \u{b7} 1080p30");
+    assert_eq!(card_ui(&host).get_host_sending(), "6.2 Mbps");
+
+    host.emit(Event::StreamViewerJoined {
+        viewer_id: "bob".into(),
+    });
+    assert_eq!(
+        host.app()
+            .get_active_stream_cards()
+            .row_data(0)
+            .expect("the hosted card")
+            .viewer_count,
+        1
+    );
+    host.emit(Event::StreamEnded {
+        crew_id: "crew-0".into(),
+        role: mello_core::events::StreamRole::Host,
+        reason: "stopped".into(),
+    });
+    assert_eq!(
+        card_ui(&host).get_popover(),
+        "",
+        "the popover goes with its card"
+    );
+}
+
+fn no_restart(h: &mut Harness) {
+    let cmds = h.commands();
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::WatchStream { .. } | Command::StopWatching)),
+        "the switch restarts nothing: {cmds:?}"
+    );
+    assert!(h.app().get_is_watching());
+}
+
+/// Whether the expanded view is on screen (main.slint over the feed).
+fn expanded_view_shows(h: &Harness) -> bool {
+    ElementHandle::find_by_element_type_name(h.app(), "ExpandedStreamCard")
+        .next()
+        .is_some()
+}
+
+/// ★ Expand: the watched card takes over the feed area and keeps its
+/// footer; the same button, now "Exit expanded view", and Escape bring it
+/// back; nothing restarts. A pause and a leave return to the normal card.
+#[test]
+fn expand_takes_over_the_feed_and_exit_escape_pause_and_leave_return() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    let _ = h.commands();
+
+    h.click_label("Expand");
+    assert!(card_ui(&h).get_expanded());
+    assert!(expanded_view_shows(&h), "the card covers the feed area");
+    assert!(
+        !h.controls_labelled("Exit expanded view").is_empty()
+            && !h.controls_labelled("Leave").is_empty(),
+        "the footer and its buttons stay"
+    );
+    no_restart(&mut h);
+
+    h.click_label("Exit expanded view");
+    assert!(!card_ui(&h).get_expanded());
+    assert!(!expanded_view_shows(&h));
+    no_restart(&mut h);
+
+    h.click_label("Expand");
+    press_escape(&mut h);
+    assert!(!card_ui(&h).get_expanded(), "Escape returns");
+
+    h.click_label("Expand");
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: true,
+        reason: "minimized".into(),
+    });
+    assert!(!card_ui(&h).get_expanded(), "a pause shows the normal card");
+    assert!(
+        h.controls_labelled("Expand").is_empty(),
+        "a paused stream has no picture to expand"
+    );
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: false,
+        reason: "".into(),
+    });
+
+    h.click_label("Expand");
+    h.click_label("Leave");
+    h.emit(Event::StreamWatchingStopped);
+    assert!(!card_ui(&h).get_expanded(), "a leave ends it");
+    assert!(!expanded_view_shows(&h));
+}
+
+/// ★ Pop out: the stream opens in its own window titled after the host; the
+/// card says "Playing in a window" and its button brings it back; nothing
+/// restarts. Closing the window, a pause, the end and a leave bring it back
+/// too. The pop-out and the expanded view exclude each other.
+#[test]
+fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
+    let mut h = Harness::new();
+    let calls = app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    let _ = h.commands();
+
+    h.click_label("Pop out");
+    assert_eq!(*calls.borrow(), ["open alice - Mello"]);
+    assert!(card_ui(&h).get_popped_out());
+    assert!(
+        !h.controls_labelled("Show it here").is_empty(),
+        "the card says the stream is in a window and brings it back"
+    );
+    assert!(
+        !h.controls_labelled("Stream volume").is_empty()
+            && !h.controls_labelled("Stream settings").is_empty(),
+        "the volume and the settings stay on the card"
+    );
+    no_restart(&mut h);
+
+    h.click_label("Show it here");
+    assert_eq!(*calls.borrow(), ["open alice - Mello", "close"]);
+    assert!(!card_ui(&h).get_popped_out());
+
+    // The window's close button: the native window procedure calls this.
+    h.click_label("Pop out");
+    crate::stream_popout::close(h.ctx(), "the window closed");
+    assert!(!card_ui(&h).get_popped_out());
+    assert!(h.app().get_is_watching(), "the stream plays on in the card");
+
+    // Exclusive: expanding brings the stream back from the window; popping
+    // out leaves the expanded view.
+    h.click_label("Pop out");
+    h.click_label("Expand");
+    assert!(card_ui(&h).get_expanded() && !card_ui(&h).get_popped_out());
+    h.click_label("Pop out");
+    assert!(!card_ui(&h).get_expanded() && card_ui(&h).get_popped_out());
+
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: true,
+        reason: "minimized".into(),
+    });
+    assert!(!card_ui(&h).get_popped_out(), "a pause brings it back");
+    h.emit(Event::StreamPaused {
+        host_id: "host-1".into(),
+        paused: false,
+        reason: "".into(),
+    });
+
+    h.click_label("Pop out");
+    h.emit(Event::StreamFailed {
+        role: mello_core::events::StreamRole::Viewer,
+        reason: "The stream server closed the session.".into(),
+    });
+    assert!(!card_ui(&h).get_popped_out(), "a failure brings it back");
+
+    h.click_label("Pop out");
+    h.click_label("Leave");
+    h.emit(Event::StreamWatchingStopped);
+    assert!(!card_ui(&h).get_popped_out(), "a leave brings it back");
+    let closes = calls.borrow().iter().filter(|c| *c == "close").count();
+    let opens = calls.borrow().len() - closes;
+    assert_eq!(opens, closes, "every window closed: {:?}", calls.borrow());
+}
+
+/// ★ Reconnect: the watched card keeps its buttons through a reconnect, and
+/// its popover and label go with the stream.
+#[test]
+fn the_watched_card_keeps_its_buttons_through_a_reconnect_and_clears_on_leave() {
+    let mut h = Harness::new();
+    app_with_alices_stream(&mut h);
+    watch_alice(&mut h);
+    card_ui(&h).set_format_label("720p60".into());
+
+    h.emit(Event::StreamReconnecting {
+        role: mello_core::events::StreamRole::Viewer,
+    });
+    assert_eq!(stream_cards(&h)[0].0, "reconnecting");
+    assert!(!h.controls_labelled("Stream volume").is_empty());
+    h.emit(Event::StreamResumed {
+        role: mello_core::events::StreamRole::Viewer,
+    });
+
+    h.click_label("Stream volume");
+    h.emit(Event::StreamEnded {
+        crew_id: "crew-1".into(),
+        role: mello_core::events::StreamRole::Viewer,
+        reason: "host_left".into(),
+    });
+    h.emit(Event::StreamWatchingStopped);
+    assert_eq!(card_ui(&h).get_popover(), "", "the popover goes");
+    assert_eq!(card_ui(&h).get_format_label(), "", "the label goes");
+    assert!(h.controls_labelled("Stream volume").is_empty());
+}
+
+/// The card's format label: the rate of the rung message and the decoded
+/// height; without a decoded picture the height of the rung.
+#[test]
+fn the_format_label_follows_the_rung_and_the_decoded_size() {
+    use mello_core::stream::controller::{rung_message, Rung};
+    use mello_core::stream::viewer_format;
+    let h = Harness::new();
+    viewer_format::reset_viewer_format();
+    crate::handlers::streaming::refresh_stream_format(h.app(), 0);
+    assert_eq!(card_ui(&h).get_format_label(), "");
+
+    viewer_format::apply_viewer_rung_message(&rung_message(Rung {
+        width: 854,
+        height: 480,
+        fps: 30,
+    }));
+    crate::handlers::streaming::refresh_stream_format(h.app(), 0);
+    assert_eq!(card_ui(&h).get_format_label(), "480p30");
+    crate::handlers::streaming::refresh_stream_format(h.app(), 720);
+    assert_eq!(
+        card_ui(&h).get_format_label(),
+        "720p30",
+        "the SPS wins for the height"
+    );
+    viewer_format::reset_viewer_format();
+}

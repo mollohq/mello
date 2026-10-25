@@ -102,7 +102,7 @@ app.set_crews(...)
 | Social | `SearchUsers`, `JoinByInviteCode`, `FetchCrewAvatars` |
 | Chat | `SendMessage` |
 | Voice | `JoinVoice`, `LeaveVoice`, `SetMute`, `SetDeafen` |
-| Streaming | `StartStream`, `StopStream`, `WatchStream`, `StopWatching` |
+| Streaming | `StartStream`, `StopStream`, `WatchStream`, `StopWatching`, `SetStreamAudioVolume` (the watched stream's game-audio gain, stage 9) |
 | Voice channels | `CreateVoiceChannel`, `RenameVoiceChannel`, `DeleteVoiceChannel` |
 | Presence | `UpdatePresence`, `SetActiveCrew`, `SubscribeSidebar` |
 | Devices | `ListAudioDevices`, `SetCaptureDevice`, `SetPlaybackDevice` |
