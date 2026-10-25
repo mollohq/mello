@@ -412,6 +412,34 @@ flows:
     protocol: []
     issues: []
 
+  # stage 9 (streaming-quality): the stream card's buttons
+  - id: STREAM-04
+    title: Watch a stream, set its volume and mute, leave
+    priority: P1
+    users: 2
+    harness: [watching_a_stream_shows_starting_then_the_cards_three_buttons, the_stream_volume_popover_sets_mutes_and_remembers_the_host, the_watched_card_keeps_its_buttons_through_a_reconnect_and_clears_on_leave]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: STREAM-05
+    title: Watch a stream fullscreen, Escape returns to the card
+    priority: P1
+    users: 2
+    harness: [fullscreen_keeps_the_stream_and_escape_pause_and_leave_return]
+    journeys: []
+    protocol: []
+    issues: []
+
+  - id: STREAM-06
+    title: Stream stats on the card, the host's quality and viewers
+    priority: P2
+    users: 2
+    harness: [stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host, the_format_label_follows_the_rung_and_the_decoded_size]
+    journeys: []
+    protocol: []
+    issues: []
+
   # ── Feed and clips ────────────────────────────────────────────
   - id: FEED-01
     title: Clip 30 s in voice, the clip card shows, play, pause and seek
