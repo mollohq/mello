@@ -805,9 +805,35 @@ IDCompositionTarget (bound to the Slint HWND)
        ├─ Content: IDXGISwapChain1 (CreateSwapChainForComposition, waitable)
        ├─ Offset: SetOffsetX/Y (physical pixels)
        ├─ Transform: Matrix3x2 scale (stream resolution → card size)
+       ├─ Bitmap interpolation: linear; border mode: hard (stage 9)
        ├─ Clip: IDCompositionRectangleClip (scroll viewport intersection)
-       └─ Child: the host's pointer (§10)
+       ├─ Child: the host's pointer (§10)
+       └─ Child: the reconnecting wash (§11.1; nearest neighbour)
 ```
+
+**Scaling (streaming-quality stage 9).** The video visual scales with a
+linear (bilinear) filter and a hard border. The default (inherit, which is
+nearest neighbour at the root) dropped whole rows and columns when a card
+showed a 1080p stream at a third of its size. The pointer inherits the
+filter. The reconnecting wash is one colour scaled up from 16x16 and keeps
+the nearest neighbour, so its edges stay sharp. A downscale under about 0.5
+still aliases with a bilinear filter; a scaled copy on the present thread
+(a swap chain at the card size) is the next step if Bob's look shows it.
+
+**Colour space (stage 9).** The swap chain declares
+`DXGI_COLOR_SPACE_RGB_FULL_G22_NONE_P709` with `IDXGISwapChain3::SetColorSpace1`
+(checked with `CheckColorSpaceSupport`): libmello's shared frame is 8-bit RGB,
+full range, sRGB transfer, BT.709 primaries.
+
+**Fullscreen (stage 9).** `show_fullscreen(hwnd, w, h)` creates a second
+DComp target on the same device for the fullscreen window
+(`client/src/stream_fullscreen.rs`), takes the video visual off the card's
+target and sets it as the root of the new one, contain-fit and unclipped.
+`show_in_card` reverses it and applies the card's last geometry; geometry
+that arrives while fullscreen is kept, not applied. The swap chain, the
+present thread and the decoder do not change, so the stream plays on
+through the switch. A stream size change while fullscreen fits the new size
+to the window.
 
 **Geometry sync:** The Slint stream card contains a zero-size `geo-tracker` element with properties bound to `media-rect.absolute-position` and dimensions. Slint `changed` handlers fire a `VideoRect.geometry-changed` callback synchronously during every layout pass (scroll, resize, reflow). Rust wires this callback to `DCompPresenter::update_geometry`, which:
 
@@ -838,6 +864,41 @@ only:
 
 Nothing on the tick waits on the network: the `stream_client_stats` send and the
 host's `stream_viewer_left` RPC run on their own tasks.
+
+### 7.9 The stream card (streaming-quality stage 9)
+
+The card in the feed (`client/ui/panels/active_streams_panel.slint`) has three
+buttons in its footer, each with an accessible label. The state behind them
+is the Slint global `StreamCardUi` (`client/ui/types.slint`), so the card and
+its popovers share it without new properties through `CrewFeed`. Rust owns
+the values (`client/src/handlers/streaming.rs`, `callbacks/streaming.rs`).
+
+| Button | Shown | Does |
+|---|---|---|
+| Stream volume | on the watched card | Opens the volume popover: 0 to 200 % with a detent at 100 %, a mute switch and a reset, built like the member volume popover (spec 01 §4.1). The value is the gain of the watched stream's game audio: `Command::SetStreamAudioVolume { gain }` → `mello_stream_viewer_set_audio_volume` on the view (the running viewer, or the decoder of a watch whose join has not finished). The mute is a gain of 0: the host's pause owns `mello_stream_viewer_set_audio_muted`, and a gain keeps the playout running, so an unmute is in sync at once. Kept per host for the life of the app and sent again on `StreamWatching` (a new view starts at unity); a restart clears it. The icon shows `volume-x` while muted or at 0 %. |
+| Stream settings | on the watched card and the hosted card | Viewer: a switch for the stats strip. Host: the quality preset the stream started with and what the pacer sends now (`StreamHostPacingStats.out_kbps`). The host cannot change the preset mid-stream yet (§14). |
+| Fullscreen | on the watched card, not while paused | The stream on a borderless window over the monitor of the app window, owned by it, black where the picture's aspect leaves room (§7.7). Escape, a double-click or Alt+F4 on it brings the stream back to the card, as do a pause (the card's pause card explains it; the window cannot), a leave and the end of the stream. A double-click on the picture in the card also opens it. |
+
+The popovers open on the window under the button that opened them, the right
+edges aligned, and move up near the bottom of the window. The footer is under
+the picture, so they do not cover the video layer, which composites above
+Slint (§14).
+
+**Labels.**
+
+| Label | Source |
+|---|---|
+| Format, "720p60" | The height of the decoded picture (the SPS: the presenter's swap chain size) and the frame rate of the host's rung message (`[0x04, 0x05, w, h, fps]`, §8.1.1). The viewer's control callback stores the last rung in `stream::viewer_format`; the stream timer reads it with the pointer. Without a decoded picture the rung's height; without a rung the height alone ("1080p"). It replaces the present rate, which is not the stream's. |
+| "N WATCHING" | Watched card: the SFU membership (`StreamMembersChanged`, the viewers plus you). Hosted card: `StreamViewerJoined` and `StreamViewerLeft`. Otherwise the crew state's `viewer_count` (the backend's `viewer_ids`, stage 2b). The outline badge of the design system. |
+| STARTING | Hosted card: §11. Watched card: from the Watch click to the first frame (the first present, or a timeline with a released frame); "Connecting to <name>'s stream" in the media area, which the video layer does not cover before its first present. |
+| RECONNECTING, ENDED, NOT LIVE | §11.1 and the 8 s notice card. |
+
+**Stats strip.** A 40 px strip under the picture (the picture gives up the
+height) with the 1 s `StreamViewerTimeline` values: DELAY (target delay),
+JITTER, DECODE (p95), LATE (frames released after their decode deadline),
+AUDIO (game-audio delay) and A/V (offset, positive when the audio is late).
+AUDIO and A/V show "-" when the stream has no game audio. The switch stays for
+the session.
 
 ---
 
@@ -1337,6 +1398,10 @@ DComp presenter diagnostics:
 | Viewer attach, stats, native presenter hook, REMB | `mello-core/src/client/stream_ffi.rs` |
 | SFU connection | `mello-core/src/transport/sfu_connection.rs` |
 | DComp presenter (Windows) | `client/src/dcomp_presenter.rs` |
+| Fullscreen window (Windows) | `client/src/stream_fullscreen.rs` |
+| Stream card state, volume, labels, stats | `client/src/handlers/streaming.rs`, `client/src/handlers/stream_cards.rs`, `StreamCardUi` in `client/ui/types.slint` |
+| The watched stream's format slot (rung message) | `mello-core/src/stream/viewer_format.rs` |
+| The watched stream's volume command | `mello-core/src/client/stream_view_audio.rs` |
 | Client render loop + metrics | `client/src/main.rs` |
 | Slint stream card UI + geo-tracker | `client/ui/panels/active_streams_panel.slint` |
 | VideoRect global (geometry callback) | `client/ui/types.slint` |
@@ -1381,7 +1446,8 @@ DComp presenter diagnostics:
 | ~~Game audio decoded on arrival, no sync~~ **Fixed (stage 7)** — NetEQ in the voice mix, in-band FEC, A/V sync with the audio as master | — | — |
 | Game-audio FEC follows the host leg only | The viewers' loss does not reach the host encoder: a loss on the SFU to viewer leg alone turns no FEC on (§9.3) | Small (the SFU forwards the worst viewer loss) |
 | Input passthrough not implemented | No remote control | Large |
-| DComp visual uses overlay, not true underlay (`WS_EX_NOREDIRECTIONBITMAP` not set) | Video composites on top of Slint content; stream card badges moved to bottom bar as workaround | Medium |
+| DComp visual uses overlay, not true underlay | Video composites on top of Slint content: a Slint popup, menu or modal over the picture is hidden under it, and the pause card needs the content detach. The card's popovers open under the footer. Slint renders with the Skia CPU rasterizer into the window's redirection surface (12-NATIVE-PLATFORM §3.1), which every DComp target composites above, and `WS_EX_NOREDIRECTIONBITMAP` would remove that surface and the UI with it. A true underlay needs the UI in a DComp visual above the video (Skia on wgpu with a visual the app supplies, which the spec rejects for its RAM), or the video in an owned window under a hole in the main window. Open for Bob (stage 9 report). | Large |
+| The host cannot change the quality preset mid-stream | The card's settings show the preset; a change needs a runtime preset command in mello-core (the stage 4 controller's ceiling, the encode size and fps) | Medium |
 | Adapter/device mismatch diagnostics are log-based only | Better in-UI error reasons still needed | Small |
 | End-to-end certification matrix pending | Performance targets not yet certified across LAN/loss/multi-viewer gates | Medium |
 | macOS viewer has no DComp equivalent | macOS needs its own compositor path (Core Animation layer); the present thread hands RGBA to the Slint timer | Medium |
@@ -1426,3 +1492,4 @@ Optional local loopback smoke:
 - DPI change (drag between monitors): video repositions correctly, no crash.
 - watch-stream init failures surface as explicit UI/log errors and stop watching cleanly.
 - No video D3D11 device exists when not streaming.
+- Stage 9: the card's Fullscreen button shows the stream on the monitor of the app with no pause; Escape brings it back to the card, still playing; the format label reads the stream's rung ("720p60") and changes with a rung; the stream volume and mute act on the game audio only.

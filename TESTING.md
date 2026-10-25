@@ -469,6 +469,28 @@ MELLO_TEST_SFU=ws://127.0.0.1:18443/ws MELLO_TEST_SFU_PASSWORD=devpass \
 Log lines to read in a client log: "Stream start timing:
 click_to_first_rtp_ms=…" and "Stream watch timing: click_to_first_frame_ms=…".
 
+### The stream card (streaming-quality stage 9)
+
+The card's buttons, labels and fullscreen have UI harness journeys in
+`client/src/flow_tests.rs`, through the real `callbacks::wire_all` and
+`handlers::handle_event`. They run in `cargo test --workspace`:
+
+| What | Where |
+|---|---|
+| Watch: STARTING from the click to the first frame, then Stream volume, Stream settings, Fullscreen and Leave on the watched card; the viewer count from the SFU membership | `watching_a_stream_shows_starting_then_the_cards_three_buttons` |
+| Volume: 70 %, mute (gain 0, the volume stays), Escape, the value sent again on the next watch of the same host, reset | `the_stream_volume_popover_sets_mutes_and_remembers_the_host` |
+| Settings: the stats strip from `StreamViewerTimeline`; the host's quality, send rate and viewer count; the popover goes with its card | `stream_settings_show_the_stats_for_a_viewer_and_the_quality_for_the_host` |
+| Fullscreen: no new watch on the switch; Escape, a pause and a leave return to the card | `fullscreen_keeps_the_stream_and_escape_pause_and_leave_return` (a fake window behind `stream_fullscreen::FullscreenSurface`) |
+| Reconnect and leave: the buttons stay through a reconnect; the popover and the label go with the stream | `the_watched_card_keeps_its_buttons_through_a_reconnect_and_clears_on_leave` |
+| The format label from the rung message and the decoded height | `the_format_label_follows_the_rung_and_the_decoded_size`; `handlers::streaming::stage9_tests`; `mello-core` `stream::viewer_format` and `stream_ffi` (`the_rung_message_sets_the_watched_format`) |
+| The presenter moves the video visual to a second DComp target and back (needs a GPU; skips without one) | `dcomp_presenter::tests::the_video_moves_to_a_fullscreen_target_and_back` |
+| The volume goes to the running viewer or to the decoder of a starting watch | `mello-core` `client::stream_view_audio` |
+
+The harness lays the card's footer out only after the window has a size, so
+the journeys set one (`app_with_alices_stream`). The native fullscreen window
+(Escape, double-click, Alt+F4, the monitor) and the bilinear filter need a
+look on a real stream: Bob's check list in the stage 9 report.
+
 ---
 
 ## Voice quality gate
