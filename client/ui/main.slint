@@ -60,13 +60,13 @@ import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 import { RecapOpened } from "panels/recap_opened.slint";
 // --- stage 9 (streaming-quality): the stream card's popovers ---
-import { StreamCardUi, StreamStatsData } from "types.slint";
+import { StreamCardUi, StreamStatsData, ChatFocus } from "types.slint";
 import { StreamVolumePopover, StreamSettingsPopover, ExpandedStreamCard } from "panels/active_streams_panel.slint";
 export { StreamCardUi, StreamStatsData }
 // --- end stage 9 ---
 
 
-export { BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -490,8 +490,6 @@ export component MainWindow inherits Window {
     in property <bool> feed-skeleton-voice-clip: false;
     in property <bool> feed-skeleton-recap: false;
     in-out property <bool> feed-invite-line: false;
-    // Members who joined in the last 24 hours, newest first (CLIPS 7).
-    in property <[JoinedRowData]> feed-joined: [];
     in property <[JoinedRowData]> feed-quiet: [];
     // The dormant strip: one strip above the grid (frame F).
     in property <[FeedCardData]> feed-dormant: [];
@@ -1058,7 +1056,6 @@ export component MainWindow inherits Window {
                             skeleton-voice-clip: root.feed-skeleton-voice-clip;
                             skeleton-recap: root.feed-skeleton-recap;
                             invite-line: root.feed-invite-line;
-                            joined-rows: root.feed-joined;
                             quiet-rows: root.feed-quiet;
                             dormant-cards: root.feed-dormant;
                             feed-has-more: root.feed-has-more;

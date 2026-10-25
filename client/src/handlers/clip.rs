@@ -282,7 +282,11 @@ pub(crate) fn skeleton_trio_for<'a>(
         // Head2head and its invite card are not real cards: frame B2 keeps the
         // trio next to a versus hero.
         // A live session is a game in progress, not a record of the crew.
-        if t.is_empty() || t == "locked" || t == "head2head" || t == "invite" || t == "live-session"
+        if t.is_empty()
+            || matches!(
+                t,
+                "locked" | "head2head" | "invite" | "live-session" | "joined"
+            )
         {
             continue;
         }
@@ -516,22 +520,26 @@ fn hero_free(entries: &[mello_core::crew_events::FeedEntry]) -> bool {
         .any(|e| e.role == "hero" && e.entry_type != "head2head")
 }
 
-/// Put the joined line on screen from the `joined` list of a feed response:
-/// one row for each member who joined in the last 24 hours (CLIPS 7).
-fn set_joined_line(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) {
+/// The joined cards of a feed response: one for each member who joined in the
+/// last 24 hours, newest first, three at most (CLIPS 7). The card is a plain
+/// cell. `feed_grid` places them after the first row, before the sessions.
+fn join_cards(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) -> Vec<FeedCardData> {
     let (viewer, members) = h2h_roster(ctx);
-    let name_of = |id: &str| -> Option<String> {
-        let known = if id == viewer.id {
+    let known = |id: &str| -> Option<&Person> {
+        if id == viewer.id {
             Some(&viewer)
         } else {
             members.iter().find(|m| m.id == id)
-        };
-        known
+        }
+    };
+    let name_of = |id: &str| -> Option<String> {
+        known(id)
             .map(|p| p.name.clone())
             .filter(|n| !n.trim().is_empty())
     };
     let now_ms = crate::converters::current_time_ms();
-    let rows: Vec<crate::JoinedRowData> = crate::joined_line::rows(
+    let cache = ctx.avatar_cache.borrow();
+    crate::joined_line::rows(
         joins,
         &viewer.id,
         now_ms,
@@ -539,14 +547,28 @@ fn set_joined_line(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]
         &name_of,
     )
     .into_iter()
-    .map(|r| crate::JoinedRowData {
-        user_id: r.user_id.into(),
-        line: r.line.into(),
-        when: r.when.into(),
+    .map(|r| {
+        let person = known(&r.user_id)
+            .cloned()
+            .unwrap_or_else(|| Person::new(&r.user_id, &r.name));
+        let avatar = cache.get(&r.user_id).cloned();
+        FeedCardData {
+            id: format!("joined-{}", r.user_id).into(),
+            card_type: "joined".into(),
+            role: "standard".into(),
+            size: "sm".into(),
+            title: format!("{} joined", r.name).into(),
+            subtitle: r.invited.into(),
+            timestamp: r.when.into(),
+            actor_name: r.name.into(),
+            actor_initials: person.initials.into(),
+            actor_hue_index: person.hue,
+            actor_has_avatar: avatar.is_some(),
+            actor_avatar: avatar.unwrap_or_default(),
+            ..Default::default()
+        }
     })
-    .collect();
-    ctx.app
-        .set_feed_joined(Rc::new(VecModel::from(rows)).into());
+    .collect()
 }
 
 /// What the quiet rules read from the `this_week` entries (`quiet_row.rs`).
@@ -749,6 +771,7 @@ pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
         return;
     }
     let mut cards = build_this_week(ctx, &section.entries);
+    cards.extend(join_cards(ctx, &resp.joined));
     cards.extend(live_session_cards(ctx));
     let cards = arranged(ctx, cards);
     ctx.app
@@ -781,6 +804,20 @@ fn head2head_cards_show(app: &crate::MainWindow, user_id: &str) -> bool {
 /// initials on screen, so the row is replaced instead. Without a feed, or
 /// when the cards of the feed changed shape, the whole this_week is rebuilt.
 pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
+    // A join card holds one avatar: patch it in place.
+    {
+        let feed = ctx.app.get_feed_cards();
+        let id = format!("joined-{user_id}");
+        let row =
+            (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id.as_str() == id));
+        if let (Some(i), Some(img)) = (row, ctx.avatar_cache.borrow().get(user_id).cloned()) {
+            if let Some(mut card) = feed.row_data(i) {
+                card.actor_avatar = img;
+                card.actor_has_avatar = true;
+                feed.set_row_data(i, card);
+            }
+        }
+    }
     if !head2head_cards_show(&ctx.app, user_id) {
         return;
     }
@@ -2300,7 +2337,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             *ctx.last_feed.borrow_mut() = Some(response.clone());
-            set_joined_line(ctx, &response.joined);
             let idle_voice = response
                 .sections
                 .iter()
@@ -2325,7 +2361,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // not end the cold start.
             let is_cold = this_week
                 .iter()
-                .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite"))
+                .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite" | "joined"))
                 && !has_real_memory;
             let mut this_week = this_week;
             // The idle voice card follows the daily recap, or the lead.
@@ -2342,6 +2378,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     });
                 this_week.insert(at.min(this_week.len()), card);
             }
+            this_week.extend(join_cards(ctx, &response.joined));
             this_week.extend(live_session_cards(ctx));
             let cards = arranged(ctx, this_week);
 

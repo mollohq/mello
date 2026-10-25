@@ -371,9 +371,6 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(empty_feed)).into());
             ctx.app.set_feed_cold_start(true);
-            ctx.app.set_feed_joined(
-                Rc::new(slint::VecModel::from(Vec::<crate::JoinedRowData>::new())).into(),
-            );
             ctx.app.set_feed_quiet(
                 Rc::new(slint::VecModel::from(Vec::<crate::JoinedRowData>::new())).into(),
             );

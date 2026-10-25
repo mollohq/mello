@@ -1,31 +1,50 @@
-//! The joined line at the top of the crew feed (CLIPS 7, mockup frame B2): one
-//! slim row for each member who joined in the last 24 hours, newest first, at
-//! most three. The rows come from the `joined` list of the feed response, which
-//! the server reads from the `member_joined` events of the crew ledger.
+//! The joined cards of the crew feed (CLIPS 7): one card for each member who
+//! joined in the last 24 hours, newest first, at most three. The cards come
+//! from the `joined` list of the feed response, which the server reads from
+//! the `member_joined` events of the crew ledger.
 //!
 //! Pure functions, so the rule needs no window.
 
 use mello_core::crew_events::FeedJoin;
 
 const DAY_MS: i64 = 24 * 60 * 60 * 1000;
-/// The most rows the line shows.
+/// The most cards the feed shows for joins.
 pub const MAX_ROWS: usize = 3;
 
-/// One row as the UI draws it.
+/// One join as the card draws it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Row {
     pub user_id: String,
+    /// The joiner's name, for "Jonas joined".
+    pub name: String,
+    /// "invited by b0bben", or empty when nobody invited.
+    pub invited: String,
+    /// "Jonas joined, invited by b0bben": the whole line, for a screen reader.
     pub line: String,
     pub when: String,
 }
 
+/// "invited by b0bben", or empty without an inviter.
+pub fn invited_text(invited_by: &str) -> String {
+    if invited_by.trim().is_empty() {
+        String::new()
+    } else {
+        format!("invited by {}", invited_by.trim())
+    }
+}
+
+/// The name on the card: "A new member" when the name is blank.
+pub fn display_name(name: &str) -> String {
+    if name.trim().is_empty() {
+        "A new member".to_string()
+    } else {
+        name.trim().to_string()
+    }
+}
+
 /// "Jonas joined, invited by b0bben", or "Jonas joined" when nobody invited.
 pub fn line(name: &str, invited_by: &str) -> String {
-    let name = if name.trim().is_empty() {
-        "A new member"
-    } else {
-        name.trim()
-    };
+    let name = display_name(name);
     if invited_by.trim().is_empty() {
         format!("{name} joined")
     } else {
@@ -49,7 +68,7 @@ pub fn when_label(ts_ms: i64, now_ms: i64, tz_offset_min: i32) -> String {
     format!("{word} {clock}")
 }
 
-/// The rows to draw. Joins older than 24 h, the viewer's own join and repeat
+/// The joins to draw. Joins older than 24 h, the viewer's own join and repeat
 /// joiners are dropped, then the list is sorted newest first and cut to three.
 /// `name_of` gives the current name of a member from the roster; the name the
 /// event stored is the fallback.
@@ -81,6 +100,8 @@ pub fn rows(
         };
         out.push(Row {
             user_id: j.user_id.clone(),
+            name: display_name(&name),
+            invited: invited_text(&inviter),
             line: line(&name, &inviter),
             when: when_label(j.ts, now_ms, tz_offset_min),
         });

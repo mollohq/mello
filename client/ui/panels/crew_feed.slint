@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { BeltReveal, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { BeltReveal, ChatFocus, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
@@ -2440,6 +2440,107 @@ component DormantStrip inherits Rectangle {
     }
 }
 
+// A member who joined in the last 24 hours. The smallest card the grid has is
+// a standard cell, so this is one: the joiner's octagon large, the name in
+// Oxanium, who invited and when in Barlow 300, and "Say hi", a white outline
+// action that puts the cursor in the crew chat. The surface may already hold
+// its one filled white button and the invite stays red, so this one is not
+// filled.
+component JoinedCard inherits Rectangle {
+    in property <FeedCardData> card;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding: 16px;
+        spacing: 3px;
+
+        HorizontalLayout {
+            alignment: start;
+            Rectangle {
+                width: 72px;
+                height: 72px;
+                UserAvatar {
+                    size: 72px;
+                    initials: root.card.actor-initials;
+                    avatar: root.card.actor-avatar;
+                    has-avatar: root.card.actor-has-avatar;
+                    color-index: root.card.actor-hue-index;
+                }
+            }
+        }
+        Rectangle { height: 9px; }
+        Text {
+            text: root.card.title;
+            font-family: Theme.font-display;
+            font-weight: Theme.weight-display-bold;
+            font-size: 20px;
+            color: Theme.text-value;
+            overflow: elide;
+        }
+        if root.card.subtitle != "": Text {
+            text: root.card.subtitle;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 13px;
+            color: Theme.text-body;
+            overflow: elide;
+        }
+        Text {
+            text: root.card.timestamp;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 13px;
+            color: Theme.text-dim;
+            overflow: elide;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        HorizontalLayout {
+            alignment: start;
+            Rectangle {
+                width: hi-label.preferred-width + 36px;
+                height: 30px;
+                accessible-role: button;
+                accessible-label: "Say hi to " + root.card.actor-name;
+                CutButton {
+                    width: parent.width; height: parent.height;
+                    outlined: true;
+                    line-color: hi-ta.has-hover ? Theme.action : Theme.action-line-hover;
+                    surface-color: Theme.card-bg;
+                }
+                hi-label := Text {
+                    text: "SAY HI";
+                    font-family: Theme.font-label;
+                    font-size: 10px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-primary;
+                    width: parent.width; height: parent.height;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                hi-ta := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { ChatFocus.requests += 1; }
+                }
+            }
+        }
+    }
+}
+
 // The voice channel when nobody is in it (frame E): the channel, when the last
 // call was, and the one filled white button of the quiet feed.
 component VoiceIdleCard inherits Rectangle {
@@ -2803,6 +2904,9 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height; card: root.card;
         start-voice-clicked(id) => { root.start-voice-clicked(id); }
     }
+    if card.card-type == "joined": JoinedCard {
+        width: parent.width; height: parent.height; card: root.card;
+    }
     if card.card-type == "dormant": DormantStrip {
         width: parent.width; height: parent.height; card: root.card;
     }
@@ -2872,9 +2976,9 @@ component FeedSlot inherits Rectangle {
     }
 }
 
-// The joined line (mockup frame B2, .qrow): a person icon, "Jonas joined,
-// invited by b0bben" in Barlow 300, and the time at the right in Barlow 600,
-// uppercase and tracked. A plain row, not a card, and not a control.
+// The quiet row (mockup frames E and F, .qrow): an icon, one sentence in
+// Barlow 300, and the time at the right in Barlow 600, uppercase and tracked.
+// A plain row, not a card, and not a control.
 component FeedJoinedRow inherits Rectangle {
     in property <string> line;
     in property <string> when;
@@ -2925,8 +3029,6 @@ component FeedJoinedRow inherits Rectangle {
 
 export component CrewFeed inherits Rectangle {
     in property <[FeedCardData]> cards: [];
-    /// Members who joined in the last 24 hours, newest first, at most three.
-    in property <[JoinedRowData]> joined-rows: [];
     /// The quiet row: one row at most, in the place of the recap (frame E).
     in property <[JoinedRowData]> quiet-rows: [];
     /// The dormant strip: at most one strip across the top (frame F).
@@ -3039,6 +3141,7 @@ export component CrewFeed inherits Rectangle {
     // card there is a cell, not a second hero (frame D). Mirrors
     // `Layout::lead` in `feed_grid.rs`.
     property <bool> lead-is-plain: lead-h2h == "cell" || lead-h2h == "cell-full"
+        || (cards.length > feed-start-index && cards[feed-start-index].card-type == "joined")
         || (cards.length > feed-start-index && cards[feed-start-index].card-type == "invite")
         || (feed-start-index > 0 && cards.length > feed-start-index
             && lead-h2h == "" && !lead-is-live && !hero-is-clip && !lead-is-cell-wide
@@ -3151,12 +3254,6 @@ export component CrewFeed inherits Rectangle {
                 padding-right: 20px;
                 spacing: 12px;
 
-                // The joined line: one slim row for each member who joined in
-                // the last 24 hours, above the first card (frame B2).
-                for j in root.joined-rows: FeedJoinedRow {
-                    line: j.line;
-                    when: j.when;
-                }
                 for q in root.quiet-rows: FeedJoinedRow {
                     quiet: true;
                     line: q.line;
@@ -4268,7 +4365,6 @@ export component PreviewFeedFirstFriend inherits Rectangle {
         skeleton-voice-clip: true;
         skeleton-recap: true;
         invite-line: false;
-        joined-rows: [{ user-id: "u2", line: "Jonas joined, invited by b0bben", when: "Today 23:14" }];
         cards: [
             {
                 id: "h2h", card-type: "head2head", role: "hero", size: "lg",
@@ -4304,6 +4400,11 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"),
                       owners: [jonas] },
                 ],
+            },
+            {
+                id: "joined-u2", card-type: "joined", role: "standard", size: "sm",
+                title: "Jonas joined", subtitle: "invited by b0bben", timestamp: "Today 23:14",
+                actor-name: "Jonas", actor-initials: "J", actor-hue-index: 1,
             },
             {
                 id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,

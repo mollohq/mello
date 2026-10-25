@@ -422,9 +422,8 @@ export struct HeroStreamData {
     has-poster: bool,
 }
 
-// One row of the joined line at the top of the crew feed (CLIPS 7): a member
-// who joined in the last 24 hours. Both strings are formatted in Rust
-// (`joined_line.rs`): "Jonas joined, invited by b0bben" and "Today 23:14".
+// One row of the quiet row of the crew feed (CLIPS 7, frames E and F): a line
+// and a time, formatted in Rust (`quiet_row.rs`). A join is a feed card.
 export struct JoinedRowData {
     user-id: string,
     line: string,
@@ -729,3 +728,12 @@ export global StreamCardUi {
 }
 
 // --- end stage 9 ---
+
+/// A request to put the cursor in the crew chat. A card sets it (the joined
+/// card's "Say hi"); the chat panel answers by focusing its input. A counter,
+/// because each press is a new request.
+export global ChatFocus {
+    in-out property <int> requests: 0;
+    /// The chat input has the cursor. The chat panel keeps it up to date.
+    in-out property <bool> input-focused: false;
+}

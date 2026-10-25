@@ -170,8 +170,11 @@ struct Snapshot {
     sealed: SealedSnap,
     /// The skeleton trio cells that show (0 to 3).
     skeleton_trio: usize,
-    /// The joined line at the top of the feed, top row first.
-    joined_rows: Vec<JoinedRowSnap>,
+    /// The joined cards of the feed, in grid order. A join is the smallest card
+    /// the grid has, a standard cell after the first row.
+    joined: Vec<JoinedSnap>,
+    /// The chat input has the cursor ("Say hi" on a joined card puts it there).
+    chat_input_focused: bool,
     /// The quiet row (frame E): at most one, in the place of the recap.
     quiet_rows: Vec<JoinedRowSnap>,
     /// The dormant strip (frame F): the text and its age, if it shows.
@@ -427,6 +430,20 @@ struct TitleHolderSnap {
     title_id: String,
     /// The member list name of the holder. Empty when the holder is not in it.
     holder_name: String,
+}
+
+#[derive(Serialize)]
+struct JoinedSnap {
+    /// The joiner, for example `"Jonas"`.
+    name: String,
+    /// The headline, for example `"Jonas joined"`.
+    title: String,
+    /// For example `"invited by b0bben"`. Empty without an inviter.
+    invited: String,
+    /// For example `"Today 23:14"`.
+    when: String,
+    /// The card's place among the feed cards, from 0.
+    index: usize,
 }
 
 #[derive(Serialize)]
@@ -1243,14 +1260,20 @@ fn read(app: &MainWindow) -> Snapshot {
                 poster: c.live.has_poster,
             })
             .collect(),
-        joined_rows: app
-            .get_feed_joined()
+        joined: app
+            .get_feed_cards()
             .iter()
-            .map(|r| JoinedRowSnap {
-                line: r.line.to_string(),
-                when: r.when.to_string(),
+            .enumerate()
+            .filter(|(_, c)| c.card_type == "joined")
+            .map(|(index, c)| JoinedSnap {
+                name: c.actor_name.to_string(),
+                title: c.title.to_string(),
+                invited: c.subtitle.to_string(),
+                when: c.timestamp.to_string(),
+                index,
             })
             .collect(),
+        chat_input_focused: app.global::<crate::ChatFocus>().get_input_focused(),
         quiet_rows: app
             .get_feed_quiet()
             .iter()

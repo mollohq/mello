@@ -7,6 +7,9 @@
 //!
 //! - A session of a crew of one stands left of the wide head2head card
 //!   (frame B): one cell, then two columns. `Lead::CellWide`.
+//! - A joined card (a member who joined in the last 24 hours) is a plain cell.
+//!   It stands after the first row of the lead and before the sessions, one for
+//!   each joiner. It never takes a wide slot. `Layout::joins_at`.
 //! - A voice clip never takes a wide slot (CLIPS 7.1, plans/next-gen-feed.md
 //!   section 2).
 //! - A live session (a game in progress) with poster art takes the wide slot
@@ -129,6 +132,8 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         Some(_) if session_then_wide => Lead::CellWide,
         Some(_) if variant == "belt" => Lead::Belt,
         Some(c) if !c.is_hero && tall_trio(cards, start) => Lead::TallTrio,
+        // Only joined cards: the grid is plain rows of cells.
+        Some(c) if c.card_type == "joined" => Lead::Plain,
         Some(c) if c.card_type == "live-session" && c.has_poster => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
@@ -163,6 +168,18 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
     }
 }
 
+/// Where the joined cards go among `len` other cards: the first card after the
+/// first row of the lead (row 2), else after the first three cells of a plain
+/// grid, which has no hero.
+fn joins_at(l: &Layout, len: usize) -> usize {
+    let at = if l.lead == Lead::Plain {
+        l.start + 3
+    } else {
+        l.row2_base
+    };
+    at.min(len)
+}
+
 /// The indices of the two-column slots for `len` cards.
 fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
     let mut w = Vec::new();
@@ -195,7 +212,14 @@ pub fn wide_slot_indices(cards: &[CardInfo], start: usize) -> Vec<usize> {
 fn is_fixed(t: &str) -> bool {
     matches!(
         t,
-        "clip" | "head2head" | "invite" | "recap" | "recent-games" | "locked" | "live-session"
+        "clip"
+            | "head2head"
+            | "invite"
+            | "recap"
+            | "recent-games"
+            | "locked"
+            | "live-session"
+            | "joined"
     )
 }
 
@@ -287,6 +311,15 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
         return order;
     }
 
+    // The joined cards wait outside the order: the rules below place the other
+    // cards as if there were none, and the joins go in after the first row.
+    let joins: Vec<usize> = order
+        .iter()
+        .copied()
+        .filter(|&i| cards[i].card_type == "joined")
+        .collect();
+    order.retain(|i| !joins.contains(i));
+
     // 0. A session of a crew of one leads the wide head2head card (frame B).
     if no_live
         && cards
@@ -307,6 +340,15 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
     // (frame F, a crew that was away).
     if no_live {
         tall_trio_order(cards, &mut order, start);
+    }
+
+    // 0c. The joined cards: after the first row, before the sessions.
+    if !joins.is_empty() {
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let at = joins_at(&layout(&infos, start), order.len());
+        for (n, &i) in joins.iter().enumerate() {
+            order.insert((at + n).min(order.len()), i);
+        }
     }
 
     // 1. Recent games to the first screen.
@@ -339,7 +381,7 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
             }
             // The poster grid needs two columns. Under a hero it takes the wide
             // slot of row 3 (frames C and D). The list stays in the side column.
-            Lead::Hero if cards[from].recent_grid => l.row2_base + 4,
+            Lead::Hero if cards[order[from]].recent_grid => l.row2_base + 4,
             Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
         };
         let target = target.min(order.len() - 1);
@@ -398,7 +440,7 @@ fn tall_trio_order(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
     }
 }
 
-/// A clip leaves every wide slot. Swap it with the nearest card that is not
+/// A clip and a joined card leave every wide slot. Swap it with the nearest card that is not
 /// fixed, later cards first. With none, the clip stays.
 fn clips_leave_wide(cards: &[CardInfo], order: &mut [usize], start: usize) {
     if order.len() <= start {
@@ -407,7 +449,9 @@ fn clips_leave_wide(cards: &[CardInfo], order: &mut [usize], start: usize) {
     let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
     let l = layout(&infos, start);
     for w in wide_slots(&l, order.len()) {
-        if infos[w].card_type != "clip" {
+        // A clip is a card that needs a cell of its own and the joined card is
+        // the smallest card: neither fills two columns.
+        if !matches!(infos[w].card_type.as_str(), "clip" | "joined") {
             continue;
         }
         let wide = wide_slots(&l, order.len());
@@ -958,5 +1002,109 @@ mod tests {
         let infos: Vec<CardInfo> = once.iter().map(|&i| cards[i].clone()).collect();
         let twice = arrange(&infos, 0);
         assert_eq!(twice, (0..cards.len()).collect::<Vec<_>>());
+    }
+
+    fn joined() -> CardInfo {
+        card("joined")
+    }
+
+    #[test]
+    fn a_join_stands_beside_the_poster_grid_under_the_versus_hero_before_the_session() {
+        // Frame B2: the versus hero, then the grid and one card, then the rest.
+        let cards = vec![h2h("versus"), grid(), card("game-session"), joined()];
+        let order = arrange(&cards, 0);
+        assert_eq!(
+            types(&cards, &order),
+            ["head2head", "recent-games", "joined", "game-session"]
+        );
+    }
+
+    #[test]
+    fn a_join_follows_the_first_row_of_every_lead() {
+        // A wide card of a crew of one: the row holds the wide card and a cell.
+        let cards = vec![h2h("wide"), card("recent-games"), joined()];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(t[2], "joined", "{t:?}");
+        // A hero: the hero and the two side cells are the first row.
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![
+            hero,
+            h2h("cell"),
+            card("game-session"),
+            card("game-session"),
+            joined(),
+        ];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(t[3], "joined", "{t:?}");
+        // A head2head cell leads a plain grid: three cells, then the join.
+        let cards = vec![
+            h2h("cell"),
+            card("invite"),
+            card("game-session"),
+            card("game-session"),
+            joined(),
+        ];
+        let t = types(&cards, &arrange(&cards, 0));
+        assert_eq!(t[3], "joined", "{t:?}");
+    }
+
+    #[test]
+    fn no_join_sits_in_a_wide_slot_and_three_joins_all_come_before_the_sessions() {
+        let cards = vec![
+            h2h("versus"),
+            grid(),
+            card("game-session"),
+            card("game-session"),
+            card("game-session"),
+            joined(),
+            joined(),
+            joined(),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let wide = wide_slots(&layout(&infos, 0), infos.len());
+        for w in wide {
+            assert_ne!(infos[w].card_type, "joined", "{:?}", types(&cards, &order));
+        }
+        assert_eq!(
+            infos.iter().filter(|c| c.card_type == "joined").count(),
+            3,
+            "none is dropped"
+        );
+    }
+
+    #[test]
+    fn a_feed_of_joins_alone_is_plain_cells() {
+        let cards = vec![joined(), joined()];
+        let order = arrange(&cards, 0);
+        assert_eq!(order, [0, 1]);
+        assert_eq!(layout(&cards, 0).lead, Lead::Plain);
+    }
+
+    #[test]
+    fn a_join_does_not_move_the_cards_the_other_rules_place() {
+        // The poster grid keeps the wide slot of row 3 under a hero (frame C).
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![
+            hero,
+            h2h("cell"),
+            card("session"),
+            card("game-session"),
+            card("game-session"),
+            card("daily-recap"),
+            card("clip"),
+            grid(),
+            joined(),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let wide = wide_slots(&layout(&infos, 0), infos.len());
+        assert!(
+            wide.iter().any(|&w| infos[w].card_type == "recent-games"),
+            "{:?}",
+            types(&cards, &order)
+        );
     }
 }
