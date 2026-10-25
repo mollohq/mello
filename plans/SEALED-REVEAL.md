@@ -201,3 +201,27 @@ The slot is open and the dot is clear.
 
 Previews and renders: `PreviewFeedSealed` (stage D with sealed belts and recap) and
 `PreviewRevealFrame` (the centre view at 1400 ms), rendered with `slint-viewer`.
+
+## 8. Measured
+
+Release build with the e2e feature, Skia, macOS arm64, one reveal of a belt in a crew of
+five (`feed-sealed-reveal` flow, RSS from `ps`).
+
+| Moment | RSS |
+|---|---|
+| Feed with no sealed card | 184 MB |
+| Feed at rest with a sealed card | 186 MB |
+| Card at rest in the centre | 219 MB |
+| After the card returned, 4 s later | 224 MB |
+
+- A sealed card costs 2 MB and no redraw.
+- One reveal leaves 38 MB behind. This is under the limit of 40 MB, so the particle
+  counts stay.
+- The whole app is over the 100 MB target at rest, with and without a sealed card. The
+  idle scenario of the perf harness measures the core without the UI and shows no
+  regression.
+
+The `slint-viewer` renders (`PreviewFeedSealed`, `PreviewRevealFrame`) use the software
+renderer. It draws no radial gradient on a `Path` and no transform, so the rays are flat
+and the card does not tilt or flip in those two files. The journey checkpoints show the
+Skia frames.
