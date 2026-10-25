@@ -396,6 +396,8 @@ export component Head2headCardWide inherits Rectangle {
                         row: floor(i / 2);
                         col: mod(i, 2);
                         t: ch;
+                        // A new crew's own chips are sealed: each opens alone.
+                        slot-id: "own-" + ch.id;
                         compact: root.tight;
                     }
                 }

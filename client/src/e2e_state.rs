@@ -301,6 +301,9 @@ struct SealedSnap {
     belts: usize,
     /// The weekly recap is sealed.
     recap: bool,
+    /// Different sealed own chips of a crew of one (the day 0 reveal). They do
+    /// not count in `belts`.
+    own: usize,
     /// The card in the centre of the feed: `"belt"`, `"recap"` or `"none"`.
     open_center: &'static str,
     /// The card in the centre is at rest: the face shows, and a click on the
@@ -313,11 +316,13 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
     let ui = app.global::<crate::SealedUi>();
     let active = ui.get_active_key();
     let mut keys: Vec<String> = Vec::new();
+    let mut own: Vec<String> = Vec::new();
     let mut recap = false;
     let mut add = |b: &crate::BeltReveal| {
         let key = b.key.to_string();
-        if b.sealed && b.key != active && !keys.contains(&key) {
-            keys.push(key);
+        let list = if b.own { &mut own } else { &mut keys };
+        if b.sealed && b.key != active && !list.contains(&key) {
+            list.push(key);
         }
     };
     for c in app.get_feed_cards().iter() {
@@ -329,6 +334,7 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
     }
     SealedSnap {
         belts: keys.len(),
+        own: own.len(),
         recap,
         open_center: match ui.get_active_kind().as_str() {
             "belt" => "belt",
@@ -1511,7 +1517,7 @@ mod tests {
         let app = h.app();
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 0, "recap": false, "open_center": "none", "resting": false})
+            json!({"belts": 0, "own": 0, "recap": false, "open_center": "none", "resting": false})
         );
         let belt = |key: &str, sealed: bool| crate::BeltReveal {
             key: key.into(),
@@ -1553,7 +1559,7 @@ mod tests {
         ]));
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 1, "recap": true, "open_center": "none", "resting": false})
+            json!({"belts": 1, "own": 0, "recap": true, "open_center": "none", "resting": false})
         );
         // The belt in the centre is no longer sealed in the feed.
         let ui = app.global::<crate::SealedUi>();
@@ -1561,7 +1567,7 @@ mod tests {
         ui.set_active_kind("belt".into());
         assert_eq!(
             snapshot_json(app)["sealed"],
-            json!({"belts": 0, "recap": true, "open_center": "belt", "resting": false})
+            json!({"belts": 0, "own": 0, "recap": true, "open_center": "belt", "resting": false})
         );
         ui.set_active_kind("recap".into());
         assert_eq!(snapshot_json(app)["sealed"]["open_center"], "recap");

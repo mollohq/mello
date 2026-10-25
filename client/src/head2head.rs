@@ -306,6 +306,16 @@ pub struct Chip {
     /// The move behind the chip, when the chip shows the crew holder of a
     /// title that changed hands.
     pub moved: Option<Moved>,
+    /// The viewer's own value, when the chip is one of a crew of one. It is
+    /// sealed on a new crew (`sealed::own_reveal`).
+    pub own: Option<OwnValue>,
+}
+
+/// What an own chip needs for its reveal: the value and the unit as sent.
+#[derive(Debug, Clone, PartialEq)]
+pub struct OwnValue {
+    pub value: Value,
+    pub unit: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -456,6 +466,10 @@ fn own_chip(o: &WireOwnValue, viewer: &Person) -> Chip {
         held_days: 0,
         moved_recent: false,
         moved: None,
+        own: Some(OwnValue {
+            value: o.value.clone(),
+            unit: o.unit.clone(),
+        }),
     }
 }
 
@@ -477,6 +491,7 @@ fn chip_of(t: &WireTitle, roster: &dyn Fn(&str) -> Person, now_ms: i64, moved: b
         },
         moved_recent: moved,
         moved: moved_of(t, roster),
+        own: None,
     }
 }
 
@@ -910,24 +925,44 @@ pub fn held_label(days: i32) -> String {
     }
 }
 
-fn title_held(c: &Chip, avatar: &dyn Fn(&str) -> Option<slint::Image>, seal: &Seal) -> TitleHeld {
+fn title_held(
+    c: &Chip,
+    viewer: &Person,
+    avatar: &dyn Fn(&str) -> Option<slint::Image>,
+    seal: &Seal,
+) -> TitleHeld {
     TitleHeld {
         belt: c
-            .moved
+            .own
             .as_ref()
-            .map(|m| {
-                crate::sealed::reveal_of(
-                    &crate::sealed::Move {
-                        title_id: &m.title_id,
-                        moved_ms: m.moved_ms,
-                        holder: &m.holder,
-                        prev: &m.prev,
-                        value: &m.value,
-                        unit: &m.unit,
+            .map(|o| {
+                crate::sealed::own_reveal(
+                    &crate::sealed::OwnValue {
+                        title_id: &c.id,
+                        viewer,
+                        value: &o.value,
+                        unit: &o.unit,
+                        shown_unit: &c.unit,
                     },
                     avatar,
                     seal,
                 )
+            })
+            .or_else(|| {
+                c.moved.as_ref().map(|m| {
+                    crate::sealed::reveal_of(
+                        &crate::sealed::Move {
+                            title_id: &m.title_id,
+                            moved_ms: m.moved_ms,
+                            holder: &m.holder,
+                            prev: &m.prev,
+                            value: &m.value,
+                            unit: &m.unit,
+                        },
+                        avatar,
+                        seal,
+                    )
+                })
             })
             .unwrap_or_default(),
         id: c.id.as_str().into(),
@@ -983,7 +1018,7 @@ pub fn to_slint_sealed(
             chip: p
                 .deciding
                 .as_ref()
-                .map(|c| title_held(c, avatar, seal))
+                .map(|c| title_held(c, &m.viewer, avatar, seal))
                 .unwrap_or_default(),
         })
         .collect();
@@ -1000,13 +1035,13 @@ pub fn to_slint_sealed(
         titles: model_of(
             m.titles
                 .iter()
-                .map(|c| title_held(c, avatar, seal))
+                .map(|c| title_held(c, &m.viewer, avatar, seal))
                 .collect(),
         ),
         chips: model_of(
             m.chips
                 .iter()
-                .map(|c| title_held(c, avatar, seal))
+                .map(|c| title_held(c, &m.viewer, avatar, seal))
                 .collect(),
         ),
         pairs: model_of(pairs),
@@ -1670,6 +1705,8 @@ mod tests {
             enabled: true,
             now_ms: NOW,
             opened: &none,
+            crew_id: "",
+            own_since_ms: 0,
         };
         let d = to_slint_sealed(&m, &|_| None, &seal);
         assert_eq!(chip_belts(&d), vec![(key.clone(), true)]);
@@ -1679,6 +1716,8 @@ mod tests {
             enabled: true,
             now_ms: NOW,
             opened: &opened,
+            crew_id: "",
+            own_since_ms: 0,
         };
         let d = to_slint_sealed(&m, &|_| None, &seal);
         assert_eq!(chip_belts(&d), vec![(key, false)]);
@@ -1694,6 +1733,8 @@ mod tests {
             enabled: true,
             now_ms: NOW,
             opened: &none,
+            crew_id: "",
+            own_since_ms: 0,
         };
         assert!(!chip_belts(&to_slint_sealed(&m, &|_| None, &seal))[0].1);
         let m = build(&sealed_data(6), &me(), &roster, NOW).unwrap();

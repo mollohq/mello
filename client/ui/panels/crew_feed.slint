@@ -4307,6 +4307,30 @@ export component PreviewFeedNewCrew inherits Rectangle {
     height: 520px;
     background: Theme.bg-app;
 
+    /// The viewer's own chips are sealed on a new crew (day 0 reveal).
+    in property <bool> sealed: true;
+    property <H2hPerson> me: { id: "u1", name: "You", initials: "BO", hue-index: 4 };
+    out property <BeltReveal> own-carry: {
+        key: "own:the_carry:c1", sealed: root.sealed, own: true, seed: 1307, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
+        title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), hue-index: 4, kind: 0, amount: 4167, unit: "h",
+        stat: "Most hours in the top shared game.", holder: root.me,
+    };
+    out property <BeltReveal> own-owl: {
+        key: "own:night_owl:c1", sealed: root.sealed, own: true, seed: 2281, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), hue-index: 4, kind: 2, amount: 194,
+        stat: "Latest local time of a last session.", holder: root.me,
+    };
+    out property <BeltReveal> own-collector: {
+        key: "own:the_collector:c1", sealed: root.sealed, own: true, seed: 911, code: SealedFixtures.marathon-code, cells: SealedFixtures.marathon-cells,
+        title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), hue-index: 4, kind: 0, amount: 5, unit: "installed",
+        stat: "Most installed games.", holder: root.me,
+    };
+    out property <BeltReveal> own-locked: {
+        key: "own:locked_in:c1", sealed: root.sealed, own: true, seed: 4421, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Locked In", icon: @image-url("../icons/h2h-locked-in.svg"), hue-index: 4, kind: 0, amount: 4.6, decimals: 1, unit: "h this week",
+        stat: "Most game hours in the last 7 days.", holder: root.me,
+    };
+
     CrewFeed {
         width: parent.width;
         height: parent.height;
@@ -4323,10 +4347,10 @@ export component PreviewFeedNewCrew inherits Rectangle {
                     left-name: "bobbyfeedtest1", left-initials: "BO", left-hue-index: 4,
                     // The viewer's own values: their hue, no holder, no held days.
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 4 },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 4 },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 4 },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 4 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 4, belt: root.own-carry },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 4, belt: root.own-owl },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 4, belt: root.own-collector },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 4, belt: root.own-locked },
                     ],
                 },
             },

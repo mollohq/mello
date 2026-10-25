@@ -507,3 +507,153 @@ fn the_centre_view_has_the_bounds_of_the_feed_panel_and_a_hint_that_is_no_contro
     assert_eq!(h.controls_labelled("Close").len(), 1);
     assert!(h.controls_labelled("Click anywhere to close").is_empty());
 }
+
+// ---- Day 0: the own chips of a new crew ---------------------------------
+
+/// A crew of one with five own values. The card draws the first four.
+fn solo_feed(carry_h: f64) -> FeedResponse {
+    let mut entry = h2h_entry(1, vec![], vec![], None);
+    entry.data["own_values"] = serde_json::json!([
+        {"title_id": "the_carry", "value": carry_h, "unit": "h", "display": "4,167"},
+        {"title_id": "night_owl", "value": "03:14", "unit": "", "display": "03:14"},
+        {"title_id": "the_collector", "value": 5, "unit": "installed", "display": "5"},
+        {"title_id": "locked_in", "value": 4.6, "unit": "h", "display": "4.6"},
+        {"title_id": "sampler", "value": 3, "unit": "games", "display": "3"},
+    ]);
+    feed_of(vec![entry])
+}
+
+fn open_solo(h: &mut Harness, feed: FeedResponse) {
+    app_with_crew_of(h, 1);
+    set_roster(h, &[("user-1", "Test User")]);
+    h.emit(Event::FeedLoaded { response: feed });
+}
+
+/// `(key, sealed, own)` of the own chips of the wide card.
+fn own_chips(h: &Harness) -> Vec<(String, bool, bool)> {
+    let chips = first_card(h).head2head.chips;
+    (0..chips.row_count())
+        .filter_map(|i| chips.row_data(i))
+        .map(|t| (t.belt.key.to_string(), t.belt.sealed, t.belt.own))
+        .collect()
+}
+
+/// A new crew seals every own chip, each under its own key, and the card keeps
+/// its headline, the four open seats and the invite.
+#[test]
+fn a_new_crew_seals_all_four_own_chips() {
+    let mut h = Harness::new();
+    open_solo(&mut h, solo_feed(4167.0));
+    assert_eq!(
+        own_chips(&h),
+        [
+            ("own:the_carry:crew-0".to_string(), true, true),
+            ("own:night_owl:crew-0".to_string(), true, true),
+            ("own:the_collector:crew-0".to_string(), true, true),
+            ("own:locked_in:crew-0".to_string(), true, true),
+        ]
+    );
+    assert_eq!(
+        h.controls_labelled("Sealed belt, open it").len(),
+        4,
+        "the own chip is labelled like any sealed belt"
+    );
+    assert_eq!(count_of(&h, "TitleChip"), 0, "the values are not drawn");
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == "GO HEAD2HEAD WITH YOUR CREW"));
+    assert_eq!(texts.iter().filter(|t| t.as_str() == "OPEN").count(), 4);
+    assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
+    assert!(
+        !texts.iter().any(|t| t == "4,167"),
+        "a sealed chip hides its value: {texts:?}"
+    );
+}
+
+/// A click opens one chip: the centre view, the face with the title, the value
+/// and the viewer as "You", no "took it from". The return leaves that chip
+/// open and the other three sealed.
+#[test]
+fn opening_one_own_chip_opens_only_that_one() {
+    let mut h = Harness::new();
+    open_solo(&mut h, solo_feed(4167.0));
+    at(&h, 0);
+    h.click_label("Sealed belt, open it");
+    assert_eq!(ui(&h).get_active_kind().as_str(), "belt");
+    assert_eq!(stored_keys(&h), ["own:the_carry:crew-0"]);
+    assert_eq!(
+        h.controls_labelled("Sealed belt, open it").len(),
+        3,
+        "the other three wait"
+    );
+
+    at(&h, 1400);
+    assert_eq!(count_of(&h, "BigBeltFace"), 1);
+    let texts = drawn_texts(&h);
+    for want in ["The Carry", "You", "Most hours in the top shared game."] {
+        assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
+    }
+    assert!(
+        !texts.iter().any(|t| t == "took it from"),
+        "an own value took nothing from anyone: {texts:?}"
+    );
+
+    at(&h, 1500);
+    h.click_label("Close");
+    at(&h, 2100);
+    h.pump();
+    assert_eq!(ui(&h).get_active_kind().as_str(), "");
+    let c = own_chips(&h);
+    assert_eq!(
+        c.iter().map(|(_, sealed, _)| *sealed).collect::<Vec<_>>(),
+        [false, true, true, true],
+        "{c:?}"
+    );
+    assert_eq!(count_of(&h, "TitleChip"), 1, "the open chip is in the slot");
+    assert!(drawn_texts(&h).iter().any(|t| t == "4,167"));
+}
+
+/// A reopened crew keeps the opened chips open, even when the value changed
+/// since: the key has no value in it.
+#[test]
+fn a_reopened_crew_keeps_opened_chips_open_when_the_value_changes() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().sealed_opened.insert(
+        "crew-0".into(),
+        vec![crate::sealed::own_key("the_carry", "crew-0")],
+    );
+    open_solo(&mut h, solo_feed(4200.0));
+    let c = own_chips(&h);
+    assert_eq!(
+        c.iter().map(|(_, sealed, _)| *sealed).collect::<Vec<_>>(),
+        [false, true, true, true],
+        "{c:?}"
+    );
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "4,167"),
+        "the open chip draws its value"
+    );
+}
+
+/// The 7 day silent open: a crew whose own chips first showed 8 days ago has
+/// them open, with no animation and no stored key.
+#[test]
+fn own_chips_open_silently_after_seven_days() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().own_seal_since.insert(
+        "crew-0".into(),
+        crate::head2head::now_ms() - 8 * 24 * HOUR_MS,
+    );
+    open_solo(&mut h, solo_feed(4167.0));
+    assert!(own_chips(&h).iter().all(|(_, sealed, _)| !sealed));
+    assert!(stored_keys(&h).is_empty());
+    assert_eq!(h.controls_labelled("Sealed belt, open it").len(), 0);
+}
+
+/// The first time the chips show, the crew's start is stored, so the 7 days
+/// count from it and survive a restart.
+#[test]
+fn the_first_day_of_own_chips_is_stored() {
+    let mut h = Harness::new();
+    open_solo(&mut h, solo_feed(4167.0));
+    assert!(h.settings().borrow().own_seal_since.contains_key("crew-0"));
+}

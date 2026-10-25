@@ -362,10 +362,19 @@ fn with_seal<R>(ctx: &AppContext, f: impl FnOnce(&Seal) -> R) -> R {
     let crew = ctx.app.get_active_crew_id().to_string();
     let opened = sealed::opened_keys(&ctx.settings.borrow(), &crew);
     let is_open = |k: &str| opened.contains(k);
+    let own_since_ms = ctx
+        .settings
+        .borrow()
+        .own_seal_since
+        .get(&crew)
+        .copied()
+        .unwrap_or(0);
     f(&Seal {
         enabled: true,
         now_ms: head2head::now_ms(),
         opened: &is_open,
+        crew_id: &crew,
+        own_since_ms,
     })
 }
 
@@ -462,6 +471,17 @@ fn head2head_cards(
     // The octagons wear the avatar the app already loaded for the user id,
     // and fall back to initials. A late avatar patches the card in place
     // (`refresh_head2head_cards`).
+    // The own chips of a new crew are sealed for 7 days from the first time
+    // they show (the day 0 reveal).
+    if model.chips.iter().any(|c| c.own.is_some()) {
+        let crew = ctx.app.get_active_crew_id().to_string();
+        if !crew.is_empty() {
+            let mut s = ctx.settings.borrow_mut();
+            if sealed::own_since(&mut s, &crew, now_ms).1 {
+                s.save();
+            }
+        }
+    }
     let cache = ctx.avatar_cache.borrow();
     let avatar = |id: &str| cache.get(id).cloned();
     let mut cards = vec![FeedCardData {

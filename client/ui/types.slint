@@ -98,6 +98,9 @@ export struct BeltReveal {
     stat: string,
     holder: H2hPerson,
     prev: H2hPerson,
+    /// The viewer's own value on a new crew (day 0). `holder` is the viewer,
+    /// the face says "You" and has no `prev`. The key is `own:<title_id>:<crew_id>`.
+    own: bool,
 }
 
 // The sealed state of a weekly recap. `bright` and `dim` are Path commands of

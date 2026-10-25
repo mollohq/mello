@@ -53,6 +53,18 @@ pub fn belt_key(title_id: &str, moved_ms: i64) -> String {
     format!("{title_id}:{moved_ms}")
 }
 
+/// The key of the viewer's own value of a title on a crew. One key for a title
+/// and a crew, with no value and no time in it: a chip that was opened once
+/// stays open on later days, whatever the value is then.
+pub fn own_key(title_id: &str, crew_id: &str) -> String {
+    format!("own:{title_id}:{crew_id}")
+}
+
+/// The seed of an own chip. The same in every slot and every day.
+pub fn own_seed(title_id: &str, crew_id: &str) -> i32 {
+    (fnv(&[b"own", title_id.as_bytes(), crew_id.as_bytes()]) % 9973) as i32
+}
+
 /// The key of a weekly recap.
 pub fn recap_key(week_start_ms: i64) -> String {
     format!("recap:{week_start_ms}")
@@ -175,6 +187,10 @@ pub struct Seal<'a> {
     pub enabled: bool,
     pub now_ms: i64,
     pub opened: &'a dyn Fn(&str) -> bool,
+    /// The crew of the feed, for the key of an own chip.
+    pub crew_id: &'a str,
+    /// When the viewer first saw the own chips of this crew sealed. 0: not yet.
+    pub own_since_ms: i64,
 }
 
 impl Seal<'static> {
@@ -185,11 +201,22 @@ impl Seal<'static> {
             enabled: false,
             now_ms: 0,
             opened: &|_| false,
+            crew_id: "",
+            own_since_ms: 0,
         }
     }
 }
 
 impl Seal<'_> {
+    /// An own chip is sealed when it is not opened and the crew's day 0 reveal
+    /// is under `SEAL_DAYS` old. After that it opens silently, like a move.
+    pub fn is_own_sealed(&self, key: &str) -> bool {
+        self.enabled
+            && !self.crew_id.is_empty()
+            && (self.own_since_ms == 0 || self.now_ms - self.own_since_ms < SEAL_DAYS * DAY_MS)
+            && !(self.opened)(key)
+    }
+
     /// A move is sealed when it is under `SEAL_DAYS` old and not opened.
     pub fn is_sealed(&self, key: &str, moved_ms: i64) -> bool {
         self.enabled
@@ -225,8 +252,24 @@ pub fn mark_opened(settings: &mut Settings, crew_id: &str, key: &str, now_ms: i6
     changed
 }
 
-/// The time inside a key: the move time, or the week start of a recap.
+/// Store the time the viewer first saw the own chips of a crew sealed, when no
+/// time is stored yet. Returns the time that counts, and true on a change.
+pub fn own_since(settings: &mut Settings, crew_id: &str, now_ms: i64) -> (i64, bool) {
+    match settings.own_seal_since.get(crew_id) {
+        Some(&t) => (t, false),
+        None => {
+            settings.own_seal_since.insert(crew_id.to_string(), now_ms);
+            (now_ms, true)
+        }
+    }
+}
+
+/// The time inside a key: the move time, or the week start of a recap. An own
+/// key has none: it never expires by age.
 fn key_time_ms(key: &str) -> Option<i64> {
+    if key.starts_with("own:") {
+        return None;
+    }
     key.rsplit(':').next()?.parse().ok()
 }
 
@@ -278,6 +321,59 @@ pub fn reveal_of(
         stat: stat_line(m.title_id).into(),
         holder: person(m.holder),
         prev: person(m.prev),
+        own: false,
+    }
+}
+
+/// The viewer's own value of a title, for the chip of a new crew.
+pub struct OwnValue<'a> {
+    pub title_id: &'a str,
+    pub viewer: &'a Person,
+    pub value: &'a Value,
+    /// The unit as the server sends it, for the count-up.
+    pub unit: &'a str,
+    /// The unit as the chip shows it ("h this week").
+    pub shown_unit: &'a str,
+}
+
+/// The own chip of the UI: the same back and the same reveal as a belt that
+/// moved, in the viewer's own hue. The face has the viewer and "You", and no
+/// previous holder.
+pub fn own_reveal(
+    o: &OwnValue,
+    avatar: &dyn Fn(&str) -> Option<slint::Image>,
+    seal: &Seal,
+) -> BeltReveal {
+    let key = own_key(o.title_id, seal.crew_id);
+    let seed = own_seed(o.title_id, seal.crew_id);
+    let cells = belt_cells(seed);
+    let (title, icon) = head2head::belt_look(o.title_id);
+    let (kind, amount, decimals) = count_of(o.value, o.unit);
+    let unit = if kind == 0 { o.shown_unit } else { "" };
+    BeltReveal {
+        sealed: seal.is_own_sealed(&key),
+        key: key.into(),
+        seed,
+        code: cells_path(&cells).into(),
+        cells: slint::ModelRc::new(slint::VecModel::from(cells)),
+        title: title.into(),
+        icon,
+        hue_index: o.viewer.hue,
+        kind,
+        amount,
+        decimals,
+        unit: unit.into(),
+        stat: stat_line(o.title_id).into(),
+        holder: H2hPerson {
+            id: o.viewer.id.as_str().into(),
+            name: "You".into(),
+            initials: o.viewer.initials.as_str().into(),
+            hue_index: o.viewer.hue,
+            avatar: avatar(&o.viewer.id).unwrap_or_default(),
+            has_avatar: avatar(&o.viewer.id).is_some(),
+        },
+        prev: Default::default(),
+        own: true,
     }
 }
 
@@ -388,6 +484,8 @@ mod tests {
             enabled: true,
             now_ms: NOW,
             opened: &none,
+            crew_id: "",
+            own_since_ms: 0,
         };
         assert!(seal.is_sealed("k", NOW - DAY_MS));
         assert!(
@@ -400,6 +498,8 @@ mod tests {
             enabled: true,
             now_ms: NOW,
             opened: &opened,
+            crew_id: "",
+            own_since_ms: 0,
         };
         assert!(!seal.is_sealed("k", NOW - DAY_MS));
         assert!(seal.is_sealed("other", NOW - DAY_MS));
@@ -441,5 +541,50 @@ mod tests {
         // A settings file from before this feature has no keys.
         let old: Settings = serde_json::from_str("{}").expect("old settings parse");
         assert!(opened_keys(&old, "c1").is_empty());
+    }
+
+    #[test]
+    fn an_own_key_has_no_value_and_no_time_so_it_never_expires() {
+        assert_eq!(own_key("the_carry", "c1"), "own:the_carry:c1");
+        assert_eq!(own_seed("the_carry", "c1"), own_seed("the_carry", "c1"));
+        assert_ne!(own_seed("the_carry", "c1"), own_seed("the_carry", "c2"));
+        let mut s = Settings::default();
+        // A crew id that is all digits must not read as a time.
+        let key = own_key("night_owl", "12345");
+        assert!(mark_opened(&mut s, "12345", &key, NOW));
+        assert!(mark_opened(
+            &mut s,
+            "12345",
+            &belt_key("x", NOW),
+            NOW + 40 * DAY_MS
+        ));
+        assert!(opened_keys(&s, "12345").contains(&key));
+    }
+
+    #[test]
+    fn an_own_chip_is_sealed_until_opened_or_seven_days_after_the_first_look() {
+        static NONE: fn(&str) -> bool = |_| false;
+        let none = &NONE;
+        let seal = |since: i64, opened: &'static dyn Fn(&str) -> bool| Seal {
+            enabled: true,
+            now_ms: NOW,
+            opened,
+            crew_id: "c1",
+            own_since_ms: since,
+        };
+        let key = own_key("the_carry", "c1");
+        assert!(seal(0, none).is_own_sealed(&key), "not stored yet");
+        assert!(seal(NOW - DAY_MS, none).is_own_sealed(&key));
+        assert!(!seal(NOW - 7 * DAY_MS, none).is_own_sealed(&key));
+        assert!(!seal(NOW - DAY_MS, &|k: &str| k == "own:the_carry:c1").is_own_sealed(&key));
+        assert!(!Seal::off().is_own_sealed(&key));
+    }
+
+    #[test]
+    fn the_first_look_is_stored_once() {
+        let mut s = Settings::default();
+        assert_eq!(own_since(&mut s, "c1", NOW), (NOW, true));
+        assert_eq!(own_since(&mut s, "c1", NOW + DAY_MS), (NOW, false));
+        assert_eq!(own_since(&mut s, "c2", NOW + DAY_MS), (NOW + DAY_MS, true));
     }
 }

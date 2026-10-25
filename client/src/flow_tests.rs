@@ -5196,6 +5196,15 @@ fn crew_of_one_shows_the_wide_card_with_four_seats_and_the_invite() {
 #[test]
 fn solo_card_shows_four_own_value_chips_and_four_open_labels() {
     let mut h = Harness::new();
+    // The chips of a new crew are sealed (day 0). This test reads the values,
+    // so the four are opened first.
+    h.settings().borrow_mut().sealed_opened.insert(
+        "crew-0".into(),
+        ["the_carry", "night_owl", "the_collector", "locked_in"]
+            .iter()
+            .map(|t| crate::sealed::own_key(t, "crew-0"))
+            .collect(),
+    );
     app_with_crew_of(&mut h, 1);
     set_roster(&h, &[("user-1", "Test User")]);
 

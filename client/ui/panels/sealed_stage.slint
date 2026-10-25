@@ -193,7 +193,7 @@ component BigBeltFace inherits Rectangle {
         spacing: 6px;
         alignment: start;
 
-        Label { text: "HEAD2HEAD  ·  BELT MOVED"; font-size: 13px; letter-spacing: 2.4px; }
+        Label { text: root.belt.own ? "HEAD2HEAD  ·  YOUR TITLE" : "HEAD2HEAD  ·  BELT MOVED"; font-size: 13px; letter-spacing: 2.4px; }
         Rectangle { height: 8px; }
 
         HorizontalLayout {
@@ -272,7 +272,7 @@ component BigBeltFace inherits Rectangle {
         }
 
         Text {
-            text: root.belt.holder.name;
+            text: root.belt.own ? "You" : root.belt.holder.name;
             horizontal-alignment: center;
             font-family: Theme.font-display;
             font-weight: Theme.weight-display;
@@ -282,7 +282,7 @@ component BigBeltFace inherits Rectangle {
             overflow: elide;
         }
 
-        HorizontalLayout {
+        if !root.belt.own: HorizontalLayout {
             alignment: center;
             spacing: 8px;
             opacity: root.line;

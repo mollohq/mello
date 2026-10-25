@@ -69,6 +69,9 @@ pub struct Settings {
     /// The sealed belts and recaps the user opened (`sealed.rs`), by crew id.
     /// A key is `title_id:moved_at_ms` or `recap:<week_start_ms>`.
     pub sealed_opened: std::collections::HashMap<String, Vec<String>>,
+    /// When the viewer first saw the own chips of a crew sealed (ms, by crew
+    /// id). The day 0 reveal lasts 7 days from this time (`sealed.rs`).
+    pub own_seal_since: std::collections::HashMap<String, i64>,
     /// The `feed_seen_ms` of a crew as it was when the feed opened. Unread is
     /// judged against this for the whole visit. Not stored.
     #[serde(skip)]
@@ -131,6 +134,7 @@ impl Default for Settings {
             seen_session_ids: Vec::new(),
             feed_seen_ms: Default::default(),
             sealed_opened: Default::default(),
+            own_seal_since: Default::default(),
             feed_baseline_ms: Default::default(),
             disabled_game_integrations: Vec::new(),
             hidden_games: Vec::new(),

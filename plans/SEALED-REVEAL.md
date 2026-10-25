@@ -25,6 +25,8 @@ Sealed cards are:
   weekly recap and the daily recap;
 - the weekly recap card.
 
+- the own chips of the solo head2head card of a new crew (section 9).
+
 The belt hero (frame E) and the belt push keep their copy.
 
 ## 2. Sealed looks
@@ -135,7 +137,8 @@ State port, `sealed`:
 
 | Field | Meaning |
 |---|---|
-| `belts` | Number of different sealed belt keys in the feed |
+| `belts` | Number of different sealed belt keys in the feed. Own chips are not in it |
+| `own` | Number of different sealed own chips (section 9) |
 | `recap` | The weekly recap is sealed |
 | `open_center` | `belt`, `recap` or `none` |
 
@@ -225,3 +228,28 @@ The `slint-viewer` renders (`PreviewFeedSealed`, `PreviewRevealFrame`) use the s
 renderer. It draws no radial gradient on a `Path` and no transform, so the rays are flat
 and the card does not tilt or flip in those two files. The journey checkpoints show the
 Skia frames.
+
+## 9. Day 0: the own chips of a new crew
+
+A crew of one has no belt that moved. The solo head2head card (HEAD2HEAD.md section 5)
+shows the viewer's own values as chips. So that the first user gets the reveal too,
+those chips arrive sealed.
+
+| Part | Rule |
+|---|---|
+| Chip | A `SealedChip` in the place of each of the four own chips. Same back as a belt chip. Label `Sealed belt, open it` |
+| Key | `own:<title_id>:<crew_id>`. No value and no time in it |
+| Seed | A stable hash of `own`, the title id and the crew id |
+| Opening | A click sends the chip to the centre with the same flight, charge, flip and burst. The hue is the viewer's own |
+| Face | Label `HEAD2HEAD  ·  YOUR TITLE`, the icon and title, the counted-up value, the stat sentence, the viewer's avatar and `You`. No "took it from" |
+| Return | The open chip lands in its slot with the value |
+| Stored | The key goes in `sealed_opened` when the chip leaves its slot |
+| Silent open | The chips are sealed for 7 days from the first time they showed (`own_seal_since`, by crew, local). After that they open with no animation and no stored key |
+| Later days | A key that was opened once stays open when the value changes, because the key has no value |
+
+- Each own chip opens alone. The other three wait in their slots while one is in the centre.
+- The sealed solo card keeps the headline "Go head2head with your crew", the four open seats and the invite.
+- A crew of two or more has no own chips. Its pair chips follow sections 2 to 4.
+- State port: `sealed.own`.
+- Harness tests: a new crew seals all own chips, opening one opens only that one, a reopened crew keeps opened chips open when the value changes, and a crew older than 7 days has them open (`flow_tests/sealed.rs`).
+- Journey: `feed-solo-head2head` opens one own chip, checkpoints the face and closes it.

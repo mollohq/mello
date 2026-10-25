@@ -187,6 +187,7 @@ The client decides if a card renders. A card with no titles, no `own_values` and
 A crew of one gets the wide card (frame A of the mockup). The card shows the viewer as an octagon with the full name, then four chips in a 2 by 2 grid, a keyline divider, "Go head2head with your crew", four open seats each labelled "Open", and the red invite button.
 
 - The chips come from `own_values`: the first four in display order (The Carry, Night Owl, The Collector, Locked In, Has a Life, Sampler, One Trick). They wear the viewer's identity hue. There is no holder octagon.
+- On a new crew the chips are sealed. A click opens one in the centre of the feed, with the reveal of a belt that moved and the viewer as "You" (plans/SEALED-REVEAL.md section 9).
 - The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.
 
 ### Pair rows in the cell
