@@ -889,7 +889,7 @@ Slint (§14).
 | Label | Source |
 |---|---|
 | Format, "720p60" | The height of the decoded picture (the SPS: the presenter's swap chain size) and the frame rate of the host's rung message (`[0x04, 0x05, w, h, fps]`, §8.1.1). The viewer's control callback stores the last rung in `stream::viewer_format`; the stream timer reads it with the pointer. Without a decoded picture the rung's height; without a rung the height alone ("1080p"). It replaces the present rate, which is not the stream's. |
-| "N WATCHING" | Watched card: the SFU membership (`StreamMembersChanged`, the viewers plus you). Hosted card: `StreamViewerJoined` and `StreamViewerLeft`. Otherwise the crew state's `viewer_count` (the backend's `viewer_ids`, stage 2b). The outline badge of the design system. |
+| "N WATCHING" | Hosted card: the live viewers. Each host tick (`host_link_tick`) compares the sink's viewer set (one entry per `member_joined`, out on `member_left` or a rejoin's reconcile) with the set the UI was told of and sends `StreamViewerJoined` and `StreamViewerLeft`. Watched card: the SFU membership (`StreamMembersChanged`, the viewers plus you). A card that is not watched, and the watched card before the first membership snapshot: the crew state's `viewer_count` (the backend's `viewer_ids`, stage 2b). The outline badge of the design system. |
 | STARTING | Hosted card: §11. Watched card: from the Watch click to the first frame (the first present, or a timeline with a released frame); "Connecting to <name>'s stream" in the media area, which the video layer does not cover before its first present. |
 | RECONNECTING, ENDED, NOT LIVE | §11.1 and the 8 s notice card. |
 

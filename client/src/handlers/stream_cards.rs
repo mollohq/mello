@@ -6,9 +6,10 @@ use crate::StreamCardData;
 
 pub fn sync_active_stream_cards(ctx: &AppContext) {
     let mut cards: Vec<StreamCardData> = Vec::new();
-    // Stage 9: the live counts (the hosted stream's viewers, the watched
-    // session's members) win over the crew state's, which the backend
-    // writes on `watch_stream` and `stream_viewer_left` and sends later.
+    // Stage 9: the live counts. The hosted card counts the viewers that
+    // mello-core reports; the watched card counts the SFU membership and
+    // falls back to the crew state's count (the backend's `viewer_ids`)
+    // until the first snapshot.
     let backend_count = ctx.app.get_active_stream_viewer_count();
     let (host_viewers, watched_viewers) = {
         let state = ctx.stream_card.borrow();
@@ -30,11 +31,8 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             has_avatar: host_has_avatar,
             avatar_initials: make_initials(&host_name).into(),
             avatar_color_index: avatar_color_index(&host_id),
-            viewer_count: if host_viewers > 0 {
-                host_viewers as i32
-            } else {
-                backend_count
-            },
+            // The live viewers: mello-core reports each join and leave.
+            viewer_count: host_viewers as i32,
             stream_width: 0,
             stream_height: 0,
             can_watch: false,

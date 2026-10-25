@@ -441,6 +441,7 @@ async fn live_host(client: &mut Client, sfu: &MediaStreamSfu) -> Arc<SfuSink> {
         token_tried_at: None,
         ticks: 0,
         start_timing: None,
+        reported_viewers: Default::default(),
     });
     sink
 }
@@ -895,4 +896,63 @@ async fn a_viewer_keeps_watching_through_the_hosts_hold_and_its_own_drop() {
         e,
         Event::StreamEnded { role: StreamRole::Viewer, ref reason, .. } if reason == "host_left"
     )));
+}
+
+// --- stage 9 (streaming-quality): the hosted card's viewer count ---
+
+fn host_viewer_events_of(events: &mpsc::Receiver<Event>) -> Vec<String> {
+    events
+        .try_iter()
+        .filter_map(|e| match e {
+            Event::StreamViewerJoined { viewer_id } => Some(format!("joined:{viewer_id}")),
+            Event::StreamViewerLeft { viewer_id } => Some(format!("left:{viewer_id}")),
+            _ => None,
+        })
+        .collect()
+}
+
+/// A viewer join and leave through the host's sink reach the UI as
+/// `StreamViewerJoined` and `StreamViewerLeft` on the next host tick, once
+/// each; a viewer that left while the host was away goes out on the
+/// rejoin's reconcile. Before stage 9 nothing sent these events, and the
+/// hosted card counted from the crew state.
+#[tokio::test]
+async fn the_host_tells_the_ui_of_each_viewer_join_and_leave_and_of_a_reconcile() {
+    use crate::stream::sink::PacketSink as _;
+    let (mut client, events) = client_for(1);
+    let sink = Arc::new(SfuSink::detached());
+    client.stream_host_sfu_sink = Some(Arc::clone(&sink));
+    client.host_link = Some(HostLinkState {
+        generation: 1,
+        link: StreamLink::new(StreamRole::Host),
+        grant: StreamGrant::new("ws://127.0.0.1:1/ws".into(), "token".into()),
+        session_id: SESSION.into(),
+        connected_at: Instant::now(),
+        attempt: None,
+        token_task: None,
+        token_tried_at: None,
+        ticks: 0,
+        start_timing: None,
+        reported_viewers: Default::default(),
+    });
+
+    sink.on_viewer_joined("bob").await;
+    sink.on_viewer_joined("bob").await;
+    sink.on_viewer_joined("carol").await;
+    client.host_link_tick().await;
+    assert_eq!(
+        host_viewer_events_of(&events),
+        ["joined:bob", "joined:carol"],
+        "a second member_joined for bob is not a second viewer"
+    );
+
+    sink.on_viewer_left("bob").await;
+    client.host_link_tick().await;
+    client.host_link_tick().await;
+    assert_eq!(host_viewer_events_of(&events), ["left:bob"], "once");
+
+    // A rejoin whose `joined.members` no longer has carol.
+    client.reconcile_host_viewers(&[]).await;
+    client.host_link_tick().await;
+    assert_eq!(host_viewer_events_of(&events), ["left:carol"]);
 }

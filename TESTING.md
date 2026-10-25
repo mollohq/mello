@@ -485,6 +485,7 @@ The card's buttons, labels and fullscreen have UI harness journeys in
 | The format label from the rung message and the decoded height | `the_format_label_follows_the_rung_and_the_decoded_size`; `handlers::streaming::stage9_tests`; `mello-core` `stream::viewer_format` and `stream_ffi` (`the_rung_message_sets_the_watched_format`) |
 | The presenter moves the video visual to a second DComp target and back (needs a GPU; skips without one) | `dcomp_presenter::tests::the_video_moves_to_a_fullscreen_target_and_back` |
 | The volume goes to the running viewer or to the decoder of a starting watch | `mello-core` `client::stream_view_audio` |
+| The host tells the UI of each viewer join and leave, once each, and of a viewer the rejoin's reconcile takes out | `mello-core` `stream_reconnect_tests::the_host_tells_the_ui_of_each_viewer_join_and_leave_and_of_a_reconcile` |
 
 The harness lays the card's footer out only after the window has a size, so
 the journeys set one (`app_with_alices_stream`). The native fullscreen window
