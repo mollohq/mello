@@ -102,6 +102,13 @@ pub struct AppContext {
     pub dcomp_presenter: Rc<RefCell<Option<crate::dcomp_presenter::DCompPresenter>>>,
     #[cfg(target_os = "windows")]
     pub taskbar_toolbar: Rc<RefCell<Option<crate::platform::taskbar_toolbar::TaskbarToolbar>>>,
+    // --- stage 9 (streaming-quality): the stream card ---
+    /// The stream card's values that the UI does not hold: the volume of
+    /// each watched host, who watches the hosted stream.
+    pub stream_card: Rc<RefCell<crate::handlers::streaming::StreamCardState>>,
+    /// The watched stream on the fullscreen window.
+    pub stream_fullscreen: Rc<RefCell<crate::stream_fullscreen::StreamFullscreen>>,
+    // --- end stage 9 ---
 }
 
 #[cfg(any(test, feature = "testkit"))]
@@ -198,6 +205,8 @@ impl AppContext {
             dcomp_presenter,
             #[cfg(target_os = "windows")]
             taskbar_toolbar: Rc::new(RefCell::new(None)),
+            stream_card: Rc::new(RefCell::new(Default::default())),
+            stream_fullscreen: Rc::new(RefCell::new(Default::default())),
         }
     }
 }
@@ -256,6 +265,8 @@ impl Clone for AppContext {
             dcomp_presenter: self.dcomp_presenter.clone(),
             #[cfg(target_os = "windows")]
             taskbar_toolbar: self.taskbar_toolbar.clone(),
+            stream_card: self.stream_card.clone(),
+            stream_fullscreen: self.stream_fullscreen.clone(),
         }
     }
 }

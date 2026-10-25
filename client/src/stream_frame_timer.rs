@@ -6,7 +6,8 @@
 //! the UI-thread side of the picture current: the host's pointer (a child
 //! visual), the geometry after a stream size change, and the debug fps.
 //! Off Windows the decoded RGBA still reaches Slint here (the macOS viewer has
-//! no compositor path yet).
+//! no compositor path yet). Stage 9: it also keeps the card's format label
+//! and ends the card's "starting" at the first frame.
 
 use std::cell::Cell;
 use std::rc::Rc;
@@ -48,6 +49,13 @@ fn on_frame_tick(ctx: &TickCtx) {
         // A new stream size from the present thread needs a new scale.
         presenter.refresh_geometry_if_resized();
         let total = presenter.presented_frames();
+        // Stage 9: the card's label ("720p60") and the end of "starting".
+        if let Some(app) = app_for_tick.as_ref() {
+            if total > 0 {
+                crate::handlers::streaming::mark_first_frame(app);
+            }
+            crate::handlers::streaming::refresh_stream_format(app, presenter.stream_size().1);
+        }
         ctx.frame_timer_presented.set(
             ctx.frame_timer_presented
                 .get()
@@ -66,6 +74,9 @@ fn on_frame_tick(ctx: &TickCtx) {
                 app.set_stream_frame(slint::Image::from_rgba8(buf));
                 ctx.frame_timer_presented
                     .set(ctx.frame_timer_presented.get().saturating_add(1));
+                // Stage 9: the card's label and the end of "starting".
+                crate::handlers::streaming::mark_first_frame(app);
+                crate::handlers::streaming::refresh_stream_format(app, h);
             }
         }
     }

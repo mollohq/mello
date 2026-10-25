@@ -7,7 +7,9 @@ mod games;
 mod presence;
 mod stats;
 mod stream_cards;
-mod streaming;
+// stage 9: the stream card state and helpers are used by the app context,
+// the callbacks and the stream timer.
+pub(crate) mod streaming;
 mod voice;
 
 use mello_core::Event;

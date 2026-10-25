@@ -201,6 +201,7 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app
             .on_watch_stream(move |host_id, session_id, width, height| {
                 log::info!(
@@ -210,6 +211,12 @@ pub fn wire(ctx: &AppContext) {
                     width,
                     height
                 );
+                // Stage 9: the card says "starting" from the click to the
+                // first frame.
+                if let Some(app) = app_weak.upgrade() {
+                    app.global::<crate::StreamCardUi>()
+                        .set_viewer_starting(true);
+                }
                 let _ = cmd.send(Command::WatchStream {
                     host_id: host_id.to_string(),
                     session_id: session_id.to_string(),
@@ -218,4 +225,35 @@ pub fn wire(ctx: &AppContext) {
                 });
             });
     }
+
+    // --- stage 9 (streaming-quality): the stream card's buttons ---
+    let ui = ctx.app.global::<crate::StreamCardUi>();
+    {
+        let ctx = ctx.clone();
+        ui.on_volume_changed(move |percent| {
+            crate::handlers::streaming::set_stream_volume(&ctx, percent);
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        ui.on_mute_changed(move |muted| {
+            crate::handlers::streaming::set_stream_muted(&ctx, muted);
+        });
+    }
+    {
+        let app_weak = ctx.app.as_weak();
+        ui.on_stats_toggled(move |on| {
+            log::info!("Stream stats on the card: {on}");
+            if let Some(app) = app_weak.upgrade() {
+                app.global::<crate::StreamCardUi>().set_stats_shown(on);
+            }
+        });
+    }
+    {
+        let ctx = ctx.clone();
+        ui.on_fullscreen_requested(move || {
+            crate::stream_fullscreen::enter(&ctx);
+        });
+    }
+    // --- end stage 9 ---
 }

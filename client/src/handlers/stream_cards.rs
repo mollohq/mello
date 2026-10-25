@@ -6,6 +6,14 @@ use crate::StreamCardData;
 
 pub fn sync_active_stream_cards(ctx: &AppContext) {
     let mut cards: Vec<StreamCardData> = Vec::new();
+    // Stage 9: the live counts (the hosted stream's viewers, the watched
+    // session's members) win over the crew state's, which the backend
+    // writes on `watch_stream` and `stream_viewer_left` and sends later.
+    let backend_count = ctx.app.get_active_stream_viewer_count();
+    let (host_viewers, watched_viewers) = {
+        let state = ctx.stream_card.borrow();
+        (state.host_viewers.len(), state.watched_viewers)
+    };
 
     if ctx.app.get_is_hosting() {
         let host_id = ctx.app.get_user_id().to_string();
@@ -22,7 +30,11 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             has_avatar: host_has_avatar,
             avatar_initials: make_initials(&host_name).into(),
             avatar_color_index: avatar_color_index(&host_id),
-            viewer_count: ctx.app.get_active_stream_viewer_count(),
+            viewer_count: if host_viewers > 0 {
+                host_viewers as i32
+            } else {
+                backend_count
+            },
             stream_width: 0,
             stream_height: 0,
             can_watch: false,
@@ -54,7 +66,10 @@ pub fn sync_active_stream_cards(ctx: &AppContext) {
             has_avatar,
             avatar_initials: make_initials(&active_streamer_name).into(),
             avatar_color_index: avatar_color_index(&active_host_id),
-            viewer_count: ctx.app.get_active_stream_viewer_count(),
+            viewer_count: match watched_viewers {
+                Some(n) if ctx.app.get_is_watching() => n as i32,
+                _ => backend_count,
+            },
             stream_width: ctx.app.get_active_stream_width(),
             stream_height: ctx.app.get_active_stream_height(),
             can_watch: true,
