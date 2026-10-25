@@ -149,6 +149,15 @@ export function profiles(n: number, _runId: string): SeedProfile[] {
   return out;
 }
 
+/**
+ * Profiles `start` to `start + n - 1` of the fixed list. The list is a prefix
+ * of the same sequence for every length, so a later call with a higher `start`
+ * gives new names and the same members as a longer first call would have.
+ */
+export function profilesFrom(start: number, n: number, runId: string): SeedProfile[] {
+  return profiles(start + n, runId).slice(start);
+}
+
 // ── REST ─────────────────────────────────────────────────────────────
 
 async function call<T>(method: string, path: string, opts: { token?: string; body?: unknown; basic?: boolean } = {}): Promise<T> {
@@ -176,6 +185,19 @@ async function rpc<T = Record<string, unknown>>(token: string, id: string, paylo
 async function deviceToken(deviceId: string): Promise<string> {
   const r = await call<{ token: string }>("POST", "/v2/account/authenticate/device?create=true", { basic: true, body: { id: deviceId } });
   return r.token;
+}
+
+/** True when the device account of a seeded member exists. It makes no account. */
+export async function seededDeviceExists(runId: string, name: string): Promise<boolean> {
+  const r = await fetch(`${nakamaBase()}/v2/account/authenticate/device?create=false`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: BASIC },
+    body: JSON.stringify({ id: `seed-${runId}-${name}`.toLowerCase() }),
+    signal: AbortSignal.timeout(20_000),
+  });
+  if (r.status === 404) return false;
+  if (!r.ok) throw new Error(`device lookup failed: HTTP ${r.status}`);
+  return true;
 }
 
 /** The session of an account that a journey made with email and password (onboarding step 3). */
