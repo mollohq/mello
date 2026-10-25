@@ -472,7 +472,7 @@ flows:
     title: "Solo crew feed: head2head wide card with own values, open seats, recent games, skeleton trio"
     priority: P1
     users: 1
-    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed, no_card_draws_a_commentary_note, new_empty_crew_shows_three_skeletons_and_no_cards]
+    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed, no_card_draws_a_commentary_note, new_empty_crew_shows_three_skeletons_and_no_cards, a_new_crew_seals_all_four_own_chips, opening_one_own_chip_opens_only_that_one, a_reopened_crew_keeps_opened_chips_open_when_the_value_changes, own_chips_open_silently_after_seven_days, the_first_day_of_own_chips_is_stored]
     journeys: [qa/journeys/feed-solo-head2head.ts]
     protocol: []
     issues: []

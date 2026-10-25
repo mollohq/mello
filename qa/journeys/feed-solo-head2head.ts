@@ -4,6 +4,11 @@
 //
 // Sharing is on, the onboarding default, so the library report runs and the
 // server returns the viewer's own values.
+//
+// Day 0 reveal (plans/SEALED-REVEAL.md section 9): the own chips of a new crew
+// arrive sealed, each under its own key. The control is labelled "Sealed belt,
+// open it", the same label as a belt that moved. A click opens one chip in the
+// centre with the face "You", and the return leaves that chip open.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./lib/onboarding.ts";
@@ -47,10 +52,8 @@ export default journey({
       expect(h.own_values.length > 0, "the card has own values");
     });
 
-    await step("the card draws one chip for each own value, and four OPEN seats", async () => {
-      const s = await bob.state();
-      // One entry for each Text on screen. The element query can list an
-      // element twice, so a place counts once.
+    /** The texts on screen, one entry for each place. The element query can list an element twice. */
+    const screenTexts = async (): Promise<string[]> => {
       const seen = new Set<string>();
       const els = (await bob.ui.textElements()).filter((e) => {
         const key = `${e.text}@${e.x},${e.y}`;
@@ -58,20 +61,51 @@ export default journey({
         seen.add(key);
         return true;
       });
-      const texts = els.map((e) => e.text);
-      const names = Object.values(TITLE_NAMES);
-      const drawn = texts.filter((t) => names.includes(t));
-      expect(
-        drawn.length === s.head2head.own_values.length,
-        `${s.head2head.own_values.length} own values, ${drawn.length} chips drawn: ${drawn.join(", ")}`,
-      );
+      return els.map((e) => e.text);
+    };
+    const names = Object.values(TITLE_NAMES);
+    let chips = 0;
+
+    await step("the own chips arrive sealed, with four OPEN seats and the invite", async () => {
+      const s = await bob.state();
+      // The card draws the first four own values.
+      chips = Math.min(4, s.head2head.own_values.length);
       for (const v of s.head2head.own_values) {
-        const name = TITLE_NAMES[v.title_id];
-        expect(name !== undefined && drawn.includes(name), `a chip for ${v.title_id}`);
+        expect(TITLE_NAMES[v.title_id] !== undefined, `${v.title_id} is a known title`);
         expect(v.display !== "", `${v.title_id} has a value`);
       }
+      expect(s.sealed.own === chips, `sealed.own is ${chips}, got ${s.sealed.own}`);
+      expect(s.sealed.belts === 0, `no belt that moved is sealed, got ${s.sealed.belts}`);
+      const texts = await screenTexts();
+      expect(texts.filter((t) => names.includes(t)).length === 0, "a sealed chip draws no title");
       expect(texts.filter((t) => t === "OPEN").length === 4, "four seats are labelled OPEN");
       expect(texts.includes("GO HEAD2HEAD WITH YOUR CREW"), "the empty-compare line shows");
+      await bob.checkpoint("solo-feed-sealed");
+    });
+
+    await step("a click on one sealed own chip opens it in the centre and the face reads You", async () => {
+      // The control is "Sealed belt, open it": the chip has no other label.
+      await bob.click("Sealed belt, open it");
+      const s = await bob.waitFor("the own chip in the centre", (st) => st.sealed.open_center === "belt", 5_000);
+      expect(s.sealed.own === chips - 1, `the chip in the centre is no longer sealed in the feed, got ${s.sealed.own}`);
+      await bob.checkpoint("own-reveal-start");
+      // The face shows from 1.03 s and the card rests from 1.25 s.
+      await bob.waitFor("the card at rest, the face shown", (st) => st.sealed.resting, 5_000);
+      const texts = await screenTexts();
+      expect(texts.includes("You"), `the face names the viewer as You: ${texts.join(" | ")}`);
+      expect(!texts.includes("took it from"), "an own value took nothing from anyone");
+      await bob.checkpoint("own-reveal-face");
+    });
+
+    await step("a click on the scrim sends the chip back open, the other chips stay sealed", async () => {
+      await bob.click("Close");
+      const s = await bob.waitFor("the chip landed, open", (st) => st.sealed.open_center === "none", 10_000);
+      expect(s.sealed.own === chips - 1, `${chips - 1} own chips are still sealed, got ${s.sealed.own}`);
+      const texts = await screenTexts();
+      const drawn = texts.filter((t) => names.includes(t));
+      expect(drawn.length === 1, `the one opened chip draws its title in the slot, got ${drawn.join(", ")}`);
+      expect(texts.filter((t) => t === "OPEN").length === 4, "four seats are labelled OPEN");
+      await bob.checkpoint("own-chip-open-in-its-slot");
     });
 
     await step("the viewer octagon wears the avatar the app loaded, not initials", async () => {

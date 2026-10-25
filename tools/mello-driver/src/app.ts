@@ -192,6 +192,8 @@ export type AppState = {
   sealed: {
     /** Different sealed belts in the feed. A belt in two slots counts once. The belt in the centre does not count. */
     belts: number;
+    /** Different sealed own chips of a crew of one (the day 0 reveal). Not in `belts`. */
+    own: number;
     /** The weekly recap is sealed. */
     recap: boolean;
     /** The card in the centre of the feed. */
