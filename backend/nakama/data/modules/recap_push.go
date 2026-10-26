@@ -52,7 +52,11 @@ type RecapPushItem struct {
 	Events     []pushEvent `json:"events,omitempty"`       // what the coalesced body is built from
 	Hold       int         `json:"hold,omitempty"`         // belts the member holds, for the belt body
 	LastSentMs int64       `json:"last_sent_ms,omitempty"` // when the item last went out
+	Attempts   int         `json:"attempts,omitempty"`     // sends the Worker did not accept
 }
+
+// recapPushMaxAttempts is how many times an item is tried before it is dropped.
+const recapPushMaxAttempts = 5
 
 // RecapPushDoc is the queue of one crew for one recap week.
 type RecapPushDoc struct {
@@ -155,24 +159,42 @@ func buildRecapPushItems(r WeeklyRecapData, memberIDs []string, tzs map[string]*
 	return items
 }
 
-// splitDueRecapPushes returns the items to send at now, and marks every item
-// that is due or stale as sent. A stale item is dropped without a send.
+// splitDueRecapPushes returns the indexes of the items to send at now. A stale
+// item is marked sent and dropped without a send. A due item stays queued: it
+// is marked sent only after the Worker accepted it (applyPushOutcome).
 // changed reports whether the doc was edited.
-func splitDueRecapPushes(doc *RecapPushDoc, now time.Time) (due []RecapPushItem, changed bool) {
+func splitDueRecapPushes(doc *RecapPushDoc, now time.Time) (due []int, changed bool) {
 	nowMs := now.UnixMilli()
 	for i := range doc.Items {
 		it := &doc.Items[i]
 		if it.Sent || it.SendAtMs > nowMs {
 			continue
 		}
+		if nowMs-it.SendAtMs <= recapPushMaxLateness.Milliseconds() {
+			due = append(due, i)
+			continue
+		}
 		it.Sent = true
 		changed = true
-		if nowMs-it.SendAtMs <= recapPushMaxLateness.Milliseconds() {
-			it.LastSentMs = nowMs
-			due = append(due, *it)
-		}
 	}
 	return due, changed
+}
+
+// applyPushOutcome records what happened to a sent item. An accepted item is
+// marked sent. A rejected one stays queued with a retry count and is dropped
+// after recapPushMaxAttempts tries.
+func applyPushOutcome(it *RecapPushItem, accepted bool, nowMs int64, logger runtime.Logger) {
+	if accepted {
+		it.Sent = true
+		it.LastSentMs = nowMs
+		it.Attempts = 0
+		return
+	}
+	it.Attempts++
+	if it.Attempts >= recapPushMaxAttempts {
+		it.Sent = true
+		logger.Warn("recap push: dropped for user=%s after %d attempts", it.UserID, it.Attempts)
+	}
 }
 
 // scheduleRecapPushes queues the Monday pushes of a recap. Never fails the
@@ -206,10 +228,11 @@ func scheduleRecapPushes(ctx context.Context, nk runtime.NakamaModule, logger ru
 }
 
 // recapPushSend delivers one recap push. Tests replace it.
-var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, week string, it RecapPushItem) {
+// It returns false when the Worker did not accept the push.
+var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, week string, it RecapPushItem) bool {
 	if pushDecisionFor(it.UserID) == pushSkip {
 		logger.Debug("recap push: skip user=%s (active in the app)", it.UserID)
-		return
+		return true
 	}
 	title := "m3llo"
 	if groups, err := nk.GroupsGetId(ctx, []string{crewID}); err == nil && len(groups) > 0 && groups[0].GetName() != "" {
@@ -218,7 +241,7 @@ var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.
 	channelID, err := nk.ChannelIdBuild(ctx, "", crewID, runtime.Group)
 	if err != nil {
 		logger.Warn("recap push: channel id for crew %s: %v", crewID, err)
-		return
+		return false
 	}
 	typ, messageID := recapPushType, "recap-"+crewID+"-"+week // collapse id, under 64 bytes
 	if it.Type != "" {
@@ -227,7 +250,7 @@ var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.
 	if it.MessageID != "" {
 		messageID = it.MessageID
 	}
-	sendPushToUser(ctx, logger, nk, it.UserID, pushAlert{
+	return sendPushToUser(ctx, logger, nk, it.UserID, pushAlert{
 		Type:      typ,
 		CrewID:    crewID,
 		ChannelID: channelID,
@@ -237,8 +260,9 @@ var recapPushSend = func(ctx context.Context, logger runtime.Logger, nk runtime.
 	})
 }
 
-// sendDueRecapPushes sends the queued recap pushes that are due at now. It
-// marks an item sent before it sends, so a crash sends at most once.
+// sendDueRecapPushes sends the queued recap pushes that are due at now. An item
+// is marked sent after the Worker accepted it. A crash between the send and the
+// write can send it twice, which a collapse id folds on the device.
 func sendDueRecapPushes(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, now time.Time) {
 	cursor := ""
 	for {
@@ -257,28 +281,66 @@ func sendDueRecapPushes(ctx context.Context, nk runtime.NakamaModule, logger run
 	}
 }
 
-// processPushQueueDoc claims and sends what is due in one queue doc.
+// processPushQueueDoc sends what is due in one queue doc and records the
+// outcome of each item: sent after the Worker accepted it, else queued with a
+// retry count.
 func processPushQueueDoc(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, key, value, version string, now time.Time) {
 	var doc RecapPushDoc
 	if json.Unmarshal([]byte(value), &doc) != nil {
 		return
 	}
 	due, changed := splitDueRecapPushes(&doc, now)
-	if !changed {
+	if len(due) == 0 && !changed {
 		return
 	}
-	data, err := json.Marshal(doc)
-	if err != nil {
-		return
+	type outcome struct {
+		item     RecapPushItem
+		accepted bool
 	}
-	if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{{
-		Collection: RecapPushCollection, Key: key, UserID: SystemUserID,
-		Value: string(data), Version: version, PermissionRead: 0, PermissionWrite: 0,
-	}}); err != nil {
-		logger.Debug("recap push: claim failed for crew %s, next tick: %v", doc.CrewID, err)
-		return
+	outcomes := make([]outcome, 0, len(due))
+	for _, i := range due {
+		it := doc.Items[i]
+		outcomes = append(outcomes, outcome{item: it, accepted: recapPushSend(ctx, logger, nk, doc.CrewID, doc.Week, it)})
 	}
-	for _, it := range due {
-		recapPushSend(ctx, logger, nk, doc.CrewID, doc.Week, it)
+	nowMs := now.UnixMilli()
+	same := func(a, b RecapPushItem) bool {
+		return a.UserID == b.UserID && a.SendAtMs == b.SendAtMs && a.Type == b.Type && a.Group == b.Group && a.MessageID == b.MessageID
 	}
+	for attempt := 0; attempt < 3; attempt++ {
+		for _, o := range outcomes {
+			for j := range doc.Items {
+				if !doc.Items[j].Sent && same(doc.Items[j], o.item) {
+					// An item that changed since the read (a new event) keeps its state.
+					if doc.Items[j].SendAtMs == o.item.SendAtMs {
+						applyPushOutcome(&doc.Items[j], o.accepted, nowMs, logger)
+					}
+					break
+				}
+			}
+		}
+		data, err := json.Marshal(doc)
+		if err != nil {
+			return
+		}
+		if _, err := nk.StorageWrite(ctx, []*runtime.StorageWrite{{
+			Collection: RecapPushCollection, Key: key, UserID: SystemUserID,
+			Value: string(data), Version: version, PermissionRead: 0, PermissionWrite: 0,
+		}}); err == nil {
+			return
+		}
+		// The doc changed under us (a new event joined the queue). Read it
+		// again and apply the same outcomes to the fresh copy.
+		objects, rerr := nk.StorageRead(ctx, []*runtime.StorageRead{{Collection: RecapPushCollection, Key: key, UserID: SystemUserID}})
+		if rerr != nil || len(objects) == 0 {
+			logger.Debug("recap push: write failed for crew %s, next tick", doc.CrewID)
+			return
+		}
+		doc = RecapPushDoc{}
+		if json.Unmarshal([]byte(objects[0].GetValue()), &doc) != nil {
+			return
+		}
+		version = objects[0].GetVersion()
+		_, _ = splitDueRecapPushes(&doc, now)
+	}
+	logger.Debug("recap push: write failed for crew %s after 3 tries, next tick", doc.CrewID)
 }

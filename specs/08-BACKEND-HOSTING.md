@@ -460,6 +460,8 @@ Upgrade service plan in Render Dashboard:
 
 ### 12.2 Horizontal Scaling (Future)
 
+The head2head dirty set (`StartHead2headDirtyLoop`) lives in memory, so it is correct on one Nakama instance only and must move to storage before a second instance runs.
+
 When >1000 concurrent users:
 
 1. Upgrade to Pro plan

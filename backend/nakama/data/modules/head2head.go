@@ -773,6 +773,11 @@ func flushHead2headDirty(ctx context.Context, logger runtime.Logger, nk runtime.
 
 // StartHead2headDirtyLoop runs flushHead2headDirty on its own ticker. The only
 // other ticker on the recap path runs hourly, which is too slow for a feed.
+//
+// The dirty set is in memory, in this process. It is correct on one Nakama
+// instance only: with two instances each one flushes the crews it saw, and a
+// session handled by one instance never marks the other dirty. Horizontal
+// scaling needs the set in storage or a shared queue first.
 func StartHead2headDirtyLoop(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, interval time.Duration) {
 	ticker := time.NewTicker(interval)
 	defer ticker.Stop()

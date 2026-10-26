@@ -2,6 +2,9 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -129,7 +132,7 @@ func TestBuildRecapPushItemsUseEachMembersOffset(t *testing.T) {
 	}
 }
 
-func TestSplitDueRecapPushesSendsOnceAndDropsStale(t *testing.T) {
+func TestSplitDueRecapPushesReturnsDueAndDropsStale(t *testing.T) {
 	base := time.Date(2026, 10, 19, 18, 0, 0, 0, time.UTC)
 	doc := &RecapPushDoc{Items: []RecapPushItem{
 		{UserID: "early", SendAtMs: base.UnixMilli()},
@@ -137,18 +140,102 @@ func TestSplitDueRecapPushesSendsOnceAndDropsStale(t *testing.T) {
 		{UserID: "stale", SendAtMs: base.Add(-30 * time.Hour).UnixMilli()},
 	}}
 	due, changed := splitDueRecapPushes(doc, base.Add(30*time.Minute))
-	if !changed || len(due) != 1 || due[0].UserID != "early" {
-		t.Fatalf("due: %+v", due)
+	if !changed || len(due) != 1 || doc.Items[due[0]].UserID != "early" {
+		t.Fatalf("due: %v", due)
 	}
-	if !doc.Items[0].Sent || doc.Items[1].Sent || !doc.Items[2].Sent {
+	// A due item is not sent until the Worker accepted it; a stale one is dropped.
+	if doc.Items[0].Sent || doc.Items[1].Sent || !doc.Items[2].Sent {
 		t.Fatalf("sent flags: %+v", doc.Items)
 	}
+	applyPushOutcome(&doc.Items[0], true, base.UnixMilli(), testLogger())
 	if due, changed := splitDueRecapPushes(doc, base.Add(30*time.Minute)); changed || len(due) != 0 {
 		t.Fatal("a second pass sends nothing")
 	}
-	if due, _ := splitDueRecapPushes(doc, base.Add(6*time.Hour)); len(due) != 1 || due[0].UserID != "later" {
-		t.Fatalf("later: %+v", due)
+	if due, _ := splitDueRecapPushes(doc, base.Add(6*time.Hour)); len(due) != 1 || doc.Items[due[0]].UserID != "later" {
+		t.Fatalf("later: %v", due)
 	}
+}
+
+func TestApplyPushOutcomeAcceptedRejectedAndDropped(t *testing.T) {
+	it := RecapPushItem{UserID: "u", Attempts: 2}
+	applyPushOutcome(&it, true, 99, testLogger())
+	if !it.Sent || it.LastSentMs != 99 || it.Attempts != 0 {
+		t.Fatalf("accepted: %+v", it)
+	}
+	it = RecapPushItem{UserID: "u"}
+	for i := 1; i < recapPushMaxAttempts; i++ {
+		applyPushOutcome(&it, false, 99, testLogger())
+		if it.Sent || it.Attempts != i {
+			t.Fatalf("rejected %d: %+v", i, it)
+		}
+	}
+	applyPushOutcome(&it, false, 99, testLogger())
+	if !it.Sent {
+		t.Fatalf("dropped after %d attempts: %+v", recapPushMaxAttempts, it)
+	}
+}
+
+// pushQueueNk is a storage fake for one queue doc.
+type pushQueueNk struct {
+	runtime.NakamaModule
+	value   string
+	version int
+}
+
+func (n *pushQueueNk) StorageWrite(_ context.Context, w []*runtime.StorageWrite) ([]*api.StorageObjectAck, error) {
+	n.value = w[0].Value
+	n.version++
+	return nil, nil
+}
+
+func queueAfter(t *testing.T, send func() bool) RecapPushItem {
+	t.Helper()
+	base := time.Date(2026, 10, 19, 18, 0, 0, 0, time.UTC)
+	doc := RecapPushDoc{CrewID: "crew", Week: "2026-W43", Items: []RecapPushItem{{UserID: "u", SendAtMs: base.UnixMilli(), Body: "b"}}}
+	raw, _ := json.Marshal(doc)
+	nk := &pushQueueNk{value: string(raw)}
+	old := recapPushSend
+	recapPushSend = func(context.Context, runtime.Logger, runtime.NakamaModule, string, string, RecapPushItem) bool {
+		return send()
+	}
+	defer func() { recapPushSend = old }()
+	processPushQueueDoc(context.Background(), nk, testLogger(), "crew", nk.value, "v", base.Add(time.Minute))
+	var out RecapPushDoc
+	if err := json.Unmarshal([]byte(nk.value), &out); err != nil {
+		t.Fatal(err)
+	}
+	return out.Items[0]
+}
+
+func TestQueueItemIsSentOnlyAfterTheWorkerAccepted(t *testing.T) {
+	if it := queueAfter(t, func() bool { return true }); !it.Sent || it.Attempts != 0 {
+		t.Fatalf("accepted: %+v", it)
+	}
+}
+
+func TestQueueItemStaysQueuedWhenTheWorkerRejects(t *testing.T) {
+	if it := queueAfter(t, func() bool { return false }); it.Sent || it.Attempts != 1 {
+		t.Fatalf("rejected: %+v", it)
+	}
+}
+
+func TestPushToUserReportsAnErrorAsNotAccepted(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+	t.Setenv("PUSH_WORKER_URL", srv.URL)
+	t.Setenv("PUSH_WORKER_TOKEN", "t")
+	nk := &pushTokenNk{}
+	if sendPushToUser(context.Background(), testLogger(), nk, "u", pushAlert{}) {
+		t.Fatal("a 500 from the Worker is not accepted")
+	}
+}
+
+type pushTokenNk struct{ runtime.NakamaModule }
+
+func (n *pushTokenNk) StorageList(context.Context, string, string, string, int, string) ([]*api.StorageObject, string, error) {
+	return []*api.StorageObject{{Value: `{"token":"abc","platform":"ios","environment":"production"}`}}, "", nil
 }
 
 // ---- the job ----
@@ -303,13 +390,14 @@ func TestRecapJobQueuesAndSendsTheMondayPush(t *testing.T) {
 
 	var sent []string
 	old := recapPushSend
-	recapPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, _, _ string, it RecapPushItem) {
+	recapPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, _, _ string, it RecapPushItem) bool {
 		// The recap job recomputes head2head, which can queue belt pushes
 		// for the moves it finds. This test checks the recap push only.
 		if it.Type != "" && it.Type != recapPushType {
-			return
+			return true
 		}
 		sent = append(sent, it.UserID+": "+it.Body)
+		return true
 	}
 	defer func() { recapPushSend = old }()
 

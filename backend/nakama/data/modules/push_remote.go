@@ -314,18 +314,21 @@ func postPushSend(ctx context.Context, client *http.Client, baseURL, bearer stri
 }
 
 // sendPushToUser sends one notification to every registered device of a user
-// and deletes the tokens the Worker reports dead.
-func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, n pushAlert) {
+// and deletes the tokens the Worker reports dead. It returns false when the
+// Worker did not accept a batch (an error or a status other than 200): the
+// caller may send again. It returns true when everything was accepted and when
+// there was nothing to send (no Worker configured, no device).
+func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, n pushAlert) bool {
 	baseURL, bearer := os.Getenv("PUSH_WORKER_URL"), os.Getenv("PUSH_WORKER_TOKEN")
 	if baseURL == "" || bearer == "" {
 		logger.Debug("push: PUSH_WORKER_URL/PUSH_WORKER_TOKEN not set; skipping")
-		return
+		return true
 	}
 
 	objects, _, err := nk.StorageList(ctx, "", userID, PushTokensCollection, maxPushTokensPerUser, "")
 	if err != nil {
 		logger.Warn("push: list tokens for %s: %v", userID, err)
-		return
+		return false
 	}
 	var devices []pushDevice
 	for _, o := range objects {
@@ -337,9 +340,10 @@ func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 	}
 	if len(devices) == 0 {
 		logger.Debug("push: user=%s has no registered device", userID)
-		return
+		return true
 	}
 
+	accepted := true
 	for start := 0; start < len(devices); start += maxTokensPerSend {
 		end := start + maxTokensPerSend
 		if end > len(devices) {
@@ -349,6 +353,7 @@ func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 			&pushSendRequest{Notification: n, Tokens: devices[start:end]})
 		if err != nil {
 			logger.Warn("push: send to user=%s failed: %v", userID, err)
+			accepted = false
 			continue
 		}
 		sent := 0
@@ -361,6 +366,7 @@ func sendPushToUser(ctx context.Context, logger runtime.Logger, nk runtime.Nakam
 			userID, n.MessageID, sent, len(resp.Results), len(resp.Prune))
 		prunePushTokens(ctx, logger, nk, userID, resp.Prune)
 	}
+	return accepted
 }
 
 func prunePushTokens(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, tokens []string) {

@@ -141,8 +141,9 @@ func newBeltRig(t *testing.T) *beltRig {
 	oldClock, oldGo, oldSend := eventPushClock, eventPushGo, recapPushSend
 	eventPushClock = func() time.Time { return r.now }
 	eventPushGo = func(f func()) { f() }
-	recapPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, crewID, _ string, it RecapPushItem) {
+	recapPushSend = func(_ context.Context, _ runtime.Logger, _ runtime.NakamaModule, crewID, _ string, it RecapPushItem) bool {
 		r.sent = append(r.sent, it.UserID+"|"+it.Type+"|"+it.MessageID+"|"+it.Body)
+		return true
 	}
 	t.Cleanup(func() { eventPushClock, eventPushGo, recapPushSend = oldClock, oldGo, oldSend })
 	return r
