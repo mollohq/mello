@@ -2409,6 +2409,9 @@ fn build_feed_card(
         mvp2_has_avatar: mvp2_has_av,
         games_summary: recap_games_summary.into(),
         recap_rows,
+        mem_col: 0,
+        mem_row: 0,
+        mem_span: 1,
         recap_active,
         recap_clipped,
         recap_games: ModelRc::new(VecModel::from(recap_games)),
@@ -2640,6 +2643,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+            let (memory, memory_rows) = crate::feed_grid::place_memory(memory);
+            ctx.app.set_memory_rows(memory_rows);
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(memory)).into());
             ctx.app.set_feed_cold_start(is_cold);

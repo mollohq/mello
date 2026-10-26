@@ -9846,6 +9846,107 @@ fn upsell_shows(h: &Harness) -> bool {
             .any(|t| t == "Unlock your crew's full story")
 }
 
+/// A recap in Crew history is the tall card as in the week: one column, two
+/// rows (three with belts). "Most active" and "See the week" stand inside it.
+#[test]
+fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+    let mut h = Harness::new();
+    // Both recaps are open: the cards show, not the sealed ones.
+    h.settings().borrow_mut().sealed_opened.insert(
+        "crew-0".into(),
+        vec![crate::sealed::recap_key(11), crate::sealed::recap_key(12)],
+    );
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+    // Tall enough for the memory band to stand on screen.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1280, 3600));
+    let old_recap = |id: &str, week_start: i64, belts: bool| {
+        let mut week = if belts {
+            week_with_everything()
+        } else {
+            week_without_belts()
+        };
+        week["week_start"] = serde_json::json!(week_start);
+        let mut e = recap_entry(week);
+        e.id = id.into();
+        e
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_with_memory(
+            vec![h2h_entry(5, vec![], vec![], None)],
+            vec![
+                old_recap("recap-a", 11, true),
+                old_recap("recap-b", 12, false),
+            ],
+        ),
+    });
+
+    let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
+    assert_eq!(slots.len(), 2, "both recaps are drawn");
+    let see = h.controls_labelled("See the week");
+    assert_eq!(see.len(), 2);
+    let kickers: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
+        .filter(|e| e.accessible_label().is_some_and(|l| l == "MOST ACTIVE"))
+        .collect();
+    assert_eq!(kickers.len(), 2);
+    let mut rows: Vec<i32> = Vec::new();
+    for slot in &slots {
+        let card = rect_of(slot);
+        let r = ((slot.size().height + 12.0) / (232.0 + 12.0)).round() as i32;
+        rows.push(r);
+        assert!(
+            slot.size().width < slot.size().height,
+            "one column, not a wide card: {card:?}"
+        );
+        for inner in see.iter().map(rect_of).chain(kickers.iter().map(rect_of)) {
+            let centre = ((inner.0 + inner.2) / 2.0, (inner.1 + inner.3) / 2.0);
+            let inside = centre.0 >= card.0
+                && centre.0 <= card.2
+                && centre.1 >= card.1
+                && centre.1 <= card.3;
+            if inside {
+                assert!(
+                    inner.0 >= card.0 - 0.5
+                        && inner.2 <= card.2 + 0.5
+                        && inner.1 >= card.1 - 0.5
+                        && inner.3 <= card.3 + 0.5,
+                    "{inner:?} runs off the card {card:?}"
+                );
+            }
+        }
+    }
+    rows.sort();
+    assert_eq!(rows, vec![2, 3], "two rows without belts, three with");
+    // Each card holds its own control and its own label.
+    for kind in [&see, &kickers] {
+        for slot in &slots {
+            let card = rect_of(slot);
+            let n = kind
+                .iter()
+                .map(rect_of)
+                .filter(|r| {
+                    r.0 >= card.0 - 0.5
+                        && r.2 <= card.2 + 0.5
+                        && r.1 >= card.1 - 0.5
+                        && r.3 <= card.3 + 0.5
+                })
+                .count();
+            assert_eq!(n, 1, "one inside the card {card:?}");
+        }
+    }
+}
+
 /// Day 0: the server still sends the upsell, and the feed shows neither the
 /// "Crew history" heading nor the m3llo+ card. A crew with no history has none
 /// of it, so m3llo+ is not offered on an empty feed.

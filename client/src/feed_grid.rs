@@ -271,6 +271,41 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
 }
 
 /// The indices of the two-column slots of the cards, in the order on screen.
+/// Columns of the Crew history grid.
+const MEMORY_COLS: usize = 3;
+
+/// Put the cards of Crew history in a three-column grid and return the rows it
+/// needs. A weekly recap is the tall card here too: one column, `recap_rows`
+/// rows (two, three with belts). Every other card is one cell. Each card takes
+/// the first free cell in reading order that fits it, so the cells beside a
+/// tall recap fill with the cards that follow. Sets `mem_col`, `mem_row` and
+/// `mem_span`.
+pub(crate) fn place_memory(mut cards: Vec<FeedCardData>) -> (Vec<FeedCardData>, i32) {
+    let mut taken: Vec<[bool; MEMORY_COLS]> = Vec::new();
+    for card in &mut cards {
+        let span = if card.card_type == "recap" {
+            card.recap_rows.clamp(2, 3) as usize
+        } else {
+            1
+        };
+        let mut row = 0;
+        let col = loop {
+            taken.resize(taken.len().max(row + span), [false; MEMORY_COLS]);
+            if let Some(c) = (0..MEMORY_COLS).find(|&c| (row..row + span).all(|r| !taken[r][c])) {
+                break c;
+            }
+            row += 1;
+        };
+        for r in row..row + span {
+            taken[r][col] = true;
+        }
+        card.mem_col = col as i32;
+        card.mem_row = row as i32;
+        card.mem_span = span as i32;
+    }
+    (cards, taken.len() as i32)
+}
+
 #[cfg(test)]
 pub fn wide_slot_indices(cards: &[CardInfo], start: usize) -> Vec<usize> {
     wide_slots(&layout(cards, start), cards.len())
@@ -1659,5 +1694,49 @@ mod tests {
                 types(&cards, &order)
             );
         }
+    }
+
+    fn history_card(t: &str, rows: i32) -> FeedCardData {
+        FeedCardData {
+            card_type: t.into(),
+            recap_rows: rows,
+            ..Default::default()
+        }
+    }
+
+    fn cells(cards: Vec<FeedCardData>) -> (Vec<(i32, i32, i32)>, i32) {
+        let (cards, rows) = place_memory(cards);
+        (
+            cards
+                .iter()
+                .map(|c| (c.mem_col, c.mem_row, c.mem_span))
+                .collect(),
+            rows,
+        )
+    }
+
+    #[test]
+    fn a_recap_in_crew_history_is_one_column_and_two_or_three_rows() {
+        let (at, rows) = cells(vec![
+            history_card("recap", 3),
+            history_card("clip", 0),
+            history_card("clip", 0),
+            history_card("recap", 2),
+            history_card("clip", 0),
+        ]);
+        // The clips fill the cells beside the tall recap, then the next recap.
+        assert_eq!(
+            at,
+            vec![(0, 0, 3), (1, 0, 1), (2, 0, 1), (1, 1, 2), (2, 1, 1)]
+        );
+        assert_eq!(rows, 3);
+    }
+
+    #[test]
+    fn crew_history_without_a_recap_is_rows_of_three() {
+        let (at, rows) = cells((0..4).map(|_| history_card("clip", 0)).collect());
+        assert_eq!(at, vec![(0, 0, 1), (1, 0, 1), (2, 0, 1), (0, 1, 1)]);
+        assert_eq!(rows, 2);
+        assert_eq!(cells(vec![]).1, 0);
     }
 }

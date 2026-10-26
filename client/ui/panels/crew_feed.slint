@@ -2983,6 +2983,8 @@ export component CrewFeed inherits Rectangle {
     /// The dormant strip: at most one strip across the top (frame F).
     in property <[FeedCardData]> dormant-cards: [];
     in property <[FeedCardData]> memory-cards: [];
+    /// Grid rows of Crew history, tall cards counted (`place_memory`).
+    in property <int> memory-rows: 0;
     in property <[StreamCardData]> stream-cards: [];
     /// Two members stream now: they share the wide hero (frame D). The client
     /// holds one remote streamer today, so the data path for a second one is a
@@ -3793,15 +3795,19 @@ export component CrewFeed inherits Rectangle {
                         background: Theme.card-border;
                     }
 
-                    for r in Math.ceil(memory-cards.length / 3.0): HorizontalLayout {
-                        height: Theme.feed-row;
-                        spacing: 12px;
+                    // Three columns. A recap is the tall card: one column, two
+                    // rows (three with belts). `place_memory` gives each card
+                    // its cell.
+                    Rectangle {
+                        height: root.memory-rows * Theme.feed-row + Math.max(0, root.memory-rows - 1) * 12px;
+                        property <length> cell-w: (self.width - 24px) / 3;
 
-                        for c in 3: FeedSlot {
-                            property <int> mem-idx: r * 3 + c;
-                            visible: mem-idx < memory-cards.length;
-                            horizontal-stretch: 1;
-                            card: mem-idx < memory-cards.length ? memory-cards[mem-idx] : { card-type: "" };
+                        for c[i] in memory-cards: FeedSlot {
+                            x: c.mem-col * (parent.cell-w + 12px);
+                            y: c.mem-row * (Theme.feed-row + 12px);
+                            width: parent.cell-w;
+                            height: c.mem-span * Theme.feed-row + (c.mem-span - 1) * 12px;
+                            card: c;
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;

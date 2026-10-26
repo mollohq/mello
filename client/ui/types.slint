@@ -451,6 +451,11 @@ export struct FeedCardData {
     // with belts, 2 without, 0 for a recap with nothing to show (a cell is
     // never drawn). Set in Rust (`recap_rows`).
     recap-rows: int,
+    // Crew history only: the cell of the card in a three-column grid. `mem-span`
+    // is the rows it takes (a recap takes 2 or 3). Set in Rust (`place_memory`).
+    mem-col: int,
+    mem-row: int,
+    mem-span: int,
     // Weekly recap (card-type "recap"): the most active member (`count` is
     // minutes) and the most clipped (`count` is clips); "" in `name` when the
     // week has none.
