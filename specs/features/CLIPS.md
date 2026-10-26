@@ -453,15 +453,9 @@ A backend job runs weekly (Monday 00:00 UTC) and generates a recap from ledger d
 
 Appears as a card in the crew feed. NOT posted to chat. Tapping expands to a full-screen stats view.
 
-A recap with head2head belts adds two sections. See [HEAD2HEAD.md](./HEAD2HEAD.md) section 6.
+The tall card (one column, three grid rows with belts, two without) shows, top to bottom: the label and the week; hangout, clips, longest and top game with its art, two by two; Most active and Most clipped, one line each; Belts moved (two rows, then "+N more"); Belts held (octagon, count, "belts"); Games played (four small art tiles with hours); and "See the week" in a row of its own. A week with no belts drops both belt sections. The server sends `most_clipped`, `most_clipped_user_id`, `most_clipped_count`, `clip_of_week` (the longest clip of the week: id, title, duration, game, media) and `games_played` with `minutes` for each game. A card carries no note that explains it: no day, no source label.
 
-| Section | Card | Full screen |
-|---|---|---|
-| Belts moved | Up to three rows. Each row: the previous holder dimmed, the new holder, and a title chip with the value | All rows, with "was held by" and "now held by" |
-| Belts held | Members in count order, with the count and the label "belts" once | All members, with their titles |
-
-- A card with belts drops the MVP row and the games list. The full-screen view shows the games list.
-- A recap with no belts shows neither section.
+"See the week" opens the recap in the feed panel, min(880 px, panel less 48 px) wide and centred: this week (hangout, top game, longest, clips, most active, most clipped), every belt that moved with "was held by" and "now held by", every member with rank, count and titles, the clip of the week with a play ring that plays it through the clip player, and every game with its hours. A section the week did not have is left out.
 
 ---
 

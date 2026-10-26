@@ -58,7 +58,6 @@ import { InviteShareModal } from "panels/invite_share_modal.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
-import { RecapOpened } from "panels/recap_opened.slint";
 // --- stage 9 (streaming-quality): the stream card's popovers ---
 import { StreamCardUi, StreamStatsData, ChatFocus } from "types.slint";
 import { StreamVolumePopover, StreamSettingsPopover, ExpandedStreamCard } from "panels/active_streams_panel.slint";
@@ -1067,6 +1066,7 @@ export component MainWindow inherits Window {
                                 root.stats-profile-open = true;
                                 root.stats-profile-opened();
                             }
+                            crew-name: root.active-crew-name;
                             clip-playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;
@@ -1847,14 +1847,6 @@ export component MainWindow inherits Window {
             root.settings-show-saved = true;
             root.setting-changed-hud-clip-toasts(v);
         }
-    }
-
-    // ===================== WEEKLY RECAP, FULL SCREEN =====================
-    if RecapView.open: RecapOpened {
-        width: 100%;
-        height: 100%;
-        card: RecapView.card;
-        close => { RecapView.open = false; }
     }
 
     // ===================== RIOT LINK DIALOG =====================

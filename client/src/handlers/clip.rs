@@ -1352,6 +1352,7 @@ fn extract_recap_belts_held(ctx: &AppContext, data: &serde_json::Value) -> Vec<R
             Some((
                 count,
                 RecapBeltHeldRow {
+                    rank: 0,
                     initials: make_initials(&name).into(),
                     name: name.into(),
                     hue: avatar_color_index(user_id),
@@ -1366,6 +1367,11 @@ fn extract_recap_belts_held(ctx: &AppContext, data: &serde_json::Value) -> Vec<R
         .collect();
     // The backend sends them most first. Keep that order for equal counts.
     rows.sort_by_key(|r| std::cmp::Reverse(r.count));
+    // The same count is the same rank (1, 2, 3, 4, 4, 4).
+    let counts: Vec<i32> = rows.iter().map(|r| r.count).collect();
+    for r in rows.iter_mut() {
+        r.rank = 1 + counts.iter().filter(|&&c| c > r.count).count() as i32;
+    }
     rows
 }
 

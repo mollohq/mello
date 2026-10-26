@@ -144,6 +144,9 @@ export struct RecapHeldTitle {
 
 // A member and the number of titles they hold when the recap was written.
 export struct RecapBeltHeldRow {
+    /// 1 for the most belts. Members with the same count share a rank, so the
+    /// next one skips: 1, 2, 3, 4, 4, 4.
+    rank: int,
     name: string,
     initials: string,
     hue: int,
