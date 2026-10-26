@@ -5721,32 +5721,42 @@ fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
     );
 }
 
-/// More than eight members show eight octagons and a "+N".
+/// The invite card shows for 5 to 9 members: eight octagons and a "+N" at
+/// nine. From 10 it is not emitted. The share link stays in the crew menu.
 #[test]
-fn invite_card_shows_eight_members_then_a_count() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 11);
-    let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
-    roster.extend((2..=11).map(|i| (format!("u{i}"), format!("Kim {i}"))));
-    let roster_ref: Vec<(&str, &str)> = roster
-        .iter()
-        .map(|(a, b)| (a.as_str(), b.as_str()))
-        .collect();
-    set_roster(&h, &roster_ref);
+fn invite_card_shows_up_to_nine_members_and_is_gone_from_ten() {
+    for (n, invite_cards) in [(9, 1usize), (10, 0), (11, 0)] {
+        let mut h = Harness::new();
+        app_with_crew_of(&mut h, n);
+        let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
+        roster.extend((2..=n).map(|i| (format!("u{i}"), format!("Kim {i}"))));
+        let roster_ref: Vec<(&str, &str)> = roster
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        set_roster(&h, &roster_ref);
 
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(11, vec![], vec![], None)]),
-    });
+        h.emit(Event::FeedLoaded {
+            response: feed_of(vec![h2h_entry(
+                n,
+                vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+                vec![h2h_pair("u2", 1, 2)],
+                None,
+            )]),
+        });
 
-    assert_eq!(
-        count_of(&h, "Head2headCell"),
-        0,
-        "no data, no head2head cell"
-    );
-    let card = first_card(&h);
-    assert_eq!(card.card_type.as_str(), "invite");
-    assert_eq!(card.head2head.members.row_count(), 8);
-    assert_eq!(card.head2head.more_members, 3);
+        assert_eq!(count_of(&h, "InviteCard"), invite_cards, "{n} members");
+        let invite = (0..h.app().get_feed_cards().row_count())
+            .filter_map(|i| h.app().get_feed_cards().row_data(i))
+            .find(|c| c.card_type.as_str() == "invite");
+        match invite {
+            Some(card) => {
+                assert_eq!(card.head2head.members.row_count(), 8);
+                assert_eq!(card.head2head.more_members, 1);
+            }
+            None => assert!(invite_cards == 0),
+        }
+    }
 }
 
 /// The chip on a pair row is the contested title with the largest gap: the

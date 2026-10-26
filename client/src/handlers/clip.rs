@@ -514,7 +514,7 @@ fn head2head_cards(
     }
     // From five members the cell loses its seats and button. The invite card
     // takes over, with the viewer first and then the crew.
-    if model.member_count >= head2head::SEATS {
+    if (head2head::SEATS..=head2head::INVITE_CARD_MAX_MEMBERS).contains(&model.member_count) {
         let mut shown = vec![viewer.clone()];
         shown.extend(members.iter().filter(|m| m.id != viewer.id).cloned());
         cards.push(FeedCardData {

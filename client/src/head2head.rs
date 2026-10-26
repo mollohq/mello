@@ -15,6 +15,9 @@ use crate::{H2hPairRow, H2hPerson, Head2headData, TitleHeld};
 
 /// Seats head2head shows, as in the backend. A crew of five or more has none.
 pub const SEATS: i32 = 5;
+/// The invite card shows for 5 to 9 members. From 10 it is not emitted: the
+/// crew menu keeps the share link.
+pub const INVITE_CARD_MAX_MEMBERS: i32 = 9;
 /// Most pair rows on the card: two columns of two. The card is always two grid
 /// columns wide. A "+N more" line counts the pairs that do not fit.
 pub const PAIR_ROWS: usize = 4;
