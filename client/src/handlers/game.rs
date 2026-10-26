@@ -19,10 +19,19 @@ pub fn handle(ctx: &AppContext, event: Event) {
             short_name,
             color,
             exe_path,
+            started_at_ms,
             ..
         } => {
             log::info!("[ui] game detected: {}", game_name);
+            ctx.live_games
+                .borrow_mut()
+                .start_own(crate::live_session::LiveGame {
+                    game_id: game_id.clone(),
+                    game_name: game_name.clone(),
+                    started_ms: started_at_ms,
+                });
             let game_id_for_icon = game_id.clone();
+            let game_name_for_icon = game_name.clone();
             ctx.app.set_game_active(true);
             ctx.app.set_game_id(game_id.into());
             ctx.app.set_game_name(game_name.into());
@@ -43,7 +52,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Already cached from an earlier session: show it immediately.
             // A first-ever launch has nothing yet, and extract_and_cache
             // pushes it in when extraction finishes a moment later.
-            crate::game_icons::push_bar_icon(ctx, &game_id_for_icon);
+            crate::game_icons::push_bar_art(ctx, &game_id_for_icon, &game_name_for_icon);
         }
         Event::GameEnded {
             game_id,
@@ -56,6 +65,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 game_name,
                 duration_min
             );
+            ctx.live_games.borrow_mut().end_own(&game_id);
             ctx.app.set_can_stream(false);
             ctx.app.set_telemetry_hint("".into());
             if duration_min >= POST_GAME_MIN_DURATION {
@@ -70,6 +80,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::PostGameTimeout => {
             log::info!("[ui] post-game timeout");
             ctx.app.set_game_has_runtime_icon(false);
+            ctx.app.set_game_has_capsule(false);
             ctx.app.set_game_active(false);
             ctx.app.set_can_stream(false);
             ctx.app.set_game_summary("".into());

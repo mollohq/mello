@@ -138,6 +138,72 @@ export type AppState = {
   feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string }[];
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };
+  /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */
+  head2head: {
+    present: boolean;
+    /** "wide" is two columns wide: the chips of a crew of one, or the pair rows of two or more. */
+    placement: "wide" | "versus" | "none";
+    member_count: number;
+    open_seats: number;
+    /** The chips the card draws: the viewer's own values on the wide card. */
+    own_values: { title_id: string; display: string }[];
+    titles: { title_id: string; holder_name: string }[];
+    /** Every pair of the viewer, drawn or not. */
+    pairs_count: number;
+    /** The pair rows the card draws, in two columns. */
+    pair_rows: number;
+    /** The "+N more" line of the card. 0 when it does not show. */
+    more_pairs: number;
+    belt_moved_recent: boolean;
+    /** A fingerprint of the viewer's octagon image. "" when it shows initials. */
+    own_avatar_key: string;
+    /** The same for the opponent octagon of each pair row. */
+    pair_avatar_keys: string[];
+  };
+  /** The invite card of the feed. `present` is false when the feed has none. */
+  invite_card: { present: boolean; octagons: number; more_count: number; with_avatar: number };
+  /** The recent games card of the feed. Empty tiles when the feed has none. */
+  recent_games: {
+    /** The week's line ("14 sessions, 31 h this week"), or "". Never a note about the PCs. */
+    header_line: string;
+    /** "grid" from two PCs on, "list" for one, "" with no card. */
+    shape: "grid" | "list" | "";
+    pc_count: number;
+    tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
+  };
+  /** The daily recap card of the feed. `present` is false when the feed has none. */
+  daily_recap: {
+    present: boolean;
+    day: string;
+    hangout: string;
+    clips: number;
+    sessions: number;
+    top_game: string;
+    members: number;
+    index: number;
+    belts: string[];
+  };
+  /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
+  live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
+  /** The joined cards of the feed, in grid order: a standard cell after the first row. */
+  joined: { name: string; title: string; invited: string; when: string; index: number }[];
+  /** The chat input has the cursor. */
+  chat_input_focused: boolean;
+  /** Sealed belts and recap in the feed, and the card in the centre. */
+  sealed: {
+    /** Different sealed belts in the feed. A belt in two slots counts once. The belt in the centre does not count. */
+    belts: number;
+    /** Different sealed own chips of a crew of one (the day 0 reveal). Not in `belts`. */
+    own: number;
+    /** The weekly recap is sealed. */
+    recap: boolean;
+    /** The card in the centre of the feed. */
+    open_center: "belt" | "recap" | "none";
+    /** The card in the centre is at rest: the face shows and a click on the scrim closes it. */
+    resting: boolean;
+  };
+  /** The skeleton trio cells that show, 0 to 3. */
+  skeleton_trio: number;
   /** The audio page of the settings. */
   audio: { capture_device: string; playback_device: string; push_to_talk: boolean; push_to_talk_key: string };
   riot: { linked: boolean; id: string };
@@ -519,6 +585,21 @@ export class App {
     return (await r.json()) as AppEvent[];
   }
 
+  /**
+   * Feed the game sensor a start or an end for a catalogue game (`counter-strike-2`),
+   * through the real handler path. E2e builds only (`POST /fake-game`).
+   * `agoMin` moves a start into the past, so that the session is long enough
+   * for the ledger when it ends (2 min).
+   */
+  async fakeGame(action: "start" | "end", gameId: string, agoMin = 0): Promise<void> {
+    const r = await fetch(`http://127.0.0.1:${this.statePort}/fake-game`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, game_id: gameId, ago_min: agoMin }),
+    });
+    if (!r.ok) throw new DriverError(`${this.name}: fakeGame ${action} ${gameId} failed: HTTP ${r.status} ${await r.text()}`);
+  }
+
   /** The controls on screen that declare accessible-enabled: false. */
   async disabledControls(): Promise<DisabledControl[]> {
     const r = await fetch(`http://127.0.0.1:${this.statePort}/disabled`);
@@ -636,6 +717,18 @@ export class App {
     const where = c ? ` ${c.role} at (${c.x.toFixed(0)},${c.y.toFixed(0)}) ${c.width.toFixed(0)}x${c.height.toFixed(0)}` : "";
     appendFileSync(join(this.dir, "actions.log"), `${new Date().toISOString()} ${action} "${label}"${where}\n`);
     this.opts.onAction?.(this.name, `${action} "${label}"`);
+  }
+
+  /**
+   * Scroll the page under the pointer at (x, y) until a control with this label
+   * is on screen: a control below the fold is absent from the element tree.
+   */
+  async scrollToControl(label: string, x = 450, y = 300, maxSteps = 10): Promise<void> {
+    for (let i = 0; i < maxSteps; i++) {
+      if ((await this.ui.controls()).some((c) => c.label === label)) return;
+      await this.ui.scrollAt(x, y, -300);
+      await sleep(200);
+    }
   }
 
   /** A real pointer click at the control's center. */

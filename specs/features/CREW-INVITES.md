@@ -338,7 +338,7 @@ Any other text is ignored. The client does not log, store or send it. The client
 
 **File:** `client/src/handlers/clip.rs`, `client/ui/panels/crew_feed.slint`
 
-An `InviteCard` component is injected client-side at a fixed position (slot 2) in the feed layout. It shows "Invite friends" with a description, a primary "Share invite link" button, and a "Hide" link.
+An `InviteCard` component is injected client-side at a fixed position (slot 2) in the feed layout. It shows "Invite your crew" with a description, a primary "Share invite link" button, and a "Hide" link.
 
 - **Visibility:** Always shown unless the user hides it. Hidden crew IDs are persisted in `settings.hidden_invite_crew_ids`.
 - **Hide action:** `on_hide_invite_card` removes the card from the current feed model and saves the crew ID to settings.

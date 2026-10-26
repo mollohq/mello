@@ -174,6 +174,9 @@ impl super::Client {
         // supervisor stays inert until the next login (otherwise it would
         // immediately rebuild the just-closed socket).
         self.nakama.clear_session();
+        // The next login may be another account: its server document is not
+        // the one this report hash describes.
+        self.library_reporter.reset_for_account();
         log::info!("Logged out, session cleared");
     }
 

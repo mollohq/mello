@@ -1,0 +1,301 @@
+// Design-time preview for the head2head feed cards. Static demo data.
+// Matches mello-backlog mockups/cold-start-full-flow.html frames 4 and 5.
+//
+//   slint-viewer --screenshot out.png --component PreviewDayOneAlone \
+//     client/ui/previews/head2head_preview.slint
+//   slint-viewer --screenshot out.png --component PreviewDayOnePlaying \
+//     client/ui/previews/head2head_preview.slint
+
+import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { GameBadge } from "../components/game_badge.slint";
+import { Head2headCardWide, VersusHero } from "../components/head2head.slint";
+import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
+
+// Same frame as CrewFeed: 20px side padding, 16px top, 12px gaps, 232px rows.
+component FeedLabel inherits Text {
+    font-family: Theme.font-label;
+    font-size: 10px;
+    font-weight: Theme.weight-label;
+    letter-spacing: Theme.track-label;
+    color: Theme.text-dim;
+}
+
+component FeedCard inherits Rectangle {
+    in property <string> corner: "tr";
+    in property <color> fill-color: Theme.card-bg;
+    background: transparent;
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: root.corner; fill: Theme.card-border; }
+    CutShape { width: parent.width; height: parent.height; n: Theme.notch; corner: root.corner; inset: Theme.keyline; fill: root.fill-color; }
+    @children
+}
+
+component JoinedRow inherits Rectangle {
+    in property <string> text: "Jonas joined, invited by b0bben";
+    height: 32px;
+    HorizontalLayout {
+        padding-left: 2px; padding-right: 2px;
+        spacing: 10px;
+        cross-axis-alignment: center;
+        UserAvatar { initials: "J"; size: 20px; color-index: 1; bg-color: Theme.bg-app; }
+        Text { text: root.text; font-family: Theme.font-body; font-size: 13px; font-weight: Theme.weight-sentence; color: Theme.text-primary; }
+        Rectangle { horizontal-stretch: 1; }
+        Text { text: "TODAY 23:14"; font-family: Theme.font-label; font-size: 9.5px; font-weight: Theme.weight-label; letter-spacing: Theme.track-kicker; color: Theme.text-tertiary; }
+    }
+}
+
+component GameRow inherits Rectangle {
+    in property <string> mono;
+    in property <string> name;
+    in property <string> detail;
+    in property <color> hue;
+    height: 36px;
+    HorizontalLayout {
+        spacing: 12px;
+        cross-axis-alignment: center;
+        GameBadge { short-name: root.mono; bg-color: root.hue; size: 36px; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 2px;
+            Text { text: root.name; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+            Text { text: root.detail + " · TRACKED"; font-family: Theme.font-label; font-size: 9px; font-weight: Theme.weight-label; letter-spacing: Theme.track-label; color: Theme.text-dim; }
+        }
+    }
+}
+
+component RecentGamesCard inherits FeedCard {
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 12px;
+        alignment: start;
+        HorizontalLayout {
+            FeedLabel { text: "RECENT GAMES"; }
+            Rectangle { horizontal-stretch: 1; }
+            FeedLabel { text: "FROM THIS PC"; color: Theme.text-tertiary; }
+        }
+        GameRow { mono: "CS"; name: "Counter-Strike 2"; detail: "4,167 H"; hue: Theme.id-blue; }
+        GameRow { mono: "NS"; name: "Night Stones"; detail: "12.6 H"; hue: Theme.id-teal; }
+        GameRow { mono: "RL"; name: "Rocket League"; detail: "EPIC"; hue: Theme.id-purple; }
+    }
+}
+
+component Pip inherits Rectangle {
+    in property <string> initials;
+    in property <int> hue-index;
+    width: 16px; height: 16px;
+    background: transparent;
+    UserAvatar { initials: root.initials; color-index: root.hue-index; size: 16px; bg-color: Theme.card-bg; }
+}
+
+component GameTile inherits Rectangle {
+    in property <string> mono;
+    in property <string> name;
+    in property <color> hue;
+    width: 80px;
+    in property <bool> bob: true;
+    in property <bool> jonas: false;
+    VerticalLayout {
+        spacing: 6px;
+        alignment: start;
+        Rectangle {
+            height: 52px;
+            CutButtonShape { width: parent.width; height: parent.height; n: 8px; fill: root.hue; }
+            Text { text: root.mono; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display-bold; color: Theme.on-action; }
+        }
+        Text { text: root.name; font-family: Theme.font-display; font-size: 12px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+        HorizontalLayout {
+            spacing: 4px;
+            alignment: start;
+            if root.bob: Pip { initials: "B"; hue-index: 0; }
+            if root.jonas: Pip { initials: "J"; hue-index: 1; }
+        }
+    }
+}
+
+/// Recent games merged from two PCs; the pips show who owns what.
+component RecentGamesTwoPcs inherits FeedCard {
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 12px;
+        alignment: start;
+        HorizontalLayout {
+            FeedLabel { text: "RECENT GAMES"; }
+            Rectangle { horizontal-stretch: 1; }
+            FeedLabel { text: "FROM 2 PCS"; color: Theme.text-tertiary; }
+        }
+        HorizontalLayout {
+            spacing: 10px;
+            GameTile { mono: "CS"; name: "Counter-Strike 2"; hue: Theme.id-blue; jonas: true; }
+            GameTile { mono: "RL"; name: "Rocket League"; hue: Theme.id-purple; jonas: true; }
+            GameTile { mono: "NS"; name: "Night Stones"; hue: Theme.id-teal; }
+            GameTile { mono: "VA"; name: "Valorant"; hue: Theme.id-amber; bob: false; jonas: true; }
+            GameTile { mono: "FG"; name: "Fall Guys"; hue: Theme.id-pink; bob: false; jonas: true; }
+        }
+    }
+}
+
+component Stat inherits Rectangle {
+    in property <string> value;
+    in property <string> label;
+    VerticalLayout {
+        Text { text: root.value; font-family: Theme.font-display; font-size: 16px; font-weight: Theme.weight-display-bold; color: Theme.text-value; }
+        Text { text: root.label; font-family: Theme.font-body; font-size: 10px; font-weight: Theme.weight-sentence; color: Theme.text-body; }
+    }
+}
+
+/// A finished session, as a plain standard cell. The feed's own session
+/// cards are private to crew_feed.slint and take FeedCardData, so this is
+/// a preview-local copy of the mockup.
+component SessionCell inherits FeedCard {
+    in property <string> when: "Earlier tonight";
+    corner: "br";
+    VerticalLayout {
+        padding: 14px; padding-left: 16px; padding-right: 16px;
+        spacing: 8px;
+        HorizontalLayout {
+            spacing: 10px;
+            cross-axis-alignment: center;
+            GameBadge { short-name: "CS"; bg-color: Theme.id-blue; size: 40px; }
+            VerticalLayout {
+                Text { text: "Counter-Strike 2"; font-family: Theme.font-display; font-size: 13px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+                Text { text: root.when; font-family: Theme.font-body; font-size: 11px; font-weight: Theme.weight-sentence; color: Theme.text-dim; }
+            }
+        }
+        Text { text: "1W - 2L"; font-family: Theme.font-display; font-size: 30px; font-weight: Theme.weight-display-bold; color: Theme.text-value; }
+        Text { text: "this session"; font-family: Theme.font-body; font-size: 11px; font-weight: Theme.weight-sentence; color: Theme.text-body; }
+        Rectangle { height: Theme.keyline; background: Theme.card-border; }
+        HorizontalLayout {
+            spacing: 10px;
+            Stat { value: "L2"; label: "streak"; }
+            Stat { value: "33%"; label: "win rate"; }
+            Stat { value: "3"; label: "matches"; }
+        }
+        Rectangle { vertical-stretch: 1; }
+        HorizontalLayout {
+            spacing: 8px;
+            cross-axis-alignment: center;
+            UserAvatar { initials: "B"; size: 20px; color-index: 0; }
+            Text { text: "Bob, solo"; font-family: Theme.font-body; font-size: 12px; font-weight: Theme.weight-sentence; color: Theme.text-body; }
+            Rectangle { horizontal-stretch: 1; }
+            Text { text: "1h 25m"; font-family: Theme.font-display; font-size: 12px; font-weight: Theme.weight-display; color: Theme.text-value; }
+        }
+    }
+}
+
+// Three equal columns, 12px gap, 20px side padding, as in CrewFeed at 760px.
+
+/// Frame A: new crew, day 0, alone, 20:45.
+export component PreviewDayOneAlone inherits Window {
+    width: 760px;
+    height: 440px;
+    background: Theme.bg-app;
+    property <length> cw: (self.width - 40px - 24px) / 3;
+
+    VerticalLayout {
+        padding-top: 16px; padding-bottom: 20px;
+        padding-left: 20px; padding-right: 20px;
+        spacing: 12px;
+        alignment: start;
+
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            Head2headCardWide {
+                width: root.cw * 2 + 12px;
+                member-name: "b0bben";
+                member-initials: "B";
+                hue-index: 0;
+                open-seats: 4;
+                titles: [
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                ];
+            }
+            RecentGamesCard { width: root.cw; }
+        }
+        SkeletonTrio { }
+    }
+}
+
+/// Frame B: day 0, alone, 22:10, after one session.
+export component PreviewDayOnePlaying inherits Window {
+    width: 760px;
+    height: 610px;
+    background: Theme.bg-app;
+    property <length> cw: (self.width - 40px - 24px) / 3;
+
+    VerticalLayout {
+        padding-top: 16px; padding-bottom: 20px;
+        padding-left: 20px; padding-right: 20px;
+        spacing: 12px;
+        alignment: start;
+
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            SessionCell { width: root.cw; when: "Just now"; }
+            Head2headCardWide {
+                width: root.cw * 2 + 12px;
+                member-name: "b0bben";
+                member-initials: "B";
+                hue-index: 0;
+                open-seats: 4;
+                titles: [
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,168", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "6.0", unit: "h", hue-index: 0 },
+                ];
+            }
+        }
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            RecentGamesCard { width: root.cw; }
+            SkeletonCell { icon: @image-url("../icons/skel-stream.svg"); line: "Your streams land here"; corner: "tr"; }
+            SkeletonCell { icon: @image-url("../icons/skel-voice.svg"); line: "Voice clips land here"; corner: "br"; }
+        }
+        SkeletonCell { height: 110px; icon: @image-url("../icons/skel-week.svg"); line: "Your week, every Monday"; corner: "bl"; }
+    }
+}
+
+/// Frame B2: first friend joined, day 1, 23:14.
+export component PreviewFirstFriend inherits Window {
+    width: 760px;
+    height: 720px;
+    background: Theme.bg-app;
+    property <length> cw: (self.width - 40px - 24px) / 3;
+
+    VerticalLayout {
+        padding-top: 16px; padding-bottom: 20px;
+        padding-left: 20px; padding-right: 20px;
+        spacing: 12px;
+        alignment: start;
+
+        JoinedRow { }
+        VersusHero {
+            height: Theme.feed-row;
+            left-name: "Bob"; left-initials: "B"; left-hue-index: 0;
+            right-name: "Jonas"; right-initials: "J"; right-hue-index: 1;
+            left-score: 4; right-score: 3;
+            open-seats: 3;
+            titles: [
+                { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
+                { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+            ];
+        }
+        HorizontalLayout {
+            height: Theme.feed-row;
+            spacing: 12px;
+            RecentGamesTwoPcs { width: root.cw * 2 + 12px; }
+            SessionCell { width: root.cw; }
+        }
+        SkeletonTrio { }
+    }
+}

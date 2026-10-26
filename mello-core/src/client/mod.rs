@@ -210,6 +210,15 @@ pub struct Client {
     disabled_integrations: std::collections::HashSet<String>,
     /// When false, sensed play stays local — no crew presence or session-end RPCs.
     share_game_activity: bool,
+    /// Installed games the user hides from the crew (game ids).
+    hidden_games: std::collections::HashSet<String>,
+    /// Decides when the installed library goes to the server.
+    library_reporter: crate::library_report::LibraryReporter,
+    /// Coalesces "feed changed" pushes into one feed reload per 5 s.
+    feed_reload: crate::feed_reload::FeedReloadGate,
+    /// `game_session_end` reports that could not be sent, kept across restarts.
+    /// Flushed when a crew becomes active (`flush_pending_session_ends`).
+    pending_session_ends: tokio::sync::Mutex<crate::pending_session_ends::PendingQueue>,
     enable_game_sensor: bool,
     emit_process_stats: bool,
     game_event_rx:
@@ -285,6 +294,12 @@ impl Client {
     /// called before `run()` so the first presence sync honors it.
     pub fn set_share_game_activity(&mut self, enabled: bool) {
         self.share_game_activity = enabled;
+    }
+
+    /// Seed the hidden games from persisted client settings. Must be called
+    /// before `run()`, so the first library report honors it.
+    pub fn set_hidden_games(&mut self, hidden: Vec<String>) {
+        self.hidden_games = hidden.into_iter().collect();
     }
 
     /// Shared frame lifecycle state used by stream_tick() and UI compositor.
@@ -384,6 +399,18 @@ impl Client {
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
             disabled_integrations: std::collections::HashSet::new(),
             share_game_activity: true,
+            hidden_games: std::collections::HashSet::new(),
+            library_reporter: crate::library_report::LibraryReporter::new(),
+            feed_reload: crate::feed_reload::FeedReloadGate::new(),
+            // Unit tests must not read or write the developer's config dir.
+            pending_session_ends: tokio::sync::Mutex::new(if cfg!(test) {
+                crate::pending_session_ends::PendingQueue::open(
+                    None,
+                    crate::pending_session_ends::now_ms(),
+                )
+            } else {
+                crate::pending_session_ends::PendingQueue::open_default()
+            }),
             enable_game_sensor,
             emit_process_stats,
             game_event_rx: std::sync::Mutex::new(None),
@@ -435,8 +462,26 @@ impl Client {
         let mut presence_tick = tokio::time::interval(tokio::time::Duration::from_millis(250));
         presence_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Runs the feed reload that the coalescing gate held back.
+        let mut feed_reload_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        feed_reload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             for game_event in self.drain_game_events() {
+                if let crate::game_sensing::GameEvent::LibraryScanned { entries } = game_event {
+                    let games = crate::library_report::installed_games(&entries)
+                        .into_iter()
+                        .map(|g| crate::events::InstalledGameInfo {
+                            game_id: g.game_id,
+                            name: g.name,
+                            steam_hidden: g.steam_hidden,
+                        })
+                        .collect();
+                    let _ = self.event_tx.send(Event::InstalledGames { games });
+                    self.library_reporter.set_scan(entries);
+                    self.sync_library_report().await;
+                    continue;
+                }
                 // Telemetry adapter side-effects on game start/stop: install the
                 // game's config on first detection, and reset adapter state on exit.
                 match &game_event {
@@ -473,7 +518,8 @@ impl Client {
                     }
                     // Focus changes carry no telemetry side-effects; the state
                     // manager handles them below.
-                    crate::game_sensing::GameEvent::PrimaryChanged { .. } => {}
+                    crate::game_sensing::GameEvent::PrimaryChanged { .. }
+                    | crate::game_sensing::GameEvent::LibraryScanned { .. } => {}
                 }
 
                 let (ui_events, session_end) = self.game_state.handle_event(game_event);
@@ -483,20 +529,21 @@ impl Client {
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
                     if game_services::should_emit_game_session_end(self.share_game_activity) {
-                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
-                            self.handle_game_session_end(
-                                &crew_id,
-                                &summary.game_name,
-                                &summary.game_id,
-                                summary.duration_min,
-                                summary.active_min,
-                                summary.igdb_id,
-                                summary.wins,
-                                summary.losses,
-                                summary.draws,
-                            )
-                            .await;
-                        }
+                        let crew_id = self.nakama.active_crew_id().map(String::from);
+                        self.handle_game_session_end(
+                            crew_id.as_deref(),
+                            &summary.game_name,
+                            &summary.game_id,
+                            summary.duration_min,
+                            summary.active_min,
+                            summary.igdb_id,
+                            summary.wins,
+                            summary.losses,
+                            summary.draws,
+                            summary.start_ms,
+                            summary.end_ms,
+                        )
+                        .await;
                     }
                 }
             }
@@ -559,6 +606,14 @@ impl Client {
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
+                }
+                _ = feed_reload_tick.tick(), if self.feed_reload.has_pending() => {
+                    let _step = watchdog.step("feed_reload");
+                    if self.feed_reload.due(Instant::now()) {
+                        if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                            self.handle_load_crew_feed(&crew_id).await;
+                        }
+                    }
                 }
                 _ = presence_tick.tick(), if self.speaking_presence.has_pending() => {
                     let _step = watchdog.step("speaking_presence");
@@ -1122,6 +1177,15 @@ impl Client {
             Command::LoadCrewFeed { crew_id } => {
                 self.handle_load_crew_feed(&crew_id).await;
             }
+            Command::FeedChanged { crew_id } => {
+                let active = self.nakama.active_crew_id().map(String::from);
+                if self
+                    .feed_reload
+                    .changed(&crew_id, active.as_deref(), Instant::now())
+                {
+                    self.handle_load_crew_feed(&crew_id).await;
+                }
+            }
 
             // --- Crew events ---
             Command::CrewCatchup { crew_id, last_seen } => {
@@ -1146,8 +1210,11 @@ impl Client {
                 draws,
             } => {
                 if game_services::should_emit_game_session_end(self.share_game_activity) {
+                    // The post-game card reports a session that just ended.
+                    let end_ms = crate::pending_session_ends::now_ms();
+                    let start_ms = end_ms - i64::from(duration_min) * 60_000;
                     self.handle_game_session_end(
-                        &crew_id,
+                        Some(&crew_id),
                         &game_name,
                         &game_id,
                         duration_min,
@@ -1158,6 +1225,8 @@ impl Client {
                         wins,
                         losses,
                         draws,
+                        start_ms,
+                        end_ms,
                     )
                     .await;
                 }
@@ -1237,12 +1306,25 @@ impl Client {
                 log::info!("[telemetry] disabled integrations set to {disabled:?}");
                 self.disabled_integrations = disabled.into_iter().collect();
             }
+            Command::SetHiddenGames { hidden } => {
+                self.hidden_games = hidden.into_iter().collect();
+                log::info!("[game-sharing] {} game(s) hidden", self.hidden_games.len());
+                self.sync_library_report().await;
+            }
             Command::SetShareGameActivity { enabled } => {
                 let changed = self.share_game_activity != enabled;
                 self.share_game_activity = enabled;
                 log::info!("[game-sharing] share_game_activity = {enabled}");
+                if changed && !enabled {
+                    self.library_reporter.consent_turned_off();
+                }
+                if !enabled {
+                    // Sharing off means nothing waits to be sent later.
+                    self.pending_session_ends.lock().await.clear();
+                }
                 if changed {
                     self.sync_game_presence().await;
+                    self.sync_library_report().await;
                 }
             }
             Command::RiotLink { riot_id, region } => {

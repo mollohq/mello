@@ -1,0 +1,120 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutMask } from "cut.slint";
+
+// ============================================================
+//  Skeleton trio: exactly three dashed cells that sit after the
+//  real cards, never in the hero slot. One for streams, one for
+//  voice clips, one for the Monday recap. Each goes when its real
+//  card arrives. Icon and one line each.
+// ============================================================
+
+/// A cell outlined in dashes. Slint has no dashed stroke, so the edges are
+/// rows of small bars and the cut corner is painted back in the ground
+/// colour with a short dashed diagonal.
+component DashedFrame inherits Rectangle {
+    in property <string> corner: "tr";
+    in property <length> n: Theme.notch;
+    in property <color> ground: Theme.bg-app;
+    in property <color> line: Theme.graphic-med;
+
+    property <length> step: 7px;
+    property <length> dash: 4px;
+    property <length> t: 1.5px;
+
+    background: transparent;
+    clip: true;
+
+    for i in floor(root.width / root.step): Rectangle { x: i * root.step; y: 0px; width: root.dash; height: root.t; background: root.line; opacity: 0.7; }
+    for i in floor(root.width / root.step): Rectangle { x: i * root.step; y: root.height - root.t; width: root.dash; height: root.t; background: root.line; opacity: 0.7; }
+    for i in floor(root.height / root.step): Rectangle { x: 0px; y: i * root.step; width: root.t; height: root.dash; background: root.line; opacity: 0.7; }
+    for i in floor(root.height / root.step): Rectangle { x: root.width - root.t; y: i * root.step; width: root.t; height: root.dash; background: root.line; opacity: 0.7; }
+
+    CutMask {
+        width: parent.width; height: parent.height;
+        n: root.n; corner: root.corner;
+        fill: root.ground;
+    }
+    // The cut edge: three dashes along the diagonal.
+    Path {
+        width: parent.width; height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: root.line;
+        stroke-width: root.t;
+        opacity: 0.7;
+        property <float> w: self.width / 1px;
+        property <float> h: self.height / 1px;
+        property <float> c: root.n / 1px;
+        // From the near end of the diagonal to the far end, in thirds.
+        property <float> ax: root.corner == "tr" || root.corner == "br" ? w - c : 0;
+        property <float> bx: root.corner == "tr" || root.corner == "br" ? w : c;
+        property <float> ay: root.corner == "tr" ? 0 : root.corner == "br" ? h : h - c;
+        property <float> by: root.corner == "tr" ? c : root.corner == "br" ? h - c : h;
+        // tr: (w-c,0)->(w,c)   br: (w,h-c)->(w-c,h)   bl: (c,h)->(0,h-c)
+        property <float> p0x: root.corner == "br" ? w : root.corner == "bl" ? c : ax;
+        property <float> p0y: root.corner == "br" ? h - c : root.corner == "bl" ? h : ay;
+        property <float> p1x: root.corner == "br" ? w - c : root.corner == "bl" ? 0 : bx;
+        property <float> p1y: root.corner == "br" ? h : root.corner == "bl" ? h - c : by;
+        commands: "M \{p0x} \{p0y} L \{p0x + (p1x - p0x) * 0.3} \{p0y + (p1y - p0y) * 0.3} M \{p0x + (p1x - p0x) * 0.45} \{p0y + (p1y - p0y) * 0.45} L \{p0x + (p1x - p0x) * 0.75} \{p0y + (p1y - p0y) * 0.75} M \{p0x + (p1x - p0x) * 0.9} \{p0y + (p1y - p0y) * 0.9} L \{p1x} \{p1y}";
+    }
+}
+
+/// One dashed cell: an icon and one line.
+export component SkeletonCell inherits Rectangle {
+    in property <image> icon;
+    in property <string> line;
+    in property <string> corner: "tr";
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: root.corner;
+        fill: Theme.card-bg-skel;
+    }
+    DashedFrame {
+        width: parent.width; height: parent.height;
+        corner: root.corner;
+    }
+    VerticalLayout {
+        alignment: center;
+        spacing: 10px;
+        Rectangle {
+            height: 30px;
+            Image {
+                source: root.icon;
+                colorize: Theme.skel-text;
+                width: 30px; height: 30px;
+                x: (parent.width - self.width) / 2;
+            }
+        }
+        Text {
+            text: root.line;
+            font-family: Theme.font-display;
+            font-size: 13px;
+            font-weight: Theme.weight-display;
+            color: Theme.skel-text;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+/// The three cells in a row, as the empty feed shows them. Each cell has a
+/// switch: the feed turns one off when its real card exists. The cells that
+/// remain share the row.
+export component SkeletonTrio inherits Rectangle {
+    in property <bool> show-stream: true;
+    in property <bool> show-voice-clip: true;
+    in property <bool> show-recap: true;
+
+    background: transparent;
+    // The recap cell alone is the slim row under the grid (mockup frame B).
+    height: root.show-stream || root.show-voice-clip ? 150px : 110px;
+
+    HorizontalLayout {
+        spacing: 12px;
+        if root.show-stream: SkeletonCell { icon: @image-url("../icons/skel-stream.svg"); line: "Your streams land here"; corner: "tr"; }
+        if root.show-voice-clip: SkeletonCell { icon: @image-url("../icons/skel-voice.svg"); line: "Voice clips land here"; corner: "br"; }
+        if root.show-recap: SkeletonCell { icon: @image-url("../icons/skel-week.svg"); line: "Your week, every Monday"; corner: "bl"; }
+    }
+}

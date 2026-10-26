@@ -2,7 +2,7 @@
 
 > **Component:** Personal Stats Surface, Crew Feed Curation for Game Sessions
 > **Version:** 0.3
-> **Status:** Implemented. The deep profile view (section 2.4), the weekly recap game section (section 3.5) and the rich telemetry session card (section 3.6) are not built.
+> **Status:** Implemented. The deep profile view (section 2.4) and the rich telemetry session card (section 3.6) are not built. The weekly recap belts (section 3.5) are built on feat/next-gen-feed.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [17-GAME-SENSING.md](./17-GAME-SENSING.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [22-GAME-UI-SURFACES.md](./22-GAME-UI-SURFACES.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -23,7 +23,7 @@ This spec does not define how a card looks. See
 │ "my win/loss streaks"      │     │ the curated crew feed              │
 │                            │     │                                    │
 │  • You strip (glance)      │     │  • session clears the bar → card   │
-│  • Profile (NOT BUILT)     │     │  • the rest → CREW PLAY rollup     │
+│  • Profile (NOT BUILT)     │     │  • the rest → RECENT GAMES header    │
 │                            │     │  • bar rises with crew volume      │
 │  always on · no curation   │     │  • same for every member           │
 │  backed by user_game_stats │     │  built on crew_feed.go             │
@@ -47,7 +47,7 @@ Telemetry bonuses add to that score when they exist.
 | Personal surface | A You strip and a deeper profile | The survey request is served without the feed |
 | Feed personalization | Identical for every member | The feed filters on notability only |
 | Volume handling | Adaptive notability threshold | One control scales low and high volume crews |
-| Routine sessions in feed | A `CREW PLAY` rollup card | Replaces the version 0.2 choice. See section 3.3 |
+| Routine sessions in feed | The recent games card header and tiles | Replaces the `CREW PLAY` rollup. See section 3.3 |
 | Sessions without telemetry | Earn cards from duration and company | Most play stays visible |
 
 ### Effect of an identical feed
@@ -193,28 +193,25 @@ session earns a card.
 A crew override, from "show everything" to "highlights only", is a future
 option.
 
-### 3.3 Routine play — the `CREW PLAY` rollup
+### 3.3 Routine play: the recent games card
 
-`pruneGameSessions` returns the removed sessions separately. `buildGameRollup`
-builds one card per crew per day from them.
+Status: the `CREW PLAY` rollup card is removed. `buildGameRollup` no longer exists.
+
+`buildRecentGames` in `crew_feed.go` reads every `game_session` in the week, before pruning. It also reads the library documents of the crew members. It builds one `recent-games` card.
 
 | Element | Content |
 |---|---|
-| Member line | `ostkatt · Valorant · 4h` |
-| Footer | Session count and total crew hours |
+| Header line | Session count and total crew time from sessions: "14 sessions, 31 h this week" |
+| Tiles | One to six games, keyed by game id, with name and minutes. Most recently played first |
 
-Fewer than three removed sessions produce no rollup card.
+- A session with no reportable minutes is not counted.
+- Tiles are the union of the sessions and the library documents. Spec [22](./22-GAME-UI-SURFACES.md) section 3.4 has the merge rules.
+- No game with minutes and no installed game means no card.
+- The sessions use no extra read. The library documents are one batched storage read of the crew members.
 
-Version 0.2 stated that routine play gets no card of its own, and that the crew
-aggregate belongs in the weekly recap. The weekly recap is a premium surface.
-That design hid the ordinary play of non-paying crews, which contradicts the
-T0 decision in section 1. The recap enrichment in section 3.5 is still wanted,
-but it does not hold routine play.
+Pruned sessions still get no card of their own. Their time is in the header and the tiles.
 
-Rollup minutes use the overnight guard. See
-[22](./22-GAME-UI-SURFACES.md) section 4.3. `reportableMinutes` in
-`crew_feed.go` applies it. Raw wall time made the rollup contradict the session
-cards below it.
+Minutes use the overnight guard. See [22](./22-GAME-UI-SURFACES.md) section 4.3. `reportableMinutes` in `crew_feed.go` applies it. Raw wall time made the card contradict the session cards below it.
 
 ### 3.4 Curation budget
 
@@ -222,28 +219,67 @@ cards below it.
 
 - Cards that are not game sessions pass through unchanged and in order.
 - `game_session` cards above the floor survive, to the cap in section 3.2.
-- Removed sessions go to the rollup in section 3.3.
-- `mapCardType`, `fillerPriority` and `fillerRole` register both `game_session`
-  and `game_rollup`.
+- Removed sessions count in the recent games card in section 3.3.
+- `mapCardType` registers `game_session`. `fillerPriority` and `fillerRole`
+  register `recent-games`.
 
 Curation runs server-side. Only `order`, `role`, `size` and `type` cross to the
 client. A threshold change needs no client release.
 
-### 3.5 Weekly recap enrichment — NOT BUILT
+### 3.5 Weekly recap enrichment
 
 The recap carries `GameRecords` and `BestStreak` from spec 18. See
-[crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go). The extension
-below is designed but not built.
+[crew_recaps.go](../backend/nakama/data/modules/crew_recaps.go).
 
-```go
-GamesPlayed   []GameTally       `json:"games_played"`
-Leaderboard   []RecapGameRecord `json:"leaderboard"`
-Awards        []RecapAward      `json:"awards"`
-```
+The recap also carries the head2head belts. See
+[HEAD2HEAD.md](./features/HEAD2HEAD.md) section 6.
 
-Candidate awards: most matches played, longest win streak, longest loss streak,
-largest win-rate change, clutch counts where the adapter supplies them,
-head-to-head record, and longest loss streak ended.
+| Field | Content |
+|---|---|
+| `belts_moved` | Titles whose holder changed in the recap week, with the holder, the previous holder and the value |
+| `belts_held` | The number of titles each member holds when the recap is generated |
+| `awards` | The existing game awards, then one `belt` award for each moved belt |
+| `leaderboard` | The same entries as `belts_held` |
+
+- The job reads the belts from the holders doc at generation time.
+- A recap with no activity has no belts.
+- `GamesPlayed` is built.
+
+Awards not built: largest win-rate change, clutch counts where the adapter
+supplies them, head-to-head record, and longest loss streak ended.
+
+### 3.5a Daily recap
+
+A daily recap is the weekly recap for one day, smaller. The server builds it
+from the sources the weekly recap reads. See
+[crew_daily_recap.go](../backend/nakama/data/modules/crew_daily_recap.go) and
+[CLIPS.md](./features/CLIPS.md) section 7.1 for the card.
+
+- `crew_feed` puts one `daily-recap` entry in `this_week` for each of the last
+  three days (UTC), newest first. Role `standard`, size `md`.
+- The entries stand after the recap and the head2head entry, before the
+  sessions. They take no filler slot.
+- A day belongs to the UTC day of the event timestamp. The day that is not over
+  is today so far.
+- A day with no minutes and no clip has no entry (`dailyRecapHasContent`). A
+  belt that moved on that day does not make it a day. Holding titles is a
+  standing state, as in the weekly recap.
+
+| Field | Content |
+|---|---|
+| `day_start`, `day_end` | 00:00 UTC of the day and of the next day, in ms. The client names the day |
+| `total_hangout_min` | Voice and stream minutes of the day |
+| `total_game_min` | Game minutes, counted by `reportableMinutes` |
+| `total_min` | The two together. The card leads with it |
+| `session_count` | Voice, stream and game sessions with reportable minutes |
+| `clip_count` | Clips of the day, from the clips doc |
+| `top_game`, `game_id` | The game with the most reportable minutes. A tie goes to the name that sorts first |
+| `member_ids` | Members who took part, the most active first, at most eight |
+| `belts_moved` | Titles whose `moved_at_ms` is in the day, newest first, at most two. The same shape as the weekly recap |
+
+The ledger events a catch-up card showed (`moment`, `member_joined`,
+`member_left`, `chat_activity`) have no feed card. A join is the joined row.
+The client does not draw a `catchup` entry that an older server sends.
 
 ### 3.6 Per-game data degradation
 
@@ -274,7 +310,8 @@ OCR. Spec 18 tracks that source.
 | `gameSessionT0Score`, `gameSessionQuality`, floor and cap | `crew_feed.go` | Implemented |
 | `pruneGameSessions`, `buildGameRollup`, `reportableMinutes` | `crew_feed.go` | Implemented |
 | You strip | `client/src/handlers/stats.rs`, `client/ui/panels/*` | Implemented |
-| Weekly recap game section | `crew_recaps.go` | Not built. Section 3.5 |
+| Weekly recap belts | `crew_recaps.go` | Implemented on feat/next-gen-feed. Section 3.5 |
+| Daily recap, `buildDailyRecaps` | `crew_daily_recap.go`, `crew_feed.go`, `DailyRecapCard` | Implemented on feat/next-gen-feed. Section 3.5a |
 | Deep profile view | Client | Not built. Section 2.4 |
 | Rich telemetry session card | Client | Not built. Section 3.6 |
 
@@ -302,6 +339,13 @@ Curation, in Go, without Nakama:
 - `buildGameRollup` aggregates removed sessions. It returns false below three.
 - `reportableMinutes` overnight guard. An overnight session must not increase
   the rollup total.
+
+Daily recap, in Go (`crew_daily_recap_test.go`):
+
+- Events group by UTC day, newest day first, with their own sums.
+- A day with nothing has no entry. A belt alone does not make a day.
+- At most two belts, newest first. The top game ties go by name.
+- The entries stand after the recap and before the sessions.
 
 Stats, in Go:
 

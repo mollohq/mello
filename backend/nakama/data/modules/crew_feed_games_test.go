@@ -1,6 +1,9 @@
 package main
 
 import (
+	"context"
+	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -12,6 +15,7 @@ func gsCard(id string, wins, losses, draws, streak int) feedCard {
 		backendType: "game_session",
 		data: GameSessionData{
 			GameName:    "Counter-Strike 2",
+			DurationMin: 20, // under the 30 min T0 bonus, over the empty-card rule
 			Wins:        wins,
 			Losses:      losses,
 			Draws:       draws,
@@ -206,66 +210,100 @@ func feedCardsContain(cards []feedCard, id string) bool {
 	return false
 }
 
-func gsCardNamed(id, game string, durationMin int, playerID, playerName string, ts int64) feedCard {
+func gsCardID(id, gameID, game string, durationMin int, ts int64) feedCard {
 	return feedCard{
-		id:          id,
-		feedType:    "session",
-		backendType: "game_session",
-		ts:          ts,
-		data: GameSessionData{
-			GameName:    game,
-			DurationMin: durationMin,
-			PlayerIDs:   []string{playerID},
-			PlayerNames: []string{playerName},
-		},
+		id: id, feedType: "session", backendType: "game_session", ts: ts,
+		data: GameSessionData{GameID: gameID, GameName: game, DurationMin: durationMin},
 	}
 }
 
-func TestBuildGameRollup_TooFewPruned(t *testing.T) {
-	pruned := []feedCard{
-		gsCardT0("a", 60, []string{"u1"}, 0, 0, 0, 0),
-		gsCardT0("b", 60, []string{"u2"}, 0, 0, 0, 0),
+func TestBuildRecentGames_Aggregation(t *testing.T) {
+	cards := []feedCard{
+		gsCardID("s1", "valorant", "Valorant", 100, 10),
+		gsCardID("s2", "counter-strike-2", "Counter-Strike 2", 50, 20),
+		gsCardID("s3", "minecraft", "Minecraft", 200, 30),
+		gsCardID("s4", "valorant", "Valorant", 30, 40),
+		clipCard("not-a-session", 99),
 	}
-	if _, ok := buildGameRollup(pruned); ok {
-		t.Fatal("expected no rollup for <3 pruned sessions")
-	}
-}
-
-func TestBuildGameRollup_Aggregation(t *testing.T) {
-	pruned := []feedCard{
-		gsCardNamed("s1", "Valorant", 100, "u1", "ostkatt", 10),
-		gsCardNamed("s2", "Counter-Strike 2", 50, "u1", "ostkatt", 20),
-		gsCardNamed("s3", "Minecraft", 200, "u2", "bob", 30),
-		gsCardNamed("s4", "Valorant", 30, "u3", "kim", 40),
-	}
-	card, ok := buildGameRollup(pruned)
+	card, ok := buildRecentGames(cards, nil)
 	if !ok {
-		t.Fatal("expected rollup for 4 pruned sessions")
+		t.Fatal("expected a recent games card")
 	}
-	if card.feedType != "rollup" || card.backendType != "game_rollup" || card.id != "game_rollup" {
-		t.Fatalf("rollup card meta: type=%q backend=%q id=%q", card.feedType, card.backendType, card.id)
+	if card.feedType != "recent-games" || card.backendType != "recent_games" || card.id != "recent_games" {
+		t.Fatalf("meta: type=%q backend=%q id=%q", card.feedType, card.backendType, card.id)
 	}
 	if card.ts != 40 {
-		t.Fatalf("rollup ts = %d, want max pruned ts 40", card.ts)
+		t.Fatalf("ts = %d, want newest session ts 40", card.ts)
 	}
-	data, ok := card.data.(GameRollupData)
+	data, ok := card.data.(RecentGamesData)
 	if !ok {
-		t.Fatalf("rollup data type %T", card.data)
+		t.Fatalf("data type %T", card.data)
 	}
 	if data.SessionCount != 4 || data.TotalMin != 380 {
-		t.Fatalf("rollup totals: sessions=%d min=%d, want 4 / 380", data.SessionCount, data.TotalMin)
+		t.Fatalf("header: sessions=%d min=%d, want 4 / 380", data.SessionCount, data.TotalMin)
 	}
-	if len(data.Lines) != 3 {
-		t.Fatalf("rollup lines: got %d want 3", len(data.Lines))
+	// Newest play first: valorant (ts 40), minecraft (30), cs2 (20).
+	want := []RecentGameTile{
+		{GameID: "valorant", GameName: "Valorant", Minutes: 130, LastPlayed: 40},
+		{GameID: "minecraft", GameName: "Minecraft", Minutes: 200, LastPlayed: 30},
+		{GameID: "counter-strike-2", GameName: "Counter-Strike 2", Minutes: 50, LastPlayed: 20},
 	}
-	if data.Lines[0].PlayerName != "bob" || data.Lines[0].GameName != "Minecraft" || data.Lines[0].TotalMin != 200 {
-		t.Fatalf("top line: %+v, want bob/Minecraft/200", data.Lines[0])
+	if len(data.Games) != len(want) {
+		t.Fatalf("tiles: got %d want %d (%+v)", len(data.Games), len(want), data.Games)
 	}
-	if data.Lines[1].PlayerName != "ostkatt" || data.Lines[1].GameName != "Valorant" || data.Lines[1].TotalMin != 150 || data.Lines[1].Sessions != 2 {
-		t.Fatalf("second line: %+v, want ostkatt/Valorant/150/2 sessions", data.Lines[1])
+	for i, w := range want {
+		g := data.Games[i]
+		if g.GameID != w.GameID || g.GameName != w.GameName || g.Minutes != w.Minutes || g.LastPlayed != w.LastPlayed {
+			t.Errorf("tile %d: got %+v want %+v", i, g, w)
+		}
 	}
-	if data.Lines[2].PlayerName != "kim" {
-		t.Fatalf("third line: %+v, want kim", data.Lines[2])
+}
+
+// Legacy events carry no game id: the name keys the tile, and the same game
+// under a different case is one tile.
+func TestBuildRecentGames_LegacyNameKey(t *testing.T) {
+	cards := []feedCard{
+		gsCardID("a", "", "Valorant", 30, 1),
+		gsCardID("b", "", "valorant", 30, 2),
+	}
+	card, ok := buildRecentGames(cards, nil)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	data := card.data.(RecentGamesData)
+	if len(data.Games) != 1 || data.Games[0].Minutes != 60 || data.Games[0].GameID != "valorant" {
+		t.Fatalf("tiles: %+v, want one valorant tile of 60 min", data.Games)
+	}
+}
+
+func TestBuildRecentGames_NothingWithoutMinutes(t *testing.T) {
+	if _, ok := buildRecentGames(nil, nil); ok {
+		t.Fatal("no sessions must give no card")
+	}
+	if _, ok := buildRecentGames([]feedCard{gsCardID("z", "valorant", "Valorant", 0, 1)}, nil); ok {
+		t.Fatal("a zero-minute session must give no card")
+	}
+}
+
+func TestBuildRecentGames_CapsTilesAtSixButCountsAllSessions(t *testing.T) {
+	cards := make([]feedCard, 0, 9)
+	for i := 0; i < 9; i++ {
+		id := "game" + string(rune('a'+i))
+		cards = append(cards, gsCardID("s"+id, id, id, 10*(i+1), int64(i+1)))
+	}
+	card, ok := buildRecentGames(cards, nil)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	data := card.data.(RecentGamesData)
+	if len(data.Games) != feedRecentGamesMaxTiles {
+		t.Fatalf("tiles: got %d want %d", len(data.Games), feedRecentGamesMaxTiles)
+	}
+	if data.SessionCount != 9 {
+		t.Fatalf("header counts %d sessions, want all 9", data.SessionCount)
+	}
+	if data.Games[0].Minutes != 90 {
+		t.Fatalf("top tile = %d min, want 90", data.Games[0].Minutes)
 	}
 }
 
@@ -288,58 +326,35 @@ func TestReportableMinutes_OvernightGuard(t *testing.T) {
 	}
 }
 
-// A session left running overnight must not inflate the rollup it appears in.
-// The session's own card already shows the active figure, so a rollup summing
+// A session left running overnight must not inflate the recent games header.
+// The session's own card already shows the active figure, so a total summing
 // wall time would contradict the cards directly below it.
-func TestBuildGameRollup_OvernightSessionDoesNotInflateTotals(t *testing.T) {
-	overnight := gsCardNamed("s1", "Valorant", 600, "u1", "ostkatt", 10)
-	data := overnight.data.(GameSessionData)
-	data.ActiveMin = 40
-	overnight.data = data
+func TestBuildRecentGames_OvernightSessionDoesNotInflateTotals(t *testing.T) {
+	overnight := gsCardID("s1", "valorant", "Valorant", 600, 10)
+	d := overnight.data.(GameSessionData)
+	d.ActiveMin = 40
+	overnight.data = d
 
-	pruned := []feedCard{
+	card, ok := buildRecentGames([]feedCard{
 		overnight,
-		gsCardNamed("s2", "Valorant", 60, "u2", "bob", 20),
-		gsCardNamed("s3", "Valorant", 30, "u3", "kim", 30),
-	}
-	card, ok := buildGameRollup(pruned)
+		gsCardID("s2", "valorant", "Valorant", 60, 20),
+		gsCardID("s3", "valorant", "Valorant", 30, 30),
+	}, nil)
 	if !ok {
-		t.Fatal("expected rollup for 3 pruned sessions")
+		t.Fatal("expected a card")
 	}
-	rollup := card.data.(GameRollupData)
-	if rollup.TotalMin != 130 {
-		t.Fatalf("crew total = %d, want 130 (40 active + 60 + 30), not the 690 wall-time sum", rollup.TotalMin)
+	data := card.data.(RecentGamesData)
+	if data.TotalMin != 130 {
+		t.Fatalf("total = %d, want 130 (40 active + 60 + 30), not the 690 wall-time sum", data.TotalMin)
 	}
-	for _, line := range rollup.Lines {
-		if line.PlayerName == "ostkatt" && line.TotalMin != 40 {
-			t.Fatalf("ostkatt line = %dm, want the 40m active figure, not 600m wall", line.TotalMin)
-		}
+	if data.Games[0].Minutes != 130 {
+		t.Fatalf("tile = %d min, want 130", data.Games[0].Minutes)
 	}
 }
 
-func TestBuildGameRollup_CapsLinesAtFive(t *testing.T) {
-	pruned := make([]feedCard, 0, 8)
-	for i := 0; i < 8; i++ {
-		pruned = append(pruned, gsCardNamed(
-			"p"+string(rune('a'+i)),
-			"Game",
-			10*(i+1),
-			"u"+string(rune('a'+i)),
-			"player"+string(rune('a'+i)),
-			int64(i+1),
-		))
-	}
-	card, ok := buildGameRollup(pruned)
-	if !ok {
-		t.Fatal("expected rollup")
-	}
-	data := card.data.(GameRollupData)
-	if len(data.Lines) != 5 {
-		t.Fatalf("rollup lines capped at 5, got %d", len(data.Lines))
-	}
-}
-
-func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
+// The Crew play rollup is gone. A loud week yields one recent games card that
+// counts the pruned routine sessions, and no entry of type rollup.
+func TestBuildThisWeek_LoudWeekHasRecentGamesNotRollup(t *testing.T) {
 	cards := make([]feedCard, 0, 20)
 	for i := 0; i < 16; i++ {
 		cards = append(cards, gsCard("heater"+string(rune('a'+i)), 5, 0, 0, 5))
@@ -348,29 +363,368 @@ func TestBuildThisWeek_LoudWeekIncludesRollup(t *testing.T) {
 		cards = append(cards, gsCardT0("routine"+string(rune('a'+i)), 30, []string{"solo"}, 0, 0, 0, 0))
 	}
 	entries := buildThisWeek(cards, time.Now().UnixMilli())
-	var rollup *FeedEntry
+	var recent *FeedEntry
 	for i := range entries {
 		if entries[i].Type == "rollup" {
-			rollup = &entries[i]
-			break
+			t.Fatal("the Crew play rollup must not be emitted")
+		}
+		if entries[i].Type == "recent-games" {
+			recent = &entries[i]
 		}
 	}
-	if rollup == nil {
-		t.Fatal("expected a rollup entry in a loud week with 4+ pruned routine sessions")
+	if recent == nil {
+		t.Fatal("expected a recent games entry")
 	}
-	if rollup.ID != "game_rollup" || rollup.Role != "standard" {
-		t.Fatalf("rollup entry meta: id=%q role=%q", rollup.ID, rollup.Role)
+	if recent.ID != "recent_games" || recent.Role != "standard" {
+		t.Fatalf("meta: id=%q role=%q", recent.ID, recent.Role)
+	}
+	data := recent.Data.(RecentGamesData)
+	if data.SessionCount != 20 {
+		t.Fatalf("header counts %d sessions, want all 20", data.SessionCount)
 	}
 }
 
-func TestFillerPriority_RollupBeatsWeakSession(t *testing.T) {
-	rollup := feedCard{feedType: "rollup", backendType: "game_rollup"}
+// A busy crew (50 members) has more clips and strong sessions than slots.
+// Clips rank 10000 and strong sessions above the recent games card, so before
+// the diversity pick the card was crowded out of the week.
+func TestBuildThisWeek_BusyCrewStillHasRecentGames(t *testing.T) {
+	now := time.Now().UnixMilli()
+	cards := make([]feedCard, 0, 40)
+	for i := 0; i < 8; i++ {
+		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
+	}
+	for i := 0; i < 16; i++ {
+		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
+	}
+	entries := buildThisWeek(cards, now)
+	for _, e := range entries {
+		if e.Type == "recent-games" {
+			return
+		}
+	}
+	t.Fatalf("a busy crew lost the recent games card: %d entries", len(entries))
+}
+
+func TestFillerPriority_RecentGamesBeatsWeakSession(t *testing.T) {
+	recent := feedCard{feedType: "recent-games", backendType: "recent_games"}
 	weak := gsCardT0("weak", 10, nil, 0, 0, 0, 0)
 	strong := gsCard("strong", 5, 0, 0, 5)
-	if fillerPriority(rollup) <= fillerPriority(weak) {
-		t.Fatalf("rollup priority %d should beat weak session %d", fillerPriority(rollup), fillerPriority(weak))
+	if fillerPriority(recent) <= fillerPriority(weak) {
+		t.Fatalf("recent games priority %d should beat weak session %d", fillerPriority(recent), fillerPriority(weak))
 	}
-	if fillerPriority(strong) <= fillerPriority(rollup) {
-		t.Fatalf("strong session priority %d should beat rollup %d", fillerPriority(strong), fillerPriority(rollup))
+	if fillerPriority(strong) <= fillerPriority(recent) {
+		t.Fatalf("strong session priority %d should beat recent games %d", fillerPriority(strong), fillerPriority(recent))
+	}
+}
+
+// ---- library snapshot merge (plans/next-gen-feed.md section 3) ----
+
+func libDoc(updatedAt int64, games ...LibraryGame) *LibraryDoc {
+	return &LibraryDoc{Games: games, UpdatedAt: updatedAt}
+}
+
+func libGame(id, name string, playtimeMin int, lastPlayedUnix int64) LibraryGame {
+	g := LibraryGame{GameID: id, Name: name, Launcher: "steam"}
+	if playtimeMin >= 0 {
+		g.PlaytimeMin = &playtimeMin
+	}
+	if lastPlayedUnix > 0 {
+		g.LastPlayedUnix = &lastPlayedUnix
+	}
+	return g
+}
+
+func recentData(t *testing.T, card feedCard) RecentGamesData {
+	t.Helper()
+	d, ok := card.data.(RecentGamesData)
+	if !ok {
+		t.Fatalf("data type %T", card.data)
+	}
+	return d
+}
+
+func tileByID(t *testing.T, d RecentGamesData, id string) RecentGameTile {
+	t.Helper()
+	for _, g := range d.Games {
+		if g.GameID == id {
+			return g
+		}
+	}
+	t.Fatalf("no tile %q in %+v", id, d.Games)
+	return RecentGameTile{}
+}
+
+// A snapshot with no sessions still gives a card. The header counts nothing.
+func TestBuildRecentGames_SnapshotOnly(t *testing.T) {
+	libs := map[string]*LibraryDoc{
+		"alice": libDoc(5_000,
+			libGame("steam-730", "Counter-Strike 2", 249_008, 1_760_000_000),
+			libGame("epic-fortnite", "Fortnite", -1, 0)),
+		"bob": libDoc(6_000, libGame("steam-730", "Counter-Strike 2", 600, 1_760_000_500)),
+	}
+	card, ok := buildRecentGames(nil, libs)
+	if !ok {
+		t.Fatal("a snapshot alone must give a card")
+	}
+	d := recentData(t, card)
+	if d.SessionCount != 0 || d.TotalMin != 0 {
+		t.Fatalf("header = %d sessions / %d min, want 0 / 0", d.SessionCount, d.TotalMin)
+	}
+	cs := tileByID(t, d, "steam-730")
+	if cs.Minutes != 249_608 {
+		t.Fatalf("minutes = %d, want the members' playtime summed (249608)", cs.Minutes)
+	}
+	if cs.LastPlayed != 1_760_000_500_000 {
+		t.Fatalf("last played = %d, want the newest, in ms", cs.LastPlayed)
+	}
+	if got := strings.Join(cs.MemberIDs, ","); got != "alice,bob" {
+		t.Fatalf("members = %q, want alice,bob", got)
+	}
+	fn := tileByID(t, d, "epic-fortnite")
+	if fn.Minutes != 0 || fn.LastPlayed != 0 || len(fn.MemberIDs) != 1 {
+		t.Fatalf("fortnite tile = %+v", fn)
+	}
+	if d.Games[0].GameID != "steam-730" {
+		t.Fatalf("the played game must lead, got %q", d.Games[0].GameID)
+	}
+	if card.ts != 1_760_000_500_000 {
+		t.Fatalf("card ts = %d", card.ts)
+	}
+	if d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2 (alice and bob)", d.PCCount)
+	}
+	if !cardHasContent(card.feedType, card.backendType, card.data) {
+		t.Fatal("a snapshot card has content")
+	}
+}
+
+// Sessions alone behave as before, and the players become the pips.
+func TestBuildRecentGames_SessionsOnlyCarryPlayers(t *testing.T) {
+	c := gsCardID("s1", "valorant", "Valorant", 90, 10)
+	sd := c.data.(GameSessionData)
+	sd.PlayerIDs = []string{"alice", "bob"}
+	c.data = sd
+	card, ok := buildRecentGames([]feedCard{c}, nil)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if d.SessionCount != 1 || d.TotalMin != 90 || len(d.Games) != 1 {
+		t.Fatalf("data = %+v", d)
+	}
+	if g := d.Games[0]; g.Minutes != 90 || strings.Join(g.MemberIDs, ",") != "alice,bob" {
+		t.Fatalf("tile = %+v", g)
+	}
+}
+
+// Both sources: union by id, name and hours from the snapshot, last played
+// from the newer, pips from both, header from sessions only.
+func TestBuildRecentGames_SnapshotAndSessionsMerge(t *testing.T) {
+	cs := gsCardID("s1", "steam-730", "CS2 session name", 60, 2_000_000)
+	csd := cs.data.(GameSessionData)
+	csd.PlayerIDs = []string{"carol"}
+	cs.data = csd
+	cards := []feedCard{
+		cs,
+		gsCardID("s2", "valorant", "Valorant", 45, 3_000_000),
+	}
+	libs := map[string]*LibraryDoc{
+		"alice": libDoc(1,
+			libGame("steam-730", "Counter-Strike 2", 1_000, 1_000), // 1,000,000 ms: older than the session
+			libGame("steam-570", "Dota 2", 300, 9_000)),            // 9,000,000 ms: newest of all
+	}
+	card, ok := buildRecentGames(cards, libs)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if d.SessionCount != 2 || d.TotalMin != 105 {
+		t.Fatalf("header = %d / %d, want 2 sessions / 105 min from sessions only", d.SessionCount, d.TotalMin)
+	}
+	if len(d.Games) != 3 {
+		t.Fatalf("tiles = %+v, want the union of 3", d.Games)
+	}
+	csTile := tileByID(t, d, "steam-730")
+	if csTile.GameName != "Counter-Strike 2" {
+		t.Fatalf("name = %q, want the snapshot name", csTile.GameName)
+	}
+	if csTile.Minutes != 1_000 {
+		t.Fatalf("minutes = %d, want playtime_min over session minutes", csTile.Minutes)
+	}
+	if csTile.LastPlayed != 2_000_000 {
+		t.Fatalf("last played = %d, want the newer (the session)", csTile.LastPlayed)
+	}
+	if strings.Join(csTile.MemberIDs, ",") != "alice,carol" {
+		t.Fatalf("members = %v, want installed (alice) and played (carol)", csTile.MemberIDs)
+	}
+	if d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2 (alice installed, carol played)", d.PCCount)
+	}
+	val := tileByID(t, d, "valorant")
+	if val.Minutes != 45 {
+		t.Fatalf("a session-only game keeps its session minutes, got %d", val.Minutes)
+	}
+	// Order: dota (9,000,000), valorant (3,000,000), cs2 (2,000,000).
+	order := []string{d.Games[0].GameID, d.Games[1].GameID, d.Games[2].GameID}
+	if strings.Join(order, ",") != "steam-570,valorant,steam-730" {
+		t.Fatalf("order = %v, want last played descending", order)
+	}
+}
+
+// A session id from the catalogue and a launcher id from the library name the
+// same game. The name joins them into one tile.
+func TestBuildRecentGames_NameJoinsCatalogueAndLauncherIDs(t *testing.T) {
+	cards := []feedCard{gsCardID("s1", "counter-strike-2", "Counter-Strike 2", 30, 100)}
+	libs := map[string]*LibraryDoc{
+		"alice": libDoc(1, libGame("steam-730", "counter-strike 2", 500, 0)),
+	}
+	libs["alice"].Games[0].Name = "Counter-Strike 2"
+	card, ok := buildRecentGames(cards, libs)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if len(d.Games) != 1 {
+		t.Fatalf("tiles = %+v, want one", d.Games)
+	}
+	g := d.Games[0]
+	if g.GameID != "counter-strike-2" || g.Minutes != 500 || len(g.MemberIDs) != 1 {
+		t.Fatalf("tile = %+v, want the session id, snapshot hours, one member", g)
+	}
+}
+
+func TestBuildRecentGames_SnapshotStillCapsAtSix(t *testing.T) {
+	games := make([]LibraryGame, 0, 10)
+	for i := 0; i < 10; i++ {
+		games = append(games, libGame(fmt.Sprintf("steam-%d", i+1), fmt.Sprintf("Game %d", i+1), 10, int64(1000+i)))
+	}
+	card, ok := buildRecentGames(nil, map[string]*LibraryDoc{"alice": libDoc(1, games...)})
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if len(d.Games) != feedRecentGamesMaxTiles {
+		t.Fatalf("tiles = %d, want %d", len(d.Games), feedRecentGamesMaxTiles)
+	}
+	if d.Games[0].GameID != "steam-10" {
+		t.Fatalf("newest first, got %q", d.Games[0].GameID)
+	}
+}
+
+func TestBuildRecentGames_EmptySnapshotsGiveNoCard(t *testing.T) {
+	libs := map[string]*LibraryDoc{"alice": libDoc(1), "bob": nil}
+	if _, ok := buildRecentGames(nil, libs); ok {
+		t.Fatal("empty documents must give no card")
+	}
+}
+
+// The feed RPC path reads the member documents as the system.
+func TestCrewLibraryDocs_ReadsMemberDocs(t *testing.T) {
+	nk := newFakeGuestNk()
+	nk.addMember("crew1", "alice", "Alice")
+	nk.addMember("crew1", "bob", "Bob")
+	nk.put(UserLibraryCollection, UserLibraryKey, "alice", libDoc(1, libGame("steam-1", "A", 5, 0)))
+	nk.put(UserLibraryCollection, UserLibraryKey, "stranger", libDoc(1, libGame("steam-2", "B", 5, 0)))
+	docs := crewLibraryDocs(context.Background(), nk, "crew1")
+	if len(docs) != 1 || docs["alice"] == nil {
+		t.Fatalf("docs = %+v, want only the members' own", docs)
+	}
+}
+
+func TestBuildThisWeek_SnapshotFeedsRecentGamesCard(t *testing.T) {
+	libs := map[string]*LibraryDoc{"alice": libDoc(1, libGame("steam-730", "Counter-Strike 2", 120, 1_760_000_000))}
+	entries := buildThisWeekWithLibraries(nil, time.Now().UnixMilli(), libs)
+	found := false
+	for _, e := range entries {
+		if e.Type == "recent-games" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("entries = %+v, want a recent-games card from the snapshot", entries)
+	}
+}
+
+// The tile carries the launcher of the library entry, so the client can show
+// it when the playtime is unknown.
+func TestBuildRecentGames_TileCarriesTheLauncher(t *testing.T) {
+	epic := libGame("epic-rocketleague", "Rocket League", -1, 0)
+	epic.Launcher = "epic"
+	libs := map[string]*LibraryDoc{
+		"alice": libDoc(5_000, epic, libGame("steam-730", "Counter-Strike 2", 600, 1_760_000_000)),
+	}
+	card, ok := buildRecentGames(nil, libs)
+	if !ok {
+		t.Fatal("a snapshot alone must give a card")
+	}
+	d := recentData(t, card)
+	if got := tileByID(t, d, "epic-rocketleague").Launcher; got != "epic" {
+		t.Fatalf("launcher = %q, want epic", got)
+	}
+	if got := tileByID(t, d, "steam-730").Launcher; got != "steam" {
+		t.Fatalf("launcher = %q, want steam", got)
+	}
+}
+
+// The recent games card is on the first screen for every crew size: right
+// after the head2head card, ahead of the clips that fill the other slots. A
+// busy crew used to get it as the 7th entry, after the wide-slot swap pushed
+// it back.
+func TestBuildThisWeek_RecentGamesFollowsHead2headInABusyCrew(t *testing.T) {
+	now := time.Now().UnixMilli()
+	cards := make([]feedCard, 0, 40)
+	for i := 0; i < 13; i++ {
+		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i)*1000))
+	}
+	for i := 0; i < 16; i++ {
+		cards = append(cards, gsCard(fmt.Sprintf("heater%d", i), 5, 0, 0, 5))
+	}
+	entries := buildThisWeekFull(cards, now, nil, &Head2headFeedData{UpdatedAt: now})
+	if len(entries) < 3 || entries[0].Type != "head2head" {
+		t.Fatalf("entries: %+v", entries)
+	}
+	pos, dailies := -1, 0
+	for i, e := range entries {
+		if e.Type == "recent-games" {
+			pos = i
+		}
+		if e.Type == "daily-recap" {
+			dailies++
+		}
+		if e.Type == "clip" && e.Size == "lg" {
+			t.Fatalf("clip %s is wide", e.ID)
+		}
+	}
+	// The daily recaps stand between head2head and the sessions; the recent
+	// games card is the first of the sessions' slots.
+	if pos < 0 || pos > 1+dailies {
+		t.Fatalf("recent games at entry %d, want right after head2head and the %d daily recaps", pos, dailies)
+	}
+}
+
+// The PC count is over every game, not the tiles that survive the cap, and a
+// member who owns many games counts once. One owner is a list, not a grid.
+func TestBuildRecentGames_PCCountCountsMembersNotTiles(t *testing.T) {
+	alice := []LibraryGame{}
+	for i := 0; i < 8; i++ {
+		alice = append(alice, libGame(fmt.Sprintf("steam-%d", i), fmt.Sprintf("Game %d", i), 60, int64(1_000+i)))
+	}
+	solo := map[string]*LibraryDoc{"alice": libDoc(1, alice...)}
+	card, ok := buildRecentGames(nil, solo)
+	if !ok {
+		t.Fatal("expected a card")
+	}
+	d := recentData(t, card)
+	if len(d.Games) != feedRecentGamesMaxTiles || d.PCCount != 1 {
+		t.Fatalf("tiles = %d, pc_count = %d, want %d tiles and 1 PC", len(d.Games), d.PCCount, feedRecentGamesMaxTiles)
+	}
+	// Bob owns only a game that the cap drops. He still counts.
+	two := map[string]*LibraryDoc{
+		"alice": libDoc(1, alice...),
+		"bob":   libDoc(1, libGame("steam-0", "Game 0", 60, 1_000)),
+	}
+	card, _ = buildRecentGames(nil, two)
+	if d = recentData(t, card); d.PCCount != 2 {
+		t.Fatalf("pc_count = %d, want 2", d.PCCount)
 	}
 }

@@ -38,6 +38,29 @@ pub fn wire(ctx: &AppContext) {
             });
     }
 
+    // Per-game "Hidden from crew" toggle (Games settings tab). A change goes to
+    // core, which re-sends the library report without the game. The switch
+    // shows its own state, so the list is not rebuilt here.
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let s = ctx.settings.clone();
+        ctx.app.on_games_hidden_toggled(move |game_id, hidden| {
+            let game_id = game_id.to_string();
+            let hidden_games = {
+                let mut settings = s.borrow_mut();
+                settings.hidden_games.retain(|id| id != &game_id);
+                if hidden {
+                    settings.hidden_games.push(game_id);
+                }
+                settings.save();
+                settings.hidden_games.clone()
+            };
+            let _ = cmd.send(Command::SetHiddenGames {
+                hidden: hidden_games,
+            });
+        });
+    }
+
     // Riot link dialog submit (from settings tab or post-game CTA).
     {
         let cmd = ctx.cmd_tx.clone();

@@ -616,6 +616,11 @@ type voiceLeaveInternalOpts struct {
 	// caller (OnSessionEnd) has already written StatusOffline and we must not
 	// overwrite it.
 	skipPresenceWrite bool
+	// leftAt is when the member stopped being in voice, when that is earlier
+	// than now. The voice GC sets it to the last sign of life of a ghost
+	// member, so the ghost's voice time and the voice_session duration end
+	// there and not when the GC finally notices. Zero means now.
+	leftAt time.Time
 }
 
 func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID string, opts ...voiceLeaveInternalOpts) {
@@ -630,7 +635,17 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	voiceUserChannelMu.Unlock()
 
 	if !wasInVoice {
-		return
+		// A member can sit in a room with no user->channel entry, for example
+		// after a racing join. Nothing else would remove it, so find it here.
+		channelID, wasInVoice = orphanVoiceChannel(userID)
+		if !wasInVoice {
+			return
+		}
+	}
+
+	leftAt := opt.leftAt
+	if leftAt.IsZero() || leftAt.After(time.Now()) {
+		leftAt = time.Now()
 	}
 
 	// Resolve crew
@@ -639,11 +654,18 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	voiceChannelCrewMu.RUnlock()
 
 	username := ""
+	var joinedAtMs int64
+	isGuest := false
 	lastMemberLeft := false
 	voiceRoomsMu.Lock()
 	if room, ok := voiceRooms[channelID]; ok {
+		if crewID == "" {
+			crewID = room.CrewID
+		}
 		if m, exists := room.Members[userID]; exists {
 			username = m.Username
+			joinedAtMs = m.JoinedAt
+			isGuest = m.IsGuest
 		}
 		delete(room.Members, userID)
 		if len(room.Members) == 0 {
@@ -656,6 +678,17 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 	}
 	voiceRoomsMu.Unlock()
 
+	// Per-member voice time. Read the session before the last leave removes it.
+	// Guests have no stats. A member who was never in a session with a second
+	// participant sat alone, which is not time with the crew.
+	hadCrewSession := voiceSessionParticipantCount(channelID) >= 2
+	if crewID != "" && !isGuest && hadCrewSession {
+		if mins := voiceMemberMinutes(joinedAtMs, leftAt); mins > 0 {
+			recordVoiceActivity(ctx, logger, nk, userID, mins, leftAt)
+			recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerSession, time.Now().UnixMilli())
+		}
+	}
+
 	// Write voice_session event if this was the last member and session had 2+ participants
 	if lastMemberLeft {
 		if sess := voiceSessionOnLastLeave(channelID); sess != nil {
@@ -665,7 +698,7 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 				participantIDs = append(participantIDs, uid)
 				participantNames = append(participantNames, uname)
 			}
-			durationMin := int(time.Since(sess.startTime).Minutes())
+			durationMin := int(leftAt.Sub(sess.startTime).Minutes())
 			if durationMin < 1 {
 				durationMin = 1
 			}
@@ -715,6 +748,35 @@ func voiceLeaveInternal(ctx context.Context, logger runtime.Logger, nk runtime.N
 		PushVoiceUpdate(ctx, logger, nk, crewID)
 		QueueSidebarVoiceDelta(logger, nk, crewID)
 	}
+}
+
+// orphanVoiceChannel finds the room that holds userID as a member, for a user
+// with no user->channel entry.
+func orphanVoiceChannel(userID string) (string, bool) {
+	voiceRoomsMu.RLock()
+	defer voiceRoomsMu.RUnlock()
+	for ch, room := range voiceRooms {
+		if _, ok := room.Members[userID]; ok {
+			return ch, true
+		}
+	}
+	return "", false
+}
+
+// voiceMemberMinutes is the whole minutes between a member's join and leave.
+// A stint over 24 hours is a ghost that nobody removed, so it is capped.
+func voiceMemberMinutes(joinedAtMs int64, leftAt time.Time) int {
+	if joinedAtMs <= 0 {
+		return 0
+	}
+	mins := int(leftAt.Sub(time.UnixMilli(joinedAtMs)).Minutes())
+	if mins < 0 {
+		return 0
+	}
+	if mins > maxSessionDurationMin {
+		return maxSessionDurationMin
+	}
+	return mins
 }
 
 // VoiceEvictChannel removes all users from a specific channel (used when channel is deleted).
@@ -831,7 +893,12 @@ func voiceRoomGC(ctx context.Context, logger runtime.Logger, nk runtime.NakamaMo
 			p.UpdatedAt,
 			misses,
 		)
-		voiceLeaveInternal(ctx, logger, nk, uid, voiceLeaveInternalOpts{skipPresenceWrite: true})
+		// The ghost's time ends at its last sign of life, not at this tick.
+		opts := voiceLeaveInternalOpts{skipPresenceWrite: true}
+		if updatedAt, parseErr := time.Parse(time.RFC3339, p.UpdatedAt); parseErr == nil {
+			opts.leftAt = updatedAt
+		}
+		voiceLeaveInternal(ctx, logger, nk, uid, opts)
 
 		// Also fix the stored presence if it's not already offline.
 		if p.Status != StatusOffline {

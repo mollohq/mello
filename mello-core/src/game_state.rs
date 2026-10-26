@@ -73,6 +73,7 @@ impl GameStateManager {
                     color: game.color.clone(),
                     pid,
                     exe_path: game.exe_path.clone(),
+                    started_at_ms: game.started_at,
                 });
                 self.sessions.insert(
                     game.game_id.clone(),
@@ -135,6 +136,8 @@ impl GameStateManager {
                         losses,
                         draws,
                         matches: std::mem::take(&mut session.matches),
+                        start_ms: session.game.started_at,
+                        end_ms: ended_at,
                     });
                 }
 
@@ -148,6 +151,8 @@ impl GameStateManager {
             GameEvent::PrimaryChanged { game_id } => {
                 self.primary = game_id;
             }
+            // The client reads the library before the event reaches here.
+            GameEvent::LibraryScanned { .. } => {}
         }
 
         (events, session_end)
@@ -227,6 +232,10 @@ pub struct SessionSummary {
     /// Drawn matches — recorded but don't move the streak.
     pub draws: u32,
     pub matches: Vec<MatchResult>,
+    /// When the game process started (Unix ms), from the sensor.
+    pub start_ms: i64,
+    /// When the game was last seen alive (Unix ms).
+    pub end_ms: i64,
 }
 
 /// Count streak-eligible wins/losses/draws. Wins/losses move the record;
@@ -338,6 +347,16 @@ mod tests {
         );
         assert!(session_end.is_none());
         assert!(mgr.current_game().is_some());
+    }
+
+    #[test]
+    fn detected_carries_the_process_start_for_the_live_card() {
+        let mut mgr = GameStateManager::new();
+        let game = game_at(7, "rocket-league", START);
+        let (events, _) = mgr.handle_event(GameEvent::Started(game));
+        assert!(
+            matches!(&events[0], Event::GameDetected { started_at_ms, .. } if *started_at_ms == START)
+        );
     }
 
     #[test]

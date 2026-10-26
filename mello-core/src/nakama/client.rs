@@ -1334,6 +1334,14 @@ impl NakamaClient {
         Ok(())
     }
 
+    /// Replace the server's copy of the installed library. An empty list
+    /// clears it. See `library_report.rs`.
+    pub async fn library_report(&self, games: &[crate::library_report::ReportGame]) -> Result<()> {
+        self.rpc("library_report", &serde_json::json!({ "games": games }))
+            .await?;
+        Ok(())
+    }
+
     pub async fn presence_get(&self, user_ids: &[String]) -> Result<String> {
         let payload = serde_json::json!({ "user_ids": user_ids });
         self.rpc("presence_get", &payload).await
@@ -2573,6 +2581,13 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
             }
             Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
         },
+        // 116 = the crew feed has new content
+        116 => match serde_json::from_str::<crew_state::FeedChanged>(content) {
+            Ok(n) => {
+                let _ = event_tx.send(Event::FeedChanged { crew_id: n.crew_id });
+            }
+            Err(e) => log::warn!("Failed to parse feed_changed notification: {}", e),
+        },
         // 115 = throttled message preview
         115 => match serde_json::from_str::<crew_state::MessagePreviewUpdate>(content) {
             Ok(update) => {
@@ -2592,6 +2607,22 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notification_116_is_a_feed_changed_event_for_the_crew() {
+        let (tx, rx) = std::sync::mpsc::channel();
+        handle_notification(
+            116,
+            r#"{"type":"feed_changed","crew_id":"c1","reason":"clip"}"#,
+            &tx,
+        );
+        match rx.try_recv() {
+            Ok(Event::FeedChanged { crew_id }) => assert_eq!(crew_id, "c1"),
+            other => panic!("expected FeedChanged, got {:?}", other.is_ok()),
+        }
+        handle_notification(116, "not json", &tx);
+        assert!(rx.try_recv().is_err(), "a bad payload sends nothing");
+    }
 
     fn make_api_msg(content: &str, sender_id: &str, username: &str) -> ApiChannelMessage {
         ApiChannelMessage {

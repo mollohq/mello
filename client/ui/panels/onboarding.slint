@@ -1630,17 +1630,43 @@ export component Onboarding inherits Rectangle {
 
                         SettingsToggle {
                             checked <=> root.share-game-activity;
-                            label: "Show crew what I'm playing";
+                            label: "Show crew what I play";
                         }
 
                         Text {
                             font-weight: Theme.weight-display;
                             font-family: Theme.font-display;
-                            text: "Show crew what I'm playing";
+                            text: "Show crew what I play";
                             font-size: 13px;
                             color: Theme.text-secondary;
                             vertical-alignment: center;
                         }
+                    }
+
+                    Rectangle {
+                        height: 6px;
+                    }
+
+                    Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
+                        text: "Your installed games, play sessions and what you're in right now.";
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
+                    }
+
+                    Rectangle {
+                        height: 6px;
+                    }
+
+                    Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
+                        text: "m3llo starts with your PC and keeps track of your sessions.";
+                        font-size: 12px;
+                        color: Theme.text-secondary;
+                        wrap: word-wrap;
                     }
                 }
 

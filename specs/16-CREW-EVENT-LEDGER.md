@@ -137,7 +137,7 @@ Written when a detected game session ends for a user in this crew. Requires game
 
 #### `member_joined`
 
-Written by the `AfterJoinGroup` hook.
+Written by the `AfterJoinGroup` hook, and by the `join_by_invite_code` RPC, which adds the caller with system authority and so runs no hook. Both call `recordMemberJoined`.
 
 ```json
 {
@@ -145,10 +145,14 @@ Written by the `AfterJoinGroup` hook.
     "score": 15,
     "data": {
         "username": "newplayer",
-        "display_name": "NewPlayer"
+        "display_name": "NewPlayer",
+        "invited_by": "<user id of the member whose invite code was used>",
+        "invited_by_name": "b0bben"
     }
 }
 ```
+
+`invited_by` and `invited_by_name` are absent when the joiner used no invite code. They feed the joined cards of the crew feed (CLIPS 7).
 
 #### `member_left`
 
@@ -324,6 +328,41 @@ Read paths:
 - `crew_timeline` is the raw paginated source: it merges the ledger with recent durable clips (last 7 days) and the single latest recap, newest first, without curation. Used for deep scroll.
 - `crew_catchup` merges recent clips (newer than `last_seen`) into the candidate set.
 - `crew_clips` and `crew_recaps` RPCs paginate the full durable history (newest first), powering the deeper memory surfaces.
+
+### 3.6 Library report (not a ledger event)
+
+The `library_report` RPC stores the games installed on a member's device. It is not a ledger event. Nothing is appended to the ledger and no card type exists for it.
+
+Reason: the ledger keeps 7 days of history inside a 256 KB object (section 3.4). A library of 500 games is about 60 KB. Each member would add that to the shared document. The library is state, not history, so a replace is the right model.
+
+| Item | Value |
+|---|---|
+| Collection / key | `user_library` / `snapshot`, one object per user |
+| Permissions | Read: owner only. Write: server only |
+| Write | A replace. The last report wins. No version check |
+| Reader | `crew_feed` reads the documents of the crew members as the system |
+| Gate | The client sends only when `share_game_activity` is on. An empty report clears the document |
+
+Request:
+
+```json
+{ "games": [ { "game_id": "steam-730", "name": "Counter-Strike 2", "launcher": "steam",
+               "playtime_min": 249008, "last_played_unix": 1760000000 } ] }
+```
+
+| Field | Rule |
+|---|---|
+| `game_id` | Required. `<prefix>-<external_id>`, at most 128 bytes, no whitespace |
+| `name` | Required. At most 128 characters |
+| `launcher` | Required. Lower case letters, digits and `_`, at most 32 bytes |
+| `playtime_min` | Optional. 0 to 26,280,000 |
+| `last_played_unix` | Optional. Unix seconds, not negative |
+| `hidden` | Not part of the contract. An entry with `hidden: true` is dropped |
+
+- More than 500 games, or a payload over 256 KB, gives error code 3 (invalid argument). A repeated `game_id` keeps its first entry.
+- The stored document is `{ "games": [...], "updated_at": <unix ms> }`.
+- The client sends after the first scan following login, then only when the set or the playtime changed. Spec [17](./17-GAME-SENSING.md) section 3.3 has the scan.
+- Module: `backend/nakama/data/modules/library_report.go`.
 
 ---
 
@@ -538,7 +577,7 @@ initializer.RegisterRpc("post_moment", PostMomentRPC)
 |---------------|---------------|---------|
 | `voice_state.go` voice_leave | `voice_session` | Last member leaves a channel that had 2+ members (track via in-memory session start time) |
 | `streaming.go` stream_stop | `stream_session` | Stream ends |
-| `crews.go` AfterJoinGroup | `member_joined` | User joins crew |
+| `crews.go` AfterJoinGroup, `invite_codes.go` join_by_invite_code | `member_joined` | User joins crew |
 | `crews.go` AfterLeaveGroup | `member_left` | User leaves crew |
 | `crew_state.go` OnChatMessage | `chat_activity` | Aggregated, not per-message (see 6.2) |
 

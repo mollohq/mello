@@ -53,6 +53,15 @@ pub struct LibraryEntry {
     pub name: String,
     /// Absolute install directory; every executable beneath it is this game.
     pub install_dir: PathBuf,
+    /// Lifetime minutes played, from Steam's local `localconfig.vdf`. Account
+    /// wide, so it includes play on other machines. Steam only; `None` when
+    /// the file is missing or has no value for this app.
+    pub playtime_min: Option<u32>,
+    /// Last played, unix seconds. `localconfig.vdf` first, then the
+    /// `appmanifest` value. Steam only.
+    pub last_played_unix: Option<u64>,
+    /// The user hid this game in the Steam library. Steam only.
+    pub hidden: bool,
 }
 
 impl LibraryEntry {
@@ -182,8 +191,22 @@ fn normalize(path: &str) -> String {
 
 // --------------------------------------------------------------------- Steam
 
+thread_local! {
+    static STEAM_ROOT_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Point the Steam art lookups of this thread at another root. For tests: a
+/// thread-local, so a parallel test never sees it. `None` clears it.
+pub fn set_steam_root_override(root: Option<PathBuf>) {
+    STEAM_ROOT_OVERRIDE.with(|r| *r.borrow_mut() = root);
+}
+
 /// Steam install root.
 fn steam_root() -> Option<PathBuf> {
+    if let Some(root) = STEAM_ROOT_OVERRIDE.with(|r| r.borrow().clone()) {
+        return Some(root);
+    }
     #[cfg(windows)]
     {
         use winreg::enums::HKEY_CURRENT_USER;
@@ -294,7 +317,464 @@ fn scan_steam() -> Vec<LibraryEntry> {
             }
         }
     }
+    if let Some(root) = steam_root() {
+        apply_local_steam_data(&root, &mut out);
+    }
     out
+}
+
+// ------------------------------------------------------------ Steam local art
+
+/// Files Steam keeps for one app in `appcache/librarycache/<appid>/`, best
+/// first. A header is the landscape capsule (460 by 215). The portrait cover
+/// is the last resort. Newer clients put the header in a hash-named
+/// subfolder, so each name is also tried one level down.
+const STEAM_ART_NAMES: &[&str] = &["header.jpg", "library_header.jpg", "library_600x900.jpg"];
+
+/// Local Steam header art for a game id such as `steam-730`. `None` for any
+/// other launcher, for an id with a non-numeric tail, or when the Steam cache
+/// has no art for the app. Reads the disk only: nothing goes to the network
+/// and nothing leaves the device.
+pub fn local_steam_art(game_id: &str) -> Option<PathBuf> {
+    let appid = game_id.strip_prefix("steam-")?;
+    steam_header_art_in(&steam_root()?, appid)
+}
+
+/// The header image of an installed Steam app under a Steam root.
+///
+/// The appid must be all digits, so an id cannot walk out of the cache folder.
+/// Order: `<appid>_header.jpg` (old clients), then for each art name
+/// `<appid>/<name>`, then `<appid>/<hash>/<name>` with the hash folders in
+/// name order, so the answer does not depend on directory order.
+pub fn steam_header_art_in(root: &Path, appid: &str) -> Option<PathBuf> {
+    if appid.is_empty() || !appid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let cache = root.join("appcache").join("librarycache");
+    let old = cache.join(format!("{appid}_header.jpg"));
+    if old.is_file() {
+        return Some(old);
+    }
+    named_art_in(&cache.join(appid), STEAM_ART_NAMES)
+}
+
+/// The first of `names` in an app's cache folder, or one level down in the
+/// hash-named folders (in name order). Names are tried in the order given.
+fn named_art_in(app_dir: &Path, names: &[&str]) -> Option<PathBuf> {
+    let mut subdirs: Vec<PathBuf> = std::fs::read_dir(app_dir)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| p.is_dir())
+        .collect();
+    subdirs.sort();
+    for name in names {
+        let direct = app_dir.join(name);
+        if direct.is_file() {
+            return Some(direct);
+        }
+        if let Some(found) = subdirs.iter().map(|d| d.join(name)).find(|p| p.is_file()) {
+            return Some(found);
+        }
+    }
+    None
+}
+
+/// Wide art for a poster: the library hero (1920 by 620) when Steam has it,
+/// else the header. Same rules and same privacy as `local_steam_art`: the
+/// disk only.
+pub fn local_steam_poster(game_id: &str) -> Option<PathBuf> {
+    let appid = game_id.strip_prefix("steam-")?;
+    steam_poster_in(&steam_root()?, appid)
+}
+
+/// The poster of an installed Steam app under a Steam root.
+pub fn steam_poster_in(root: &Path, appid: &str) -> Option<PathBuf> {
+    if appid.is_empty() || !appid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    let app_dir = root.join("appcache").join("librarycache").join(appid);
+    // The portrait cover is not a poster: it is not landscape.
+    named_art_in(
+        &app_dir,
+        &["library_hero.jpg", "library_header.jpg", "header.jpg"],
+    )
+    .or_else(|| {
+        let old = root
+            .join("appcache")
+            .join("librarycache")
+            .join(format!("{appid}_header.jpg"));
+        old.is_file().then_some(old)
+    })
+}
+
+// ------------------------------------------------------- Steam local readers
+
+/// A parsed Valve KeyValues document. Only what the readers below need.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum Vdf {
+    Str(String),
+    Map(Vec<(String, Vdf)>),
+}
+
+impl Vdf {
+    /// Child lookup. Valve files are inconsistent about key case
+    /// (`Playtime`, `playtime`), so the match ignores case.
+    fn get(&self, key: &str) -> Option<&Vdf> {
+        match self {
+            Vdf::Map(items) => items
+                .iter()
+                .find(|(k, _)| k.eq_ignore_ascii_case(key))
+                .map(|(_, v)| v),
+            Vdf::Str(_) => None,
+        }
+    }
+
+    fn path(&self, keys: &[&str]) -> Option<&Vdf> {
+        keys.iter().try_fold(self, |node, k| node.get(k))
+    }
+
+    fn as_str(&self) -> Option<&str> {
+        match self {
+            Vdf::Str(s) => Some(s),
+            Vdf::Map(_) => None,
+        }
+    }
+
+    fn entries(&self) -> &[(String, Vdf)] {
+        match self {
+            Vdf::Map(items) => items,
+            Vdf::Str(_) => &[],
+        }
+    }
+}
+
+/// Keys the parser drops while reading, so their values never sit in memory.
+/// `LaunchOptions` can hold paths, tokens or account names.
+const VDF_SKIPPED_KEYS: &[&str] = &["launchoptions"];
+
+#[derive(PartialEq)]
+enum VdfTok {
+    Str(String),
+    Open,
+    Close,
+}
+
+fn vdf_tokens(text: &str) -> Option<Vec<VdfTok>> {
+    let mut toks = Vec::new();
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        match c {
+            '{' => toks.push(VdfTok::Open),
+            '}' => toks.push(VdfTok::Close),
+            '"' => {
+                let mut v = String::new();
+                loop {
+                    match chars.next()? {
+                        '"' => break,
+                        '\\' => match chars.next()? {
+                            'n' => v.push('\n'),
+                            't' => v.push('\t'),
+                            other => v.push(other),
+                        },
+                        other => v.push(other),
+                    }
+                }
+                toks.push(VdfTok::Str(v));
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                for n in chars.by_ref() {
+                    if n == '\n' {
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+    Some(toks)
+}
+
+fn vdf_block(
+    toks: &mut std::iter::Peekable<std::vec::IntoIter<VdfTok>>,
+    top: bool,
+) -> Option<Vec<(String, Vdf)>> {
+    let mut items = Vec::new();
+    loop {
+        match toks.next() {
+            None if top => return Some(items),
+            Some(VdfTok::Close) if !top => return Some(items),
+            Some(VdfTok::Str(key)) => {
+                let skip = VDF_SKIPPED_KEYS.iter().any(|k| key.eq_ignore_ascii_case(k));
+                match toks.next()? {
+                    VdfTok::Str(v) => {
+                        if !skip {
+                            items.push((key, Vdf::Str(v)));
+                        }
+                    }
+                    VdfTok::Open => {
+                        let sub = vdf_block(toks, false)?;
+                        if !skip {
+                            items.push((key, Vdf::Map(sub)));
+                        }
+                    }
+                    VdfTok::Close => return None,
+                }
+            }
+            _ => return None,
+        }
+    }
+}
+
+/// Parse Valve KeyValues text into a tree. Returns `None` on malformed input.
+fn parse_vdf(text: &str) -> Option<Vdf> {
+    let mut it = vdf_tokens(text)?.into_iter().peekable();
+    vdf_block(&mut it, true).map(Vdf::Map)
+}
+
+/// Steam account ids in `userdata/` are the low 32 bits of the SteamID64.
+const STEAM_ID64_BASE: u64 = 76_561_197_960_265_728;
+
+/// One user of `config/loginusers.vdf`. Holds no account or persona name.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct LoginUser {
+    /// The `userdata/<id>` folder name.
+    account_id: String,
+    most_recent: bool,
+    auto_login: bool,
+    timestamp: Option<u64>,
+}
+
+/// The users of `config/loginusers.vdf`, in file order.
+fn parse_login_users(loginusers: &str) -> Vec<LoginUser> {
+    let Some(doc) = parse_vdf(loginusers) else {
+        return Vec::new();
+    };
+    let Some(users) = doc.get("users") else {
+        return Vec::new();
+    };
+    users
+        .entries()
+        .iter()
+        .filter_map(|(id64, u)| {
+            let id = id64
+                .parse::<u64>()
+                .ok()
+                .filter(|id| *id >= STEAM_ID64_BASE)?;
+            let flag = |k: &str| u.get(k).and_then(Vdf::as_str) == Some("1");
+            Some(LoginUser {
+                account_id: (id - STEAM_ID64_BASE).to_string(),
+                most_recent: flag("MostRecent"),
+                auto_login: flag("AutoLogin"),
+                timestamp: u
+                    .get("timestamp")
+                    .and_then(Vdf::as_str)
+                    .and_then(|t| t.trim().parse().ok()),
+            })
+        })
+        .collect()
+}
+
+/// Which rule chose the active Steam user. Logged, never the user.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum UserRule {
+    MostRecent,
+    AutoLogin,
+    NewestTimestamp,
+    OnlyFolder,
+    NewestLocalconfig,
+}
+
+impl UserRule {
+    fn label(self) -> &'static str {
+        match self {
+            UserRule::MostRecent => "MostRecent flag",
+            UserRule::AutoLogin => "the only AutoLogin user",
+            UserRule::NewestTimestamp => "newest loginusers timestamp",
+            UserRule::OnlyFolder => "the only userdata folder",
+            UserRule::NewestLocalconfig => "newest localconfig",
+        }
+    }
+}
+
+/// Pick the account id from `loginusers.vdf` by the first three rules.
+/// `has_dir` tells if `userdata/<id>` exists.
+fn pick_login_user(loginusers: &str, has_dir: impl Fn(&str) -> bool) -> Option<(String, UserRule)> {
+    let users: Vec<LoginUser> = parse_login_users(loginusers)
+        .into_iter()
+        .filter(|u| has_dir(&u.account_id))
+        .collect();
+    if let Some(u) = users.iter().find(|u| u.most_recent) {
+        return Some((u.account_id.clone(), UserRule::MostRecent));
+    }
+    let mut auto = users.iter().filter(|u| u.auto_login);
+    if let (Some(u), None) = (auto.next(), auto.next()) {
+        return Some((u.account_id.clone(), UserRule::AutoLogin));
+    }
+    users
+        .iter()
+        .filter_map(|u| Some((u.timestamp?, u)))
+        .max_by_key(|(t, _)| *t)
+        .map(|(_, u)| (u.account_id.clone(), UserRule::NewestTimestamp))
+}
+
+/// The `userdata/<id>` folder of the active Steam user.
+///
+/// Order: the `MostRecent "1"` user in `loginusers.vdf`; else the one user
+/// with `AutoLogin "1"`; else the user with the newest `timestamp`; else the
+/// only `userdata` folder; else the folder whose `localconfig.vdf` changed
+/// last. The log line names the rule, never the user.
+fn active_user_dir(root: &Path) -> Option<PathBuf> {
+    let userdata = root.join("userdata");
+    if let Ok(text) = std::fs::read_to_string(root.join("config").join("loginusers.vdf")) {
+        if let Some((id, rule)) = pick_login_user(&text, |id| userdata.join(id).is_dir()) {
+            log::info!("[library] steam: active user chosen by {}", rule.label());
+            return Some(userdata.join(id));
+        }
+    }
+    let mut dirs: Vec<PathBuf> = std::fs::read_dir(&userdata)
+        .ok()?
+        .flatten()
+        .map(|e| e.path())
+        .filter(|p| {
+            p.is_dir()
+                && p.file_name()
+                    .and_then(|n| n.to_str())
+                    .is_some_and(|n| n.chars().all(|c| c.is_ascii_digit()) && n != "0")
+        })
+        .collect();
+    match dirs.len() {
+        0 => None,
+        1 => {
+            log::info!(
+                "[library] steam: active user chosen by {}",
+                UserRule::OnlyFolder.label()
+            );
+            dirs.pop()
+        }
+        _ => {
+            let newest = dirs
+                .into_iter()
+                .filter_map(|d| {
+                    let m = std::fs::metadata(d.join("config").join("localconfig.vdf"))
+                        .and_then(|m| m.modified())
+                        .ok()?;
+                    Some((m, d))
+                })
+                .max_by_key(|(m, _)| *m)
+                .map(|(_, d)| d);
+            if newest.is_some() {
+                log::info!(
+                    "[library] steam: active user chosen by {}",
+                    UserRule::NewestLocalconfig.label()
+                );
+            }
+            newest
+        }
+    }
+}
+
+/// What `localconfig.vdf` records for one app.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+struct LocalAppStats {
+    playtime_min: Option<u32>,
+    last_played_unix: Option<u64>,
+}
+
+/// `Playtime` and `LastPlayed` per appid from `localconfig.vdf`.
+///
+/// `Playtime` is lifetime minutes, account wide. `Playtime2wks` is not read:
+/// Steam leaves it stale while the client is idle. `LaunchOptions` is dropped
+/// by the parser.
+fn parse_local_stats(localconfig: &str) -> HashMap<u32, LocalAppStats> {
+    let mut out = HashMap::new();
+    let Some(doc) = parse_vdf(localconfig) else {
+        return out;
+    };
+    let apps = doc.path(&["UserLocalConfigStore", "Software", "Valve", "Steam", "apps"]);
+    for (id, app) in apps.map(Vdf::entries).unwrap_or_default() {
+        let Ok(appid) = id.parse::<u32>() else {
+            continue;
+        };
+        let num = |k: &str| app.get(k).and_then(Vdf::as_str)?.trim().parse::<u64>().ok();
+        out.insert(
+            appid,
+            LocalAppStats {
+                playtime_min: num("Playtime").and_then(|v| u32::try_from(v).ok()),
+                last_played_unix: num("LastPlayed").filter(|&t| t > 0),
+            },
+        );
+    }
+    out
+}
+
+/// Appids with `hidden "1"` in `sharedconfig.vdf`.
+fn parse_hidden_apps(sharedconfig: &str) -> std::collections::HashSet<u32> {
+    let Some(doc) = parse_vdf(sharedconfig) else {
+        return Default::default();
+    };
+    let apps = doc.path(&[
+        "UserRoamingConfigStore",
+        "Software",
+        "Valve",
+        "Steam",
+        "apps",
+    ]);
+    apps.map(Vdf::entries)
+        .unwrap_or_default()
+        .iter()
+        .filter(|(_, app)| app.get("hidden").and_then(Vdf::as_str).map(str::trim) == Some("1"))
+        .filter_map(|(id, _)| id.parse().ok())
+        .collect()
+}
+
+/// Fill playtime, last played and hidden on the installed Steam entries from
+/// the active user's local files. Local reads only. Logs counts, never values.
+fn apply_local_steam_data(root: &Path, entries: &mut [LibraryEntry]) {
+    let user = active_user_dir(root);
+    let stats = user
+        .as_ref()
+        .and_then(|u| std::fs::read_to_string(u.join("config").join("localconfig.vdf")).ok())
+        .map(|t| parse_local_stats(&t))
+        .unwrap_or_default();
+    let hidden = user
+        .as_ref()
+        .and_then(|u| {
+            std::fs::read_to_string(u.join("7").join("remote").join("sharedconfig.vdf")).ok()
+        })
+        .map(|t| parse_hidden_apps(&t))
+        .unwrap_or_default();
+    apply_local_data(entries, &stats, &hidden);
+    log::info!(
+        "[library] steam local data: {} installed, {} with playtime, {} hidden",
+        entries.len(),
+        entries.iter().filter(|e| e.playtime_min.is_some()).count(),
+        entries.iter().filter(|e| e.hidden).count()
+    );
+}
+
+/// Merge parsed local data into installed entries. The `localconfig` last
+/// played wins. The `appmanifest` value stays when `localconfig` has none.
+fn apply_local_data(
+    entries: &mut [LibraryEntry],
+    stats: &HashMap<u32, LocalAppStats>,
+    hidden: &std::collections::HashSet<u32>,
+) {
+    for e in entries
+        .iter_mut()
+        .filter(|e| e.source == LibrarySource::Steam)
+    {
+        let Ok(appid) = e.external_id.parse::<u32>() else {
+            continue;
+        };
+        if let Some(s) = stats.get(&appid) {
+            e.playtime_min = s.playtime_min;
+            if s.last_played_unix.is_some() {
+                e.last_played_unix = s.last_played_unix;
+            }
+        }
+        e.hidden = hidden.contains(&appid);
+    }
 }
 
 /// Pull appid / name / installdir out of an `appmanifest_*.acf`.
@@ -310,7 +790,7 @@ fn parse_app_manifest(contents: &str, steamapps: &Path) -> Option<LibraryEntry> 
             continue;
         };
         let key = key.trim().to_ascii_lowercase();
-        if matches!(key.as_str(), "appid" | "name" | "installdir") {
+        if matches!(key.as_str(), "appid" | "name" | "installdir" | "lastplayed") {
             fields.entry(key).or_insert_with(|| value.to_string());
         }
     }
@@ -324,10 +804,18 @@ fn parse_app_manifest(contents: &str, steamapps: &Path) -> Option<LibraryEntry> 
     if name.is_empty() || installdir.is_empty() {
         return None;
     }
+    // `LastOwner` sits in the same file and is deliberately never read.
+    let last_played_unix = fields
+        .get("lastplayed")
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .filter(|&t| t > 0);
     Some(LibraryEntry {
         source: LibrarySource::Steam,
         external_id: appid.to_string(),
         name,
+        playtime_min: None,
+        last_played_unix,
+        hidden: false,
         install_dir: steamapps.join("common").join(installdir),
     })
 }
@@ -424,6 +912,9 @@ fn parse_epic_manifest(body: &str) -> Option<LibraryEntry> {
         source: LibrarySource::Epic,
         external_id: id,
         name: m.display_name.trim().to_string(),
+        playtime_min: None,
+        last_played_unix: None,
+        hidden: false,
         install_dir: PathBuf::from(m.install_location.trim()),
     })
 }
@@ -464,6 +955,9 @@ fn scan_gog() -> Vec<LibraryEntry> {
                 source: LibrarySource::Gog,
                 external_id: id,
                 name: name.trim().to_string(),
+                playtime_min: None,
+                last_played_unix: None,
+                hidden: false,
                 install_dir: PathBuf::from(path.trim()),
             });
         }
@@ -574,6 +1068,9 @@ mod tests {
             source: LibrarySource::Epic,
             external_id: "730".into(),
             name: "Something Else".into(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: PathBuf::from(r"C:\b"),
         };
         assert_eq!(steam.game_id(), "steam-730");
@@ -635,6 +1132,9 @@ mod tests {
             source: LibrarySource::Steam,
             external_id: appid.to_string(),
             name: name.to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: PathBuf::from(dir),
         }
     }
@@ -722,5 +1222,370 @@ mod tests {
         assert_eq!(derive_short_name("Portal"), "Portal");
         // One significant word uses the word, not a truncated full name.
         assert_eq!(derive_short_name("The Saboteur"), "Saboteur");
+    }
+
+    const LOCALCONFIG: &str = r#"
+"UserLocalConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"730"
+					{
+						"Playtime"		"249008"
+						"Playtime2wks"		"77"
+						"LastPlayed"		"1760000000"
+						"LaunchOptions"		"-secret-token-value"
+					}
+					"620"
+					{
+						"Playtime"		"95"
+						"LastPlayed"		"0"
+					}
+					"440"
+					{
+						"cloud"
+						{
+							"last_sync_state"		"synchronized"
+						}
+					}
+				}
+			}
+		}
+	}
+}
+"#;
+
+    const LOGINUSERS: &str = r#"
+"users"
+{
+	"76561198000000001"
+	{
+		"AccountName"		"first"
+		"MostRecent"		"0"
+	}
+	"76561198000000002"
+	{
+		"AccountName"		"second"
+		"MostRecent"		"1"
+	}
+}
+"#;
+
+    const SHAREDCONFIG: &str = r#"
+"UserRoamingConfigStore"
+{
+	"Software"
+	{
+		"Valve"
+		{
+			"Steam"
+			{
+				"apps"
+				{
+					"620"
+					{
+						"hidden"		"1"
+					}
+					"730"
+					{
+						"LastPlayed"		"1"
+					}
+				}
+			}
+		}
+	}
+}
+"#;
+
+    #[test]
+    fn local_stats_pass_minutes_through() {
+        let stats = parse_local_stats(LOCALCONFIG);
+        assert_eq!(stats[&730].playtime_min, Some(249_008));
+        assert_eq!(stats[&730].last_played_unix, Some(1_760_000_000));
+        assert_eq!(stats[&620].playtime_min, Some(95));
+        // LastPlayed "0" means never.
+        assert_eq!(stats[&620].last_played_unix, None);
+        assert_eq!(stats[&440], LocalAppStats::default());
+    }
+
+    #[test]
+    fn parser_drops_launch_options() {
+        let doc = parse_vdf(LOCALCONFIG).expect("parses");
+        let app = doc
+            .path(&[
+                "UserLocalConfigStore",
+                "Software",
+                "Valve",
+                "Steam",
+                "apps",
+                "730",
+            ])
+            .expect("app 730");
+        assert!(app.get("LaunchOptions").is_none());
+        assert!(app.get("Playtime").is_some());
+    }
+
+    #[test]
+    fn active_user_is_the_most_recent_one() {
+        // 76561198000000002 - 76561197960265728 = 39734274
+        let picked = pick_login_user(LOGINUSERS, |_| true);
+        assert_eq!(picked, Some(("39734274".into(), UserRule::MostRecent)));
+    }
+
+    #[test]
+    fn hidden_flag_is_true_only_when_set() {
+        let hidden = parse_hidden_apps(SHAREDCONFIG);
+        assert!(hidden.contains(&620));
+        assert!(!hidden.contains(&730));
+    }
+
+    #[test]
+    fn malformed_files_give_nothing() {
+        assert!(parse_local_stats("\"a\" { \"b\"").is_empty());
+        assert!(parse_hidden_apps("not vdf").is_empty());
+        assert!(parse_login_users("").is_empty());
+    }
+
+    #[test]
+    fn manifest_last_played_is_the_fallback() {
+        let manifest = r#"
+"AppState"
+{
+	"appid"		"620"
+	"name"		"Portal 2"
+	"installdir"		"Portal 2"
+	"LastOwner"		"76561198000000002"
+	"LastPlayed"		"1750000000"
+}
+"#;
+        let mut entries = vec![
+            parse_app_manifest(manifest, &steamapps()).expect("manifest"),
+            parse_app_manifest(MANIFEST, &steamapps()).expect("manifest"),
+        ];
+        assert_eq!(entries[0].last_played_unix, Some(1_750_000_000));
+        assert_eq!(entries[1].last_played_unix, None);
+
+        // localconfig has LastPlayed for 730 only. 620 keeps the manifest value.
+        let stats = parse_local_stats(LOCALCONFIG);
+        apply_local_data(&mut entries, &stats, &parse_hidden_apps(SHAREDCONFIG));
+        assert_eq!(entries[0].last_played_unix, Some(1_750_000_000));
+        assert_eq!(entries[0].playtime_min, Some(95));
+        assert!(entries[0].hidden);
+        assert_eq!(entries[1].last_played_unix, Some(1_760_000_000));
+        assert_eq!(entries[1].playtime_min, Some(249_008));
+        assert!(!entries[1].hidden);
+    }
+
+    #[test]
+    fn missing_files_leave_none_and_no_error() {
+        let mut entries = vec![parse_app_manifest(MANIFEST, &steamapps()).expect("manifest")];
+        apply_local_data(&mut entries, &HashMap::new(), &Default::default());
+        assert_eq!(entries[0].playtime_min, None);
+        assert_eq!(entries[0].last_played_unix, None);
+        assert!(!entries[0].hidden);
+
+        let dir = std::env::temp_dir().join(format!("m3llo-steam-none-{}", std::process::id()));
+        apply_local_steam_data(&dir, &mut entries);
+        assert_eq!(entries[0].playtime_min, None);
+    }
+
+    #[test]
+    fn active_user_dir_follows_the_rules() {
+        let root = std::env::temp_dir().join(format!("m3llo-steam-users-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let cfg = |id: &str| root.join("userdata").join(id).join("config");
+        std::fs::create_dir_all(cfg("39734273")).expect("mkdir");
+        // One folder, no loginusers.vdf: use it.
+        assert_eq!(
+            active_user_dir(&root),
+            Some(root.join("userdata").join("39734273"))
+        );
+        // Two folders and MostRecent names the second.
+        std::fs::create_dir_all(cfg("39734274")).expect("mkdir");
+        std::fs::create_dir_all(root.join("config")).expect("mkdir");
+        std::fs::write(root.join("config").join("loginusers.vdf"), LOGINUSERS).expect("write");
+        assert_eq!(
+            active_user_dir(&root),
+            Some(root.join("userdata").join("39734274"))
+        );
+        // MostRecent names a missing folder: newest localconfig wins.
+        std::fs::remove_dir_all(root.join("userdata").join("39734274")).expect("rm");
+        std::fs::create_dir_all(cfg("39734275")).expect("mkdir");
+        std::fs::write(cfg("39734273").join("localconfig.vdf"), "").expect("write");
+        std::thread::sleep(std::time::Duration::from_millis(30));
+        std::fs::write(cfg("39734275").join("localconfig.vdf"), "").expect("write");
+        assert_eq!(
+            active_user_dir(&root),
+            Some(root.join("userdata").join("39734275"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// The Windows shape: two users, no MostRecent, these keys only.
+    fn loginusers_without_most_recent(auto1: &str, auto2: &str, t1: u64, t2: u64) -> String {
+        let user = |id: u64, auto: &str, t: u64| {
+            format!(
+                "\t\t\"{id}\"\n\t{{\n\t\t\"AccountName\"\t\t\"acct\"\n\t\t\"PersonaName\"\t\t\"persona\"\n\t\t\"RememberPassword\"\t\t\"1\"\n\t\t\"WantsOfflineMode\"\t\t\"0\"\n\t\t\"SkipOfflineModeWarning\"\t\t\"0\"\n\t\t\"AutoLogin\"\t\t\"{auto}\"\n\t\t\"timestamp\"\t\t\"{t}\"\n\t}}\n"
+            )
+        };
+        format!(
+            "\"users\"\n{{\n{}{}}}\n",
+            user(76561198000000001, auto1, t1),
+            user(76561198000000002, auto2, t2)
+        )
+    }
+
+    #[test]
+    fn no_most_recent_uses_the_one_auto_login_user() {
+        // The older user has AutoLogin: the flag beats the timestamp.
+        let text = loginusers_without_most_recent("1", "0", 1_760_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734273".into(), UserRule::AutoLogin))
+        );
+    }
+
+    #[test]
+    fn no_most_recent_and_no_single_auto_login_uses_the_newest_timestamp() {
+        let text = loginusers_without_most_recent("0", "0", 1_760_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734274".into(), UserRule::NewestTimestamp))
+        );
+        // Both have AutoLogin: not exactly one, so the timestamp decides.
+        let text = loginusers_without_most_recent("1", "1", 1_780_000_000, 1_770_000_000);
+        assert_eq!(
+            pick_login_user(&text, |_| true),
+            Some(("39734273".into(), UserRule::NewestTimestamp))
+        );
+        // The newest user has no userdata folder: only the other one counts.
+        assert_eq!(
+            pick_login_user(&text, |id| id == "39734274"),
+            Some(("39734274".into(), UserRule::AutoLogin))
+        );
+    }
+
+    #[test]
+    fn active_user_dir_uses_timestamp_for_a_two_user_file_without_most_recent() {
+        let root = std::env::temp_dir().join(format!("m3llo-steam-ts-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        for id in ["39734273", "39734274"] {
+            std::fs::create_dir_all(root.join("userdata").join(id).join("config")).expect("mkdir");
+        }
+        std::fs::create_dir_all(root.join("config")).expect("mkdir");
+        // The older timestamp is on the first user. The second one wins.
+        let text = loginusers_without_most_recent("0", "0", 1_760_000_000, 1_770_000_000);
+        std::fs::write(root.join("config").join("loginusers.vdf"), text).expect("write");
+        assert_eq!(
+            active_user_dir(&root),
+            Some(root.join("userdata").join("39734274"))
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// Prints counts only. Run: `cargo test -p mello-core --lib
+    /// steam_local_scan_counts -- --ignored --nocapture`.
+    #[test]
+    #[ignore = "reads the real Steam install on this machine"]
+    fn steam_local_scan_counts() {
+        let entries = scan_steam();
+        println!(
+            "installed={} with_playtime={} with_last_played={} hidden={}",
+            entries.len(),
+            entries.iter().filter(|e| e.playtime_min.is_some()).count(),
+            entries
+                .iter()
+                .filter(|e| e.last_played_unix.is_some())
+                .count(),
+            entries.iter().filter(|e| e.hidden).count()
+        );
+    }
+
+    // ---- local Steam art ----
+
+    fn art_fixture(tag: &str) -> PathBuf {
+        let dir =
+            std::env::temp_dir().join(format!("m3llo-steam-art-{}-{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("appcache").join("librarycache")).unwrap();
+        dir
+    }
+
+    fn put(root: &Path, rel: &str) -> PathBuf {
+        let path = root.join("appcache").join("librarycache").join(rel);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, b"jpg").unwrap();
+        path
+    }
+
+    #[test]
+    fn steam_art_finds_each_cache_layout() {
+        let root = art_fixture("layouts");
+        let old = put(&root, "10_header.jpg");
+        let flat = put(&root, "20/header.jpg");
+        let hashed = put(&root, "30/97fc0b0f/header.jpg");
+        let lib_header = put(&root, "40/97fc0b0f/library_header.jpg");
+        let portrait = put(&root, "50/library_600x900.jpg");
+        assert_eq!(steam_header_art_in(&root, "10"), Some(old));
+        assert_eq!(steam_header_art_in(&root, "20"), Some(flat));
+        assert_eq!(steam_header_art_in(&root, "30"), Some(hashed));
+        assert_eq!(steam_header_art_in(&root, "40"), Some(lib_header));
+        assert_eq!(steam_header_art_in(&root, "50"), Some(portrait));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_poster_prefers_the_hero_and_skips_the_portrait() {
+        let root = art_fixture("poster");
+        put(&root, "7/header.jpg");
+        let hero = put(&root, "7/abc/library_hero.jpg");
+        put(&root, "8/library_600x900.jpg");
+        let header = put(&root, "9/header.jpg");
+        assert_eq!(steam_poster_in(&root, "7"), Some(hero));
+        assert_eq!(steam_poster_in(&root, "8"), None);
+        assert_eq!(steam_poster_in(&root, "9"), Some(header));
+        assert_eq!(steam_poster_in(&root, "../x"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_prefers_a_header_over_the_portrait_cover() {
+        let root = art_fixture("prefer");
+        put(&root, "7/library_600x900.jpg");
+        let header = put(&root, "7/abc/header.jpg");
+        assert_eq!(steam_header_art_in(&root, "7"), Some(header));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_is_none_when_the_cache_has_nothing() {
+        let root = art_fixture("none");
+        put(&root, "8/logo.png");
+        assert_eq!(steam_header_art_in(&root, "8"), None);
+        assert_eq!(steam_header_art_in(&root, "9999"), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn steam_art_rejects_ids_that_are_not_an_appid() {
+        let root = art_fixture("reject");
+        put(&root, "1/header.jpg");
+        for bad in ["", "..", "../1", "1/../1", "1a", "-1"] {
+            assert_eq!(steam_header_art_in(&root, bad), None, "{bad:?}");
+        }
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn only_steam_ids_have_local_art() {
+        assert_eq!(local_steam_art("epic-fortnite"), None);
+        assert_eq!(local_steam_art("counter-strike-2"), None);
+        assert_eq!(local_steam_art("steam-"), None);
     }
 }

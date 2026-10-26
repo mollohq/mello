@@ -169,7 +169,7 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 	}
 
 	code := normalizeInviteCode(req.Code)
-	crewID, _, err := lookupInviteCode(ctx, nk, code)
+	crewID, inviterID, err := lookupInviteCode(ctx, nk, code)
 	if err != nil {
 		return "", err
 	}
@@ -197,6 +197,10 @@ func JoinByInviteCodeRPC(ctx context.Context, logger runtime.Logger, db *sql.DB,
 			return "", inviteJoinError(err)
 		}
 		logger.Info("User %s joined crew %s via invite code %s", userID, crewID, code)
+		// GroupUsersAdd runs no after-join hook, so the ledger event and the
+		// push are written here. The event names the member who invited.
+		recordMemberJoined(ctx, logger, nk, crewID, userID, inviterID)
+		queueCrewJoinPush(ctx, logger, nk, crewID, userID)
 	}
 
 	// Fetch group name for the response

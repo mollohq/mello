@@ -13,13 +13,26 @@ import {
     DiscoverCrewData,
     SearchUserData,
     FeedCardData,
+    TitleHeld,
+    BeltReveal,
+    RecapSeal,
+    H2hPairRow,
+    H2hPerson,
+    Head2headData,
     RecapLbRow,
     RecapAwardRow,
-    GameRollupLine,
+    RecapBeltMovedRow,
+    RecapBeltHeldRow,
+    RecapHeldTitle,
+    RecentGameTile,
     StreamCardData,
     YouStripData,
     GameStatsCardData,
+    JoinedRowData,
+    BeltHeroData,
+    HeroStreamData,
     GameIntegrationData,
+    InstalledGameData,
     InvitePersonData,
     VideoRect,
 } from "types.slint";
@@ -30,7 +43,8 @@ import { MemberVolumePopover } from "panels/member_volume_popover.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
-import { CrewFeed } from "panels/crew_feed.slint";
+import { CrewFeed, RecapView } from "panels/crew_feed.slint";
+import { Clock, SealedUi } from "components/sealed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
 import { DebugPanel } from "panels/debug_panel.slint";
@@ -45,13 +59,13 @@ import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 // --- stage 9 (streaming-quality): the stream card's popovers ---
-import { StreamCardUi, StreamStatsData } from "types.slint";
+import { StreamCardUi, StreamStatsData, ChatFocus } from "types.slint";
 import { StreamVolumePopover, StreamSettingsPopover, ExpandedStreamCard } from "panels/active_streams_panel.slint";
 export { StreamCardUi, StreamStatsData }
 // --- end stage 9 ---
 
 
-export { CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, RecapLbRow, RecapAwardRow, GameRollupLine, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -238,6 +252,10 @@ export component MainWindow inherits Window {
     // on every play after that.
     in property <image> game-runtime-icon;
     in property <bool> game-has-runtime-icon: false;
+    in property <image> game-capsule;
+    in property <bool> game-has-capsule: false;
+    in property <string> game-monogram: "";
+    in property <int> game-hue-index: 0;
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
@@ -290,6 +308,8 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-hud-clip-toasts: true;
     // Games settings
     in property <[GameIntegrationData]> games-list: [];
+    in property <[InstalledGameData]> installed-games: [];
+    callback games-hidden-toggled(string /* game-id */, bool);
     in-out property <bool> settings-share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
@@ -464,6 +484,14 @@ export component MainWindow inherits Window {
     // Fired on open so the client can refresh user_game_stats.
     callback stats-profile-opened();
     in property <bool> feed-cold-start: true;
+    // Skeleton trio (CLIPS 8): which of the three dashed cells show.
+    in property <bool> feed-skeleton-stream: false;
+    in property <bool> feed-skeleton-voice-clip: false;
+    in property <bool> feed-skeleton-recap: false;
+    in-out property <bool> feed-invite-line: false;
+    in property <[JoinedRowData]> feed-quiet: [];
+    // The dormant strip: one strip above the grid (frame F).
+    in property <[FeedCardData]> feed-dormant: [];
     in property <bool> feed-has-more: false;
     in property <int> feed-clip-count: 0;
     callback feed-show-more-clicked();
@@ -1023,6 +1051,12 @@ export component MainWindow inherits Window {
                             stream-paused: root.stream-paused;
                             stream-paused-reason: root.stream-paused-reason;
                             is-cold-start: root.feed-cold-start;
+                            skeleton-stream: root.feed-skeleton-stream;
+                            skeleton-voice-clip: root.feed-skeleton-voice-clip;
+                            skeleton-recap: root.feed-skeleton-recap;
+                            invite-line: root.feed-invite-line;
+                            quiet-rows: root.feed-quiet;
+                            dormant-cards: root.feed-dormant;
                             feed-has-more: root.feed-has-more;
                             clip-count: root.feed-clip-count;
                             feed-show-more-clicked => {
@@ -1032,6 +1066,7 @@ export component MainWindow inherits Window {
                                 root.stats-profile-open = true;
                                 root.stats-profile-opened();
                             }
+                            crew-name: root.active-crew-name;
                             clip-playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;
@@ -1066,6 +1101,9 @@ export component MainWindow inherits Window {
                             }
                             invite-clicked => {
                                 root.invite-share-requested();
+                            }
+                            start-voice-clicked(channel-id) => {
+                                root.join-voice-channel(channel-id);
                             }
                             hide-invite-clicked => {
                                 root.hide-invite-card();
@@ -1120,6 +1158,10 @@ export component MainWindow inherits Window {
                         game-color: root.game-color;
                         game-runtime-icon: root.game-runtime-icon;
                         game-has-runtime-icon: root.game-has-runtime-icon;
+                        game-capsule: root.game-capsule;
+                        game-has-capsule: root.game-has-capsule;
+                        game-monogram: root.game-monogram;
+                        game-hue-index: root.game-hue-index;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
                         can-stream: root.can-stream;
@@ -1678,6 +1720,11 @@ export component MainWindow inherits Window {
         settings-hud-clip-toasts <=> root.settings-hud-clip-toasts;
         // Games
         games-list: root.games-list;
+        installed-games: root.installed-games;
+        games-hidden-toggled(id, v) => {
+            root.settings-show-saved = true;
+            root.games-hidden-toggled(id, v);
+        }
         settings-share-game-activity <=> root.settings-share-game-activity;
         riot-available: root.riot-available;
         riot-linked: root.riot-linked;

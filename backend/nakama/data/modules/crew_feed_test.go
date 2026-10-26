@@ -3,6 +3,7 @@ package main
 import (
 	"fmt"
 	"testing"
+	"time"
 )
 
 const feedTestNowMs int64 = 1_700_000_000_000
@@ -77,7 +78,6 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 		previewCard("p1", 1, 2),
 		typedCard("clip", "clip", "clip"),
 		previewCard("p2", 21, 30),
-		typedCard("catch", "catchup", "chat_activity"),
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 
@@ -97,8 +97,8 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 	if counts["session-preview"] < 2 {
 		t.Fatalf("expected >=2 session-preview, got %d", counts["session-preview"])
 	}
-	if counts["catchup"] == 0 {
-		t.Fatal("expected a catchup")
+	if counts["catchup"] != 0 {
+		t.Fatal("the catch-up card is gone")
 	}
 }
 
@@ -165,15 +165,19 @@ func TestUnknownBackendTypeSkipped(t *testing.T) {
 	}
 }
 
-func TestTextlessMomentIsStandard(t *testing.T) {
-	cards := []feedCard{typedCard("m", "catchup", "moment")}
-	entries := buildThisWeek(cards, feedTestNowMs)
-	e := findEntry(entries, "m")
-	if e == nil {
-		t.Fatal("moment entry missing")
+// The ledger events a catch-up card showed have no card now: a join is the
+// joined row, and a day of activity is a daily recap.
+func TestCatchupEventsHaveNoCard(t *testing.T) {
+	for _, typ := range []string{"moment", "member_joined", "member_left", "chat_activity"} {
+		if ft, ok := mapCardType(typ, false); ok {
+			t.Errorf("%s maps to %q, want no card", typ, ft)
+		}
 	}
-	if e.Role != "standard" {
-		t.Fatalf("text-less moment role: got %q want standard", e.Role)
+	cards := mergedToCards([]TimelineEntry{
+		{ID: "m", Type: "moment"}, {ID: "j", Type: "member_joined"}, {ID: "c", Type: "chat_activity"},
+	})
+	if len(cards) != 0 {
+		t.Fatalf("want no cards, got %d", len(cards))
 	}
 }
 
@@ -227,12 +231,12 @@ func TestLowSignalFillersAreQuiet(t *testing.T) {
 	}
 }
 
-// The single best non-hero visual card is promoted to the wide (lg) grid cell.
-// With no session-preview there is no hero, so the wide filler is the only lg.
+// The wide (lg) grid cell holds one card. With no session-preview there is no
+// hero, so the wide filler is the only lg. Clips never take it (TestClipNeverWide).
 func TestWideSlotGetsLargeSize(t *testing.T) {
 	cards := make([]feedCard, 0, 6)
 	for i := 0; i < 6; i++ {
-		cards = append(cards, typedCard("clip"+string(rune('0'+i)), "clip", "clip"))
+		cards = append(cards, typedCard("voice"+string(rune('0'+i)), "session", "voice_session"))
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 
@@ -250,7 +254,25 @@ func TestWideSlotGetsLargeSize(t *testing.T) {
 	}
 }
 
-func TestFreshClipIsHero(t *testing.T) {
+func freshPreview(id string, now int64, ageMs int64) feedCard {
+	c := previewCard(id, 21, 50)
+	c.ts = now - ageMs
+	return c
+}
+
+func recapAt(id string, ts int64) feedCard {
+	return feedCard{id: id, feedType: "recap", backendType: "weekly_recap", ts: ts}
+}
+
+// A Monday 12:00 UTC and a Thursday 12:00 UTC, for the recap-on-Monday rule.
+var (
+	feedTestMonday   = time.Date(2026, time.October, 19, 12, 0, 0, 0, time.UTC).UnixMilli()
+	feedTestThursday = time.Date(2026, time.October, 22, 12, 0, 0, 0, time.UTC).UnixMilli()
+)
+
+// A voice clip is never the hero, however fresh, and a stream preview that is
+// older than the clip still leads.
+func TestFreshClipIsNeverHero(t *testing.T) {
 	now := feedTestNowMs
 	cards := []feedCard{
 		clipCard("fresh", now-1_000),
@@ -258,132 +280,175 @@ func TestFreshClipIsHero(t *testing.T) {
 		typedCardAt("voice", "session", "voice_session", now-500),
 	}
 	entries := buildThisWeek(cards, now)
-	if entries[0].ID != "fresh" || entries[0].Role != "hero" || entries[0].Size != "lg" {
-		t.Fatalf("hero: got id=%q role=%q size=%q want fresh/hero/lg", entries[0].ID, entries[0].Role, entries[0].Size)
+	if entries[0].ID != "long" || entries[0].Role != "hero" {
+		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
 	}
+	clip := findEntry(entries, "fresh")
+	if clip == nil || clip.Role == "hero" {
+		t.Fatalf("fresh clip must be a non-hero filler, got %+v", clip)
+	}
+}
+
+func TestClipOnlyFeedHasNoHero(t *testing.T) {
+	now := feedTestNowMs
+	entries := buildThisWeek([]feedCard{clipCard("fresh", now-500)}, now)
 	for _, e := range entries {
-		if e.Role == "hero" && e.Type == "session-preview" {
-			t.Fatalf("session-preview should not be hero when a fresh clip qualifies: %q", e.ID)
+		if e.Role == "hero" || e.Size == "lg" {
+			t.Fatalf("clip %q got role=%q size=%q, want standard md", e.ID, e.Role, e.Size)
 		}
 	}
-	preview := findEntry(entries, "long")
-	if preview == nil {
-		t.Fatal("strong preview missing from fillers")
+	clips := 0
+	for _, e := range entries {
+		if e.Type == "clip" {
+			clips++
+		}
 	}
-	if preview.Role == "hero" {
-		t.Fatalf("preview role: got %q want non-hero filler", preview.Role)
+	if clips != 1 {
+		t.Fatalf("want the clip emitted once, got %d clip entries", clips)
+	}
+	// The clip makes a day, so the day has its daily recap ahead of the fillers.
+	if len(entries) != 2 || entries[0].Type != "daily-recap" || entries[1].Type != "clip" {
+		t.Fatalf("want the daily recap then the clip, got %+v", entries)
 	}
 }
 
-func TestStaleClipFallsBackToPreviewHero(t *testing.T) {
+// With fillers of several kinds, a clip never lands on the wide cell and never
+// carries the lg size, even when it would otherwise be picked for that slot.
+func TestClipNeverWide(t *testing.T) {
 	now := feedTestNowMs
-	cards := []feedCard{
-		clipCard("stale", now-feedClipHeroMaxAgeMs-1),
-		previewCard("long", 21, 50),
+	cards := []feedCard{}
+	for i := 0; i < 8; i++ {
+		cards = append(cards, clipCard(fmt.Sprintf("clip%d", i), now-int64(i+1)))
 	}
+	cards = append(cards, typedCardAt("voice", "session", "voice_session", now-100))
 	entries := buildThisWeek(cards, now)
-	if entries[0].ID != "long" || entries[0].Role != "hero" {
-		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
+	for _, e := range entries {
+		if e.Type == "clip" && e.Size == "lg" {
+			t.Fatalf("clip %q has lg size", e.ID)
+		}
 	}
+}
+
+// A weak preview does not outrank a non-clip for the wide cell, and a clip
+// that would have been promoted is swapped off it.
+func TestKeepClipOutOfWideSlot(t *testing.T) {
+	cards := []feedCard{
+		clipCard("c0", 1), clipCard("c1", 2), clipCard("c2", 3),
+		clipCard("c3", 4), clipCard("c4", 5), clipCard("c5", 6),
+		typedCard("v", "session", "voice_session"),
+	}
+	picks := []int{0, 1, 2, 3, 4, 5, 6}
+	keepClipOutOfWideSlot(cards, picks)
+	if cards[picks[feedWideFillerIdx]].feedType == "clip" {
+		t.Fatalf("wide position still holds a clip: picks=%v", picks)
+	}
+	if cards[picks[feedWideFillerIdx]].id != "v" {
+		t.Fatalf("want the voice session swapped in, got %q", cards[picks[feedWideFillerIdx]].id)
+	}
+}
+
+func TestStaleClipIsStandard(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{clipCard("stale", now-48*60*60*1000), previewCard("long", 21, 50)}
+	entries := buildThisWeek(cards, now)
 	clip := findEntry(entries, "stale")
-	if clip == nil {
-		t.Fatal("stale clip missing from fillers")
-	}
-	if clip.Role != "standard" {
-		t.Fatalf("stale clip role: got %q want standard", clip.Role)
+	if clip == nil || clip.Role != "standard" || clip.Size != "md" {
+		t.Fatalf("stale clip: got %+v want standard/md", clip)
 	}
 }
 
-func TestBuriedClipNotHero(t *testing.T) {
-	now := feedTestNowMs
-	clipTs := now - 1_000
+// Hero order: stream preview under 24 h beats a Monday recap.
+func TestHeroFreshPreviewBeatsMondayRecap(t *testing.T) {
+	now := feedTestMonday
 	cards := []feedCard{
-		clipCard("buried", clipTs),
-		typedCardAt("n1", "catchup", "chat_activity", clipTs+1),
-		typedCardAt("n2", "catchup", "moment", clipTs+2),
-		typedCardAt("n3", "session", "voice_session", clipTs+3),
-		typedCardAt("n4", "catchup", "member_joined", clipTs+4),
-		previewCard("long", 21, 50),
+		recapAt("recap_1", now-3_600_000),
+		freshPreview("fresh", now, 2*3_600_000),
 	}
-	entries := buildThisWeek(cards, now)
-	if entries[0].ID != "long" || entries[0].Role != "hero" {
-		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
-	}
-	clip := findEntry(entries, "buried")
-	if clip == nil {
-		t.Fatal("buried clip missing from fillers")
-	}
-	if clip.Role == "hero" {
-		t.Fatal("buried clip should not be hero")
+	h := buildThisWeek(cards, now)
+	if h[0].ID != "fresh" || h[0].Role != "hero" {
+		t.Fatalf("hero: got %q/%q want fresh/hero", h[0].ID, h[0].Role)
 	}
 }
 
-func TestNoClipsKeepsPreviewHero(t *testing.T) {
+// A preview older than 24 h loses to a real Monday recap, which leads on
+// Monday only.
+func TestHeroMondayRecapBeatsOldPreview(t *testing.T) {
+	now := feedTestMonday
+	cards := []feedCard{
+		freshPreview("old", now, 30*3_600_000),
+		recapAt("recap_1", now-3_600_000),
+	}
+	h := buildThisWeek(cards, now)
+	if h[0].ID != "recap_1" || h[0].Role != "hero" || h[0].Size != "lg" {
+		t.Fatalf("hero: got %q/%q/%q want recap_1/hero/lg", h[0].ID, h[0].Role, h[0].Size)
+	}
+	if findEntry(h, "old") == nil {
+		t.Fatal("old preview should stay in the feed as a filler")
+	}
+	// Same cards on a Thursday: the recap is not the hero, the best session is.
+	th := buildThisWeek([]feedCard{
+		freshPreview("old", feedTestThursday, 30*3_600_000),
+		recapAt("recap_1", feedTestThursday-3_600_000),
+	}, feedTestThursday)
+	if th[0].ID != "old" || th[0].Role != "hero" {
+		t.Fatalf("thursday hero: got %q/%q want old/hero", th[0].ID, th[0].Role)
+	}
+	if r := findEntry(th, "recap_1"); r == nil || r.Role != "recap" {
+		t.Fatalf("thursday recap: got %+v want role recap", r)
+	}
+}
+
+// A recap older than 24 h does not lead on a Monday.
+func TestHeroStaleRecapOnMondayIsNotHero(t *testing.T) {
+	now := feedTestMonday
+	cards := []feedCard{recapAt("recap_0", now-8*24*3_600_000)}
+	for _, e := range buildThisWeek(cards, now) {
+		if e.Role == "hero" {
+			t.Fatalf("stale recap became hero: %q", e.ID)
+		}
+	}
+}
+
+// With no fresh preview and no recap, the best session leads, whatever its age.
+func TestHeroBestSessionFallback(t *testing.T) {
 	now := feedTestNowMs
 	cards := []feedCard{
-		typedCard("recap", "recap", "weekly_recap"),
-		previewCard("long", 21, 50),
-		typedCard("voice", "session", "voice_session"),
+		freshPreview("weak", now, 40*3_600_000),
+		freshPreview("best", now, 90*3_600_000),
 	}
-	entries := buildThisWeek(cards, now)
-	if entries[0].ID != "long" || entries[0].Role != "hero" {
-		t.Fatalf("hero: got id=%q role=%q want long/hero", entries[0].ID, entries[0].Role)
-	}
-}
-
-func TestFreshClipBeatsStrongPreview(t *testing.T) {
-	now := feedTestNowMs
-	cards := []feedCard{
-		clipCard("fresh", now-500),
-		previewCard("long", 21, 50),
-	}
-	entries := buildThisWeek(cards, now)
-	if entries[0].ID != "fresh" || entries[0].Type != "clip" {
-		t.Fatalf("hero: got id=%q type=%q want fresh/clip", entries[0].ID, entries[0].Type)
-	}
-	if findEntry(entries, "long") == nil {
-		t.Fatal("strong preview should still appear among fillers")
+	cards[0] = previewCard("weak", 3, 6)
+	cards[0].ts = now - 40*3_600_000
+	h := buildThisWeek(cards, now)
+	if h[0].ID != "best" || h[0].Role != "hero" {
+		t.Fatalf("hero: got %q/%q want best/hero", h[0].ID, h[0].Role)
 	}
 }
 
-func TestFreshClipHeroBoundaries(t *testing.T) {
+// Among previews under 24 h, quality picks the hero, not recency.
+func TestHeroFreshPreviewPicksBestQuality(t *testing.T) {
 	now := feedTestNowMs
-	clipTs := now - feedClipHeroMaxAgeMs
+	weak := previewCard("weak", 3, 6)
+	weak.ts = now - 1_000
+	strong := freshPreview("strong", now, 20*3_600_000)
+	h := buildThisWeek([]feedCard{weak, strong}, now)
+	if h[0].ID != "strong" {
+		t.Fatalf("hero: got %q want strong", h[0].ID)
+	}
+}
 
-	// Exactly max age → still premieres.
-	atAge := buildThisWeek([]feedCard{clipCard("edge-age", clipTs)}, now)
-	if atAge[0].Role != "hero" {
-		t.Fatalf("clip at max age should hero, got role=%q", atAge[0].Role)
+// The belt hook finds nothing when no head2head card is in the list.
+func TestBeltMovedHeroHookNeedsAHead2headCard(t *testing.T) {
+	if got := beltMovedHeroIndex([]feedCard{clipCard("c", 1)}, feedTestNowMs); got != -1 {
+		t.Fatalf("belt hook: got %d want -1", got)
 	}
+}
 
-	// One millisecond older → demoted.
-	overAge := buildThisWeek([]feedCard{clipCard("over-age", clipTs-1)}, now)
-	if overAge[0].Role == "hero" && overAge[0].Type == "clip" {
-		t.Fatal("clip past max age should not hero")
-	}
-
-	// Exactly max-newer - 1 newer cards → still premieres.
-	almostBuried := []feedCard{clipCard("almost", clipTs+1_000)}
-	for i := 0; i < feedClipHeroMaxNewer-1; i++ {
-		almostBuried = append(almostBuried, typedCardAt(
-			fmt.Sprintf("n%d", i), "catchup", "chat_activity", clipTs+1_000+int64(i+1),
-		))
-	}
-	abEntries := buildThisWeek(almostBuried, now)
-	if abEntries[0].ID != "almost" || abEntries[0].Role != "hero" {
-		t.Fatalf("clip with %d newer cards should hero, got id=%q role=%q",
-			feedClipHeroMaxNewer-1, abEntries[0].ID, abEntries[0].Role)
-	}
-
-	// Exactly max-newer newer cards → buried.
-	buried := []feedCard{clipCard("exact-buried", clipTs+1_000)}
-	for i := 0; i < feedClipHeroMaxNewer; i++ {
-		buried = append(buried, typedCardAt(
-			fmt.Sprintf("b%d", i), "catchup", "chat_activity", clipTs+1_000+int64(i+1),
-		))
-	}
-	bEntries := buildThisWeek(buried, now)
-	if bEntries[0].Role == "hero" && bEntries[0].Type == "clip" {
-		t.Fatal("clip with exactly max-newer newer cards should not hero")
+func TestNoHeroWhenNothingQualifies(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{clipCard("c", now-1), typedCard("v", "session", "voice_session")}
+	for _, e := range buildThisWeek(cards, now) {
+		if e.Role == "hero" {
+			t.Fatalf("unexpected hero %q", e.ID)
+		}
 	}
 }

@@ -6,6 +6,7 @@ mod crew_settings;
 mod game;
 mod games;
 pub(crate) mod onboarding;
+mod sealed;
 mod settings;
 mod streaming;
 mod voice;
@@ -21,6 +22,7 @@ pub fn wire_all(ctx: &AppContext) {
     voice::wire(ctx);
     chat::wire(ctx);
     clip::wire(ctx);
+    sealed::wire(ctx);
     streaming::wire(ctx);
     settings::wire(ctx);
     onboarding::wire(ctx);

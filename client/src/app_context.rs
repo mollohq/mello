@@ -72,6 +72,9 @@ pub struct AppContext {
     /// Games settings rows as last received from core; merged with the
     /// disabled set from Settings when pushed to the UI.
     pub games_integrations: Rc<RefCell<Vec<mello_core::events::GameIntegrationStatus>>>,
+    /// Installed games from the newest library scan; merged with the hidden
+    /// set from Settings when pushed to the UI.
+    pub installed_games: Rc<RefCell<Vec<mello_core::events::InstalledGameInfo>>>,
     /// Unknown-game candidate currently shown in the "track it?" prompt
     /// (exe, path, display name). Consumed on track/dismiss.
     pub muted_before_deafen: Rc<Cell<bool>>,
@@ -82,6 +85,11 @@ pub struct AppContext {
     pub gif_chat_anim: GifAnimator,
     pub dbg_hist: Rc<RefCell<crate::DebugHistory>>,
     pub avatar_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// The last crew feed, so cards that name members (head2head, invite) can
+    /// be built again when the member list arrives after the feed.
+    pub last_feed: Rc<RefCell<Option<mello_core::crew_events::FeedResponse>>>,
+    /// The games the viewer and the active crew play now (live session card).
+    pub live_games: Rc<RefCell<crate::live_session::LiveGames>>,
     /// Runtime game icons (exe-extracted or crew-shared), keyed by game_id.
     /// Populated from the disk cache on demand; misses are negative-cached
     /// per run by the fetch glue.
@@ -178,6 +186,7 @@ impl AppContext {
             riot_cta_pending: Rc::new(Cell::new(false)),
             session_recovery: Rc::new(Cell::new(false)),
             games_integrations: Rc::new(RefCell::new(Vec::new())),
+            installed_games: Rc::new(RefCell::new(Vec::new())),
             muted_before_deafen: Rc::new(Cell::new(false)),
             updater: Rc::new(RefCell::new(None)),
             hotkey_mgr: Rc::new(RefCell::new(
@@ -188,6 +197,8 @@ impl AppContext {
             gif_chat_anim: GifAnimator::new(50, Some(2)),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
+            last_feed: Rc::new(RefCell::new(None)),
+            live_games: Rc::new(RefCell::new(Default::default())),
             game_icon_cache: Rc::new(RefCell::new(HashMap::new())),
             hud_manager: Rc::new(HudManager::start(false)),
             fg_monitor: Rc::new(RefCell::new(ForegroundMonitor::new(false))),
@@ -241,6 +252,7 @@ impl Clone for AppContext {
             riot_cta_pending: self.riot_cta_pending.clone(),
             session_recovery: self.session_recovery.clone(),
             games_integrations: self.games_integrations.clone(),
+            installed_games: self.installed_games.clone(),
             muted_before_deafen: self.muted_before_deafen.clone(),
             updater: self.updater.clone(),
             hotkey_mgr: self.hotkey_mgr.clone(),
@@ -249,6 +261,8 @@ impl Clone for AppContext {
             gif_chat_anim: self.gif_chat_anim.clone(),
             dbg_hist: self.dbg_hist.clone(),
             avatar_cache: self.avatar_cache.clone(),
+            last_feed: self.last_feed.clone(),
+            live_games: self.live_games.clone(),
             game_icon_cache: self.game_icon_cache.clone(),
             hud_manager: self.hud_manager.clone(),
             fg_monitor: self.fg_monitor.clone(),

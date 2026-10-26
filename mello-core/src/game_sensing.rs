@@ -131,6 +131,11 @@ pub enum GameEvent {
     PrimaryChanged {
         game_id: Option<String>,
     },
+    /// A library scan finished. Sent after the first scan and after each
+    /// rescan. The client may report these games to the crew (library_report).
+    LibraryScanned {
+        entries: Vec<crate::library::LibraryEntry>,
+    },
 }
 
 /// Wrapper to make raw pointer Send-safe for the sensor thread.
@@ -169,6 +174,15 @@ impl GameSensor {
     }
 }
 
+/// Tell the client what a library scan found. Returns false when the receiver
+/// is gone, which ends the scan loop.
+fn announce_library(library: &LibraryIndex, tx: &Sender<GameEvent>) -> bool {
+    tx.send(GameEvent::LibraryScanned {
+        entries: library.iter().cloned().collect(),
+    })
+    .is_ok()
+}
+
 fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     // Every game currently running, keyed by pid. v1 tracked a single
     // Option<ActiveGame>, which made alt-tabbing between two games look like a
@@ -176,6 +190,9 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
     let mut active: HashMap<u32, ActiveGame> = HashMap::new();
     let mut primary: Option<u32> = None;
     let mut library = LibraryIndex::scan();
+    if !announce_library(&library, tx) {
+        return;
+    }
     let mut scans_since_library_refresh = 0u32;
     let mut fast_scans_left = ACTIVE_CADENCE_SCANS;
     let mut shadow: HashMap<u32, String> = HashMap::new();
@@ -335,6 +352,9 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         if scans_since_library_refresh >= LIBRARY_RESCAN_SCANS {
             scans_since_library_refresh = 0;
             library = LibraryIndex::scan();
+            if !announce_library(&library, tx) {
+                return;
+            }
         }
 
         let interval = if fast_scans_left > 0 {
@@ -644,6 +664,29 @@ fn catalogue_head() -> Option<&'static crate::catalogue::Head> {
         head
     })
     .as_ref()
+}
+
+/// Whether the game sensor can track this game: the catalogue knows it by
+/// game id, by Steam appid (`steam-<appid>` through the bundled appid index),
+/// or by display name. The feed uses this for the "Tracked" label. Reads the
+/// bundled data only.
+pub fn is_tracked_game(game_id: &str, game_name: &str) -> bool {
+    let Some(head) = catalogue_head() else {
+        return false;
+    };
+    if head.by_game_id(game_id).is_some() {
+        return true;
+    }
+    if let Some(igdb) = game_id
+        .strip_prefix("steam-")
+        .and_then(|a| a.parse::<u32>().ok())
+        .and_then(|appid| appid_index()?.igdb_id(appid))
+    {
+        if head.get(igdb).is_some() {
+            return true;
+        }
+    }
+    head.by_name(game_name).is_some()
 }
 
 /// What a process resolved to, and how.
@@ -1046,6 +1089,18 @@ fn detect_games(library: &LibraryIndex, processes: &[RawGameProcess], now: i64) 
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tracked_games_resolve_by_id_appid_and_name() {
+        assert!(is_tracked_game("counter-strike-2", ""));
+        assert!(is_tracked_game("steam-730", "Counter-Strike 2"));
+        assert!(is_tracked_game("", "counter-strike 2"));
+        assert!(!is_tracked_game(
+            "epic-no-such-game",
+            "No Such Game Anywhere"
+        ));
+        assert!(!is_tracked_game("", ""));
+    }
+
     use super::*;
 
     fn make_process(exe: &str, pid: u32, fullscreen: bool) -> RawGameProcess {
@@ -1085,6 +1140,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "4fe75bbc5a674f4f9b356b5c90567da5".into(),
             name: "Fortnite".into(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: install_dir.clone(),
         }]);
 
@@ -1124,6 +1182,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "dupe123".into(),
             name: ambiguous.to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\EpicGames\Ambiguous"),
         }]);
         let mut p = make_process("game.exe", 102, false);
@@ -1144,6 +1205,9 @@ mod tests {
             source: crate::library::LibrarySource::Epic,
             external_id: "abc123".into(),
             name: "Some Unreleased Indie Thing".into(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\EpicGames\Indie"),
         }]);
         let mut p = make_process("indie.exe", 101, false);
@@ -1261,6 +1325,9 @@ mod tests {
             source: crate::library::LibrarySource::Steam,
             external_id: "1145360".to_string(),
             name: "Hades".to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(r"D:\SteamLibrary\steamapps\common\Hades"),
         }]);
         let mut p = make_process("Hades.exe", 4242, true);
@@ -1300,6 +1367,9 @@ mod tests {
             source: crate::library::LibrarySource::Steam,
             external_id: "730".to_string(),
             name: "Counter-Strike 2".to_string(),
+            playtime_min: None,
+            last_played_unix: None,
+            hidden: false,
             install_dir: std::path::PathBuf::from(
                 r"C:\Steam\steamapps\common\Counter-Strike Global Offensive",
             ),

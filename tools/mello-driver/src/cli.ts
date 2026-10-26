@@ -4,6 +4,19 @@
 //                                        [--events <file>] [--live-screenshot-ms N]
 //   node tools/mello-driver/src/cli.ts list [--json] [qa/journeys/<file>.ts ...]
 //   node tools/mello-driver/src/cli.ts mcp
+//   node tools/mello-driver/src/cli.ts seed-crew <invite code> [--members N] [--belts] [--clips N] [--recap]
+//
+// `seed-crew` joins seeded members (qa/journeys/lib/seed.ts profiles: library,
+// sessions over 14 days with tz offsets, clips, generated avatar) into the
+// crew behind the invite code, on the local stack. For testing the feed in
+// your own client. It runs the production guard on NAKAMA_HOST and refuses a
+// host that is not loopback or private. `--members N` (default 3) adds N
+// members. A rerun with the same code adds N more, with new names.
+// `--belts` re-reports one new member's library so the_carry moves (sealed belt
+// and red dot). `--clips N` spreads N clips over the new members (default: the
+// profiles' own). `--recap` asks dev_fault generate_recap; when dev_fault is
+// off it prints how to turn it on and skips. It prints the crew id, the names,
+// the counts and whether a belt moved, and no other id.
 //
 // `list` imports the journey modules and does not run them. With no files it
 // reads every qa/journeys/*.ts. `--json` prints one JSON array on stdout and
@@ -41,11 +54,12 @@ import { pathToFileURL } from "node:url";
 
 import { closeBrowser } from "./browser.ts";
 import { defaultOptions, preflight, repoRoot } from "./config.ts";
-import { parseRunArgs } from "./args.ts";
+import { parseRunArgs, parseSeedCrewArgs } from "./args.ts";
 import { EventWriter } from "./events.ts";
 import { runJourney, type Journey } from "./journey.ts";
 import { defaultJourneyFiles, formatTable, listJourneys } from "./list.ts";
 import { serveMcp } from "./mcp.ts";
+import { seedCrewCommand } from "./seedcrew.ts";
 
 const RUN_USAGE = "usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N]";
 
@@ -141,9 +155,17 @@ if (cmd === "run") {
   run(rest).then(finish, fail);
 } else if (cmd === "list") {
   list(rest).then(finish, fail);
+} else if (cmd === "seed-crew") {
+  const parsed = parseSeedCrewArgs(rest);
+  if (typeof parsed === "string") {
+    console.error(`${parsed}\nusage: cli.ts seed-crew <invite code> [--members N] [--belts] [--clips N] [--recap]`);
+    process.exitCode = 2;
+  } else {
+    seedCrewCommand(parsed).then(finish, fail);
+  }
 } else if (cmd === "mcp") {
   serveMcp(defaultOptions());
 } else {
-  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp");
+  console.error("usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N] | cli.ts list [--json] [journey.ts ...] | cli.ts mcp | cli.ts seed-crew <invite code> [options]");
   process.exitCode = 2;
 }

@@ -1,6 +1,8 @@
 import { Theme } from "../theme.slint";
 import { CutShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
+import { StreamTag, PlayRing, FootageWash } from "../components/stream_hero.slint";
+import { CutMask, CutButtonShape } from "../components/cut.slint";
 
 
 export component SessionPreviewCard inherits Rectangle {
@@ -10,6 +12,7 @@ export component SessionPreviewCard inherits Rectangle {
     in property <string> game-name;
     in property <string> streamer-username;
     in property <string> streamer-initials;
+    in property <int> streamer-hue-index: 0;
     in property <int> duration-min;
     in property <int> peak-viewers;
     in property <int> clip-count;
@@ -50,6 +53,11 @@ export component SessionPreviewCard inherits Rectangle {
         ? duration-hours + "h " + duration-remaining-mins + "m"
         : duration-min + "m";
 
+    // "1 h 12 min", as the hero chip reads (frame C).
+    property <string> duration-hero-text: duration-hours > 0
+        ? duration-hours + " h " + (duration-remaining-mins < 10 ? "0" : "") + duration-remaining-mins + " min"
+        : duration-min + " min";
+
     property <int> seen-threshold: image-count * 7 / 10;
 
     property <image> current-image;
@@ -64,18 +72,20 @@ export component SessionPreviewCard inherits Rectangle {
 
     // A content card cuts at the bottom: the snapshot fills the top edge
     // and must not be cropped.
+    // The hero is footage edge to edge and cuts at the top right (frames C
+    // and D). A standard card keeps the bottom cut under its strip.
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "br";
+        corner: root.is-hero ? "tr" : "br";
         fill: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
     }
     CutShape {
         width: parent.width;
         height: parent.height;
         n: Theme.notch;
-        corner: "br";
+        corner: root.is-hero ? "tr" : "br";
         inset: Theme.keyline;
         fill: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg;
     }
@@ -98,6 +108,8 @@ export component SessionPreviewCard inherits Rectangle {
     }
 
     VerticalLayout {
+        padding: root.is-hero ? Theme.keyline : 0px;
+
         Rectangle {
             vertical-stretch: 3;
             min-height: is-hero ? 200px : 110px;
@@ -146,16 +158,19 @@ export component SessionPreviewCard inherits Rectangle {
                     animate opacity { duration: 300ms; easing: ease-in-out; }
                 }
 
-                Rectangle {
+                if !root.is-hero: Rectangle {
                     x: 0;
-                    y: parent.height - (is-hero ? 60px : 40px);
+                    y: parent.height - 40px;
                     width: parent.width;
-                    height: is-hero ? 60px : 40px;
+                    height: 40px;
                     background: @linear-gradient(0deg, rgba(0,0,0,0.72) 0%, rgba(0,0,0,0) 100%);
+                }
+                if root.is-hero: FootageWash {
+                    x: 0; y: 0; width: parent.width; height: parent.height;
                 }
 
                 if clip-count > 0: Rectangle {
-                    x: is-hero ? 12px : 8px;
+                    x: is-hero ? parent.width - self.width - 18px : 8px;
                     y: is-hero ? 12px : 8px;
                     width: clip-txt.preferred-width + (is-hero ? 28px : 22px);
                     height: is-hero ? 22px : 20px;
@@ -184,13 +199,20 @@ export component SessionPreviewCard inherits Rectangle {
                     }
                 }
 
-                if !root.playing || root.finished || root.paused: Rectangle {
+                if (!root.playing || root.finished || root.paused) && !root.is-hero: Rectangle {
                     x: 0; y: 0;
                     width: parent.width; height: parent.height;
                     background: Theme.over-media-soft;
                 }
 
-                if snapshot-poster-ready && (!root.playing || root.finished): Rectangle {
+                // The hero plays from a ring at 46% of its height (frame C).
+                if root.is-hero && snapshot-poster-ready && (!root.playing || root.finished): PlayRing {
+                    x: (parent.width - self.width) / 2;
+                    y: parent.height * 0.46 - self.height / 2;
+                    size: 56px;
+                }
+
+                if !root.is-hero && snapshot-poster-ready && (!root.playing || root.finished): Rectangle {
                     property <int> btn-size: is-hero ? 52 : 32;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
@@ -209,7 +231,7 @@ export component SessionPreviewCard inherits Rectangle {
                     }
                 }
 
-                if !root.playing || root.finished || root.paused: Rectangle {
+                if (!root.playing || root.finished || root.paused) && !root.is-hero: Rectangle {
                     x: parent.width - self.width - (is-hero ? 10px : 8px);
                     y: parent.height - self.height - (is-hero ? 10px : 8px);
                     width: dur-text.preferred-width + 16px;
@@ -223,6 +245,106 @@ export component SessionPreviewCard inherits Rectangle {
                         color: Theme.on-media;
                         horizontal-alignment: center;
                         vertical-alignment: center;
+                    }
+                }
+
+                // The hero's label and text sit on the footage (frame C).
+                if root.is-hero: StreamTag {
+                    x: 18px;
+                    y: 14px;
+                    label: "STREAM";
+                }
+                if root.is-hero && (!root.playing || root.finished || root.paused): VerticalLayout {
+                    x: 18px;
+                    y: 0px;
+                    width: parent.width - 36px;
+                    height: parent.height - 18px;
+                    alignment: end;
+                    spacing: 0px;
+
+                    Text {
+                        height: 14px;
+                        text: root.time-since-ended.to-uppercase();
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        font-size: 9.5px;
+                        letter-spacing: 1.9px;
+                        color: #A2A2A8;
+                    }
+                    HorizontalLayout {
+                        spacing: 16px;
+                        VerticalLayout {
+                            horizontal-stretch: 1;
+                            spacing: 10px;
+                            Text {
+                                text: root.title;
+                                font-family: Theme.font-display;
+                                font-weight: Theme.weight-display-bold;
+                                font-size: 28px;
+                                letter-spacing: -0.84px;
+                                color: Theme.text-primary;
+                                overflow: elide;
+                            }
+                            HorizontalLayout {
+                                spacing: 10px;
+                                height: 28px;
+                                cross-axis-alignment: center;
+                                UserAvatar {
+                                    bg-color: #000000;
+                                    initials: root.streamer-initials;
+                                    color-index: root.streamer-hue-index;
+                                    size: 28px;
+                                }
+                                Text {
+                                    text: root.streamer-username;
+                                    font-family: Theme.font-display;
+                                    font-weight: Theme.weight-display;
+                                    font-size: 15px;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    text: root.game-name;
+                                    font-family: Theme.font-body;
+                                    font-weight: Theme.weight-sentence;
+                                    font-size: 13px;
+                                    color: #A2A2A8;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                                if root.peak-viewers > 0: Text {
+                                    text: root.peak-viewers + " watched";
+                                    font-family: Theme.font-body;
+                                    font-weight: Theme.weight-sentence;
+                                    font-size: 13px;
+                                    color: #A2A2A8;
+                                    vertical-alignment: center;
+                                }
+                                Rectangle { horizontal-stretch: 1; }
+                            }
+                        }
+                        // The length of the stream: a black chip, cut at two corners.
+                        Rectangle {
+                            width: dur-hero.preferred-width + 24px;
+                            height: 34px;
+                            y: parent.height - self.height;
+                            CutButtonShape {
+                                width: parent.width; height: parent.height;
+                                n: 5px;
+                                fill: #000000A8;
+                            }
+                            dur-hero := Text {
+                                x: 12px;
+                                text: root.duration-hero-text;
+                                font-family: Theme.font-display;
+                                font-weight: Theme.weight-display-bold;
+                                font-size: 20px;
+                                letter-spacing: -0.4px;
+                                color: Theme.text-primary;
+                                vertical-alignment: center;
+                                height: parent.height;
+                            }
+                        }
                     }
                 }
 
@@ -347,64 +469,6 @@ export component SessionPreviewCard inherits Rectangle {
             }
         }
 
-        if is-hero: VerticalLayout {
-            padding: 12px;
-            padding-left: 14px;
-            padding-right: 14px;
-            spacing: 6px;
-            vertical-stretch: 0;
-
-            HorizontalLayout {
-                spacing: 4px;
-                height: 16px;
-
-                Image {
-                    source: @image-url("../icons/monitor.svg");
-                    colorize: Theme.accent;
-                    width: 11px;
-                    height: 11px;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                Text {
-                    text: "SESSION · " + root.duration-text;
-                    font-size: 11px;
-                    font-weight: 700;
-                    color: Theme.accent;
-                    vertical-alignment: center;
-                }
-            }
-
-            Text {
-                text: root.title;
-                font-size: 14px;
-                font-weight: 500;
-                color: Theme.text-primary;
-                overflow: elide;
-            }
-
-            HorizontalLayout {
-                spacing: 8px;
-                height: 20px;
-
-                if peak-viewers > 0: HorizontalLayout {
-                    spacing: 4px;
-                    width: self.preferred-width;
-
-                    UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: root.streamer-initials; color-index: 0; }
-                    if peak-viewers > 1: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: "+"; color-index: 2; }
-                    if peak-viewers > 2: UserAvatar { bg-color: card-hover.has-hover ? Theme.card-bg-hover : Theme.card-bg; initials: ""; color-index: 1; }
-                }
-
-                Text {
-                    text: root.time-since-ended;
-                    font-size: 11px;
-                    color: Theme.text-sub;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
         if !is-hero: VerticalLayout {
             padding: 10px;
             padding-left: 12px;
@@ -447,6 +511,24 @@ export component SessionPreviewCard inherits Rectangle {
                 color: Theme.text-sub;
             }
         }
+    }
+
+    // The footage is a rectangle: put the cut corner back, with its keyline.
+    if root.is-hero: CutMask {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.bg-app;
+    }
+    if root.is-hero: Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: card-hover.has-hover ? Theme.graphic-med : Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{(self.width - Theme.notch) / 1px} 0 L \{self.width / 1px} \{Theme.notch / 1px}";
     }
 
     card-hover := TouchArea {

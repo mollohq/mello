@@ -107,9 +107,15 @@ type GameSessionData struct {
 	Verified bool `json:"verified,omitempty"`
 }
 
+// MemberJoinedData is the payload of member_joined. InvitedBy is the user id of
+// the member whose invite code the joiner used, and InvitedByName their name.
+// Both are absent when the joiner came by another way. They feed the joined
+// line at the top of the crew feed (CLIPS 7).
 type MemberJoinedData struct {
-	Username    string `json:"username"`
-	DisplayName string `json:"display_name"`
+	Username      string `json:"username"`
+	DisplayName   string `json:"display_name"`
+	InvitedBy     string `json:"invited_by,omitempty"`
+	InvitedByName string `json:"invited_by_name,omitempty"`
 }
 
 type MemberLeftData struct {
@@ -696,6 +702,10 @@ func PostMomentRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	}
 
 	logger.Info("User %s posted moment in crew %s: sentiment=%s", userID, req.CrewID, req.Sentiment)
+	if req.Sentiment == "win" {
+		recordWinMomentActivity(ctx, logger, nk, userID)
+		recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
+	}
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "event_id": eventID})
 	return string(resp), nil
 }
@@ -718,6 +728,51 @@ type GameSessionEndRequest struct {
 	// the same id; duplicates are acknowledged without re-applying stats or
 	// appending a second ledger event. Empty for older clients (no dedup).
 	SessionID string `json:"session_id"`
+	// UTC offset of the user's clock in minutes, east positive. Optional.
+	// Head2head night_owl reads it. A value outside -840..840 is ignored.
+	TzOffsetMin *int `json:"tz_offset_min,omitempty"`
+	// StartMs and EndMs are the real start and end of the session on the
+	// client's clock, in Unix ms. A session that waited in the client's pending
+	// queue carries them so it lands on the day it was played. Optional: the
+	// server uses them only when resolveSessionTimes accepts them.
+	StartMs int64 `json:"start_ms,omitempty"`
+	EndMs   int64 `json:"end_ms,omitempty"`
+}
+
+const (
+	// sessionEndFutureSlack is how far past the receive time a client end_ms
+	// may be (clock skew).
+	sessionEndFutureSlack = 5 * time.Minute
+	// sessionMaxSpan is the longest session the server believes.
+	sessionMaxSpan = 24 * time.Hour
+	// sessionMaxAge is the oldest start the server accepts.
+	sessionMaxAge = 90 * 24 * time.Hour
+)
+
+// resolveSessionTimes returns the start and end of a session in Unix ms. It
+// takes the client's start_ms and end_ms when both are present and sane: the
+// end is after the start, not more than 5 minutes in the future, the span is
+// under 24 hours and the start is not older than 90 days. Otherwise it returns
+// the receive time as the end, the clamped duration before it as the start,
+// and false so the caller logs a warning. Both zero means an older client
+// that sends nothing, which is not worth a warning.
+func resolveSessionTimes(startMs, endMs int64, durationMin int, now time.Time) (int64, int64, bool) {
+	nowMs := now.UnixMilli()
+	fallbackStart := nowMs - int64(durationMin)*60_000
+	if startMs == 0 && endMs == 0 {
+		return fallbackStart, nowMs, true
+	}
+	switch {
+	case startMs <= 0 || endMs <= startMs:
+		return fallbackStart, nowMs, false
+	case endMs > nowMs+sessionEndFutureSlack.Milliseconds():
+		return fallbackStart, nowMs, false
+	case endMs-startMs >= sessionMaxSpan.Milliseconds():
+		return fallbackStart, nowMs, false
+	case startMs < nowMs-sessionMaxAge.Milliseconds():
+		return fallbackStart, nowMs, false
+	}
+	return startMs, endMs, true
 }
 
 // The server can't verify client-reported outcomes, but it can bound them:
@@ -841,11 +896,15 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	// Who else in the crew was in this game at the same time. Best-effort:
 	// enrichment, never a reason to lose the session.
 	ledger, _ := readLedger(ctx, nk, req.CrewID)
+	startMs, endMs, timesOK := resolveSessionTimes(req.StartMs, req.EndMs, req.DurationMin, time.Now())
+	if !timesOK {
+		logger.Warn("User %s game session end: start_ms=%d end_ms=%d not usable, stamping receive time", userID, req.StartMs, req.EndMs)
+	}
 	window := sessionWindow{
 		UserID:  userID,
 		GameID:  req.GameID,
-		StartMs: time.Now().UnixMilli() - int64(req.DurationMin)*60_000,
-		EndMs:   time.Now().UnixMilli(),
+		StartMs: startMs,
+		EndMs:   endMs,
 	}
 	playerIDs, playerNames := []string{userID}, []string{username}
 	playerOverlapMin := []int{req.DurationMin}
@@ -879,7 +938,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	// this public event.
 	streakAfter := 0
 	if req.GameID != "" {
-		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws)
+		stats, result, err := UpdateUserGameStatsForSession(ctx, nk, userID, req.GameID, req.DurationMin, req.ActiveMin, req.Wins, req.Losses, req.Draws, validTzOffset(req.TzOffsetMin), time.UnixMilli(endMs))
 		if err != nil {
 			// Non-fatal: still record the session, just without stats enrichment.
 			logger.Warn("user_game_stats update failed for %s/%s: %v", userID, req.GameID, err)
@@ -904,7 +963,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		CrewID:    req.CrewID,
 		Type:      "game_session",
 		ActorID:   userID,
-		Timestamp: time.Now().UnixMilli(),
+		Timestamp: endMs,
 		Score:     score,
 		Data:      data,
 	}
@@ -916,6 +975,15 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 
 	logger.Info("User %s game session end in crew %s: game=%s duration=%dm %dW-%dL streak=%d",
 		userID, req.CrewID, req.GameName, req.DurationMin, req.Wins, req.Losses, streakAfter)
+	// The per-user activity doc backs the session titles. It does not need a
+	// game id, so it counts every session.
+	recordGameSessionActivity(ctx, logger, nk, userID, req.DurationMin, endMs, validTzOffset(req.TzOffsetMin))
+	// Stats changed for every crew the user is in. The debounce keeps a burst
+	// of session ends to one recompute per crew per minute.
+	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
+	// The feed of the crew has a new session, and the recent games card and
+	// the head2head titles of every crew of the user may have moved.
+	PushFeedChangedForUser(ctx, logger, nk, userID, "game_session")
 	resp, _ := json.Marshal(map[string]interface{}{"success": true, "streak_after": streakAfter})
 	return string(resp), nil
 }
@@ -1030,6 +1098,18 @@ func voiceSessionOnJoin(channelID, crewID, channelName, userID, username string)
 	if len(sess.participants) > sess.peakCount {
 		sess.peakCount = len(sess.participants)
 	}
+}
+
+// voiceSessionParticipantCount is the number of unique members who have been
+// in the open voice session of a channel. Zero when there is no session.
+func voiceSessionParticipantCount(channelID string) int {
+	voiceSessionsMu.Lock()
+	defer voiceSessionsMu.Unlock()
+	sess, ok := voiceSessions[channelID]
+	if !ok {
+		return 0
+	}
+	return len(sess.participants)
 }
 
 // voiceSessionOnLastLeave returns session info when the last member leaves

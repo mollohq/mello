@@ -266,6 +266,13 @@ export class SlintMcp {
     await this.call("set_element_value", { elementHandle: handle, value });
   }
 
+  /** A mouse wheel event at a window position, in logical pixels. A negative `deltaY` scrolls down. */
+  async scrollAt(x: number, y: number, deltaY: number): Promise<void> {
+    await this.hold(async () => {
+      await this.call("dispatch_pointer_scroll", { windowHandle: await this.window(), position: { x, y }, deltaX: 0, deltaY });
+    });
+  }
+
   async key(text: string): Promise<void> {
     await this.hold(async () => {
       await this.call("dispatch_key_event", { windowHandle: await this.window(), text });

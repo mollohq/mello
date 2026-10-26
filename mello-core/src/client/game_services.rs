@@ -114,14 +114,47 @@ impl Client {
         }
     }
 
+    /// Send the installed library when the reporter says it is due: first scan
+    /// after login, a changed set or playtime, a hide change, or the empty
+    /// report after consent turns off. Logs counts only, never names.
+    pub(super) async fn sync_library_report(&mut self) {
+        let Some(games) = self.library_reporter.plan(
+            self.share_game_activity,
+            self.nakama.has_session(),
+            &self.hidden_games,
+        ) else {
+            return;
+        };
+        let is_clear = games.is_empty() && !self.share_game_activity;
+        match self.nakama.library_report(&games).await {
+            Ok(()) => {
+                log::info!("[library-report] sent {} game(s)", games.len());
+                // The server recomputes head2head from the report (HEAD2HEAD
+                // 4). The first feed of a session loads before the first
+                // scan ends, so it holds no own values. Load it again.
+                if let Some(crew_id) = self.nakama.active_crew_id().map(String::from) {
+                    self.handle_load_crew_feed(&crew_id).await;
+                }
+            }
+            Err(e) => {
+                log::warn!("[library-report] failed: {e}");
+                self.library_reporter.send_failed(is_clear);
+            }
+        }
+    }
+
     pub(super) fn drain_game_events(&self) -> Vec<GameEvent> {
+        // A journey's fake game goes through the same loop as a real one.
+        #[cfg(feature = "e2e-game")]
+        let mut out = crate::e2e_game::take();
+        #[cfg(not(feature = "e2e-game"))]
+        let mut out = Vec::new();
         let Ok(guard) = self.game_event_rx.lock() else {
-            return Vec::new();
+            return out;
         };
         let Some(rx) = guard.as_ref() else {
-            return Vec::new();
+            return out;
         };
-        let mut out = Vec::new();
         while let Ok(ev) = rx.try_recv() {
             out.push(ev);
         }

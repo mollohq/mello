@@ -1,0 +1,245 @@
+import { Theme } from "../theme.slint";
+
+// Play/pause ring for clip cards. Declared as a component so both hero and
+// standard cards share geometry, hover fill, and click forwarding.
+export component ClipPlayRing inherits Rectangle {
+    in property <bool> small: false;
+    in property <bool> is-playing: false;
+    in property <bool> is-paused: false;
+    /// Red for an unread clip, grey otherwise (frame C): red is state.
+    in property <color> tone: Theme.clip-amber;
+
+    // Clicks on the ring must reach card-level play toggle: without this
+    // forward the ring's own TouchArea would swallow the event silently.
+    callback ring-clicked();
+
+    width: small ? 24px : 44px;
+    height: small ? 24px : 44px;
+    border-radius: self.width / 2;
+    border-width: 1.5px;
+    border-color: root.tone;
+    background: ring-hover.has-hover ? Theme.live-bg : transparent;
+    animate background { duration: 150ms; easing: ease-out; }
+
+    if !is-playing || is-paused: Image {
+        source: @image-url("../icons/play.svg");
+        colorize: root.tone;
+        width: small ? 8px : 14px;
+        height: small ? 8px : 14px;
+        opacity: 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        x: small ? 9px : 16px;
+        y: (parent.height - self.height) / 2;
+    }
+
+    if is-playing && !is-paused: Image {
+        source: @image-url("../icons/pause.svg");
+        colorize: root.tone;
+        width: small ? 7px : 12px;
+        height: small ? 7px : 12px;
+        opacity: 1.0;
+        animate opacity { duration: 150ms; easing: ease-out; }
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+
+    ring-hover := TouchArea {
+        accessible-role: button;
+        accessible-label: root.is-playing && !root.is-paused ? "Pause" : "Play";
+        mouse-cursor: pointer;
+        clicked => { root.ring-clicked(); }
+    }
+}
+
+export component DotWaveform inherits Rectangle {
+    in property <[float]> peaks: [];
+    in property <float> progress: 0.0;
+    in property <bool> is-playing: false;
+    in property <bool> is-paused: false;
+    in property <int> rows: 15;
+    /// The lit dots. Red on the hero, grey on a read clip cell (frame C).
+    in property <color> tone: Theme.clip-amber;
+    in property <length> dot-size: 3px;
+    in property <length> row-pitch: 5px;
+    in property <int> duration-ms: 30000;
+    callback seek-ms(int);
+    callback play-at-ms(int);
+
+    property <int> cols: 64;
+    property <bool> use-placeholder: peaks.length == 0;
+    property <bool> scrubbing: touch.pressed;
+    property <bool> hovering: touch.has-hover && !scrubbing;
+    property <float> col-pitch-f: self.width / 1px / cols;
+    property <int> scrub-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <float> scrub-progress: scrub-col / (cols - 1);
+    property <float> display-progress: scrubbing ? scrub-progress : progress;
+    property <int> play-col: Math.min(cols - 1, Math.max(0, Math.round(display-progress * (cols - 1))));
+    property <bool> show-two-tone: is-playing || is-paused || scrubbing;
+    property <int> hover-col: Math.min(cols - 1, Math.max(0, Math.floor((touch.mouse-x / 1px) / col-pitch-f)));
+    property <int> press-mode: 0;
+    property <length> hairline-x: Math.floor(play-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    // Absolute ms for the released scrub position. Duration comes from the
+    // component's duration-ms input (card metadata while idle, real duration
+    // during playback) — NOT from the global clip-duration-ms, which is
+    // zeroed on playback finish and would collapse every idle seek to 0ms.
+    property <int> release-pos-ms: Math.round(root.scrub-col / (root.cols - 1) * root.duration-ms);
+    property <length> ghost-x: Math.floor(hover-col * col-pitch-f + col-pitch-f / 2) * 1px;
+    property <int> chip-col: scrubbing ? scrub-col : hover-col;
+    property <length> chip-x: Math.min(self.width - 8px, Math.max(8px, Math.floor(chip-col * col-pitch-f + col-pitch-f / 2) * 1px));
+    property <int> chip-ms: Math.round(chip-col / (cols - 1) * duration-ms);
+    property <int> chip-secs: Math.max(0, chip-ms / 1000);
+    property <int> chip-min-part: Math.floor(chip-secs / 60);
+    property <int> chip-sec-part: Math.mod(chip-secs, 60);
+    property <string> chip-sec-text: chip-sec-part < 10 ? "0" + chip-sec-part : chip-sec-part;
+    property <string> chip-time: chip-min-part + ":" + chip-sec-text;
+
+    property <[float]> placeholder-peaks: [
+        0.02, 0.03, 0.01, 0.04, 0.02, 0.03, 0.01, 0.02,
+        0.55, 0.72, 0.88, 0.95, 0.82, 0.76, 0.91, 0.68, 0.74, 0.85, 0.62, 0.58,
+        0.04, 0.06, 0.03, 0.05, 0.02, 0.04,
+        0.78, 0.92, 0.86, 0.71, 0.88, 0.94, 0.79, 0.83, 0.67, 0.75, 0.90, 0.84,
+        0.03, 0.05, 0.02, 0.06,
+        0.52, 0.61, 0.48,
+        0.02, 0.04, 0.03,
+        0.65, 0.80, 0.93, 0.87, 0.76, 0.91, 0.85, 0.70, 0.88, 0.96, 0.82,
+        0.04, 0.03, 0.06,
+        0.58, 0.71
+    ];
+
+    background: Theme.card-bg-inset;
+    border-radius: 4px;
+    clip: true;
+
+    for col[c] in cols: Rectangle {
+        property <float> peak-val: root.use-placeholder ? root.placeholder-peaks[c] : peaks[c];
+        property <int> lit-count: 1 + Math.round(peak-val * (root.rows - 1));
+        property <float> col-pitch-f: parent.width / 1px / root.cols;
+        property <length> col-x: Math.min(
+            Math.floor(c * col-pitch-f + (col-pitch-f - root.dot-size / 1px) / 2) * 1px,
+            parent.width - root.dot-size);
+        property <bool> col-remaining: root.show-two-tone && c >= root.play-col;
+        property <bool> is-snap-col: root.show-two-tone && c == root.play-col;
+
+        for row[r] in lit-count: Rectangle {
+            property <int> row-from-base: lit-count - 1 - r;
+            property <bool> silent-col: lit-count == 1;
+            property <float> rest-opacity: silent-col && row-from-base == 0
+                ? 0.25
+                : 0.9 - (row-from-base / (root.rows - 1)) * 0.45;
+            property <float> dot-opacity: root.use-placeholder
+                ? 0.3 * rest-opacity
+                : (col-remaining ? 0.45 : (is-snap-col ? 1.0 : rest-opacity));
+
+            width: root.dot-size;
+            height: root.dot-size;
+            x: col-x;
+            y: Math.floor((parent.height / 1px) - (root.row-pitch / 1px) - (root.dot-size / 1px) - row-from-base * (root.row-pitch / 1px)) * 1px;
+            background: is-snap-col ? white : (col-remaining ? Theme.text-dim : root.tone);
+            opacity: dot-opacity;
+            animate opacity { duration: 120ms; easing: ease-out; }
+            animate background { duration: 120ms; easing: ease-out; }
+        }
+    }
+
+  // Ghost hairline (hover preview at rest / paused)
+    if hovering && !scrubbing && (!is-playing || is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        Rectangle {
+            x: ghost-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 0.3;
+        }
+    }
+
+  // Playhead hairline
+    if show-two-tone: Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        playhead-hairline := Rectangle {
+            x: hairline-x;
+            width: 1px;
+            height: parent.height;
+            background: white;
+            opacity: 1.0;
+            animate x {
+                duration: scrubbing ? 0ms : (is-playing && !is-paused ? 80ms : 0ms);
+                easing: linear;
+            }
+            states [
+                breathing when is-paused && !scrubbing: {
+                    opacity: 0.35;
+                    in {
+                        animate opacity {
+                            duration: 700ms;
+                            easing: ease-in-out;
+                            iteration-count: -1;
+                            direction: alternate;
+                        }
+                    }
+                }
+            ]
+        }
+    }
+
+  // Hover / scrub time chip
+    if scrubbing || (hovering && !is-playing && !is-paused): Rectangle {
+        x: 0;
+        width: parent.width;
+        height: parent.height;
+        clip: true;
+
+        chip-bg := Rectangle {
+            x: chip-x - (chip-text.preferred-width + 10px) / 2;
+            y: 2px;
+            width: chip-text.preferred-width + 10px;
+            height: chip-text.preferred-height + 4px;
+            border-radius: 3px;
+            background: #000000CC;
+
+            chip-text := Text {
+                letter-spacing: Theme.track-label;
+                font-weight: Theme.weight-label;
+                text: chip-time;
+                font-family: Theme.font-label;
+                font-size: 10px;
+                color: Theme.clip-amber;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+    }
+
+    touch := TouchArea {
+        accessible-role: slider;
+        accessible-label: "Clip position";
+        mouse-cursor: crosshair;
+
+        changed pressed => {
+            if (self.pressed) {
+                root.press-mode = root.is-playing && !root.is-paused ? 1 : (root.is-paused ? 2 : 0);
+            } else {
+                // Mode 0 (idle): play-at-ms plays then seeks — a bare seek
+                // here would target the previously loaded clip.
+                if (root.press-mode != 0) {
+                    root.seek-ms(root.release-pos-ms);
+                }
+                if (root.press-mode == 0) {
+                    root.play-at-ms(root.release-pos-ms);
+                }
+            }
+        }
+
+        clicked => { /* scrub release handles seek; block card-face toggle */ }
+    }
+}

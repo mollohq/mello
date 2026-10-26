@@ -21,6 +21,8 @@ type fakeGuestNk struct {
 	groups  map[string]*api.Group
 	members map[string][]*api.GroupUserList_GroupUser // groupID -> members
 	users   map[string]*api.User
+	// perms records the last write permissions per storage key: read, write.
+	perms map[string][2]int
 }
 
 func newFakeGuestNk() *fakeGuestNk {
@@ -29,6 +31,7 @@ func newFakeGuestNk() *fakeGuestNk {
 		groups:  make(map[string]*api.Group),
 		members: make(map[string][]*api.GroupUserList_GroupUser),
 		users:   make(map[string]*api.User),
+		perms:   make(map[string][2]int),
 	}
 }
 
@@ -72,6 +75,7 @@ func (f *fakeGuestNk) StorageWrite(_ context.Context, writes []*runtime.StorageW
 	acks := make([]*api.StorageObjectAck, 0, len(writes))
 	for _, w := range writes {
 		f.storage[fakeStorageKey(w.Collection, w.Key, w.UserID)] = w.Value
+		f.perms[fakeStorageKey(w.Collection, w.Key, w.UserID)] = [2]int{w.PermissionRead, w.PermissionWrite}
 		acks = append(acks, &api.StorageObjectAck{Collection: w.Collection, Key: w.Key, UserId: w.UserID})
 	}
 	return acks, nil
@@ -104,4 +108,10 @@ func (f *fakeGuestNk) UsersGetId(_ context.Context, ids []string, _ []string) ([
 // ctxWithUser returns a context that carries an authenticated Nakama user ID.
 func ctxWithUser(userID string) context.Context {
 	return context.WithValue(context.Background(), runtime.RUNTIME_CTX_USER_ID, userID)
+}
+
+// ChannelIdBuild returns a deterministic group channel id, so a background push
+// flush in a guest test does not hit the nil embedded module.
+func (f *fakeGuestNk) ChannelIdBuild(_ context.Context, _ string, target string, _ runtime.ChannelType) (string, error) {
+	return "3." + target + "..", nil
 }

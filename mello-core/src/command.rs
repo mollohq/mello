@@ -471,6 +471,12 @@ pub enum Command {
     LoadCrewFeed {
         crew_id: String,
     },
+    /// The server pushed "feed changed" for a crew. The core loads the feed of
+    /// the active crew again, at most once every five seconds
+    /// (`feed_reload::FeedReloadGate`).
+    FeedChanged {
+        crew_id: String,
+    },
 
     // --- Crew events (event ledger) ---
     CrewCatchup {
@@ -525,6 +531,12 @@ pub enum Command {
     SetGameIntegrations {
         #[serde(default)]
         disabled: Vec<String>,
+    },
+    /// Replace the set of installed games the user hides from the crew.
+    /// Hidden games are left out of the library report.
+    SetHiddenGames {
+        #[serde(default)]
+        hidden: Vec<String>,
     },
     /// Toggle whether sensed play is shared with crews (presence + session-end).
     SetShareGameActivity {

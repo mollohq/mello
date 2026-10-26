@@ -20,9 +20,13 @@ import (
 const CrewRecapsCollection = "crew_recaps"
 
 type CrewRecapsDoc struct {
-	CrewID    string            `json:"crew_id"`
-	Recaps    []WeeklyRecapData `json:"recaps"` // newest appended last
-	UpdatedAt int64             `json:"updated_at"`
+	CrewID string            `json:"crew_id"`
+	Recaps []WeeklyRecapData `json:"recaps"` // newest appended last
+	// LastRecapWeek is the ISO week ("2026-W43") of the last recap the job
+	// wrote for this crew. The job runs for a crew when the current week is
+	// not this value, so a missed Monday runs later (recapDue).
+	LastRecapWeek string `json:"last_recap_week,omitempty"`
+	UpdatedAt     int64  `json:"updated_at"`
 }
 
 func readRecapsDoc(ctx context.Context, nk runtime.NakamaModule, crewID string) (*CrewRecapsDoc, string) {
@@ -65,6 +69,7 @@ func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, re
 	for attempt := 0; attempt < 3; attempt++ {
 		doc, version := readRecapsDoc(ctx, nk, crewID)
 		doc.Recaps = append(doc.Recaps, recap)
+		doc.LastRecapWeek = isoWeekKey(time.UnixMilli(recap.WeekEnd))
 		doc.UpdatedAt = time.Now().UnixMilli()
 		if err := writeRecapsDoc(ctx, nk, crewID, doc, version); err == nil {
 			return nil
@@ -82,7 +87,9 @@ func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, re
 type RecapMember struct {
 	UserID      string `json:"user_id"` // for client-side avatar resolution (spec 19)
 	DisplayName string `json:"display_name"`
-	HangoutMin  int    `json:"hangout_min"`
+	// HangoutMin is the minutes the member spent in voice, on a stream and in a
+	// game this week. Recaps stored before this held the member's event count.
+	HangoutMin int `json:"hangout_min"`
 }
 
 // RecapGameRecord is a member's win/loss record across the week (spec 18).
@@ -93,10 +100,27 @@ type RecapGameRecord struct {
 	Losses      int    `json:"losses"`
 }
 
-// RecapGameTally is a crew-wide match count for one game (spec 19).
+// RecapGameTally is a crew-wide total for one game: the matches played (spec 19)
+// and the minutes of game time. A game with minutes and no matches is in the
+// list too (a game that reports no outcomes).
 type RecapGameTally struct {
 	Game    string `json:"game"`
 	Matches int    `json:"matches"`
+	Minutes int    `json:"minutes"`
+}
+
+// RecapClipOfWeek is the longest clip of the recap week. Plays are not
+// tracked, so length is what ranks a clip.
+type RecapClipOfWeek struct {
+	ClipID           string   `json:"clip_id"`
+	Title            string   `json:"title"`
+	DurationSeconds  float64  `json:"duration_seconds"`
+	Game             string   `json:"game,omitempty"`
+	ClipperName      string   `json:"clipper_name"`
+	ParticipantNames []string `json:"participant_names,omitempty"`
+	Ts               int64    `json:"ts"`
+	MediaURL         string   `json:"media_url,omitempty"`
+	Waveform         string   `json:"waveform,omitempty"`
 }
 
 // RecapAward is a fun, shareable superlative for the week (spec 19).
@@ -105,6 +129,29 @@ type RecapAward struct {
 	Title  string `json:"title"`
 	Name   string `json:"name"`
 	Detail string `json:"detail"`
+}
+
+// RecapBeltMoved is one head2head title that changed hands in the recap week
+// (plans/next-gen-feed.md section 8). The value uses the encoding of
+// Head2headTitle.Value.
+type RecapBeltMoved struct {
+	TitleID        string      `json:"title_id"`
+	HolderUserID   string      `json:"holder_user_id"`
+	HolderName     string      `json:"holder_name"`
+	PreviousUserID string      `json:"previous_holder_user_id"`
+	PreviousName   string      `json:"previous_holder_name"`
+	Value          interface{} `json:"value"`
+	Unit           string      `json:"unit"`
+	MovedAtMs      int64       `json:"moved_at_ms"`
+}
+
+// RecapBeltHeld is the number of titles one member holds when the recap is
+// generated, with the ids of those titles.
+type RecapBeltHeld struct {
+	UserID      string   `json:"user_id"` // for client-side avatar resolution (spec 19)
+	DisplayName string   `json:"display_name"`
+	Count       int      `json:"count"`
+	TitleIDs    []string `json:"title_ids"`
 }
 
 type WeeklyRecapData struct {
@@ -129,13 +176,32 @@ type WeeklyRecapData struct {
 	MostActive        string        `json:"most_active"`
 	MostClipped       string        `json:"most_clipped"`
 	TopMembers        []RecapMember `json:"top_members"`
+	// MostClipped is the display name of the member with the most clips in the
+	// week. The id and the count stand beside it, so the client can draw the
+	// avatar and "5 clips". A string stays here: recaps stored before the id
+	// existed must still read.
+	MostClippedUserID string `json:"most_clipped_user_id,omitempty"`
+	MostClippedCount  int    `json:"most_clipped_count,omitempty"`
+	// ClipOfWeek is the longest clip of the week. Omitted for a week with no
+	// clips.
+	ClipOfWeek *RecapClipOfWeek `json:"clip_of_week,omitempty"`
 	// Telemetry-derived (spec 18/19); omitted when no game outcomes were recorded.
 	GameRecords    []RecapGameRecord `json:"game_records,omitempty"` // leaderboard, most wins first
 	GamesPlayed    []RecapGameTally  `json:"games_played,omitempty"` // crew-wide match counts
 	Awards         []RecapAward      `json:"awards,omitempty"`
 	BestStreak     int               `json:"best_streak,omitempty"`
 	BestStreakName string            `json:"best_streak_name,omitempty"`
-	GeneratedAt    int64             `json:"generated_at"`
+	// Head2head belts, read from the holders doc at generation time. Both are
+	// omitted for a recap with no activity.
+	//
+	//   - BeltsMoved: titles whose moved_at_ms is in the recap week. The same
+	//     titles are also appended to Awards (kind "belt").
+	//   - BeltsHeld: titles held by each member, most first. Leaderboard has
+	//     the same rows, for the RecapCard leaderboard field (spec 19, 3.5).
+	BeltsMoved  []RecapBeltMoved `json:"belts_moved,omitempty"`
+	BeltsHeld   []RecapBeltHeld  `json:"belts_held,omitempty"`
+	Leaderboard []RecapBeltHeld  `json:"leaderboard,omitempty"`
+	GeneratedAt int64            `json:"generated_at"`
 }
 
 // isEmptyRecap reports whether a recap has nothing to show: no hangout or game
@@ -156,18 +222,32 @@ func isEmptyRecap(r WeeklyRecapData) bool {
 		r.ClipCount == 0
 }
 
+// generateWeeklyRecap writes the recap of the 7 days up to now. The dev tools
+// use it. The job uses generateWeeklyRecapAt with the Monday that ends the week.
 func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string) {
+	generateWeeklyRecapAt(ctx, nk, logger, crewID, time.Now())
+}
+
+// generateWeeklyRecapAt writes the recap of the 7 days that end at weekEnd.
+// Events and clips after weekEnd are left out, so a late run (recapLookback)
+// still reports the week that ended on Monday 00:00 UTC.
+func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string, weekEnd time.Time) {
 	ledger, _ := readLedger(ctx, nk, crewID)
 
-	weekEnd := time.Now()
 	weekStart := weekEnd.Add(-7 * 24 * time.Hour)
 	startMs := weekStart.UnixMilli()
+	endMs := weekEnd.UnixMilli()
 
 	var totalHangoutMin int
 	var totalGameMin int
 	sessionCount := 0
 	gameDurations := make(map[string]int)
+	gameMinutes := make(map[string]int)
 	actorActivity := make(map[string]int)
+	// Minutes each member spent in voice, on a stream and in a game. "Most
+	// active" ranks by these, and falls back to the event count when a week has
+	// no minutes.
+	actorMinutes := make(map[string]int)
 	actorClips := make(map[string]int)
 	actorWins := make(map[string]int)
 	actorLosses := make(map[string]int)
@@ -182,7 +262,7 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	longestSessionMin := 0
 
 	for _, e := range ledger.Events {
-		if e.Timestamp < startMs {
+		if e.Timestamp < startMs || e.Timestamp > endMs {
 			continue
 		}
 		// System events (e.g. voice_session) have an empty actor; don't let them
@@ -198,6 +278,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalHangoutMin += d.DurationMin
+			for _, id := range d.ParticipantIDs {
+				actorMinutes[id] += d.DurationMin
+			}
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
 				longestSessionDesc = fmt.Sprintf("%s in %s (%dm)",
@@ -208,6 +291,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalHangoutMin += d.DurationMin
+			if d.StreamerID != "" {
+				actorMinutes[d.StreamerID] += d.DurationMin
+			}
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
 				longestSessionDesc = fmt.Sprintf("%s streaming %s (%dm)",
@@ -218,7 +304,13 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalGameMin += reportableMinutes(d.DurationMin, d.ActiveMin)
+			if e.ActorID != "" {
+				actorMinutes[e.ActorID] += reportableMinutes(d.DurationMin, d.ActiveMin)
+			}
 			gameDurations[d.GameName] += d.DurationMin
+			if d.GameName != "" {
+				gameMinutes[d.GameName] += reportableMinutes(d.DurationMin, d.ActiveMin)
+			}
 			matches := d.Wins + d.Losses + d.Draws
 			if matches > 0 {
 				gameMatches[d.GameName] += matches
@@ -240,11 +332,12 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 	// Clips are durable and no longer in the ledger; count them from the clips doc.
 	clipsDoc, _ := readClipsDoc(ctx, nk, crewID)
 	for _, c := range clipsDoc.Clips {
-		if c.Ts >= startMs {
+		if c.Ts >= startMs && c.Ts <= endMs {
 			clipCount++
 			actorClips[c.ActorID]++
 		}
 	}
+	clipOfWeek := pickClipOfWeek(clipsDoc.Clips, startMs, endMs)
 
 	topGame := ""
 	topGameMin := 0
@@ -255,13 +348,20 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		}
 	}
 
-	mostActive := topActor(actorActivity, ctx, nk)
-	mostClipped := topActor(actorClips, ctx, nk)
-	topMembers := topActors(actorActivity, 3, ctx, nk)
+	activeSource := actorMinutes
+	if len(activeSource) == 0 {
+		activeSource = actorActivity
+	}
+	mostActive := topActor(activeSource, ctx, nk)
+	// One pass picks the id and the name, so a tie cannot give the name of one
+	// member and the id of another.
+	mostClippedID, mostClippedCount := topKeyCount(actorClips)
+	mostClipped := resolveOrID(ctx, nk, mostClippedID)
+	topMembers := topActors(activeSource, 3, ctx, nk)
 	gameRecords := buildGameRecords(actorWins, actorLosses, ctx, nk)
 
 	bestStreakName := resolveOrID(ctx, nk, bestStreakActor)
-	gamesPlayed := buildGamesPlayed(gameMatches)
+	gamesPlayed := buildGamesPlayedWithMinutes(gameMatches, gameMinutes)
 	awards := buildAwards(ctx, nk, actorMatches, bestStreak, bestStreakName, worstStreak, worstStreakActor)
 
 	recap := WeeklyRecapData{
@@ -278,6 +378,9 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		ClipCount:         clipCount,
 		MostActive:        mostActive,
 		MostClipped:       mostClipped,
+		MostClippedUserID: mostClippedID,
+		MostClippedCount:  mostClippedCount,
+		ClipOfWeek:        clipOfWeek,
 		TopMembers:        topMembers,
 		GameRecords:       gameRecords,
 		GamesPlayed:       gamesPlayed,
@@ -292,12 +395,128 @@ func generateWeeklyRecap(ctx context.Context, nk runtime.NakamaModule, logger ru
 		return
 	}
 
+	// Belts only join a recap that has activity. Holding titles is a standing
+	// state and must not turn an empty week into a recap with content.
+	attachRecapBelts(ctx, nk, logger, crewID, &recap, startMs, weekEnd.UnixMilli())
+
 	if err := AppendRecap(ctx, nk, crewID, recap); err != nil {
 		logger.Error("Failed to store weekly recap for crew %s: %v", crewID, err)
 	} else {
 		logger.Info("Weekly recap generated for crew %s: hangout=%dm clips=%d top_game=%s",
 			crewID, totalHangoutMin, clipCount, topGame)
+		scheduleRecapPushes(ctx, nk, logger, crewID, recap)
 	}
+}
+
+// head2headTitleLabels is the English label of each title, for recap awards.
+// The client owns the display copy of the head2head card.
+var head2headTitleLabels = map[string]string{
+	titleTheCarry:   "The Carry",
+	titleLockedIn:   "Locked In",
+	titleHasALife:   "Has a Life",
+	titleNightOwl:   "Night Owl",
+	titleTheCollect: "The Collector",
+	titleSampler:    "Sampler",
+	titleOneTrick:   "One Trick",
+	titleMouth:      "Mouth",
+	titleMarathon:   "Marathon",
+	titleLastOneUp:  "Last One Up",
+	titleClipper:    "Clipper",
+	titleRageQuit:   "Rage Quit",
+	titleWinner:     "Winner",
+}
+
+// buildRecapBelts derives the belt sections from a holders doc. A title moved
+// in the week when its moved_at_ms is in [startMs, endMs]. Held counts every
+// contested title in the doc. Pure, so the rules are unit-testable. name
+// resolves a user id to a display name.
+func buildRecapBelts(doc *Head2headDoc, startMs, endMs int64, name func(string) string) ([]RecapBeltMoved, []RecapBeltHeld) {
+	if doc == nil {
+		return nil, nil
+	}
+	var moved []RecapBeltMoved
+	held := map[string]*RecapBeltHeld{}
+	for _, t := range doc.Titles {
+		if t.HolderUserID == "" {
+			continue
+		}
+		h := held[t.HolderUserID]
+		if h == nil {
+			h = &RecapBeltHeld{UserID: t.HolderUserID, DisplayName: name(t.HolderUserID), TitleIDs: []string{}}
+			held[t.HolderUserID] = h
+		}
+		h.Count++
+		h.TitleIDs = append(h.TitleIDs, t.TitleID)
+		if t.MovedAtMs >= startMs && t.MovedAtMs <= endMs {
+			moved = append(moved, RecapBeltMoved{
+				TitleID:        t.TitleID,
+				HolderUserID:   t.HolderUserID,
+				HolderName:     name(t.HolderUserID),
+				PreviousUserID: t.PreviousHolderUserID,
+				PreviousName:   name(t.PreviousHolderUserID),
+				Value:          t.Value,
+				Unit:           t.Unit,
+				MovedAtMs:      t.MovedAtMs,
+			})
+		}
+	}
+	sort.SliceStable(moved, func(i, j int) bool { return moved[i].MovedAtMs < moved[j].MovedAtMs })
+	heldList := make([]RecapBeltHeld, 0, len(held))
+	for _, h := range held {
+		heldList = append(heldList, *h)
+	}
+	sort.Slice(heldList, func(i, j int) bool {
+		if heldList[i].Count != heldList[j].Count {
+			return heldList[i].Count > heldList[j].Count
+		}
+		return heldList[i].UserID < heldList[j].UserID
+	})
+	return moved, heldList
+}
+
+// beltAwards turns moved belts into recap awards, one for each belt.
+func beltAwards(moved []RecapBeltMoved) []RecapAward {
+	out := make([]RecapAward, 0, len(moved))
+	for _, m := range moved {
+		title := head2headTitleLabels[m.TitleID]
+		if title == "" {
+			title = m.TitleID
+		}
+		detail := ""
+		if m.PreviousName != "" {
+			detail = "took it from " + m.PreviousName
+		}
+		out = append(out, RecapAward{Kind: "belt", Title: title, Name: m.HolderName, Detail: detail})
+	}
+	return out
+}
+
+// attachRecapBelts fills the belt sections of a recap from the holders doc of
+// the crew. It recomputes the doc first, because the session trigger is
+// debounced and the doc can lag the last session. If the recompute fails it
+// reads the stored doc. Never fails the recap.
+func attachRecapBelts(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, crewID string, recap *WeeklyRecapData, startMs, endMs int64) {
+	doc := recomputeHead2head(ctx, logger, nk, crewID, head2headTriggerLibrary, endMs)
+	if doc == nil {
+		doc, _ = readHead2headDoc(ctx, nk, crewID)
+	}
+	names := map[string]string{}
+	name := func(id string) string {
+		if id == "" {
+			return ""
+		}
+		if n, ok := names[id]; ok {
+			return n
+		}
+		n := resolveOrID(ctx, nk, id)
+		names[id] = n
+		return n
+	}
+	moved, held := buildRecapBelts(doc, startMs, endMs, name)
+	recap.BeltsMoved = moved
+	recap.BeltsHeld = held
+	recap.Leaderboard = held
+	recap.Awards = append(recap.Awards, beltAwards(moved)...)
 }
 
 func resolveOrID(ctx context.Context, nk runtime.NakamaModule, id string) string {
@@ -332,6 +551,71 @@ func buildGamesPlayed(gameMatches map[string]int) []RecapGameTally {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Matches > out[j].Matches })
 	return out
+}
+
+// buildGamesPlayedWithMinutes lists every game of the week with its matches and
+// its minutes: the most minutes first, then the most matches, then the name.
+// A game with minutes and no recorded matches is in the list. Pure.
+func buildGamesPlayedWithMinutes(gameMatches, gameMinutes map[string]int) []RecapGameTally {
+	names := map[string]bool{}
+	for g := range gameMatches {
+		names[g] = true
+	}
+	for g, m := range gameMinutes {
+		if m > 0 {
+			names[g] = true
+		}
+	}
+	out := make([]RecapGameTally, 0, len(names))
+	for g := range names {
+		out = append(out, RecapGameTally{Game: g, Matches: gameMatches[g], Minutes: gameMinutes[g]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Minutes != out[j].Minutes {
+			return out[i].Minutes > out[j].Minutes
+		}
+		if out[i].Matches != out[j].Matches {
+			return out[i].Matches > out[j].Matches
+		}
+		return out[i].Game < out[j].Game
+	})
+	return out
+}
+
+// pickClipOfWeek is the longest clip with a timestamp in [startMs, endMs].
+// Plays are not tracked, so length ranks the clips. A tie goes to the newer
+// clip. It returns nil for a week with no clips. The title reads "Leo clipped
+// that". Pure.
+func pickClipOfWeek(clips []StoredClip, startMs, endMs int64) *RecapClipOfWeek {
+	var best *StoredClip
+	for i := range clips {
+		c := &clips[i]
+		if c.Ts < startMs || c.Ts > endMs {
+			continue
+		}
+		if best == nil || c.DurationSeconds > best.DurationSeconds ||
+			(c.DurationSeconds == best.DurationSeconds && c.Ts > best.Ts) {
+			best = c
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	title := "Clipped"
+	if best.ClipperName != "" {
+		title = best.ClipperName + " clipped that"
+	}
+	return &RecapClipOfWeek{
+		ClipID:           best.ClipID,
+		Title:            title,
+		DurationSeconds:  best.DurationSeconds,
+		Game:             best.Game,
+		ClipperName:      best.ClipperName,
+		ParticipantNames: best.ParticipantNames,
+		Ts:               best.Ts,
+		MediaURL:         best.MediaURL,
+		Waveform:         best.Waveform,
+	}
 }
 
 // buildAwards composes the week's fun superlatives: grinder of the week (most
@@ -461,31 +745,80 @@ func topActor(counts map[string]int, ctx context.Context, nk runtime.NakamaModul
 	return topID
 }
 
-// StartWeeklyRecapJob runs every hour, checks if it's Monday 00:xx UTC,
-// and generates recaps for all active crews.
+// recapLookback is how long after Monday 00:00 UTC the job may still write the
+// recap of the week that ended then. A missed Monday runs on a later tick. After
+// the lookback the week is skipped: a recap on Friday for last week is stale.
+const recapLookback = 72 * time.Hour
+
+// isoWeekKey names an ISO week, for example "2026-W43".
+func isoWeekKey(t time.Time) string {
+	y, w := t.UTC().ISOWeek()
+	return fmt.Sprintf("%04d-W%02d", y, w)
+}
+
+// mondayStartUTC is Monday 00:00 UTC of the ISO week that holds t. It is the
+// end of the week a recap covers.
+func mondayStartUTC(t time.Time) time.Time {
+	u := t.UTC()
+	back := (int(u.Weekday()) + 6) % 7 // Monday is 0
+	return time.Date(u.Year(), u.Month(), u.Day()-back, 0, 0, 0, 0, time.UTC)
+}
+
+// recapDue reports whether the job must write a recap for a crew at now: the
+// current ISO week has none yet, and now is inside the lookback after Monday
+// 00:00 UTC. A recap already stored with a week end in this week counts as
+// written, which covers a crew whose recap predates last_recap_week.
+func recapDue(doc *CrewRecapsDoc, now time.Time) bool {
+	weekEnd := mondayStartUTC(now)
+	if now.Before(weekEnd) || now.Sub(weekEnd) >= recapLookback {
+		return false
+	}
+	key := isoWeekKey(now)
+	if doc.LastRecapWeek == key {
+		return false
+	}
+	if n := len(doc.Recaps); n > 0 && isoWeekKey(time.UnixMilli(doc.Recaps[n-1].WeekEnd)) == key {
+		return false
+	}
+	return true
+}
+
+// StartWeeklyRecapJob runs at start and then every hour. Each run writes the
+// recap of every crew that is due (recapDue) and sends the recap pushes that
+// are due. The state is in storage, so a restart or a missed Monday loses
+// nothing within the lookback.
 func StartWeeklyRecapJob(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
+	runWeeklyRecapTick(ctx, nk, logger, time.Now())
+
 	ticker := time.NewTicker(1 * time.Hour)
 	defer ticker.Stop()
-
-	lastRunWeek := -1
-
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case t := <-ticker.C:
-			_, week := t.UTC().ISOWeek()
-			if t.UTC().Weekday() == time.Monday && t.UTC().Hour() == 0 && week != lastRunWeek {
-				lastRunWeek = week
-				logger.Info("Weekly recap job started for week %d", week)
-				generateRecapsForAllCrews(ctx, nk, logger)
-			}
+			runWeeklyRecapTick(ctx, nk, logger, t)
 		}
 	}
 }
 
-func generateRecapsForAllCrews(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger) {
-	// List all crews (Nakama groups)
+// runWeeklyRecapTick is one pass of the job at now.
+func runWeeklyRecapTick(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, now time.Time) {
+	defer func() {
+		if r := recover(); r != nil {
+			logger.Error("Weekly recap tick panic: %v", r)
+		}
+	}()
+	generateDueRecaps(ctx, nk, logger, now)
+	sendDueRecapPushes(ctx, nk, logger, now)
+}
+
+// generateDueRecaps writes the recap of each crew that is due at now.
+func generateDueRecaps(ctx context.Context, nk runtime.NakamaModule, logger runtime.Logger, now time.Time) {
+	if now.Before(mondayStartUTC(now)) || now.Sub(mondayStartUTC(now)) >= recapLookback {
+		return
+	}
+	logger.Info("Weekly recap check for %s", isoWeekKey(now))
 	cursor := ""
 	for {
 		groups, nextCursor, err := nk.GroupsList(ctx, "", "", nil, nil, 100, cursor)
@@ -494,7 +827,10 @@ func generateRecapsForAllCrews(ctx context.Context, nk runtime.NakamaModule, log
 			return
 		}
 		for _, g := range groups {
-			generateWeeklyRecap(ctx, nk, logger, g.GetId())
+			doc, _ := readRecapsDoc(ctx, nk, g.GetId())
+			if recapDue(doc, now) {
+				generateWeeklyRecapAt(ctx, nk, logger, g.GetId(), mondayStartUTC(now))
+			}
 		}
 		if nextCursor == "" || len(groups) == 0 {
 			break

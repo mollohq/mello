@@ -19,6 +19,9 @@ const (
 	NotifyPresenceChange = 113
 	NotifyVoiceUpdate    = 114
 	NotifyMessagePreview = 115
+	// NotifyFeedChanged says the crew feed has new content. The client loads
+	// the feed of the active crew again, at most once every 5 s.
+	NotifyFeedChanged = 116
 )
 
 // Priority events are always pushed immediately to all subscribers.
@@ -263,17 +266,68 @@ func PushCrewEvent(ctx context.Context, logger runtime.Logger, nk runtime.Nakama
 	}
 }
 
-// PushPresenceChange sends a presence change to active crew subscribers only.
-func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID string, p *UserPresence) {
+// PushFeedChanged tells the members who have the crew open that its feed
+// changed: a session ended, a library report moved the recent games or the
+// head2head titles, a clip was posted. The actor gets it too: a second device
+// of the same user has the crew open, and the client coalesces its own reload.
+// The payload names the crew and the reason only, never data.
+func PushFeedChanged(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, reason string) {
 	content := map[string]interface{}{
-		"type":    "presence_change",
+		"type":    "feed_changed",
 		"crew_id": crewID,
-		"user_id": userID,
-		"presence": map[string]interface{}{
-			"status":   p.Status,
-			"activity": p.Activity,
-		},
+		"reason":  reason,
 	}
+	seen := map[string]bool{}
+	for _, sub := range getActiveSubscribersForCrew(crewID) {
+		if seen[sub.UserID] {
+			continue
+		}
+		seen[sub.UserID] = true
+		pushNotification(ctx, nk, sub.UserID, NotifyFeedChanged, content)
+	}
+}
+
+// PushFeedChangedForUser sends PushFeedChanged for every crew the user is in.
+// Never fails the caller: the feed also loads when a member opens the crew.
+func PushFeedChangedForUser(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, userID, reason string) {
+	groups, _, err := nk.UserGroupsList(ctx, userID, 100, nil, "")
+	if err != nil {
+		logger.Warn("feed_changed: crew list failed for user %s: %v", userID, err)
+		return
+	}
+	for _, g := range groups {
+		if st := g.GetState(); st != nil && st.GetValue() > 2 {
+			continue
+		}
+		if id := g.GetGroup().GetId(); id != "" {
+			PushFeedChanged(ctx, logger, nk, id, reason)
+		}
+	}
+}
+
+// PushPresenceChange sends a presence change to active crew subscribers only.
+// presenceChangeContent is the body of a presence_change push. It carries the
+// game (name, id, started_at) beside the activity, so a crewmate's client can
+// show the game that is in progress without loading the crew state again
+// (spec 17 section 5.2). Nothing else of the presence leaves the server.
+func presenceChangeContent(crewID, userID string, p *UserPresence) map[string]interface{} {
+	presence := map[string]interface{}{
+		"status":   p.Status,
+		"activity": p.Activity,
+	}
+	if p.Game != nil {
+		presence["game"] = p.Game
+	}
+	return map[string]interface{}{
+		"type":     "presence_change",
+		"crew_id":  crewID,
+		"user_id":  userID,
+		"presence": presence,
+	}
+}
+
+func PushPresenceChange(ctx context.Context, logger runtime.Logger, nk runtime.NakamaModule, crewID, userID string, p *UserPresence) {
+	content := presenceChangeContent(crewID, userID, p)
 
 	subs := getActiveSubscribersForCrew(crewID)
 	seen := make(map[string]bool, len(subs))

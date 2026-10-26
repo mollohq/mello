@@ -20,6 +20,10 @@ e2e-oauth = []
 # (granted, denied or undetermined) instead of asking the OS, and answer a
 # request without the OS dialog. Never enabled in shipped builds.
 e2e-mic = []
+# Test-only: `e2e_game::inject` feeds a game sensor Started or Stopped event
+# for a catalogue game into the same path the real sensor uses. Never enabled
+# in shipped builds.
+e2e-game = []
 
 [dependencies]
 tokio = { workspace = true }

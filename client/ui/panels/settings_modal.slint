@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -1833,18 +1833,73 @@ component GameIntegrationRow inherits Rectangle {
     }
 }
 
+// One installed game with its "Hidden from crew" switch. A game hidden in
+// Steam shows the state as text, with no switch.
+component InstalledGameRow inherits Rectangle {
+    in property <InstalledGameData> game;
+    callback toggled(bool);
+
+    height: installed-row-layout.preferred-height;
+    background: transparent;
+
+    installed-row-layout := HorizontalLayout {
+        padding-top: 8px;
+        padding-bottom: 8px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 16px;
+        cross-axis-alignment: center;
+
+        GameIcon {
+            game-id: game.game-id;
+            short-name: game.short-name;
+            badge-color: Theme.raised;
+            size: 28px;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            font-family: Theme.font-display;
+            text: game.name;
+            font-size: 14px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+            overflow: elide;
+            vertical-alignment: center;
+        }
+
+        Text {
+            font-family: Theme.font-label;
+            text: game.locked ? "HIDDEN IN STEAM" : "HIDDEN FROM CREW";
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            letter-spacing: Theme.track-label;
+            color: Theme.text-secondary;
+            vertical-alignment: center;
+        }
+
+        if !game.locked: SettingsToggle {
+            checked: game.hidden;
+            label: "Hidden from crew: \{game.name}";
+            toggled(v) => { root.toggled(v); }
+        }
+    }
+}
+
 component GamesTab inherits VerticalLayout {
     padding: 40px;
     padding-bottom: 80px;
     spacing: 48px;
 
     in property <[GameIntegrationData]> games: [];
+    in property <[InstalledGameData]> installed-games: [];
     in-out property <bool> share-game-activity: true;
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
     in property <string> riot-id: "";
 
     callback integration-toggled(string /* game-id */, bool);
+    callback hidden-toggled(string /* game-id */, bool);
     callback share-game-activity-toggled(bool);
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
@@ -1856,8 +1911,8 @@ component GamesTab inherits VerticalLayout {
         SectionHeader { title: "ACTIVITY SHARING"; }
 
         ToggleRow {
-            title: "Show crew what I'm playing";
-            description: "Let crewmates see what game you're in and record play sessions to the crew feed.";
+            title: "Show crew what I play";
+            description: "Let crewmates see your installed games, what game you're in, and your play sessions in the crew feed.";
             checked <=> root.share-game-activity;
             toggled(v) => { root.share-game-activity-toggled(v); }
         }
@@ -1872,7 +1927,7 @@ component GamesTab inherits VerticalLayout {
         Text {
             font-weight: Theme.weight-display;
             font-family: Theme.font-display;
-            text: "m3llo captures match results for these games while you play. Some games need a small config file in their game folder — turning a game off skips any setup and stops capture for it.";
+            text: "m3llo captures match results for these games while you play. Some games need a small config file in their game folder. Turning a game off skips any setup and stops capture for it.";
             font-size: 13px;
             color: Theme.text-secondary;
             wrap: word-wrap;
@@ -1884,6 +1939,31 @@ component GamesTab inherits VerticalLayout {
             for game in games: GameIntegrationRow {
                 game: game;
                 toggled(v) => { integration-toggled(game.game-id, v); }
+            }
+        }
+    }
+
+    // HIDDEN FROM CREW
+    if installed-games.length > 0: VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "HIDDEN FROM CREW"; }
+
+        Text {
+            font-weight: Theme.weight-display;
+            font-family: Theme.font-display;
+            text: "Games you hide stay off the crew feed. A game hidden in Steam stays hidden here.";
+            font-size: 13px;
+            color: Theme.text-secondary;
+            wrap: word-wrap;
+        }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            for game in installed-games: InstalledGameRow {
+                game: game;
+                toggled(v) => { hidden-toggled(game.game-id, v); }
             }
         }
     }
@@ -1923,7 +2003,7 @@ component GamesTab inherits VerticalLayout {
                         font-family: Theme.font-display;
                         text: riot-linked
                             ? "Linked as \{riot-id}. Match results for League of Legends and TFT are verified against Riot's official data."
-                            : "Link your Riot ID to get server-verified match results for League of Legends and TFT. We only read your match history — nothing is posted to your account.";
+                            : "Link your Riot ID to get server-verified match results for League of Legends and TFT. We only read your match history. Nothing is posted to your account.";
                         font-size: 13px;
                         color: Theme.text-secondary;
                         wrap: word-wrap;
@@ -2103,6 +2183,8 @@ export component SettingsModal inherits Rectangle {
 
     // Games settings
     in property <[GameIntegrationData]> games-list: [];
+    in property <[InstalledGameData]> installed-games: [];
+    callback games-hidden-toggled(string /* game-id */, bool);
     in property <bool> riot-available: false;
     in property <bool> riot-linked: false;
     in property <string> riot-id: "";
@@ -2672,6 +2754,8 @@ export component SettingsModal inherits Rectangle {
                             visible: active-tab == 3;
                             width: parent.width;
                             games: root.games-list;
+                            installed-games: root.installed-games;
+                            hidden-toggled(id, v) => { root.games-hidden-toggled(id, v); }
                             share-game-activity <=> root.settings-share-game-activity;
                             riot-available: root.riot-available;
                             riot-linked: root.riot-linked;
@@ -2816,6 +2900,11 @@ component SettingsPreview inherits Rectangle {
             { game-id: "lol", name: "League of Legends", short-name: "LOL",
               color: #C8AA6E, install-status: "not-found", writes-files: false,
               note: "", enabled: false, has-account-link: true },
+        ];
+        installed-games: [
+            { game-id: "steam-620", name: "Portal 2", short-name: "Portal 2", hidden: false, locked: false },
+            { game-id: "steam-730", name: "Counter-Strike 2", short-name: "CS2", hidden: true, locked: false },
+            { game-id: "steam-999", name: "Steam Hidden Game", short-name: "SHG", hidden: true, locked: true },
         ];
     }
 }

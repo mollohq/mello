@@ -500,7 +500,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				},
 			},
 
-			// ── MOMENTS (show as catchup cards) ───────────────
+			// ── MOMENTS (ledger only, no feed card) ───────────────
 			{
 				ID: generateEventID(), CrewID: crewIDs["Gamers"],
 				Type: "moment", ActorID: users["bob"].id,
@@ -520,7 +520,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 				},
 			},
 
-			// ── MEMBER JOINED (catch-up card) ─────────────────
+			// ── MEMBER JOINED (the joined row) ─────────────────
 			// Seeded explicitly: the equivalent hook events fire once when
 			// seed.sh/.ps1 joins users, and the idempotent ledger reset
 			// clears them, so re-runs would otherwise lose this card type.
@@ -844,7 +844,7 @@ func DevSeedStateRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 					DurationMin:      18,
 				},
 			},
-			// Catch-up card alongside the voice variants.
+			// A join alongside the voice variants (the joined row).
 			{
 				ID: generateEventID(), CrewID: gid,
 				Type: "member_joined", ActorID: users["bob"].id,

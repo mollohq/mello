@@ -366,16 +366,8 @@ pub fn wire(ctx: &AppContext) {
             }
             log::info!("[invite] hiding invite card for crew {}", crew_id);
 
-            // Remove the invite card from the current feed
-            let model = app.get_feed_cards();
-            let mut cards: Vec<crate::FeedCardData> = (0..model.row_count())
-                .filter_map(|i| model.row_data(i))
-                .filter(|c| c.card_type != "invite")
-                .collect();
-            if cards.is_empty() {
-                cards.push(crate::FeedCardData::default());
-            }
-            app.set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+            // Take the invite line off the feed now.
+            app.set_feed_invite_line(false);
 
             // Persist the preference
             let mut s = settings.borrow_mut();

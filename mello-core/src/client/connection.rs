@@ -15,9 +15,14 @@ impl super::Client {
     /// already up. A `presence_update` from here wrote the same row at the
     /// same moment; on a fresh account Nakama refused the second insert.
     pub(super) async fn on_connected(&mut self) {
+        // Every login path ends here. It may be another account than the last
+        // one, so the first scan after it sends in full.
+        self.library_reporter.reset_for_account();
         self.check_protocol_version().await;
 
         self.ensure_game_services();
+        // A new login sends the library again, without waiting for a rescan.
+        self.sync_library_report().await;
 
         match self.nakama.get_ice_servers().await {
             Ok(urls) => {

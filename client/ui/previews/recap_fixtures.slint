@@ -1,0 +1,32 @@
+import { RecapPerson, RecapGameRow, RecapClip } from "../types.slint";
+
+// Fixtures for the weekly recap previews: the numbers of the mockup
+// (weekly-recap-card.html). The hours of Max, Leo and the games are made up.
+export global RecapFixtures {
+    out property <RecapPerson> active: { name: "Max", initials: "M", hue: 2, count: 550 };
+    out property <RecapPerson> clipped: { name: "Leo", initials: "L", hue: 4, count: 5 };
+    out property <[RecapGameRow]> games: [
+        { game-id: "steam-252950", name: "Rocket League", monogram: "RL", hue-index: 1, has-capsule: true, capsule: @image-url("fixtures/capsule-sample-2.png"), minutes: 740 },
+        { game-id: "steam-730", name: "Counter-Strike 2", monogram: "CS", hue-index: 0, has-capsule: true, capsule: @image-url("fixtures/capsule-sample-1.png"), minutes: 550 },
+        { game-id: "steam-1097150", name: "Fall Guys", monogram: "FG", hue-index: 4, has-capsule: true, capsule: @image-url("fixtures/capsule-sample-5.png"), minutes: 270 },
+        { game-id: "steam-570", name: "Dota 2", monogram: "D2", hue-index: 1, has-capsule: true, capsule: @image-url("fixtures/capsule-sample-3.png"), minutes: 220 },
+        { game-id: "night-stones", name: "Night Stones", monogram: "NS", hue-index: 3, has-capsule: true, capsule: @image-url("fixtures/capsule-sample-4.png"), minutes: 120 },
+    ];
+    out property <int> games-min: 1900;
+    out property <RecapClip> clip: {
+        clip-path: "https://example.invalid/clip.opus",
+        title: "Leo clipped that",
+        duration: "0:29",
+        duration-ms: 29000,
+        game-name: "Rocket League",
+        when: "Saturday",
+        names: "b0bben, Max, Sara and Leo",
+        people: [
+            { name: "b0bben", initials: "B", hue: 0 },
+            { name: "Max", initials: "M", hue: 2 },
+            { name: "Sara", initials: "S", hue: 3 },
+            { name: "Leo", initials: "L", hue: 4 },
+        ],
+        waveform: [0.05, 0.12, 0.08, 0.04, 0.1, 0.3, 0.55, 0.7, 0.9, 1.0, 0.8, 0.9, 0.75, 0.6, 0.85, 0.7, 0.5, 0.4, 0.15, 0.1, 0.08, 0.12, 0.06, 0.3, 0.5, 0.8, 0.9, 0.7, 0.95, 0.8, 0.6, 0.9, 0.85, 0.7, 0.4, 0.2, 0.1, 0.05, 0.25, 0.45, 0.6, 0.3, 0.1, 0.05, 0.08, 0.5, 0.7, 0.9, 0.8, 0.95, 0.6, 0.4, 0.2, 0.1, 0.05, 0.3, 0.6, 0.9, 0.7, 0.3],
+    };
+}

@@ -2,7 +2,7 @@
 
 > **Component:** Control Bar Game States, Crew Sidebar Game List, Member Playing Line, Game Feed Cards, Game Icons
 > **Version:** 0.1
-> **Status:** Implemented. Section 3.4 (`recent_games`) and section 7.1 (HUD overlay) are not built.
+> **Status:** Implemented. Section 7.1 (HUD overlay) is not built. Section 3.4 is built as a feed card, with a different data path.
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [17-GAME-SENSING.md](./17-GAME-SENSING.md), [18-GAME-TELEMETRY.md](./18-GAME-TELEMETRY.md), [16-CREW-EVENT-LEDGER.md](./16-CREW-EVENT-LEDGER.md), [19-FEED-CURATION-PERSONAL-STATS.md](./19-FEED-CURATION-PERSONAL-STATS.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -146,14 +146,45 @@ the presence heartbeat. No dedicated timer is needed.
 The line is empty when the member does not play a game, or when the member
 disabled activity sharing. See section 5.
 
-### 3.4 Recent games data — NOT BUILT
+### 3.3a Live session card
 
-Two designs existed. The first added a `recent_games` array to the
-`crew_catchup` response. The second added a `crew_recent_games` RPC. Both
-aggregate `game_session` events over 7 days.
+The crew feed shows a game in progress as a `LiveSessionCard`. See
+[CLIPS.md](./features/CLIPS.md) section 7.1 for the placement rule.
 
-Neither is built. No `recent_games` field and no such RPC exist. The sidebar
-list uses live presence only.
+| Source | Data |
+|---|---|
+| `presence.game` of a crewmate | Game id, game name, `started_at` |
+| `GameDetected` of the viewer | Same three values from the local sensor |
+
+The `presence_change` push carries `game`, so the card needs no crew state load.
+The client sends no new data. The card is never a ledger event.
+
+### 3.4 Recent games data
+
+The recent games card gets its data from the `crew_feed` RPC. Entry type: `recent-games`. No `recent_games` field on `crew_catchup` and no `crew_recent_games` RPC exist.
+
+```json
+{ "games": [ { "game_id": "valorant", "game_name": "Valorant", "launcher": "steam",
+               "minutes": 600, "last_played": 1760000000000, "member_ids": ["<user id>"] } ],
+  "session_count": 14, "total_min": 1860 }
+```
+
+- Source: the library documents of the crew members plus the `game_session` events of the week. Builder: `buildRecentGames` in `crew_feed.go`. Spec [19](./19-FEED-CURATION-PERSONAL-STATS.md) section 3.3 has the rules.
+- Library documents: one per member, in the `user_library` collection. The client writes them with `library_report`. See spec [16](./16-CREW-EVENT-LEDGER.md) section 3.6. The feed RPC reads the documents of the crew members as the system. A member with no document adds nothing.
+- Merge: the union of both sources by game id. A library game with no matching id falls back to a match on the lower-case name, because sessions carry catalogue ids and the library carries launcher ids.
+- Name: the library name when present, else the session name.
+- `minutes`: the summed `playtime_min` of the members when present, else the session minutes.
+- `last_played`: the newer of the library and the sessions, in milliseconds. The tiles sort by it, newest first.
+- `member_ids`: members who have the game installed or played it in the week. The client card does not draw them yet.
+- The header line comes from sessions only. With no sessions the line is empty.
+- Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
+- `launcher`: the launcher prefix of the library entry (`steam`, `epic`, `gog`). Absent for a game only seen in sessions.
+- Art ladder, first hit wins: the runtime game icon (cached or crew-shared), then the local Steam header art, then the monogram.
+- Local Steam art: `mello_core::library::local_steam_art` reads `<steam root>/appcache/librarycache/`. It tries `<appid>_header.jpg`, then `header.jpg` and `library_header.jpg` in `<appid>/` and in each hash folder under it, then `library_600x900.jpg`. It reads the disk only. Nothing is fetched or uploaded. The log carries counts only.
+- Monogram: two letters, the first letters of the first two words of the name (one word: its first two letters), on a two-corner tile in an identity hue chosen from the game id.
+- Client: `RecentGamesCard` in `crew_feed.slint`, one row per game, at most three rows. Each row has the art (76 px wide, the shape of a Steam header), the name in Oxanium, and under it the hours in capitals ("4,167 H"; one decimal under 100 hours). With no hours known it shows the launcher ("EPIC"). The right side of the row shows "TRACKED" when the game sensor catalogue knows the game (by game id, Steam appid or name). Otherwise it shows nothing.
+- Header: "RECENT GAMES" on the left. The right side is the sessions line (`subtitle`), or empty. It never says where the games come from.
+- The sidebar list still uses live presence only.
 
 ---
 
@@ -203,11 +234,11 @@ Three implementations apply this rule. Keep them in step.
 |---|---|---|
 | One session | `game_session_duration_display` | `client/src/handlers/clip.rs` |
 | One week | `weekly_time_text` | `client/src/handlers/stats.rs` |
-| Rollup total | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
+| Recent games total | `reportableMinutes` | `backend/nakama/data/modules/crew_feed.go` |
 
 The rollup implementation was added last. Before it, a 10-hour overnight session
 showed 40 minutes on its own card and added 10 hours to the `CREW PLAY` card
-above it.
+above it. The recent games card replaced that card and keeps the same rule.
 
 ### 4.4 Co-play copy
 
@@ -222,7 +253,7 @@ No surface renders this copy. The ledger records the data. See
 
 ## 5. Activity Sharing Consent
 
-Onboarding shows a checkbox at the nickname step: "Show crew what I'm playing".
+Onboarding shows a checkbox at the nickname step: "Show crew what I play".
 The default is on. Settings → Games changes it later.
 
 The flag gates every surface in this spec.
@@ -233,11 +264,32 @@ The flag gates every surface in this spec.
 | Session sharing | `should_emit_game_session_end(share)` in the same file |
 | Persistence | `settings.share_game_activity`, default from `default_share_game_activity()` |
 | Runtime change | `Command::SetShareGameActivity` |
+| Library report | `LibraryReporter::plan` in `mello-core/src/library_report.rs` sends only when the flag is on and the session is active |
 
 The client clears published presence on the next scan when the user disables the
 flag. `sync_game_presence` recomputes the value and detects the change.
 
-Per-game hiding is out of scope.
+### Per-game hiding
+
+The user can hide single games from the crew. The setting is `hidden_games` in
+the client settings: a list of game ids (`<prefix>-<external_id>`, spec
+[17](./17-GAME-SENSING.md) section 3.3). Settings → Games shows one
+"Hidden from crew" switch for each installed game.
+
+| Rule | Behavior |
+|---|---|
+| Library report | The client leaves every hidden game out of `library_report`. The server also drops an entry that carries `hidden: true` |
+| Change | A change sends a new report at once, without the game |
+| Steam default | A game hidden in the Steam library is hidden from the crew by default. The row shows "HIDDEN IN STEAM" and has no switch. To share it, unhide it in Steam |
+| Sessions | Hiding a game affects the library report only. The presence line and `game_session_end` still follow the global toggle |
+| Toggle off | The client sends an empty report once. The server document is empty |
+
+The consent copy is the same on both surfaces.
+
+| Surface | Text |
+|---|---|
+| Onboarding | "Show crew what I play". Subline: "Your installed games, play sessions and what you're in right now." |
+| Settings, ACTIVITY SHARING | "Let crewmates see your installed games, what game you're in, and your play sessions in the crew feed." |
 
 ---
 
@@ -269,9 +321,10 @@ badge on the game colour when extraction fails.
 | `GameSessionCard` | `crew_feed.slint` | Session card shell |
 | `GameSessionRecordPanel` | `crew_feed.slint` | W/L body |
 | `GameSessionCompactBody` | `crew_feed.slint` | Body without telemetry |
-| `GameRollupCard` | `crew_feed.slint` | `CREW PLAY` daily rollup |
-| `GameRollupLineRow` | `crew_feed.slint` | One member line in the rollup |
+| `RecentGamesCard` | `crew_feed.slint` | Recent games: header line and tiles |
+| `RecentGameTileCell` | `crew_feed.slint` | One game tile |
 | `PlayingBadge` | `crew_feed.slint` | Live playing marker |
+| `LiveSessionCard` | `crew_feed.slint` | NOW PLAYING card of the crew feed: pip, game art, game name, octagons, "since N min" |
 
 `client/ui/types.slint` declares the types. Both member row structs carry
 `game-line`.
@@ -304,6 +357,5 @@ No surface in this spec has run against a live backend with real crew traffic.
 ## 9. Out of Scope
 
 - Deep profile view. See spec 19 section 2.4.
-- Per-game activity hiding. Only the global toggle in section 5 exists.
 - Rich telemetry session card beyond the W/L panel in section 4.1.
-- `recent_games` (section 3.4) and the HUD overlay (section 7.1).
+- The HUD overlay (section 7.1).

@@ -3,13 +3,21 @@ use std::rc::Rc;
 use mello_core::Event;
 
 use crate::app_context::AppContext;
-use crate::GameIntegrationData;
+use crate::{GameIntegrationData, InstalledGameData};
 
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::GamesSettings { games } => {
             *ctx.games_integrations.borrow_mut() = games;
             push_games_list(ctx);
+        }
+        Event::InstalledGames { games } => {
+            *ctx.installed_games.borrow_mut() = games;
+            push_installed_games(
+                &ctx.app,
+                &ctx.installed_games.borrow(),
+                &ctx.settings.borrow().hidden_games,
+            );
         }
         Event::RiotStatus {
             available,
@@ -72,6 +80,26 @@ fn push_games_list(ctx: &AppContext) {
         .collect();
     ctx.app
         .set_games_list(Rc::new(slint::VecModel::from(rows)).into());
+}
+
+/// Rebuild the "Hidden from crew" list: the installed games merged with the
+/// persisted hidden set. A game hidden in Steam shows as hidden and locked.
+pub fn push_installed_games(
+    app: &crate::MainWindow,
+    installed: &[mello_core::events::InstalledGameInfo],
+    hidden_games: &[String],
+) {
+    let rows: Vec<InstalledGameData> = installed
+        .iter()
+        .map(|g| InstalledGameData {
+            game_id: g.game_id.as_str().into(),
+            name: g.name.as_str().into(),
+            short_name: mello_core::library::derive_short_name(&g.name).into(),
+            hidden: g.steam_hidden || hidden_games.contains(&g.game_id),
+            locked: g.steam_hidden,
+        })
+        .collect();
+    app.set_installed_games(Rc::new(slint::VecModel::from(rows)).into());
 }
 
 /// Map raw RPC errors to something a user can act on.

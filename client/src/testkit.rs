@@ -113,6 +113,11 @@ impl Harness {
         init_test_backend();
         redirect_settings_to_temp_dir();
         assert_element_queries_work();
+        // A test never sees the Steam art of the machine it runs on. A test
+        // that needs art points the lookup at its own cache.
+        mello_core::library::set_steam_root_override(Some(
+            std::env::temp_dir().join("m3llo-no-steam-root"),
+        ));
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()

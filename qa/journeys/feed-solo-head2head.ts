@@ -1,0 +1,145 @@
+// FEED-03: a user alone in a new crew sees the solo feed (mockup frame A of
+// next-gen-feed): the wide head2head card with the viewer's own values and the
+// open seats, the recent games card from this PC, and the skeleton trio.
+//
+// Sharing is on, the onboarding default, so the library report runs and the
+// server returns the viewer's own values.
+//
+// Day 0 reveal (plans/SEALED-REVEAL.md section 9): the own chips of a new crew
+// arrive sealed, each under its own key. The control is labelled "Sealed belt,
+// open it", the same label as a belt that moved. A click opens one chip in the
+// centre with the face "You", and the return leaves that chip open.
+
+import { journey } from "../../tools/mello-driver/src/journey.ts";
+import { onboardWithNewCrew } from "./lib/onboarding.ts";
+
+/** The names that a TitleChip draws, upper case (client/src/head2head.rs). */
+const TITLE_NAMES: Record<string, string> = {
+  the_carry: "THE CARRY",
+  night_owl: "NIGHT OWL",
+  the_collector: "THE COLLECTOR",
+  locked_in: "LOCKED IN",
+  has_a_life: "HAS A LIFE",
+  sampler: "SAMPLER",
+  one_trick: "ONE TRICK",
+};
+
+export default journey({
+  id: "feed.solo-head2head",
+  flows: ["FEED-03"],
+  async run({ runId, launch, step, expect }) {
+    const crew = `Solo ${runId}`;
+    const bob = await launch("bob");
+
+    await step("bob onboards alone in a new crew with sharing on", async () => {
+      await onboardWithNewCrew(bob, crew, `bob${runId}`);
+      await bob.waitFor("the app, logged in", (s) => s.screen === "app" && s.logged_in, 20_000);
+    });
+
+    await step("the head2head card arrives as the wide card for a crew of one", async () => {
+      // The card appears before the library report returns the own values and
+      // the recent games tiles, so wait for them, not for `present` alone.
+      const s = await bob.waitFor(
+        "the head2head card with own_values and recent_games tiles",
+        (st) => st.head2head.present && st.head2head.own_values.length > 0 && st.recent_games.tiles.length > 0,
+        15_000,
+      );
+      const h = s.head2head;
+      expect(h.placement === "wide", `placement is wide, got ${h.placement}`);
+      expect(h.member_count === 1, `member_count is 1, got ${h.member_count}`);
+      expect(h.open_seats === 4, `open_seats is 4, got ${h.open_seats}`);
+      expect(h.titles.length === 0, `no contested titles, got ${JSON.stringify(h.titles)}`);
+      expect(h.own_values.length > 0, "the card has own values");
+    });
+
+    /** The texts on screen, one entry for each place. The element query can list an element twice. */
+    const screenTexts = async (): Promise<string[]> => {
+      const seen = new Set<string>();
+      const els = (await bob.ui.textElements()).filter((e) => {
+        const key = `${e.text}@${e.x},${e.y}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+      return els.map((e) => e.text);
+    };
+    const names = Object.values(TITLE_NAMES);
+    let chips = 0;
+
+    await step("the own chips arrive sealed, with four OPEN seats and the invite", async () => {
+      const s = await bob.state();
+      // The card draws the first four own values.
+      chips = Math.min(4, s.head2head.own_values.length);
+      for (const v of s.head2head.own_values) {
+        expect(TITLE_NAMES[v.title_id] !== undefined, `${v.title_id} is a known title`);
+        expect(v.display !== "", `${v.title_id} has a value`);
+      }
+      expect(s.sealed.own === chips, `sealed.own is ${chips}, got ${s.sealed.own}`);
+      expect(s.sealed.belts === 0, `no belt that moved is sealed, got ${s.sealed.belts}`);
+      const texts = await screenTexts();
+      expect(texts.filter((t) => names.includes(t)).length === 0, "a sealed chip draws no title");
+      expect(texts.filter((t) => t === "OPEN").length === 4, "four seats are labelled OPEN");
+      expect(texts.includes("GO HEAD2HEAD WITH YOUR CREW"), "the empty-compare line shows");
+      await bob.checkpoint("solo-feed-sealed");
+    });
+
+    await step("a click on one sealed own chip opens it in the centre and the face reads You", async () => {
+      // The control is "Sealed belt, open it": the chip has no other label.
+      await bob.click("Sealed belt, open it");
+      const s = await bob.waitFor("the own chip in the centre", (st) => st.sealed.open_center === "belt", 5_000);
+      expect(s.sealed.own === chips - 1, `the chip in the centre is no longer sealed in the feed, got ${s.sealed.own}`);
+      await bob.checkpoint("own-reveal-start");
+      // The face shows from 1.03 s and the card rests from 1.25 s.
+      await bob.waitFor("the card at rest, the face shown", (st) => st.sealed.resting, 5_000);
+      const texts = await screenTexts();
+      expect(texts.includes("You"), `the face names the viewer as You: ${texts.join(" | ")}`);
+      expect(!texts.includes("took it from"), "an own value took nothing from anyone");
+      await bob.checkpoint("own-reveal-face");
+    });
+
+    await step("a click on the scrim sends the chip back open, the other chips stay sealed", async () => {
+      await bob.click("Close");
+      const s = await bob.waitFor("the chip landed, open", (st) => st.sealed.open_center === "none", 10_000);
+      expect(s.sealed.own === chips - 1, `${chips - 1} own chips are still sealed, got ${s.sealed.own}`);
+      const texts = await screenTexts();
+      const drawn = texts.filter((t) => names.includes(t));
+      expect(drawn.length === 1, `the one opened chip draws its title in the slot, got ${drawn.join(", ")}`);
+      expect(texts.filter((t) => t === "OPEN").length === 4, "four seats are labelled OPEN");
+      await bob.checkpoint("own-chip-open-in-its-slot");
+    });
+
+    await step("the viewer octagon wears the avatar the app loaded, not initials", async () => {
+      const s = await bob.waitFor("the avatar on the head2head octagon", (st) => st.head2head.own_avatar_key !== "", 20_000);
+      expect(s.head2head.own_avatar_key !== "", "the octagon shows an image");
+    });
+
+    await step("the invite button is a control", async () => {
+      const c = await bob.find("Invite your crew");
+      expect(c.label === "Invite your crew", `label is "Invite your crew", got "${c.label}"`);
+    });
+
+    await step("recent games list this PC", async () => {
+      const s = await bob.waitFor("recent games tiles", (st) => st.recent_games.tiles.length > 0, 30_000);
+      const rg = s.recent_games;
+      expect(!rg.header_line.startsWith("From "), `the header carries no note, got "${rg.header_line}"`);
+      expect(rg.shape === "list", `one PC is the narrow list, got "${rg.shape}"`);
+      for (const t of rg.tiles) {
+        expect(t.name !== "", "a tile has a name");
+        expect(t.hours_text !== "" || t.launcher !== "", `${t.name} shows hours or a launcher`);
+      }
+      expect(!!(await bob.text("RECENT GAMES")), "the RECENT GAMES label shows");
+    });
+
+    await step("the skeleton trio shows three cells and no card is empty", async () => {
+      const s = await bob.state();
+      expect(s.skeleton_trio === 3, `skeleton_trio is 3, got ${s.skeleton_trio}`);
+      expect(s.head2head.own_values.length > 0, "the head2head card has content");
+      expect(s.recent_games.tiles.length > 0, "the recent games card has content");
+      for (const c of s.feed_cards) {
+        expect(c.card_type !== "", `feed card ${c.id} has a type`);
+        expect(c.card_type !== "catchup", `feed card ${c.id} is not a catch-up card`);
+      }
+      await bob.checkpoint("solo-feed");
+    });
+  },
+});

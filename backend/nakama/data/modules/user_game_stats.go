@@ -34,8 +34,9 @@ const UserGameStatsCollection = "user_game_stats"
 // recentFormCap bounds the rolling per-session form list (newest last).
 const recentFormCap = 10
 
-// recentDaysCap bounds the rolling daily play-time window (oldest first).
-const recentDaysCap = 8
+// recentDaysCap bounds the rolling daily play-time window (oldest first). 14
+// days feeds the head2head sampler title (plans/next-gen-feed.md section 5).
+const recentDaysCap = 14
 
 // RecentDayEntry is one UTC calendar day's accumulated session minutes.
 type RecentDayEntry struct {
@@ -59,6 +60,10 @@ type UserGameStats struct {
 	PlayedMinTotal    int              `json:"played_min_total"` // lifetime wall minutes
 	ActiveMinTotal    int              `json:"active_min_total"`
 	RecentDays        []RecentDayEntry `json:"recent_days"` // oldest first, capped at recentDaysCap
+	// LastTzOffsetMin is the user's UTC offset in minutes (east is positive)
+	// as reported with the last session of this game. Nil when the client did
+	// not send one. Head2head night_owl needs it to read a local clock time.
+	LastTzOffsetMin *int `json:"last_tz_offset_min,omitempty"`
 }
 
 func readUserGameStats(ctx context.Context, nk runtime.NakamaModule, userID, gameID string) (*UserGameStats, string) {
@@ -165,11 +170,14 @@ func applySessionPlayTime(s *UserGameStats, durationMin, activeMin int, now time
 			return
 		}
 	}
+	// A session can land on an older day than the newest entry (a pending
+	// queue flushed late), so insert by date and keep the order.
 	s.RecentDays = append(s.RecentDays, RecentDayEntry{
 		Date:      dateStr,
 		WallMin:   durationMin,
 		ActiveMin: activeMin,
 	})
+	sort.SliceStable(s.RecentDays, func(i, j int) bool { return s.RecentDays[i].Date < s.RecentDays[j].Date })
 	if len(s.RecentDays) > recentDaysCap {
 		s.RecentDays = s.RecentDays[len(s.RecentDays)-recentDaysCap:]
 	}
@@ -196,22 +204,28 @@ func UpdateUserGameStats(ctx context.Context, nk runtime.NakamaModule, userID, g
 }
 
 // UpdateUserGameStatsForSession records play time for every session and applies
-// telemetry outcomes when present. Returns the session result only when
+// telemetry outcomes when present. tzOffsetMin, when not nil, replaces the
+// stored last offset. endAt is when the session ended: it picks the day bucket
+// and LastPlayed. Returns the session result only when
 // wins+losses+draws > 0 (otherwise "").
-func UpdateUserGameStatsForSession(ctx context.Context, nk runtime.NakamaModule, userID, gameID string, durationMin, activeMin, wins, losses, draws int) (*UserGameStats, string, error) {
+func UpdateUserGameStatsForSession(ctx context.Context, nk runtime.NakamaModule, userID, gameID string, durationMin, activeMin, wins, losses, draws int, tzOffsetMin *int, endAt time.Time) (*UserGameStats, string, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		s, version := readUserGameStats(ctx, nk, userID, gameID)
-		now := time.Now()
-		applySessionPlayTime(s, durationMin, activeMin, now)
+		applySessionPlayTime(s, durationMin, activeMin, endAt)
+		if tzOffsetMin != nil {
+			tz := *tzOffsetMin
+			s.LastTzOffsetMin = &tz
+		}
 
 		result := ""
 		if wins > 0 || losses > 0 || draws > 0 {
 			result = applySessionOutcome(s, wins, losses, draws)
 		}
 
-		nowMs := now.UnixMilli()
-		s.UpdatedAt = nowMs
-		s.LastPlayed = nowMs
+		s.UpdatedAt = time.Now().UnixMilli()
+		if endMs := endAt.UnixMilli(); endMs > s.LastPlayed {
+			s.LastPlayed = endMs
+		}
 		if err := writeUserGameStats(ctx, nk, userID, s, version); err == nil {
 			return s, result, nil
 		}

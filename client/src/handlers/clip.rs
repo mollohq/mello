@@ -5,8 +5,13 @@ use mello_core::{decode_clip_waveform, Command, Event};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::app_context::AppContext;
-use crate::converters::make_initials;
-use crate::{FeedCardData, GameRollupLine, RecapAwardRow, RecapLbRow};
+use crate::converters::{avatar_color_index, make_initials};
+use crate::head2head::{self, Person, Placement};
+use crate::sealed::{self, Seal};
+use crate::{
+    FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapClip, RecapGameRow,
+    RecapHeldTitle, RecapLbRow, RecapPerson, RecentGameTile,
+};
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
     if raw.is_object() {
@@ -27,7 +32,7 @@ fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
 }
 
 // The server feed type collapses the backend event type (session covers
-// voice/game/stream, catchup covers moment/join/leave/chat). The copy helpers
+// voice/game/stream). The copy helpers
 // below still key off the backend type, so recover it from the payload fields.
 // member_joined and member_left carry identical data, so leaves fold into the
 // join copy path; everything else is distinguishable.
@@ -45,16 +50,8 @@ fn derive_backend_type(feed_type: &str, data: &serde_json::Value) -> &'static st
                 "stream_session"
             }
         }
-        "catchup" => {
-            if data.get("sentiment").is_some() || data.get("text").is_some() {
-                "moment"
-            } else if data.get("message_count").is_some() {
-                "chat_activity"
-            } else {
-                "member_joined"
-            }
-        }
-        "rollup" => "game_rollup",
+        "daily-recap" => "daily_recap",
+        "recent-games" => "recent_games",
         _ => "",
     }
 }
@@ -69,12 +66,6 @@ fn extract_actor(data: &serde_json::Value, backend_type: &str) -> String {
         "weekly_recap" => data
             .get("most_active")
             .or_else(|| data.get("mvp"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("")
-            .to_string(),
-        "moment" | "member_joined" | "member_left" => data
-            .get("display_name")
-            .or_else(|| data.get("username"))
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string(),
@@ -187,19 +178,15 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
                 format!("{}m", hangout as i64)
             }
         }
-        "moment" => {
-            let text = data.get("text").and_then(|v| v.as_str()).unwrap_or("");
-            if text.is_empty() {
-                let sentiment = data
-                    .get("sentiment")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("moment");
-                format!("{} had a {}", actor, sentiment)
+        // The hangout time of the day, the first number of the daily recap.
+        "daily_recap" => {
+            let min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
+            if min > 0 {
+                humanize_duration_min(min)
             } else {
-                text.to_string()
+                "0m".to_string()
             }
         }
-        "member_joined" => format!("{} joined the crew", actor),
         _ => String::new(),
     }
 }
@@ -265,40 +252,900 @@ fn waveform_from_data(data: &serde_json::Value) -> ModelRc<f32> {
     ModelRc::new(slint::VecModel::from(peaks))
 }
 
-fn skeleton_card(card_type: &str) -> FeedCardData {
-    FeedCardData {
-        id: Default::default(),
-        card_type: card_type.into(),
-        role: Default::default(),
-        size: Default::default(),
-        title: Default::default(),
-        subtitle: Default::default(),
-        timestamp: Default::default(),
-        duration: Default::default(),
-        duration_min: 0,
-        actor_name: Default::default(),
-        actor_initials: Default::default(),
-        game_name: Default::default(),
-        participant_count: 0,
-        clip_count: 0,
-        clip_path: Default::default(),
-        is_hero: false,
-        is_skeleton: true,
-        snapshot_urls: Default::default(),
-        mvp_count: 0,
-        mvp0_name: Default::default(),
-        mvp0_initials: Default::default(),
-        mvp0_stat: Default::default(),
-        mvp1_name: Default::default(),
-        mvp1_initials: Default::default(),
-        mvp1_stat: Default::default(),
-        mvp2_name: Default::default(),
-        mvp2_initials: Default::default(),
-        mvp2_stat: Default::default(),
-        is_new: false,
-        was_seen: false,
-        ..Default::default()
+/// Which cells of the skeleton trio show (CLIPS 8). Pure, so the rule is
+/// testable without a window.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) struct SkeletonTrio {
+    pub stream: bool,
+    pub voice_clip: bool,
+    pub recap: bool,
+}
+
+impl SkeletonTrio {
+    pub fn any(self) -> bool {
+        self.stream || self.voice_clip || self.recap
     }
+}
+
+/// The cards of Crew history that the feed shows. The section has a heading and
+/// a place on the feed only when it holds at least one real card: a crew with
+/// no history (day 0, a quiet week) shows nothing of it. The m3llo+ upsell
+/// (`locked`) is not a real card. It stands at the end of a section that has
+/// history, and only while `plus_upsell` is on: m3llo+ does not exist yet.
+pub(crate) fn memory_for_display(cards: Vec<FeedCardData>, plus_upsell: bool) -> Vec<FeedCardData> {
+    if !cards.iter().any(|c| c.card_type != "locked") {
+        return Vec::new();
+    }
+    cards
+        .into_iter()
+        .filter(|c| plus_upsell || c.card_type != "locked")
+        .collect()
+}
+
+/// Decide the trio from the card types in the feed. A cell hides when its real
+/// card type exists: a stream preview or a live stream, a clip, a recap. All
+/// three hide from three members on (frame C): the crew is no longer new. At
+/// two members the trio stays under whatever real cards there are (frame B2).
+/// `locked` is the m3llo+ upsell, not a real card.
+pub(crate) fn skeleton_trio_for<'a>(
+    card_types: impl IntoIterator<Item = &'a str>,
+    live_streams: usize,
+    member_count: i32,
+) -> SkeletonTrio {
+    let (mut stream, mut voice_clip, mut recap) = (live_streams == 0, true, true);
+    for t in card_types {
+        // Head2head and its invite card are not real cards: frame B2 keeps the
+        // trio next to a versus hero.
+        // A live session is a game in progress, not a record of the crew.
+        if t.is_empty()
+            || matches!(
+                t,
+                "locked" | "head2head" | "invite" | "live-session" | "joined"
+            )
+        {
+            continue;
+        }
+        match t {
+            "session-preview" => stream = false,
+            "clip" => voice_clip = false,
+            "recap" => recap = false,
+            _ => {}
+        }
+    }
+    if member_count >= 3 {
+        return SkeletonTrio {
+            stream: false,
+            voice_clip: false,
+            recap: false,
+        };
+    }
+    SkeletonTrio {
+        stream,
+        voice_clip,
+        recap,
+    }
+}
+
+/// Recompute the skeleton trio and the invite line from the models on screen.
+/// Call after anything that changes the feed cards, the live streams or the
+/// active crew. The cells never enter the card model, so they cannot take the
+/// hero slot or a grid cell.
+pub(super) fn refresh_feed_skeletons(ctx: &AppContext) {
+    let app = &ctx.app;
+    let types: Vec<String> = [app.get_feed_cards(), app.get_memory_cards()]
+        .iter()
+        .flat_map(|m| (0..m.row_count()).filter_map(|i| m.row_data(i)))
+        .map(|c| c.card_type.to_string())
+        .collect();
+    let active = app.get_active_crew_id().to_string();
+    let crews = app.get_crews();
+    let members = (0..crews.row_count())
+        .filter_map(|i| crews.row_data(i))
+        .find(|c| c.id.as_str() == active)
+        .map(|c| c.member_count)
+        .unwrap_or(0);
+    // The feed carries the live crew size in its head2head entry. The crew
+    // list learns a new member only when the crew state loads, so a feed that
+    // reloads on a push can be ahead of it.
+    let feed_members = app
+        .get_feed_cards()
+        .iter()
+        .filter(|c| c.card_type.as_str() == "head2head")
+        .map(|c| c.head2head.member_count)
+        .max()
+        .unwrap_or(0);
+    let members = members.max(feed_members);
+    let live = app.get_active_stream_cards().row_count();
+    let trio = skeleton_trio_for(types.iter().map(String::as_str), live, members);
+    let invite_hidden = ctx
+        .settings
+        .borrow()
+        .hidden_invite_crew_ids
+        .contains(&active);
+    app.set_feed_skeleton_stream(trio.stream);
+    app.set_feed_skeleton_voice_clip(trio.voice_clip);
+    app.set_feed_skeleton_recap(trio.recap);
+    // Head2head and the invite card carry their own red invite button. The
+    // surface has one red button, so the line gives way.
+    let has_h2h_invite = types.iter().any(|t| t == "head2head" || t == "invite");
+    app.set_feed_invite_line(trio.any() && !invite_hidden && !active.is_empty() && !has_h2h_invite);
+}
+
+/// Run `f` with the seal of the active crew: the belts the user opened, and
+/// the time. Sealed belts and recaps are drawn from it (`sealed.rs`).
+fn with_seal<R>(ctx: &AppContext, f: impl FnOnce(&Seal) -> R) -> R {
+    let crew = ctx.app.get_active_crew_id().to_string();
+    let opened = sealed::opened_keys(&ctx.settings.borrow(), &crew);
+    let is_open = |k: &str| opened.contains(k);
+    let own_since_ms = ctx
+        .settings
+        .borrow()
+        .own_seal_since
+        .get(&crew)
+        .copied()
+        .unwrap_or(0);
+    f(&Seal {
+        enabled: true,
+        now_ms: head2head::now_ms(),
+        opened: &is_open,
+        crew_id: &crew,
+        own_since_ms,
+    })
+}
+
+/// The viewer and the roster of the active crew, for naming the user ids of
+/// the head2head entry.
+fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
+    let viewer = Person::new(
+        ctx.app.get_user_id().as_str(),
+        ctx.app.get_user_name().as_str(),
+    );
+    let model = ctx.app.get_members();
+    let members: Vec<Person> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .map(|m| Person {
+            hue: avatar_color_index(m.id.as_str()),
+            id: m.id.to_string(),
+            name: m.name.to_string(),
+            initials: m.initials.to_string(),
+        })
+        .collect();
+    (viewer, members)
+}
+
+/// Turn the `head2head` entry into its feed cards: the head2head card, and
+/// the invite card from five members on. The card is always two columns wide.
+/// Wide, versus and belt lead the feed. The pairs card leads a feed with no
+/// hero and keeps the server's position behind a hero, where `feed_grid` gives
+/// it the first wide slot.
+///
+/// `hero_free`: no other entry of `this_week` is a hero. A quiet feed then
+/// leads with the belt that moved last, of any age (frame E), and the pairs
+/// card is the wide card under it.
+fn head2head_cards(
+    ctx: &AppContext,
+    e: &mello_core::crew_events::FeedEntry,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Option<(Placement, Vec<FeedCardData>)> {
+    let hero_free = hero_free(entries);
+    let data = normalized_entry_data(&e.data);
+    let (viewer, members) = h2h_roster(ctx);
+    let roster = |id: &str| -> Person {
+        if id == viewer.id {
+            return viewer.clone();
+        }
+        members
+            .iter()
+            .find(|m| m.id == id)
+            .cloned()
+            .unwrap_or_else(|| Person::unknown(id))
+    };
+    let now_ms = head2head::now_ms();
+    // Unread rule: a move after the viewer's previous open of this feed.
+    // With no baseline (feed not opened through a crew select) nothing is
+    // unread.
+    let seen_ms = ctx
+        .settings
+        .borrow()
+        .feed_baseline_ms
+        .get(ctx.app.get_active_crew_id().as_str())
+        .copied()
+        .unwrap_or(i64::MAX);
+    // An opened belt does not mark its pair row unread.
+    let opened = sealed::opened_keys(
+        &ctx.settings.borrow(),
+        ctx.app.get_active_crew_id().as_str(),
+    );
+    let is_open = |k: &str| opened.contains(k);
+    let model = head2head::build_rows_sealed(&data, &viewer, &roster, now_ms, seen_ms, &is_open)?;
+    // The octagons wear the avatar the app already loaded for the user id,
+    // and fall back to initials. A late avatar patches the card in place
+    // (`refresh_head2head_cards`).
+    // The own chips of a new crew are sealed for 7 days from the first time
+    // they show (the day 0 reveal).
+    if model.chips.iter().any(|c| c.own.is_some()) {
+        let crew = ctx.app.get_active_crew_id().to_string();
+        if !crew.is_empty() {
+            let mut s = ctx.settings.borrow_mut();
+            if sealed::own_since(&mut s, &crew, now_ms).1 {
+                s.save();
+            }
+        }
+    }
+    let cache = ctx.avatar_cache.borrow();
+    let avatar = |id: &str| cache.get(id).cloned();
+    let mut cards = vec![FeedCardData {
+        id: e.id.as_str().into(),
+        card_type: "head2head".into(),
+        role: e.role.as_str().into(),
+        size: e.size.as_str().into(),
+        head2head: with_seal(ctx, |seal| {
+            head2head::to_slint_sealed(&model, &avatar, seal)
+        }),
+        ..Default::default()
+    }];
+    // A quiet feed with no hero: the newest belt move leads (frame E).
+    if hero_free && model.placement == Placement::Pairs {
+        if let Some(hero) = head2head::belt_hero_data(&model, now_ms, &avatar) {
+            cards.insert(
+                0,
+                FeedCardData {
+                    id: format!("{}-belt", e.id).into(),
+                    card_type: "head2head".into(),
+                    role: "hero".into(),
+                    size: "lg".into(),
+                    head2head: hero,
+                    ..Default::default()
+                },
+            );
+            return Some((Placement::Belt, cards));
+        }
+    }
+    // From five members the cell loses its seats and button. The invite card
+    // takes over, with the viewer first and then the crew.
+    if model.member_count >= head2head::SEATS {
+        let mut shown = vec![viewer.clone()];
+        shown.extend(members.iter().filter(|m| m.id != viewer.id).cloned());
+        cards.push(FeedCardData {
+            id: "invite".into(),
+            card_type: "invite".into(),
+            role: "standard".into(),
+            size: "md".into(),
+            head2head: head2head::invite_card_data(&shown, model.member_count, &avatar),
+            ..Default::default()
+        });
+    }
+    // A crew of five or more with nothing to compare has no cell. The invite
+    // card stays.
+    if model.placement == Placement::Pairs
+        && model.member_count >= head2head::SEATS
+        && model.pairs.is_empty()
+    {
+        cards.remove(0);
+    }
+    Some((model.placement, cards))
+}
+
+/// No entry of `this_week` other than head2head is a hero.
+fn hero_free(entries: &[mello_core::crew_events::FeedEntry]) -> bool {
+    !entries
+        .iter()
+        .any(|e| e.role == "hero" && e.entry_type != "head2head")
+}
+
+/// The joined cards of a feed response: one for each member who joined in the
+/// last 24 hours, newest first, three at most (CLIPS 7). The card is a plain
+/// cell. `feed_grid` places them after the first row, before the sessions.
+fn join_cards(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) -> Vec<FeedCardData> {
+    let (viewer, members) = h2h_roster(ctx);
+    let known = |id: &str| -> Option<&Person> {
+        if id == viewer.id {
+            Some(&viewer)
+        } else {
+            members.iter().find(|m| m.id == id)
+        }
+    };
+    let name_of = |id: &str| -> Option<String> {
+        known(id)
+            .map(|p| p.name.clone())
+            .filter(|n| !n.trim().is_empty())
+    };
+    let now_ms = crate::converters::current_time_ms();
+    let cache = ctx.avatar_cache.borrow();
+    // The members this user already greeted from a card, in this crew.
+    let said: Vec<String> = ctx
+        .settings
+        .borrow()
+        .said_hi
+        .get(ctx.app.get_active_crew_id().as_str())
+        .cloned()
+        .unwrap_or_default();
+    crate::joined_line::rows(
+        joins,
+        &viewer.id,
+        now_ms,
+        mello_core::crew_events::local_tz_offset_min(now_ms),
+        &name_of,
+    )
+    .into_iter()
+    .map(|r| {
+        let person = known(&r.user_id)
+            .cloned()
+            .unwrap_or_else(|| Person::new(&r.user_id, &r.name));
+        let avatar = cache.get(&r.user_id).cloned();
+        FeedCardData {
+            id: format!("joined-{}", r.user_id).into(),
+            card_type: "joined".into(),
+            role: "standard".into(),
+            size: "sm".into(),
+            title: format!("{} joined", r.name).into(),
+            subtitle: r.invited.into(),
+            timestamp: r.when.into(),
+            actor_name: r.name.into(),
+            actor_initials: person.initials.into(),
+            actor_hue_index: person.hue,
+            actor_has_avatar: avatar.is_some(),
+            actor_avatar: avatar.unwrap_or_default(),
+            said_hi: said.contains(&r.user_id),
+            ..Default::default()
+        }
+    })
+    .collect()
+}
+
+/// What the quiet rules read from the `this_week` entries (`quiet_row.rs`).
+fn quiet_facts(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> crate::quiet_row::Facts {
+    let now_ms = crate::converters::current_time_ms();
+    let (viewer, members) = h2h_roster(ctx);
+    let name_of = |id: &str| -> String {
+        if id == viewer.id {
+            viewer.name.clone()
+        } else {
+            members
+                .iter()
+                .find(|m| m.id == id)
+                .map(|m| m.name.clone())
+                .unwrap_or_default()
+        }
+    };
+    let mut f = crate::quiet_row::Facts {
+        member_count: members.len().max(1) as i32,
+        now_ms,
+        live_stream: ctx.app.get_active_stream_cards().row_count() > 0,
+        ..Default::default()
+    };
+    let newest = |cur: Option<i64>, t: i64| Some(cur.map_or(t, |c| c.max(t)));
+    let mut sessions: Vec<(i64, Vec<String>)> = Vec::new();
+    for e in entries {
+        let data = normalized_entry_data(&e.data);
+        match e.entry_type.as_str() {
+            "head2head" => {
+                if let Some(n) = data.get("member_count").and_then(|v| v.as_i64()) {
+                    f.member_count = n as i32;
+                }
+                let titles = data.get("titles").and_then(|v| v.as_array());
+                for t in titles.into_iter().flatten() {
+                    let moved = t.get("moved_at_ms").and_then(|v| v.as_i64()).unwrap_or(0);
+                    if moved > 0 {
+                        f.newest_belt_move_ms = newest(f.newest_belt_move_ms, moved);
+                        f.last_activity_ms = newest(f.last_activity_ms, moved);
+                    }
+                }
+                // The first belt in display order that has a holder.
+                let held = |id: &str| {
+                    titles.and_then(|a| {
+                        a.iter().find(|t| {
+                            t.get("title_id").and_then(|v| v.as_str()) == Some(id)
+                                && t.get("holder_user_id")
+                                    .and_then(|v| v.as_str())
+                                    .is_some_and(|h| !h.is_empty())
+                        })
+                    })
+                };
+                f.top_belt = head2head::TITLE_IDS.iter().find_map(|id| {
+                    let t = held(id)?;
+                    let holder = name_of(t.get("holder_user_id")?.as_str()?);
+                    if holder.is_empty() {
+                        return None;
+                    }
+                    Some((holder, head2head::title_name(id)?.to_string()))
+                });
+            }
+            "session-preview" => {
+                f.newest_stream_ms = newest(f.newest_stream_ms, e.ts);
+                f.last_activity_ms = newest(f.last_activity_ms, e.ts);
+            }
+            // A recap sums up weeks that are over: it is not new activity.
+            "recap" if !is_empty_recap_entry(&e.entry_type, &e.data) => {
+                let t = data
+                    .get("week_end")
+                    .and_then(|v| v.as_i64())
+                    .unwrap_or(e.ts);
+                f.newest_recap_ms = newest(f.newest_recap_ms, t);
+            }
+            // An older server still sends catch-up cards: they are activity.
+            "clip" | "catchup" => f.last_activity_ms = newest(f.last_activity_ms, e.ts),
+            "session" => {
+                f.last_activity_ms = newest(f.last_activity_ms, e.ts);
+                if derive_backend_type(&e.entry_type, &data) == "game_session" {
+                    let names = data
+                        .get("player_names")
+                        .and_then(|v| v.as_array())
+                        .map(|a| {
+                            a.iter()
+                                .filter_map(|v| v.as_str().map(String::from))
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    sessions.push((e.ts, names));
+                }
+            }
+            _ => {}
+        }
+    }
+    sessions.sort_by_key(|(ts, _)| std::cmp::Reverse(*ts));
+    for (ts, names) in sessions {
+        if now_ms - ts > 7 * 86_400_000 {
+            continue;
+        }
+        for n in names {
+            if !n.is_empty() && !f.players_last_week.contains(&n) {
+                f.players_last_week.push(n);
+            }
+        }
+    }
+    f
+}
+
+/// The voice channel when nobody is in it, for a quiet feed (frame E): the
+/// channel, when the last call was, and the one filled white button that
+/// starts voice. `None` when a call is on or the crew has no channel.
+fn voice_idle_card(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Option<FeedCardData> {
+    let channels = ctx.app.get_voice_channels();
+    let channel = (0..channels.row_count())
+        .filter_map(|i| channels.row_data(i))
+        .find(|c| c.is_default)?;
+    if channel.member_count > 0 || channel.active {
+        return None;
+    }
+    let last_call = entries
+        .iter()
+        .filter(|e| e.entry_type == "session")
+        .filter(|e| {
+            derive_backend_type(&e.entry_type, &normalized_entry_data(&e.data)) == "voice_session"
+        })
+        .map(|e| e.ts)
+        .max();
+    Some(FeedCardData {
+        id: "voice-idle".into(),
+        card_type: "voice-idle".into(),
+        role: "standard".into(),
+        size: "md".into(),
+        channel_id: channel.id.clone(),
+        channel_name: channel.name.clone(),
+        subtitle: last_call
+            .map(|t| format!("Last call {}", crate::feed_age::date_label(t)))
+            .unwrap_or_default()
+            .into(),
+        ..Default::default()
+    })
+}
+
+/// Put the quiet row and the dormant strip on screen from the `this_week`
+/// entries. At most one of them shows (`quiet_row.rs`). Returns the idle voice
+/// card when the quiet row shows.
+fn set_quiet_state(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Option<FeedCardData> {
+    let facts = quiet_facts(ctx, entries);
+    let quiet: Vec<crate::JoinedRowData> = crate::quiet_row::quiet_row(&facts)
+        .into_iter()
+        .map(|r| crate::JoinedRowData {
+            user_id: "".into(),
+            line: r.line.into(),
+            when: "".into(),
+        })
+        .collect();
+    ctx.app
+        .set_feed_quiet(Rc::new(VecModel::from(quiet)).into());
+    let dormant: Vec<FeedCardData> = crate::quiet_row::dormant_strip(&facts)
+        .into_iter()
+        .map(|d| FeedCardData {
+            id: "dormant".into(),
+            card_type: "dormant".into(),
+            role: "dormant".into(),
+            title: d.text.into(),
+            timestamp: d.age.into(),
+            ..Default::default()
+        })
+        .collect();
+    ctx.app
+        .set_feed_dormant(Rc::new(VecModel::from(dormant)).into());
+    if ctx.app.get_feed_quiet().row_count() > 0 {
+        voice_idle_card(ctx, entries)
+    } else {
+        None
+    }
+}
+
+/// Build the this_week cards again from the last feed. The member list and the
+/// feed load in no fixed order, and the head2head and invite cards name
+/// members from the list: a feed that came first would show "Crew mate" and a
+/// short invite card. Called when the member list is set.
+pub(super) fn rebuild_roster_cards(ctx: &AppContext) {
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let Some(section) = resp.sections.iter().find(|s| s.id == "this_week") else {
+        return;
+    };
+    if !section.entries.iter().any(|e| e.entry_type == "head2head") {
+        return;
+    }
+    let mut cards = build_this_week(ctx, &section.entries);
+    cards.extend(join_cards(ctx, &resp.joined));
+    cards.extend(live_session_cards(ctx));
+    let cards = arranged(ctx, cards);
+    ctx.app
+        .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+    refresh_feed_skeletons(ctx);
+}
+
+/// True when a head2head or invite card draws an octagon for the user. A big
+/// crew loads dozens of avatars, and most belong to members the cards do not
+/// draw: those need no rebuild.
+fn head2head_cards_show(app: &crate::MainWindow, user_id: &str) -> bool {
+    app.get_feed_cards()
+        .iter()
+        .any(|c| match c.card_type.as_str() {
+            "head2head" => {
+                let h = &c.head2head;
+                h.left_id.as_str() == user_id
+                    || h.right_id.as_str() == user_id
+                    || h.pairs.iter().any(|r| r.id.as_str() == user_id)
+            }
+            "invite" => c.head2head.members.iter().any(|m| m.id.as_str() == user_id),
+            _ => false,
+        })
+}
+
+/// Put a newly loaded avatar on the head2head and invite cards. The two cards
+/// are built again from the last feed, which reads the avatar cache, and
+/// replace their rows in the feed model. Editing the avatar of a row inside
+/// the card's own model changes the data but the octagons keep their
+/// initials on screen, so the row is replaced instead. Without a feed, or
+/// when the cards of the feed changed shape, the whole this_week is rebuilt.
+pub(super) fn refresh_head2head_cards(ctx: &AppContext, user_id: &str) {
+    // A join card holds one avatar: patch it in place.
+    {
+        let feed = ctx.app.get_feed_cards();
+        let id = format!("joined-{user_id}");
+        let row =
+            (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id.as_str() == id));
+        if let (Some(i), Some(img)) = (row, ctx.avatar_cache.borrow().get(user_id).cloned()) {
+            if let Some(mut card) = feed.row_data(i) {
+                card.actor_avatar = img;
+                card.actor_has_avatar = true;
+                feed.set_row_data(i, card);
+            }
+        }
+    }
+    if !head2head_cards_show(&ctx.app, user_id) {
+        return;
+    }
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let entries: Vec<mello_core::crew_events::FeedEntry> = resp
+        .sections
+        .iter()
+        .filter(|s| s.id == "this_week")
+        .flat_map(|s| s.entries.iter().cloned())
+        .collect();
+    let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") else {
+        return;
+    };
+    let Some((_, cards)) = head2head_cards(ctx, entry, &entries) else {
+        return;
+    };
+    let feed = ctx.app.get_feed_cards();
+    let rows: Vec<Option<usize>> = cards
+        .iter()
+        .map(|c| (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id == c.id)))
+        .collect();
+    if rows.iter().any(Option::is_none) {
+        rebuild_roster_cards(ctx);
+        return;
+    }
+    for (card, row) in cards.into_iter().zip(rows.into_iter().flatten()) {
+        feed.set_row_data(row, card);
+    }
+}
+
+/// Put the cards that hold a belt or a recap on screen again after a card
+/// opened (`sealed.rs`): the head2head and invite cards, and the recaps. Each
+/// replaces the row with its id, so the order of the feed does not change.
+pub(super) fn refresh_sealed_cards(ctx: &AppContext) {
+    let Some(resp) = ctx.last_feed.borrow().clone() else {
+        return;
+    };
+    if resp.crew_id != ctx.app.get_active_crew_id().as_str() {
+        return;
+    }
+    let entries: Vec<mello_core::crew_events::FeedEntry> = resp
+        .sections
+        .iter()
+        .filter(|s| s.id == "this_week")
+        .flat_map(|s| s.entries.iter().cloned())
+        .collect();
+    let mut fresh: Vec<FeedCardData> = Vec::new();
+    if let Some(entry) = entries.iter().find(|e| e.entry_type == "head2head") {
+        if let Some((_, cards)) = head2head_cards(ctx, entry, &entries) {
+            fresh.extend(cards);
+        }
+    }
+    for e in &entries {
+        if matches!(e.entry_type.as_str(), "recap" | "daily-recap")
+            && !is_empty_recap_entry(&e.entry_type, &e.data)
+        {
+            fresh.push(build_feed_card(
+                ctx,
+                &e.id,
+                &e.entry_type,
+                &e.role,
+                &e.size,
+                &e.data,
+                e.ts,
+            ));
+        }
+    }
+    let feed = ctx.app.get_feed_cards();
+    for card in fresh {
+        if let Some(row) =
+            (0..feed.row_count()).find(|&i| feed.row_data(i).is_some_and(|r| r.id == card.id))
+        {
+            feed.set_row_data(row, card);
+        }
+    }
+}
+
+/// The octagon of a user: the loaded avatar, else the initials.
+fn live_person(ctx: &AppContext, person: &Person) -> crate::H2hPerson {
+    let cache = ctx.avatar_cache.borrow();
+    let mut avatar = cache.get(&person.id).cloned();
+    if avatar.is_none()
+        && person.id == ctx.app.get_user_id().as_str()
+        && ctx.app.get_has_user_avatar()
+    {
+        avatar = Some(ctx.app.get_user_avatar());
+    }
+    crate::H2hPerson {
+        id: person.id.as_str().into(),
+        name: person.name.as_str().into(),
+        initials: person.initials.as_str().into(),
+        hue_index: person.hue,
+        has_avatar: avatar.is_some(),
+        avatar: avatar.unwrap_or_default(),
+    }
+}
+
+/// "Bob", "Bob and Jonas", "Bob, Jonas and Sara", "Bob, Jonas, Sara +2".
+fn names_line(names: &[String]) -> String {
+    match names {
+        [] => String::new(),
+        [a] => a.clone(),
+        [a, b] => format!("{a} and {b}"),
+        [a, b, c] => format!("{a}, {b} and {c}"),
+        [a, b, c, rest @ ..] => format!("{a}, {b}, {c} +{}", rest.len()),
+    }
+}
+
+/// The most octagons a live session card draws before the "+N".
+const LIVE_OCTAGONS: usize = 5;
+
+/// One card for each game that the viewer or a crewmate plays now. Built from
+/// the presence state (`live_session`), not from the ledger.
+pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
+    let viewer_id = ctx.app.get_user_id().to_string();
+    let groups = ctx.live_games.borrow().groups(&viewer_id);
+    if groups.is_empty() || ctx.app.get_active_crew_id().is_empty() {
+        return Vec::new();
+    }
+    let (viewer, members) = h2h_roster(ctx);
+    let now_ms = crate::converters::current_time_ms();
+    groups
+        .into_iter()
+        .map(|g| {
+            let people: Vec<Person> = g
+                .user_ids
+                .iter()
+                .map(|id| {
+                    if *id == viewer.id {
+                        viewer.clone()
+                    } else {
+                        members
+                            .iter()
+                            .find(|m| m.id == *id)
+                            .cloned()
+                            .unwrap_or_else(|| Person::unknown(id))
+                    }
+                })
+                .collect();
+            let names: Vec<String> = people.iter().map(|p| p.name.clone()).collect();
+            let shown: Vec<crate::H2hPerson> = people
+                .iter()
+                .take(LIVE_OCTAGONS)
+                .map(|p| live_person(ctx, p))
+                .collect();
+            let min = crate::live_session::since_min(g.started_ms, now_ms);
+
+            let (game_id, _, _) = resolve_game_meta(ctx, &g.game_id, &g.game_name);
+            // The shared art ladder: the same ids and order as every tile.
+            let art = crate::game_icons::resolve_tile_art(ctx, &g.game_id, &game_id, &g.game_name);
+            let (game_icon, game_has_icon) = (art.icon, art.has_icon);
+            let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
+            // Poster art for the wide slot: only a game installed on this
+            // device has it, and it never leaves the device.
+            let (poster, has_poster) =
+                crate::game_icons::resolve_poster(ctx, &g.game_id, &game_id, &g.game_name)
+                    .map_or((slint::Image::default(), false), |img| (img, true));
+            FeedCardData {
+                id: format!(
+                    "live-{}",
+                    if g.game_id.is_empty() {
+                        &g.game_name
+                    } else {
+                        &g.game_id
+                    }
+                )
+                .into(),
+                card_type: "live-session".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                game_name: g.game_name.as_str().into(),
+                game_id: game_id.as_str().into(),
+                game_icon,
+                game_has_icon,
+                game_capsule,
+                game_has_capsule,
+                game_monogram: crate::recent_games::monogram(&g.game_name).into(),
+                game_hue_index: crate::recent_games::hue_index(&game_id, &g.game_name),
+                live: crate::LiveSessionData {
+                    since_min: min as i32,
+                    since_text: crate::live_session::since_text(min).into(),
+                    names_line: names_line(&names).into(),
+                    member_names: Rc::new(VecModel::from(
+                        names
+                            .iter()
+                            .map(|n| slint::SharedString::from(n.as_str()))
+                            .collect::<Vec<_>>(),
+                    ))
+                    .into(),
+                    more_players: people.len().saturating_sub(LIVE_OCTAGONS) as i32,
+                    players: Rc::new(VecModel::from(shown)).into(),
+                    poster,
+                    has_poster,
+                },
+                ..Default::default()
+            }
+        })
+        .collect()
+}
+
+/// What a live card shows, for telling a card that changed from one that did
+/// not. A model reset costs a rebuild of every slot.
+fn live_signature(cards: &[FeedCardData]) -> Vec<String> {
+    cards
+        .iter()
+        .map(|c| {
+            format!(
+                "{}|{}|{}|{}|{}|{}",
+                c.id,
+                c.live.since_text,
+                c.live.names_line,
+                c.live.players.iter().filter(|p| p.has_avatar).count(),
+                c.game_has_capsule || c.game_has_icon,
+                c.live.has_poster,
+            )
+        })
+        .collect()
+}
+
+/// Put the live session cards on screen again from the presence state. Call
+/// after anything that changes who plays what, the roster or an avatar. Does
+/// nothing when the live cards did not change.
+pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
+    let model = ctx.app.get_feed_cards();
+    let all: Vec<FeedCardData> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect();
+    let (old, mut cards): (Vec<_>, Vec<_>) =
+        all.into_iter().partition(|c| c.card_type == "live-session");
+    let new = live_session_cards(ctx);
+    if live_signature(&old) == live_signature(&new) {
+        return;
+    }
+    cards.extend(new);
+    let cards = arranged(ctx, cards);
+    ctx.app
+        .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+    refresh_feed_skeletons(ctx);
+}
+
+/// Put the cards where the grid wants them: recent games on the first screen
+/// and no clip in a wide slot (`feed_grid`).
+fn arranged(ctx: &AppContext, cards: Vec<FeedCardData>) -> Vec<FeedCardData> {
+    crate::feed_grid::arrange_for_streams(cards, ctx.app.get_active_stream_cards().row_count())
+}
+
+/// Arrange the cards on screen again. A live stream moves the first grid slot,
+/// so the wide slots move with it.
+pub(super) fn rearrange_feed_cards(ctx: &AppContext) {
+    let live = ctx.app.get_active_stream_cards().row_count();
+    let arranged = crate::feed_grid::arrange_model(&ctx.app.get_feed_cards(), live);
+    ctx.app.set_feed_cards(arranged);
+}
+
+/// The cards of the `this_week` section. Wide and versus lead the feed (the
+/// wide slot and the hero slot); a cell keeps the server's position.
+fn build_this_week(
+    ctx: &AppContext,
+    entries: &[mello_core::crew_events::FeedEntry],
+) -> Vec<FeedCardData> {
+    let mut lead: Vec<FeedCardData> = Vec::new();
+    let mut cards: Vec<FeedCardData> = Vec::new();
+    let mut daily_shown = false;
+    for e in entries {
+        if is_empty_recap_entry(&e.entry_type, &e.data) {
+            continue;
+        }
+        // An older server still sends catch-up cards. They are not drawn.
+        if e.entry_type == "catchup" {
+            continue;
+        }
+        // The server sends a daily recap for each of the last three days, the
+        // newest first. The feed shows one: the newest.
+        if e.entry_type == "daily-recap" {
+            if daily_shown {
+                continue;
+            }
+            daily_shown = true;
+        }
+        if e.entry_type == "head2head" {
+            if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
+                match placement {
+                    Placement::Wide | Placement::Versus | Placement::Belt => lead = group,
+                    Placement::Pairs if hero_free(entries) => lead = group,
+                    Placement::Pairs => cards.extend(group),
+                }
+            }
+            continue;
+        }
+        cards.push(build_feed_card(
+            ctx,
+            &e.id,
+            &e.entry_type,
+            &e.role,
+            &e.size,
+            &e.data,
+            e.ts,
+        ));
+    }
+    lead.extend(cards);
+    lead
 }
 
 type MvpSlot = (String, String, String, String); // (name, initials, stat, user_id)
@@ -389,12 +1236,153 @@ fn extract_recap_leaderboard(ctx: &AppContext, data: &serde_json::Value) -> Vec<
         .collect()
 }
 
+/// Rows of the Belts moved section: one for each title that changed hands in
+/// the recap week, from `belts_moved`. Names come from the recap, so a member
+/// who left the crew still has one.
+fn extract_recap_belts_moved(
+    ctx: &AppContext,
+    data: &serde_json::Value,
+    seal: &Seal,
+) -> Vec<RecapBeltMovedRow> {
+    let arr = match data.get("belts_moved").and_then(|v| v.as_array()) {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let str_of = |v: &serde_json::Value, k: &str| -> String {
+        v.get(k).and_then(|n| n.as_str()).unwrap_or("").to_string()
+    };
+    arr.iter()
+        .map(|v| {
+            let title_id = str_of(v, "title_id");
+            let (title, icon) = head2head::belt_look(&title_id);
+            let (value, unit) = head2head::value_text(
+                v.get("value").unwrap_or(&serde_json::Value::Null),
+                &str_of(v, "unit"),
+            );
+            let holder_id = str_of(v, "holder_user_id");
+            let holder_name = str_of(v, "holder_name");
+            let prev_id = str_of(v, "previous_holder_user_id");
+            let prev_name = str_of(v, "previous_holder_name");
+            let (holder_avatar, holder_has_avatar) = resolve_avatar(ctx, &holder_id);
+            let (prev_avatar, prev_has_avatar) = resolve_avatar(ctx, &prev_id);
+            let belt = {
+                let cache = ctx.avatar_cache.borrow();
+                let moved_ms = v.get("moved_at_ms").and_then(|n| n.as_i64()).unwrap_or(0);
+                let value = v.get("value").unwrap_or(&serde_json::Value::Null);
+                sealed::reveal_of(
+                    &sealed::Move {
+                        title_id: &title_id,
+                        moved_ms,
+                        holder: &Person::new(&holder_id, &holder_name),
+                        prev: &Person::new(&prev_id, &prev_name),
+                        value,
+                        unit: &str_of(v, "unit"),
+                    },
+                    &|id| cache.get(id).cloned(),
+                    seal,
+                )
+            };
+            RecapBeltMovedRow {
+                belt,
+                title: title.into(),
+                icon,
+                value: value.into(),
+                unit: unit.into(),
+                prev_initials: if prev_name.is_empty() {
+                    "".into()
+                } else {
+                    make_initials(&prev_name).into()
+                },
+                prev_name: prev_name.into(),
+                prev_hue: avatar_color_index(&prev_id),
+                prev_avatar,
+                prev_has_avatar,
+                holder_initials: make_initials(&holder_name).into(),
+                holder_name: holder_name.into(),
+                holder_hue: avatar_color_index(&holder_id),
+                holder_avatar,
+                holder_has_avatar,
+            }
+        })
+        .collect()
+}
+
+/// Rows of the Belts held section: members in count order, from
+/// `leaderboard` (the same entries as `belts_held`). A member with no titles
+/// has no row.
+fn extract_recap_belts_held(ctx: &AppContext, data: &serde_json::Value) -> Vec<RecapBeltHeldRow> {
+    let arr = match data
+        .get("leaderboard")
+        .or_else(|| data.get("belts_held"))
+        .and_then(|v| v.as_array())
+    {
+        Some(a) => a,
+        None => return Vec::new(),
+    };
+    let mut rows: Vec<RecapBeltHeldRow> = arr
+        .iter()
+        .filter_map(|v| {
+            let count = v.get("count").and_then(|n| n.as_i64()).unwrap_or(0);
+            if count <= 0 {
+                return None;
+            }
+            let user_id = v.get("user_id").and_then(|n| n.as_str()).unwrap_or("");
+            let name = v
+                .get("display_name")
+                .and_then(|n| n.as_str())
+                .unwrap_or("")
+                .to_string();
+            let (avatar, has_avatar) = resolve_avatar(ctx, user_id);
+            let titles: Vec<RecapHeldTitle> = v
+                .get("title_ids")
+                .and_then(|t| t.as_array())
+                .map(|ids| {
+                    ids.iter()
+                        .filter_map(|i| i.as_str())
+                        .map(|id| {
+                            let (title, icon) = head2head::belt_look(id);
+                            RecapHeldTitle {
+                                title: title.into(),
+                                icon,
+                            }
+                        })
+                        .collect()
+                })
+                .unwrap_or_default();
+            Some((
+                count,
+                RecapBeltHeldRow {
+                    rank: 0,
+                    initials: make_initials(&name).into(),
+                    name: name.into(),
+                    hue: avatar_color_index(user_id),
+                    avatar,
+                    has_avatar,
+                    count: count as i32,
+                    titles: ModelRc::new(VecModel::from(titles)),
+                },
+            ))
+        })
+        .map(|(_, r)| r)
+        .collect();
+    // The backend sends them most first. Keep that order for equal counts.
+    rows.sort_by_key(|r| std::cmp::Reverse(r.count));
+    // The same count is the same rank (1, 2, 3, 4, 4, 4).
+    let counts: Vec<i32> = rows.iter().map(|r| r.count).collect();
+    for r in rows.iter_mut() {
+        r.rank = 1 + counts.iter().filter(|&&c| c > r.count).count() as i32;
+    }
+    rows
+}
+
 fn extract_recap_awards(data: &serde_json::Value) -> Vec<RecapAwardRow> {
     let arr = match data.get("awards").and_then(|v| v.as_array()) {
         Some(a) => a,
         None => return Vec::new(),
     };
     arr.iter()
+        // Belt awards are drawn as the Belts moved section, with the two members.
+        .filter(|v| v.get("kind").and_then(|k| k.as_str()) != Some("belt"))
         .map(|v| {
             let s = |k: &str| {
                 v.get(k)
@@ -411,6 +1399,163 @@ fn extract_recap_awards(data: &serde_json::Value) -> Vec<RecapAwardRow> {
             }
         })
         .collect()
+}
+
+/// A member of a recap with the avatar the client holds. `count` is minutes or
+/// clips, by the caller.
+fn recap_person(ctx: &AppContext, user_id: &str, name: &str, count: i64) -> RecapPerson {
+    let (avatar, has_avatar) = resolve_avatar(ctx, user_id);
+    RecapPerson {
+        name: name.into(),
+        initials: make_initials(name).into(),
+        hue: avatar_color_index(if user_id.is_empty() { name } else { user_id }),
+        avatar,
+        has_avatar,
+        count: count.clamp(0, i64::from(i32::MAX)) as i32,
+    }
+}
+
+/// The most active member of a weekly recap, with the minutes. The default
+/// (no name) when the recap has none.
+fn extract_recap_active(ctx: &AppContext, data: &serde_json::Value) -> RecapPerson {
+    let Some(top) = data
+        .get("top_members")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+    else {
+        return RecapPerson::default();
+    };
+    let name = top
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    if name.is_empty() {
+        return RecapPerson::default();
+    }
+    let id = top.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+    let min = top.get("hangout_min").and_then(|v| v.as_i64()).unwrap_or(0);
+    recap_person(ctx, id, name, min)
+}
+
+/// The member with the most clips of the week, with the count. The default when
+/// nobody clipped.
+fn extract_recap_clipped(ctx: &AppContext, data: &serde_json::Value) -> RecapPerson {
+    let name = data
+        .get("most_clipped")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let count = data
+        .get("most_clipped_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    // A recap stored before the count existed names the member and no more.
+    if name.is_empty() || count <= 0 {
+        return RecapPerson::default();
+    }
+    let id = data
+        .get("most_clipped_user_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    recap_person(ctx, id, name, count)
+}
+
+/// Every game of the recap week with its minutes, most first, and the total.
+/// A game with no minutes (a recap stored before `minutes`) is left out.
+fn extract_recap_games(ctx: &AppContext, data: &serde_json::Value) -> (Vec<RecapGameRow>, i32) {
+    let Some(arr) = data.get("games_played").and_then(|v| v.as_array()) else {
+        return (Vec::new(), 0);
+    };
+    let mut rows: Vec<RecapGameRow> = arr
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("game").and_then(|g| g.as_str())?.to_string();
+            let minutes = v.get("minutes").and_then(|m| m.as_i64()).unwrap_or(0);
+            if name.is_empty() || minutes <= 0 {
+                return None;
+            }
+            let (game_id, _, _) = resolve_game_meta(ctx, "", &name);
+            let art = crate::game_icons::resolve_tile_art(ctx, "", &game_id, &name);
+            Some(RecapGameRow {
+                monogram: crate::recent_games::monogram(&name).into(),
+                hue_index: crate::recent_games::hue_index(&game_id, &name),
+                game_id: game_id.into(),
+                name: name.into(),
+                icon: art.icon,
+                has_icon: art.has_icon,
+                capsule: art.capsule,
+                has_capsule: art.has_capsule,
+                minutes: minutes.clamp(0, i64::from(i32::MAX)) as i32,
+            })
+        })
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.minutes));
+    let total = rows.iter().map(|r| r.minutes).sum();
+    (rows, total)
+}
+
+/// The clip of the week: the longest clip, which the clip player can play. The
+/// default (no path) when the week had no clip or the clip has no media.
+fn extract_recap_clip(ctx: &AppContext, data: &serde_json::Value) -> RecapClip {
+    let Some(c) = data.get("clip_of_week").filter(|v| v.is_object()) else {
+        return RecapClip::default();
+    };
+    let str_of = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let clip_path = c
+        .get("media_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
+    let secs = c
+        .get("duration_seconds")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let whole = secs.round().max(0.0) as u32;
+    let names: Vec<String> = c
+        .get("participant_names")
+        .and_then(|v| v.as_array())
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    let people: Vec<RecapPerson> = names
+        .iter()
+        .take(4)
+        .map(|n| recap_person(ctx, "", n, 0))
+        .collect();
+    let when = c
+        .get("ts")
+        .and_then(|v| v.as_i64())
+        .filter(|&t| t > 0)
+        .map(|t| crate::feed_age::weekday_of(t).to_string())
+        .unwrap_or_default();
+    let waveform = c
+        .get("waveform")
+        .and_then(|v| v.as_str())
+        .map(decode_clip_waveform)
+        .unwrap_or_default();
+    RecapClip {
+        clip_path: clip_path.into(),
+        title: str_of("title").into(),
+        duration: format!("{}:{:02}", whole / 60, whole % 60).into(),
+        duration_ms: (secs * 1000.0).round() as i32,
+        game_name: str_of("game").into(),
+        when: when.into(),
+        waveform: ModelRc::new(VecModel::from(waveform)),
+        people: ModelRc::new(VecModel::from(people)),
+        names: join_names(&names).into(),
+    }
+}
+
+/// "Bob", "Bob and Max", "Bob, Max and Sara".
+fn join_names(names: &[String]) -> String {
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].clone(),
+        n => format!("{} and {}", names[..n - 1].join(", "), names[n - 1]),
+    }
 }
 
 /// Compact "this week in games" summary, e.g. "312 matches · CS2, Rocket League".
@@ -461,24 +1606,161 @@ fn humanize_duration_min(mins: i64) -> String {
     }
 }
 
-fn extract_rollup_lines(data: &serde_json::Value) -> Vec<GameRollupLine> {
-    data.get("lines")
+/// Header line of the recent games card: "14 sessions, 31 h this week".
+/// Under an hour the total reads in minutes. One session reads "1 session".
+/// No sessions (a card built from the installed library only) gives no line.
+fn recent_games_header(session_count: i64, total_min: i64) -> String {
+    if session_count <= 0 {
+        return String::new();
+    }
+    let sessions = if session_count == 1 {
+        "1 session".to_string()
+    } else {
+        format!("{session_count} sessions")
+    };
+    let total = if total_min < 60 {
+        format!("{} min", total_min.max(1))
+    } else {
+        // Round to the nearest hour: the line is a gist, the tiles carry detail.
+        format!("{} h", (total_min + 30) / 60)
+    };
+    format!("{sessions}, {total} this week")
+}
+
+/// What the recent games card needs from the server's payload.
+struct RecentTiles {
+    tiles: Vec<RecentGameTile>,
+    /// The PCs behind the tiles. Two or more make the card a poster grid.
+    pc_count: i64,
+}
+
+/// Tiles for the recent games card, keyed by game id, from the server's
+/// `games` array.
+///
+/// Each tile carries its owners (`member_ids` of the server) as octagons, the
+/// poster grid's pips. With two or more PCs the row is capped at five tiles,
+/// sorted by last played as the server sends them.
+///
+/// Art ladder: the runtime icon (cached or crew-shared), else the Steam header
+/// art on this disk, else the monogram. Nothing leaves the device. The log
+/// carries counts only.
+fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> RecentTiles {
+    let installed = ctx.installed_games.borrow();
+    let installed_ids: std::collections::HashSet<String> =
+        installed.iter().map(|g| g.game_id.clone()).collect();
+    let installed_names: std::collections::HashSet<String> = installed
+        .iter()
+        .map(|g| g.name.trim().to_lowercase())
+        .collect();
+    drop(installed);
+
+    let rows = data
+        .get("games")
         .and_then(|v| v.as_array())
-        .map(|rows| {
-            rows.iter()
-                .filter_map(|row| {
-                    let player_name = row.get("player_name")?.as_str()?;
-                    let game_name = row.get("game_name")?.as_str()?;
-                    let total_min = row.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
-                    Some(GameRollupLine {
-                        player_name: player_name.into(),
-                        game_name: game_name.into(),
-                        duration_human: humanize_duration_min(total_min).into(),
-                    })
+        .cloned()
+        .unwrap_or_default();
+    let (viewer, members) = h2h_roster(ctx);
+    let person_of = |id: &str| -> Option<Person> {
+        if id == viewer.id {
+            Some(viewer.clone())
+        } else {
+            members.iter().find(|m| m.id == id).cloned()
+        }
+    };
+    let owner_ids: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| {
+            row.get("member_ids")
+                .and_then(|v| v.as_array())
+                .map(|a| {
+                    a.iter()
+                        .filter_map(|v| v.as_str().map(str::to_string))
+                        .collect()
                 })
-                .collect()
+                .unwrap_or_default()
         })
-        .unwrap_or_default()
+        .collect();
+    let pc_count =
+        crate::recent_games::pc_count_of(data.get("pc_count").and_then(|v| v.as_i64()), &owner_ids);
+    let (mut local_art, mut tracked_count, mut installed_count) = (0, 0, 0);
+    let mut tiles: Vec<RecentGameTile> = rows
+        .iter()
+        .zip(owner_ids.iter())
+        .filter_map(|(row, owner_ids)| {
+            let game_name = row.get("game_name")?.as_str()?;
+            let wire_id = row.get("game_id").and_then(|v| v.as_str()).unwrap_or("");
+            let minutes = row.get("minutes").and_then(|v| v.as_i64()).unwrap_or(0);
+            let wire_launcher = row.get("launcher").and_then(|v| v.as_str()).unwrap_or("");
+            let (game_id, _, _) = resolve_game_meta(ctx, wire_id, game_name);
+
+            let art = crate::game_icons::resolve_tile_art(ctx, wire_id, &game_id, game_name);
+            let (game_icon, has_icon) = (art.icon, art.has_icon);
+            let (capsule, has_capsule) = (art.capsule, art.has_capsule);
+            if has_capsule {
+                local_art += 1;
+            }
+            let tracked = mello_core::game_sensing::is_tracked_game(wire_id, game_name)
+                || mello_core::game_sensing::is_tracked_game(&game_id, game_name);
+            if tracked {
+                tracked_count += 1;
+            }
+            if crate::recent_games::is_installed(
+                wire_id,
+                game_name,
+                &installed_ids,
+                &installed_names,
+            ) || crate::recent_games::is_installed(
+                &game_id,
+                "",
+                &installed_ids,
+                &installed_names,
+            ) {
+                installed_count += 1;
+            }
+            let launcher = crate::recent_games::launcher_of(wire_id, wire_launcher);
+            Some(RecentGameTile {
+                game_id: game_id.as_str().into(),
+                game_name: game_name.into(),
+                monogram: crate::recent_games::monogram(game_name).into(),
+                hue_index: crate::recent_games::hue_index(&game_id, game_name),
+                game_icon,
+                has_icon,
+                capsule,
+                has_capsule,
+                hours: crate::recent_games::hours_label(minutes, &launcher).into(),
+                // The caption comes with the week's line, from three PCs.
+                when: if pc_count >= 3 {
+                    crate::recent_games::when_label(
+                        row.get("last_played").and_then(|v| v.as_i64()).unwrap_or(0),
+                        crate::converters::current_time_ms(),
+                    )
+                } else {
+                    String::new()
+                }
+                .into(),
+                tracked,
+                owners: Rc::new(VecModel::from(
+                    owner_ids
+                        .iter()
+                        .filter_map(|id| person_of(id))
+                        .map(|p| live_person(ctx, &p))
+                        .collect::<Vec<_>>(),
+                ))
+                .into(),
+            })
+        })
+        .collect();
+    if crate::recent_games::is_grid(pc_count) {
+        tiles.truncate(crate::recent_games::GRID_TILES);
+    }
+    log::info!(
+        "[recent-games] {} tile(s), {} with local art, {} tracked, {} installed",
+        tiles.len(),
+        local_art,
+        tracked_count,
+        installed_count
+    );
+    RecentTiles { tiles, pc_count }
 }
 
 /// Wall-time duration for game sessions; uses active time when wall time is
@@ -544,6 +1826,27 @@ fn resolve_game_meta(
         mello_core::library::derive_short_name(game_name)
     };
     (game_id.to_string(), short, None)
+}
+
+/// The members of a daily recap who took part that day, in the server's order
+/// (the most active first). A member who is not in the roster any more has no
+/// octagon.
+fn daily_recap_members(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::H2hPerson> {
+    let (viewer, members) = h2h_roster(ctx);
+    data.get("member_ids")
+        .and_then(|v| v.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|v| v.as_str())
+        .filter_map(|id| {
+            if id == viewer.id {
+                Some(viewer.clone())
+            } else {
+                members.iter().find(|m| m.id == id).cloned()
+            }
+        })
+        .map(|p| live_person(ctx, &p))
+        .collect()
 }
 
 // Build a feed card from a server feed entry. card_type is the server-provided
@@ -622,6 +1925,7 @@ fn build_feed_card(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
+    let wire_game_id = game_id.clone();
     let (game_id, game_short_name, game_color_hex) = resolve_game_meta(ctx, &game_id, &game);
     let game_has_color = game_color_hex.is_some();
     let game_color = slint::Color::from_argb_encoded(super::game::parse_hex_color(
@@ -629,10 +1933,11 @@ fn build_feed_card(
     ));
     // Runtime icon (exe-extracted / crew-shared) for games without bundled
     // art; a cache miss requests the crew copy once per run.
-    let (game_icon, game_has_icon) = match crate::game_icons::resolve_or_fetch_icon(ctx, &game_id) {
-        Some(img) => (img, true),
-        None => (slint::Image::default(), false),
-    };
+    let art = crate::game_icons::resolve_tile_art(ctx, &wire_game_id, &game_id, &game);
+    let (game_icon, game_has_icon) = (art.icon, art.has_icon);
+    let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
+    let game_monogram = crate::recent_games::monogram(&game);
+    let game_hue_index = crate::recent_games::hue_index(&game_id, &game);
 
     let clip_path = data
         .get("media_url")
@@ -701,35 +2006,33 @@ fn build_feed_card(
     // Rich game-session card fields (spec 19 B2). Retype game sessions so the
     // feed dispatches them to the rich GameSessionCard instead of SessionCard.
     let is_game_session = backend_type == "game_session";
-    let is_rollup = feed_type == "rollup";
-    let card_type = if is_rollup {
-        "rollup"
-    } else if is_game_session {
+    let is_recent_games = feed_type == "recent-games";
+    let card_type = if is_game_session {
         "game-session"
     } else {
         feed_type
     };
-    let (title, subtitle) = if is_rollup {
+    let recent = if is_recent_games {
+        extract_recent_game_tiles(ctx, &data)
+    } else {
+        RecentTiles {
+            tiles: Vec::new(),
+            pc_count: 0,
+        }
+    };
+    let (recent_games, recent_pc_count) = (recent.tiles, recent.pc_count);
+    let (title, subtitle) = if is_recent_games {
         let session_count = data
             .get("session_count")
             .and_then(|v| v.as_i64())
             .unwrap_or(0);
         let total_min = data.get("total_min").and_then(|v| v.as_i64()).unwrap_or(0);
         (
-            "CREW PLAY".to_string(),
-            format!(
-                "{} sessions · {}",
-                session_count,
-                humanize_duration_min(total_min)
-            ),
+            "RECENT GAMES".to_string(),
+            recent_games_header(session_count, total_min),
         )
     } else {
         (title, subtitle)
-    };
-    let rollup_lines = if is_rollup {
-        extract_rollup_lines(&data)
-    } else {
-        Vec::new()
     };
     let game_verified = is_game_session
         && data
@@ -891,7 +2194,70 @@ fn build_feed_card(
     let (mvp2_av, mvp2_has_av) = resolve_avatar(ctx, &mvp2.3);
     let recap_leaderboard = extract_recap_leaderboard(ctx, &data);
     let recap_awards = extract_recap_awards(&data);
+    let mut recap_belts_moved = with_seal(ctx, |seal| extract_recap_belts_moved(ctx, &data, seal));
+    // A daily recap lists two belts at most, the server's newest first.
+    if backend_type == "daily_recap" {
+        recap_belts_moved.truncate(2);
+    }
+    let recap_belts_held = extract_recap_belts_held(ctx, &data);
     let recap_games_summary = games_summary(&data);
+    let is_weekly_recap = backend_type == "weekly_recap";
+    let recap_active = if is_weekly_recap {
+        extract_recap_active(ctx, &data)
+    } else {
+        Default::default()
+    };
+    let recap_clipped = if is_weekly_recap {
+        extract_recap_clipped(ctx, &data)
+    } else {
+        Default::default()
+    };
+    let (recap_games, recap_games_min) = if is_weekly_recap {
+        extract_recap_games(ctx, &data)
+    } else {
+        (Vec::new(), 0)
+    };
+    // The tall card is three grid rows high with belts and two without. A recap
+    // with nothing to show is never a card (`recap_rows` 0).
+    let recap_rows: i32 = if !is_weekly_recap {
+        0
+    } else if !recap_belts_moved.is_empty() || !recap_belts_held.is_empty() {
+        3
+    } else if !recap_leaderboard.is_empty()
+        || !recap_awards.is_empty()
+        || !recap_games.is_empty()
+        || !recap_active.name.is_empty()
+        || !recap_clipped.name.is_empty()
+    {
+        2
+    } else {
+        0
+    };
+    let recap_clip = if is_weekly_recap {
+        extract_recap_clip(ctx, &data)
+    } else {
+        Default::default()
+    };
+    let is_daily_recap = backend_type == "daily_recap";
+    let day_members = if is_daily_recap {
+        daily_recap_members(ctx, &data)
+    } else {
+        Vec::new()
+    };
+    let day_label = if is_daily_recap {
+        crate::feed_age::day_label(
+            data.get("day_start").and_then(|v| v.as_i64()).unwrap_or(0),
+            crate::converters::current_time_ms(),
+        )
+    } else {
+        String::new()
+    };
+    let day_sessions = data
+        .get("session_count")
+        .and_then(|v| v.as_i64())
+        .filter(|_| is_daily_recap)
+        .unwrap_or(0)
+        .clamp(0, i64::from(i32::MAX)) as i32;
     let was_seen = ctx
         .settings
         .borrow()
@@ -918,6 +2284,52 @@ fn build_feed_card(
         duration_min,
         actor_name: actor.clone().into(),
         actor_initials: make_initials(&actor).into(),
+        actor_hue_index: avatar_color_index(actor_avatar_id.unwrap_or(&actor)),
+        // "Week 4" when the server counts the crew's weeks (`week_number`).
+        recap_week: data
+            .get("week_number")
+            .and_then(|v| v.as_i64())
+            .filter(|&n| n > 0)
+            .map(|n| format!("Week {n}"))
+            .unwrap_or_default()
+            .into(),
+        recap_hangout_min: if backend_type == "weekly_recap" {
+            recap_lead_minutes(&data).round() as i32
+        } else {
+            0
+        },
+        recap_clips: if backend_type == "weekly_recap" {
+            data.get("clip_count")
+                .and_then(|v| v.as_i64())
+                .unwrap_or(0)
+                .clamp(0, i64::from(i32::MAX)) as i32
+        } else {
+            0
+        },
+        recap_longest_min: if backend_type == "weekly_recap" {
+            data.get("longest_session_min")
+                .and_then(|v| v.as_f64())
+                .unwrap_or(0.0)
+                .round() as i32
+        } else {
+            0
+        },
+        recap_seal: if backend_type == "weekly_recap" {
+            let week_start = data.get("week_start").and_then(|v| v.as_i64()).unwrap_or(0);
+            let week_end = data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0);
+            with_seal(ctx, |seal| sealed::recap_seal(week_start, week_end, seal))
+        } else {
+            Default::default()
+        },
+        age_label: if backend_type == "weekly_recap" {
+            crate::feed_age::recap_age_label(
+                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+                crate::converters::current_time_ms(),
+            )
+        } else {
+            String::new()
+        }
+        .into(),
         game_name: game.into(),
         game_id: game_id.into(),
         game_short_name: game_short_name.into(),
@@ -925,6 +2337,10 @@ fn build_feed_card(
         game_has_color,
         game_icon,
         game_has_icon,
+        game_capsule,
+        game_has_capsule,
+        game_monogram: game_monogram.into(),
+        game_hue_index,
         session_kind: session_kind.into(),
         duration_human: duration_human.into(),
         peak_count,
@@ -974,8 +2390,28 @@ fn build_feed_card(
         mvp2_avatar: mvp2_av,
         mvp2_has_avatar: mvp2_has_av,
         games_summary: recap_games_summary.into(),
+        recap_rows,
+        recap_active,
+        recap_clipped,
+        recap_games: ModelRc::new(VecModel::from(recap_games)),
+        recap_games_min,
+        recap_clip,
+        recap_range: if is_weekly_recap {
+            crate::feed_age::week_range(
+                data.get("week_start").and_then(|v| v.as_i64()).unwrap_or(0),
+                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+            )
+        } else {
+            String::new()
+        }
+        .into(),
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
+        belts_moved: ModelRc::new(VecModel::from(recap_belts_moved)),
+        day_label: day_label.into(),
+        day_sessions,
+        day_members: ModelRc::new(VecModel::from(day_members)),
+        belts_held: ModelRc::new(VecModel::from(recap_belts_held)),
         game_record: game_record.into(),
         game_wins,
         game_losses,
@@ -985,7 +2421,8 @@ fn build_feed_card(
         game_winrate: game_winrate.into(),
         game_matches,
         game_verified,
-        rollup_lines: ModelRc::new(VecModel::from(rollup_lines)),
+        recent_games: ModelRc::new(VecModel::from(recent_games)),
+        recent_pc_count: recent_pc_count as i32,
         snapshot_loading: feed_type == "session-preview" && has_snapshots,
         snapshot_poster_ready: false,
         snapshot_error: false,
@@ -1061,8 +2498,10 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 0
             };
             cards.insert(insert_pos.min(cards.len()), new_card);
+            let cards = arranged(ctx, cards);
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+            refresh_feed_skeletons(ctx);
 
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if !crew_id.is_empty() {
@@ -1108,28 +2547,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
             for section in &response.sections {
                 match section.id.as_str() {
                     "this_week" => {
-                        this_week = section
-                            .entries
-                            .iter()
-                            .filter(|e| !is_empty_recap_entry(&e.entry_type, &e.data))
-                            .map(|e| {
-                                build_feed_card(
-                                    ctx,
-                                    &e.id,
-                                    &e.entry_type,
-                                    &e.role,
-                                    &e.size,
-                                    &e.data,
-                                    e.ts,
-                                )
-                            })
-                            .collect();
+                        this_week = build_this_week(ctx, &section.entries);
                     }
                     "memory" => {
                         memory = section
                             .entries
                             .iter()
                             .filter(|e| !is_empty_recap_entry(&e.entry_type, &e.data))
+                            .filter(|e| e.entry_type != "catchup" && e.entry_type != "daily-recap")
                             .map(|e| {
                                 build_feed_card(
                                     ctx,
@@ -1147,47 +2572,60 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
 
-            let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
+            let memory = memory_for_display(memory, ctx.settings.borrow().plus_upsell_enabled);
 
-            // Fill with skeletons only for a true cold start. Once the server
-            // returns real feed or memory content, the client must not invent
-            // onboarding cards that compete with crew memory.
-            let mut ordered = this_week;
-            let has_real_memory = memory.iter().any(|c| c.card_type != "locked");
-            let is_cold = ordered.is_empty() && !has_real_memory;
-            if is_cold {
-                ordered.push(skeleton_card("skeleton-hero"));
-                ordered.push(skeleton_card("skeleton-recap"));
-                ordered.push(skeleton_card("skeleton-session"));
-                ordered.push(skeleton_card("skeleton-clip"));
-                ordered.push(skeleton_card("skeleton-catchup"));
-                ordered.push(skeleton_card("skeleton-now-playing"));
-                ordered.push(skeleton_card("skeleton-stream-clips"));
-                ordered.push(skeleton_card("skeleton-recent-games"));
-
-                // Inject invite card unless hidden for this crew.
-                let active_crew = ctx.app.get_active_crew_id().to_string();
-                let invite_hidden = ctx
-                    .settings
-                    .borrow()
-                    .hidden_invite_crew_ids
-                    .contains(&active_crew);
-                if !invite_hidden && !active_crew.is_empty() {
-                    let mut invite = skeleton_card("invite");
-                    invite.is_skeleton = false;
-                    invite.id = "invite".into();
-                    let insert_pos = 2.min(ordered.len());
-                    ordered.insert(insert_pos, invite);
+            *ctx.last_feed.borrow_mut() = Some(response.clone());
+            let idle_voice = response
+                .sections
+                .iter()
+                .find(|s| s.id == "this_week")
+                .and_then(|section| set_quiet_state(ctx, &section.entries));
+            // The feed is on screen now: what it shows counts as seen at the
+            // next open. This visit keeps its own baseline, so the dot stays.
+            {
+                let active = ctx.app.get_active_crew_id().to_string();
+                let mut s = ctx.settings.borrow_mut();
+                if !active.is_empty() && s.feed_baseline_ms.contains_key(&active) {
+                    s.feed_seen_ms.insert(active, head2head::now_ms());
+                    s.save();
                 }
             }
+            let clip_count = this_week.iter().filter(|c| c.card_type == "clip").count() as i32;
 
-            let cards = ordered;
+            // The feed shows real cards only. The skeleton trio is separate
+            // state, set below, so it never takes a card slot or the hero.
+            let has_real_memory = memory.iter().any(|c| c.card_type != "locked");
+            // Head2head and the invite card are there from day one, so they do
+            // not end the cold start.
+            let is_cold = this_week
+                .iter()
+                .all(|c| matches!(c.card_type.as_str(), "head2head" | "invite" | "joined"))
+                && !has_real_memory;
+            let mut this_week = this_week;
+            // The idle voice card follows the daily recap, or the lead.
+            if let Some(card) = idle_voice {
+                let at = this_week
+                    .iter()
+                    .position(|c| c.card_type == "daily-recap")
+                    .map(|p| p + 1)
+                    .unwrap_or_else(|| {
+                        this_week
+                            .iter()
+                            .take_while(|c| c.card_type == "head2head")
+                            .count()
+                    });
+                this_week.insert(at.min(this_week.len()), card);
+            }
+            this_week.extend(join_cards(ctx, &response.joined));
+            this_week.extend(live_session_cards(ctx));
+            let cards = arranged(ctx, this_week);
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(memory)).into());
             ctx.app.set_feed_cold_start(is_cold);
+            refresh_feed_skeletons(ctx);
             ctx.app.set_feed_clip_count(clip_count);
             ctx.app.set_feed_has_more(false);
 
@@ -1261,6 +2699,40 @@ pub fn handle(ctx: &AppContext, event: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn skeleton_trio_rule() {
+        let all = |t| (t, t, t);
+        let s = |t: SkeletonTrio| (t.stream, t.voice_clip, t.recap);
+        assert_eq!(s(skeleton_trio_for([], 0, 1)), all(true));
+        assert_eq!(
+            s(skeleton_trio_for(["session-preview"], 0, 1)),
+            (false, true, true)
+        );
+        assert_eq!(s(skeleton_trio_for(["clip"], 0, 1)), (true, false, true));
+        assert_eq!(s(skeleton_trio_for(["recap"], 0, 1)), (true, true, false));
+        assert_eq!(s(skeleton_trio_for([], 1, 1)), (false, true, true));
+        // Two members: the trio stays under the real cards (frame B2).
+        assert_eq!(s(skeleton_trio_for(["locked"], 0, 2)), all(true));
+        assert_eq!(s(skeleton_trio_for(["daily-recap"], 0, 2)), all(true));
+        assert_eq!(s(skeleton_trio_for(["clip"], 0, 2)), (true, false, true));
+        assert_eq!(
+            s(skeleton_trio_for(["head2head", "game-session"], 0, 2)),
+            all(true)
+        );
+        // Three members or more: none, with or without real cards.
+        assert_eq!(s(skeleton_trio_for([], 0, 3)), all(false));
+        assert_eq!(s(skeleton_trio_for(["locked"], 0, 5)), all(false));
+        assert_eq!(s(skeleton_trio_for([], 0, 9)), all(false));
+    }
+
+    #[test]
+    fn recent_games_header_wording() {
+        assert_eq!(recent_games_header(1, 45), "1 session, 45 min this week");
+        assert_eq!(recent_games_header(2, 240), "2 sessions, 4 h this week");
+        assert_eq!(recent_games_header(14, 1860), "14 sessions, 31 h this week");
+        assert_eq!(recent_games_header(0, 0), "", "installed games only");
+    }
 
     #[test]
     fn game_session_duration_uses_wall_time_by_default() {

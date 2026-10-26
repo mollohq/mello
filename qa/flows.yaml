@@ -463,8 +463,80 @@ flows:
     title: Game session and weekly cards render from real sessions
     priority: P2
     users: 2
-    harness: [zero_telemetry_game_session_renders_compact_card_without_record, game_rollup_renders_card_with_lines]
+    harness: [zero_telemetry_game_session_renders_compact_card_without_record, recent_games_card_carries_header_and_tiles]
     journeys: []
+    protocol: []
+    issues: []
+
+  - id: FEED-03
+    title: "Solo crew feed: head2head wide card with own values, open seats, recent games, skeleton trio"
+    priority: P1
+    users: 1
+    harness: [solo_card_shows_four_own_value_chips_and_four_open_labels, recent_games_card_carries_header_and_tiles, recent_games_header_is_the_sessions_line_even_when_all_tiles_are_installed, no_card_draws_a_commentary_note, new_empty_crew_shows_three_skeletons_and_no_cards, a_new_crew_seals_all_four_own_chips, opening_one_own_chip_opens_only_that_one, a_reopened_crew_keeps_opened_chips_open_when_the_value_changes, own_chips_open_silently_after_seven_days, the_first_day_of_own_chips_is_stored]
+    journeys: [qa/journeys/feed-solo-head2head.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-04
+    title: "Crew feed with 2 members: one pair, three open seats, contested titles, avatars on the octagons"
+    priority: P1
+    users: 2
+    harness: [crew_of_two_without_a_move_shows_the_wide_card_with_one_pair_and_three_seats, head2head_octagons_show_the_loaded_avatar_and_initials_without_one, a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster, a_joiner_is_a_card_with_the_inviter_the_time_and_say_hi, the_join_card_stands_after_the_first_row_and_before_the_session, say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_nothing, said_hi_survives_a_restart_and_is_once_for_each_joiner, the_join_cards_keep_three_newest_and_drop_old_and_own_joins, no_join_in_the_last_day_gives_no_join_card]
+    journeys: [qa/journeys/feed-stage-two.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-05
+    title: "Crew feed with 5 members: head2head without seats, the invite card with five octagons"
+    priority: P1
+    users: 1
+    harness: [crew_of_five_shows_the_wide_card_without_seats_and_the_invite_card]
+    journeys: [qa/journeys/feed-stage-five.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-06
+    title: "Crew feed with 20 members: three closest pairs and a +N more line, invite card with eight octagons and a +N"
+    priority: P1
+    users: 1
+    harness: [invite_card_shows_eight_members_then_a_count]
+    journeys: [qa/journeys/feed-stage-twenty.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-07
+    title: "Crew feed with 50 members: the feed loads in under 3 s and no layout breaks"
+    priority: P1
+    users: 1
+    harness: [invite_card_shows_eight_members_then_a_count]
+    journeys: [qa/journeys/feed-stage-fifty.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-08
+    title: "A game in progress shows as a live card for the viewer and the crew, and becomes the session card at the end"
+    priority: P1
+    users: 1
+    harness: [a_live_session_for_the_viewer_shows_the_pip_and_since_n_min, two_crewmates_in_the_same_game_share_one_card, the_wide_head2head_card_takes_row_two_while_a_live_session_holds_the_slot, the_live_card_is_gone_after_the_session_end_and_the_session_card_is_there_once]
+    journeys: [qa/journeys/feed-live-session.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-09
+    title: "A day of crew activity shows as one daily recap card: the day, hangout, clips, sessions, top game, members, belts"
+    priority: P1
+    users: 2
+    harness: [the_daily_recap_card_shows_the_day_the_numbers_the_members_and_two_belts, the_daily_recap_names_its_day, only_the_newest_daily_recap_is_drawn, a_feed_with_no_daily_recap_draws_none, a_catchup_entry_from_an_older_server_is_not_drawn]
+    journeys: [qa/journeys/feed-stage-two.ts, qa/journeys/feed-stage-five.ts]
+    protocol: []
+    issues: []
+
+  - id: FEED-10
+    title: "A belt that moved is sealed in the feed, opens in the centre with the reveal, and returns open with the dot cleared"
+    priority: P1
+    users: 1
+    harness: [a_belt_that_moved_is_sealed_and_not_a_title_that_did_not, a_move_older_than_seven_days_is_open, a_click_sends_the_card_to_the_centre_and_a_click_on_the_scrim_brings_it_back_open, opening_a_belt_opens_it_in_every_slot, the_recap_is_sealed_by_week, opening_the_recap_stores_the_week_and_the_card_returns_open, the_versus_hero_seals_its_moved_belt_and_keeps_its_tally, a_frame_at_a_fixed_clock_time_renders, the_card_rests_from_1250_ms, the_sealed_cards_and_the_scrim_are_controls_with_a_role_and_a_label]
+    journeys: [qa/journeys/feed-sealed-reveal.ts]
     protocol: []
     issues: []
 

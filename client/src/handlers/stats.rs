@@ -14,27 +14,67 @@ pub fn handle(ctx: &AppContext, event: Event) {
     }
 }
 
+/// A name a person can read for a game id that the catalogue does not know.
+///
+/// Stats rows carry the id only. A launcher id (`steam-730`) is resolved
+/// through the Steam appid index first. After that the launcher prefix is
+/// dropped, and an id with words in it ("epic-night-stones") is title cased.
+/// An id that is only digits or hashes ("steam-4999999") has no readable form,
+/// so it becomes "Unknown game". A raw id is never shown.
+pub(crate) fn fallback_game_name(game_id: &str) -> String {
+    let rest = ["steam-", "epic-", "gog-"]
+        .iter()
+        .find_map(|p| game_id.strip_prefix(p))
+        .unwrap_or(game_id);
+    let words: Vec<&str> = rest
+        .split(['-', '_', ' '])
+        .filter(|w| !w.is_empty())
+        .collect();
+    let readable = !words.is_empty()
+        && words
+            .iter()
+            .all(|w| w.chars().all(|c| c.is_alphabetic()) && w.chars().count() <= 20);
+    if !readable {
+        return "Unknown game".to_string();
+    }
+    words
+        .iter()
+        .map(|w| {
+            let mut c = w.chars();
+            match c.next() {
+                Some(f) => f
+                    .to_uppercase()
+                    .chain(c.flat_map(char::to_lowercase))
+                    .collect(),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<String>>()
+        .join(" ")
+}
+
 /// Resolve display name / short name / badge colour for a stats row.
 ///
-/// The catalogue covers curated and popular games. Anything else — a title
-/// discovered in an installed library, or one nothing could name — falls back
-/// to the raw id, which at least renders something legible rather than a blank
-/// badge.
-fn display_info(
+/// The catalogue is asked by catalogue id first, then by the Steam appid for a
+/// launcher id. Anything else falls back to `fallback_game_name`.
+pub(crate) fn display_info(
     head: Option<&mello_core::catalogue::Head>,
     game_id: &str,
 ) -> (String, String, Color) {
-    match head.and_then(|h| h.by_game_id(game_id)) {
-        Some(e) => (
-            e.name.to_string(),
-            e.short_name.to_string(),
-            parse_hex_color("#888888"),
-        ),
-        None => (
-            game_id.to_string(),
-            mello_core::library::derive_short_name(game_id),
-            parse_hex_color("#888888"),
-        ),
+    let grey = parse_hex_color("#888888");
+    let by_id = head.and_then(|h| h.by_game_id(game_id));
+    let by_appid = || {
+        let appid: u32 = game_id.strip_prefix("steam-")?.parse().ok()?;
+        let igdb = mello_core::catalogue::AppIdIndex::bundled()?.igdb_id(appid)?;
+        head?.get(igdb)
+    };
+    match by_id.or_else(by_appid) {
+        Some(e) => (e.name.to_string(), e.short_name.to_string(), grey),
+        None => {
+            let name = fallback_game_name(game_id);
+            let short = mello_core::library::derive_short_name(&name);
+            (name, short, grey)
+        }
     }
 }
 
@@ -234,6 +274,23 @@ fn parse_hex_color(hex: &str) -> Color {
 mod tests {
     use super::*;
     use mello_core::crew_events::RecentDayEntry;
+
+    #[test]
+    fn an_unknown_id_never_shows_as_a_raw_id() {
+        assert_eq!(fallback_game_name("steam-4999999"), "Unknown game");
+        assert_eq!(fallback_game_name("epic-4fe75bbc5a67"), "Unknown game");
+        assert_eq!(fallback_game_name(""), "Unknown game");
+        assert_eq!(fallback_game_name("epic-night-stones"), "Night Stones");
+    }
+
+    #[test]
+    fn a_launcher_id_resolves_through_the_appid_index() {
+        let head = mello_core::catalogue::Head::bundled();
+        let (name, _, _) = display_info(head.as_ref(), "steam-730");
+        assert_eq!(name, "Counter-Strike 2");
+        let (name, _, _) = display_info(head.as_ref(), "counter-strike-2");
+        assert_eq!(name, "Counter-Strike 2");
+    }
 
     fn day(date: &str, wall: u32, active: u32) -> RecentDayEntry {
         RecentDayEntry {

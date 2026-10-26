@@ -18,6 +18,9 @@
 //! Tests skip (loudly) when `MELLO_E2E` is unset, so `cargo test --workspace`
 //! stays hermetic and fast for everyone else.
 
+mod common;
+
+use common::{next_send_of_type, stub_push_worker};
 use mello_core::nakama::client::NakamaClient;
 use mello_core::Config;
 
@@ -575,86 +578,6 @@ fn push_token_register_and_unregister_round_trip() {
     });
 }
 
-/// One request captured by the stub push Worker.
-struct CapturedSend {
-    head: String,
-    body: serde_json::Value,
-    at: std::time::Instant,
-}
-
-/// Serves `POST /send` on the host port that `scripts/e2e.sh` gave Nakama as
-/// `PUSH_WORKER_URL`, answers like the real Worker, and reports each request.
-fn stub_push_worker(port: u16) -> std::sync::mpsc::Receiver<CapturedSend> {
-    use std::io::{BufRead, BufReader, Read, Write};
-    let listener = std::net::TcpListener::bind(("0.0.0.0", port)).expect("bind stub push worker");
-    let (tx, rx) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        for stream in listener.incoming() {
-            let Ok(mut stream) = stream else { continue };
-            let mut reader = BufReader::new(stream.try_clone().expect("clone"));
-            let mut head = String::new();
-            let mut len = 0usize;
-            loop {
-                let mut line = String::new();
-                if reader.read_line(&mut line).unwrap_or(0) == 0 {
-                    break;
-                }
-                if let Some(v) = line.to_ascii_lowercase().strip_prefix("content-length:") {
-                    len = v.trim().parse().unwrap_or(0);
-                }
-                if line == "\r\n" {
-                    break;
-                }
-                head.push_str(&line);
-            }
-            let mut raw = vec![0u8; len];
-            let _ = reader.read_exact(&mut raw);
-            let body: serde_json::Value = serde_json::from_slice(&raw).unwrap_or_default();
-            let token = body["tokens"][0]["token"]
-                .as_str()
-                .unwrap_or_default()
-                .to_string();
-            let reply = serde_json::json!({
-                "results": [{"token": token, "status": "sent", "apns_id": "e2e"}],
-                "prune": [],
-            })
-            .to_string();
-            let _ = write!(
-                stream,
-                "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{reply}",
-                reply.len()
-            );
-            if tx
-                .send(CapturedSend {
-                    head,
-                    body,
-                    at: std::time::Instant::now(),
-                })
-                .is_err()
-            {
-                return;
-            }
-        }
-    });
-    rx
-}
-
-/// Waits for the next `/send` without blocking the single-threaded runtime:
-/// the socket writer task must run to deliver messages at all.
-async fn next_send(rx: &std::sync::mpsc::Receiver<CapturedSend>, what: &str) -> CapturedSend {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(15);
-    loop {
-        if let Ok(got) = rx.try_recv() {
-            return got;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "no /send within 15 s: {what}"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
-    }
-}
-
 /// Sends a chat message, retrying while the channel join is still in flight
 /// (the send reports NotConnected until Nakama's join reply arrives).
 async fn send_when_joined(client: &NakamaClient, text: &str) {
@@ -724,7 +647,7 @@ fn mention_pushes_follow_the_delivery_rules() {
         // 1. Offline member: pushed at once.
         let (offline, offline_id) = joined_member(&code, "feedface01").await;
         send_when_joined(&owner, &format!("gg <@{offline_id}> ping")).await;
-        let got = next_send(&captured, "mention of an offline member").await;
+        let got = next_send_of_type(&captured, "mention", "mention of an offline member").await;
         let head = got.head.to_ascii_lowercase();
         assert!(head.starts_with("post /send "), "{}", got.head);
         assert!(head.contains("authorization: bearer e2e-push-token"), "{}", got.head);
@@ -755,7 +678,7 @@ fn mention_pushes_follow_the_delivery_rules() {
             .send_chat_message(&format!("<@{away_id}> you there?"))
             .await
             .expect("mention the away member");
-        let got = next_send(&captured, "held mention of an inactive desktop user").await;
+        let got = next_send_of_type(&captured, "mention", "held mention of an inactive desktop user").await;
         assert_eq!(got.body["tokens"][0]["token"], "feedface02");
         let waited = got.at.duration_since(sent_at);
         assert!(

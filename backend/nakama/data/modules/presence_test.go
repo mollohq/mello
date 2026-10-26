@@ -1,6 +1,10 @@
 package main
 
-import "testing"
+import (
+	"encoding/json"
+	"strings"
+	"testing"
+)
 
 func TestIsValidStatus(t *testing.T) {
 	valid := []string{StatusOnline, StatusIdle, StatusDoNotDisturb, StatusOffline}
@@ -160,5 +164,51 @@ func TestFirstEverUpdateDefaults(t *testing.T) {
 	}
 	if p.Game != nil {
 		t.Errorf("expected no game, got %+v", p.Game)
+	}
+}
+
+// The presence_change push carries the game with its start time. The live
+// session card of a crewmate's client counts "since N min" from it.
+func TestPresenceChangePushCarriesTheGame(t *testing.T) {
+	p := &UserPresence{
+		UserID:   "u1",
+		Status:   StatusOnline,
+		Activity: &Activity{Type: ActivityNone},
+		Game: &GamePresence{
+			GameName:  "Rocket League",
+			GameID:    "rocket-league",
+			StartedAt: "2026-10-22T20:00:00Z",
+		},
+	}
+	content := presenceChangeContent("crew-1", "u1", p)
+	raw, err := json.Marshal(content)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got struct {
+		Presence struct {
+			Status string `json:"status"`
+			Game   *struct {
+				GameName  string `json:"game_name"`
+				GameID    string `json:"game_id"`
+				StartedAt string `json:"started_at"`
+			} `json:"game"`
+		} `json:"presence"`
+	}
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Presence.Game == nil {
+		t.Fatalf("push has no game: %s", raw)
+	}
+	if got.Presence.Game.GameID != "rocket-league" || got.Presence.Game.StartedAt != "2026-10-22T20:00:00Z" {
+		t.Errorf("wrong game in push: %+v", got.Presence.Game)
+	}
+
+	// No game, no game key: a cleared game must not leave a stale one.
+	p.Game = nil
+	raw, _ = json.Marshal(presenceChangeContent("crew-1", "u1", p))
+	if strings.Contains(string(raw), `"game"`) {
+		t.Errorf("push without a game carries a game key: %s", raw)
 	}
 }

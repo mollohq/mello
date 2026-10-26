@@ -1,0 +1,40 @@
+import { Theme } from "../theme.slint";
+
+/// A span of minutes in big numerals with a small "h" between hours and
+/// minutes: "19 h 40" (mockup .num). Under an hour it is the minutes and "min".
+export component RecapDur inherits HorizontalLayout {
+    in property <int> minutes;
+    in property <length> size: 24px;
+    in property <length> unit-size: 13px;
+    in property <color> color: Theme.text-primary;
+    property <bool> hours: root.minutes >= 60;
+
+    alignment: start;
+    spacing: 0px;
+    Text {
+        text: root.hours ? "\{Math.floor(root.minutes / 60)}" : "\{root.minutes}";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.size; letter-spacing: -0.5px; color: root.color;
+        vertical-alignment: bottom;
+    }
+    Text {
+        text: root.hours ? " h " : " min";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.unit-size; color: Theme.text-body;
+        vertical-alignment: bottom;
+    }
+    if root.hours: Text {
+        text: Math.mod(root.minutes, 60) < 10 ? "0\{Math.mod(root.minutes, 60)}" : "\{Math.mod(root.minutes, 60)}";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.size; letter-spacing: -0.5px; color: root.color;
+        vertical-alignment: bottom;
+    }
+}
+
+export component RecapKicker inherits Text {
+    font-family: Theme.font-label;
+    font-weight: Theme.weight-label;
+    font-size: 9px;
+    letter-spacing: 1.8px;
+    color: Theme.text-dim;
+}

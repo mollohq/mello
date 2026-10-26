@@ -3,7 +3,7 @@ mod chat;
 mod clip;
 mod crew;
 mod game;
-mod games;
+pub(crate) mod games;
 mod presence;
 mod stats;
 mod stream_cards;
@@ -18,9 +18,31 @@ pub(crate) use crew::{invite_join_error_message, invite_resolve_error_message, I
 
 use crate::app_context::AppContext;
 
+/// Count the minutes of the live session cards again.
+pub(crate) fn refresh_live_session_cards(ctx: &AppContext) {
+    clip::refresh_live_session_cards(ctx);
+}
+
+/// Put the belt and recap cards on screen again from the last feed: a belt or
+/// a recap that was opened is not sealed any more (`sealed.rs`).
+pub(crate) fn rebuild_sealed_cards(ctx: &AppContext) {
+    clip::refresh_sealed_cards(ctx);
+}
+
 pub fn handle_event(ctx: &AppContext, event: Event) {
     // These events change the voice channel models. See
     // voice::sync_member_audio.
+    // A change of who plays what, of the roster or of an avatar moves the
+    // live session cards.
+    let live_cards_change = matches!(
+        event,
+        Event::PresenceChanged { .. }
+            | Event::CrewStateLoaded { .. }
+            | Event::GameDetected { .. }
+            | Event::GameEnded { .. }
+            | Event::UserAvatarLoaded { .. }
+            | Event::CrewJoined { .. }
+    );
     let voice_models_change = matches!(
         event,
         Event::VoiceStateChanged { .. }
@@ -33,6 +55,9 @@ pub fn handle_event(ctx: &AppContext, event: Event) {
             | Event::CrewJoined { .. }
     );
     dispatch(ctx, event);
+    if live_cards_change {
+        clip::refresh_live_session_cards(ctx);
+    }
     if voice_models_change {
         voice::sync_member_audio(ctx);
     }
@@ -140,6 +165,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         Event::CrewStateLoaded { .. }
         | Event::SidebarUpdated { .. }
         | Event::CrewEventReceived { .. }
+        | Event::FeedChanged { .. }
         | Event::PresenceChanged { .. }
         | Event::PresenceUpdated { .. }
         | Event::MemberJoined { .. }
@@ -175,6 +201,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
 
         // Games settings + Riot account link
         Event::GamesSettings { .. }
+        | Event::InstalledGames { .. }
         | Event::RiotStatus { .. }
         | Event::RiotLinkFailed { .. } => games::handle(ctx, event),
 

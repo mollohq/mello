@@ -1,0 +1,982 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutButtonShape, CutButton } from "cut.slint";
+import { UserAvatar } from "avatar.slint";
+import { BeltSlot, SealedUi } from "sealed.slint";
+import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
+
+export { TitleHeld }
+
+/// Identity hue of a person by the index `UserAvatar` takes.
+export global H2hHue {
+    pure public function of(i: int) -> color {
+        return i == 0 ? Theme.id-blue
+            : i == 1 ? Theme.id-purple
+            : i == 2 ? Theme.id-teal
+            : i == 3 ? Theme.id-amber : Theme.id-pink;
+    }
+}
+
+// ============================================================
+//  Head2head: the crew-feed card that compares members.
+//  Spec of record: mello-backlog mockups/next-gen-feed.html frames
+//  A, B, B2, C, D. The feed (crew_feed.slint) feeds these from the
+//  `head2head` entry of this_week, see client/src/head2head.rs.
+//
+//  Identity hue sits on the avatar and the chip borders. The one
+//  red thing is the commit button.
+// ============================================================
+
+/// One title the holder owns: icon, title, number with a small unit.
+/// The border wears the holder's identity hue. Button silhouette:
+/// top-left and bottom-right cut.
+export component TitleChip inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> value;
+    in property <string> unit;
+    in property <color> hue: Theme.id-blue;
+    in property <bool> compact: false;
+    /// Four pair rows in one cell: the compact chip a little shorter.
+    in property <bool> dense: false;
+
+    property <length> cut: compact ? 5px : 7px;
+
+    height: root.dense ? 34px : root.compact ? 46px : 54px;
+    background: transparent;
+
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.cut;
+        fill: root.hue;
+    }
+    CutButtonShape {
+        width: parent.width; height: parent.height;
+        n: root.cut; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    // Full size: icon on the left, title over number.
+    if !root.compact: HorizontalLayout {
+        padding-left: 12px; padding-right: 8px;
+        spacing: 12px;
+        cross-axis-alignment: center;
+
+        Image {
+            source: root.icon;
+            colorize: root.hue;
+            width: 24px;
+            height: 24px;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: 0px;
+            Text {
+                text: root.title.to-uppercase();
+                font-family: Theme.font-label;
+                font-size: 9px;
+                font-weight: Theme.weight-label;
+                letter-spacing: 1.4px;
+                color: Theme.text-body;
+                overflow: elide;
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                cross-axis-alignment: end;
+                Text {
+                    text: root.value;
+                    font-family: Theme.font-display;
+                    font-size: 20px;
+                    font-weight: Theme.weight-display;
+                    color: Theme.text-value;
+                }
+                if root.unit != "": Text {
+                    text: root.unit;
+                    font-family: Theme.font-body;
+                    font-size: 12px;
+                    font-weight: Theme.weight-sentence;
+                    color: Theme.text-dim;
+                }
+            }
+        }
+    }
+
+    // Compact: icon beside the title, number under both.
+    if root.compact: VerticalLayout {
+        padding-left: 8px; padding-right: 6px;
+        alignment: center;
+        spacing: root.dense ? 0px : 1px;
+        HorizontalLayout {
+            spacing: 4px;
+            cross-axis-alignment: center;
+            Image {
+                source: root.icon;
+                colorize: root.hue;
+                width: root.dense ? 11px : 13px;
+                height: root.dense ? 11px : 13px;
+            }
+            Text {
+                text: root.title.to-uppercase();
+                font-family: Theme.font-label;
+                font-size: 8px;
+                font-weight: Theme.weight-label;
+                letter-spacing: 0.4px;
+                color: Theme.text-body;
+                overflow: elide;
+            }
+        }
+        HorizontalLayout {
+            alignment: start;
+            spacing: 3px;
+            cross-axis-alignment: end;
+            Text {
+                text: root.value;
+                font-family: Theme.font-display;
+                font-size: root.dense ? 13px : 15px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-value;
+            }
+            if root.unit != "": Text {
+                text: root.unit;
+                font-family: Theme.font-body;
+                font-size: 10px;
+                font-weight: Theme.weight-sentence;
+                color: Theme.text-dim;
+            }
+        }
+    }
+}
+
+/// A TitleChip with how long the holder has held the title under it. The
+/// label is empty under one day, and then the chip stands alone. A belt that
+/// moved and is not opened is sealed: the chip hides what it holds, and the
+/// held label waits until the belt is open (`BeltSlot`).
+export component HeldChip inherits Rectangle {
+    in property <TitleHeld> t;
+    in property <bool> compact: false;
+    in property <bool> dense: false;
+    /// Names the slot for the card that leaves it (`BeltSlot`). Empty for a
+    /// chip that is never sealed.
+    in property <string> slot-id: "";
+
+    property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
+    property <bool> waiting: SealedUi.hides(root.t.belt);
+
+    background: transparent;
+    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.waiting ? 16px : 0px);
+
+    // No layout here: a layout would give the chip a preferred width and
+    // skew the equal columns of the grid it sits in.
+    BeltSlot {
+        x: 0px; y: 0px;
+        width: parent.width;
+        height: root.chip-height;
+        belt: root.t.belt;
+        slot-id: root.slot-id;
+        tight: root.compact || root.dense;
+
+        TitleChip {
+            x: 0px; y: 0px;
+            width: parent.width;
+            compact: root.compact;
+            dense: root.dense;
+            hue: H2hHue.of(root.t.hue-index);
+            icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
+        }
+    }
+    if root.t.held-label != "" && !root.dense && !root.waiting: Text {
+        x: 2px;
+        y: root.chip-height + 3px;
+        width: parent.width - 2px;
+        text: root.t.held-label;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        color: Theme.text-dim;
+        overflow: elide;
+    }
+}
+
+/// A seat nobody has taken. Dashed octagon, same silhouette and size as
+/// the member avatar, with the label "Open" under it.
+export component OpenSeat inherits Rectangle {
+    in property <length> size: 48px;
+    in property <bool> show-label: true;
+
+    width: size;
+    height: col.preferred-height;
+    background: transparent;
+
+    col := VerticalLayout {
+        spacing: 6px;
+        alignment: start;
+
+        Image {
+            source: @image-url("../icons/open-seat.svg");
+            colorize: Theme.graphic-med;
+            width: root.size;
+            height: root.size;
+        }
+        if root.show-label: Text {
+            text: "OPEN";
+            font-family: Theme.font-label;
+            font-size: 9px;
+            font-weight: Theme.weight-label;
+            letter-spacing: Theme.track-label;
+            color: Theme.text-dim;
+            horizontal-alignment: center;
+        }
+    }
+}
+
+/// A row of open seats at the compact size. It lays out up to `max-shown`
+/// seats and stands for the rest with "+N". The wide card and the versus hero
+/// have room for four. The cell has room for two, beside the invite button.
+export component OpenSeatStrip inherits Rectangle {
+    in property <int> seats: 0;
+    in property <int> max-shown: 4;
+    in property <length> size: 24px;
+    in property <length> gap: 6px;
+    in property <bool> show-labels: false;
+
+    background: transparent;
+    width: row.preferred-width;
+    height: row.preferred-height;
+
+    row := HorizontalLayout {
+        spacing: root.gap;
+        alignment: start;
+        cross-axis-alignment: center;
+        for i in min(root.seats, root.max-shown): OpenSeat {
+            size: root.size;
+            show-label: root.show-labels;
+        }
+        if root.seats > root.max-shown: Text {
+            text: "+" + (root.seats - root.max-shown);
+            font-family: Theme.font-label;
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 1px;
+            color: Theme.text-dim;
+        }
+    }
+}
+
+/// The commit button of the card: the design-system CutButton filled with
+/// `Theme.confirm`, white label. No labelled commit button exists in
+/// client/ui yet (each panel inlines its own), so this one wraps CutButton.
+export component InviteButton inherits Rectangle {
+    callback clicked();
+    in property <bool> compact: false;
+    /// Two-line label for a narrow column.
+    in property <bool> wrap: false;
+    /// What the button says, and what a screen reader reads.
+    in property <string> label-text: "Invite your crew";
+    /// What a screen reader and the harness call the button, when the short
+    /// label on it says less. The crew panel has its own "Invite", so this
+    /// keeps the name unique.
+    in property <string> a11y-label: "";
+
+    accessible-role: button;
+    accessible-label: root.a11y-label != "" ? root.a11y-label : root.label-text;
+
+    height: wrap ? 34px : compact ? 30px : 34px;
+    min-width: wrap ? 0px : label.preferred-width + (compact ? 16px : 24px);
+
+    CutButton {
+        width: parent.width; height: parent.height;
+        fill-color: ta.pressed ? Theme.confirm-press : Theme.confirm;
+    }
+    label := Text {
+        text: root.label-text.to-uppercase();
+        font-family: Theme.font-label;
+        font-size: root.compact ? 9px : 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: root.compact ? 1px : Theme.track-label;
+        color: Theme.on-confirm;
+        width: parent.width; height: parent.height;
+        horizontal-alignment: center;
+        vertical-alignment: center;
+        wrap: root.wrap ? word-wrap : no-wrap;
+    }
+    ta := TouchArea {
+        clicked => { root.clicked(); }
+    }
+}
+
+export component CardLabel inherits Text {
+    font-family: Theme.font-label;
+    font-size: 10px;
+    font-weight: Theme.weight-label;
+    letter-spacing: Theme.track-label;
+    color: Theme.text-dim;
+}
+
+/// Wide slot (two cells). Left: the member. Middle: the member's titles, two
+/// by two. Right: the open seats and the invite button.
+export component Head2headCardWide inherits Rectangle {
+    callback invite-clicked();
+    in property <string> member-name;
+    in property <string> member-initials;
+    in property <image> member-avatar;
+    in property <bool> member-has-avatar: false;
+    in property <int> hue-index: 0;
+    /// Open seats shown. The seats are the first five, so this is 5 minus
+    /// the member count, and 0 from five members on.
+    in property <int> open-seats: 4;
+    /// The member's titles, at most four. The chips wear the member's hue.
+    in property <[TitleHeld]> titles;
+
+    // Room for the 64 px octagon and 40 px seats of the mockup.
+    property <bool> wide-room: root.width >= 640px;
+    // Under 640 px the chips go compact so four of them and the seats fit.
+    property <bool> tight: root.width < 640px;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 10px;
+
+        CardLabel { text: "HEAD2HEAD"; }
+
+        HorizontalLayout {
+            spacing: root.tight ? 10px : 20px;
+            vertical-stretch: 1;
+
+            // The member. The column is as wide as the name, so the name
+            // never elides at the card's width.
+            VerticalLayout {
+                width: max(72px, min(160px, name.preferred-width));
+                alignment: center;
+                spacing: 8px;
+
+                Rectangle {
+                    height: root.wide-room ? 64px : 56px;
+                    UserAvatar {
+                        x: (parent.width - self.width) / 2;
+                        initials: root.member-initials;
+                        avatar: root.member-avatar;
+                        has-avatar: root.member-has-avatar;
+                        color-index: root.hue-index;
+                        size: root.wide-room ? 64px : 56px;
+                    }
+                }
+                name := Text {
+                    text: root.member-name;
+                    font-family: Theme.font-display;
+                    font-size: root.wide-room ? 20px : root.tight ? 13px : 16px;
+                    font-weight: Theme.weight-display-bold;
+                    color: Theme.text-value;
+                    horizontal-alignment: center;
+                    overflow: elide;
+                }
+            }
+
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: 8px;
+
+                GridLayout {
+                    spacing: 8px;
+                    for ch[i] in root.titles: HeldChip {
+                        row: floor(i / 2);
+                        col: mod(i, 2);
+                        t: ch;
+                        // A new crew's own chips are sealed: each opens alone.
+                        slot-id: "own-" + ch.id;
+                        compact: root.tight;
+                    }
+                }
+            }
+
+            Rectangle { width: Theme.keyline; background: Theme.card-border; }
+
+            VerticalLayout {
+                width: root.wide-room ? 200px : root.tight ? 134px : 152px;
+                alignment: center;
+                spacing: 10px;
+
+                Text {
+                    text: "GO HEAD2HEAD WITH YOUR CREW";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-body;
+                    wrap: word-wrap;
+                }
+                OpenSeatStrip {
+                    seats: root.open-seats;
+                    max-shown: 4;
+                    size: root.wide-room ? 40px : root.tight ? 30px : 32px;
+                    gap: root.wide-room ? 10px : root.tight ? 4px : 8px;
+                    show-labels: true;
+                }
+                InviteButton { compact: true; wrap: !root.wide-room; clicked => { root.invite-clicked(); } }
+            }
+        }
+    }
+}
+
+/// One row of the pairs card: "You vs Name", the tally between two octagons,
+/// and the title that decides the pair.
+component PairRow inherits Rectangle {
+    in property <H2hPairRow> pair;
+    height: root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
+    background: transparent;
+
+    HorizontalLayout {
+        spacing: 6px;
+        cross-axis-alignment: center;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 3px;
+            HorizontalLayout {
+                spacing: 6px;
+                alignment: start;
+                // Unread: a belt of this pair moved today. Red is state.
+                if root.pair.moved-recent: Rectangle {
+                    width: 6px; height: 6px;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: 3px;
+                    background: Theme.live;
+                }
+                Text {
+                    text: "You vs " + root.pair.name;
+                    font-family: Theme.font-display;
+                    font-size: 12px;
+                    font-weight: Theme.weight-display;
+                    color: Theme.text-value;
+                    overflow: elide;
+                }
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 5px;
+                cross-axis-alignment: center;
+                UserAvatar { initials: root.pair.you-initials; avatar: root.pair.you-avatar; has-avatar: root.pair.you-has-avatar; color-index: root.pair.you-hue-index; size: 20px; }
+                Text {
+                    text: root.pair.you-count + " : " + root.pair.them-count;
+                    font-family: Theme.font-display;
+                    font-size: 13px;
+                    font-weight: Theme.weight-display-bold;
+                    color: Theme.text-value;
+                }
+                UserAvatar { initials: root.pair.initials; avatar: root.pair.avatar; has-avatar: root.pair.has-avatar; color-index: root.pair.hue-index; size: 20px; }
+            }
+        }
+        if root.pair.has-chip: HeldChip {
+            slot-id: "pair-" + root.pair.id;
+            compact: true;
+            width: 108px;
+            t: root.pair.chip;
+        }
+    }
+}
+
+/// The "+N more" line of the pairs card. It stands for the opened view, which
+/// does not exist yet: a control that opens nothing.
+component MorePairs inherits Rectangle {
+    in property <int> count;
+    height: 22px;
+    width: label.preferred-width + 8px;
+    accessible-role: button;
+    accessible-label: "+" + root.count + " more";
+    label := Text {
+        x: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: "+" + root.count + " MORE";
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-label;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { }
+    }
+}
+
+/// The head2head card of two or more members. Always two grid columns wide, one
+/// row high (232 px at the 760 px feed). A title row, then the pair rows of the
+/// viewer in two columns: the first column fills first, so five members draw
+/// two rows of pairs side by side. Below: a "+N more" line when pairs remain,
+/// and, with seats, the open seats left and the red invite button right. From
+/// five members the seats are gone and the invite card carries the invite.
+export component Head2headCardPairs inherits Rectangle {
+    callback invite-clicked();
+    /// Open seats, 5 minus the member count. Four show, the rest as "+N".
+    in property <int> open-seats: 3;
+    in property <string> viewer-name;
+    in property <[H2hPairRow]> pairs;
+    /// Pairs of the viewer that the card does not draw. 0 draws no line.
+    in property <int> more-pairs: 0;
+
+    /// The first column takes the first half of the rows, rounded up.
+    property <int> first-column: Math.ceil(root.pairs.length / 2);
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 10px;
+
+        HorizontalLayout {
+            spacing: 12px;
+            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; }
+            // The name can be long. It elides, and never touches the label.
+            CardLabel {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                horizontal-alignment: right;
+                text: (root.viewer-name + " VS THE CREW").to-uppercase();
+                color: Theme.text-tertiary;
+                overflow: elide;
+            }
+        }
+
+        // The pair rows, from the top. The seats row stands at the foot.
+        Rectangle {
+            height: rows.preferred-height;
+
+            rows := GridLayout {
+                width: parent.width;
+                spacing-horizontal: 33px;
+                spacing-vertical: 6px;
+                for p[i] in root.pairs: PairRow {
+                    row: i < root.first-column ? i : i - root.first-column;
+                    col: i < root.first-column ? 0 : 1;
+                    pair: p;
+                }
+            }
+            // The keyline between the two columns.
+            if root.pairs.length > 1: Rectangle {
+                x: (parent.width - self.width) / 2;
+                width: Theme.keyline;
+                height: parent.height;
+                background: Theme.card-border;
+            }
+        }
+        Rectangle { vertical-stretch: 1; }
+
+        // The seats row (mockup .openrow): a rule, the seats, "Open" once, the
+        // "+N more" line and the short red INVITE at the right.
+        if root.open-seats > 0: VerticalLayout {
+            spacing: 10px;
+            Rectangle { height: Theme.keyline; background: Theme.card-border; }
+            HorizontalLayout {
+                spacing: 8px;
+                cross-axis-alignment: center;
+                OpenSeatStrip { seats: root.open-seats; max-shown: 4; }
+                Text {
+                    text: "OPEN";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-body;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                if root.more-pairs > 0: MorePairs { count: root.more-pairs; }
+                InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
+            }
+        }
+        // With no seats the line stands alone.
+        if root.open-seats <= 0 && root.more-pairs > 0: MorePairs { count: root.more-pairs; }
+    }
+}
+
+/// Full-width head2head between two members (mockup frame B2). Both
+/// octagons and names, the tally between them, the titles in a row, then
+/// the open seats and the red invite.
+export component VersusHero inherits Rectangle {
+    callback invite-clicked();
+    in property <string> left-name;
+    in property <string> left-initials;
+    in property <image> left-avatar;
+    in property <bool> left-has-avatar: false;
+    in property <int> left-hue-index: 0;
+    in property <string> right-name;
+    in property <string> right-initials;
+    in property <image> right-avatar;
+    in property <bool> right-has-avatar: false;
+    in property <int> right-hue-index: 1;
+    in property <int> left-score;
+    in property <int> right-score;
+    in property <[TitleHeld]> titles;
+    in property <int> open-seats: 3;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 16px;
+
+        // Label left, "Bob vs Jonas" right in Barlow 300 (mockup .lab .r).
+        HorizontalLayout {
+            spacing: 12px;
+            height: 16px;
+            CardLabel { text: "HEAD2HEAD"; horizontal-stretch: 0; vertical-alignment: center; }
+            Text {
+                horizontal-stretch: 1;
+                min-width: 0px;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+                text: root.left-name + " vs " + root.right-name;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-dim;
+                overflow: elide;
+            }
+        }
+
+        HorizontalLayout {
+            vertical-stretch: 1;
+            spacing: 20px;
+            cross-axis-alignment: center;
+
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 16px;
+                alignment: start;
+                cross-axis-alignment: center;
+                UserAvatar { initials: root.left-initials; avatar: root.left-avatar; has-avatar: root.left-has-avatar; color-index: root.left-hue-index; size: 64px; }
+                Text { text: root.left-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+            }
+            Text {
+                text: root.left-score + " : " + root.right-score;
+                font-family: Theme.font-display;
+                font-size: 40px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-value;
+            }
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 16px;
+                alignment: end;
+                cross-axis-alignment: center;
+                Text { text: root.right-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; color: Theme.text-value; overflow: elide; }
+                UserAvatar { initials: root.right-initials; avatar: root.right-avatar; has-avatar: root.right-has-avatar; color-index: root.right-hue-index; size: 64px; }
+            }
+        }
+
+        HorizontalLayout {
+            spacing: 8px;
+            for ch[i] in root.titles: HeldChip {
+                horizontal-stretch: 1;
+                t: ch;
+                slot-id: "versus-" + i;
+            }
+        }
+
+        // The seats row: a rule above, three seats, "Open" once, and the short
+        // red INVITE at the right (mockup .openrow). The wide card keeps the
+        // long label.
+        if root.open-seats > 0: VerticalLayout {
+            spacing: 10px;
+            Rectangle { height: Theme.keyline; background: Theme.card-border; }
+            HorizontalLayout {
+                spacing: 10px;
+                cross-axis-alignment: center;
+                OpenSeatStrip { seats: root.open-seats; max-shown: 4; size: 28px; gap: 10px; }
+                Text {
+                    text: "OPEN";
+                    font-family: Theme.font-label;
+                    font-size: 9.5px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-body;
+                }
+                Rectangle { horizontal-stretch: 1; }
+                InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
+            }
+        }
+    }
+}
+
+/// The calm card from five members on (mockup frame D): the members as
+/// filled octagons, no seat, one line, and the red button that shares the
+/// invite link. Up to eight octagons, then "+N".
+export component InviteCard inherits Rectangle {
+    callback invite-clicked();
+    in property <[H2hPerson]> members;
+    in property <int> more-members: 0;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "br"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    VerticalLayout {
+        padding-top: 14px; padding-bottom: 14px;
+        padding-left: 16px; padding-right: 16px;
+        spacing: 12px;
+
+        CardLabel { text: "INVITE"; }
+
+        // Octagons never overlap. Five fit a row, so eight wrap to two.
+        GridLayout {
+            spacing: 6px;
+            for m[i] in root.members: UserAvatar {
+                row: floor(i / 5);
+                col: mod(i, 5);
+                initials: m.initials;
+                avatar: m.avatar;
+                has-avatar: m.has-avatar;
+                color-index: m.hue-index;
+                size: 32px;
+            }
+            if root.more-members > 0: Text {
+                row: floor(root.members.length / 5);
+                col: mod(root.members.length, 5);
+                text: "+" + root.more-members;
+                font-family: Theme.font-display;
+                font-size: 13px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-dim;
+                horizontal-alignment: center;
+                vertical-alignment: center;
+            }
+        }
+
+        Text {
+            text: "Invite your crew";
+            font-family: Theme.font-body;
+            font-size: 14px;
+            font-weight: Theme.weight-sentence;
+            color: Theme.text-primary;
+        }
+
+        Rectangle { vertical-stretch: 1; }
+
+        InviteButton {
+            label-text: "Share invite link";
+            clicked => { root.invite-clicked(); }
+        }
+    }
+}
+
+/// The belt that moved, two columns wide (mockup frame E). It leads a quiet
+/// feed: who held the title, the title in the middle, who holds it now, and
+/// one line that says what happened. The holder before is dim.
+export component BeltHero inherits Rectangle {
+    in property <BeltHeroData> belt;
+
+    background: transparent;
+
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr";
+        fill: Theme.card-border;
+    }
+    CutShape {
+        width: parent.width; height: parent.height;
+        n: Theme.notch; corner: "tr"; inset: Theme.keyline;
+        fill: Theme.card-bg;
+    }
+
+    property <color> hue: H2hHue.of(root.belt.hue-index);
+
+    VerticalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding: 16px;
+        padding-top: 14px;
+        spacing: 0px;
+
+        // Label left, how long ago at the right.
+        HorizontalLayout {
+            height: 16px;
+            vertical-stretch: 0;
+            CardLabel { text: "HEAD2HEAD"; vertical-alignment: center; }
+            Text {
+                horizontal-stretch: 1;
+                text: root.belt.age;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 11px;
+                color: Theme.text-dim;
+                horizontal-alignment: right;
+                vertical-alignment: center;
+            }
+        }
+
+        // The two holders and the title between them.
+        Rectangle {
+          height: 124px;
+          HorizontalLayout {
+            spacing: 14px;
+            cross-axis-alignment: center;
+
+            // Before: dim.
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 12px;
+                cross-axis-alignment: center;
+                Rectangle {
+                    width: 64px; height: 64px;
+                    opacity: 0.4;
+                    UserAvatar {
+                        size: 64px;
+                        initials: root.belt.prev.initials;
+                        avatar: root.belt.prev.avatar;
+                        has-avatar: root.belt.prev.has-avatar;
+                        color-index: root.belt.prev.hue-index;
+                    }
+                }
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "WAS HELD BY";
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 8.5px; letter-spacing: 1.6px; color: Theme.text-dim;
+                    }
+                    Text {
+                        text: root.belt.prev.name;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display;
+                        font-size: 20px; color: Theme.text-body;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.belt.prev-value;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+                        font-size: 30px; letter-spacing: -0.6px; color: Theme.text-dim;
+                    }
+                }
+            }
+
+            // The title: its icon and name, in the new holder's hue.
+            Rectangle {
+                width: 156px; height: 62px;
+                CutButtonShape { width: parent.width; height: parent.height; n: 7px; fill: root.hue; }
+                CutButtonShape { width: parent.width; height: parent.height; n: 7px; inset: Theme.keyline; fill: Theme.card-bg; }
+                HorizontalLayout {
+                    padding-left: 14px; padding-right: 14px;
+                    spacing: 14px;
+                    alignment: center;
+                    cross-axis-alignment: center;
+                    Image { source: root.belt.icon; colorize: root.hue; width: 26px; height: 26px; }
+                    Text {
+                        text: root.belt.title.to-uppercase();
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 10px; letter-spacing: 1.8px; color: Theme.text-body;
+                        vertical-alignment: center;
+                    }
+                }
+            }
+
+            // Now: bright, in the holder's hue.
+            HorizontalLayout {
+                horizontal-stretch: 1;
+                spacing: 12px;
+                alignment: end;
+                cross-axis-alignment: center;
+                VerticalLayout {
+                    alignment: center;
+                    spacing: 1px;
+                    Text {
+                        text: "NOW HELD BY";
+                        font-family: Theme.font-label; font-weight: Theme.weight-label;
+                        font-size: 8.5px; letter-spacing: 1.6px; color: Theme.text-dim;
+                        horizontal-alignment: right;
+                    }
+                    Text {
+                        text: root.belt.holder.name;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display;
+                        font-size: 20px; color: Theme.text-value;
+                        horizontal-alignment: right;
+                        overflow: elide;
+                    }
+                    Text {
+                        text: root.belt.holder-value;
+                        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+                        font-size: 30px; letter-spacing: -0.6px; color: root.hue;
+                        horizontal-alignment: right;
+                    }
+                }
+                UserAvatar {
+                    size: 64px;
+                    initials: root.belt.holder.initials;
+                    avatar: root.belt.holder.avatar;
+                    has-avatar: root.belt.holder.has-avatar;
+                    color-index: root.belt.holder.hue-index;
+                }
+            }
+        }
+
+        }
+
+        // What happened, in one line, and why.
+        VerticalLayout {
+            vertical-stretch: 0;
+            spacing: 8px;
+            Text {
+                height: 20px;
+                text: root.belt.headline;
+                font-family: Theme.font-display; font-weight: Theme.weight-display;
+                font-size: 15px; color: Theme.text-value;
+                overflow: elide;
+            }
+            Text {
+                visible: root.belt.detail != "";
+                height: root.belt.detail != "" ? 16px : 0px;
+                text: root.belt.detail;
+                font-family: Theme.font-body; font-weight: Theme.weight-sentence;
+                font-size: 12px; color: Theme.text-dim;
+                overflow: elide;
+            }
+        }
+    }
+}

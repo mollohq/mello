@@ -59,6 +59,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
 
             crate::avatar::update_chat_avatars_for_sender(&ctx.app, &user_id, &ui_img);
+            super::clip::refresh_head2head_cards(ctx, &user_id);
 
             {
                 let members_model = ctx.app.get_members();
@@ -179,6 +180,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
             );
             let active_id = ctx.app.get_active_crew_id();
             if active_id == change.crew_id.as_str() {
+                ctx.live_games.borrow_mut().set_presence(
+                    &change.user_id,
+                    &change.presence.status,
+                    change.presence.game.as_ref(),
+                );
                 let current = ctx.app.get_members();
                 let is_online =
                     change.presence.status != mello_core::presence::PresenceStatus::Offline;
@@ -396,6 +402,14 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
 
             if ctx.app.get_active_crew_id() == state.crew_id.as_str() {
+                if let Some(members) = state.members.as_ref() {
+                    ctx.live_games
+                        .borrow_mut()
+                        .replace_others(members.iter().filter_map(|cm| {
+                            let p = cm.presence.as_ref()?;
+                            Some((cm.user_id.as_str(), &p.status, p.game.as_ref()))
+                        }));
+                }
                 let now_ms = current_time_ms();
                 let game_lines: std::collections::HashMap<String, String> = state
                     .members
@@ -522,6 +536,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     ctx.app
                         .set_members(Rc::new(slint::VecModel::from(member_data)).into());
                     crate::callbacks::refresh_mention_members(ctx);
+                    super::clip::rebuild_roster_cards(ctx);
                 }
                 // Catch-up is now fetched in mello-core handle_select_crew
                 // (before set_active_crew) to avoid the last_seen race.
@@ -820,6 +835,11 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 crew_id: crew_id.clone(),
             });
             let _ = ctx.cmd_tx.send(Command::LoadCrewFeed { crew_id });
+        }
+        Event::FeedChanged { crew_id } => {
+            // The core loads the feed of the active crew, at most once every
+            // 5 s, and ignores another crew.
+            let _ = ctx.cmd_tx.send(Command::FeedChanged { crew_id });
         }
         Event::CatchupLoaded { response } => {
             log::info!(

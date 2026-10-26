@@ -16,6 +16,8 @@ mod diag_capture;
 mod e2e_state;
 mod edit_shortcuts;
 mod emoji_font;
+mod feed_age;
+mod feed_grid;
 #[cfg(test)]
 mod flow_catalogue;
 #[cfg(test)]
@@ -24,6 +26,7 @@ mod foreground_monitor;
 mod game_icons;
 mod gif_animator;
 mod handlers;
+mod head2head;
 mod http;
 pub mod hud_manager;
 #[cfg(target_os = "windows")]
@@ -31,6 +34,8 @@ mod hud_overlay;
 mod hud_state_builder;
 mod image_cache;
 mod ipc;
+mod joined_line;
+mod live_session;
 mod member_audio;
 mod notifications;
 mod onboarding;
@@ -38,6 +43,10 @@ mod onboarding_invite;
 mod perf_mode;
 mod platform;
 mod poll_loop;
+mod quiet_row;
+mod recent_games;
+mod say_hi;
+mod sealed;
 mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
@@ -362,6 +371,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let settings = Rc::new(RefCell::new(Settings::load()));
     let disabled_integrations = settings.borrow().disabled_game_integrations.clone();
     let share_game_activity = settings.borrow().share_game_activity;
+    let hidden_games = settings.borrow().hidden_games.clone();
 
     let config = nakama_config();
     let lounge_host = config.lounge_host.clone();
@@ -377,6 +387,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         );
         client.set_disabled_integrations(disabled_integrations);
         client.set_share_game_activity(share_game_activity);
+        client.set_hidden_games(hidden_games);
         client.run(cmd_rx).await;
     });
 
@@ -580,6 +591,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         riot_cta_pending: Rc::new(Cell::new(false)),
         session_recovery: Rc::new(Cell::new(false)),
         games_integrations: Rc::new(RefCell::new(Vec::new())),
+        installed_games: Rc::new(RefCell::new(Vec::new())),
         muted_before_deafen: Rc::new(Cell::new(false)),
         updater,
         hotkey_mgr,
@@ -588,6 +600,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         gif_chat_anim,
         dbg_hist: Rc::new(RefCell::new(DebugHistory::new())),
         avatar_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        last_feed: Rc::new(RefCell::new(None)),
+        live_games: Rc::new(RefCell::new(Default::default())),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
         hud_manager: hud_mgr,
         fg_monitor,
