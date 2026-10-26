@@ -322,6 +322,9 @@ pub struct PairRow {
     pub them_count: i32,
     /// The contested title that decides the pair, if any.
     pub deciding: Option<Chip>,
+    /// The chip decides the pair. False when every contested title ties: the
+    /// row then shows the first contested title without the emphasis.
+    pub decides: bool,
     /// A belt of this pair moved in the last 24 h, after the viewer last
     /// opened the feed. The row wears the red dot and sorts first.
     pub moved_recent: bool,
@@ -515,14 +518,20 @@ fn higher_wins(id: &str) -> bool {
 }
 
 /// The contested title that decides a pair: the one with the largest relative
-/// gap, `abs(a - b) / max(a, b)`, over the titles in the pair's values. Ties
-/// go to the title that comes first in the display order. The chip carries
-/// the value of the member who would hold the title in the pair, and the
-/// held days of the crew holder when that is the same member.
+/// gap, `abs(a - b) / max(a, b)`, over the titles in the pair's values. A
+/// title where both values are equal, or the gap is zero, decides nothing and
+/// is skipped. Ties between gaps go to the title that comes first in the
+/// display order. The chip carries the value of the member who would hold the
+/// title in the pair, and the held days of the crew holder when that is the
+/// same member.
+///
+/// When every contested title ties, the row shows the first contested title
+/// in the display order, and the second value of the result is `false`: the
+/// chip has no deciding emphasis.
 ///
 /// Variety: a title in `used`, already the chip of a row above, is skipped
-/// when the pair has another contested title. When every title of the pair is
-/// used, the largest gap wins as before.
+/// when the pair has another deciding title. When every deciding title of the
+/// pair is used, the largest gap wins as before.
 fn deciding_chip(
     pair: &WirePair,
     titles: &[&WireTitle],
@@ -531,24 +540,38 @@ fn deciding_chip(
     now_ms: i64,
     moved_id: Option<&str>,
     used: &[String],
-) -> Option<Chip> {
-    let contested = |v: &&WirePairValue| titles.iter().any(|t| t.title_id == v.title_id);
-    let fresh = pair
+) -> Option<(Chip, bool)> {
+    let gap_of = |v: &WirePairValue| {
+        let (a, b) = (magnitude(&v.a_value), magnitude(&v.b_value));
+        let top = a.max(b);
+        if top > 0.0 {
+            (a - b).abs() / top
+        } else {
+            0.0
+        }
+    };
+    let contested: Vec<&WirePairValue> = pair
         .values
         .iter()
-        .filter(contested)
-        .any(|v| !used.contains(&v.title_id));
+        .filter(|v| titles.iter().any(|t| t.title_id == v.title_id))
+        .collect();
+    let decisive: Vec<&WirePairValue> = contested
+        .iter()
+        .copied()
+        .filter(|v| v.a_value != v.b_value && gap_of(v) > 0.0)
+        .collect();
+    let decides = !decisive.is_empty();
+    let pool = if decides { &decisive } else { &contested };
+    let fresh = pool.iter().any(|v| !used.contains(&v.title_id));
     let mut best: Option<(f64, &WirePairValue, &WireTitle)> = None;
-    for v in &pair.values {
-        if fresh && used.contains(&v.title_id) {
+    for v in pool.iter().copied() {
+        if decides && fresh && used.contains(&v.title_id) {
             continue;
         }
         let Some(crew) = titles.iter().find(|t| t.title_id == v.title_id) else {
             continue;
         };
-        let (a, b) = (magnitude(&v.a_value), magnitude(&v.b_value));
-        let top = a.max(b);
-        let gap = if top > 0.0 { (a - b).abs() / top } else { 0.0 };
+        let gap = gap_of(v);
         let better = match best {
             None => true,
             Some((bg, bv, _)) => {
@@ -586,7 +609,7 @@ fn deciding_chip(
         chip.moved_recent = false;
         chip.moved = None;
     }
-    Some(chip)
+    Some((chip, decides))
 }
 
 /// A held value as text: "03:40", "4,201 h".
@@ -740,6 +763,7 @@ pub fn build_rows_sealed(
                     you_count: p.a_count,
                     them_count: p.b_count,
                     deciding: None,
+                    decides: false,
                     moved_recent: moved_recent(
                         &wire.titles,
                         &viewer.id,
@@ -848,7 +872,7 @@ pub fn build_rows_sealed(
     // higher row gives way to another contested title in the rows below.
     let mut used: Vec<String> = Vec::new();
     for (mut row, wire_pair) in pairs {
-        row.deciding = deciding_chip(
+        let picked = deciding_chip(
             wire_pair,
             &known,
             &viewer.id,
@@ -857,7 +881,9 @@ pub fn build_rows_sealed(
             moved_id.as_deref(),
             &used,
         );
-        if let Some(c) = &row.deciding {
+        row.decides = picked.as_ref().is_some_and(|(_, d)| *d);
+        row.deciding = picked.map(|(c, _)| c);
+        if let (Some(c), true) = (&row.deciding, row.decides) {
             used.push(c.id.clone());
         }
         model.pairs.push(row);
@@ -985,6 +1011,7 @@ pub fn to_slint_sealed(
             you_count: p.you_count,
             them_count: p.them_count,
             has_chip: p.deciding.is_some(),
+            chip_ties: p.deciding.is_some() && !p.decides,
             moved_recent: p.moved_recent,
             chip: p
                 .deciding
@@ -1407,6 +1434,64 @@ mod tests {
         assert_eq!(chip.holder_id, "u2", "u2 holds it in the pair");
         assert_eq!(chip.value, "4,171");
         assert_eq!(chip.held_days, 0, "the crew holder is u3, so no held days");
+    }
+
+    #[test]
+    fn a_tied_title_never_decides_while_another_title_has_a_gap() {
+        // One Trick is 100 against 100: a tie. The Collector has a gap, and
+        // wins although One Trick comes later in the display order.
+        let data = feed(
+            2,
+            vec![
+                title("one_trick", "me", json!(100), "%"),
+                title("the_collector", "me", json!(12), "installed"),
+            ],
+            vec![pair_v(
+                "u2",
+                1,
+                1,
+                vec![
+                    pv("one_trick", json!(100), json!(100)),
+                    pv("the_collector", json!(12), json!(10)),
+                ],
+            )],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.pairs[0].deciding.as_ref().unwrap().id, "the_collector");
+        assert!(m.pairs[0].decides);
+        use slint::Model;
+        let d = to_slint(&m, &|_| None);
+        assert!(!d.pairs.row_data(0).unwrap().chip_ties);
+    }
+
+    #[test]
+    fn when_every_contested_title_ties_the_row_shows_the_first_without_emphasis() {
+        let data = feed(
+            2,
+            vec![
+                title("one_trick", "me", json!(100), "%"),
+                title("the_collector", "me", json!(10), "installed"),
+            ],
+            vec![pair_v(
+                "u2",
+                1,
+                1,
+                vec![
+                    pv("one_trick", json!(100), json!(100)),
+                    pv("the_collector", json!(10), json!(10)),
+                ],
+            )],
+            None,
+        );
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let row = &m.pairs[0];
+        assert_eq!(row.deciding.as_ref().unwrap().id, "the_collector");
+        assert!(!row.decides, "no deciding emphasis");
+        use slint::Model;
+        let d = to_slint(&m, &|_| None);
+        let r = d.pairs.row_data(0).unwrap();
+        assert!(r.has_chip && r.chip_ties);
     }
 
     #[test]

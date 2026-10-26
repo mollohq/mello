@@ -158,6 +158,9 @@ export component HeldChip inherits Rectangle {
     /// Names the slot for the card that leaves it (`BeltSlot`). Empty for a
     /// chip that is never sealed.
     in property <string> slot-id: "";
+    /// A chip that decides nothing (every contested title ties) loses the
+    /// holder's hue.
+    in property <bool> neutral: false;
 
     property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
     property <bool> waiting: SealedUi.hides(root.t.belt);
@@ -180,7 +183,7 @@ export component HeldChip inherits Rectangle {
             width: parent.width;
             compact: root.compact;
             dense: root.dense;
-            hue: H2hHue.of(root.t.hue-index);
+            hue: root.neutral ? Theme.graphic-med : H2hHue.of(root.t.hue-index);
             icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
         }
     }
@@ -485,6 +488,7 @@ component PairRow inherits Rectangle {
             slot-id: "pair-" + root.pair.id;
             compact: true;
             width: 108px;
+            neutral: root.pair.chip-ties;
             t: root.pair.chip;
         }
     }

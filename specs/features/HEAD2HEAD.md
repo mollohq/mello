@@ -29,7 +29,7 @@ On a tie, the previous holder keeps the title. With no previous holder, the lowe
 | `night_owl` | Latest local clock time of the last session | Latest | `user_game_stats` `last_played` and `last_tz_offset_min` | `"HH:MM"`, no unit |
 | `the_collector` | Installed games | Most | `user_library` games | count, `installed` |
 | `sampler` | Distinct games played, 14 days | Most | `user_game_stats` `recent_days` | count, `games` |
-| `one_trick` | Share of lifetime minutes in one game | Highest | `user_library` and `user_game_stats` minutes | percent, `%` |
+| `one_trick` | Share of lifetime minutes in one game. Only members with at least two games with playtime and at least ten hours in all contend. A member with one game has no value | Highest | `user_library` and `user_game_stats` minutes | percent, `%` |
 | `mouth` | Voice minutes, 14 days | Most | `user_activity_stats` `voice_min` | minutes, `min` |
 | `marathon` | Longest single game session | Longest, lifetime | `user_activity_stats` `longest_session_min` | minutes, `min` |
 | `last_one_up` | Latest local clock time of a session end, 14 days | Latest | `user_activity_stats` `latest_end_local_min` | `"HH:MM"`, no unit |
@@ -209,8 +209,10 @@ The card shows the viewer's closest pairs (smallest gap first) in two columns, u
 Each pair row on the card shows one chip: the title that decides the pair. The client picks it from `values`.
 
 - The gap of a title is `abs(a_value - b_value) / max(a_value, b_value)`. For `night_owl` the values are minutes after 18:00.
-- The title with the largest gap wins. A tie goes to the title that comes first in the display order.
-- Rows pick from the top down. A title that is the deciding chip of a higher row is skipped when the pair has another contested title. When every contested title of the pair is used, the largest gap wins. This keeps a count title with small values (6 against 1) from deciding every row.
+- A title where both values are equal, or the gap is zero, decides nothing and is skipped.
+- Of the rest, the title with the largest gap wins. A tie goes to the title that comes first in the display order.
+- When every contested title of the pair ties, the row shows the first contested title in the display order, without the deciding emphasis: the chip loses the holder's hue (`chip_ties`).
+- Rows pick from the top down. A title that is the deciding chip of a higher row is skipped when the pair has another contested title. When every deciding title of the pair is used, the largest gap wins. This keeps a count title with small values (6 against 1) from deciding every row.
 - The chip shows the value of the member who would hold the title in the pair. Held days come from the crew holder, only when the crew holder is that member.
 - A pair with no `values` shows no chip.
 

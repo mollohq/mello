@@ -369,17 +369,32 @@ func computeSampler(members []h2hMemberData, nowMs int64) h2hResult {
 	return r
 }
 
+const (
+	// oneTrickMinGames and oneTrickMinMinutes are what a member needs to
+	// contend for One Trick: two games with playtime and ten hours in all. A
+	// member with one game plays 100 % of it, which says nothing.
+	oneTrickMinGames   = 2
+	oneTrickMinMinutes = 10 * 60
+)
+
+// computeOneTrick scores the share of the top game in a member's playtime, in
+// basis points. Only a member with at least oneTrickMinGames games with
+// playtime and oneTrickMinMinutes in all has a value.
 func computeOneTrick(members []h2hMemberData) h2hResult {
 	r := h2hResult{titleID: titleOneTrick, unit: "%", higherWins: true, scores: map[string]int64{}}
 	for _, m := range members {
-		total, top := 0, 0
+		total, top, games := 0, 0, 0
 		for _, min := range memberGameMinutes(m) {
+			if min <= 0 {
+				continue
+			}
+			games++
 			total += min
 			if min > top {
 				top = min
 			}
 		}
-		if total > 0 {
+		if games >= oneTrickMinGames && total >= oneTrickMinMinutes {
 			r.scores[m.UserID] = int64(top) * 10000 / int64(total) // basis points
 		}
 	}

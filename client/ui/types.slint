@@ -258,6 +258,9 @@ export struct H2hPairRow {
     you-count: int,
     them-count: int,
     has-chip: bool,
+    /// Every contested title of the pair ties: the chip is drawn without the
+    /// holder's hue.
+    chip-ties: bool,
     chip: TitleHeld,
     /// A belt of this pair moved in the last 24 h and the viewer has not
     /// opened the feed since. Draws the red dot before the label.
