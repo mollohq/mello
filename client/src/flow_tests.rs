@@ -9045,3 +9045,116 @@ fn the_format_label_follows_the_rung_and_the_decoded_size() {
 }
 
 mod sealed;
+
+// ---- the recap is never a one-cell card ----
+
+/// `(width, height)` of the first element of a component type.
+fn size_of_type(h: &Harness, name: &str) -> (f32, f32) {
+    let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
+    assert!(!found.is_empty(), "no {name} on screen");
+    let s = found[0].size();
+    (s.width, s.height)
+}
+
+/// The smallest width and the smallest height among the elements of a type:
+/// the size of one grid cell, whichever slot the first one stands in.
+fn cell_size_of_type(h: &Harness, name: &str) -> (f32, f32) {
+    let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
+    assert!(!found.is_empty(), "no {name} on screen");
+    found.iter().fold((f32::MAX, f32::MAX), |(w, h), e| {
+        (w.min(e.size().width), h.min(e.size().height))
+    })
+}
+
+/// A crew of five with a weekly recap that has belts, head2head, a daily
+/// recap and sessions, in the given server order.
+fn crew_with_recap_h2h_daily_and_sessions(order: &[&str]) -> Harness {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+    let entry = |kind: &str| -> FeedEntry {
+        match kind {
+            "recap" => recap_entry(serde_json::json!({
+                "belts_moved": [belt_moved("the_carry", serde_json::json!(4201.0), "h")],
+                "belts_held": belts_held(),
+            })),
+            "h2h" => h2h_entry(
+                5,
+                vec![h2h_title("the_carry", "u2", serde_json::json!(4201.0), "h")],
+                vec![
+                    h2h_pair("u2", 1, 3),
+                    h2h_pair("u3", 2, 2),
+                    h2h_pair("u4", 3, 1),
+                    h2h_pair("u5", 2, 2),
+                ],
+                None,
+            ),
+            "daily" => feed_entry(
+                "daily_0",
+                "daily-recap",
+                serde_json::json!({ "day_start": 1, "total_min": 125, "session_count": 2 }),
+            ),
+            "clip" => clip_entry("clip-1"),
+            "games" => feed_entry(
+                "recent_games",
+                "recent-games",
+                serde_json::json!({
+                    "session_count": 14, "total_min": 1860,
+                    "games": [{ "game_id": "valorant", "game_name": "Valorant", "minutes": 600 }]
+                }),
+            ),
+            other => feed_entry(
+                other,
+                "session",
+                serde_json::json!({"game_name": "Valorant", "duration_min": 60, "active_min": 60}),
+            ),
+        }
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_of(order.iter().map(|k| entry(k)).collect()),
+    });
+    h
+}
+
+/// Bob's feed drew the recap as a standard cell with "Belts moved" cut off.
+/// The recap is the tall card (two rows, one column) or the wide card (two
+/// columns), whatever order the server sends the cards in.
+#[test]
+fn the_weekly_recap_is_tall_or_wide_never_one_cell() {
+    let orders: [&[&str]; 8] = [
+        &["recap", "h2h", "daily", "s1", "s2"],
+        &["h2h", "recap", "daily", "s1", "s2"],
+        &["daily", "s1", "h2h", "recap", "s2"],
+        &["s1", "s2", "daily", "recap", "h2h"],
+        &["h2h", "daily", "recap", "s1", "s2", "clip", "games"],
+        &["recap", "h2h", "daily", "s1", "clip", "games"],
+        &["h2h", "recap", "s1", "clip", "games"],
+        &["daily", "recap", "h2h", "s1", "games"],
+    ];
+    for order in orders {
+        let h = crew_with_recap_h2h_daily_and_sessions(order);
+        assert!(
+            feed_card_types(&h).iter().any(|t| t == "recap"),
+            "{order:?}: the feed has the recap"
+        );
+        let (cw, ch) = cell_size_of_type(&h, "GameSessionCard");
+        let (w, hgt) = size_of_type(&h, "RecapSlot");
+        assert!(
+            w >= cw * 1.6 || hgt >= ch * 1.6,
+            "{order:?}: the recap is {w}x{hgt} beside a {cw}x{ch} cell"
+        );
+        assert!(
+            h.controls_labelled("See the week").len() <= 1,
+            "{order:?}: one control"
+        );
+    }
+}

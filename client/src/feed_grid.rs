@@ -26,6 +26,9 @@
 //!   row after it moves up by one card.
 //! - Under a hero the poster grid takes the wide slot of row 3 (frames C and
 //!   D). The one-PC list stays in the side column.
+//! - The weekly recap is never a one-cell card. It is the tall card of the
+//!   side column beside a hero (two rows high, one column), else the wide card
+//!   of the first wide slot after the lead (`place_wide_cards`).
 //! - The recent games card is on the first screen for every crew size. In the
 //!   plain layout (head2head cell and invite card lead) it takes the wide slot
 //!   of the second row. Next to a hero or a wide head2head it takes the first
@@ -71,6 +74,20 @@ impl CardInfo {
     }
 }
 
+impl CardInfo {
+    /// A weekly recap with content: it needs the tall slot or a wide slot,
+    /// never one cell.
+    fn is_recap(&self) -> bool {
+        self.card_type == "recap" && self.recap_has_content
+    }
+
+    /// A card that takes two columns when the grid has the room: the recap
+    /// and the poster grid.
+    fn is_wide_card(&self) -> bool {
+        self.is_recap() || self.recent_grid
+    }
+}
+
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Lead {
     /// Head2head wide: two columns of the first row, one card beside it.
@@ -95,7 +112,8 @@ struct Layout {
     lead: Lead,
     start: usize,
     row2_base: usize,
-    /// The poster grid leads row 2: two columns, then one card.
+    /// A wide card (the recap or the poster grid) leads row 2: two columns,
+    /// then one card.
     r2_wide: bool,
 }
 
@@ -164,7 +182,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         lead,
         start,
         row2_base,
-        r2_wide: at(row2_base).is_some_and(|c| c.recent_grid),
+        r2_wide: at(row2_base).is_some_and(CardInfo::is_wide_card),
     }
 }
 
@@ -258,7 +276,9 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
             .into_iter()
             .map(|j| rest[j])
             .collect();
-        out.insert((start + 1).min(out.len()), live);
+        // A recap holds the side column alone: the session goes behind it.
+        let side_recap = out.get(start + 1).is_some_and(|&i| cards[i].is_recap());
+        out.insert((start + 1 + usize::from(side_recap)).min(out.len()), live);
         return place_more(out);
     }
     // The live session leads and the head2head card is the cell beside it.
@@ -351,48 +371,113 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
         }
     }
 
-    // 1. Recent games to the first screen.
-    if let Some(from) = order
-        .iter()
-        .position(|&i| cards[i].card_type == "recent-games")
-    {
-        let infos = |o: &[usize]| o.iter().map(|&i| cards[i].clone()).collect::<Vec<_>>();
-        let l = layout(&infos(&order), start);
-        let target = match l.lead {
-            // The wide slot of the second row, with the head2head cell and
-            // invite card in the first.
-            Lead::Plain => l.row2_base + 4,
-            // The session cell and the wide card fill row 1. The list is the
-            // first cell of row 2, with the skeletons beside it.
-            Lead::CellWide => start + 2,
-            // The third cell of row 2, beside the two sessions (frame E).
-            Lead::Belt | Lead::TallTrio => l.row2_base + 2,
-            // Next to the lead, in the side column.
-            // Beside a live session, behind the head2head cell that sits there.
-            Lead::Wide
-                if infos(&order)
-                    .get(start)
-                    .is_some_and(|c| c.card_type == "live-session")
-                    && infos(&order)
-                        .get(start + 1)
-                        .is_some_and(|c| c.card_type == "head2head") =>
-            {
-                start + 2
-            }
-            // The poster grid needs two columns. Under a hero it takes the wide
-            // slot of row 3 (frames C and D). The list stays in the side column.
-            Lead::Hero if cards[order[from]].recent_grid => l.row2_base + 4,
-            Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
-        };
-        let target = target.min(order.len() - 1);
-        if from != target {
-            let id = order.remove(from);
-            order.insert(target, id);
-        }
-    }
+    // 1. The wide cards go to their slots: the recap, then recent games.
+    place_wide_cards(cards, &mut order, start);
 
     clips_leave_wide(cards, &mut order, start);
     order
+}
+
+fn infos_of(cards: &[CardInfo], order: &[usize]) -> Vec<CardInfo> {
+    order.iter().map(|&i| cards[i].clone()).collect()
+}
+
+/// The recap and the recent games card to their slots.
+///
+/// - The recap is the tall card of the side column beside a hero, else the wide
+///   card of the first wide slot after the lead block. Never one cell.
+/// - Recent games is on the first screen for every crew size. Under a hero or
+///   in a plain grid it takes the wide slot of row 3 (frames C and D); a wide
+///   card in row 2 pushes it one card up the order.
+///
+/// Both cards leave the order, the lead is read from the others, and then each
+/// card goes back in at its slot, the recap first.
+fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
+    if order.len() <= start {
+        return;
+    }
+    let tall_trio = layout(&infos_of(cards, order), start).lead == Lead::TallTrio;
+    // The tall trio already holds its recap, tall.
+    let recap = if tall_trio {
+        None
+    } else {
+        order.iter().copied().find(|&i| cards[i].is_recap())
+    };
+    let games = order
+        .iter()
+        .copied()
+        .find(|&i| cards[i].card_type == "recent-games");
+    order.retain(|&i| Some(i) != recap && Some(i) != games);
+
+    // The slot of row 3 is one card up when row 2 leads with a wide card.
+    let r3_wide = |l: &Layout| l.row2_base + if l.r2_wide { 3 } else { 4 };
+
+    if let Some(id) = recap {
+        let l = layout(&infos_of(cards, order), start);
+        let at = match l.lead {
+            Lead::Hero => start + 1,
+            // A lead row of cells (the invite card, a join) stays whole: the
+            // recap takes the wide slot of the row after it.
+            Lead::Plain
+                if order.get(start).is_some_and(|&i| {
+                    matches!(cards[i].card_type.as_str(), "invite" | "joined")
+                }) =>
+            {
+                r3_wide(&l)
+            }
+            _ => l.row2_base,
+        };
+        order.insert(at.min(order.len()), id);
+    }
+
+    if let Some(id) = games {
+        let infos = infos_of(cards, order);
+        let l = layout(&infos, start);
+        let grid = cards[id].recent_grid;
+        let r3 = r3_wide(&l);
+        let r3_taken = order.get(r3).is_some_and(|&i| cards[i].is_wide_card());
+        let side_recap =
+            l.lead == Lead::Hero && infos.get(start + 1).is_some_and(CardInfo::is_recap);
+        let target = if l.r2_wide && l.lead != Lead::TallTrio && l.lead != Lead::Belt {
+            // A wide card leads row 2: the grid takes the wide slot of row 3,
+            // the list is the cell beside the wide card.
+            if grid && !r3_taken {
+                r3
+            } else {
+                l.row2_base + 1
+            }
+        } else {
+            match l.lead {
+                // The wide slot of the second row, with the invite card and the
+                // cells in the first.
+                Lead::Plain if r3_taken => r3 + 1,
+                Lead::Plain => r3,
+                // The session cell and the wide card fill row 1. The list is the
+                // first cell of row 2, with the skeletons beside it.
+                Lead::CellWide => start + 2,
+                // The third cell of row 2, beside the two sessions (frame E).
+                Lead::Belt | Lead::TallTrio => l.row2_base + 2,
+                // Beside a live session, behind the head2head cell that sits there.
+                Lead::Wide
+                    if infos
+                        .get(start)
+                        .is_some_and(|c| c.card_type == "live-session")
+                        && infos
+                            .get(start + 1)
+                            .is_some_and(|c| c.card_type == "head2head") =>
+                {
+                    start + 2
+                }
+                // The poster grid needs two columns. Under a hero it takes the
+                // wide slot of row 3 (frames C and D). The list stays in the side
+                // column, behind a tall recap.
+                Lead::Hero if grid => r3,
+                Lead::Hero if side_recap => l.row2_base,
+                Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
+            }
+        };
+        order.insert(target.min(order.len()), id);
+    }
 }
 
 /// Put a head2head cell and a recap with content in the third and fourth
@@ -477,11 +562,35 @@ pub fn arrange_cards(cards: Vec<FeedCardData>, start: usize) -> Vec<FeedCardData
     order.into_iter().filter_map(|i| slots[i].take()).collect()
 }
 
-/// The first grid card: one live stream takes the two first cards of the feed
-/// into its side column (`stream-side-consumed` in `crew_feed.slint`).
-pub fn grid_start(live_streams: usize, cards: usize) -> usize {
+/// Arrange the cards for `live_streams` streams beside the feed. One live
+/// stream takes the first cards of the feed into its side column. A recap
+/// with content then leads and holds the column alone, tall; else two cards
+/// stand in it. Mirrors `stream-side-consumed` in `crew_feed.slint`.
+pub fn arrange_for_streams(mut cards: Vec<FeedCardData>, live_streams: usize) -> Vec<FeedCardData> {
     if live_streams == 1 {
-        cards.min(2)
+        if let Some(p) = cards
+            .iter()
+            .position(|c| CardInfo::of(c).is_recap())
+            .filter(|&p| p > 0)
+        {
+            let recap = cards.remove(p);
+            cards.insert(0, recap);
+        }
+    }
+    let infos: Vec<CardInfo> = cards.iter().map(CardInfo::of).collect();
+    let start = grid_start(live_streams, &infos);
+    arrange_cards(cards, start)
+}
+
+/// The first grid card: one live stream takes the first cards of the feed into
+/// its side column (`stream-side-consumed` in `crew_feed.slint`): the recap
+/// alone when it leads, else two cards.
+pub fn grid_start(live_streams: usize, cards: &[CardInfo]) -> usize {
+    if live_streams == 1 {
+        match cards.first() {
+            Some(c) if c.is_recap() => 1,
+            _ => cards.len().min(2),
+        }
     } else {
         0
     }
@@ -510,8 +619,7 @@ pub fn arrange_model(model: &ModelRc<FeedCardData>, live_streams: usize) -> Mode
     let cards: Vec<FeedCardData> = (0..model.row_count())
         .filter_map(|i| model.row_data(i))
         .collect();
-    let start = grid_start(live_streams, cards.len());
-    Rc::new(VecModel::from(arrange_cards(cards, start))).into()
+    Rc::new(VecModel::from(arrange_for_streams(cards, live_streams))).into()
 }
 
 #[cfg(test)]
@@ -842,9 +950,10 @@ mod tests {
 
     #[test]
     fn a_live_stream_moves_the_start() {
-        assert_eq!(grid_start(1, 5), 2);
-        assert_eq!(grid_start(0, 5), 0);
-        assert_eq!(grid_start(2, 5), 0);
+        let five: Vec<CardInfo> = (0..5).map(|_| card("clip")).collect();
+        assert_eq!(grid_start(1, &five), 2);
+        assert_eq!(grid_start(0, &five), 0);
+        assert_eq!(grid_start(2, &five), 0);
     }
 
     fn live() -> CardInfo {
@@ -1106,5 +1215,115 @@ mod tests {
             "{:?}",
             types(&cards, &order)
         );
+    }
+
+    fn recap() -> CardInfo {
+        CardInfo {
+            recap_has_content: true,
+            ..card("recap")
+        }
+    }
+
+    /// Where the first recap with content stands: the tall slot of the side
+    /// column (hero lead, tall trio) or a wide slot. `None` is one cell.
+    fn recap_shape(cards: &[CardInfo], order: &[usize], start: usize) -> Option<&'static str> {
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let at = infos.iter().position(CardInfo::is_recap)?;
+        let l = layout(&infos, start);
+        if l.lead == Lead::Hero && at == start + 1 {
+            return Some("tall");
+        }
+        if l.lead == Lead::TallTrio && at == start + 3 {
+            return Some("tall");
+        }
+        if start == 1 && at == 0 {
+            return Some("tall");
+        }
+        wide_slots(&l, infos.len()).contains(&at).then_some("wide")
+    }
+
+    #[test]
+    fn a_recap_is_never_one_cell() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let leads: Vec<Vec<CardInfo>> = vec![
+            vec![h2h("versus")],
+            vec![h2h("wide")],
+            vec![h2h("cell"), card("invite")],
+            vec![hero.clone()],
+            vec![live()],
+            vec![card("game-session"), h2h("wide")],
+        ];
+        for lead in leads {
+            for pos in 0..4 {
+                let mut cards = lead.clone();
+                for _ in 0..4 {
+                    cards.push(card("game-session"));
+                }
+                cards.push(card("clip"));
+                cards.push(grid());
+                cards.insert((lead.len() + pos).min(cards.len()), recap());
+                let order = arrange(&cards, 0);
+                assert_eq!(order.len(), cards.len());
+                let shape = recap_shape(&cards, &order, 0);
+                assert!(
+                    shape.is_some(),
+                    "recap at {pos} after {:?} is one cell: {:?}",
+                    types(&cards, &(0..lead.len()).collect::<Vec<_>>()),
+                    types(&cards, &order)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_recap_goes_to_the_side_column_beside_a_hero() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![
+            hero,
+            card("game-session"),
+            card("game-session"),
+            card("game-session"),
+            recap(),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t[1], "recap", "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(layout(&infos, 0).row2_base, 2, "the recap holds the column");
+        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn a_recap_takes_the_first_wide_slot_of_the_next_row_when_the_column_is_taken() {
+        // A versus hero is one full row: row 2 leads with the recap, two
+        // columns, and the poster grid takes the wide slot of row 3.
+        let cards = vec![
+            h2h("versus"),
+            card("game-session"),
+            card("game-session"),
+            grid(),
+            recap(),
+        ];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t[1], "recap", "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert!(l.r2_wide);
+        let wide = wide_slots(&l, infos.len());
+        assert_eq!(wide[0], 1, "row 2 leads with the recap");
+        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
+    }
+
+    #[test]
+    fn one_live_stream_gives_the_recap_the_whole_side_column() {
+        let cards = vec![card("game-session"), card("clip"), recap(), card("session")];
+        let infos = cards.clone();
+        assert_eq!(grid_start(1, &infos), 2, "no recap first: two cards");
+        let recap_first = vec![recap(), card("game-session")];
+        assert_eq!(grid_start(1, &recap_first), 1, "the recap alone");
+        assert_eq!(grid_start(2, &recap_first), 0);
     }
 }

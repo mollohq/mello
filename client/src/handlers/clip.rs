@@ -1086,9 +1086,7 @@ pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
 /// Put the cards where the grid wants them: recent games on the first screen
 /// and no clip in a wide slot (`feed_grid`).
 fn arranged(ctx: &AppContext, cards: Vec<FeedCardData>) -> Vec<FeedCardData> {
-    let start =
-        crate::feed_grid::grid_start(ctx.app.get_active_stream_cards().row_count(), cards.len());
-    crate::feed_grid::arrange_cards(cards, start)
+    crate::feed_grid::arrange_for_streams(cards, ctx.app.get_active_stream_cards().row_count())
 }
 
 /// Arrange the cards on screen again. A live stream moves the first grid slot,

@@ -264,7 +264,7 @@ Card types in the bento grid:
   - "Say hi" is a white outline action, not filled: the surface may already hold its one filled white button, and red stays on the invite. It puts the cursor in the crew chat input. Its label is "Say hi to Jonas".
   - The card is in the grid flow, not above it. It stands in the first card place after the first row of the lead (the hero row, row 2 in a plain grid after the first three cells) and before the sessions. Under the versus hero (frame B2) it is the one card beside the poster grid. It never takes a wide slot (`feed_grid.rs`, `joins_at`). It is not a real card for the skeleton trio and the cold start.
   - Data path: the `joined` array of the `crew_feed` response (`user_id`, `name`, `invited_by`, `invited_by_name`, `ts`), read from the `member_joined` events of the ledger (`buildFeedJoins` in `crew_feed.go`). The invite code RPC (`join_by_invite_code`) adds the caller with system authority, which runs no join hook, so it writes the `member_joined` event itself with `invited_by` set to the member whose code was used. The client builds the cards in `join_cards` (`handlers/clip.rs`) from `joined_line.rs`. The state port reports them as `joined`.
-- **Weekly recap card** — stats summary for the week. Red label. Generated weekly by backend job.
+- **Weekly recap card** — stats summary for the week. Generated weekly by backend job. Tall or wide, never one cell (see Grid layouts).
 - **Skeleton trio** — three dashed placeholders for an empty crew (see section 8).
 - **Invite line** — one line and one red button under the skeleton trio (see section 8).
 
@@ -304,6 +304,7 @@ If no item exists, the feed has no hero. The latest recap then takes its own pin
 - A feed with no hero, a head2head cell and a recap with content puts the cell and the recap third and fourth (TallTrio). Two plain cells stack beside them.
 - Row 2 is the last row and has free cells: the stream and voice clip skeletons fill them at the card height, and the recap skeleton is the slim row under them (frame B). A full last row keeps the trio as one row.
 - A recap holds the whole side column beside the two-stream hero.
+- The weekly recap is never a one-cell card. It has two shapes: the tall card (one column, two rows) in the side column beside a hero, beside one live stream or in frame F, and the wide card (two columns, one row: the week, the belts moved and the belts held side by side). When the side column is taken, the recap takes the first wide slot of the next row, and the poster grid moves to the wide slot of the row after it (`feed_grid.rs`, `place_wide_cards`).
 
 #### Two streams (frame D)
 
