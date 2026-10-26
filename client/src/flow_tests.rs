@@ -8041,11 +8041,12 @@ fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
             "{case}: the session card has Steam art"
         );
 
-        // NOW PLAYING pill.
+        // NOW PLAYING pill: the icon slot has no local Steam art; it is the
+        // exe icon, then the Worker icon, then the monogram.
         h.emit(game_detected("brawlhalla", "Brawlhalla", now_ms() - 60_000));
         assert!(
-            h.app().get_game_has_capsule(),
-            "{case}: the pill has Steam art"
+            !h.app().get_game_has_capsule(),
+            "{case}: the pill does not take Steam header art"
         );
         assert!(!h.app().get_game_has_runtime_icon());
         assert_eq!(h.app().get_game_monogram().as_str(), "BR");

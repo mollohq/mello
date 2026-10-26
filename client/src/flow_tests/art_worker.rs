@@ -278,3 +278,76 @@ fn the_grid_poster_frame_is_the_header_shape() {
         );
     }
 }
+
+fn an_icon() -> slint::Image {
+    crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4)
+}
+
+/// The ladder is per slot. A game with an exe icon and Worker art: the art
+/// frames (tile) show the art and never the icon; the icon slot (pill) shows
+/// the icon and does not ask for the Worker icon.
+#[test]
+fn an_exe_icon_stays_in_the_icon_slot_and_the_art_fills_the_frames() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "header", jpeg(1280, 720));
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.ctx()
+        .game_icon_cache
+        .borrow_mut()
+        .insert("steam-2300340".into(), an_icon());
+
+    h.emit(Event::FeedLoaded {
+        response: recent_feed(serde_json::json!([
+            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
+        ])),
+    });
+    let (ids, slot) = art_requests(&mut h).remove(0);
+    assert_eq!(slot, ArtSlot::Header, "the frame asks for header art");
+    serve(&mut h, &ids, slot);
+    let tile = first_tile(&h);
+    assert!(tile.has_capsule, "the art is in the header frame");
+    assert!(!tile.has_icon, "the exe icon is not in an art frame");
+
+    h.emit(game_detected(
+        "steam-2300340",
+        "Night Stones",
+        now_ms() - 60_000,
+    ));
+    assert!(
+        h.app().get_game_has_runtime_icon(),
+        "the pill shows the icon"
+    );
+    assert!(!h.app().get_game_has_capsule());
+    assert!(
+        art_requests(&mut h)
+            .iter()
+            .all(|(_, s)| *s != ArtSlot::Icon),
+        "an exe icon needs no Worker icon"
+    );
+}
+
+#[test]
+fn the_pill_without_an_exe_icon_takes_the_worker_icon() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.emit(game_detected(
+        "steam-2300340",
+        "Night Stones",
+        now_ms() - 60_000,
+    ));
+    assert!(!h.app().get_game_has_capsule(), "monogram until it lands");
+    let (ids, slot) = art_requests(&mut h)
+        .into_iter()
+        .find(|(_, s)| *s == ArtSlot::Icon)
+        .expect("the pill asked for the icon slot");
+    serve(&mut h, &ids, slot);
+    assert!(
+        h.app().get_game_has_capsule(),
+        "the Worker icon fills the pill"
+    );
+    assert!(!h.app().get_game_has_runtime_icon());
+}

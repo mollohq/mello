@@ -370,12 +370,13 @@ fn steam_ids_of_catalogue_game(id: &str, name: &str) -> Vec<String> {
     ids
 }
 
-/// The one art ladder of every game tile: the server icon (cached, or the
-/// crew copy), then the local Steam art under any id that names the game
-/// ([`art_candidates`]), then the art Worker ([`resolve_art_worker`]), then
-/// nothing, which draws the monogram. The recent games card, the session card,
-/// the live card and the NOW PLAYING pill all call this, so one game gets one
-/// kind of art everywhere. `slot` picks the Worker image: `Header` for tiles.
+/// The art ladder of a game, per slot.
+///
+/// - `Icon` (the NOW PLAYING pill): the crew-shared exe icon, then the art
+///   Worker `icon`, then nothing, which draws the monogram.
+/// - `Header`, `Hero`, `Capsule` (art frames): the local Steam art under any id
+///   that names the game ([`art_candidates`]), then the art Worker, then the
+///   monogram. The exe icon never fills an art frame.
 pub fn resolve_tile_art_slot(
     ctx: &AppContext,
     wire_id: &str,
@@ -384,22 +385,26 @@ pub fn resolve_tile_art_slot(
     slot: ArtSlot,
 ) -> TileArt {
     let none = slint::Image::default;
-    if let Some(icon) = resolve_or_fetch_icon(ctx, game_id) {
-        return TileArt {
-            icon,
-            has_icon: true,
-            capsule: none(),
-            has_capsule: false,
-        };
-    }
-    let ids = art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow());
-    let art = ids
-        .iter()
-        .find_map(|id| resolve_local_steam_art(ctx, id))
-        .or_else(|| {
-            let wids = worker_ids(wire_id, game_id, name, &ctx.installed_games.borrow());
-            resolve_art_worker(ctx, &wids, slot)
-        });
+    let worker = || {
+        let wids = worker_ids(wire_id, game_id, name, &ctx.installed_games.borrow());
+        resolve_art_worker(ctx, &wids, slot)
+    };
+    let art = if slot == ArtSlot::Icon {
+        if let Some(icon) = resolve_or_fetch_icon(ctx, game_id) {
+            return TileArt {
+                icon,
+                has_icon: true,
+                capsule: none(),
+                has_capsule: false,
+            };
+        }
+        worker()
+    } else {
+        art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
+            .iter()
+            .find_map(|id| resolve_local_steam_art(ctx, id))
+            .or_else(worker)
+    };
     match art {
         Some(capsule) => TileArt {
             icon: none(),
