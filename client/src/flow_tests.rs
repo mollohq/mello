@@ -7372,6 +7372,37 @@ fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
     assert_eq!(first_recap(&h).recap_rows, 2);
 }
 
+/// The recap names its week and says how old it is: "Week 5" over "This week",
+/// "Last week" or "3 weeks ago", counted from `week_start_ms`.
+#[test]
+fn the_recap_title_is_the_week_number_and_the_line_under_it_is_its_age() {
+    for (days_ago, want) in [(2, "This week"), (9, "Last week"), (22, "3 weeks ago")] {
+        let mut week = week_without_belts();
+        week["week_number"] = serde_json::json!(5);
+        week["week_start_ms"] = serde_json::json!(now_ms() - days_ago * DAY_MS);
+        let h = tall_recap_crew(week);
+        let texts = drawn_texts(&h);
+        assert!(texts.iter().any(|t| t == "Week 5"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+        assert_eq!(first_recap(&h).age_label.as_str(), want);
+    }
+}
+
+/// A recap stored before the server numbered the weeks has no `week_number`
+/// and no `week_start_ms`. It still parses: the title is the date.
+#[test]
+fn an_old_recap_without_a_week_number_is_named_by_its_date() {
+    let mut week = week_without_belts();
+    week.as_object_mut().expect("object").remove("week_number");
+    // Tuesday 6 October 2026, 00:00 UTC. Only `week_start` is there.
+    week["week_start"] = serde_json::json!(20_732 * DAY_MS);
+    week["week_end"] = serde_json::json!(20_739 * DAY_MS);
+    let h = tall_recap_crew(week);
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == "Week of 6 Oct"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "This week"), "{texts:?}");
+}
+
 fn first_recap(h: &Harness) -> FeedCardData {
     use slint::Model;
     h.app()
@@ -8886,7 +8917,7 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
                 "recap",
                 "recap",
                 serde_json::json!({
-                    "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
+                    "week_start_ms": recap_end - 7 * DAY_MS, "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
                     "top_members": [], "top_game": "Rocket League", "longest_session_min": 140,
                     "belts_held": [{"user_id": "u4", "display_name": "Sara", "count": 3, "title_ids": ["night_owl"]}],
                 }),
@@ -8925,7 +8956,7 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
         .filter_map(|i| feed.row_data(i))
         .find(|c| c.card_type.as_str() == "recap")
         .expect("the last recap stays");
-    assert_eq!(recap.age_label.as_str(), "3 weeks ago");
+    assert_eq!(recap.age_label.as_str(), "4 weeks ago");
     let types = card_types(&h);
     // Head2head leads, the recap stands beside it (tall), two cells under it.
     assert_eq!(types[0], "head2head:pairs", "{types:?}");

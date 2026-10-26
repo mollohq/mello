@@ -527,6 +527,16 @@ component RecapHead inherits Rectangle {
             color: Theme.text-primary;
         }
 
+        // When the week was: "This week", "Last week", "3 weeks ago".
+        if card.age-label != "": Text {
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            text: card.age-label;
+            font-size: 11px;
+            color: Theme.text-sub;
+            overflow: elide;
+        }
+
         Rectangle { height: 10px; }
 
         Rectangle { height: 1px; background: Theme.card-border; }

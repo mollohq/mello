@@ -191,6 +191,17 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
     }
 }
 
+/// The start of the recap week. `week_start_ms` is the server's name for it;
+/// recaps stored before it have `week_start`, and the oldest only `week_end`.
+/// 0 when none is there.
+fn recap_week_start_ms(data: &serde_json::Value) -> i64 {
+    let num = |k: &str| data.get(k).and_then(|v| v.as_i64()).filter(|&n| n > 0);
+    num("week_start_ms")
+        .or_else(|| num("week_start"))
+        .or_else(|| num("week_end").map(|e| e - 7 * 24 * 60 * 60 * 1000))
+        .unwrap_or(0)
+}
+
 /// Minutes the recap card leads with: `total_min` (voice, stream and game), or
 /// `total_hangout_min` for recaps stored before `total_min` existed.
 fn recap_lead_minutes(data: &serde_json::Value) -> f64 {
@@ -2286,13 +2297,20 @@ fn build_feed_card(
         actor_initials: make_initials(&actor).into(),
         actor_hue_index: avatar_color_index(actor_avatar_id.unwrap_or(&actor)),
         // "Week 4" when the server counts the crew's weeks (`week_number`).
-        recap_week: data
-            .get("week_number")
-            .and_then(|v| v.as_i64())
-            .filter(|&n| n > 0)
-            .map(|n| format!("Week {n}"))
-            .unwrap_or_default()
-            .into(),
+        // An older recap has no number: "Week of 6 Oct" from its start.
+        recap_week: if backend_type == "weekly_recap" {
+            match data
+                .get("week_number")
+                .and_then(|v| v.as_i64())
+                .filter(|&n| n > 0)
+            {
+                Some(n) => format!("Week {n}"),
+                None => crate::feed_age::week_of_label(recap_week_start_ms(&data)),
+            }
+        } else {
+            String::new()
+        }
+        .into(),
         recap_hangout_min: if backend_type == "weekly_recap" {
             recap_lead_minutes(&data).round() as i32
         } else {
@@ -2323,7 +2341,7 @@ fn build_feed_card(
         },
         age_label: if backend_type == "weekly_recap" {
             crate::feed_age::recap_age_label(
-                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+                recap_week_start_ms(&data),
                 crate::converters::current_time_ms(),
             )
         } else {
