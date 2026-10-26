@@ -199,6 +199,9 @@ fn dispatch(ctx: &AppContext, event: Event) {
         Event::ProtocolMismatch { message, .. } => {
             ctx.app.set_protocol_warning(message.into());
         }
+        // The notice is a log line in mello-core for now; the UI shows
+        // nothing yet (mello-admin increment 4).
+        Event::LogsRequested { .. } => {}
         Event::DiagnosticCaptureState { phase, message } => {
             let status = match phase.as_str() {
                 "capturing" => "Recording… reproduce the issue, then press Stop.".to_string(),
