@@ -5,7 +5,7 @@
 // feed-stage-five).
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { CARRY_TAKER_PLAYTIME_MIN, profiles, reportLibrary } from "./lib/seed.ts";
+import { CARRY_TAKER_PLAYTIME_MIN, generateRecap, profiles, reportLibrary } from "./lib/seed.ts";
 import { bobWithSeededCrew } from "./lib/stage.ts";
 
 export default journey({
@@ -43,6 +43,8 @@ export default journey({
     });
 
     await step("a click on the sealed chip opens the belt in the centre", async () => {
+      // The chip may stand below the fold of the feed.
+      await bob.scrollToControl("Sealed belt, open it");
       await bob.click("Sealed belt, open it");
       const s = await bob.waitFor("the belt in the centre", (st) => st.sealed.open_center === "belt", 5_000);
       expect(s.sealed.belts === 0, `the belt in the centre is no longer sealed in the feed, got ${s.sealed.belts}`);
@@ -68,6 +70,35 @@ export default journey({
       await bob.restart();
       const s = await bob.waitFor("the wide card after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
       expect(s.sealed.belts === 0, `sealed.belts is 0 after a restart, got ${s.sealed.belts}`);
+    });
+
+    // The recap opens in the centre and fits the feed panel: the card keeps its
+    // own size or shrinks, stays 40 px from every edge and "See the week" is
+    // inside the panel, not half outside it. It needs a recap, which only
+    // dev_fault writes. Without dev_fault the step has nothing to open.
+    await step("the weekly recap opens in the centre inside the feed panel", async () => {
+      const crewId = (await bob.state()).active_crew_id;
+      if (!(await generateRecap(members[0].token, crewId))) {
+        console.log("dev_fault is off on this stack: no recap to open, step skipped");
+        return;
+      }
+      await bob.restart();
+      await bob.waitFor("the sealed recap", (st) => st.sealed.recap, 30_000);
+      await bob.scrollToControl("Sealed recap, open it");
+      await bob.click("Sealed recap, open it");
+      await bob.waitFor("the recap in the centre", (st) => st.sealed.open_center === "recap", 5_000);
+      await bob.waitFor("the recap at rest, the face shown", (st) => st.sealed.resting, 5_000);
+      const panel = await bob.find("Close");
+      const see = await bob.find("See the week");
+      const margin = 40;
+      expect(see.x >= panel.x + margin - 1 && see.y >= panel.y + margin - 1, `See the week starts inside the panel: ${see.x},${see.y} in ${panel.x},${panel.y}`);
+      expect(
+        see.x + see.width <= panel.x + panel.width - margin + 1 && see.y + see.height <= panel.y + panel.height - margin + 1,
+        `See the week ends inside the panel: ${see.x + see.width},${see.y + see.height} in ${panel.x + panel.width},${panel.y + panel.height}`,
+      );
+      await bob.checkpoint("recap-face");
+      await bob.click("Close");
+      await bob.waitFor("the recap landed", (st) => st.sealed.open_center === "none", 10_000);
     });
   },
 });

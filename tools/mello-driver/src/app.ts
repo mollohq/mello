@@ -719,6 +719,18 @@ export class App {
     this.opts.onAction?.(this.name, `${action} "${label}"`);
   }
 
+  /**
+   * Scroll the page under the pointer at (x, y) until a control with this label
+   * is on screen: a control below the fold is absent from the element tree.
+   */
+  async scrollToControl(label: string, x = 450, y = 300, maxSteps = 10): Promise<void> {
+    for (let i = 0; i < maxSteps; i++) {
+      if ((await this.ui.controls()).some((c) => c.label === label)) return;
+      await this.ui.scrollAt(x, y, -300);
+      await sleep(200);
+    }
+  }
+
   /** A real pointer click at the control's center. */
   async click(label: string, n = 0): Promise<void> {
     await this.onControl(label, n, async (c) => {

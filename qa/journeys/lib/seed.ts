@@ -350,6 +350,21 @@ export async function seedCrew(crewInviteCode: string, list: SeedProfile[], runI
   return out;
 }
 
+/**
+ * Ask the server to write the weekly recap of a crew now (`dev_fault`
+ * `generate_recap`). False when `dev_fault` is off on this stack: the recap
+ * steps of a journey then have nothing to open and skip themselves.
+ */
+export async function generateRecap(token: string, crewId: string): Promise<boolean> {
+  const r = await fetch(`${nakamaBase()}/v2/rpc/dev_fault`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify(JSON.stringify({ action: "generate_recap", crew_id: crewId })),
+    signal: AbortSignal.timeout(30_000),
+  });
+  return r.ok;
+}
+
 /** The `crew_feed` RPC as one member sees it. For timing and for checks. */
 export async function crewFeed(token: string, crewId: string): Promise<{ ms: number; feed: any }> {
   const t0 = Date.now();
