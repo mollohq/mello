@@ -20,6 +20,18 @@ Usage:
     python build_catalogue.py                # build both artifacts
     python build_catalogue.py --check-schema # verify IGDB's schema is unchanged
     python build_catalogue.py --head-size N  # default 2000
+    python build_catalogue.py --export-art-index DIR   # art Worker input
+
+Art index run (the game art Worker, repo mello-art-worker):
+    1. export TWITCH_CLIENT_ID=... TWITCH_CLIENT_SECRET=...   (or the JSON file)
+    2. python scripts/build_catalogue.py --export-art-index /tmp/igdb-dumps
+       Fetches the dumps into scripts/.catalogue_work (cached by updated_at)
+       and writes games, covers, artworks, screenshots, external_games and
+       external_game_sources CSVs into DIR. It builds no catalogue files.
+    3. cd mello-art-worker && node scripts/build-index.ts /tmp/igdb-dumps
+       Prints coverage and writes index-out/kv-*.json.
+    4. npx wrangler kv bulk put index-out/kv-000.json --binding ART_INDEX --remote
+       Repeat for each kv-NNN.json file.
 
 Credentials: TWITCH_CLIENT_ID / TWITCH_CLIENT_SECRET, or a JSON file at
 scripts/igdb_credentials.json (gitignored) with client_id / client_secret.
@@ -73,6 +85,8 @@ ENDPOINTS = [
     "external_games",
     "external_game_sources",
     "covers",
+    "artworks",
+    "screenshots",
     "alternative_names",
     "game_types",
     "platforms",
@@ -205,6 +219,15 @@ def check_schema(versions):
         return
     with open(SCHEMA_LOCK, encoding="utf-8") as f:
         locked = json.load(f)
+    # An endpoint that was never locked is recorded, not treated as drift: the
+    # lock only guards schemas somebody already reviewed.
+    new = {ep: got for ep, got in versions.items() if ep not in locked}
+    if new:
+        locked.update(new)
+        with open(SCHEMA_LOCK, "w", encoding="utf-8") as f:
+            json.dump(locked, f, indent=2, sort_keys=True)
+            f.write("\n")
+        print(f"Locked new endpoint schemas: {', '.join(sorted(new))}")
     drift = {ep: (locked.get(ep), got) for ep, got in versions.items() if locked.get(ep) != got}
     if drift:
         print("IGDB dump schema changed:", file=sys.stderr)
@@ -230,6 +253,42 @@ def id_list(cell):
     if not cell:
         return []
     return [p for p in cell.strip("{}[]").replace('"', "").split(",") if p.strip()]
+
+
+# Columns the art Worker's build-index.ts reads, per dump. Same file names as
+# the IGDB dumps; extra columns are dropped to keep the folder small.
+ART_EXPORT_COLUMNS = {
+    "games": ["id", "name", "slug"],
+    "covers": ["id", "game", "image_id", "width", "height"],
+    "artworks": ["id", "game", "image_id", "width", "height"],
+    "screenshots": ["id", "game", "image_id", "width", "height"],
+    "external_games": ["id", "game", "uid", "external_game_source"],
+    "external_game_sources": ["id", "name"],
+}
+
+
+def export_art_index(work_dir, out_dir):
+    """Write the CSV folder that mello-art-worker/scripts/build-index.ts reads.
+    Returns {name: row count}. Reads only work_dir, never the network."""
+    os.makedirs(out_dir, exist_ok=True)
+    counts = {}
+    for name, cols in ART_EXPORT_COLUMNS.items():
+        src = os.path.join(work_dir, f"{name}.csv")
+        n = 0
+        with open(src, encoding="utf-8", newline="") as fin, open(
+            os.path.join(out_dir, f"{name}.csv"), "w", encoding="utf-8", newline=""
+        ) as fout:
+            reader = csv.DictReader(fin)
+            missing = [c for c in cols if c not in (reader.fieldnames or [])]
+            if missing:
+                sys.exit(f"{name}.csv has no column {', '.join(missing)}")
+            w = csv.writer(fout, lineterminator="\n")
+            w.writerow(cols)
+            for r in reader:
+                w.writerow([r.get(c, "") for c in cols])
+                n += 1
+        counts[name] = n
+    return counts
 
 
 def derive_short_name(name, slug):
@@ -408,12 +467,23 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--check-schema", action="store_true", help="verify schema and exit")
     ap.add_argument("--head-size", type=int, default=2000, help="games in head.bin (default 2000)")
+    ap.add_argument(
+        "--export-art-index",
+        metavar="DIR",
+        help="fetch the dumps, write the CSV folder for the art Worker's build-index.ts, and exit",
+    )
     args = ap.parse_args()
 
     print("Fetching IGDB dumps ...")
     versions = fetch_dumps(ENDPOINTS)
     check_schema(versions)
     if args.check_schema:
+        return
+    if args.export_art_index:
+        counts = export_art_index(WORK, args.export_art_index)
+        for name, n in counts.items():
+            print(f"  {name:<24} {n:>10,} rows")
+        print(f"Wrote {args.export_art_index}")
         return
 
     print("Reading games ...")
