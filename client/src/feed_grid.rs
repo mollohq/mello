@@ -296,8 +296,8 @@ pub(crate) fn place_memory(mut cards: Vec<FeedCardData>) -> (Vec<FeedCardData>, 
             }
             row += 1;
         };
-        for r in row..row + span {
-            taken[r][col] = true;
+        for cells in &mut taken[row..row + span] {
+            cells[col] = true;
         }
         card.mem_col = col as i32;
         card.mem_row = row as i32;
