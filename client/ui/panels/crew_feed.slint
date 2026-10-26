@@ -550,13 +550,13 @@ component RecapHead inherits Rectangle {
             HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 2;
                     spacing: 2px;
                     RecapDur { minutes: Math.round(card.recap-hangout-min * root.count); }
                     RecapKicker { text: "HANGOUT"; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 3;
                     spacing: 2px;
                     Text { text: "\{Math.round(card.recap-clips * root.count)}"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     RecapKicker { text: "CLIPS"; }
@@ -566,13 +566,13 @@ component RecapHead inherits Rectangle {
             if card.recap-longest-min > 0 || card.game-name != "": HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 2;
                     spacing: 2px;
                     if card.recap-longest-min > 0: RecapDur { minutes: Math.round(card.recap-longest-min * root.count); }
                     if card.recap-longest-min > 0: RecapKicker { text: "LONGEST"; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 3;
                     spacing: 4px;
                     if card.game-name != "": HorizontalLayout {
                         height: 29px;
@@ -591,7 +591,7 @@ component RecapHead inherits Rectangle {
                             font-weight: Theme.weight-display;
                             font-size: 12px;
                             color: Theme.text-primary;
-                            wrap: word-wrap;
+                            overflow: elide;
                             vertical-alignment: center;
                         }
                     }

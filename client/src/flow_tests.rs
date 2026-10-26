@@ -9846,10 +9846,9 @@ fn upsell_shows(h: &Harness) -> bool {
             .any(|t| t == "Unlock your crew's full story")
 }
 
-/// A recap in Crew history is the tall card as in the week: one column, two
-/// rows (three with belts). "Most active" and "See the week" stand inside it.
-#[test]
-fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+/// A crew whose Crew history holds two opened recaps (week 1 of the week
+/// start 11, with belts, and 12, without), in a window `width` wide.
+fn crew_history_of_two_recaps(width: u32, top_game: &str) -> Harness {
     let mut h = Harness::new();
     // Both recaps are open: the cards show, not the sealed ones.
     h.settings().borrow_mut().sealed_opened.insert(
@@ -9870,7 +9869,7 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
     // Tall enough for the memory band to stand on screen.
     h.app()
         .window()
-        .set_size(slint::PhysicalSize::new(1280, 3600));
+        .set_size(slint::PhysicalSize::new(width, 3600));
     let old_recap = |id: &str, week_start: i64, belts: bool| {
         let mut week = if belts {
             week_with_everything()
@@ -9878,6 +9877,7 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
             week_without_belts()
         };
         week["week_start"] = serde_json::json!(week_start);
+        week["top_game"] = serde_json::json!(top_game);
         let mut e = recap_entry(week);
         e.id = id.into();
         e
@@ -9892,6 +9892,14 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
         ),
     });
 
+    h
+}
+
+/// A recap in Crew history is the tall card as in the week: one column, two
+/// rows (three with belts). "Most active" and "See the week" stand inside it.
+#[test]
+fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+    let h = crew_history_of_two_recaps(1280, "Rocket League");
     let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
     assert_eq!(slots.len(), 2, "both recaps are drawn");
     let see = h.controls_labelled("See the week");
@@ -9943,6 +9951,31 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
                 })
                 .count();
             assert_eq!(n, 1, "one inside the card {card:?}");
+        }
+    }
+}
+
+/// "Counter-Strike 2" is the top game in the 2 by 2 numbers of the tall card in
+/// Crew history. The name is one line (a line is 15 px high, two are 30) at
+/// every window width. At the default width, 1600 px, the cell is wide enough
+/// to show all of it (124 px at 12 px); a narrower card elides it.
+#[test]
+fn the_top_game_name_stays_on_one_line() {
+    for width in [1200, 1280, 1440, 1600] {
+        let h = crew_history_of_two_recaps(width, "Counter-Strike 2");
+        let names: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
+            .filter(|e| {
+                e.accessible_label()
+                    .is_some_and(|l| l == "Counter-Strike 2")
+            })
+            .collect();
+        assert_eq!(names.len(), 2, "the top game of each recap");
+        for name in &names {
+            let r = rect_of(name);
+            assert!(r.3 - r.1 < 20.0, "{width}: {r:?} wraps to a second line");
+            if width == 1600 {
+                assert!(r.2 - r.0 >= 120.0, "{width}: {r:?} is elided");
+            }
         }
     }
 }
