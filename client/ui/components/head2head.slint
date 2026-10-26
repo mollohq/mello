@@ -161,12 +161,14 @@ export component HeldChip inherits Rectangle {
     /// A chip that decides nothing (every contested title ties) loses the
     /// holder's hue.
     in property <bool> neutral: false;
+    /// Leaves out the "held N days" line, for a card with no room for it.
+    in property <bool> hide-held: false;
 
     property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
     property <bool> waiting: SealedUi.hides(root.t.belt);
 
     background: transparent;
-    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.waiting ? 16px : 0px);
+    height: root.chip-height + (root.t.held-label != "" && !root.dense && !root.waiting && !root.hide-held ? 16px : 0px);
 
     // No layout here: a layout would give the chip a preferred width and
     // skew the equal columns of the grid it sits in.
@@ -187,7 +189,7 @@ export component HeldChip inherits Rectangle {
             icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
         }
     }
-    if root.t.held-label != "" && !root.dense && !root.waiting: Text {
+    if root.t.held-label != "" && !root.dense && !root.waiting && !root.hide-held: Text {
         x: 2px;
         y: root.chip-height + 3px;
         width: parent.width - 2px;
@@ -435,11 +437,40 @@ export component Head2headCardWide inherits Rectangle {
     }
 }
 
+/// The "+N more" line of the pairs card. It stands for the opened view, which
+/// does not exist yet: a control that opens nothing.
+component MorePairs inherits Rectangle {
+    in property <int> count;
+    height: 22px;
+    width: label.preferred-width + 8px;
+    accessible-role: button;
+    accessible-label: "+" + root.count + " more";
+    label := Text {
+        x: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: "+" + root.count + " MORE";
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-label;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { }
+    }
+}
+
 /// One row of the pairs card: "You vs Name", the tally between two octagons,
 /// and the title that decides the pair.
 component PairRow inherits Rectangle {
     in property <H2hPairRow> pair;
-    height: root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
+    /// Three rows to a column: no room for the "held N days" line.
+    in property <bool> tight: false;
+    /// "+N more" stands in the last row, after the tally, when pairs remain.
+    in property <int> more: 0;
+    height: !root.tight && root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
     background: transparent;
 
     HorizontalLayout {
@@ -482,11 +513,13 @@ component PairRow inherits Rectangle {
                     color: Theme.text-value;
                 }
                 UserAvatar { initials: root.pair.initials; avatar: root.pair.avatar; has-avatar: root.pair.has-avatar; color-index: root.pair.hue-index; size: 20px; }
+                if root.more > 0: MorePairs { count: root.more; }
             }
         }
         if root.pair.has-chip: HeldChip {
             slot-id: "pair-" + root.pair.id;
             compact: true;
+            hide-held: root.tight;
             width: 108px;
             neutral: root.pair.chip-ties;
             t: root.pair.chip;
@@ -494,36 +527,12 @@ component PairRow inherits Rectangle {
     }
 }
 
-/// The "+N more" line of the pairs card. It stands for the opened view, which
-/// does not exist yet: a control that opens nothing.
-component MorePairs inherits Rectangle {
-    in property <int> count;
-    height: 22px;
-    width: label.preferred-width + 8px;
-    accessible-role: button;
-    accessible-label: "+" + root.count + " more";
-    label := Text {
-        x: 0px;
-        width: parent.width;
-        height: parent.height;
-        text: "+" + root.count + " MORE";
-        font-family: Theme.font-label;
-        font-size: 10px;
-        font-weight: Theme.weight-label;
-        letter-spacing: Theme.track-label;
-        color: Theme.text-dim;
-        vertical-alignment: center;
-    }
-    TouchArea {
-        clicked => { }
-    }
-}
-
 /// The head2head card of two or more members. Always two grid columns wide, one
 /// row high (232 px at the 760 px feed). A title row, then the pair rows of the
 /// viewer in two columns: the first column fills first, so five members draw
-/// two rows of pairs side by side. Below: a "+N more" line when pairs remain,
-/// and, with seats, the open seats left and the red invite button right. From
+/// two rows of pairs side by side and nine draw three rows in each column (six
+/// pairs). "+N more" stands in the last row when pairs remain. With seats, the
+/// open seats stand left at the foot and the red invite button right. From
 /// five members the seats are gone and the invite card carries the invite.
 export component Head2headCardPairs inherits Rectangle {
     callback invite-clicked();
@@ -581,6 +590,8 @@ export component Head2headCardPairs inherits Rectangle {
                     row: i < root.first-column ? i : i - root.first-column;
                     col: i < root.first-column ? 0 : 1;
                     pair: p;
+                    tight: root.first-column > 2;
+                    more: i == root.pairs.length - 1 ? root.more-pairs : 0;
                 }
             }
             // The keyline between the two columns.
@@ -611,12 +622,9 @@ export component Head2headCardPairs inherits Rectangle {
                     color: Theme.text-body;
                 }
                 Rectangle { horizontal-stretch: 1; }
-                if root.more-pairs > 0: MorePairs { count: root.more-pairs; }
                 InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
             }
         }
-        // With no seats the line stands alone.
-        if root.open-seats <= 0 && root.more-pairs > 0: MorePairs { count: root.more-pairs; }
     }
 }
 

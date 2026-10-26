@@ -9775,7 +9775,7 @@ fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_co
 
         let pairs = (members - 1) as usize;
         let rows = pair_row_positions(&h);
-        assert_eq!(rows.len(), pairs.min(4), "{members} members: {rows:?}");
+        assert_eq!(rows.len(), pairs.min(6), "{members} members: {rows:?}");
         let mut xs: Vec<i32> = rows.iter().map(|r| r.0 as i32).collect();
         xs.sort();
         xs.dedup();
@@ -9789,8 +9789,23 @@ fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_co
             ys.dedup();
             assert_eq!(ys.len(), 2, "two rows of pairs: {rows:?}");
         }
-        // The line that stands for the pairs that do not fit.
-        let more = pairs.saturating_sub(4);
+        // Nine members: three rows in each column, and the rows reach the
+        // lower half of the card.
+        if members == 9 {
+            let mut ys: Vec<i32> = rows.iter().map(|r| r.1 as i32).collect();
+            ys.sort();
+            ys.dedup();
+            assert_eq!(ys.len(), 3, "three rows of pairs: {rows:?}");
+            let card = ElementHandle::find_by_element_type_name(h.app(), "Head2headCardPairs")
+                .next()
+                .expect("the pairs card");
+            let mid = card.absolute_position().y + card.size().height / 2.0;
+            let last = *ys.last().expect("rows") as f32;
+            assert!(last > mid - 40.0, "no empty lower half: {last} vs {mid}");
+        }
+        // The line that stands for the pairs that do not fit. It stands in
+        // the last row, not under the rows.
+        let more = pairs.saturating_sub(6);
         assert_eq!(
             h.controls_labelled(&format!("+{more} more")).len(),
             usize::from(more > 0),

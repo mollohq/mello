@@ -4655,7 +4655,7 @@ export component PreviewFeedFiveMembers inherits Rectangle {
             {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
-                    variant: "pairs", member-count: 5, open-seats: 0,
+                    variant: "pairs", member-count: 9, open-seats: 0, more-pairs: 2,
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
@@ -4666,6 +4666,10 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                           chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
                           chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                        { name: "Kim", initials: "K", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 2, has-chip: true,
+                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "21", unit: "installed", hue-index: 1 } },
+                        { name: "Ola", initials: "O", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 1, them-count: 3, has-chip: true,
+                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "7.2", unit: "h this week", hue-index: 2 } },
                     ],
                 },
             },
@@ -4698,7 +4702,7 @@ export component PreviewFeedFiveMembers inherits Rectangle {
             {
                 id: "invite", card-type: "invite", role: "standard", size: "md",
                 head2head: {
-                    variant: "invite", member-count: 5,
+                    variant: "invite", member-count: 9, more-members: 4,
                     members: [bob, jonas, sara, max, leo],
                 },
             },

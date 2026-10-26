@@ -20,7 +20,7 @@ pub const SEATS: i32 = 5;
 pub const INVITE_CARD_MAX_MEMBERS: i32 = 9;
 /// Most pair rows on the card: two columns of two. The card is always two grid
 /// columns wide. A "+N more" line counts the pairs that do not fit.
-pub const PAIR_ROWS: usize = 4;
+pub const PAIR_ROWS: usize = 6;
 /// Most octagons on the invite card. More members show as "+N".
 pub const INVITE_CARD_MEMBERS: usize = 8;
 /// Chips on the wide card and the versus card.
@@ -1361,12 +1361,13 @@ mod tests {
         let m = build(&data, &me(), &roster, NOW).unwrap();
         assert_eq!(m.placement, Placement::Pairs);
         assert_eq!(m.open_seats, 0);
-        assert_eq!(m.pairs.len(), PAIR_ROWS);
+        assert_eq!(m.pairs.len(), 4);
     }
 
     /// Frame D: five members, four pairs, all four on the card in two columns.
     /// No "+N more" line, because no row remains. Four members have three pairs
-    /// and seats; six members have five pairs, so one remains.
+    /// and seats; seven members have six pairs, all shown; eight have seven, so
+    /// one remains.
     #[test]
     fn five_members_show_four_pairs_and_no_more_line() {
         let roster = |id: &str| Person::new(id, id);
@@ -1390,10 +1391,16 @@ mod tests {
         assert_eq!(to_slint(&m, &|_| None).more_pairs, 0);
 
         let mut six = pairs;
-        six.push(pair("u6", 1, 1));
-        let data = feed(6, vec![], six, None);
+        six.extend([pair("u6", 1, 1), pair("u7", 1, 1)]);
+        let data = feed(7, vec![], six.clone(), None);
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.pairs.len(), 4);
+        assert_eq!(m.pairs.len(), 6, "three rows in each column");
+        assert_eq!(to_slint(&m, &|_| None).more_pairs, 0);
+
+        six.push(pair("u8", 1, 1));
+        let data = feed(8, vec![], six, None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.pairs.len(), 6);
         assert_eq!(to_slint(&m, &|_| None).more_pairs, 1);
     }
 
@@ -1674,23 +1681,30 @@ mod tests {
     }
 
     #[test]
-    fn the_pairs_card_keeps_the_four_closest_pairs_and_counts_the_rest() {
-        // More than five members: four rows, the closest tallies first.
+    fn the_pairs_card_keeps_the_six_closest_pairs_and_counts_the_rest() {
+        // Eight pairs: six rows, three in each column, the closest tallies first.
         let pairs = vec![
             pair("u2", 9, 0),
             pair("u3", 4, 5),
             pair("u4", 7, 2),
             pair("u5", 3, 3),
             pair("u6", 0, 8),
+            pair("u7", 2, 2),
+            pair("u8", 6, 1),
+            pair("u9", 0, 12),
         ];
-        let data = feed(6, vec![], pairs, None);
+        let data = feed(9, vec![], pairs, None);
         let m = build(&data, &me(), &roster, NOW).unwrap();
         assert_eq!(m.placement, Placement::Pairs);
         let order: Vec<&str> = m.pairs.iter().map(|p| p.opponent.id.as_str()).collect();
-        assert_eq!(order, ["u5", "u3", "u4", "u6"], "gaps 0, 1, 5, 8");
-        assert_eq!(m.pairs_total, 5);
+        assert_eq!(
+            order,
+            ["u5", "u7", "u3", "u4", "u8", "u6"],
+            "gaps 0, 0, 1, 5, 5, 8"
+        );
+        assert_eq!(m.pairs_total, 8);
         let d = to_slint(&m, &|_| None);
-        assert_eq!((d.pairs_total, d.more_pairs), (5, 1));
+        assert_eq!((d.pairs_total, d.more_pairs), (8, 2));
     }
 
     #[test]

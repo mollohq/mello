@@ -193,7 +193,7 @@ A crew of one gets the wide card (frame A of the mockup). The card shows the vie
 
 ### Pair rows on the wide card
 
-The card shows the viewer's closest pairs (smallest gap first) in two columns, up to four. The first column fills first: two members show one pair on each side, three pairs show two and one, five members show two rows of pairs side by side (frame D). A "+N more" line shows only when pairs remain, from six members. Under five members the card also has the deciding chips, the open seats and the red invite. From five members the seats and the button are gone, and the invite card stands beside the head2head card, for 5 to 9 members. From 10 members there is no invite card.
+The card shows the viewer's closest pairs (smallest gap first) in two columns, up to six: the card fills its height, three rows in each column. The first column fills first: two members show one pair on each side, three pairs show two and one, five members show two rows of pairs side by side (frame D), nine members show three rows in each column. With three rows in a column the "held N days" line under the chip is left out, and the row spacing stays. "+N more" stands in the last row, after the tally, only when pairs remain, from eight members. Under five members the card also has the deciding chips, the open seats and the red invite. From five members the seats and the button are gone, and the invite card stands beside the head2head card, for 5 to 9 members. From 10 members there is no invite card.
 
 ### Unread dot on a pair row
 

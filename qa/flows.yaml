@@ -496,10 +496,10 @@ flows:
     issues: []
 
   - id: FEED-06
-    title: "Crew feed with 20 members: three closest pairs and a +N more line, invite card with eight octagons and a +N"
+    title: "Crew feed with 20 members: six closest pairs with +N more in the last row, no invite card"
     priority: P1
     users: 1
-    harness: [invite_card_shows_eight_members_then_a_count]
+    harness: [invite_card_shows_up_to_nine_members_and_is_gone_from_ten, head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_columns]
     journeys: [qa/journeys/feed-stage-twenty.ts]
     protocol: []
     issues: []
@@ -508,7 +508,7 @@ flows:
     title: "Crew feed with 50 members: the feed loads in under 3 s and no layout breaks"
     priority: P1
     users: 1
-    harness: [invite_card_shows_eight_members_then_a_count]
+    harness: [invite_card_shows_up_to_nine_members_and_is_gone_from_ten]
     journeys: [qa/journeys/feed-stage-fifty.ts]
     protocol: []
     issues: []
