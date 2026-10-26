@@ -301,6 +301,9 @@ export component MainWindow inherits Window {
     in-out property <float> settings-vad-threshold: -40.0;
     in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
+    in property <string> settings-build-commit: "unknown";
+    in property <string> settings-build-date: "unknown";
+    callback about-notices-requested();
     in-out property <bool> settings-show-saved: false;
     // HUD settings
     in-out property <bool> settings-hud-enabled: true;
@@ -1713,6 +1716,9 @@ export component MainWindow inherits Window {
         vad-threshold <=> root.settings-vad-threshold;
         vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
+        build-commit: root.settings-build-commit;
+        build-date: root.settings-build-date;
+        about-notices-requested => { root.about-notices-requested(); }
         show-saved <=> root.settings-show-saved;
         // HUD
         settings-hud-enabled <=> root.settings-hud-enabled;

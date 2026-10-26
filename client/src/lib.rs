@@ -397,6 +397,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    app.set_settings_build_commit(build_info::commit_label().into());
+    app.set_settings_build_date(build_info::built_date().into());
 
     // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
     // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the
