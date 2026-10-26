@@ -153,6 +153,46 @@ export struct RecapBeltHeldRow {
     titles: [RecapHeldTitle],
 }
 
+// A member in a weekly recap: the most active and the most clipped, and the
+// members of the clip of the week. `count` is minutes for the most active and
+// clips for the most clipped.
+export struct RecapPerson {
+    name: string,
+    initials: string,
+    hue: int,
+    avatar: image,
+    has-avatar: bool,
+    count: int,
+}
+
+// One game of the weekly recap with the time the crew spent in it. The art
+// ladder is the recent games tile's.
+export struct RecapGameRow {
+    game-id: string,
+    name: string,
+    monogram: string,
+    hue-index: int,
+    icon: image,
+    has-icon: bool,
+    capsule: image,
+    has-capsule: bool,
+    minutes: int,
+}
+
+// The longest clip of the recap week. `clip-path` is "" when the week had no
+// clip, and the opened recap shows no section then.
+export struct RecapClip {
+    clip-path: string,
+    title: string,
+    duration: string,
+    duration-ms: int,
+    game-name: string,
+    when: string,
+    waveform: [float],
+    people: [RecapPerson],
+    names: string,
+}
+
 // One game tile on the recent games card (CLIPS 7, 22 section 3.4). Keyed by
 // game id. Art ladder: the runtime icon (server or crew), else the local
 // Steam header (`capsule`), else the two-letter `monogram` in the game's hue.
@@ -403,6 +443,24 @@ export struct FeedCardData {
     // or more make the card a poster grid in a two-column slot; one is the
     // list. 0 when the server does not say.
     recent-pc-count: int,
+
+    // Weekly recap (card-type "recap"): the grid rows the tall card takes. 3
+    // with belts, 2 without, 0 for a recap with nothing to show (a cell is
+    // never drawn). Set in Rust (`recap_rows`).
+    recap-rows: int,
+    // Weekly recap (card-type "recap"): the most active member (`count` is
+    // minutes) and the most clipped (`count` is clips); "" in `name` when the
+    // week has none.
+    recap-active: RecapPerson,
+    recap-clipped: RecapPerson,
+    // Every game of the week, the most hours first, and the minutes of all of
+    // them. The card shows four, the opened recap shows them all.
+    recap-games: [RecapGameRow],
+    recap-games-min: int,
+    // The longest clip of the week.
+    recap-clip: RecapClip,
+    // "12 to 18 October".
+    recap-range: string,
 
     // Head2head card and invite card (card-type "head2head" / "invite").
     head2head: Head2headData,

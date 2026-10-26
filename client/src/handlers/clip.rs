@@ -9,8 +9,8 @@ use crate::converters::{avatar_color_index, make_initials};
 use crate::head2head::{self, Person, Placement};
 use crate::sealed::{self, Seal};
 use crate::{
-    FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapHeldTitle, RecapLbRow,
-    RecentGameTile,
+    FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapClip, RecapGameRow,
+    RecapHeldTitle, RecapLbRow, RecapPerson, RecentGameTile,
 };
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
@@ -1395,6 +1395,156 @@ fn extract_recap_awards(data: &serde_json::Value) -> Vec<RecapAwardRow> {
         .collect()
 }
 
+/// A member of a recap with the avatar the client holds. `count` is minutes or
+/// clips, by the caller.
+fn recap_person(ctx: &AppContext, user_id: &str, name: &str, count: i64) -> RecapPerson {
+    let (avatar, has_avatar) = resolve_avatar(ctx, user_id);
+    RecapPerson {
+        name: name.into(),
+        initials: make_initials(name).into(),
+        hue: avatar_color_index(if user_id.is_empty() { name } else { user_id }),
+        avatar,
+        has_avatar,
+        count: count.clamp(0, i64::from(i32::MAX)) as i32,
+    }
+}
+
+/// The most active member of a weekly recap, with the minutes. The default
+/// (no name) when the recap has none.
+fn extract_recap_active(ctx: &AppContext, data: &serde_json::Value) -> RecapPerson {
+    let Some(top) = data
+        .get("top_members")
+        .and_then(|v| v.as_array())
+        .and_then(|a| a.first())
+    else {
+        return RecapPerson::default();
+    };
+    let name = top.get("display_name").and_then(|v| v.as_str()).unwrap_or("");
+    if name.is_empty() {
+        return RecapPerson::default();
+    }
+    let id = top.get("user_id").and_then(|v| v.as_str()).unwrap_or("");
+    let min = top.get("hangout_min").and_then(|v| v.as_i64()).unwrap_or(0);
+    recap_person(ctx, id, name, min)
+}
+
+/// The member with the most clips of the week, with the count. The default when
+/// nobody clipped.
+fn extract_recap_clipped(ctx: &AppContext, data: &serde_json::Value) -> RecapPerson {
+    let name = data
+        .get("most_clipped")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    let count = data
+        .get("most_clipped_count")
+        .and_then(|v| v.as_i64())
+        .unwrap_or(0);
+    // A recap stored before the count existed names the member and no more.
+    if name.is_empty() || count <= 0 {
+        return RecapPerson::default();
+    }
+    let id = data
+        .get("most_clipped_user_id")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
+    recap_person(ctx, id, name, count)
+}
+
+/// Every game of the recap week with its minutes, most first, and the total.
+/// A game with no minutes (a recap stored before `minutes`) is left out.
+fn extract_recap_games(ctx: &AppContext, data: &serde_json::Value) -> (Vec<RecapGameRow>, i32) {
+    let Some(arr) = data.get("games_played").and_then(|v| v.as_array()) else {
+        return (Vec::new(), 0);
+    };
+    let mut rows: Vec<RecapGameRow> = arr
+        .iter()
+        .filter_map(|v| {
+            let name = v.get("game").and_then(|g| g.as_str())?.to_string();
+            let minutes = v.get("minutes").and_then(|m| m.as_i64()).unwrap_or(0);
+            if name.is_empty() || minutes <= 0 {
+                return None;
+            }
+            let (game_id, _, _) = resolve_game_meta(ctx, "", &name);
+            let art = crate::game_icons::resolve_tile_art(ctx, "", &game_id, &name);
+            Some(RecapGameRow {
+                monogram: crate::recent_games::monogram(&name).into(),
+                hue_index: crate::recent_games::hue_index(&game_id, &name),
+                game_id: game_id.into(),
+                name: name.into(),
+                icon: art.icon,
+                has_icon: art.has_icon,
+                capsule: art.capsule,
+                has_capsule: art.has_capsule,
+                minutes: minutes.clamp(0, i64::from(i32::MAX)) as i32,
+            })
+        })
+        .collect();
+    rows.sort_by_key(|r| std::cmp::Reverse(r.minutes));
+    let total = rows.iter().map(|r| r.minutes).sum();
+    (rows, total)
+}
+
+/// The clip of the week: the longest clip, which the clip player can play. The
+/// default (no path) when the week had no clip or the clip has no media.
+fn extract_recap_clip(ctx: &AppContext, data: &serde_json::Value) -> RecapClip {
+    let Some(c) = data.get("clip_of_week").filter(|v| v.is_object()) else {
+        return RecapClip::default();
+    };
+    let str_of = |k: &str| c.get(k).and_then(|v| v.as_str()).unwrap_or("").to_string();
+    let clip_path = c
+        .get("media_url")
+        .and_then(|v| v.as_str())
+        .filter(|s| !s.is_empty())
+        .unwrap_or("")
+        .to_string();
+    let secs = c
+        .get("duration_seconds")
+        .and_then(|v| v.as_f64())
+        .unwrap_or(0.0);
+    let whole = secs.round().max(0.0) as u32;
+    let names: Vec<String> = c
+        .get("participant_names")
+        .and_then(|v| v.as_array())
+        .map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect())
+        .unwrap_or_default();
+    let people: Vec<RecapPerson> = names
+        .iter()
+        .take(4)
+        .map(|n| recap_person(ctx, "", n, 0))
+        .collect();
+    let when = c
+        .get("ts")
+        .and_then(|v| v.as_i64())
+        .filter(|&t| t > 0)
+        .map(|t| crate::feed_age::weekday_of(t).to_string())
+        .unwrap_or_default();
+    let waveform = c
+        .get("waveform")
+        .and_then(|v| v.as_str())
+        .map(decode_clip_waveform)
+        .unwrap_or_default();
+    RecapClip {
+        clip_path: clip_path.into(),
+        title: str_of("title").into(),
+        duration: format!("{}:{:02}", whole / 60, whole % 60).into(),
+        duration_ms: (secs * 1000.0).round() as i32,
+        game_name: str_of("game").into(),
+        when: when.into(),
+        waveform: ModelRc::new(VecModel::from(waveform)),
+        people: ModelRc::new(VecModel::from(people)),
+        names: join_names(&names).into(),
+    }
+}
+
+/// "Bob", "Bob and Max", "Bob, Max and Sara".
+fn join_names(names: &[String]) -> String {
+    match names.len() {
+        0 => String::new(),
+        1 => names[0].clone(),
+        n => format!("{} and {}", names[..n - 1].join(", "), names[n - 1]),
+    }
+}
+
 /// Compact "this week in games" summary, e.g. "312 matches · CS2, Rocket League".
 fn games_summary(data: &serde_json::Value) -> String {
     let arr = match data.get("games_played").and_then(|v| v.as_array()) {
@@ -2038,6 +2188,43 @@ fn build_feed_card(
     }
     let recap_belts_held = extract_recap_belts_held(ctx, &data);
     let recap_games_summary = games_summary(&data);
+    let is_weekly_recap = backend_type == "weekly_recap";
+    let recap_active = if is_weekly_recap {
+        extract_recap_active(ctx, &data)
+    } else {
+        Default::default()
+    };
+    let recap_clipped = if is_weekly_recap {
+        extract_recap_clipped(ctx, &data)
+    } else {
+        Default::default()
+    };
+    let (recap_games, recap_games_min) = if is_weekly_recap {
+        extract_recap_games(ctx, &data)
+    } else {
+        (Vec::new(), 0)
+    };
+    // The tall card is three grid rows high with belts and two without. A recap
+    // with nothing to show is never a card (`recap_rows` 0).
+    let recap_rows: i32 = if !is_weekly_recap {
+        0
+    } else if !recap_belts_moved.is_empty() || !recap_belts_held.is_empty() {
+        3
+    } else if !recap_leaderboard.is_empty()
+        || !recap_awards.is_empty()
+        || !recap_games.is_empty()
+        || !recap_active.name.is_empty()
+        || !recap_clipped.name.is_empty()
+    {
+        2
+    } else {
+        0
+    };
+    let recap_clip = if is_weekly_recap {
+        extract_recap_clip(ctx, &data)
+    } else {
+        Default::default()
+    };
     let is_daily_recap = backend_type == "daily_recap";
     let day_members = if is_daily_recap {
         daily_recap_members(ctx, &data)
@@ -2190,6 +2377,21 @@ fn build_feed_card(
         mvp2_avatar: mvp2_av,
         mvp2_has_avatar: mvp2_has_av,
         games_summary: recap_games_summary.into(),
+        recap_rows,
+        recap_active,
+        recap_clipped,
+        recap_games: ModelRc::new(VecModel::from(recap_games)),
+        recap_games_min,
+        recap_clip,
+        recap_range: if is_weekly_recap {
+            crate::feed_age::week_range(
+                data.get("week_start").and_then(|v| v.as_i64()).unwrap_or(0),
+                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+            )
+        } else {
+            String::new()
+        }
+        .into(),
         leaderboard: ModelRc::new(VecModel::from(recap_leaderboard)),
         awards: ModelRc::new(VecModel::from(recap_awards)),
         belts_moved: ModelRc::new(VecModel::from(recap_belts_moved)),

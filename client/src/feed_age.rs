@@ -51,6 +51,36 @@ pub fn date_label(ms: i64) -> String {
     format!("{day} {}", MONTHS[(month - 1) as usize])
 }
 
+/// The day, the month and the year of an instant, UTC, as numbers.
+fn civil(ms: i64) -> (i64, usize, i64) {
+    let z = ms.div_euclid(DAY_MS) + 719_468;
+    let era = z.div_euclid(146_097);
+    let doe = z.rem_euclid(146_097);
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = if mp < 10 { mp + 3 } else { mp - 9 };
+    let year = yoe + era * 400 + i64::from(month <= 2);
+    (day, (month - 1) as usize, year)
+}
+
+/// The days of a recap week: "12 to 18 October", or "28 September to 4
+/// October" across a month. `week_end_ms` is the Monday that ends the week, so
+/// the last day is the one before it. Empty without a time.
+pub fn week_range(week_start_ms: i64, week_end_ms: i64) -> String {
+    if week_start_ms <= 0 || week_end_ms <= week_start_ms {
+        return String::new();
+    }
+    let (d0, m0, _) = civil(week_start_ms);
+    let (d1, m1, _) = civil(week_end_ms - 1);
+    if m0 == m1 {
+        format!("{d0} to {d1} {}", MONTHS[m1])
+    } else {
+        format!("{d0} {} to {d1} {}", MONTHS[m0], MONTHS[m1])
+    }
+}
+
 /// How long ago, plainly: "Today", "Yesterday", "2 days ago", "Last week",
 /// "3 weeks ago". By UTC day. Empty without a time.
 pub fn ago_label(then_ms: i64, now_ms: i64) -> String {
@@ -103,6 +133,20 @@ mod tests {
     const DAY: i64 = DAY_MS;
     // Monday 5 October 2026, 00:00 UTC.
     const MON_5_OCT: i64 = 20_731 * DAY;
+
+    #[test]
+    fn a_week_reads_as_its_first_and_last_day() {
+        // Monday 12 October 2026 to the Monday after.
+        let start = MON_5_OCT + 7 * DAY;
+        assert_eq!(week_range(start, start + 7 * DAY), "12 to 18 October");
+        // Monday 28 September to Sunday 4 October.
+        let start = MON_5_OCT - 7 * DAY;
+        assert_eq!(
+            week_range(start, start + 7 * DAY),
+            "28 September to 4 October"
+        );
+        assert_eq!(week_range(0, 0), "");
+    }
 
     #[test]
     fn the_weekday_is_right() {
