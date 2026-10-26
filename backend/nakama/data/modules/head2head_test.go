@@ -475,7 +475,8 @@ func (f *fakeGuestNk) StorageList(_ context.Context, _, userID, collection strin
 	var out []*api.StorageObject
 	for k, v := range f.storage {
 		if strings.HasPrefix(k, prefix) && strings.HasSuffix(k, suffix) {
-			out = append(out, &api.StorageObject{Collection: collection, UserId: userID, Value: v})
+			key := strings.TrimSuffix(strings.TrimPrefix(k, prefix), suffix)
+			out = append(out, &api.StorageObject{Collection: collection, Key: key, UserId: userID, Value: v})
 		}
 	}
 	return out, "", nil

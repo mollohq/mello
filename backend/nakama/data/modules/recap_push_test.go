@@ -254,15 +254,6 @@ func (j *jobNk) GroupsList(_ context.Context, _, _ string, _ *int, _ *bool, _ in
 	return out, "", nil
 }
 
-func (j *jobNk) StorageList(ctx context.Context, caller, userID, collection string, limit int, cursor string) ([]*api.StorageObject, string, error) {
-	objs, next, err := j.fakeGuestNk.StorageList(ctx, caller, userID, collection, limit, cursor)
-	for _, o := range objs {
-		// The fake keeps no key on a listed object; recover it from the crew doc.
-		o.Key = "crew"
-	}
-	return objs, next, err
-}
-
 func newJobNk() *jobNk {
 	return &jobNk{fakeGuestNk: recapFixture(), crews: []string{"crew"}}
 }
