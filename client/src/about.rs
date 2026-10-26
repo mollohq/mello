@@ -3,7 +3,7 @@
 //! `build.rs` writes the asset (see `build_notices.rs` for the format). It is
 //! embedded as one string and parsed on the first open of the notices view.
 
-use crate::NoticeEntryData;
+use crate::{MainWindow, NoticeEntryData};
 
 static NOTICES: &str = include_str!(concat!(env!("OUT_DIR"), "/third_party_notices.txt"));
 
@@ -31,6 +31,14 @@ pub fn parse(asset: &str) -> Vec<Notice<'_>> {
             })
         })
         .collect()
+}
+
+/// Show the version, the commit and the build day on the About tab and in the
+/// settings sidebar.
+pub fn show_build(app: &MainWindow) {
+    app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    app.set_settings_build_commit(crate::build_info::commit_label().into());
+    app.set_settings_build_date(crate::build_info::built_date().into());
 }
 
 /// The embedded notices, for the Slint model.
