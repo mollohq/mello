@@ -87,7 +87,9 @@ func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, re
 type RecapMember struct {
 	UserID      string `json:"user_id"` // for client-side avatar resolution (spec 19)
 	DisplayName string `json:"display_name"`
-	HangoutMin  int    `json:"hangout_min"`
+	// HangoutMin is the minutes the member spent in voice, on a stream and in a
+	// game this week. Recaps stored before this held the member's event count.
+	HangoutMin int `json:"hangout_min"`
 }
 
 // RecapGameRecord is a member's win/loss record across the week (spec 18).
@@ -242,6 +244,10 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	gameDurations := make(map[string]int)
 	gameMinutes := make(map[string]int)
 	actorActivity := make(map[string]int)
+	// Minutes each member spent in voice, on a stream and in a game. "Most
+	// active" ranks by these, and falls back to the event count when a week has
+	// no minutes.
+	actorMinutes := make(map[string]int)
 	actorClips := make(map[string]int)
 	actorWins := make(map[string]int)
 	actorLosses := make(map[string]int)
@@ -272,6 +278,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalHangoutMin += d.DurationMin
+			for _, id := range d.ParticipantIDs {
+				actorMinutes[id] += d.DurationMin
+			}
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
 				longestSessionDesc = fmt.Sprintf("%s in %s (%dm)",
@@ -282,6 +291,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalHangoutMin += d.DurationMin
+			if d.StreamerID != "" {
+				actorMinutes[d.StreamerID] += d.DurationMin
+			}
 			if d.DurationMin > longestSessionMin {
 				longestSessionMin = d.DurationMin
 				longestSessionDesc = fmt.Sprintf("%s streaming %s (%dm)",
@@ -292,6 +304,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 			json.Unmarshal(dataBytes, &d)
 			sessionCount++
 			totalGameMin += reportableMinutes(d.DurationMin, d.ActiveMin)
+			if e.ActorID != "" {
+				actorMinutes[e.ActorID] += reportableMinutes(d.DurationMin, d.ActiveMin)
+			}
 			gameDurations[d.GameName] += d.DurationMin
 			if d.GameName != "" {
 				gameMinutes[d.GameName] += reportableMinutes(d.DurationMin, d.ActiveMin)
@@ -333,12 +348,16 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		}
 	}
 
-	mostActive := topActor(actorActivity, ctx, nk)
+	activeSource := actorMinutes
+	if len(activeSource) == 0 {
+		activeSource = actorActivity
+	}
+	mostActive := topActor(activeSource, ctx, nk)
 	// One pass picks the id and the name, so a tie cannot give the name of one
 	// member and the id of another.
 	mostClippedID, mostClippedCount := topKeyCount(actorClips)
 	mostClipped := resolveOrID(ctx, nk, mostClippedID)
-	topMembers := topActors(actorActivity, 3, ctx, nk)
+	topMembers := topActors(activeSource, 3, ctx, nk)
 	gameRecords := buildGameRecords(actorWins, actorLosses, ctx, nk)
 
 	bestStreakName := resolveOrID(ctx, nk, bestStreakActor)
