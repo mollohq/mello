@@ -6,7 +6,7 @@ import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
-import { Head2headCardWide, Head2headCell, H2hCellSize, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
+import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
 import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease, Clock } from "../components/sealed.slint";
 import { SealedStage } from "./sealed_stage.slint";
 import { SealedFixtures } from "../previews/sealed_fixtures.slint";
@@ -2879,10 +2879,6 @@ component FeedSlot inherits Rectangle {
     in property <string> clip-position-text: "";
     in property <string> clip-duration-text: "";
     in property <int> clip-duration-ms: 0;
-    /// The slot is one column, not the wide slot: the side column beside a
-    /// live stream, or the cell beside a live session. A wide head2head card
-    /// does not fit there.
-    in property <bool> side-column: false;
     callback play-clicked(string);
     callback seek-clip-ms(int);
     callback session-seen(string);
@@ -2974,7 +2970,9 @@ component FeedSlot inherits Rectangle {
         width: parent.width; height: parent.height;
     }
     // Head2head: the variant is the placement rule, see client/src/head2head.rs.
-    if card.card-type == "head2head" && card.head2head.variant == "wide" && !root.side-column: Head2headCardWide {
+    // The card is always two columns wide: `feed_grid.rs` gives it a wide slot.
+    // A crew of one has the chips, a crew of two or more the pair rows.
+    if card.card-type == "head2head" && card.head2head.variant == "wide": Head2headCardWide {
         width: parent.width; height: parent.height;
         member-name: card.head2head.left-name;
         member-initials: card.head2head.left-initials;
@@ -2983,16 +2981,6 @@ component FeedSlot inherits Rectangle {
         hue-index: card.head2head.left-hue-index;
         open-seats: card.head2head.open-seats;
         titles: card.head2head.chips;
-        invite-clicked => { root.invite-clicked(); }
-    }
-    // A live stream holds the hero and sends the first two cards to the side
-    // column. A crew of one has no pair to show, so the wide card gives way
-    // to the cell: its seats as "+N", the invite beside them.
-    if card.card-type == "head2head" && card.head2head.variant == "wide" && root.side-column: Head2headCell {
-        width: parent.width; height: parent.height;
-        viewer-name: card.head2head.left-name;
-        pairs: [];
-        open-seats: card.head2head.open-seats;
         invite-clicked => { root.invite-clicked(); }
     }
     if card.card-type == "head2head" && card.head2head.variant == "belt": BeltHero {
@@ -3017,7 +3005,7 @@ component FeedSlot inherits Rectangle {
         open-seats: card.head2head.open-seats;
         invite-clicked => { root.invite-clicked(); }
     }
-    if card.card-type == "head2head" && (card.head2head.variant == "cell" || card.head2head.variant == "cell-full"): Head2headCell {
+    if card.card-type == "head2head" && card.head2head.variant == "pairs": Head2headCardPairs {
         width: parent.width; height: parent.height;
         viewer-name: card.head2head.left-name;
         pairs: card.head2head.pairs;
@@ -3155,41 +3143,44 @@ export component CrewFeed inherits Rectangle {
         && cards[0].card-type == "recap"
         && (cards[0].leaderboard.length > 0 || cards[0].awards.length > 0
             || cards[0].belts-moved.length > 0 || cards[0].belts-held.length > 0);
+    // Head2head is two columns wide, so it never stands in the column: up to two
+    // cards that are not head2head do (`grid_start` in `feed_grid.rs`).
+    property <bool> first-is-h2h: cards.length > 0 && cards[0].card-type == "head2head"
+        && (cards[0].head2head.variant == "wide" || cards[0].head2head.variant == "pairs");
+    property <bool> second-is-h2h: cards.length > 1 && cards[1].card-type == "head2head"
+        && (cards[1].head2head.variant == "wide" || cards[1].head2head.variant == "pairs");
     property <int> stream-side-consumed: stream-recap ? 1
         : stream-cards.length == 1 && cards.length > 0
-        ? Math.min(2, cards.length)
+        ? (first-is-h2h ? 0 : second-is-h2h ? 1 : Math.min(2, cards.length))
         : two-streams-recap ? 1
         : two-streams ? Math.min(2, cards.length) : 0;
     property <int> feed-start-index: stream-side-consumed;
     property <bool> hero-is-clip: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "clip"
         && cards[feed-start-index].is-hero;
-    // Head2head leads the feed in one of three ways (plans/next-gen-feed.md
-    // section 3). A versus card takes the hero slot: one full-width row, like
-    // a hero clip. A wide card takes two columns of the first row. A cell or
-    // the invite card is a plain one-column card: no hero, no wide slot.
+    // Head2head leads the feed in one of three ways. A versus card takes the
+    // hero slot: one full-width row, like a hero clip. A wide or pairs card
+    // takes two columns of the first row: head2head is always two columns wide,
+    // and `feed_grid.rs` puts it in a wide slot behind any other lead. The
+    // invite card is a plain one-column card: no hero, no wide slot.
     property <string> lead-h2h: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "head2head"
         ? cards[feed-start-index].head2head.variant : "";
     property <bool> hero-is-full-row: hero-is-clip || lead-h2h == "versus";
-    // A quiet feed (frame E): the belt hero is two columns of one row, the
-    // head2head cell stands tall beside it and two cells sit under it.
-    // Mirrors `Lead::Belt`.
+    // A quiet feed (frame E): the belt hero and head2head are two wide rows, a
+    // cell beside each. Cards in order: belt, head2head, cell, cell. Mirrors
+    // `Lead::Belt`.
     property <bool> lead-is-belt: lead-h2h == "belt";
-    // A feed that was away (frame F): two stacked cells, then the head2head
-    // cell and a recap with content, both tall. Mirrors `Lead::TallTrio`.
+    property <bool> lead-h2h-wide: lead-h2h == "wide" || lead-h2h == "pairs";
+    // A feed that was away (frame F): head2head leads, the recap stands beside
+    // it, tall, and two cells sit under head2head. Mirrors `Lead::TallTrio`.
     property <bool> lead-is-tall-trio: cards.length > feed-start-index + 3
-        && !cards[feed-start-index].is-hero
-        && !lead-is-belt && lead-h2h == ""
-        && cards[feed-start-index].card-type != "invite"
-        && cards[feed-start-index + 2].card-type == "head2head"
-        && (cards[feed-start-index + 2].head2head.variant == "cell"
-            || cards[feed-start-index + 2].head2head.variant == "cell-full")
-        && cards[feed-start-index + 3].card-type == "recap"
-        && (cards[feed-start-index + 3].leaderboard.length > 0
-            || cards[feed-start-index + 3].awards.length > 0
-            || cards[feed-start-index + 3].belts-moved.length > 0
-            || cards[feed-start-index + 3].belts-held.length > 0);
+        && lead-h2h-wide
+        && cards[feed-start-index + 1].card-type == "recap"
+        && (cards[feed-start-index + 1].leaderboard.length > 0
+            || cards[feed-start-index + 1].awards.length > 0
+            || cards[feed-start-index + 1].belts-moved.length > 0
+            || cards[feed-start-index + 1].belts-held.length > 0);
     // The first session of a crew of one stands left of the wide head2head
     // card (frame B): one cell, then two columns. Mirrors `Lead::CellWide`.
     property <bool> lead-is-cell-wide: cards.length > feed-start-index + 1
@@ -3199,13 +3190,12 @@ export component CrewFeed inherits Rectangle {
     property <bool> lead-is-live: cards.length > feed-start-index
         && cards[feed-start-index].card-type == "live-session"
         && cards[feed-start-index].live.has-poster;
-    // A live session takes the wide slot as well as the wide head2head card.
-    property <bool> lead-is-wide: lead-h2h == "wide" || lead-is-live;
+    // A live session takes the wide slot as well as the head2head card.
+    property <bool> lead-is-wide: (lead-h2h-wide && !lead-is-tall-trio) || lead-is-live;
     // After a live stream or the two-stream hero the grid is plain rows: a
     // card there is a cell, not a second hero (frame D). Mirrors
     // `Layout::lead` in `feed_grid.rs`.
-    property <bool> lead-is-plain: lead-h2h == "cell" || lead-h2h == "cell-full"
-        || (cards.length > feed-start-index && cards[feed-start-index].card-type == "joined")
+    property <bool> lead-is-plain: (cards.length > feed-start-index && cards[feed-start-index].card-type == "joined")
         || (cards.length > feed-start-index && cards[feed-start-index].card-type == "invite")
         || (feed-start-index > 0 && cards.length > feed-start-index
             && lead-h2h == "" && !lead-is-live && !hero-is-clip && !lead-is-cell-wide
@@ -3219,19 +3209,39 @@ export component CrewFeed inherits Rectangle {
             || cards[feed-start-index + 1].awards.length > 0
             || cards[feed-start-index + 1].belts-moved.length > 0
             || cards[feed-start-index + 1].belts-held.length > 0);
+    // A head2head card behind a lead stands in row 2, never in the one-column
+    // slot beside the lead: the lead then holds row 1 alone. Mirrors
+    // `wide_follows` in `feed_grid.rs`.
+    property <bool> side-is-h2h: cards.length > feed-start-index + 1
+        && cards[feed-start-index + 1].card-type == "head2head"
+        && (cards[feed-start-index + 1].head2head.variant == "wide"
+            || cards[feed-start-index + 1].head2head.variant == "pairs");
+    property <bool> wide-follows: side-is-h2h || (lead-is-wide && side-is-recap);
+    // Beside a hero, the first of the two side slots that holds head2head:
+    // row 2 starts where it stands.
+    property <bool> side2-is-h2h: cards.length > feed-start-index + 2
+        && cards[feed-start-index + 2].card-type == "head2head"
+        && (cards[feed-start-index + 2].head2head.variant == "wide"
+            || cards[feed-start-index + 2].head2head.variant == "pairs");
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
         : lead-is-plain ? 0
         : lead-is-belt || lead-is-tall-trio ? Math.min(4, cards.length - feed-start-index)
+        : lead-is-wide && wide-follows ? 1
         : lead-is-wide || lead-is-cell-wide ? Math.min(2, cards.length - feed-start-index)
         : hero-is-full-row ? 1
         : side-is-recap ? Math.min(2, cards.length - feed-start-index)
+        : side-is-h2h ? 1
+        : side2-is-h2h ? 2
         : Math.min(3, cards.length - feed-start-index);
     property <int> row2-base: feed-start-index + row1-consumed;
-    // The recent games poster grid leads row 2: it takes two columns, so the
-    // row holds two cards and every row after it moves up by one card. Mirrors
-    // `feed_grid.rs` (`Layout::r2_wide`).
+    // A wide card leads row 2: head2head, the recap or the recent games poster
+    // grid takes two columns, so the row holds two cards and every row after it
+    // moves up by one card. Mirrors `feed_grid.rs` (`Layout::r2_wide`).
     property <bool> r2-wide: cards.length > row2-base
-        && ((cards[row2-base].card-type == "recent-games"
+        && ((cards[row2-base].card-type == "head2head"
+            && (cards[row2-base].head2head.variant == "wide"
+                || cards[row2-base].head2head.variant == "pairs"))
+            || (cards[row2-base].card-type == "recent-games"
             && cards[row2-base].recent-pc-count >= 2)
             || (cards[row2-base].card-type == "recap"
                 && (cards[row2-base].leaderboard.length > 0
@@ -3379,9 +3389,8 @@ export component CrewFeed inherits Rectangle {
                         height: parent.height;
                         spacing: 12px;
 
-                        if cards.length > 0: FeedSlot {
+                        if root.stream-side-consumed >= 1: FeedSlot {
                             height: root.two-streams-recap || root.stream-recap ? parent.height : Theme.feed-row;
-                            side-column: true;
                             card: cards[0];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -3398,9 +3407,8 @@ export component CrewFeed inherits Rectangle {
                             start-voice-clicked(id) => { root.start-voice-clicked(id); }
                         }
 
-                        if cards.length > 1 && !root.two-streams-recap && !root.stream-recap: FeedSlot {
+                        if root.stream-side-consumed >= 2 && !root.two-streams-recap: FeedSlot {
                             height: Theme.feed-row;
-                            side-column: true;
                             card: cards[1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -3487,30 +3495,25 @@ export component CrewFeed inherits Rectangle {
                     start-voice-clicked(id) => { root.start-voice-clicked(id); }
                 }
 
-                // The belt hero (frame E): two columns of one row, the cell tall
-                // beside it, two cells under it.
-                if lead-is-belt && cards.length > root.feed-start-index: HorizontalLayout {
+                // The belt hero (frame E): two columns of one row with a cell
+                // beside it, then head2head, two columns, with a cell beside it.
+                // Cards in order: belt, head2head, cell, cell.
+                if lead-is-belt && cards.length > root.feed-start-index: VerticalLayout {
                     height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
-                    VerticalLayout {
-                        horizontal-stretch: 2;
+                    HorizontalLayout {
+                        height: Theme.feed-row;
                         spacing: 12px;
-
                         FeedSlot {
-                            height: Theme.feed-row;
+                            horizontal-stretch: 2;
                             card: cards[root.feed-start-index];
                             invite-clicked => { root.invite-clicked(); }
                         }
-                        HorizontalLayout {
-                            height: Theme.feed-row;
-                            spacing: 12px;
-                            for rel-idx in [2, 3]: FeedSlot {
-                                property <int> card-idx: root.feed-start-index + rel-idx;
-                                visible: cards.length > card-idx;
-                                horizontal-stretch: 1;
-                                card: cards.length > card-idx ? cards[card-idx] : { card-type: "" };
-                                playing-path: root.clip-playing-path;
+                        if cards.length > root.feed-start-index + 2: FeedSlot {
+                            horizontal-stretch: 1;
+                            card: cards[root.feed-start-index + 2];
+                            playing-path: root.clip-playing-path;
                                 clip-progress: root.clip-progress;
                                 clip-paused: root.clip-paused;
                                 clip-anim-tick: root.clip-anim-tick;
@@ -3523,36 +3526,62 @@ export component CrewFeed inherits Rectangle {
                                 session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
                                 invite-clicked => { root.invite-clicked(); }
                                 start-voice-clicked(id) => { root.start-voice-clicked(id); }
-                            }
                         }
+                        if cards.length <= root.feed-start-index + 2: Rectangle { horizontal-stretch: 1; }
                     }
-                    if cards.length > root.feed-start-index + 1: FeedSlot {
-                        horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 1];
-                        invite-clicked => { root.invite-clicked(); }
+                    HorizontalLayout {
+                        height: Theme.feed-row;
+                        spacing: 12px;
+                        if cards.length > root.feed-start-index + 1: FeedSlot {
+                            horizontal-stretch: 2;
+                            card: cards[root.feed-start-index + 1];
+                            invite-clicked => { root.invite-clicked(); }
+                        }
+                        if cards.length > root.feed-start-index + 3: FeedSlot {
+                            horizontal-stretch: 1;
+                            card: cards[root.feed-start-index + 3];
+                            playing-path: root.clip-playing-path;
+                                clip-progress: root.clip-progress;
+                                clip-paused: root.clip-paused;
+                                clip-anim-tick: root.clip-anim-tick;
+                                clip-position-text: root.clip-position-text;
+                                clip-duration-text: root.clip-duration-text;
+                                clip-duration-ms: root.clip-duration-ms;
+                                play-clicked(id) => { root.card-clicked(id); }
+                                seek-clip-ms(m) => { root.seek-clip-ms(m); }
+                                session-seen(id) => { root.session-seen(id); }
+                                session-preview-request-frame(sid, idx) => { root.session-preview-request-frame(sid, idx); }
+                                invite-clicked => { root.invite-clicked(); }
+                                start-voice-clicked(id) => { root.start-voice-clicked(id); }
+                        }
+                        if cards.length <= root.feed-start-index + 3: Rectangle { horizontal-stretch: 1; }
                     }
                 }
 
-                // A feed that was away (frame F): two stacked cells, the cell
-                // and the recap, both tall.
+                // A feed that was away (frame F): head2head leads, two columns,
+                // with two cells under it. The recap is the tall card beside both.
                 if lead-is-tall-trio: HorizontalLayout {
                     height: Theme.feed-row * 2 + 12px;
                     spacing: 12px;
 
                     VerticalLayout {
-                        horizontal-stretch: 1;
+                        horizontal-stretch: 2;
                         spacing: 12px;
-                        FeedSlot { height: Theme.feed-row; card: cards[root.feed-start-index]; }
-                        FeedSlot { height: Theme.feed-row; card: cards[root.feed-start-index + 1]; }
+                        FeedSlot {
+                            height: Theme.feed-row;
+                            card: cards[root.feed-start-index];
+                            invite-clicked => { root.invite-clicked(); }
+                        }
+                        HorizontalLayout {
+                            height: Theme.feed-row;
+                            spacing: 12px;
+                            FeedSlot { horizontal-stretch: 1; card: cards[root.feed-start-index + 2]; }
+                            FeedSlot { horizontal-stretch: 1; card: cards[root.feed-start-index + 3]; }
+                        }
                     }
                     FeedSlot {
                         horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 2];
-                        invite-clicked => { root.invite-clicked(); }
-                    }
-                    FeedSlot {
-                        horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 3];
+                        card: cards[root.feed-start-index + 1];
                     }
                 }
 
@@ -3584,10 +3613,8 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                     }
 
-                    if cards.length > root.feed-start-index + 1: FeedSlot {
+                    if cards.length > root.feed-start-index + 1 && !root.wide-follows: FeedSlot {
                         horizontal-stretch: 1;
-                        // One column: a wide head2head card gives way to the cell.
-                        side-column: true;
                         card: cards[root.feed-start-index + 1];
                         playing-path: root.clip-playing-path;
                         clip-progress: root.clip-progress;
@@ -3603,7 +3630,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         start-voice-clicked(id) => { root.start-voice-clicked(id); }
                     }
-                    if cards.length <= root.feed-start-index + 1: Rectangle { horizontal-stretch: 1; }
+                    if cards.length <= root.feed-start-index + 1 || root.wide-follows: Rectangle { horizontal-stretch: 1; }
                 }
 
                 if !hero-is-full-row && !lead-is-wide && !lead-is-cell-wide && !lead-is-belt && !lead-is-tall-trio && !lead-is-plain && cards.length > root.feed-start-index: HorizontalLayout {
@@ -3634,7 +3661,8 @@ export component CrewFeed inherits Rectangle {
                         spacing: 12px;
 
                         // A recap holds the whole column; anything else is one row.
-                        if cards.length > root.feed-start-index + 1: FeedSlot {
+                        // A head2head card behind the hero stands in row 2.
+                        if cards.length > root.feed-start-index + 1 && !root.side-is-h2h: FeedSlot {
                             height: root.side-is-recap ? parent.height : Theme.feed-row;
                             card: cards[root.feed-start-index + 1];
                             playing-path: root.clip-playing-path;
@@ -3652,7 +3680,7 @@ export component CrewFeed inherits Rectangle {
                             start-voice-clicked(id) => { root.start-voice-clicked(id); }
                         }
 
-                        if !root.side-is-recap && cards.length > root.feed-start-index + 2: FeedSlot {
+                        if !root.side-is-recap && !root.side-is-h2h && !root.side2-is-h2h && cards.length > root.feed-start-index + 2: FeedSlot {
                             height: Theme.feed-row;
                             card: cards[root.feed-start-index + 2];
                             playing-path: root.clip-playing-path;
@@ -3672,13 +3700,9 @@ export component CrewFeed inherits Rectangle {
                     }
                 }
 
-                // Row 2: Three 1x cards. The four-row head2head cell grows the
-                // row when its rows do not fit the grid height.
+                // Row 2: three 1x cards, or a wide card and one card.
                 if cards.length > root.row2-base: HorizontalLayout {
-                    height: cards[root.row2-base].card-type == "head2head" && cards[root.row2-base].head2head.variant == "cell-full"
-                        && cards[root.row2-base].head2head.pairs.length >= 4
-                        ? max(Theme.feed-row, H2hCellSize.height(cards[root.row2-base].head2head.pairs.length, cards[root.row2-base].head2head.more-pairs))
-                        : Theme.feed-row;
+                    height: Theme.feed-row;
                     spacing: 12px;
 
                     for rel-idx in (root.r2-wide ? [0, 1] : [0, 1, 2]): Rectangle {
@@ -4613,11 +4637,12 @@ export component PreviewFeedRecapWide inherits Rectangle {
 
 // Frame D: five members, week 4, Thursday. Max and Leo stream together and
 // share the wide hero, one LIVE tag and a play ring each, no filled white
-// button. The Monday recap holds the side column. The cell has no seats and no
-// button, and the invite card beside it carries the one red button. The data
-// path for a second live stream is a later phase (CLIPS 7.2): the strips draw
-// from mock data. Row order differs from the mockup: the grid has no
-// three-cell clip row.
+// button. The Monday recap holds the side column, tall. Head2head is two
+// columns wide with the pair rows in two columns and no seats and no button.
+// The live game is the cell beside it. The poster grid leads the next row, and
+// the invite card beside it carries the one red button. The data path for a
+// second live stream is a later phase (CLIPS 7.2): the strips draw from mock
+// data. Row order differs from the mockup: the grid has no three-cell clip row.
 export component PreviewFeedFiveMembers inherits Rectangle {
     width: 1200px;
     height: 1290px;
@@ -4680,11 +4705,21 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 ],
             },
             {
-                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
-                day-label: "Today so far", title: "2h 05m", clip-count: 1, day-sessions: 1,
-                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
-                day-members: [bob, sara, leo],
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "pairs", member-count: 5, open-seats: 0,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
+                        { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
+                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
+                        { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
+                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                    ],
+                },
             },
             {
                 id: "live-rl", card-type: "live-session", role: "standard", size: "md",
@@ -4697,30 +4732,6 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                         { name: "Max", initials: "M", hue-index: 2 },
                     ],
                 },
-            },
-            {
-                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
-                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
-                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
-                game-record: "2W–3L", game-wins: 2, game-losses: 3,
-                game-streak-text: "L2", game-streak-positive: false,
-                game-winrate: "40%", game-matches: 5,
-                duration-human: "2h 05m", timestamp: "5h ago",
-                actor-name: "Bob", actor-initials: "B", participant-count: 2,
-                part0-initials: "B", part1-initials: "S",
-            },
-            {
-                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
-                title: "Rocket League", game-name: "Rocket League",
-                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
-                game-record: "5W–1L", game-wins: 5, game-losses: 1,
-                game-streak-text: "W3", game-streak-positive: true,
-                game-winrate: "83%", game-matches: 6,
-                duration-human: "1h 48m", timestamp: "Yesterday",
-                actor-name: "Jonas", actor-initials: "J", participant-count: 3,
-                part0-initials: "J", part1-initials: "M", part2-initials: "L",
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
@@ -4737,34 +4748,30 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 ],
             },
             {
-                id: "clip", card-type: "clip", role: "standard", size: "md",
-                title: "Leo clipped that", actor-name: "Leo", actor-initials: "L",
-                game-name: "Counter-Strike 2", timestamp: "Thursday 22:14",
-                duration: "0:31", duration-ms: 31000, participant-count: 4,
-                part0-initials: "L", part1-initials: "B", part2-initials: "J",
-                waveform: [0.5, 0.7, 0.9, 0.6, 0.3, 0.8, 1.0, 0.7, 0.4, 0.2, 0.6, 0.9, 0.8, 0.5, 0.3, 0.7, 0.9, 0.6, 0.4, 0.8, 0.95, 0.7, 0.5, 0.3, 0.2, 0.6, 0.85, 0.9, 0.7, 0.4, 0.55, 0.8, 0.6, 0.35, 0.2, 0.5, 0.75, 0.9, 0.65, 0.4, 0.3, 0.6, 0.8, 0.95, 0.7, 0.5, 0.25, 0.4, 0.7, 0.85, 0.6, 0.35, 0.5, 0.8, 0.9, 0.65, 0.4, 0.2, 0.55, 0.75, 0.9, 0.6, 0.35, 0.2],
-            },
-            {
-                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
-                head2head: {
-                    variant: "cell-full", member-count: 5, open-seats: 0,
-                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
-                    pairs: [
-                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
-                        { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
-                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
-                    ],
-                },
-            },
-            {
                 id: "invite", card-type: "invite", role: "standard", size: "md",
                 head2head: {
                     variant: "invite", member-count: 5,
                     members: [bob, jonas, sara, max, leo],
                 },
+            },
+            {
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Today so far", title: "2h 05m", clip-count: 1, day-sessions: 1,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                day-members: [bob, sara, leo],
+            },
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                game-record: "2W–3L", game-wins: 2, game-losses: 3,
+                game-streak-text: "L2", game-streak-positive: false,
+                game-winrate: "40%", game-matches: 5,
+                duration-human: "2h 05m", timestamp: "5h ago",
+                actor-name: "Bob", actor-initials: "B", participant-count: 2,
+                part0-initials: "B", part1-initials: "S",
             },
         ];
     }
@@ -4831,6 +4838,13 @@ export component PreviewFeedLiveStreamSolo inherits Rectangle {
         ];
         cards: [
             {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "",
+                recent-games: [
+                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
+                ],
+            },
+            {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
                     variant: "wide", member-count: 1, open-seats: 4,
@@ -4840,19 +4854,13 @@ export component PreviewFeedLiveStreamSolo inherits Rectangle {
                     ],
                 },
             },
-            {
-                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
-                title: "RECENT GAMES", subtitle: "",
-                recent-games: [
-                    { game-id: "cs2", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 4, hours: "4,167 H" },
-                ],
-            },
         ];
     }
 }
 
 // A game in progress (mockup cold-start frames 5 and 8): the live card holds the
-// wide slot and the head2head card of a crew of one is the cell beside it.
+// wide slot. The head2head card of a crew of one is two columns wide, so it takes
+// the wide slot of the row under the live card.
 export component PreviewFeedLiveSession inherits Rectangle {
     width: 1000px;
     height: 640px;
@@ -4868,6 +4876,7 @@ export component PreviewFeedLiveSession inherits Rectangle {
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 live: {
                     since-min: 20, since-text: "since 20 min", names-line: "Bob and Jonas",
+                    has-poster: true, poster: @image-url("../previews/fixtures/capsule-sample-2.png"),
                     players: [
                         { name: "Bob", initials: "B", hue-index: 0 },
                         { name: "Jonas", initials: "J", hue-index: 1 },
@@ -4875,15 +4884,15 @@ export component PreviewFeedLiveSession inherits Rectangle {
                 },
             },
             {
-                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
-                head2head: { variant: "wide", member-count: 1, open-seats: 4, left-name: "Bob", left-initials: "B" },
-            },
-            {
                 id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
                 title: "Counter-Strike 2", game-name: "Counter-Strike 2",
                 game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
                 duration-human: "2h 05m", timestamp: "5h ago",
                 actor-name: "Bob", actor-initials: "B",
+            },
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: { variant: "wide", member-count: 1, open-seats: 4, left-name: "Bob", left-initials: "B" },
             },
         ];
     }
@@ -4949,8 +4958,10 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
 
 // Frame C: three members, day 5, nothing live. The hero is Jonas's stream
 // snapshot from yesterday: footage edge to edge, a play ring and no filled
-// white button. The head2head cell and a voice session card are the side
-// column. A voice clip is a plain cell, never the hero. No skeletons.
+// white button. A voice session card and a game session are the side column.
+// Head2head is two columns wide: it takes the first wide slot after the hero,
+// row 2. The poster grid takes the wide slot of row 3. A voice clip is a plain
+// cell, never the hero. No skeletons.
 export component PreviewFeedThreeMembers inherits Rectangle {
     width: 1200px;
     height: 1110px;
@@ -4978,19 +4989,6 @@ export component PreviewFeedThreeMembers inherits Rectangle {
                 snapshot-poster: @image-url("../previews/fixtures/stream-sample-1.png"),
             },
             {
-                id: "h2h", card-type: "head2head", role: "standard", size: "md",
-                head2head: {
-                    variant: "cell", member-count: 3, open-seats: 2,
-                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
-                    pairs: [
-                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,171", unit: "h", hue-index: 0 } },
-                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2 } },
-                    ],
-                },
-            },
-            {
                 id: "voice", card-type: "session", role: "standard", size: "md",
                 session-kind: "voice", title: "General", channel-name: "General",
                 duration-human: "2h 14m", peak-count: 3, participant-count: 3,
@@ -5010,12 +5008,17 @@ export component PreviewFeedThreeMembers inherits Rectangle {
                 part0-initials: "B", part1-initials: "J",
             },
             {
-                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
-                title: "Valorant", game-name: "Valorant",
-                game-short-name: "VA", game-monogram: "VA", game-hue-index: 3,
-                duration-human: "1h 30m", timestamp: "2 days ago",
-                actor-name: "Jonas", actor-initials: "J", participant-count: 2,
-                part0-initials: "J", part1-initials: "M", participants-line: "Jonas and Max",
+                id: "h2h", card-type: "head2head", role: "standard", size: "md",
+                head2head: {
+                    variant: "pairs", member-count: 3, open-seats: 2,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,171", unit: "h", hue-index: 0 } },
+                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2 } },
+                    ],
+                },
             },
             {
                 id: "daily", card-type: "daily-recap", role: "standard", size: "md",
@@ -5053,7 +5056,8 @@ export component PreviewFeedThreeMembers inherits Rectangle {
 // Frame E: four members, nobody in voice for nine days, Sunday 18 October.
 // No live stream, no stream in 24 h, no belt in 24 h and no recap this week,
 // so the quiet row takes the recap's place. The hero is the belt that moved
-// two days ago, with the head2head cell tall beside it. The one filled white
+// two days ago, two columns wide with the daily recap beside it. Head2head is
+// the wide card under it, with the voice card beside it. The one filled white
 // button is Start voice, the one red button is Invite next to the one open
 // seat.
 export component PreviewFeedQuiet inherits Rectangle {
@@ -5087,7 +5091,7 @@ export component PreviewFeedQuiet inherits Rectangle {
             {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
-                    variant: "cell", member-count: 4, open-seats: 1,
+                    variant: "pairs", member-count: 4, open-seats: 1,
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
@@ -5170,33 +5174,9 @@ export component PreviewFeedDormant inherits Rectangle {
         ];
         cards: [
             {
-                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
-                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
-                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
-                game-record: "2W–2L", game-wins: 2, game-losses: 2,
-                game-streak-text: "L1", game-streak-positive: false,
-                game-winrate: "50%", game-matches: 4,
-                duration-human: "1h 56m", timestamp: "2 October",
-                actor-name: "Bob", actor-initials: "B", participant-count: 2,
-                part0-initials: "B", part1-initials: "M",
-            },
-            {
-                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
-                title: "Rocket League", game-name: "Rocket League",
-                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
-                game-record: "3W–3L", game-wins: 3, game-losses: 3,
-                game-streak-text: "L1", game-streak-positive: false,
-                game-winrate: "50%", game-matches: 6,
-                duration-human: "2h 20m", timestamp: "29 September",
-                actor-name: "Jonas", actor-initials: "J", actor-hue-index: 1, participant-count: 2,
-                part0-initials: "J", part1-initials: "L",
-            },
-            {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
-                    variant: "cell", member-count: 4, open-seats: 1,
+                    variant: "pairs", member-count: 4, open-seats: 1,
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
@@ -5223,6 +5203,30 @@ export component PreviewFeedDormant inherits Rectangle {
                     { name: "Leo", initials: "L", hue: 4, count: 3 },
                     { name: "Bob", initials: "B", hue: 0, count: 3 },
                 ],
+            },
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Counter-Strike 2", game-name: "Counter-Strike 2",
+                game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                game-record: "2W–2L", game-wins: 2, game-losses: 2,
+                game-streak-text: "L1", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 4,
+                duration-human: "1h 56m", timestamp: "2 October",
+                actor-name: "Bob", actor-initials: "B", participant-count: 2,
+                part0-initials: "B", part1-initials: "M",
+            },
+            {
+                id: "gs2", card-type: "game-session", is-hero: false, is-skeleton: false,
+                title: "Rocket League", game-name: "Rocket League",
+                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                game-record: "3W–3L", game-wins: 3, game-losses: 3,
+                game-streak-text: "L1", game-streak-positive: false,
+                game-winrate: "50%", game-matches: 6,
+                duration-human: "2h 20m", timestamp: "29 September",
+                actor-name: "Jonas", actor-initials: "J", actor-hue-index: 1, participant-count: 2,
+                part0-initials: "J", part1-initials: "L",
             },
         ];
     }

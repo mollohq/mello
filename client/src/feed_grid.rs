@@ -46,7 +46,8 @@ use crate::FeedCardData;
 #[derive(Clone, Debug, Default)]
 pub struct CardInfo {
     pub card_type: String,
-    /// The head2head variant: "wide", "versus", "cell", "cell-full", "invite".
+    /// The head2head variant: "wide" (a crew of one), "pairs" (two or more),
+    /// "versus", "belt", "invite".
     pub variant: String,
     pub is_hero: bool,
     /// A live session with poster art: the only live card for the wide slot.
@@ -81,10 +82,17 @@ impl CardInfo {
         self.card_type == "recap" && self.recap_has_content
     }
 
-    /// A card that takes two columns when the grid has the room: the recap
-    /// and the poster grid.
+    /// The head2head card, which is always two columns wide: the chips of a
+    /// crew of one, or the pair rows of two or more. A versus card and the
+    /// belt hero are heroes of their own.
+    fn is_h2h_wide(&self) -> bool {
+        self.card_type == "head2head" && (self.variant == "wide" || self.variant == "pairs")
+    }
+
+    /// A card that takes two columns when the grid has the room: head2head,
+    /// the recap and the poster grid.
     fn is_wide_card(&self) -> bool {
-        self.is_recap() || self.recent_grid
+        self.is_h2h_wide() || self.is_recap() || self.recent_grid
     }
 }
 
@@ -124,16 +132,12 @@ impl Layout {
     }
 }
 
-/// Frame F: a head2head cell and a recap with content stand in the third and
-/// fourth place, so they are the two tall cards beside two stacked cells.
+/// Frame F: the head2head card leads, the recap stands beside it, tall in the
+/// side column, and two cells sit under the head2head card.
 fn tall_trio(cards: &[CardInfo], start: usize) -> bool {
-    let h2h = cards.get(start + 2).is_some_and(|c| {
-        c.card_type == "head2head" && (c.variant == "cell" || c.variant == "cell-full")
-    });
-    let recap = cards
-        .get(start + 3)
-        .is_some_and(|c| c.card_type == "recap" && c.recap_has_content);
-    h2h && recap
+    cards.get(start).is_some_and(CardInfo::is_h2h_wide)
+        && cards.get(start + 1).is_some_and(CardInfo::is_recap)
+        && cards.len() >= start + 4
 }
 
 fn layout(cards: &[CardInfo], start: usize) -> Layout {
@@ -143,6 +147,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         .filter(|c| c.card_type == "head2head")
         .map(|c| c.variant.as_str())
         .unwrap_or("");
+    let first_wide = first.is_some_and(CardInfo::is_h2h_wide);
     let session_then_wide = first.is_some_and(|c| c.card_type == "game-session")
         && at(start + 1).is_some_and(|c| c.card_type == "head2head" && c.variant == "wide");
     let lead = match first {
@@ -155,25 +160,32 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         Some(c) if c.card_type == "live-session" && c.has_poster => Lead::Wide,
         Some(c) if c.card_type == "clip" && c.is_hero => Lead::FullRow,
         Some(_) if variant == "versus" => Lead::FullRow,
-        Some(_) if variant == "wide" => Lead::Wide,
-        Some(c) if variant == "cell" || variant == "cell-full" || c.card_type == "invite" => {
-            Lead::Plain
-        }
+        Some(_) if first_wide => Lead::Wide,
+        Some(c) if c.card_type == "invite" => Lead::Plain,
         // After a live stream the grid is plain rows: a card there is a cell.
         Some(c) if start > 0 && !c.is_hero => Lead::Plain,
         Some(_) => Lead::Hero,
     };
-    let side_recap = at(start + 1).is_some_and(|c| c.card_type == "recap" && c.recap_has_content);
+    let side_recap = at(start + 1).is_some_and(CardInfo::is_recap);
+    // A wide card behind the lead stands in row 2, not in the one-column slot
+    // beside the lead: the lead then holds row 1 alone.
+    let wide_follows =
+        at(start + 1).is_some_and(CardInfo::is_h2h_wide) || (lead == Lead::Wide && side_recap);
+    // Beside a hero, the first of the two side slots that holds head2head.
+    let h2h_in_side = (1..=2).find(|&k| at(start + k).is_some_and(CardInfo::is_h2h_wide));
     let left = cards.len().saturating_sub(start);
     let consumed = if cards.len() <= start {
         0
     } else {
         match lead {
             Lead::Plain => 0,
+            Lead::Wide if wide_follows => 1,
             Lead::Wide | Lead::CellWide => left.min(2),
             Lead::Belt | Lead::TallTrio => left.min(4),
             Lead::FullRow => 1,
             Lead::Hero if side_recap => left.min(2),
+            // Head2head is not a side card: row 2 starts where it stands.
+            Lead::Hero if h2h_in_side.is_some() => h2h_in_side.unwrap_or(1),
             Lead::Hero => left.min(3),
         }
     };
@@ -191,9 +203,15 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
 /// grid, which has no hero.
 fn joins_at(l: &Layout, len: usize) -> usize {
     let at = if l.lead == Lead::Plain {
-        l.start + 3
+        // A wide card leads the first row: the join is the cell beside it.
+        if l.r2_wide {
+            l.start + 1
+        } else {
+            l.start + 3
+        }
     } else {
-        l.row2_base
+        // The cell beside the wide card that leads row 2, never its slot.
+        l.row2_base + usize::from(l.r2_wide)
     };
     at.min(len)
 }
@@ -209,6 +227,13 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
     }
     if l.lead == Lead::CellWide && l.start + 1 < len {
         w.push(l.start + 1); // the session cell, then the wide card
+    }
+    if l.lead == Lead::TallTrio && l.start < len {
+        w.push(l.start); // the head2head card, the recap tall beside it
+    }
+    if l.lead == Lead::Belt && l.start + 1 < len {
+        w.push(l.start); // the belt hero
+        w.push(l.start + 1); // the head2head card in row 2
     }
     if l.r2_wide {
         w.push(l.row2_base); // row 2: the poster grid and one card
@@ -263,6 +288,9 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
         for (n, &i) in more.iter().enumerate() {
             out.insert((start + 2 + n).min(out.len()), i);
         }
+        // The games moved the cards behind them: the wide cards find their
+        // slots again.
+        place_wide_cards(cards, &mut out, start);
         clips_leave_wide(cards, &mut out, start);
         out
     };
@@ -276,22 +304,15 @@ pub fn arrange(cards: &[CardInfo], start: usize) -> Vec<usize> {
             .into_iter()
             .map(|j| rest[j])
             .collect();
-        // A recap holds the side column alone: the session goes behind it.
-        let side_recap = out.get(start + 1).is_some_and(|&i| cards[i].is_recap());
-        out.insert((start + 1 + usize::from(side_recap)).min(out.len()), live);
+        // A recap holds the side column alone and the wide cards stand in
+        // their slots: `place_more` puts them right once the session is in.
+        out.insert((start + 1).min(out.len()), live);
         return place_more(out);
     }
-    // The live session leads and the head2head card is the cell beside it.
+    // The live session leads. The head2head card is always two columns wide, so
+    // it is not the cell beside it: it takes the first wide slot of row 2.
     let mut seq = rest;
     seq.insert(start.min(seq.len()), live);
-    if let Some(p) = seq
-        .iter()
-        .position(|&i| cards[i].card_type == "head2head")
-        .filter(|&p| p > start + 1)
-    {
-        let id = seq.remove(p);
-        seq.insert(start + 1, id);
-    }
     let infos: Vec<CardInfo> = seq.iter().map(|&i| cards[i].clone()).collect();
     place_more(
         arrange_core(&infos, start, false)
@@ -311,13 +332,12 @@ fn arrange_cells(cards: &[CardInfo], start: usize, rest: &[usize], lives: &[usiz
         .into_iter()
         .map(|j| rest[j])
         .collect();
-    let side_recap = out
-        .get(start + 1)
-        .is_some_and(|&i| cards[i].card_type == "recap" && cards[i].recap_has_content);
+    let side_recap = out.get(start + 1).is_some_and(|&i| cards[i].is_recap());
     let base = start + 1 + usize::from(side_recap);
     for (n, &i) in lives.iter().enumerate() {
         out.insert((base + n).min(out.len()), i);
     }
+    place_wide_cards(cards, &mut out, start);
     clips_leave_wide(cards, &mut out, start);
     out
 }
@@ -346,9 +366,12 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
             .get(start)
             .is_some_and(|c| c.card_type == "head2head" && c.variant == "wide")
     {
+        // The side column of a live stream (before `start`) keeps its cards.
         if let Some(p) = order
             .iter()
+            .skip(start)
             .position(|&i| cards[i].card_type == "game-session")
+            .map(|p| p + start)
         {
             let id = order.remove(p);
             order.insert(start, id);
@@ -362,17 +385,19 @@ fn arrange_core(cards: &[CardInfo], start: usize, no_live: bool) -> Vec<usize> {
         tall_trio_order(cards, &mut order, start);
     }
 
-    // 0c. The joined cards: after the first row, before the sessions.
+    // 1. The wide cards go to their slots: head2head, the recap, recent games.
+    place_wide_cards(cards, &mut order, start);
+
+    // 2. The joined cards: after the first row, before the sessions. They take
+    // a cell, never a wide slot, so the wide cards find their slots again.
     if !joins.is_empty() {
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let at = joins_at(&layout(&infos, start), order.len());
         for (n, &i) in joins.iter().enumerate() {
             order.insert((at + n).min(order.len()), i);
         }
+        place_wide_cards(cards, &mut order, start);
     }
-
-    // 1. The wide cards go to their slots: the recap, then recent games.
-    place_wide_cards(cards, &mut order, start);
 
     clips_leave_wide(cards, &mut order, start);
     order
@@ -382,23 +407,40 @@ fn infos_of(cards: &[CardInfo], order: &[usize]) -> Vec<CardInfo> {
     order.iter().map(|&i| cards[i].clone()).collect()
 }
 
-/// The recap and the recent games card to their slots.
+/// The wide cards to their slots: head2head, the recap and recent games.
 ///
+/// - Head2head is always two columns wide. It leads a feed with no hero. Else it
+///   takes the first wide slot after the lead block.
 /// - The recap is the tall card of the side column beside a hero, else the wide
-///   card of the first wide slot after the lead block. Never one cell.
+///   card of the next wide slot. Never one cell.
 /// - Recent games is on the first screen for every crew size. Under a hero or
-///   in a plain grid it takes the wide slot of row 3 (frames C and D); a wide
+///   in a plain grid it takes the wide slot of row 3 (frames C and D). A wide
 ///   card in row 2 pushes it one card up the order.
 ///
-/// Both cards leave the order, the lead is read from the others, and then each
-/// card goes back in at its slot, the recap first.
+/// A wide card that is not at home leaves the order, the lead is read from the
+/// other cards, and each card goes back in at its slot: head2head first, then
+/// the recap, then recent games.
 fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
     if order.len() <= start {
         return;
     }
-    let tall_trio = layout(&infos_of(cards, order), start).lead == Lead::TallTrio;
-    // The tall trio already holds its recap, tall.
-    let recap = if tall_trio {
+    let l0 = layout(&infos_of(cards, order), start);
+    // Cards that already hold their slot as part of the lead block.
+    let h2h_home = |o: &[usize], l: &Layout| match l.lead {
+        Lead::Wide | Lead::TallTrio => o.get(start).is_some_and(|&i| cards[i].is_h2h_wide()),
+        Lead::CellWide => o.get(start + 1).is_some_and(|&i| cards[i].is_h2h_wide()),
+        Lead::Belt => o.get(start + 1).is_some_and(|&i| cards[i].is_h2h_wide()),
+        _ => false,
+    };
+    let h2h = order
+        .iter()
+        .copied()
+        .find(|&i| cards[i].is_h2h_wide())
+        .filter(|_| !h2h_home(order, &l0));
+    // The tall trio already holds its recap, tall. So does the side column of
+    // one live stream, when the recap leads the feed (`grid_start`).
+    let side_tall = start == 1 && order.first().is_some_and(|&i| cards[i].is_recap());
+    let recap = if l0.lead == Lead::TallTrio || side_tall {
         None
     } else {
         order.iter().copied().find(|&i| cards[i].is_recap())
@@ -407,26 +449,38 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         .iter()
         .copied()
         .find(|&i| cards[i].card_type == "recent-games");
-    order.retain(|&i| Some(i) != recap && Some(i) != games);
+    order.retain(|&i| Some(i) != h2h && Some(i) != recap && Some(i) != games);
 
     // The slot of row 3 is one card up when row 2 leads with a wide card.
     let r3_wide = |l: &Layout| l.row2_base + if l.r2_wide { 3 } else { 4 };
+    // The first free wide slot: row 2, else row 3.
+    let next_slot = |_: &[usize], l: &Layout| {
+        if l.r2_wide {
+            r3_wide(l)
+        } else {
+            l.row2_base
+        }
+    };
+
+    // Beside a hero the recap is the tall card of the side column. It goes in
+    // first: it moves the wide slot of row 2 one card up.
+    let mut recap = recap;
+    if let Some(id) = recap {
+        if layout(&infos_of(cards, order), start).lead == Lead::Hero {
+            order.insert((start + 1).min(order.len()), id);
+            recap = None;
+        }
+    }
+
+    if let Some(id) = h2h {
+        let l = layout(&infos_of(cards, order), start);
+        let at = next_slot(order, &l);
+        order.insert(at.min(order.len()), id);
+    }
 
     if let Some(id) = recap {
         let l = layout(&infos_of(cards, order), start);
-        let at = match l.lead {
-            Lead::Hero => start + 1,
-            // A lead row of cells (the invite card, a join) stays whole: the
-            // recap takes the wide slot of the row after it.
-            Lead::Plain
-                if order.get(start).is_some_and(|&i| {
-                    matches!(cards[i].card_type.as_str(), "invite" | "joined")
-                }) =>
-            {
-                r3_wide(&l)
-            }
-            _ => l.row2_base,
-        };
+        let at = next_slot(order, &l);
         order.insert(at.min(order.len()), id);
     }
 
@@ -438,13 +492,19 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         let r3_taken = order.get(r3).is_some_and(|&i| cards[i].is_wide_card());
         let side_recap =
             l.lead == Lead::Hero && infos.get(start + 1).is_some_and(CardInfo::is_recap);
-        let target = if l.r2_wide && l.lead != Lead::TallTrio && l.lead != Lead::Belt {
+        let target = if l.r2_wide && !matches!(l.lead, Lead::TallTrio | Lead::Belt) {
             // A wide card leads row 2: the grid takes the wide slot of row 3,
             // the list is the cell beside the wide card.
             if grid && !r3_taken {
                 r3
             } else {
-                l.row2_base + 1
+                // The cell beside the wide card, behind a live session that is
+                // already there.
+                let mut at = l.row2_base + 1;
+                while infos.get(at).is_some_and(|c| c.card_type == "live-session") {
+                    at += 1;
+                }
+                at
             }
         } else {
             match l.lead {
@@ -457,57 +517,58 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
                 Lead::CellWide => start + 2,
                 // The third cell of row 2, beside the two sessions (frame E).
                 Lead::Belt | Lead::TallTrio => l.row2_base + 2,
-                // Beside a live session, behind the head2head cell that sits there.
-                Lead::Wide
-                    if infos
-                        .get(start)
-                        .is_some_and(|c| c.card_type == "live-session")
-                        && infos
-                            .get(start + 1)
-                            .is_some_and(|c| c.card_type == "head2head") =>
-                {
-                    start + 2
-                }
                 // The poster grid needs two columns. Under a hero it takes the
                 // wide slot of row 3 (frames C and D). The list stays in the side
                 // column, behind a tall recap.
                 Lead::Hero if grid => r3,
                 Lead::Hero if side_recap => l.row2_base,
-                Lead::Wide | Lead::Hero | Lead::FullRow => start + 1,
+                // The grid leads row 2 under a wide lead. The list is the cell
+                // beside it, behind the invite card of a big crew.
+                Lead::Wide if grid => l.row2_base,
+                Lead::Wide
+                    if infos
+                        .get(start + 1)
+                        .is_some_and(|c| c.card_type == "invite") =>
+                {
+                    start + 2
+                }
+                // The list is a cell beside the lead, behind a live session that
+                // is already the first one.
+                Lead::Wide | Lead::Hero | Lead::FullRow => {
+                    start
+                        + 1
+                        + usize::from(
+                            infos
+                                .get(start + 1)
+                                .is_some_and(|c| c.card_type == "live-session"),
+                        )
+                }
             }
         };
         order.insert(target.min(order.len()), id);
     }
 }
 
-/// Put a head2head cell and a recap with content in the third and fourth
-/// place, after two plain cells, when the feed has no hero (frame F). A feed
-/// that already has a lead of its own keeps it.
+/// A feed with no hero: the head2head card leads, a recap with content stands
+/// second so it is the tall card beside it, and two plain cells sit under the
+/// head2head card (frame F, a crew that was away). A feed that already has a
+/// lead of its own keeps it.
 fn tall_trio_order(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
-    let at = |o: &[usize], p: usize| o.get(p).map(|&i| &cards[i]);
-    let has_lead = at(order, start).is_none_or(|c| {
-        c.is_hero
-            || matches!(
-                c.card_type.as_str(),
-                "live-session" | "invite" | "recent-games"
-            )
-            || (c.card_type == "head2head" && c.variant != "cell" && c.variant != "cell-full")
-    });
-    if has_lead {
-        return;
-    }
-    let find = |o: &[usize], f: &dyn Fn(&CardInfo) -> bool| o.iter().position(|&i| f(&cards[i]));
-    let (Some(h), Some(r)) = (
-        find(order, &|c| {
-            c.card_type == "head2head" && (c.variant == "cell" || c.variant == "cell-full")
-        }),
-        find(order, &|c| c.card_type == "recap" && c.recap_has_content),
-    ) else {
+    let Some(&h) = order.get(start) else {
         return;
     };
-    // Two plain cells to stack: anything that is not a fixed card.
+    if !cards[h].is_h2h_wide() {
+        return;
+    }
+    let Some(&r) = order.iter().find(|&&i| cards[i].is_recap()) else {
+        return;
+    };
+    // Two plain cells to sit under the head2head card: anything that is not a
+    // fixed card.
+    // The side column of a live stream (before `start`) keeps its cards.
     let plain: Vec<usize> = order
         .iter()
+        .skip(start)
         .copied()
         .filter(|&i| !is_fixed(&cards[i].card_type))
         .take(2)
@@ -515,11 +576,9 @@ fn tall_trio_order(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
     if plain.len() < 2 {
         return;
     }
-    let (h_id, r_id) = (order[h], order[r]);
-    order.retain(|i| !plain.contains(i) && *i != h_id && *i != r_id);
-    let mut head = plain;
-    head.push(h_id);
-    head.push(r_id);
+    order.retain(|i| !plain.contains(i) && *i != h && *i != r);
+    let mut head = vec![h, r];
+    head.extend(plain);
     for (n, i) in head.into_iter().enumerate() {
         order.insert((start + n).min(order.len()), i);
     }
@@ -563,18 +622,26 @@ pub fn arrange_cards(cards: Vec<FeedCardData>, start: usize) -> Vec<FeedCardData
 }
 
 /// Arrange the cards for `live_streams` streams beside the feed. One live
-/// stream takes the first cards of the feed into its side column. A recap
-/// with content then leads and holds the column alone, tall; else two cards
-/// stand in it. Mirrors `stream-side-consumed` in `crew_feed.slint`.
+/// stream takes the first cards of the feed into its side column, one column
+/// wide. A recap with content then leads and holds the column alone, tall; else
+/// two cards stand in it, and head2head is never one of them: it is always two
+/// columns wide. Mirrors `stream-side-consumed` in `crew_feed.slint`.
 pub fn arrange_for_streams(mut cards: Vec<FeedCardData>, live_streams: usize) -> Vec<FeedCardData> {
     if live_streams == 1 {
-        if let Some(p) = cards
-            .iter()
-            .position(|c| CardInfo::of(c).is_recap())
-            .filter(|&p| p > 0)
-        {
+        let infos: Vec<CardInfo> = cards.iter().map(CardInfo::of).collect();
+        if let Some(p) = infos.iter().position(CardInfo::is_recap).filter(|&p| p > 0) {
             let recap = cards.remove(p);
             cards.insert(0, recap);
+        } else if !infos.first().is_some_and(CardInfo::is_recap) {
+            // The first two cards that are not head2head stand in the column.
+            let side: Vec<usize> = (0..infos.len())
+                .filter(|&i| !infos[i].is_h2h_wide())
+                .take(2)
+                .collect();
+            let mut slots: Vec<Option<FeedCardData>> = cards.into_iter().map(Some).collect();
+            let mut out: Vec<FeedCardData> = side.iter().filter_map(|&i| slots[i].take()).collect();
+            out.extend(slots.into_iter().flatten());
+            cards = out;
         }
     }
     let infos: Vec<CardInfo> = cards.iter().map(CardInfo::of).collect();
@@ -584,12 +651,16 @@ pub fn arrange_for_streams(mut cards: Vec<FeedCardData>, live_streams: usize) ->
 
 /// The first grid card: one live stream takes the first cards of the feed into
 /// its side column (`stream-side-consumed` in `crew_feed.slint`): the recap
-/// alone when it leads, else two cards.
+/// alone when it leads, else up to two cards that are not head2head.
 pub fn grid_start(live_streams: usize, cards: &[CardInfo]) -> usize {
     if live_streams == 1 {
         match cards.first() {
             Some(c) if c.is_recap() => 1,
-            _ => cards.len().min(2),
+            _ => cards
+                .iter()
+                .take(2)
+                .take_while(|c| !c.is_h2h_wide())
+                .count(),
         }
     } else {
         0
@@ -646,24 +717,30 @@ mod tests {
     /// The fifty-member feed of the e2e stage, with the invite card the client adds.
     fn fifty() -> Vec<CardInfo> {
         vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("invite"),
             card("clip"),
             card("game-session"),
             card("clip"),
             card("clip"),
             card("clip"),
-            card("recent-games"),
+            grid(),
             card("clip"),
         ]
     }
 
     #[test]
-    fn recent_games_takes_the_wide_slot_of_the_second_row() {
+    fn head2head_leads_and_recent_games_takes_the_wide_slot_of_row_two() {
+        // The wide head2head card and the invite card are row 1. The poster
+        // grid leads row 2, and clips fill the cells.
         let cards = fifty();
         let order = arrange(&cards, 0);
         let t = types(&cards, &order);
-        assert_eq!(t[4], "recent-games", "{t:?}");
+        assert_eq!(&t[..3], ["head2head", "invite", "recent-games"], "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        assert_eq!(l.lead, Lead::Wide);
+        assert_eq!(wide_slots(&l, infos.len())[..2], [0, 2]);
     }
 
     #[test]
@@ -681,7 +758,7 @@ mod tests {
     fn five_clips_and_nothing_else_keep_the_clip_where_it_is() {
         // Nothing to swap with: a clip stays rather than a fixed card moving.
         let cards = vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("invite"),
             card("clip"),
             card("clip"),
@@ -739,16 +816,21 @@ mod tests {
 
     #[test]
     fn a_card_order_without_recent_games_is_kept_but_clips_leave_wide() {
+        // Row 1: head2head and the invite card. Rows 2 and 3 hold cells, and
+        // the second slot of row 3 is wide: a clip there swaps with a session.
         let cards = vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("invite"),
+            card("clip"),
+            card("clip"),
+            card("clip"),
             card("clip"),
             card("clip"),
             card("clip"),
             card("game-session"),
         ];
         let order = arrange(&cards, 0);
-        assert_eq!(types(&cards, &order)[4], "game-session");
+        assert_eq!(types(&cards, &order)[6], "game-session");
     }
 
     fn grid() -> CardInfo {
@@ -811,13 +893,13 @@ mod tests {
 
     #[test]
     fn the_poster_grid_takes_the_wide_slot_of_row_three_under_a_hero() {
-        // Frame C: the stream snapshot hero, two side cards, three cells in
-        // row 2, then a clip and the grid.
+        // Frame C: the stream snapshot hero and two side cards, then head2head
+        // in the wide slot of row 2 with a cell, and the grid in row 3.
         let mut hero = card("session-preview");
         hero.is_hero = true;
         let cards = vec![
             hero,
-            h2h("cell"),
+            h2h("pairs"),
             card("session"),
             card("game-session"),
             card("game-session"),
@@ -829,9 +911,11 @@ mod tests {
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 0);
         let wide = wide_slots(&l, infos.len());
-        assert_eq!(wide, [0, 7], "the hero and the grid");
-        assert_eq!(infos[7].card_type, "recent-games");
-        assert_eq!(infos[6].card_type, "clip", "a clip is a cell, never wide");
+        // Head2head leads row 2 (two columns, always), the grid row 3.
+        assert_eq!(wide, [0, 3, 6], "the hero, head2head and the grid");
+        assert_eq!(infos[3].card_type, "head2head");
+        assert_eq!(infos[6].card_type, "recent-games");
+        assert_eq!(infos[7].card_type, "clip", "a clip is a cell, never wide");
     }
 
     #[test]
@@ -859,8 +943,8 @@ mod tests {
 
     #[test]
     fn after_a_stream_the_grid_is_plain_rows() {
-        // Frame D: the recap stands beside the two streams. Then three cells,
-        // a cell and the wide grid, then two cells.
+        // Frame D: the recap stands beside the two streams. Head2head leads the
+        // first row of the grid with the invite card beside it, then the grid.
         let cards = vec![
             card("recap"),
             card("daily-recap"),
@@ -868,20 +952,18 @@ mod tests {
             card("game-session"),
             card("clip"),
             grid(),
-            h2h("cell-full"),
+            h2h("pairs"),
             card("invite"),
         ];
         let order = arrange(&cards, 1);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 1);
-        assert_eq!(l.lead, Lead::Plain);
-        assert_eq!(l.row2_base, 1, "row 2 starts right after the side column");
-        assert_eq!(
-            wide_slots(&l, infos.len()),
-            [5],
-            "the grid is the one wide slot"
-        );
-        assert_eq!(infos[5].card_type, "recent-games");
+        assert_eq!(l.lead, Lead::Wide);
+        assert_eq!(infos[1].card_type, "head2head", "head2head leads the grid");
+        assert_eq!(l.row2_base, 3, "row 2 follows the lead row");
+        let wide = wide_slots(&l, infos.len());
+        assert_eq!(wide[..2], [1, 3], "head2head, then the grid leads row 2");
+        assert_eq!(infos[3].card_type, "recent-games");
     }
 
     fn hero_belt() -> CardInfo {
@@ -890,11 +972,11 @@ mod tests {
 
     #[test]
     fn the_belt_hero_takes_four_cards_and_the_list_the_third_cell_of_row_two() {
-        // Frame E: belt hero, head2head cell, daily recap and voice, then two
-        // sessions and the list.
+        // Frame E: the belt hero and head2head are the two wide cards, the daily
+        // recap and voice sit beside them, then two sessions and the list.
         let cards = vec![
             hero_belt(),
-            h2h("cell"),
+            h2h("pairs"),
             card("daily-recap"),
             card("voice-idle"),
             card("game-session"),
@@ -906,33 +988,35 @@ mod tests {
         let l = layout(&infos, 0);
         assert_eq!(l.lead, Lead::Belt);
         assert_eq!(l.row2_base, 4);
-        assert!(wide_slots(&l, infos.len()).is_empty());
+        assert_eq!(wide_slots(&l, infos.len()), [0, 1], "belt hero, head2head");
         assert_eq!(infos[6].card_type, "recent-games");
         assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
     }
 
     #[test]
     fn a_dormant_feed_stacks_two_cells_beside_two_tall_cards() {
-        // Frame F: the server lists the recap first and the cell in the middle.
+        // Frame F: head2head leads a feed with no hero. The recap is the tall
+        // card beside it, and two cells sit under head2head.
         let mut recap = card("recap");
         recap.recap_has_content = true;
         let cards = vec![
-            recap,
+            h2h("pairs"),
             card("game-session"),
-            h2h("cell"),
+            recap,
             card("game-session"),
         ];
         let order = arrange(&cards, 0);
         let t = types(&cards, &order);
         assert_eq!(
             t,
-            ["game-session", "game-session", "head2head", "recap"],
+            ["head2head", "recap", "game-session", "game-session"],
             "{t:?}"
         );
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 0);
         assert_eq!(l.lead, Lead::TallTrio);
         assert_eq!(l.row2_base, 4);
+        assert_eq!(wide_slots(&l, infos.len()), [0], "head2head is two columns");
         assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
     }
 
@@ -942,7 +1026,7 @@ mod tests {
         hero.is_hero = true;
         let mut recap = card("recap");
         recap.recap_has_content = true;
-        let cards = vec![hero, h2h("cell"), card("session"), recap];
+        let cards = vec![hero, h2h("pairs"), card("session"), recap];
         let order = arrange(&cards, 0);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         assert_eq!(layout(&infos, 0).lead, Lead::Hero);
@@ -991,7 +1075,7 @@ mod tests {
     #[test]
     fn a_live_session_without_poster_leaves_the_next_card_the_wide_slot() {
         let cards = vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("invite"),
             card("game-session"),
             live_cell(),
@@ -1007,12 +1091,15 @@ mod tests {
 
     #[test]
     fn a_poster_game_leads_and_a_game_without_one_is_a_cell_behind_the_first_row() {
-        let cards = vec![h2h("cell"), card("recent-games"), live_cell(), live()];
+        let cards = vec![h2h("pairs"), card("recent-games"), live_cell(), live()];
         let order = arrange(&cards, 0);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         assert!(infos[0].has_poster, "{infos:?}");
-        assert_eq!(infos[1].card_type, "head2head");
-        assert!(infos[2..].iter().any(|c| c.card_type == "live-session"));
+        assert_eq!(
+            infos[1].card_type, "live-session",
+            "the cell beside the lead"
+        );
+        assert_eq!(infos[2].card_type, "head2head", "two columns of row 2");
         assert_eq!(arrange(&infos, 0), (0..cards.len()).collect::<Vec<_>>());
     }
 
@@ -1037,7 +1124,7 @@ mod tests {
     }
 
     #[test]
-    fn a_live_session_takes_the_wide_slot_and_the_head2head_cell_sits_beside_it() {
+    fn a_live_session_takes_the_wide_slot_and_head2head_the_wide_slot_of_row_two() {
         let cards = vec![
             h2h("wide"),
             card("recent-games"),
@@ -1047,17 +1134,18 @@ mod tests {
         let order = arrange(&cards, 0);
         let t = types(&cards, &order);
         assert_eq!(t[0], "live-session", "{t:?}");
-        assert_eq!(t[1], "head2head", "{t:?}");
-        assert_eq!(t[2], "recent-games", "{t:?}");
+        assert_eq!(t[1], "game-session", "the cell beside the live session");
+        assert_eq!(t[2], "head2head", "{t:?}");
+        assert_eq!(t[3], "recent-games", "{t:?}");
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        assert_eq!(wide_slots(&layout(&infos, 0), infos.len())[0], 0);
+        assert_eq!(wide_slots(&layout(&infos, 0), infos.len())[..2], [0, 2]);
     }
 
     #[test]
-    fn a_live_no_live_a_crew_whose_cell_leads() {
-        let cards = vec![h2h("cell"), card("invite"), card("game-session"), live()];
+    fn a_live_session_leads_a_big_crew_and_head2head_is_wide_in_row_two() {
+        let cards = vec![h2h("pairs"), card("invite"), card("game-session"), live()];
         let t = types(&cards, &arrange(&cards, 0));
-        assert_eq!(&t[..3], ["live-session", "head2head", "invite"], "{t:?}");
+        assert_eq!(&t[..3], ["live-session", "invite", "head2head"], "{t:?}");
     }
 
     #[test]
@@ -1082,7 +1170,7 @@ mod tests {
     #[test]
     fn a_second_game_is_a_cell_behind_the_first_row() {
         let cards = vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("recent-games"),
             card("game-session"),
             live(),
@@ -1092,7 +1180,7 @@ mod tests {
         let t = types(&cards, &order);
         assert_eq!(
             &t[..4],
-            ["live-session", "head2head", "live-session", "recent-games"],
+            ["live-session", "game-session", "head2head", "live-session"],
             "{t:?}"
         );
         let again: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
@@ -1134,28 +1222,29 @@ mod tests {
         let cards = vec![h2h("wide"), card("recent-games"), joined()];
         let t = types(&cards, &arrange(&cards, 0));
         assert_eq!(t[2], "joined", "{t:?}");
-        // A hero: the hero and the two side cells are the first row.
+        // A hero: the hero and the two side cells are the first row. Head2head
+        // leads row 2 and the join is the cell beside it.
         let mut hero = card("session-preview");
         hero.is_hero = true;
         let cards = vec![
             hero,
-            h2h("cell"),
+            h2h("pairs"),
             card("game-session"),
             card("game-session"),
             joined(),
         ];
         let t = types(&cards, &arrange(&cards, 0));
-        assert_eq!(t[3], "joined", "{t:?}");
-        // A head2head cell leads a plain grid: three cells, then the join.
+        assert_eq!(&t[3..], ["head2head", "joined"], "{t:?}");
+        // Head2head and the invite card are row 1: the join leads row 2.
         let cards = vec![
-            h2h("cell"),
+            h2h("pairs"),
             card("invite"),
             card("game-session"),
             card("game-session"),
             joined(),
         ];
         let t = types(&cards, &arrange(&cards, 0));
-        assert_eq!(t[3], "joined", "{t:?}");
+        assert_eq!(t[2], "joined", "{t:?}");
     }
 
     #[test]
@@ -1198,7 +1287,7 @@ mod tests {
         hero.is_hero = true;
         let cards = vec![
             hero,
-            h2h("cell"),
+            h2h("pairs"),
             card("session"),
             card("game-session"),
             card("game-session"),
@@ -1233,7 +1322,7 @@ mod tests {
         if l.lead == Lead::Hero && at == start + 1 {
             return Some("tall");
         }
-        if l.lead == Lead::TallTrio && at == start + 3 {
+        if l.lead == Lead::TallTrio && at == start + 1 {
             return Some("tall");
         }
         if start == 1 && at == 0 {
@@ -1249,7 +1338,7 @@ mod tests {
         let leads: Vec<Vec<CardInfo>> = vec![
             vec![h2h("versus")],
             vec![h2h("wide")],
-            vec![h2h("cell"), card("invite")],
+            vec![h2h("pairs"), card("invite")],
             vec![hero.clone()],
             vec![live()],
             vec![card("game-session"), h2h("wide")],
@@ -1325,5 +1414,93 @@ mod tests {
         let recap_first = vec![recap(), card("game-session")];
         assert_eq!(grid_start(1, &recap_first), 1, "the recap alone");
         assert_eq!(grid_start(2, &recap_first), 0);
+    }
+
+    /// Head2head is always two columns wide: its slot is a wide slot, whatever
+    /// leads the feed, wherever the server lists it and however few cards the
+    /// feed has.
+    #[test]
+    fn head2head_is_always_in_a_wide_slot() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let leads: Vec<(Vec<CardInfo>, usize)> = vec![
+            (vec![], 0),
+            (vec![hero.clone()], 0),
+            (vec![live()], 0),
+            (vec![live_cell()], 0),
+            (vec![card("clip")], 0),
+            (vec![joined()], 0),
+            (vec![card("invite")], 0),
+            (vec![card("game-session"), card("clip")], 2),
+            (vec![recap(), card("clip")], 1),
+        ];
+        for variant in ["pairs", "wide"] {
+            for (lead, start) in &leads {
+                for extra in [0usize, 1, 2, 5] {
+                    for pos in 0..3 {
+                        let mut cards = lead.clone();
+                        for _ in 0..extra {
+                            cards.push(card("game-session"));
+                        }
+                        cards.insert((lead.len() + pos).min(cards.len()), h2h(variant));
+                        cards.push(recap());
+                        cards.push(grid());
+                        let order = arrange(&cards, *start);
+                        let infos: Vec<CardInfo> =
+                            order.iter().map(|&i| cards[i].clone()).collect();
+                        let at = infos
+                            .iter()
+                            .position(|c| c.card_type == "head2head")
+                            .expect("head2head");
+                        let l = layout(&infos, *start);
+                        assert!(
+                            wide_slots(&l, infos.len()).contains(&at),
+                            "{variant}: head2head at {at} is one column: {:?} lead {:?} start {start} extra {extra} pos {pos} from {:?}",
+                            types(&cards, &order),
+                            l.lead,
+                            types(&cards, &(0..cards.len()).collect::<Vec<_>>())
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn head2head_takes_the_first_wide_slot_after_the_hero() {
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let cards = vec![hero, card("session"), card("session"), h2h("pairs"), grid()];
+        let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        // Row 2 leads with head2head, the grid has the wide slot of row 3.
+        assert_eq!(t[3], "head2head", "{t:?}");
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        assert_eq!(wide_slots(&layout(&infos, 0), infos.len())[..2], [0, 3]);
+    }
+
+    #[test]
+    fn head2head_is_not_a_side_card_of_a_small_feed_behind_a_hero() {
+        // Hero, head2head and the invite card of a crew of five: nothing else.
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        for cards in [
+            vec![hero.clone(), h2h("pairs"), card("invite")],
+            vec![hero.clone(), card("invite"), h2h("pairs")],
+            vec![hero.clone(), h2h("pairs")],
+        ] {
+            let order = arrange(&cards, 0);
+            let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+            let l = layout(&infos, 0);
+            let at = infos
+                .iter()
+                .position(|c| c.card_type == "head2head")
+                .expect("head2head");
+            assert!(
+                wide_slots(&l, infos.len()).contains(&at),
+                "{:?}",
+                types(&cards, &order)
+            );
+        }
     }
 }

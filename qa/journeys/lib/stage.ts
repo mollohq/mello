@@ -98,8 +98,8 @@ export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => v
 export { crewFeed };
 
 /**
- * A crew of `seeded + 1`: head2head is a cell with no seats that draws the
- * viewer's three closest pairs and a "+N more" line, the invite card shows
+ * A crew of `seeded + 1`: head2head is the wide card with no seats that draws the
+ * viewer's four closest pairs in two columns and a "+N more" line, the invite card shows
  * eight octagons and a "+N", recent games keeps six tiles, and the feed loads
  * in under three seconds. Plan next-gen-feed.md section 3 and spec HEAD2HEAD
  * section 5, rules for large crews.
@@ -109,17 +109,17 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
   const total = seeded + 1;
   const { bob, members } = await bobWithSeededCrew(ctx, seeded);
 
-  await step(`head2head is a cell with no seats over ${total} members and ${total - 1} pairs`, async () => {
+  await step(`head2head is the wide card with no seats over ${total} members and ${total - 1} pairs`, async () => {
     const s = await bob.waitFor(
       `head2head for ${total} members`,
       (st) => st.head2head.member_count === total && st.head2head.pairs_count === total - 1,
       30_000,
     );
     const h = s.head2head;
-    expect(h.placement === "cell" || h.placement === "versus", `placement is cell or versus, got ${h.placement}`);
+    expect(h.placement === "wide" || h.placement === "versus", `placement is wide or versus, got ${h.placement}`);
     expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
-    if (h.placement === "cell") {
-      expect(h.pair_rows === 4, `the cell draws the four closest pairs, got ${h.pair_rows}`);
+    if (h.placement === "wide") {
+      expect(h.pair_rows === 4, `the wide card draws the four closest pairs, got ${h.pair_rows}`);
       expect(h.more_pairs === total - 1 - 4, `the +N more line says ${total - 5}, got ${h.more_pairs}`);
       expect((await bob.find(`+${total - 5} more`)).role === "Button", "the +N more line is a control");
     }

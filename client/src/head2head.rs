@@ -15,13 +15,9 @@ use crate::{H2hPairRow, H2hPerson, Head2headData, TitleHeld};
 
 /// Seats head2head shows, as in the backend. A crew of five or more has none.
 pub const SEATS: i32 = 5;
-/// Most pair rows in the cell. With seats and the invite button the cell has
-/// room for two rows, without them for four (mockup frame D).
-pub const ROWS_WITH_SEATS: usize = 2;
-/// A cell that stands tall (two grid rows, frames E and F) has room for a
-/// third row beside the seats.
-pub const ROWS_TALL: usize = 3;
-const ROWS_FULL: usize = 4;
+/// Most pair rows on the card: two columns of two. The card is always two grid
+/// columns wide. A "+N more" line counts the pairs that do not fit.
+pub const PAIR_ROWS: usize = 4;
 /// Most octagons on the invite card. More members show as "+N".
 pub const INVITE_CARD_MEMBERS: usize = 8;
 /// Chips on the wide card and the versus card.
@@ -259,14 +255,13 @@ pub enum Placement {
     Wide,
     /// A belt moved in the last 24 h, two or more members: the hero slot.
     Versus,
-    /// Two to four members: a standard cell with seats and the invite.
-    Cell,
-    /// Five or more members: a standard cell without seats and button, and
-    /// the invite card beside it.
-    CellFull,
+    /// Two or more members: the wide card, two columns, with the pair rows in
+    /// two columns. Under five members it carries the open seats and the red
+    /// invite. From five members the invite card stands beside it.
+    Pairs,
     /// A quiet feed with no hero: the belt that moved leads, two columns wide,
-    /// and the cell stands tall beside it (frame E). A model never has this
-    /// placement. The feed builder gives it to the pair of cards.
+    /// and the pairs card is the wide card under it (frame E). A model never
+    /// has this placement. The feed builder gives it to the pair of cards.
     Belt,
 }
 
@@ -275,8 +270,7 @@ impl Placement {
         match self {
             Placement::Wide => "wide",
             Placement::Versus => "versus",
-            Placement::Cell => "cell",
-            Placement::CellFull => "cell-full",
+            Placement::Pairs => "pairs",
             Placement::Belt => "belt",
         }
     }
@@ -704,32 +698,10 @@ pub fn build_seen(
     now_ms: i64,
     seen_ms: i64,
 ) -> Option<Model> {
-    build_rows(data, viewer, roster, now_ms, seen_ms, ROWS_WITH_SEATS)
+    build_rows_sealed(data, viewer, roster, now_ms, seen_ms, &|_| false)
 }
 
-/// `build_seen` with the number of pair rows a cell with seats draws: two in
-/// a plain cell, `ROWS_TALL` in one that stands tall.
-#[cfg(test)]
-pub fn build_rows(
-    data: &Value,
-    viewer: &Person,
-    roster: &dyn Fn(&str) -> Person,
-    now_ms: i64,
-    seen_ms: i64,
-    rows_with_seats: usize,
-) -> Option<Model> {
-    build_rows_sealed(
-        data,
-        viewer,
-        roster,
-        now_ms,
-        seen_ms,
-        rows_with_seats,
-        &|_| false,
-    )
-}
-
-/// `build_rows` that knows which belts the user opened (`opened` takes the
+/// `build_seen` that knows which belts the user opened (`opened` takes the
 /// key of a move). An opened belt does not mark its pair row unread.
 pub fn build_rows_sealed(
     data: &Value,
@@ -737,7 +709,6 @@ pub fn build_rows_sealed(
     roster: &dyn Fn(&str) -> Person,
     now_ms: i64,
     seen_ms: i64,
-    rows_with_seats: usize,
     opened: &dyn Fn(&str) -> bool,
 ) -> Option<Model> {
     let wire: WireFeed = serde_json::from_value(data.clone()).ok()?;
@@ -782,7 +753,7 @@ pub fn build_rows_sealed(
 
     let belt_moved = wire.belt_moved_recent.is_some();
     let mut model = Model {
-        placement: Placement::Cell,
+        placement: Placement::Pairs,
         member_count: wire.member_count,
         open_seats: wire.open_seats.clamp(0, SEATS),
         belt_moved_recent: belt_moved,
@@ -867,12 +838,9 @@ pub fn build_rows_sealed(
     // The sort is stable, so equal gaps keep the payload order.
     pairs.sort_by_key(|(p, _)| (!p.moved_recent, (p.you_count - p.them_count).abs()));
     if wire.member_count >= SEATS {
-        model.placement = Placement::CellFull;
         model.open_seats = 0;
-        pairs.truncate(ROWS_FULL);
-    } else {
-        pairs.truncate(rows_with_seats);
     }
+    pairs.truncate(PAIR_ROWS);
     // The chips are picked row by row, top down, so a title that decided a
     // higher row gives way to another contested title in the rows below.
     let mut used: Vec<String> = Vec::new();
@@ -1058,11 +1026,9 @@ pub fn to_slint_sealed(
         right_avatar: pic(right_id),
         right_has_avatar: !right_id.is_empty() && has(right_id),
         pairs_total: m.pairs_total as i32,
-        // Only the cell has a pair list to continue.
+        // Only the pairs card has a pair list to continue.
         more_pairs: match m.placement {
-            Placement::Cell | Placement::CellFull => {
-                m.pairs_total.saturating_sub(m.pairs.len()) as i32
-            }
+            Placement::Pairs => m.pairs_total.saturating_sub(m.pairs.len()) as i32,
             _ => 0,
         },
         left_score: m.left_score,
@@ -1287,7 +1253,7 @@ mod tests {
     }
 
     #[test]
-    fn two_members_without_a_move_are_a_cell_with_one_pair() {
+    fn two_members_without_a_move_are_the_pairs_card_with_one_pair() {
         let data = feed(
             2,
             vec![
@@ -1298,7 +1264,7 @@ mod tests {
             None,
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.placement, Placement::Cell);
+        assert_eq!(m.placement, Placement::Pairs);
         assert_eq!(m.open_seats, 3);
         assert_eq!(m.pairs.len(), 1);
         assert_eq!(m.pairs[0].opponent.name, "Jonas");
@@ -1363,13 +1329,14 @@ mod tests {
             None,
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.placement, Placement::CellFull);
+        assert_eq!(m.placement, Placement::Pairs);
         assert_eq!(m.open_seats, 0);
-        assert_eq!(m.pairs.len(), ROWS_FULL);
+        assert_eq!(m.pairs.len(), PAIR_ROWS);
     }
 
-    /// Frame D: five members, four pairs, all four in the cell. No "+N more"
-    /// line, because no row remains. With seats the cell keeps two rows.
+    /// Frame D: five members, four pairs, all four on the card in two columns.
+    /// No "+N more" line, because no row remains. Four members have three pairs
+    /// and seats; six members have five pairs, so one remains.
     #[test]
     fn five_members_show_four_pairs_and_no_more_line() {
         let roster = |id: &str| Person::new(id, id);
@@ -1381,15 +1348,23 @@ mod tests {
         ];
         let data = feed(5, vec![], pairs.clone(), None);
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.placement, Placement::CellFull);
+        assert_eq!(m.placement, Placement::Pairs);
         assert_eq!(m.pairs.len(), 4);
         assert_eq!(to_slint(&m, &|_| None).more_pairs, 0);
 
-        let data = feed(4, vec![], pairs, None);
+        let data = feed(4, vec![], pairs[..3].to_vec(), None);
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.placement, Placement::Cell);
-        assert_eq!(m.pairs.len(), 2, "two rows when the cell has seats");
-        assert_eq!(to_slint(&m, &|_| None).more_pairs, 2);
+        assert_eq!(m.placement, Placement::Pairs, "always two columns wide");
+        assert_eq!(m.pairs.len(), 3, "every pair fits with seats");
+        assert_eq!(m.open_seats, 1);
+        assert_eq!(to_slint(&m, &|_| None).more_pairs, 0);
+
+        let mut six = pairs;
+        six.push(pair("u6", 1, 1));
+        let data = feed(6, vec![], six, None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        assert_eq!(m.pairs.len(), 4);
+        assert_eq!(to_slint(&m, &|_| None).more_pairs, 1);
     }
 
     fn pair_v(b: &str, a: i32, bc: i32, values: Vec<Value>) -> Value {
@@ -1611,8 +1586,8 @@ mod tests {
     }
 
     #[test]
-    fn the_cell_keeps_the_four_closest_pairs_and_counts_the_rest() {
-        // Five members and more: three rows, the closest tallies first.
+    fn the_pairs_card_keeps_the_four_closest_pairs_and_counts_the_rest() {
+        // More than five members: four rows, the closest tallies first.
         let pairs = vec![
             pair("u2", 9, 0),
             pair("u3", 4, 5),
@@ -1622,7 +1597,7 @@ mod tests {
         ];
         let data = feed(6, vec![], pairs, None);
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert_eq!(m.placement, Placement::CellFull);
+        assert_eq!(m.placement, Placement::Pairs);
         let order: Vec<&str> = m.pairs.iter().map(|p| p.opponent.id.as_str()).collect();
         assert_eq!(order, ["u5", "u3", "u4", "u6"], "gaps 0, 1, 5, 8");
         assert_eq!(m.pairs_total, 5);
@@ -1668,7 +1643,7 @@ mod tests {
                 {"title_id": "night_owl", "a_value": "03:14", "b_value": "03:40"}]}],
         });
         let m = build(&data, &me(), &roster, NOW).expect("model");
-        assert_eq!(m.placement, Placement::Cell, "the cell stays a cell");
+        assert_eq!(m.placement, Placement::Pairs, "the pairs card stays wide");
         let b = m.belt.expect("a belt");
         assert_eq!(b.headline(), "Jonas took Night Owl from Bob");
         assert_eq!(b.detail(), "03:40 beats 03:14.");
@@ -1760,11 +1735,9 @@ mod tests {
         let key = crate::sealed::belt_key("night_owl", NOW);
         // The data above moved at NOW - 0 days: after the last open (seen 0).
         let seen = NOW - 1000;
-        let unread =
-            build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, 2, &|_| false).unwrap();
+        let unread = build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, &|_| false).unwrap();
         assert!(unread.pairs[0].moved_recent);
-        let read =
-            build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, 2, &|k| k == key).unwrap();
+        let read = build_rows_sealed(&data, &me(), &roster, NOW + 5, seen, &|k| k == key).unwrap();
         assert!(!read.pairs[0].moved_recent);
     }
 
@@ -1787,17 +1760,5 @@ mod tests {
         assert_eq!(b.headline(), "Bob took The Carry from Jonas");
         assert_eq!(b.detail(), "");
         assert_eq!(b.holder_value, "4,201");
-    }
-
-    #[test]
-    fn a_tall_cell_draws_a_third_pair_row() {
-        let titles = vec![title("the_carry", "u2", json!(4201.0), "h")];
-        let pairs = vec![pair("u2", 4, 3), pair("u3", 2, 5), pair("u4", 3, 3)];
-        let data = feed(4, titles, pairs, None);
-        let plain = build_rows(&data, &me(), &roster, NOW, i64::MAX, ROWS_WITH_SEATS).expect("m");
-        let tall = build_rows(&data, &me(), &roster, NOW, i64::MAX, ROWS_TALL).expect("m");
-        assert_eq!(plain.pairs.len(), 2);
-        assert_eq!(tall.pairs.len(), 3);
-        assert_eq!(tall.pairs_total, 3);
     }
 }

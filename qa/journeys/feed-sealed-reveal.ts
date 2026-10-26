@@ -17,7 +17,7 @@ export default journey({
 
     await step("nothing is sealed before a belt moves", async () => {
       await bob.restart();
-      const s = await bob.waitFor("the cell after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      const s = await bob.waitFor("the wide card after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
       expect(s.sealed.belts === 0, `sealed.belts is 0 before the move, got ${s.sealed.belts}`);
       expect(s.sealed.open_center === "none", `open_center is none, got ${s.sealed.open_center}`);
     });
@@ -66,7 +66,7 @@ export default journey({
 
     await step("the belt stays open when the app starts again", async () => {
       await bob.restart();
-      const s = await bob.waitFor("the cell after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      const s = await bob.waitFor("the wide card after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
       expect(s.sealed.belts === 0, `sealed.belts is 0 after a restart, got ${s.sealed.belts}`);
     });
   },

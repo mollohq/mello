@@ -13,10 +13,10 @@ export default journey({
     const { step, expect, runId } = ctx;
     const { bob, members } = await bobWithSeededCrew(ctx, 4);
 
-    await step("head2head is a cell with no seats, over five members", async () => {
+    await step("head2head is the wide card with no seats, over five members", async () => {
       const s = await bob.waitFor("head2head for five members", (st) => st.head2head.member_count === 5 && st.head2head.pairs_count === 4, 30_000);
       const h = s.head2head;
-      expect(h.placement === "cell" || h.placement === "versus", `placement is cell or versus, got ${h.placement}`);
+      expect(h.placement === "wide" || h.placement === "versus", `placement is wide or versus, got ${h.placement}`);
       expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
       expect(h.pairs_count === 4, `pairs_count is 4, got ${h.pairs_count}`);
       expect(h.pair_rows === 4 && h.more_pairs === 0, `frame D: four pairs and no +N more, got ${h.pair_rows} and ${h.more_pairs}`);
@@ -48,12 +48,12 @@ export default journey({
     });
 
     // A belt that moves between two other members is not the viewer's: no
-    // hero, the cell shows a red dot on that pair until the feed is opened
+    // hero, the wide card shows a red dot on that pair until the feed is opened
     // again (client/src/head2head.rs, spec HEAD2HEAD.md "Unread").
     await step("a belt moves between two other members: nothing is unread before it", async () => {
       await bob.restart();
-      const s = await bob.waitFor("the cell after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
-      expect(s.head2head.placement === "cell", `placement is cell, got ${s.head2head.placement}`);
+      const s = await bob.waitFor("the wide card after a reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      expect(s.head2head.placement === "wide", `placement is wide, got ${s.head2head.placement}`);
       expect(s.head2head.pair_rows_dot === 0, `pair_rows_dot is 0 before the move, got ${s.head2head.pair_rows_dot}`);
       await bob.checkpoint("before-belt-move");
     });
@@ -75,14 +75,14 @@ export default journey({
         (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker!.name) && st.head2head.pair_rows_dot === 1,
         60_000,
       );
-      expect(s.head2head.placement === "cell", `no hero for a move between others, placement ${s.head2head.placement}`);
+      expect(s.head2head.placement === "wide", `no hero for a move between others, placement ${s.head2head.placement}`);
       expect(s.head2head.pair_rows_dot === 1, `pair_rows_dot is 1, got ${s.head2head.pair_rows_dot}`);
       await bob.checkpoint("belt-moved-dot");
     });
 
     await step("the dot clears when the feed is opened again", async () => {
       await bob.restart();
-      const s = await bob.waitFor("the cell after the second reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
+      const s = await bob.waitFor("the wide card after the second reopen", (st) => st.head2head.present && st.head2head.pairs_count === 4 && st.head2head.titles.length > 0, 30_000);
       expect(s.head2head.pair_rows_dot === 0, `pair_rows_dot is 0 after a reopen, got ${s.head2head.pair_rows_dot}`);
       await bob.checkpoint("belt-moved-read");
     });

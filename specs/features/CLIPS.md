@@ -249,7 +249,7 @@ Card types in the bento grid:
 - **Live session card** (`live-session`, `LiveSessionCard`) — a game in progress. Label NOW PLAYING with the red live pip. Red is only the pip. It shows the game art, the game name, the member octagons and "since N min". The client builds it from presence (game id, name, `started_at`) and the sensor of the viewer. It is not a ledger event.
   - One card for each game. Crewmates in the same game share one card and count from the earliest start.
   - A live stream is above the feed and comes first.
-  - With no hero, the live card takes the wide slot of the first row. A wide head2head card then becomes the cell beside it. A voice clip is never wide.
+  - With no hero, the live card takes the wide slot of the first row. Head2head is always two columns wide, so it takes the wide slot of row 2. A voice clip is never wide.
   - A hero (a versus card or a hero clip) keeps its place. The live card is the first cell of the side column.
   - More games are cells behind the first row.
   - When the game ends, the live card leaves. The session card from the ledger replaces it. The two never show together.
@@ -291,17 +291,17 @@ If no item exists, the feed has no hero. The latest recap then takes its own pin
 | Lead | Cards | Layout |
 |---|---|---|
 | Hero | first card | two columns and two rows, a side column of two cells, or one tall recap |
-| Wide | head2head wide, or a live session with poster art | two columns, one cell beside it |
+| Wide | head2head (wide or pairs), or a live session with poster art | two columns, one cell beside it |
 | CellWide | a session, then head2head wide | frame B: the session is the cell, then two columns |
 | FullRow | a versus card, or a hero clip | one full row |
-| Plain | head2head cell, invite card, or any card after a stream | rows of three cells |
-| Belt | belt hero, head2head cell, two cells | frame E: the hero is two columns, the cell is tall beside it, two cells under the hero |
-| TallTrio | two cells, head2head cell, recap | frame F: the two cells stack, the cell and the recap are tall |
+| Plain | invite card, a join, or any card after a stream | rows of three cells |
+| Belt | belt hero, head2head, two cells | frame E: the hero is two columns with a cell beside it, then head2head, two columns, with a cell beside it |
+| TallTrio | head2head, recap, two cells | frame F: head2head is two columns, the two cells sit under it, the recap is tall beside both |
 
 - A crew of one with a session puts the session first (CellWide). Frame A has no session, so the wide card stays first.
 - After a live stream or the two-stream hero the grid is plain rows. A card there is a cell, never a second hero.
 - Under a hero the poster grid of recent games takes the wide slot of row 3 (frames C and D). The one-PC list stays in the side column.
-- A feed with no hero, a head2head cell and a recap with content puts the cell and the recap third and fourth (TallTrio). Two plain cells stack beside them.
+- Head2head is always two columns wide, at every crew size. It leads a feed with no hero. Behind any other lead it takes the first wide slot after the lead (row 2, else row 3), never the one-column side slot. After one live stream it leads the grid beside the stream. A feed with no hero, head2head and a recap with content puts the recap second, tall (TallTrio): two plain cells sit under head2head.
 - Row 2 is the last row and has free cells: the stream and voice clip skeletons fill them at the card height, and the recap skeleton is the slim row under them (frame B). A full last row keeps the trio as one row.
 - A recap holds the whole side column beside the two-stream hero.
 - The weekly recap is never a one-cell card. It has two shapes: the tall card (one column, two rows) in the side column beside a hero, beside one live stream or in frame F, and the wide card (two columns, one row: the week, the belts moved and the belts held side by side). When the side column is taken, the recap takes the first wide slot of the next row, and the poster grid moves to the wide slot of the row after it (`feed_grid.rs`, `place_wide_cards`).
@@ -317,9 +317,9 @@ The client holds one remote streamer today. `CrewFeed.hero-streams` takes the tw
 A feed with nothing new must not look broken. The rules live in `client/src/quiet_row.rs`.
 
 - **Quiet row.** A slim row with a moon, in the place of the recap. It shows when the crew has two or more members, nothing is live, no stream preview or belt move is under 24 hours old, no recap is under seven days old, and something happened in the last 14 days. The text is "No crew time last week." and, when members played, "Bob and Sara still played." The row has no note at the right.
-- **Belt hero.** With no hero, the newest belt move that involves the viewer leads, at any age up to 14 days. The card is two columns wide. It shows who held the title, the title, who holds it now, a headline ("Sara took Night Owl from Bob") and the values ("03:40 beats 03:14."). The head2head cell stands tall beside it with a third pair row.
-- **Idle voice card.** When the quiet row shows and nobody is in the default voice channel, a card shows the channel, "Empty", the date of the last call and the one filled white button, Start voice. The red invite stays in the head2head cell, next to the open seat.
-- **Dormant strip.** Nothing happened for 14 days or more. A strip across the top, with the label QUIET, says "Nothing new since 2 October. Leo holds The Carry." and how long ago, in weeks. The feed keeps the last real recap, its sessions and the head2head cell. No skeletons show and no empty card shows. A feed that is dormant has no daily recap: its last three days are empty. A recap is a summary of past weeks, so it does not count as activity.
+- **Belt hero.** With no hero, the newest belt move that involves the viewer leads, at any age up to 14 days. The card is two columns wide. It shows who held the title, the title, who holds it now, a headline ("Sara took Night Owl from Bob") and the values ("03:40 beats 03:14."). The head2head card is the wide card under it, with a cell beside each.
+- **Idle voice card.** When the quiet row shows and nobody is in the default voice channel, a card shows the channel, "Empty", the date of the last call and the one filled white button, Start voice. The red invite stays on the head2head card, next to the open seat.
+- **Dormant strip.** Nothing happened for 14 days or more. A strip across the top, with the label QUIET, says "Nothing new since 2 October. Leo holds The Carry." and how long ago, in weeks. The feed keeps the last real recap, its sessions and the head2head card. No skeletons show and no empty card shows. A feed that is dormant has no daily recap: its last three days are empty. A recap is a summary of past weeks, so it does not count as activity.
 - A recap from the current week has no age at the right of its label. An older recap says "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
 - A session older than a week shows its date ("2 October"), not "9d ago".
 

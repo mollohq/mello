@@ -432,37 +432,14 @@ export component Head2headCardWide inherits Rectangle {
     }
 }
 
-/// Sizes of the head2head cell that the feed grid needs to size its row.
-export global H2hCellSize {
-    /// A row of the four-row cell: 5px, name line, tally line, 5px (frame D).
-    out property <length> dense-row: 50px;
-    /// Card height for `rows` pairs and a "+N more" line. 232px is the grid
-    /// row. Four rows do not fit it at the mockup spacing, so the card grows.
-    public pure function height(rows: int, more: int) -> length {
-        return 54px + rows * root.dense-row + (more > 0 ? 22px : 0px);
-    }
-}
-
-/// One row of the cell: "You vs Name", the tally between two octagons, and
-/// the title that decides the pair.
+/// One row of the pairs card: "You vs Name", the tally between two octagons,
+/// and the title that decides the pair.
 component PairRow inherits Rectangle {
     in property <H2hPairRow> pair;
-    /// Four rows share the cell: a shorter row, and no held label.
-    in property <bool> dense: false;
-    /// The first row has no keyline above it.
-    in property <bool> first: false;
-    height: root.dense ? H2hCellSize.dense-row : root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
+    height: root.pair.has-chip && root.pair.chip.held-label != "" ? 62px : 46px;
     background: transparent;
 
-    // Frame D: a keyline between rows, 5px of air on both sides of it.
-    if root.dense && !root.first: Rectangle {
-        y: 0px; height: Theme.keyline; width: parent.width;
-        background: Theme.card-border;
-    }
-
     HorizontalLayout {
-        padding-top: root.dense ? 5px : 0px;
-        padding-bottom: root.dense ? 5px : 0px;
         spacing: 6px;
         cross-axis-alignment: center;
 
@@ -497,7 +474,7 @@ component PairRow inherits Rectangle {
                 Text {
                     text: root.pair.you-count + " : " + root.pair.them-count;
                     font-family: Theme.font-display;
-                    font-size: root.dense ? 20px : 13px;
+                    font-size: 13px;
                     font-weight: Theme.weight-display-bold;
                     color: Theme.text-value;
                 }
@@ -507,27 +484,54 @@ component PairRow inherits Rectangle {
         if root.pair.has-chip: HeldChip {
             slot-id: "pair-" + root.pair.id;
             compact: true;
-            dense: root.dense;
             width: 108px;
             t: root.pair.chip;
         }
     }
 }
 
-/// Standard cell (one column, 232px at the 760px feed). Title row, then one
-/// row for each pair the viewer is in (frame C). Below that, with seats:
-/// open seats left, invite button right. Three seats and the button do not
-/// fit one line at this width, so the strip shows two and a "+N".
-/// With no seats (five members or more) the bottom row is gone, and the
-/// Invite card carries the invite.
-export component Head2headCell inherits Rectangle {
+/// The "+N more" line of the pairs card. It stands for the opened view, which
+/// does not exist yet: a control that opens nothing.
+component MorePairs inherits Rectangle {
+    in property <int> count;
+    height: 22px;
+    width: label.preferred-width + 8px;
+    accessible-role: button;
+    accessible-label: "+" + root.count + " more";
+    label := Text {
+        x: 0px;
+        width: parent.width;
+        height: parent.height;
+        text: "+" + root.count + " MORE";
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: Theme.track-label;
+        color: Theme.text-dim;
+        vertical-alignment: center;
+    }
+    TouchArea {
+        clicked => { }
+    }
+}
+
+/// The head2head card of two or more members. Always two grid columns wide, one
+/// row high (232 px at the 760 px feed). A title row, then the pair rows of the
+/// viewer in two columns: the first column fills first, so five members draw
+/// two rows of pairs side by side. Below: a "+N more" line when pairs remain,
+/// and, with seats, the open seats left and the red invite button right. From
+/// five members the seats are gone and the invite card carries the invite.
+export component Head2headCardPairs inherits Rectangle {
     callback invite-clicked();
-    /// Open seats, 5 minus the member count. Two show, the rest as "+N".
+    /// Open seats, 5 minus the member count. Four show, the rest as "+N".
     in property <int> open-seats: 3;
     in property <string> viewer-name;
     in property <[H2hPairRow]> pairs;
-    /// Pairs of the viewer that the cell does not draw. 0 draws no line.
+    /// Pairs of the viewer that the card does not draw. 0 draws no line.
     in property <int> more-pairs: 0;
+
+    /// The first column takes the first half of the rows, rounded up.
+    property <int> first-column: Math.ceil(root.pairs.length / 2);
 
     background: transparent;
 
@@ -561,46 +565,39 @@ export component Head2headCell inherits Rectangle {
             }
         }
 
-        VerticalLayout {
-            vertical-stretch: 1;
-            alignment: start;
-            spacing: root.pairs.length >= 4 ? 0px : 6px;
+        // The pair rows, from the top. The seats row stands at the foot.
+        Rectangle {
+            height: rows.preferred-height;
 
-            for p[i] in root.pairs: PairRow { pair: p; first: i == 0; dense: root.pairs.length >= 4; }
-
-            // The line stands for the opened view, which does not exist yet.
-            // It is a control that opens nothing.
-            if root.more-pairs > 0: Rectangle {
-                height: 22px;
-                accessible-role: button;
-                accessible-label: "+" + root.more-pairs + " more";
-                Text {
-                    x: 0px;
-                    width: parent.width;
-                    height: parent.height;
-                    text: "+" + root.more-pairs + " MORE";
-                    font-family: Theme.font-label;
-                    font-size: 10px;
-                    font-weight: Theme.weight-label;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-dim;
-                    vertical-alignment: center;
-                }
-                TouchArea {
-                    clicked => { }
+            rows := GridLayout {
+                width: parent.width;
+                spacing-horizontal: 33px;
+                spacing-vertical: 6px;
+                for p[i] in root.pairs: PairRow {
+                    row: i < root.first-column ? i : i - root.first-column;
+                    col: i < root.first-column ? 0 : 1;
+                    pair: p;
                 }
             }
+            // The keyline between the two columns.
+            if root.pairs.length > 1: Rectangle {
+                x: (parent.width - self.width) / 2;
+                width: Theme.keyline;
+                height: parent.height;
+                background: Theme.card-border;
+            }
         }
+        Rectangle { vertical-stretch: 1; }
 
-        // The seats row (mockup .openrow): a rule, the seats, "Open" once and
-        // the short red INVITE at the right.
+        // The seats row (mockup .openrow): a rule, the seats, "Open" once, the
+        // "+N more" line and the short red INVITE at the right.
         if root.open-seats > 0: VerticalLayout {
             spacing: 10px;
             Rectangle { height: Theme.keyline; background: Theme.card-border; }
             HorizontalLayout {
                 spacing: 8px;
                 cross-axis-alignment: center;
-                OpenSeatStrip { seats: root.open-seats; max-shown: 2; }
+                OpenSeatStrip { seats: root.open-seats; max-shown: 4; }
                 Text {
                     text: "OPEN";
                     font-family: Theme.font-label;
@@ -610,9 +607,12 @@ export component Head2headCell inherits Rectangle {
                     color: Theme.text-body;
                 }
                 Rectangle { horizontal-stretch: 1; }
+                if root.more-pairs > 0: MorePairs { count: root.more-pairs; }
                 InviteButton { compact: true; label-text: "Invite"; a11y-label: "Invite your crew"; clicked => { root.invite-clicked(); } }
             }
         }
+        // With no seats the line stands alone.
+        if root.open-seats <= 0 && root.more-pairs > 0: MorePairs { count: root.more-pairs; }
     }
 }
 

@@ -350,8 +350,9 @@ fn read_sealed(app: &MainWindow) -> SealedSnap {
 #[derive(Serialize)]
 struct Head2headSnap {
     present: bool,
-    /// `"wide"`, `"cell"`, `"versus"` or `"none"`. A cell with no seats
-    /// (`cell-full` on screen) is reported as `"cell"`.
+    /// `"wide"`, `"versus"` or `"none"`. The card is always two columns wide:
+    /// `"wide"` is the card of a crew of one (chips) and the pairs card of a
+    /// crew of two or more (pair rows). `member_count` tells them apart.
     placement: &'static str,
     member_count: i32,
     open_seats: i32,
@@ -361,11 +362,11 @@ struct Head2headSnap {
     titles: Vec<TitleHolderSnap>,
     /// Every pair of the viewer, drawn or not.
     pairs_count: usize,
-    /// The pair rows the cell draws.
+    /// The pair rows the pairs card draws.
     pair_rows: usize,
     /// Pair rows that wear the red dot (a belt moved today, not yet seen).
     pair_rows_dot: usize,
-    /// The "+N more" line of the cell. 0 when it does not show.
+    /// The "+N more" line of the pairs card. 0 when it does not show.
     more_pairs: i32,
     belt_moved_recent: bool,
     /// The viewer's octagon on the card: a fingerprint of the avatar image,
@@ -608,9 +609,8 @@ fn image_key(img: &slint::Image) -> String {
 /// The placement name that the state port reports for a head2head variant.
 fn placement_name(variant: &str) -> &'static str {
     match variant {
-        "wide" => "wide",
+        "wide" | "pairs" => "wide",
         "versus" => "versus",
-        "cell" | "cell-full" => "cell",
         _ => "none",
     }
 }
@@ -618,7 +618,7 @@ fn placement_name(variant: &str) -> &'static str {
 /// The head2head card of the feed, read from the first `head2head` card.
 fn read_head2head(app: &MainWindow) -> Head2headSnap {
     let feed = app.get_feed_cards();
-    // The belt hero is a head2head card too, but the cell carries the pairs.
+    // The belt hero is a head2head card too, but the pairs card carries the pairs.
     let Some(card) = feed
         .iter()
         .find(|c| c.card_type == "head2head" && c.head2head.variant != "belt")
@@ -1610,7 +1610,7 @@ mod tests {
             crate::FeedCardData {
                 card_type: "head2head".into(),
                 head2head: crate::Head2headData {
-                    variant: "cell-full".into(),
+                    variant: "pairs".into(),
                     member_count: 1,
                     open_seats: 4,
                     belt_moved_recent: true,
@@ -1644,7 +1644,7 @@ mod tests {
         let s = snapshot_json(app);
         assert_eq!(
             s["head2head"],
-            json!({"present": true, "placement": "cell", "member_count": 1, "open_seats": 4,
+            json!({"present": true, "placement": "wide", "member_count": 1, "open_seats": 4,
                    "own_values": [{"title_id": "the_carry", "display": "62 %"},
                                   {"title_id": "one_trick", "display": "9"}],
                    "titles": [{"title_id": "the_carry", "holder_name": "bob"}],

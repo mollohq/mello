@@ -177,8 +177,9 @@ The `this_week` section has one entry for every crew: `type` `head2head`, `id` `
 Role and size:
 
 - When a belt moved in the last 24 hours, the entry is the hero (`hero`, `lg`). The hero order is: live stream, belt moved, stream preview from the last 24 hours, recap on Monday, best session.
-- Otherwise the entry is `standard`, `lg`. It follows the hero and the recap. It never takes a filler slot.
-- A quiet feed has no hero (CLIPS.md 7.1, frame E). The client then leads with the newest belt move that involves the viewer, up to 14 days old, and the cell stands tall beside it. The payload does not change: the client reads `moved_at_ms` and `previous_holder_user_id` of every title, and the values of the pair. The card has its own headline: "Sara took Night Owl from Bob".
+- Otherwise the entry is `standard`, `lg`. It leads a feed with no hero. Behind a hero it takes the first wide slot after it. It never takes a filler slot.
+- The card is always two grid columns wide, at every crew size. There is no one-column form (`feed_grid.rs`, `place_wide_cards`). A crew of one has the chips (section "Solo card"), two or more have the pair rows.
+- A quiet feed has no hero (CLIPS.md 7.1, frame E). The client then leads with the newest belt move that involves the viewer, up to 14 days old, and the head2head card is the wide card under it. The payload does not change: the client reads `moved_at_ms` and `previous_holder_user_id` of every title, and the values of the pair. The card has its own headline: "Sara took Night Owl from Bob".
 
 The client decides if a card renders. A card with no titles, no `own_values` and no open seats has no data.
 
@@ -190,22 +191,22 @@ A crew of one gets the wide card (frame A of the mockup). The card shows the vie
 - On a new crew the chips are sealed. A click opens one in the centre of the feed, with the reveal of a belt that moved and the viewer as "You" (plans/SEALED-REVEAL.md section 9).
 - The mockup also shows an "Old Guard" chip (the year of the Steam account). The client has no Steam account year, so the card does not show it. The next title in the display order takes its place.
 
-### Pair rows in the cell
+### Pair rows on the wide card
 
-The cell shows the viewer's closest pairs (smallest gap first). With no open seats (five members or more) it shows up to four rows, as in frame D. With seats it shows up to two. A cell that stands tall (beside the belt hero or the recap, frames E and F) shows up to three. A "+N more" line shows only when pairs remain.
+The card shows the viewer's closest pairs (smallest gap first) in two columns, up to four. The first column fills first: two members show one pair on each side, three pairs show two and one, five members show two rows of pairs side by side (frame D). A "+N more" line shows only when pairs remain, from six members. Under five members the card also has the deciding chips, the open seats and the red invite. From five members the seats and the button are gone, and the invite card stands beside the head2head card.
 
 ### Unread dot on a pair row
 
 - A pair row is unread when a title held by the viewer or by the other member has `moved_at_ms` less than 24 hours old and after the last time the viewer had the crew feed open.
 - An unread row shows a small red dot before the "You vs Name" label (red is state, "unread"). The client derives this from `titles`. The payload has no field for it.
 - Unread rows sort first. The other rows keep the closest-tally order.
-- The versus hero shows only when the moved title involves the viewer, as holder or as previous holder. A move between two other members has no hero. The cell carries it as the dot.
+- The versus hero shows only when the moved title involves the viewer, as holder or as previous holder. A move between two other members has no hero. The wide card carries it as the dot.
 - The client stores the time of the last feed view for each crew, locally. Opening a crew takes the stored time as the baseline for that visit, and every feed load of the visit updates the stored time. The dot shows for the whole visit and clears on the next open.
 - The state port reports `head2head.pair_rows_dot`: the number of pair rows with the dot.
 
 ### Deciding chip
 
-Each pair row in the cell shows one chip: the title that decides the pair. The client picks it from `values`.
+Each pair row on the card shows one chip: the title that decides the pair. The client picks it from `values`.
 
 - The gap of a title is `abs(a_value - b_value) / max(a_value, b_value)`. For `night_owl` the values are minutes after 18:00.
 - The title with the largest gap wins. A tie goes to the title that comes first in the display order.

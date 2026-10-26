@@ -44,7 +44,7 @@ export default journey({
           40_000,
         );
         const h = s.head2head;
-        expect(h.placement === "cell" || h.placement === "versus", `placement is cell or versus, got ${h.placement}`);
+        expect(h.placement === "wide" || h.placement === "versus", `placement is wide or versus, got ${h.placement}`);
         expect(h.open_seats === 3, `open_seats is 3, got ${h.open_seats}`);
         expect(h.pairs_count === 1, `pairs_count is 1, got ${h.pairs_count}`);
         expect(h.titles.every((t) => t.holder_name !== ""), "every holder is on the member list");

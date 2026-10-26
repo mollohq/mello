@@ -399,12 +399,14 @@ fn h2h_roster(ctx: &AppContext) -> (Person, Vec<Person>) {
 }
 
 /// Turn the `head2head` entry into its feed cards: the head2head card, and
-/// the invite card from five members on. The placement says whether the card
-/// leads the feed (wide and versus do) or keeps the server's position.
+/// the invite card from five members on. The card is always two columns wide.
+/// Wide, versus and belt lead the feed. The pairs card leads a feed with no
+/// hero and keeps the server's position behind a hero, where `feed_grid` gives
+/// it the first wide slot.
 ///
 /// `hero_free`: no other entry of `this_week` is a hero. A quiet feed then
-/// leads with the belt that moved last, of any age (frame E), and the cell
-/// stands tall beside it.
+/// leads with the belt that moved last, of any age (frame E), and the pairs
+/// card is the wide card under it.
 fn head2head_cards(
     ctx: &AppContext,
     e: &mello_core::crew_events::FeedEntry,
@@ -440,34 +442,7 @@ fn head2head_cards(
         ctx.app.get_active_crew_id().as_str(),
     );
     let is_open = |k: &str| opened.contains(k);
-    let mut model = head2head::build_rows_sealed(
-        &data,
-        &viewer,
-        &roster,
-        now_ms,
-        seen_ms,
-        head2head::ROWS_WITH_SEATS,
-        &is_open,
-    )?;
-    // With no hero, the cell stands tall beside the belt hero (frame E) or
-    // beside the recap (frame F), and has room for a third row.
-    let tall = hero_free
-        && model.placement == Placement::Cell
-        && (model.belt.as_ref().is_some_and(|b| b.is_news(now_ms))
-            || entries
-                .iter()
-                .any(|e| e.entry_type == "recap" && !is_empty_recap_entry(&e.entry_type, &e.data)));
-    if tall {
-        model = head2head::build_rows_sealed(
-            &data,
-            &viewer,
-            &roster,
-            now_ms,
-            seen_ms,
-            head2head::ROWS_TALL,
-            &is_open,
-        )?;
-    }
+    let model = head2head::build_rows_sealed(&data, &viewer, &roster, now_ms, seen_ms, &is_open)?;
     // The octagons wear the avatar the app already loaded for the user id,
     // and fall back to initials. A late avatar patches the card in place
     // (`refresh_head2head_cards`).
@@ -495,7 +470,7 @@ fn head2head_cards(
         ..Default::default()
     }];
     // A quiet feed with no hero: the newest belt move leads (frame E).
-    if hero_free && model.placement == Placement::Cell {
+    if hero_free && model.placement == Placement::Pairs {
         if let Some(hero) = head2head::belt_hero_data(&model, now_ms, &avatar) {
             cards.insert(
                 0,
@@ -527,7 +502,10 @@ fn head2head_cards(
     }
     // A crew of five or more with nothing to compare has no cell. The invite
     // card stays.
-    if model.placement == Placement::CellFull && model.pairs.is_empty() {
+    if model.placement == Placement::Pairs
+        && model.member_count >= head2head::SEATS
+        && model.pairs.is_empty()
+    {
         cards.remove(0);
     }
     Some((model.placement, cards))
@@ -1126,7 +1104,8 @@ fn build_this_week(
             if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
                 match placement {
                     Placement::Wide | Placement::Versus | Placement::Belt => lead = group,
-                    Placement::Cell | Placement::CellFull => cards.extend(group),
+                    Placement::Pairs if hero_free(entries) => lead = group,
+                    Placement::Pairs => cards.extend(group),
                 }
             }
             continue;

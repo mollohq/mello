@@ -141,7 +141,8 @@ export type AppState = {
   /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */
   head2head: {
     present: boolean;
-    placement: "wide" | "cell" | "versus" | "none";
+    /** "wide" is two columns wide: the chips of a crew of one, or the pair rows of two or more. */
+    placement: "wide" | "versus" | "none";
     member_count: number;
     open_seats: number;
     /** The chips the card draws: the viewer's own values on the wide card. */
@@ -149,9 +150,9 @@ export type AppState = {
     titles: { title_id: string; holder_name: string }[];
     /** Every pair of the viewer, drawn or not. */
     pairs_count: number;
-    /** The pair rows the cell draws. */
+    /** The pair rows the card draws, in two columns. */
     pair_rows: number;
-    /** The "+N more" line of the cell. 0 when it does not show. */
+    /** The "+N more" line of the card. 0 when it does not show. */
     more_pairs: number;
     belt_moved_recent: boolean;
     /** A fingerprint of the viewer's octagon image. "" when it shows initials. */

@@ -5238,10 +5238,10 @@ fn solo_card_shows_four_own_value_chips_and_four_open_labels() {
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
-/// Two members and no move in the last 24 h: a standard cell with the one
-/// pair and the seats that are left, not a hero.
+/// Two members and no move in the last 24 h: the head2head card, two columns
+/// wide, with the one pair and the seats that are left, not a hero.
 #[test]
-fn crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats() {
+fn crew_of_two_without_a_move_shows_the_wide_card_with_one_pair_and_three_seats() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
@@ -5258,21 +5258,17 @@ fn crew_of_two_without_a_move_shows_the_cell_with_one_pair_and_three_seats() {
         )]),
     });
 
-    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
     assert_eq!(count_of(&h, "VersusHero"), 0);
     assert_eq!(count_of(&h, "Head2headCardWide"), 0);
     assert_eq!(count_of(&h, "PairRow"), 1);
     let card = first_card(&h);
-    assert_eq!(card.head2head.variant.as_str(), "cell");
+    assert_eq!(card.head2head.variant.as_str(), "pairs");
     assert_eq!(card.head2head.open_seats, 3);
-    // Three seats do not fit one line: two show and a "+1" stands for the third.
-    assert_eq!(count_of(&h, "OpenSeat"), 2);
+    // The card is wide: all three seats fit one line.
+    assert_eq!(count_of(&h, "OpenSeat"), 3);
     assert_eq!(count_of(&h, "OpenSeatStrip"), 1);
-    assert!(
-        drawn_texts(&h).iter().any(|t| t == "+1"),
-        "{:?}",
-        drawn_texts(&h)
-    );
+    assert_two_columns_wide(&h, "Head2headCardPairs");
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 }
 
@@ -5454,7 +5450,7 @@ fn a_pair_row_with_a_belt_moved_today_wears_a_dot_until_the_feed_is_opened_again
     });
     assert_eq!(
         first_card(&h).head2head.variant.as_str(),
-        "cell-full",
+        "pairs",
         "no hero"
     );
     // u2 holds the 2 h belt: only the pair with u2 wears the dot, and it
@@ -5484,11 +5480,10 @@ fn a_pair_row_with_a_belt_moved_today_wears_a_dot_until_the_feed_is_opened_again
 }
 
 /// A live stream holds the hero and sends the first cards to the side column,
-/// one column wide. A crew of one then gets the cell with its four seats as
-/// "+2", not the wide card squeezed into the column. With no live stream the
-/// wide card keeps the wide slot.
+/// one column wide. Head2head is always two columns wide, so it never stands in
+/// the column: it leads the grid beside the stream, wide, with all four seats.
 #[test]
-fn wide_card_gives_way_to_the_cell_beside_a_live_stream() {
+fn the_wide_card_stays_two_columns_wide_beside_a_live_stream() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 1);
     set_roster(&h, &[("user-1", "Test User")]);
@@ -5507,7 +5502,6 @@ fn wide_card_gives_way_to_the_cell_beside_a_live_stream() {
     });
 
     assert_eq!(count_of(&h, "Head2headCardWide"), 1, "no stream: wide slot");
-    assert_eq!(count_of(&h, "Head2headCell"), 0);
     assert_eq!(count_of(&h, "OpenSeat"), 4);
 
     h.app()
@@ -5520,23 +5514,11 @@ fn wide_card_gives_way_to_the_cell_beside_a_live_stream() {
             },
         ])));
 
-    assert_eq!(
-        count_of(&h, "Head2headCardWide"),
-        0,
-        "side column is too narrow"
-    );
-    assert_eq!(count_of(&h, "Head2headCell"), 1);
-    assert_eq!(count_of(&h, "OpenSeat"), 2, "two seats and a +N");
-    assert!(
-        drawn_texts(&h).iter().any(|t| t == "+2"),
-        "four seats read as two and +2: {:?}",
-        drawn_texts(&h)
-    );
-    assert_eq!(
-        first_card(&h).head2head.variant.as_str(),
-        "wide",
-        "the entry is the same, only the slot differs"
-    );
+    // The card is two columns wide: it does not give way to a one-column cell.
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "still wide");
+    assert_eq!(count_of(&h, "OpenSeat"), 4, "all four seats");
+    assert_two_columns_wide(&h, "Head2headCardWide");
+    assert_eq!(first_card(&h).head2head.variant.as_str(), "wide");
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 
     h.app()
@@ -5546,12 +5528,13 @@ fn wide_card_gives_way_to_the_cell_beside_a_live_stream() {
         1,
         "stream ended: wide again"
     );
+    assert_two_columns_wide(&h, "Head2headCardWide");
 }
 
-/// Five members: the cell has no seats and no button, and the calm invite
+/// Five members: the wide card has no seats and no button, and the calm invite
 /// card carries the one red button, wired to the share action.
 #[test]
-fn crew_of_five_shows_the_cell_without_seats_and_the_invite_card() {
+fn crew_of_five_shows_the_wide_card_without_seats_and_the_invite_card() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 5);
     set_roster(
@@ -5577,8 +5560,9 @@ fn crew_of_five_shows_the_cell_without_seats_and_the_invite_card() {
         )]),
     });
 
-    assert_eq!(count_of(&h, "Head2headCell"), 1);
-    assert_eq!(first_card(&h).head2head.variant.as_str(), "cell-full");
+    assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
+    assert_two_columns_wide(&h, "Head2headCardPairs");
+    assert_eq!(first_card(&h).head2head.variant.as_str(), "pairs");
     assert_eq!(first_card(&h).head2head.open_seats, 0);
     assert_eq!(count_of(&h, "OpenSeat"), 0, "no seats from five members");
     assert_eq!(count_of(&h, "InviteCard"), 1);
@@ -7630,7 +7614,7 @@ fn solo_crew_feed(h: &mut Harness) {
 }
 
 /// With poster art the live card takes the wide slot and shows the poster
-/// instead of the tile. The wide head2head card gives way to the cell.
+/// instead of the tile. The wide head2head card takes the wide slot of row 2.
 #[test]
 fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
     let mut h = Harness::new();
@@ -7657,8 +7641,8 @@ fn a_live_session_with_poster_art_is_wide_and_shows_the_poster() {
         })
         .count();
     assert_eq!(tiles, 0, "the poster is the art, there is no tile");
-    assert_eq!(count_of(&h, "Head2headCardWide"), 0);
-    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1);
+    assert_two_columns_wide(&h, "Head2headCardWide");
     let texts = drawn_texts(&h);
     for want in ["NOW PLAYING", "Brawlhalla", "since 12 min"] {
         assert!(texts.iter().any(|t| t == want), "{want} in {texts:?}");
@@ -7894,10 +7878,11 @@ fn the_live_card_has_the_session_tile_size_in_a_cell_and_the_poster_in_the_wide_
     }
 }
 
-/// A live session with poster art holds the wide slot, so the wide head2head
-/// card of a crew of one becomes the cell beside it. When the game ends the wide card is back.
+/// A live session with poster art holds the wide slot of row 1, so the wide
+/// head2head card of a crew of one takes the wide slot of row 2. It is two
+/// columns wide before, during and after the game.
 #[test]
-fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() {
+fn the_wide_head2head_card_takes_row_two_while_a_live_session_holds_the_slot() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 1);
     set_roster(&h, &[("user-1", "Test User")]);
@@ -7922,8 +7907,8 @@ fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() 
         "Counter-Strike 2",
         now_ms(),
     ));
-    assert_eq!(count_of(&h, "Head2headCardWide"), 0, "the slot is taken");
-    assert_eq!(count_of(&h, "Head2headCell"), 1);
+    assert_eq!(count_of(&h, "Head2headCardWide"), 1, "wide in row 2");
+    assert_two_columns_wide(&h, "Head2headCardWide");
     assert_eq!(count_of(&h, "LiveSessionCard"), 1);
     let cards: Vec<_> = h.app().get_feed_cards().iter().collect();
     assert_eq!(cards[0].card_type.as_str(), "live-session");
@@ -7933,12 +7918,22 @@ fn the_wide_head2head_card_becomes_a_cell_while_a_live_session_holds_the_slot() 
         "wide",
         "the entry is the same, only the slot differs"
     );
+    let live = ElementHandle::find_by_element_type_name(h.app(), "LiveSessionCard")
+        .next()
+        .expect("the live card");
+    let h2h = ElementHandle::find_by_element_type_name(h.app(), "Head2headCardWide")
+        .next()
+        .expect("head2head");
+    assert!(
+        h2h.absolute_position().y >= live.absolute_position().y + live.size().height,
+        "head2head is the row under the live card"
+    );
     assert_eq!(h.controls_labelled("Invite your crew").len(), 1);
 
     h.emit(game_ended("counter-strike-2", "Counter-Strike 2", 1));
     assert_eq!(count_of(&h, "LiveSessionCard"), 0);
     assert_eq!(count_of(&h, "Head2headCardWide"), 1, "wide again");
-    assert_eq!(count_of(&h, "Head2headCell"), 0);
+    assert_two_columns_wide(&h, "Head2headCardWide");
 }
 
 /// The session end removes the live card, and the session card from the ledger
@@ -8313,7 +8308,7 @@ fn stream_volumes(h: &mut Harness) -> Vec<f32> {
 
 /// Frame E: nothing live, no stream or belt in 24 h, no recap this week. The
 /// quiet row says so, and the belt that moved two days ago leads the feed with
-/// the head2head cell tall beside it.
+/// the head2head card, two columns wide, under it.
 #[test]
 fn a_quiet_feed_has_a_quiet_row_and_the_belt_that_moved_leads() {
     let mut h = Harness::new();
@@ -8341,7 +8336,7 @@ fn a_quiet_feed_has_a_quiet_row_and_the_belt_that_moved_leads() {
     let types = card_types(&h);
     assert_eq!(
         types[..2],
-        ["head2head:belt", "head2head:cell"],
+        ["head2head:belt", "head2head:pairs"],
         "{types:?}"
     );
     let belt = first_card(&h).head2head.belt;
@@ -8449,12 +8444,9 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
         .expect("the last recap stays");
     assert_eq!(recap.age_label.as_str(), "3 weeks ago");
     let types = card_types(&h);
-    assert!(
-        types.iter().any(|t| t == "head2head:cell")
-            && types.last().map(String::as_str) == Some("recap"),
-        "{types:?}"
-    );
-    assert_eq!(types[2], "head2head:cell", "{types:?}");
+    // Head2head leads, the recap stands beside it (tall), two cells under it.
+    assert_eq!(types[0], "head2head:pairs", "{types:?}");
+    assert_eq!(types[1], "recap", "{types:?}");
     assert_eq!(skeleton_cells(&h), 0, "no skeletons");
     assert_eq!(count_of(&h, "RecapCard"), 1);
 }
@@ -9056,6 +9048,17 @@ fn size_of_type(h: &Harness, name: &str) -> (f32, f32) {
     (s.width, s.height)
 }
 
+/// The card of this type is two grid columns wide: more than half the feed
+/// panel, where a one-column cell is a third of it.
+fn assert_two_columns_wide(h: &Harness, name: &str) {
+    let (w, _) = size_of_type(h, name);
+    let (feed, _) = size_of_type(h, "CrewFeed");
+    assert!(
+        w > feed * 0.5,
+        "{name} is {w} px wide in a {feed} px feed: it is not two columns wide"
+    );
+}
+
 /// The smallest width and the smallest height among the elements of a type:
 /// the size of one grid cell, whichever slot the first one stands in.
 fn cell_size_of_type(h: &Harness, name: &str) -> (f32, f32) {
@@ -9146,7 +9149,7 @@ fn the_weekly_recap_is_tall_or_wide_never_one_cell() {
             feed_card_types(&h).iter().any(|t| t == "recap"),
             "{order:?}: the feed has the recap"
         );
-        let (cw, ch) = cell_size_of_type(&h, "GameSessionCard");
+        let (cw, ch) = cell_size_of_type(&h, "FeedSlot");
         let (w, hgt) = size_of_type(&h, "RecapSlot");
         assert!(
             w >= cw * 1.6 || hgt >= ch * 1.6,
@@ -9157,4 +9160,136 @@ fn the_weekly_recap_is_tall_or_wide_never_one_cell() {
             "{order:?}: one control"
         );
     }
+}
+
+// ---- head2head is always two columns wide ----
+
+/// A crew of `members` with one pair for each other member, no belt moved.
+fn pairs_feed(members: i32, extra: Vec<FeedEntry>) -> FeedResponse {
+    let pairs: Vec<_> = (2..=members)
+        .map(|n| h2h_pair(&format!("u{n}"), n % 3, 3 - n % 3))
+        .collect();
+    // The server lists the hero first.
+    let mut entries = extra;
+    entries.push(h2h_entry(
+        members,
+        vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+        pairs,
+        None,
+    ));
+    feed_of(entries)
+}
+
+fn open_pairs_crew(h: &mut Harness, members: i32, extra: Vec<FeedEntry>) {
+    app_with_crew_of(h, members);
+    let names: Vec<(String, String)> = std::iter::once(("user-1".to_string(), "Test User".into()))
+        .chain((2..=members).map(|n| (format!("u{n}"), format!("Member {n}"))))
+        .collect();
+    let roster: Vec<(&str, &str)> = names
+        .iter()
+        .map(|(a, b)| (a.as_str(), b.as_str()))
+        .collect();
+    set_roster(h, &roster);
+    h.emit(Event::FeedLoaded {
+        response: pairs_feed(members, extra),
+    });
+}
+
+/// The pair rows of the pairs card as `(x, y)`.
+fn pair_row_positions(h: &Harness) -> Vec<(f32, f32)> {
+    ElementHandle::find_by_element_type_name(h.app(), "PairRow")
+        .map(|e| (e.absolute_position().x, e.absolute_position().y))
+        .collect()
+}
+
+/// From two members on, head2head is the wide card: two grid columns, with the
+/// pair rows in two columns (two rows of pairs side by side at five members),
+/// a "+N more" line when rows remain, and the seats and the invite under five.
+#[test]
+fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_columns() {
+    for members in [2, 3, 4, 5, 6, 9] {
+        let mut h = Harness::new();
+        open_pairs_crew(&mut h, members, vec![]);
+        assert_eq!(count_of(&h, "Head2headCardPairs"), 1, "{members} members");
+        assert_eq!(count_of(&h, "Head2headCardWide"), 0);
+        assert_two_columns_wide(&h, "Head2headCardPairs");
+
+        let pairs = (members - 1) as usize;
+        let rows = pair_row_positions(&h);
+        assert_eq!(rows.len(), pairs.min(4), "{members} members: {rows:?}");
+        let mut xs: Vec<i32> = rows.iter().map(|r| r.0 as i32).collect();
+        xs.sort();
+        xs.dedup();
+        if pairs >= 2 {
+            assert_eq!(xs.len(), 2, "{members} members: two columns, got {rows:?}");
+        }
+        // Five members: two rows of pairs side by side.
+        if members == 5 {
+            let mut ys: Vec<i32> = rows.iter().map(|r| r.1 as i32).collect();
+            ys.sort();
+            ys.dedup();
+            assert_eq!(ys.len(), 2, "two rows of pairs: {rows:?}");
+        }
+        // The line that stands for the pairs that do not fit.
+        let more = pairs.saturating_sub(4);
+        assert_eq!(
+            h.controls_labelled(&format!("+{more} more")).len(),
+            usize::from(more > 0),
+            "{members} members"
+        );
+        // Seats and the red invite stay under five members.
+        let seats = (5 - members).max(0) as usize;
+        assert_eq!(count_of(&h, "OpenSeat"), seats.min(4), "{members} members");
+        assert_eq!(
+            h.controls_labelled("Invite your crew").len(),
+            usize::from(members < 5),
+            "{members} members"
+        );
+    }
+}
+
+/// Behind a hero, head2head takes the first wide slot after it: row 2, two
+/// columns, never the one-column side slot.
+#[test]
+fn head2head_takes_a_wide_slot_behind_a_hero() {
+    let mut hero = feed_entry(
+        "evt-stream-1",
+        "session-preview",
+        serde_json::json!({
+            "streamer_name": "Jonas", "title": "Ranked", "duration_min": 30,
+            "snapshot_urls": ["https://example.invalid/a.jpg"]
+        }),
+    );
+    hero.role = "hero".into();
+    for members in [3, 5] {
+        let mut h = Harness::new();
+        open_pairs_crew(&mut h, members, vec![hero.clone()]);
+        let types = feed_card_types(&h);
+        assert_eq!(types[0], "session-preview", "{types:?}");
+        assert_eq!(count_of(&h, "Head2headCardPairs"), 1);
+        assert_two_columns_wide(&h, "Head2headCardPairs");
+    }
+}
+
+/// A belt that moved for the viewer keeps the versus hero.
+#[test]
+fn the_versus_hero_stays_the_hero_when_a_belt_moved_for_the_viewer() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    let now = crate::head2head::now_ms();
+    let moved = serde_json::json!({
+        "title_id": "the_carry", "holder_user_id": "u2", "value": 4201.0, "unit": "h",
+        "since_ms": now - 1000, "moved_at_ms": now - 1000, "previous_holder_user_id": "user-1",
+    });
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![h2h_entry(
+            2,
+            vec![moved.clone()],
+            vec![h2h_pair("u2", 0, 1)],
+            Some(moved),
+        )]),
+    });
+    assert_eq!(count_of(&h, "VersusHero"), 1);
+    assert_eq!(count_of(&h, "Head2headCardPairs"), 0);
 }
