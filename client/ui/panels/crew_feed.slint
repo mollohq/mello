@@ -10,6 +10,7 @@ import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard
 import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease, Clock } from "../components/sealed.slint";
 import { SealedStage } from "./sealed_stage.slint";
 import { SealedFixtures } from "../previews/sealed_fixtures.slint";
+import { RecapFixtures } from "../previews/recap_fixtures.slint";
 import { YouStrip } from "./you_strip.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { GameArt } from "../components/game_art.slint";
@@ -733,6 +734,45 @@ export global RecapView {
     in-out property <FeedCardData> card;
 }
 
+/// A span of minutes in big numerals with a small "h" between hours and
+/// minutes: "19 h 40" (mockup .num). Under an hour it is the minutes and "min".
+component RecapDur inherits HorizontalLayout {
+    in property <int> minutes;
+    in property <length> size: 24px;
+    in property <length> unit-size: 13px;
+    in property <color> color: Theme.text-primary;
+    property <bool> hours: root.minutes >= 60;
+
+    alignment: start;
+    spacing: 0px;
+    Text {
+        text: root.hours ? "\{Math.floor(root.minutes / 60)}" : "\{root.minutes}";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.size; letter-spacing: -0.5px; color: root.color;
+        vertical-alignment: bottom;
+    }
+    Text {
+        text: root.hours ? " h " : " min";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.unit-size; color: Theme.text-body;
+        vertical-alignment: bottom;
+    }
+    if root.hours: Text {
+        text: Math.mod(root.minutes, 60) < 10 ? "0\{Math.mod(root.minutes, 60)}" : "\{Math.mod(root.minutes, 60)}";
+        font-family: Theme.font-display; font-weight: Theme.weight-display-bold;
+        font-size: root.size; letter-spacing: -0.5px; color: root.color;
+        vertical-alignment: bottom;
+    }
+}
+
+component RecapKicker inherits Text {
+    font-family: Theme.font-label;
+    font-weight: Theme.weight-label;
+    font-size: 9px;
+    letter-spacing: 1.8px;
+    color: Theme.text-dim;
+}
+
 component RecapHead inherits Rectangle {
     in property <FeedCardData> card;
     in property <float> count: 1;
@@ -741,10 +781,8 @@ component RecapHead inherits Rectangle {
         spacing: 0px;
         alignment: start;
 
-        // Label left, when the recap came out at the right (frames D and F).
         HorizontalLayout {
             height: 16px;
-            spacing: 8px;
             Text {
                 font-family: Theme.font-label;
                 text: "WEEKLY RECAP";
@@ -754,19 +792,9 @@ component RecapHead inherits Rectangle {
                 letter-spacing: Theme.track-label;
                 vertical-alignment: center;
             }
-            Text {
-                horizontal-stretch: 1;
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: card.age-label;
-                font-size: 11px;
-                color: Theme.text-dim;
-                horizontal-alignment: right;
-                vertical-alignment: center;
-            }
         }
 
-        Rectangle { height: 4px; }
+        Rectangle { height: 6px; }
 
         // "Week 4" once the server counts the crew's weeks. Until then the
         // card says what it is.
@@ -779,39 +807,39 @@ component RecapHead inherits Rectangle {
             color: Theme.text-primary;
         }
 
-        Rectangle { height: 8px; }
+        Rectangle { height: 10px; }
 
         Rectangle { height: 1px; background: Theme.card-border; }
 
-        Rectangle { height: 8px; }
+        Rectangle { height: 10px; }
 
         // The numbers of the week, two by two (mockup .rc-nums).
         VerticalLayout {
-            spacing: 8px;
+            spacing: 10px;
 
             HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    Text { text: root.count >= 1 ? card.title : SealedFmt.minutes(Math.round(card.recap-hangout-min * root.count)); font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                    RecapDur { minutes: Math.round(card.recap-hangout-min * root.count); }
+                    RecapKicker { text: "HANGOUT"; }
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    Text { text: card.subtitle == "" ? "0" : root.count >= 1 ? card.subtitle : "\{Math.round(card.recap-clips * root.count)}"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                    Text { text: "\{Math.round(card.recap-clips * root.count)}"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    RecapKicker { text: "CLIPS"; }
                 }
             }
 
-            if card.duration != "" || card.game-name != "": HorizontalLayout {
+            if card.recap-longest-min > 0 || card.game-name != "": HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
                     horizontal-stretch: 1;
                     spacing: 2px;
-                    if card.duration != "": Text { text: root.count >= 1 ? card.duration : SealedFmt.minutes(Math.round(card.recap-longest-min * root.count)); font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    if card.duration != "": Text { text: "LONGEST"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                    if card.recap-longest-min > 0: RecapDur { minutes: Math.round(card.recap-longest-min * root.count); }
+                    if card.recap-longest-min > 0: RecapKicker { text: "LONGEST"; }
                 }
                 VerticalLayout {
                     horizontal-stretch: 1;
@@ -833,15 +861,125 @@ component RecapHead inherits Rectangle {
                             font-weight: Theme.weight-display;
                             font-size: 12px;
                             color: Theme.text-primary;
-                            overflow: elide;
+                            wrap: word-wrap;
                             vertical-alignment: center;
                         }
                     }
-                    if card.game-name != "": Text { text: "TOP GAME"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                    if card.game-name != "": RecapKicker { text: "TOP GAME"; }
                 }
             }
         }
 
+        Rectangle { height: 10px; }
+    }
+}
+
+/// Most active and Most clipped, one line each: the label, an octagon, the name
+/// and the value at the right (mockup .pm).
+component RecapPeople inherits Rectangle {
+    in property <FeedCardData> card;
+    in property <bool> rule: true;
+    height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 0px;
+        if root.rule: Rectangle { height: 1px; background: Theme.card-border; }
+        if root.rule: Rectangle { height: 8px; }
+
+        if card.recap-active.name != "": HorizontalLayout {
+            height: 24px;
+            spacing: 8px;
+            Text { width: 78px; text: "MOST ACTIVE"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 8.5px; letter-spacing: 1.36px; color: Theme.text-dim; vertical-alignment: center; }
+            UserAvatar { size: 20px; initials: card.recap-active.initials; color-index: card.recap-active.hue; avatar: card.recap-active.avatar; has-avatar: card.recap-active.has-avatar; }
+            Text { horizontal-stretch: 1; text: card.recap-active.name; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-primary; vertical-alignment: center; }
+            Text { text: SealedFmt.span(card.recap-active.count); font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-body; vertical-alignment: center; }
+        }
+        if card.recap-active.name != "" && card.recap-clipped.name != "": Rectangle { height: 2px; }
+        if card.recap-clipped.name != "": HorizontalLayout {
+            height: 24px;
+            spacing: 8px;
+            Text { width: 78px; text: "MOST CLIPPED"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 8.5px; letter-spacing: 1.36px; color: Theme.text-dim; vertical-alignment: center; }
+            UserAvatar { size: 20px; initials: card.recap-clipped.initials; color-index: card.recap-clipped.hue; avatar: card.recap-clipped.avatar; has-avatar: card.recap-clipped.has-avatar; }
+            Text { horizontal-stretch: 1; text: card.recap-clipped.name; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-primary; vertical-alignment: center; }
+            Text { text: "\{card.recap-clipped.count}"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-body; vertical-alignment: center; }
+            Text { text: card.recap-clipped.count == 1 ? "clip" : "clips"; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px; color: Theme.text-dim; vertical-alignment: center; }
+        }
+        Rectangle { height: 10px; }
+    }
+}
+
+/// Games played: four small art tiles with the hours under each (mockup .gp).
+/// The opened recap lists every game.
+component RecapGamesStrip inherits Rectangle {
+    in property <FeedCardData> card;
+    in property <bool> rule: true;
+    /// Tiles in a row.
+    property <int> tiles: 4;
+    property <length> gap: 8px;
+    // Tiles take the width of the section, four in a row, in the 460 by 215
+    // proportion of a Steam header.
+    property <length> tile-w: (root.width - (root.tiles - 1) * root.gap) / root.tiles;
+    property <length> tile-h: root.tile-w * 215 / 460;
+    height: col.preferred-height;
+
+    col := VerticalLayout {
+        spacing: 0px;
+        if root.rule: Rectangle { height: 1px; background: Theme.card-border; }
+        if root.rule: Rectangle { height: 8px; }
+
+        HorizontalLayout {
+            height: 16px;
+            Text {
+                horizontal-stretch: 1;
+                font-family: Theme.font-label;
+                text: "GAMES PLAYED";
+                font-size: 10px;
+                font-weight: Theme.weight-label;
+                color: Theme.text-dim;
+                letter-spacing: Theme.track-label;
+                vertical-alignment: center;
+            }
+            Text {
+                text: SealedFmt.span(card.recap-games-min);
+                font-family: Theme.font-label;
+                font-size: 9px;
+                font-weight: Theme.weight-label;
+                letter-spacing: 1.2px;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+            }
+        }
+
+        Rectangle { height: 6px; }
+
+        HorizontalLayout {
+            spacing: root.gap;
+            alignment: start;
+            for g[i] in card.recap-games: Rectangle {
+                width: i < root.tiles ? root.tile-w : 0px;
+                height: i < root.tiles ? root.tile-h + 4px + 11px : 0px;
+                clip: true;
+                VerticalLayout {
+                    spacing: 4px;
+                    GameArt {
+                        game-id: g.game-id; monogram: g.monogram; hue-index: g.hue-index;
+                        icon: g.icon; has-icon: g.has-icon;
+                        capsule: g.capsule; has-capsule: g.has-capsule;
+                        size: root.tile-h; art-width: root.tile-w; art-height: root.tile-h;
+                    }
+                    Text {
+                        height: 11px;
+                        text: SealedFmt.span(g.minutes).to-uppercase();
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        font-size: 8.5px;
+                        letter-spacing: 1.2px;
+                        color: Theme.text-dim;
+                        overflow: elide;
+                    }
+                }
+            }
+        }
         Rectangle { height: 10px; }
     }
 }
@@ -906,8 +1044,9 @@ component RecapMvp inherits Rectangle {
 component RecapMoved inherits Rectangle {
     in property <FeedCardData> card;
     in property <bool> rule: true;
-    /// Rows of Belts moved the card shows.
-    property <int> max-belt-rows: 3;
+    /// Rows of Belts moved the card shows. The tall card shows two and then
+    /// "+N more".
+    in property <int> max-belt-rows: 3;
             VerticalLayout {
                 spacing: 0px;
 
@@ -972,6 +1111,14 @@ component RecapMoved inherits Rectangle {
                         }
                       }
                     }
+                }
+                if card.belts-moved.length > root.max-belt-rows: Text {
+                    text: "+\{card.belts-moved.length - root.max-belt-rows} MORE";
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    font-size: 9px;
+                    letter-spacing: 1.44px;
+                    color: Theme.text-dim;
                 }
                 Rectangle { height: 10px; }
             }
@@ -1139,6 +1286,54 @@ component RecapGames inherits Rectangle {
             }
         }
 
+/// The control of a recap card: opens the recap full screen (`RecapOpened`).
+component RecapFoot inherits Rectangle {
+    in property <FeedCardData> card;
+    property <length> button-w: see-label.preferred-width + 24px;
+    preferred-width: root.button-w;
+    preferred-height: 40px;
+    background: transparent;
+
+    Rectangle {
+        x: parent.width - self.width;
+        y: parent.height - self.height;
+        width: root.button-w;
+        height: 28px;
+        accessible-role: button;
+        accessible-label: "See the week";
+
+        CutButtonShape {
+            width: parent.width; height: parent.height;
+            n: 6px;
+            fill: see-ta.has-hover ? Theme.action : Theme.action-line;
+        }
+        CutButtonShape {
+            width: parent.width; height: parent.height;
+            n: 6px; inset: Theme.keyline;
+            fill: Theme.card-bg;
+        }
+        see-label := Text {
+            width: parent.width;
+            height: parent.height;
+            text: "SEE THE WEEK";
+            font-family: Theme.font-label;
+            font-size: 9px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 1.44px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+        see-ta := TouchArea {
+            mouse-cursor: pointer;
+            clicked => {
+                RecapView.card = root.card;
+                RecapView.open = true;
+            }
+        }
+    }
+}
+
 // Weekly recap card. Two shapes, never one cell: the tall card of the side
 // column (one column, two rows) and the wide card (two columns, one row).
 component RecapCard inherits Rectangle {
@@ -1151,13 +1346,13 @@ component RecapCard inherits Rectangle {
     // One grid row high and two columns wide. A recap that is two rows high (the
     // hero, a tall slot) stacks its sections even when it is wide.
     property <bool> wide: root.width >= 560px && root.height < 340px;
-    /// Members of Belts held that fit one octagon column of 56 px.
-    property <int> max-held: Math.min(5, Math.max(1, Math.floor((root.wide ? (root.width - 28px - 34px) * 0.4 : root.width - 28px) / 56px)));
-    /// With belts the card has no room for everything. The belts are the news
-    /// of the week, so the MVP row and the games list go to the full-screen
-    /// recap, which shows both. A recap with no belts keeps all of them.
+    /// A recap with belts needs three grid rows. A slot of two rows (a lone recap
+    /// with no head2head beside it) drops Belts held and the games, so the
+    /// control stays on the card.
     property <bool> has-belts: card.belts-moved.length > 0 || card.belts-held.length > 0;
-
+    property <bool> short: root.height < 600px;
+    /// Members of Belts held that fit one octagon column of 56 px.
+    property <int> max-held: Math.min(5, Math.max(1, Math.floor((root.wide ? (root.width - 28px - 34px) * 0.4 : root.width - 32px) / 56px)));
     clip: true;
 
     background: transparent;
@@ -1180,19 +1375,26 @@ component RecapCard inherits Rectangle {
     }
 
 
+    // The tall card (mockup weekly-recap-card, frame 1): the label and the
+    // week, the numbers two by two, the two members, the belts, the games and
+    // the control in a row of its own at the foot.
     if !root.wide: VerticalLayout {
         padding: 14px;
+        padding-left: 16px;
+        padding-right: 16px;
         padding-top: 16px;
         spacing: 0px;
-        // Top-pack: each section uses its natural height and any slack collects
-        // at the bottom, instead of stretching a section away from its header.
+        // Top-pack: each section uses its natural height and the slack
+        // collects between the last section and the foot.
         alignment: start;
 
         RecapHead { card: root.card; count: root.count; }
-        if card.mvp-count > 0 && !root.has-belts: RecapMvp { card: root.card; }
-        if card.belts-moved.length > 0: RecapMoved { card: root.card; }
-        if card.belts-held.length > 0: RecapHeld { card: root.card; count: root.count; max-held: root.max-held; }
-        if (card.leaderboard.length > 0 || card.awards.length > 0) && !root.has-belts: RecapGames { card: root.card; }
+        if card.recap-active.name != "" || card.recap-clipped.name != "": RecapPeople { card: root.card; }
+        if card.belts-moved.length > 0: RecapMoved { card: root.card; max-belt-rows: 2; }
+        if card.belts-held.length > 0 && !root.short: RecapHeld { card: root.card; count: root.count; max-held: root.max-held; }
+        if card.recap-games.length > 0 && (!root.short || !root.has-belts): RecapGamesStrip { card: root.card; }
+        Rectangle { vertical-stretch: 1; }
+        RecapFoot { card: root.card; }
     }
 
     // The wide card: the week, the belts that moved and who holds them, side
@@ -1220,45 +1422,13 @@ component RecapCard inherits Rectangle {
         }
     }
 
-    // Opens the recap full screen (`RecapOpened`). The card holds the news of
-    // the week, so the control stays at the foot.
-    Rectangle {
+    // The wide card keeps the control at the foot, at the right.
+    if root.wide: RecapFoot {
         x: parent.width - self.width - 14px;
         y: parent.height - self.height - 12px;
-        width: see-label.preferred-width + 24px;
+        width: self.preferred-width;
         height: 28px;
-        accessible-role: button;
-        accessible-label: "See the week";
-
-        CutButtonShape {
-            width: parent.width; height: parent.height;
-            n: 6px;
-            fill: see-ta.has-hover ? Theme.action : Theme.action-line;
-        }
-        CutButtonShape {
-            width: parent.width; height: parent.height;
-            n: 6px; inset: Theme.keyline;
-            fill: Theme.card-bg;
-        }
-        see-label := Text {
-            width: parent.width;
-            height: parent.height;
-            text: "SEE THE WEEK";
-            font-family: Theme.font-label;
-            font-size: 9px;
-            font-weight: Theme.weight-label;
-            letter-spacing: 1.2px;
-            color: Theme.text-primary;
-            horizontal-alignment: center;
-            vertical-alignment: center;
-        }
-        see-ta := TouchArea {
-            mouse-cursor: pointer;
-            clicked => {
-                RecapView.card = root.card;
-                RecapView.open = true;
-            }
-        }
+        card: root.card;
     }
 }
 
@@ -3139,14 +3309,12 @@ export component CrewFeed inherits Rectangle {
     // `feed_grid.rs`.
     property <bool> two-streams: hero-streams.length == 2 && cards.length > 0;
     property <bool> two-streams-recap: two-streams && cards[0].card-type == "recap"
-        && (cards[0].leaderboard.length > 0 || cards[0].awards.length > 0
-            || cards[0].belts-moved.length > 0 || cards[0].belts-held.length > 0);
+        && cards[0].recap-rows > 0;
     // One live stream: a recap with content leads and holds the side column
     // alone, tall (`grid_start`). Else two cards stand in it.
     property <bool> stream-recap: stream-cards.length == 1 && cards.length > 0
         && cards[0].card-type == "recap"
-        && (cards[0].leaderboard.length > 0 || cards[0].awards.length > 0
-            || cards[0].belts-moved.length > 0 || cards[0].belts-held.length > 0);
+        && cards[0].recap-rows > 0;
     // Head2head is two columns wide, so it never stands in the column: up to two
     // cards that are not head2head do (`grid_start` in `feed_grid.rs`).
     property <bool> first-is-h2h: cards.length > 0 && cards[0].card-type == "head2head"
@@ -3181,10 +3349,7 @@ export component CrewFeed inherits Rectangle {
     property <bool> lead-is-tall-trio: cards.length > feed-start-index + 3
         && lead-h2h-wide
         && cards[feed-start-index + 1].card-type == "recap"
-        && (cards[feed-start-index + 1].leaderboard.length > 0
-            || cards[feed-start-index + 1].awards.length > 0
-            || cards[feed-start-index + 1].belts-moved.length > 0
-            || cards[feed-start-index + 1].belts-held.length > 0);
+        && cards[feed-start-index + 1].recap-rows > 0;
     // The first session of a crew of one stands left of the wide head2head
     // card (frame B): one cell, then two columns. Mirrors `Lead::CellWide`.
     property <bool> lead-is-cell-wide: cards.length > feed-start-index + 1
@@ -3209,10 +3374,7 @@ export component CrewFeed inherits Rectangle {
     // so it takes the side column alone and row 1 holds two cards, not three.
     property <bool> side-is-recap: cards.length > feed-start-index + 1
         && cards[feed-start-index + 1].card-type == "recap"
-        && (cards[feed-start-index + 1].leaderboard.length > 0
-            || cards[feed-start-index + 1].awards.length > 0
-            || cards[feed-start-index + 1].belts-moved.length > 0
-            || cards[feed-start-index + 1].belts-held.length > 0);
+        && cards[feed-start-index + 1].recap-rows > 0;
     // A head2head card behind a lead stands in row 2, never in the one-column
     // slot beside the lead: the lead then holds row 1 alone. Mirrors
     // `wide_follows` in `feed_grid.rs`.
@@ -3230,7 +3392,7 @@ export component CrewFeed inherits Rectangle {
     property <int> row1-consumed: cards.length <= feed-start-index ? 0
         : lead-is-plain ? 0
         : lead-is-belt || lead-is-tall-trio ? Math.min(4, cards.length - feed-start-index)
-        : lead-is-wide && wide-follows ? 1
+        : lead-is-wide && (wide-follows || tall3) ? 1
         : lead-is-wide || lead-is-cell-wide ? Math.min(2, cards.length - feed-start-index)
         : hero-is-full-row ? 1
         : side-is-recap ? Math.min(2, cards.length - feed-start-index)
@@ -3248,18 +3410,37 @@ export component CrewFeed inherits Rectangle {
             || (cards[row2-base].card-type == "recent-games"
             && cards[row2-base].recent-pc-count >= 2)
             || (cards[row2-base].card-type == "recap"
-                && (cards[row2-base].leaderboard.length > 0
-                    || cards[row2-base].awards.length > 0
-                    || cards[row2-base].belts-moved.length > 0
-                    || cards[row2-base].belts-held.length > 0)));
-    property <int> row3-base: row2-base + (r2-wide ? 2 : 3);
+                && cards[row2-base].recap-rows > 0));
+    // The tall recap is one column wide and three rows high with belts (two
+    // without), beside the hero, the stream, or head2head and its two cells.
+    // Its third row leaves two columns under the lead, so the row after the
+    // lead holds one wide card or two cells, not three. Mirrors
+    // `Layout::tall3` in `feed_grid.rs`.
+    property <bool> hero-block: !hero-is-full-row && !lead-is-wide && !lead-is-cell-wide
+        && !lead-is-belt && !lead-is-tall-trio && !lead-is-plain && cards.length > feed-start-index;
+    // Beside a stream the recap is three rows only when the cards under the
+    // stream leave the third column free: a wide card and a plain row do, a
+    // hero or a full row does not.
+    property <bool> tall3: ((two-streams-recap || stream-recap) && cards[0].recap-rows >= 3
+            && (lead-is-wide || lead-is-plain))
+        || (lead-is-tall-trio && cards[feed-start-index + 1].recap-rows >= 3)
+        || (hero-block && side-is-recap && cards[feed-start-index + 1].recap-rows >= 3);
+    // The row after the lead holds the third row of the recap when the lead is
+    // not the wide card: beside a wide card the recap's third row is the wide
+    // card's own row.
+    property <bool> row2-tall: root.tall3 && !lead-is-wide;
+    /// Height of the tall recap: three rows and two gaps, or two rows and one.
+    property <length> recap-h: root.tall3 ? Theme.feed-row * 3 + 24px : Theme.feed-row * 2 + 12px;
+    /// Cards in the row after the lead block.
+    property <int> row2-cap: root.row2-tall ? (r2-wide ? 1 : 2) : (r2-wide ? 2 : 3);
+    property <int> row3-base: row2-base + row2-cap;
     // Row 2 is the last row and has free cells: the stream and voice clip
     // skeletons fill them at the card height, and the recap skeleton takes the
     // slim row under it (frame B). A full last row leaves the trio as one row.
     property <int> row2-count: cards.length <= row2-base ? 0
-        : Math.min(r2-wide ? 2 : 3, cards.length - row2-base);
-    property <int> row2-free: (r2-wide ? 2 : 3) - row2-count;
-    property <bool> skel-fill: !r2-wide && row2-count >= 1 && row2-free >= 1
+        : Math.min(row2-cap, cards.length - row2-base);
+    property <int> row2-free: row2-cap - row2-count;
+    property <bool> skel-fill: !r2-wide && (row2-count >= 1 || row2-tall) && row2-free >= 1
         && cards.length <= row3-base;
     property <bool> fill-stream: skel-fill && skeleton-stream;
     property <int> voice-slot: skeleton-stream ? 1 : 0;
@@ -3393,8 +3574,21 @@ export component CrewFeed inherits Rectangle {
                         height: parent.height;
                         spacing: 12px;
 
-                        if root.stream-side-consumed >= 1: FeedSlot {
-                            height: root.two-streams-recap || root.stream-recap ? parent.height : Theme.feed-row;
+                        // The tall recap holds the whole column and takes a third row
+                        // under the hero when it has belts: it stands in a plain
+                        // rectangle, so the layout does not cut it to the block.
+                        if root.stream-side-consumed >= 1 && (root.two-streams-recap || root.stream-recap): Rectangle {
+                            vertical-stretch: 1;
+                            FeedSlot {
+                                x: 0px; y: 0px;
+                                width: parent.width;
+                                height: root.recap-h;
+                                card: cards[0];
+                            }
+                        }
+
+                        if root.stream-side-consumed >= 1 && !root.two-streams-recap && !root.stream-recap: FeedSlot {
+                            height: Theme.feed-row;
                             card: cards[0];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -3583,9 +3777,14 @@ export component CrewFeed inherits Rectangle {
                             FeedSlot { horizontal-stretch: 1; card: cards[root.feed-start-index + 3]; }
                         }
                     }
-                    FeedSlot {
+                    Rectangle {
                         horizontal-stretch: 1;
-                        card: cards[root.feed-start-index + 1];
+                        FeedSlot {
+                            x: 0px; y: 0px;
+                            width: parent.width;
+                            height: root.recap-h;
+                            card: cards[root.feed-start-index + 1];
+                        }
                     }
                 }
 
@@ -3617,7 +3816,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                     }
 
-                    if cards.length > root.feed-start-index + 1 && !root.wide-follows: FeedSlot {
+                    if cards.length > root.feed-start-index + 1 && !root.wide-follows && !root.tall3: FeedSlot {
                         horizontal-stretch: 1;
                         card: cards[root.feed-start-index + 1];
                         playing-path: root.clip-playing-path;
@@ -3634,7 +3833,7 @@ export component CrewFeed inherits Rectangle {
                         invite-clicked => { root.invite-clicked(); }
                         start-voice-clicked(id) => { root.start-voice-clicked(id); }
                     }
-                    if cards.length <= root.feed-start-index + 1 || root.wide-follows: Rectangle { horizontal-stretch: 1; }
+                    if cards.length <= root.feed-start-index + 1 || root.wide-follows || root.tall3: Rectangle { horizontal-stretch: 1; }
                 }
 
                 if !hero-is-full-row && !lead-is-wide && !lead-is-cell-wide && !lead-is-belt && !lead-is-tall-trio && !lead-is-plain && cards.length > root.feed-start-index: HorizontalLayout {
@@ -3666,8 +3865,18 @@ export component CrewFeed inherits Rectangle {
 
                         // A recap holds the whole column; anything else is one row.
                         // A head2head card behind the hero stands in row 2.
-                        if cards.length > root.feed-start-index + 1 && !root.side-is-h2h: FeedSlot {
-                            height: root.side-is-recap ? parent.height : Theme.feed-row;
+                        if cards.length > root.feed-start-index + 1 && root.side-is-recap: Rectangle {
+                            vertical-stretch: 1;
+                            FeedSlot {
+                                x: 0px; y: 0px;
+                                width: parent.width;
+                                height: root.recap-h;
+                                card: cards[root.feed-start-index + 1];
+                            }
+                        }
+
+                        if cards.length > root.feed-start-index + 1 && !root.side-is-h2h && !root.side-is-recap: FeedSlot {
+                            height: Theme.feed-row;
                             card: cards[root.feed-start-index + 1];
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
@@ -3705,11 +3914,11 @@ export component CrewFeed inherits Rectangle {
                 }
 
                 // Row 2: three 1x cards, or a wide card and one card.
-                if cards.length > root.row2-base: HorizontalLayout {
+                if cards.length > root.row2-base || root.row2-tall: HorizontalLayout {
                     height: Theme.feed-row;
                     spacing: 12px;
 
-                    for rel-idx in (root.r2-wide ? [0, 1] : [0, 1, 2]): Rectangle {
+                    for rel-idx in (root.row2-tall ? (root.r2-wide ? [0] : [0, 1]) : (root.r2-wide ? [0, 1] : [0, 1, 2])): Rectangle {
                         property <int> card-idx: root.row2-base + rel-idx;
                         // The free cell, counted from the first one after the cards.
                         property <int> free-idx: rel-idx - root.row2-count;
@@ -3750,6 +3959,9 @@ export component CrewFeed inherits Rectangle {
                             corner: "br";
                         }
                     }
+
+                    // The third column holds the third row of the tall recap.
+                    if root.row2-tall: Rectangle { horizontal-stretch: 1; }
                 }
 
                 // Row 3: card (1x) + wide card (2x)
@@ -4171,7 +4383,7 @@ export component Preview inherits Rectangle {
                 participant-count: 2, clip-count: 3, clip-path: "",
             },
             {
-                id: "2", card-type: "recap", is-hero: false, is-skeleton: false,
+                id: "2", card-type: "recap", is-hero: false, is-skeleton: false, recap-rows: 2, recap-hangout-min: 870, recap-clips: 12, recap-longest-min: 312,
                 title: "14.5h",
                 subtitle: "12",
                 actor-name: "FaiL", actor-initials: "Fa",
@@ -4266,7 +4478,7 @@ export component PreviewSessionHero inherits Rectangle {
                 participant-count: 6, clip-count: 4, clip-path: "",
             },
             {
-                id: "side-a", card-type: "recap", is-hero: false, is-skeleton: false,
+                id: "side-a", card-type: "recap", is-hero: false, is-skeleton: false, recap-rows: 2, recap-hangout-min: 870, recap-clips: 12, recap-longest-min: 312,
                 title: "14.5h", subtitle: "12",
                 actor-name: "FaiL", actor-initials: "Fa",
                 game-name: "Valorant", duration: "5h 12m", timestamp: "This week",
@@ -4596,6 +4808,9 @@ export component PreviewFeedRecapWide inherits Rectangle {
                 id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 4",
                 recap-seal: { key: "recap:4421", sealed: root.sealed, seed: 4421, bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim },
                 title: "19h 40", subtitle: "11", duration: "3h 48",
+                recap-rows: 3, recap-hangout-min: 1180, recap-clips: 11, recap-longest-min: 228, recap-range: "12 to 18 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
@@ -4693,6 +4908,9 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 4",
                 recap-seal: { key: "recap:4421", sealed: root.sealed, seed: 4421, bright: SealedFixtures.recap-bright, dim: SealedFixtures.recap-dim },
                 title: "19h 40", subtitle: "11", duration: "3h 48",
+                recap-rows: 3, recap-hangout-min: 1180, recap-clips: 11, recap-longest-min: 228, recap-range: "12 to 18 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
@@ -4726,18 +4944,6 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 },
             },
             {
-                id: "live-rl", card-type: "live-session", role: "standard", size: "md",
-                game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
-                live: {
-                    since-min: 38, since-text: "since 38 min", names-line: "Jonas and Max",
-                    players: [
-                        { name: "Jonas", initials: "J", hue-index: 1 },
-                        { name: "Max", initials: "M", hue-index: 2 },
-                    ],
-                },
-            },
-            {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "14 sessions, 31 h this week", recent-pc-count: 5,
                 recent-games: [
@@ -4750,6 +4956,18 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                     { game-id: "steam-1097150", game-name: "Fall Guys", monogram: "FG", hue-index: 4, hours: "34 H", when: "Last week",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"), owners: [leo, jonas] },
                 ],
+            },
+            {
+                id: "live-rl", card-type: "live-session", role: "standard", size: "md",
+                game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                live: {
+                    since-min: 38, since-text: "since 38 min", names-line: "Jonas and Max",
+                    players: [
+                        { name: "Jonas", initials: "J", hue-index: 1 },
+                        { name: "Max", initials: "M", hue-index: 2 },
+                    ],
+                },
             },
             {
                 id: "invite", card-type: "invite", role: "standard", size: "md",
@@ -5162,7 +5380,7 @@ export component PreviewFeedQuiet inherits Rectangle {
 // record. No skeletons, no empty cards. One open seat, with the red invite.
 export component PreviewFeedDormant inherits Rectangle {
     width: 1200px;
-    height: 760px;
+    height: 960px;
     background: Theme.bg-app;
 
     CrewFeed {
@@ -5193,8 +5411,11 @@ export component PreviewFeedDormant inherits Rectangle {
                 },
             },
             {
-                id: "recap", card-type: "recap", role: "recap", size: "lg", age-label: "3 weeks ago", recap-week: "Week 2",
+                id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 2",
                 title: "6h 15", subtitle: "3", duration: "2h 20",
+                recap-rows: 3, recap-hangout-min: 375, recap-clips: 3, recap-longest-min: 140, recap-range: "28 September to 4 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: 800, recap-clip: RecapFixtures.clip,
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [

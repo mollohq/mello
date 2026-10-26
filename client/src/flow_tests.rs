@@ -4924,16 +4924,11 @@ fn no_card_draws_a_commentary_note() {
         "Now",
         "Today",
     ];
-    let mut h = Harness::new();
-    open_recap(&h, 1);
-    emit_recap(
-        &mut h,
-        serde_json::json!({
-            "belts_moved": [belt_moved("the_carry", serde_json::json!(4201.0), "h")],
-            "belts_held": belts_held(),
-            "week_end": now_ms(),
-        }),
-    );
+    let h = tall_recap_crew(serde_json::json!({
+        "belts_moved": [belt_moved("the_carry", serde_json::json!(4201.0), "h")],
+        "belts_held": belts_held(),
+        "week_end": now_ms(),
+    }));
     let texts = drawn_texts(&h);
     for want in ["WEEKLY RECAP", "BELTS MOVED", "BELTS HELD"] {
         assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
@@ -7148,9 +7143,10 @@ fn recap_with_two_moved_belts_shows_two_rows_and_the_held_section() {
     assert_eq!(card.game_name.as_str(), "Rocket League");
 }
 
-/// The card shows three moved belts at most. The full-screen recap shows all.
+/// The tall card shows two moved belts and "+N more". The full-screen recap
+/// shows all of them.
 #[test]
-fn recap_card_caps_moved_belts_at_three_and_opens_full_screen_with_all() {
+fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
     let mut h = Harness::new();
     emit_recap(
         &mut h,
@@ -7167,8 +7163,12 @@ fn recap_card_caps_moved_belts_at_three_and_opens_full_screen_with_all() {
     assert_eq!(count_of(&h, "RecapOpened"), 0);
     assert_eq!(
         count_of(&h, "TitleChip"),
-        3,
-        "the card shows three of the four rows: a clipped row is absent from queries"
+        2,
+        "the card shows two of the four rows: a clipped row is absent from queries"
+    );
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "+2 MORE"),
+        "the rest is a count"
     );
     h.click_label("See the week");
     assert_eq!(
@@ -7178,8 +7178,8 @@ fn recap_card_caps_moved_belts_at_three_and_opens_full_screen_with_all() {
     );
     assert_eq!(
         count_of(&h, "TitleChip"),
-        3 + 4,
-        "the three rows of the card and all four rows of the full-screen recap"
+        2 + 4,
+        "the two rows of the card and all four rows of the full-screen recap"
     );
     h.click_label("Close weekly recap");
     assert_eq!(count_of(&h, "RecapOpened"), 0);
@@ -7200,6 +7200,254 @@ fn recap_without_belts_shows_neither_section() {
         count_of(&h, "TitleChip"),
         0,
         "no belts, no chips in the full-screen recap"
+    );
+}
+
+// ---- the tall recap card (mockup weekly-recap-card, frame 1) ----
+
+/// Sessions for the cells under head2head in frame F.
+fn tall_recap_crew(recap: serde_json::Value) -> Harness {
+    let mut h = Harness::new();
+    // The recap of week 1 is open: the card shows, not the sealed one.
+    open_recap(&h, 1);
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+    let session = |id: &str| {
+        feed_entry(
+            id,
+            "session",
+            serde_json::json!({"game_name": "Valorant", "duration_min": 60, "active_min": 60}),
+        )
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![
+            h2h_entry(
+                5,
+                vec![h2h_title("the_carry", "u2", serde_json::json!(4201.0), "h")],
+                vec![
+                    h2h_pair("u2", 1, 3),
+                    h2h_pair("u3", 2, 2),
+                    h2h_pair("u4", 3, 1),
+                    h2h_pair("u5", 2, 2),
+                ],
+                None,
+            ),
+            recap_entry(recap),
+            session("s1"),
+            session("s2"),
+        ]),
+    });
+    h
+}
+
+fn week_with_everything() -> serde_json::Value {
+    serde_json::json!({
+        "week_number": 4,
+        "total_min": 1180, "total_hangout_min": 1180, "longest_session_min": 228,
+        "clip_count": 11,
+        "top_members": [{"user_id": "u4", "display_name": "Max", "hangout_min": 550}],
+        "most_clipped": "Leo", "most_clipped_user_id": "u5", "most_clipped_count": 5,
+        "belts_moved": [
+            belt_moved("the_carry", serde_json::json!(4201.0), "h"),
+            belt_moved("night_owl", serde_json::json!("03:40"), ""),
+            belt_moved("sampler", serde_json::json!(9), "games"),
+        ],
+        "belts_held": belts_held(),
+        "games_played": [
+            {"game": "Rocket League", "matches": 4, "minutes": 740},
+            {"game": "Counter-Strike 2", "matches": 3, "minutes": 550},
+            {"game": "Fall Guys", "matches": 0, "minutes": 270},
+            {"game": "Dota 2", "matches": 0, "minutes": 220},
+            {"game": "Night Stones", "matches": 0, "minutes": 120},
+        ],
+    })
+}
+
+fn week_without_belts() -> serde_json::Value {
+    let mut w = week_with_everything();
+    w["belts_moved"] = serde_json::json!([]);
+    w["belts_held"] = serde_json::json!([]);
+    w
+}
+
+const TALL_SECTIONS: [&str; 5] = [
+    "RecapHead",
+    "RecapPeople",
+    "RecapMoved",
+    "RecapHeld",
+    "RecapGamesStrip",
+];
+
+fn rect_of(e: &ElementHandle) -> (f32, f32, f32, f32) {
+    let (p, s) = (e.absolute_position(), e.size());
+    (p.x, p.y, p.x + s.width, p.y + s.height)
+}
+
+fn overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
+    a.0 < b.2 - 0.5 && b.0 < a.2 - 0.5 && a.1 < b.3 - 0.5 && b.1 < a.3 - 0.5
+}
+
+/// With belts the card has every section and three grid rows.
+#[test]
+fn the_tall_recap_has_every_section_and_three_rows_with_belts() {
+    let h = tall_recap_crew(week_with_everything());
+    for name in TALL_SECTIONS {
+        assert_eq!(count_of(&h, name), 1, "{name} is on the card");
+    }
+    assert_eq!(count_of(&h, "RecapFoot"), 1);
+    let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
+        .next()
+        .expect("the recap");
+    let rows = (card.size().height + 12.0) / (232.0 + 12.0);
+    assert!((rows - 3.0).abs() < 0.01, "three rows, got {rows}");
+    let texts = drawn_texts(&h);
+    for want in [
+        "WEEKLY RECAP",
+        "HANGOUT",
+        "CLIPS",
+        "LONGEST",
+        "TOP GAME",
+        "MOST ACTIVE",
+        "MOST CLIPPED",
+        "BELTS MOVED",
+        "+1 MORE",
+        "BELTS HELD",
+        "GAMES PLAYED",
+        "Max",
+        "Leo",
+        "9 h 10",
+    ] {
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+    }
+    assert_eq!(
+        count_of(&h, "TitleChip"),
+        2,
+        "two belts and the rest a count"
+    );
+    // Four tiles with the hours of each game, the fifth game is for the opened
+    // recap.
+    assert!(texts.iter().any(|t| t == "12 H 20"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "9 H 10"), "{texts:?}");
+    assert!(texts.iter().any(|t| t == "3 H 40"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "2 H 00"), "{texts:?}");
+    // No note of the mockup stays on the card: no day, no source.
+    for note in ["Monday", "Head2head", "Now", "NOW", "31 h 40 together"] {
+        assert!(!texts.iter().any(|t| t == note), "{note:?} in {texts:?}");
+    }
+}
+
+/// With no belts both belt sections are gone and the card is two rows.
+#[test]
+fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
+    let h = tall_recap_crew(week_without_belts());
+    assert_eq!(count_of(&h, "RecapMoved"), 0);
+    assert_eq!(count_of(&h, "RecapHeld"), 0);
+    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip", "RecapFoot"] {
+        assert_eq!(count_of(&h, name), 1, "{name} is on the card");
+    }
+    let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
+        .next()
+        .expect("the recap");
+    let rows = (card.size().height + 12.0) / (232.0 + 12.0);
+    assert!((rows - 2.0).abs() < 0.01, "two rows, got {rows}");
+    assert_eq!(first_recap(&h).recap_rows, 2);
+}
+
+fn first_recap(h: &Harness) -> FeedCardData {
+    use slint::Model;
+    h.app()
+        .get_feed_cards()
+        .iter()
+        .find(|c| c.card_type == "recap")
+        .expect("a recap card")
+}
+
+/// "See the week" stands in a row of its own: it touches no section.
+#[test]
+fn see_the_week_intersects_no_sibling() {
+    for week in [week_with_everything(), week_without_belts()] {
+        let h = tall_recap_crew(week);
+        let controls = h.controls_labelled("See the week");
+        assert_eq!(controls.len(), 1);
+        let button = rect_of(&controls[0]);
+        let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
+            .next()
+            .expect("the recap");
+        let card = rect_of(&card);
+        assert!(
+            button.2 <= card.2 && button.3 <= card.3 && button.0 >= card.0,
+            "the button {button:?} is inside the card {card:?}"
+        );
+        for name in TALL_SECTIONS {
+            for e in ElementHandle::find_by_element_type_name(h.app(), name) {
+                assert!(
+                    !overlap(button, rect_of(&e)),
+                    "the button {button:?} sits on {name} {:?}",
+                    rect_of(&e)
+                );
+            }
+        }
+    }
+}
+
+/// The server's new fields reach the card: the most clipped member with the
+/// count, the hours of every game and the week.
+#[test]
+fn the_recap_card_reads_the_most_clipped_member_the_games_and_the_week() {
+    let h = tall_recap_crew(week_with_everything());
+    let card = first_recap(&h);
+    assert_eq!(card.recap_rows, 3);
+    assert_eq!(card.recap_week.as_str(), "Week 4");
+    assert_eq!(card.recap_active.name.as_str(), "Max");
+    assert_eq!(card.recap_active.count, 550);
+    assert_eq!(card.recap_clipped.name.as_str(), "Leo");
+    assert_eq!(card.recap_clipped.count, 5);
+    assert_eq!(card.recap_games.row_count(), 5, "every game is on the data");
+    assert_eq!(card.recap_games_min, 1900);
+    let first = card.recap_games.row_data(0).expect("a game");
+    assert_eq!((first.name.as_str(), first.minutes), ("Rocket League", 740));
+}
+
+/// A recap stored before `most_clipped_count` shows no most clipped line and
+/// no games strip, and keeps the card.
+#[test]
+fn an_older_recap_draws_without_the_new_fields() {
+    let h = tall_recap_crew(serde_json::json!({"most_clipped": "Leo"}));
+    let card = first_recap(&h);
+    assert_eq!(card.recap_clipped.name.as_str(), "");
+    assert_eq!(card.recap_games.row_count(), 0);
+    assert_eq!(count_of(&h, "RecapGamesStrip"), 0);
+    assert_eq!(count_of(&h, "RecapHead"), 1);
+}
+
+/// A crew of one has no weekly recap: with nobody to be in voice with and no
+/// clip, the week is empty (`isEmptyRecap`), so no card is drawn and the recap
+/// skeleton stays. The rule did not change with the tall card.
+#[test]
+fn a_crew_of_one_renders_no_recap() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![recap_entry(serde_json::json!({
+            "total_hangout_min": 0, "total_game_min": 0, "total_min": 0,
+            "clip_count": 0, "top_members": [], "most_clipped": "",
+        }))]),
+    });
+    assert_eq!(count_of(&h, "RecapSlot"), 0);
+    assert_eq!(count_of(&h, "RecapCard"), 0);
+    assert_eq!(count_of(&h, "RecapHead"), 0);
+    assert!(
+        h.app().get_feed_skeleton_recap(),
+        "the recap skeleton stays"
     );
 }
 

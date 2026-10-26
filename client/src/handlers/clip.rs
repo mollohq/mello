@@ -1419,7 +1419,10 @@ fn extract_recap_active(ctx: &AppContext, data: &serde_json::Value) -> RecapPers
     else {
         return RecapPerson::default();
     };
-    let name = top.get("display_name").and_then(|v| v.as_str()).unwrap_or("");
+    let name = top
+        .get("display_name")
+        .and_then(|v| v.as_str())
+        .unwrap_or("");
     if name.is_empty() {
         return RecapPerson::default();
     }
@@ -1505,7 +1508,11 @@ fn extract_recap_clip(ctx: &AppContext, data: &serde_json::Value) -> RecapClip {
     let names: Vec<String> = c
         .get("participant_names")
         .and_then(|v| v.as_array())
-        .map(|a| a.iter().filter_map(|n| n.as_str().map(String::from)).collect())
+        .map(|a| {
+            a.iter()
+                .filter_map(|n| n.as_str().map(String::from))
+                .collect()
+        })
         .unwrap_or_default();
     let people: Vec<RecapPerson> = names
         .iter()

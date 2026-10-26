@@ -77,6 +77,10 @@ export global SealedFmt {
             : kind == 1 ? "\{Math.floor(Math.round(v) / 60)} h \{pad2(Math.mod(Math.round(v), 60))}"
             : "\{pad2(Math.mod(Math.floor(Math.round(v) / 60), 24))}:\{pad2(Math.mod(Math.round(v), 60))}";
     }
+    /// A span of minutes as the recap writes it: "9 h 10", "3 h 00", "40 min".
+    public pure function span(m: int) -> string {
+        return m >= 60 ? "\{Math.floor(m / 60)} h \{pad2(Math.mod(m, 60))}" : "\{m} min";
+    }
     /// Minutes as the recap card writes them while they count up.
     public pure function minutes(m: int) -> string {
         return m >= 60 ? "\{Math.floor(m / 60)}h \{pad2(Math.mod(m, 60))}m" : "\{m}m";
