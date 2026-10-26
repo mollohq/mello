@@ -75,8 +75,12 @@ export default journey({
     for (const app of [bob, alice]) {
       await step(`${app.name} sees Worker art on the tiles of the indexed games`, async () => {
         const s = await app.waitFor(
-          "art on the Brawlhalla tile",
-          (st) => st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.art === "image"),
+          "art on the tiles of the indexed games",
+          (st) =>
+            ["Brawlhalla", "Rocket League", "Fall Guys"].every((n) => {
+              const t = st.recent_games.tiles.find((x) => x.name === n);
+              return !t || t.art === "image";
+            }) && st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.art === "image"),
           30_000,
         );
         for (const name of ["Brawlhalla", "Rocket League", "Fall Guys"]) {
