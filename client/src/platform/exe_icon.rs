@@ -30,7 +30,11 @@ pub fn icon_cache_dir() -> Option<PathBuf> {
 }
 
 /// Disk cache dir for the art Worker images, beside the icon cache.
+/// `MELLO_ART_CACHE_DIR` replaces it (the e2e driver gives each app its own).
 pub fn art_cache_dir() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("MELLO_ART_CACHE_DIR").filter(|d| !d.is_empty()) {
+        return Some(PathBuf::from(dir));
+    }
     icon_cache_dir().map(|d| d.with_file_name("game_art"))
 }
 

@@ -5,9 +5,12 @@
 // games, so recent games is a poster grid of at most five tiles with owner pips,
 // "From 2 PCs" on its header. The skeleton trio stays (frame B2). alice sees the
 // join card for bob, who came by her invite link: a standard cell after the
-// first row, with "Say hi".
+// first row, with "Say hi". The art Worker serves Brawlhalla, Rocket League and
+// Fall Guys (qa/fixtures/art-index): their tiles show art. Start the Worker
+// first: scripts/e2e-art-worker.sh up.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
+import { DEFAULT_ART_BASE } from "../../tools/mello-driver/src/app.ts";
 import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 import { endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
@@ -17,6 +20,11 @@ export default journey({
   flows: ["FEED-04"],
   async run(ctx) {
     const { step, expect } = ctx;
+    await step("the local art Worker answers", async () => {
+      const base = process.env.MELLO_E2E_ART_BASE ?? DEFAULT_ART_BASE;
+      const ok = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3_000) }).then((r) => r.ok, () => false);
+      expect(ok, `no art Worker at ${base}; run scripts/e2e-art-worker.sh up`);
+    });
     const { alice, bob, aliceCreds } = await twoUsersInOneCrew(ctx, "Public");
     const crewId = (await alice.state()).active_crew_id;
 
@@ -61,6 +69,21 @@ export default journey({
         expect(rg.tiles.length <= 5, `at most five tiles in the row, got ${rg.tiles.length}`);
         expect(rg.tiles.every((t) => t.owners >= 1), "every tile carries an owner pip");
         expect(rg.tiles.some((t) => t.owners === 2), "a game both members own carries two pips");
+      });
+    }
+
+    for (const app of [bob, alice]) {
+      await step(`${app.name} sees Worker art on the tiles of the indexed games`, async () => {
+        const s = await app.waitFor(
+          "art on the Brawlhalla tile",
+          (st) => st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.art === "image"),
+          30_000,
+        );
+        for (const name of ["Brawlhalla", "Rocket League", "Fall Guys"]) {
+          const t = s.recent_games.tiles.find((x) => x.name === name);
+          if (t) expect(t.art === "image", `${name} is in the art index and shows art, got ${t.art}`);
+        }
+        await app.checkpoint("two-feed-art");
       });
     }
 

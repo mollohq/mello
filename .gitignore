@@ -90,3 +90,4 @@ scripts/.catalogue_work/
 
 # Streaming quality gate: reference clips rendered on first use (tools/stream-gate)
 benchmarks/clips/
+!qa/fixtures/art-index/*.csv

@@ -310,6 +310,9 @@ export type MicPermission = "granted" | "denied" | "undetermined";
  * Every app gets this unless its journey asks for another value. Voice
  * journeys then find Mute and the voice controls on every machine.
  */
+/** Where the e2e apps ask for game art: the local art Worker. */
+export const DEFAULT_ART_BASE = "http://127.0.0.1:8787";
+
 export const DEFAULT_MIC_PERMISSION: MicPermission = "granted";
 
 /** What a journey can set for one user when it starts the app. */
@@ -490,6 +493,12 @@ export class App {
       // The machine's clipboard: one file per run, shared by every user and
       // the browser (client/src/onboarding_invite.rs).
       MELLO_E2E_CLIPBOARD_FILE: clipboardFile(this.opts.runDir),
+      // The art Worker rung (mello-core/src/art.rs). Always local, so a run
+      // never asks art.m3llo.app. scripts/e2e-art-worker.sh serves it; with
+      // nothing there the rung gets a refused connection and the monogram.
+      MELLO_ART_BASE: process.env.MELLO_E2E_ART_BASE ?? DEFAULT_ART_BASE,
+      // Its own art cache, so a run starts empty and never touches the user's.
+      MELLO_ART_CACHE_DIR: join(this.dir, "art"),
       RUST_LOG: "info,mello=debug,mello_core=debug",
       ...this.opts.env,
       // The e2e-mic seam (mello-core/src/client/mic_permission.rs). Last, so
