@@ -9386,3 +9386,106 @@ fn the_versus_hero_stays_the_hero_when_a_belt_moved_for_the_viewer() {
     assert_eq!(count_of(&h, "VersusHero"), 1);
     assert_eq!(count_of(&h, "Head2headCardPairs"), 0);
 }
+
+// ---- Crew history and the m3llo+ upsell ----------------------------------
+
+/// A feed with the given `this_week` entries and `memory` entries.
+fn feed_with_memory(this_week: Vec<FeedEntry>, memory: Vec<FeedEntry>) -> FeedResponse {
+    FeedResponse {
+        crew_id: "crew-0".into(),
+        sections: vec![
+            FeedSection {
+                id: "this_week".into(),
+                entries: this_week,
+            },
+            FeedSection {
+                id: "memory".into(),
+                entries: memory,
+            },
+        ],
+        joined: vec![],
+    }
+}
+
+/// The m3llo+ upsell as the server sends it, pinned at the end of memory.
+fn locked_entry() -> FeedEntry {
+    let mut e = feed_entry("locked", "locked", serde_json::json!({}));
+    e.role = "locked".into();
+    e
+}
+
+fn crew_history_shows(h: &Harness) -> bool {
+    drawn_texts(h).iter().any(|t| t == "Crew history")
+}
+
+fn upsell_shows(h: &Harness) -> bool {
+    count_of(h, "LockedCard") > 0
+        || drawn_texts(h)
+            .iter()
+            .any(|t| t == "Unlock your crew's full story")
+}
+
+/// Day 0: the server still sends the upsell, and the feed shows neither the
+/// "Crew history" heading nor the m3llo+ card. A crew with no history has none
+/// of it, so m3llo+ is not offered on an empty feed.
+#[test]
+fn a_new_crew_shows_no_crew_history_and_no_m3llo_plus_card() {
+    for plus in [false, true] {
+        let mut h = Harness::new();
+        h.settings().borrow_mut().plus_upsell_enabled = plus;
+        app_with_crew_of(&mut h, 1);
+        set_roster(&h, &[("user-1", "Test User")]);
+        h.emit(Event::FeedLoaded {
+            response: feed_with_memory(
+                vec![h2h_entry(1, vec![], vec![], None)],
+                vec![locked_entry()],
+            ),
+        });
+        assert!(
+            h.app().get_memory_cards().row_count() == 0,
+            "the section is empty (flag {plus})"
+        );
+        assert!(!crew_history_shows(&h), "no heading (flag {plus})");
+        assert!(!upsell_shows(&h), "no upsell (flag {plus})");
+    }
+}
+
+/// With history the heading shows. The upsell stays off until the client flag
+/// `plus_upsell_enabled` is on.
+#[test]
+fn a_crew_with_history_shows_crew_history_and_the_upsell_only_behind_the_flag() {
+    let memory = || vec![clip_entry("old-1"), clip_entry("old-2"), locked_entry()];
+    let this_week = || vec![h2h_entry(2, vec![], vec![h2h_pair("u2", 1, 1)], None)];
+
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_memory(this_week(), memory()),
+    });
+    assert!(crew_history_shows(&h), "{:?}", drawn_texts(&h));
+    assert_eq!(h.app().get_memory_cards().row_count(), 2, "two clips");
+    assert!(!upsell_shows(&h), "the flag is off by default");
+
+    let mut h = Harness::new();
+    h.settings().borrow_mut().plus_upsell_enabled = true;
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_with_memory(this_week(), memory()),
+    });
+    assert!(crew_history_shows(&h));
+    assert!(upsell_shows(&h), "the flag shows the card at the end");
+    let last = h
+        .app()
+        .get_memory_cards()
+        .row_data(2)
+        .expect("three memory cards");
+    assert_eq!(last.card_type.as_str(), "locked", "pinned at the end");
+}
+
+/// The flag defaults to off.
+#[test]
+fn the_plus_upsell_flag_defaults_to_off() {
+    assert!(!crate::settings::Settings::default().plus_upsell_enabled);
+}

@@ -389,6 +389,7 @@ Rules:
 - A cell hides when its real card type exists in the feed.
 - All three cells hide from three members on, with or without real cards. At two members the trio stays under the real cards, and each cell still hides when its own card type exists.
 - The `locked` upsell is not a real card.
+- A new crew shows no "Crew history" heading and no m3llo+ card (section 8.5).
 - The trio is client state. It is not in the card model. Component: `SkeletonTrio` in `client/ui/components/skeleton_trio.slint`. Rule: `skeleton_trio_for` in `client/src/handlers/clip.rs`.
 
 ### 8.2 Invite Line
@@ -405,6 +406,14 @@ One line under the trio: "Your crew is not here yet. Send them the link." A red 
 ### 8.4 Visual Treatment
 
 Dashed outline, one cut corner, a dark ground, icon and text at low contrast. No animation or pulsing. A cell is an empty slot, not a loading indicator.
+
+### 8.5 Crew History and the m3llo+ Card
+
+The `memory` section of the feed has the heading "Crew history" and the older cards of the crew. The server pins the `locked` m3llo+ upsell ("Unlock your crew's full story") at the end of it for a viewer who is not premium.
+
+- The section shows only when it holds at least one real card. A crew with no history (day 0, or a feed with nothing old) shows no heading and no cards of it.
+- The m3llo+ card is not a real card. It shows only at the end of a section that has history, and only when the client flag `plus_upsell_enabled` is on. The flag defaults to off, because m3llo+ does not exist yet. It is in the local settings (`client/src/settings.rs`).
+- The rule is `memory_for_display` in `client/src/handlers/clip.rs`. The server keeps sending the `locked` entry.
 
 ---
 

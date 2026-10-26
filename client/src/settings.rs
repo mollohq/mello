@@ -72,6 +72,10 @@ pub struct Settings {
     /// The members this user said hi to from a joined card, by crew id. The
     /// card then reads "Said hi" and stays off, once for each member. Local.
     pub said_hi: std::collections::HashMap<String, Vec<String>>,
+    /// Show the m3llo+ upsell card at the end of Crew history. Off: m3llo+ does
+    /// not exist yet, so the card promises nothing the app cannot give. The
+    /// server still sends the `locked` entry (`crew_feed.go`).
+    pub plus_upsell_enabled: bool,
     /// When the viewer first saw the own chips of a crew sealed (ms, by crew
     /// id). The day 0 reveal lasts 7 days from this time (`sealed.rs`).
     pub own_seal_since: std::collections::HashMap<String, i64>,
@@ -138,6 +142,7 @@ impl Default for Settings {
             feed_seen_ms: Default::default(),
             sealed_opened: Default::default(),
             said_hi: Default::default(),
+            plus_upsell_enabled: false,
             own_seal_since: Default::default(),
             feed_baseline_ms: Default::default(),
             disabled_game_integrations: Vec::new(),

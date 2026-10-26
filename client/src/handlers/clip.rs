@@ -267,6 +267,21 @@ impl SkeletonTrio {
     }
 }
 
+/// The cards of Crew history that the feed shows. The section has a heading and
+/// a place on the feed only when it holds at least one real card: a crew with
+/// no history (day 0, a quiet week) shows nothing of it. The m3llo+ upsell
+/// (`locked`) is not a real card. It stands at the end of a section that has
+/// history, and only while `plus_upsell` is on: m3llo+ does not exist yet.
+pub(crate) fn memory_for_display(cards: Vec<FeedCardData>, plus_upsell: bool) -> Vec<FeedCardData> {
+    if !cards.iter().any(|c| c.card_type != "locked") {
+        return Vec::new();
+    }
+    cards
+        .into_iter()
+        .filter(|c| plus_upsell || c.card_type != "locked")
+        .collect()
+}
+
 /// Decide the trio from the card types in the feed. A cell hides when its real
 /// card type exists: a stream preview or a live stream, a clip, a recap. All
 /// three hide from three members on (frame C): the crew is no longer new. At
@@ -2341,6 +2356,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     _ => {}
                 }
             }
+
+            let memory = memory_for_display(memory, ctx.settings.borrow().plus_upsell_enabled);
 
             *ctx.last_feed.borrow_mut() = Some(response.clone());
             let idle_voice = response
