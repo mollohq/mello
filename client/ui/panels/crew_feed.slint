@@ -4465,7 +4465,10 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                     { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png"),
                       owners: [bob] },
+                    // Not on this PC: the art comes from the art Worker (header slot,
+                    // cut to 460 by 215). A bundled placeholder stands in for it.
                     { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 3, hours: "91 H",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-4.png"),
                       owners: [jonas] },
                     { game-id: "steam-1097150", game-name: "Fall Guys", monogram: "FG", hue-index: 4, hours: "34 H",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"),
@@ -4836,7 +4839,8 @@ export component PreviewFeedLiveSession inherits Rectangle {
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 live: {
                     since-min: 20, since-text: "since 20 min", names-line: "Bob and Jonas",
-                    has-poster: true, poster: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                    // The art Worker hero (cut to 1920 by 620); a placeholder here.
+                    has-poster: true, poster: @image-url("../previews/fixtures/stream-sample-1.png"),
                     players: [
                         { name: "Bob", initials: "B", hue-index: 0 },
                         { name: "Jonas", initials: "J", hue-index: 1 },
@@ -4847,6 +4851,8 @@ export component PreviewFeedLiveSession inherits Rectangle {
                 id: "gs", card-type: "game-session", is-hero: false, is-skeleton: false,
                 title: "Counter-Strike 2", game-name: "Counter-Strike 2",
                 game-short-name: "CS2", game-monogram: "CS", game-hue-index: 0,
+                // Header slot of the art Worker; a placeholder here.
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
                 duration-human: "2h 05m", timestamp: "5h ago",
                 actor-name: "Bob", actor-initials: "B",
             },
