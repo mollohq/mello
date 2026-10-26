@@ -110,6 +110,26 @@ pub struct Harness {
 impl Harness {
     /// Build a harness with all callbacks wired and no OS resources touched.
     pub fn new() -> Self {
+        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::disabled()))
+    }
+
+    /// A harness whose art Worker rung asks `base` and keeps its files in a
+    /// temp dir of its own. The commands the UI sends are read with
+    /// [`Harness::commands`]; a test runs them against the store itself.
+    pub fn with_art_server(base: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "m3llo-art-harness-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::new(
+            base, dir,
+        )))
+    }
+
+    fn build(art: std::sync::Arc<mello_core::art::ArtStore>) -> Self {
         init_test_backend();
         redirect_settings_to_temp_dir();
         assert_element_queries_work();
@@ -129,7 +149,8 @@ impl Harness {
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         let (update_tx, update_rx) = std::sync::mpsc::channel::<crate::updater::UpdateEvent>();
 
-        let ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
+        let mut ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
+        ctx.art = art;
 
         // The real wiring — not a copy of it.
         crate::callbacks::wire_all(&ctx);

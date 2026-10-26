@@ -121,6 +121,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
         }
+        Event::GameArtLoaded { game_id, slot } => {
+            // The image is on disk. Cards that have no art yet look again;
+            // the lookup decodes the file once.
+            log::info!("[game-art] {} art ready", slot.as_str());
+            let _ = game_id;
+            super::clip::refresh_game_art(ctx);
+        }
         Event::SessionSummary {
             wins,
             losses,

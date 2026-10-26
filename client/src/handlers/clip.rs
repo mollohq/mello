@@ -1085,6 +1085,100 @@ pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
     refresh_feed_skeletons(ctx);
 }
 
+/// Look for art again on every card, tile and recap row that has none, and on
+/// the NOW PLAYING pill. Runs when the art Worker delivered an image. A card
+/// that already has art is left as it is, so nothing flickers.
+pub(super) fn refresh_game_art(ctx: &AppContext) {
+    use mello_core::art::ArtSlot;
+    fn fill(ctx: &AppContext, model: slint::ModelRc<FeedCardData>) {
+        for i in 0..model.row_count() {
+            let Some(mut card) = model.row_data(i) else {
+                continue;
+            };
+            let mut changed = false;
+            if !card.game_id.is_empty()
+                && !card.game_has_icon
+                && !card.game_has_capsule
+                && card.card_type != "head2head"
+            {
+                let art = crate::game_icons::resolve_tile_art(
+                    ctx,
+                    "",
+                    card.game_id.as_str(),
+                    card.game_name.as_str(),
+                );
+                if art.has_capsule || art.has_icon {
+                    card.game_icon = art.icon;
+                    card.game_has_icon = art.has_icon;
+                    card.game_capsule = art.capsule;
+                    card.game_has_capsule = art.has_capsule;
+                    changed = true;
+                }
+            }
+            let tiles = card.recent_games.clone();
+            for t in 0..tiles.row_count() {
+                let Some(mut tile) = tiles.row_data(t) else {
+                    continue;
+                };
+                if tile.has_icon || tile.has_capsule {
+                    continue;
+                }
+                let art = crate::game_icons::resolve_tile_art(
+                    ctx,
+                    "",
+                    tile.game_id.as_str(),
+                    tile.game_name.as_str(),
+                );
+                if art.has_capsule || art.has_icon {
+                    tile.game_icon = art.icon;
+                    tile.has_icon = art.has_icon;
+                    tile.capsule = art.capsule;
+                    tile.has_capsule = art.has_capsule;
+                    tiles.set_row_data(t, tile);
+                }
+            }
+            let rows = card.recap_games.clone();
+            for r in 0..rows.row_count() {
+                let Some(mut row) = rows.row_data(r) else {
+                    continue;
+                };
+                if row.has_icon || row.has_capsule {
+                    continue;
+                }
+                let art = crate::game_icons::resolve_tile_art_slot(
+                    ctx,
+                    "",
+                    row.game_id.as_str(),
+                    row.name.as_str(),
+                    ArtSlot::Capsule,
+                );
+                if art.has_capsule || art.has_icon {
+                    row.icon = art.icon;
+                    row.has_icon = art.has_icon;
+                    row.capsule = art.capsule;
+                    row.has_capsule = art.has_capsule;
+                    rows.set_row_data(r, row);
+                }
+            }
+            if changed {
+                model.set_row_data(i, card);
+            }
+        }
+    }
+    fill(ctx, ctx.app.get_feed_cards());
+    fill(ctx, ctx.app.get_memory_cards());
+    // A live card that got its poster moves to the wide slot, so it is built
+    // and arranged again; it does nothing when the live cards did not change.
+    refresh_live_session_cards(ctx);
+    if ctx.app.get_game_active()
+        && !ctx.app.get_game_has_runtime_icon()
+        && !ctx.app.get_game_has_capsule()
+    {
+        let (id, name) = (ctx.app.get_game_id(), ctx.app.get_game_name());
+        crate::game_icons::push_bar_art(ctx, id.as_str(), name.as_str());
+    }
+}
+
 /// Put the cards where the grid wants them: recent games on the first screen
 /// and no clip in a wide slot (`feed_grid`).
 fn arranged(ctx: &AppContext, cards: Vec<FeedCardData>) -> Vec<FeedCardData> {
@@ -1474,7 +1568,13 @@ fn extract_recap_games(ctx: &AppContext, data: &serde_json::Value) -> (Vec<Recap
                 return None;
             }
             let (game_id, _, _) = resolve_game_meta(ctx, "", &name);
-            let art = crate::game_icons::resolve_tile_art(ctx, "", &game_id, &name);
+            let art = crate::game_icons::resolve_tile_art_slot(
+                ctx,
+                "",
+                &game_id,
+                &name,
+                mello_core::art::ArtSlot::Capsule,
+            );
             Some(RecapGameRow {
                 monogram: crate::recent_games::monogram(&name).into(),
                 hue_index: crate::recent_games::hue_index(&game_id, &name),

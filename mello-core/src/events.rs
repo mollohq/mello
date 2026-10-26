@@ -715,6 +715,12 @@ pub enum Event {
         game_id: String,
         png: Vec<u8>,
     },
+    /// Game art from the art Worker is on disk for `game_id` (the id that
+    /// had it) in `slot`. Cards pick it up when they are built again.
+    GameArtLoaded {
+        game_id: String,
+        slot: crate::art::ArtSlot,
+    },
     /// The viewer's per-game personal stats loaded (backs the "You strip").
     UserGameStatsLoaded {
         games: Vec<crate::crew_events::UserGameStats>,

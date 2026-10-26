@@ -519,6 +519,13 @@ pub enum Command {
     FetchGameIcon {
         game_id: String,
     },
+    /// Fetch game art from the art Worker for the first of `ids` that has
+    /// it (`steam-440`, `igdb-1234`). Replies with `Event::GameArtLoaded`
+    /// when an image is on disk; quiet when none exists.
+    FetchGameArt {
+        ids: Vec<String>,
+        slot: crate::art::ArtSlot,
+    },
     /// Fetch the viewer's own per-game stats (for the personal "You strip").
     GetUserGameStats,
 

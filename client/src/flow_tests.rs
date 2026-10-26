@@ -9519,6 +9519,7 @@ fn the_format_label_follows_the_rung_and_the_decoded_size() {
     viewer_format::reset_viewer_format();
 }
 
+mod art_worker;
 mod sealed;
 
 // ---- the recap is never a one-cell card ----

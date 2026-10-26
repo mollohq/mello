@@ -29,6 +29,11 @@ pub fn icon_cache_dir() -> Option<PathBuf> {
         .map(|dirs| dirs.data_dir().join("game_icons"))
 }
 
+/// Disk cache dir for the art Worker images, beside the icon cache.
+pub fn art_cache_dir() -> Option<PathBuf> {
+    icon_cache_dir().map(|d| d.with_file_name("game_art"))
+}
+
 pub fn cached_icon_path(game_id: &str) -> Option<PathBuf> {
     // Ids are slugs ([a-z0-9-]); refuse anything path-ish defensively.
     if game_id.is_empty()

@@ -1,4 +1,5 @@
 pub mod activity;
+pub mod art;
 pub mod auth_discord;
 pub mod auth_google;
 pub mod auth_steam;

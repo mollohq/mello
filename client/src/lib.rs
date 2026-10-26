@@ -604,6 +604,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         last_feed: Rc::new(RefCell::new(None)),
         live_games: Rc::new(RefCell::new(Default::default())),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        art: match platform::exe_icon::art_cache_dir() {
+            Some(dir) => mello_core::art::init(dir),
+            None => mello_core::art::global(),
+        },
         hud_manager: hud_mgr,
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),

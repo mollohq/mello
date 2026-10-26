@@ -197,6 +197,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::MatchEnded { .. }
         | Event::SessionSummary { .. }
         | Event::GameIconLoaded { .. }
+        | Event::GameArtLoaded { .. }
         | Event::TelemetrySetupHint { .. } => game::handle(ctx, event),
 
         // Games settings + Riot account link
