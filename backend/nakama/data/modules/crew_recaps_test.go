@@ -293,3 +293,95 @@ func TestBuildMemorySection_FiltersEmptyRecaps(t *testing.T) {
 		t.Error("recap with activity missing from memory")
 	}
 }
+
+func TestBuildGamesPlayedWithMinutes_EveryGameMostHoursFirst(t *testing.T) {
+	got := buildGamesPlayedWithMinutes(
+		map[string]int{"CS2": 30, "Rocket League": 80},
+		map[string]int{"CS2": 550, "Rocket League": 740, "Fall Guys": 270, "Idle": 0},
+	)
+	want := []RecapGameTally{
+		{Game: "Rocket League", Matches: 80, Minutes: 740},
+		{Game: "CS2", Matches: 30, Minutes: 550},
+		{Game: "Fall Guys", Matches: 0, Minutes: 270},
+	}
+	if len(got) != len(want) {
+		t.Fatalf("got %+v, want %+v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("row %d = %+v, want %+v", i, got[i], want[i])
+		}
+	}
+}
+
+func TestBuildGamesPlayedWithMinutes_MatchesOnlyGameStillListed(t *testing.T) {
+	got := buildGamesPlayedWithMinutes(map[string]int{"CS2": 4}, nil)
+	if len(got) != 1 || got[0].Game != "CS2" || got[0].Matches != 4 || got[0].Minutes != 0 {
+		t.Fatalf("got %+v", got)
+	}
+}
+
+func TestPickClipOfWeek_LongestInTheWeek(t *testing.T) {
+	clips := []StoredClip{
+		{ClipID: "old", Ts: 50, DurationSeconds: 59, ClipperName: "Bob"},
+		{ClipID: "a", Ts: 120, DurationSeconds: 12, ClipperName: "Max", Game: "Rocket League"},
+		{ClipID: "b", Ts: 150, DurationSeconds: 29, ClipperName: "Leo", Game: "Rocket League", ParticipantNames: []string{"Leo", "Max"}},
+		{ClipID: "late", Ts: 900, DurationSeconds: 60, ClipperName: "Sara"},
+	}
+	got := pickClipOfWeek(clips, 100, 200)
+	if got == nil {
+		t.Fatal("no clip of the week")
+	}
+	if got.ClipID != "b" || got.DurationSeconds != 29 || got.Game != "Rocket League" {
+		t.Fatalf("got %+v", got)
+	}
+	if got.Title != "Leo clipped that" {
+		t.Fatalf("title = %q", got.Title)
+	}
+}
+
+func TestPickClipOfWeek_TieGoesToTheNewerClipAndNoClipsGivesNil(t *testing.T) {
+	clips := []StoredClip{
+		{ClipID: "a", Ts: 120, DurationSeconds: 20, ClipperName: "Max"},
+		{ClipID: "b", Ts: 130, DurationSeconds: 20, ClipperName: "Leo"},
+	}
+	if got := pickClipOfWeek(clips, 100, 200); got == nil || got.ClipID != "b" {
+		t.Fatalf("tie = %+v, want b", got)
+	}
+	if got := pickClipOfWeek(clips, 300, 400); got != nil {
+		t.Fatalf("empty week = %+v, want nil", got)
+	}
+}
+
+func TestRecapPayload_ClipFieldsAndOldRecapsStillRead(t *testing.T) {
+	r := WeeklyRecapData{
+		MostClipped: "Leo", MostClippedUserID: "u5", MostClippedCount: 5,
+		ClipOfWeek:  &RecapClipOfWeek{ClipID: "c1", Title: "Leo clipped that", DurationSeconds: 29, Game: "Rocket League"},
+		GamesPlayed: []RecapGameTally{{Game: "Rocket League", Matches: 3, Minutes: 740}},
+	}
+	b, err := json.Marshal(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var m map[string]interface{}
+	_ = json.Unmarshal(b, &m)
+	if m["most_clipped"] != "Leo" || m["most_clipped_user_id"] != "u5" || m["most_clipped_count"].(float64) != 5 {
+		t.Fatalf("most clipped: %v", m)
+	}
+	cow := m["clip_of_week"].(map[string]interface{})
+	if cow["clip_id"] != "c1" || cow["title"] != "Leo clipped that" || cow["duration_seconds"].(float64) != 29 || cow["game"] != "Rocket League" {
+		t.Fatalf("clip_of_week: %v", cow)
+	}
+	gp := m["games_played"].([]interface{})[0].(map[string]interface{})
+	if gp["minutes"].(float64) != 740 {
+		t.Fatalf("games_played: %v", gp)
+	}
+	// A recap stored before these fields existed reads, and has none of them.
+	var old WeeklyRecapData
+	if err := json.Unmarshal([]byte(`{"crew_id":"c","most_clipped":"Leo","games_played":[{"game":"CS2","matches":3}]}`), &old); err != nil {
+		t.Fatal(err)
+	}
+	if old.ClipOfWeek != nil || old.MostClippedCount != 0 || old.GamesPlayed[0].Minutes != 0 {
+		t.Fatalf("old = %+v", old)
+	}
+}

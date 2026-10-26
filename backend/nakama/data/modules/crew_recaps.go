@@ -98,10 +98,27 @@ type RecapGameRecord struct {
 	Losses      int    `json:"losses"`
 }
 
-// RecapGameTally is a crew-wide match count for one game (spec 19).
+// RecapGameTally is a crew-wide total for one game: the matches played (spec 19)
+// and the minutes of game time. A game with minutes and no matches is in the
+// list too (a game that reports no outcomes).
 type RecapGameTally struct {
 	Game    string `json:"game"`
 	Matches int    `json:"matches"`
+	Minutes int    `json:"minutes"`
+}
+
+// RecapClipOfWeek is the longest clip of the recap week. Plays are not
+// tracked, so length is what ranks a clip.
+type RecapClipOfWeek struct {
+	ClipID           string   `json:"clip_id"`
+	Title            string   `json:"title"`
+	DurationSeconds  float64  `json:"duration_seconds"`
+	Game             string   `json:"game,omitempty"`
+	ClipperName      string   `json:"clipper_name"`
+	ParticipantNames []string `json:"participant_names,omitempty"`
+	Ts               int64    `json:"ts"`
+	MediaURL         string   `json:"media_url,omitempty"`
+	Waveform         string   `json:"waveform,omitempty"`
 }
 
 // RecapAward is a fun, shareable superlative for the week (spec 19).
@@ -157,6 +174,15 @@ type WeeklyRecapData struct {
 	MostActive        string        `json:"most_active"`
 	MostClipped       string        `json:"most_clipped"`
 	TopMembers        []RecapMember `json:"top_members"`
+	// MostClipped is the display name of the member with the most clips in the
+	// week. The id and the count stand beside it, so the client can draw the
+	// avatar and "5 clips". A string stays here: recaps stored before the id
+	// existed must still read.
+	MostClippedUserID string `json:"most_clipped_user_id,omitempty"`
+	MostClippedCount  int    `json:"most_clipped_count,omitempty"`
+	// ClipOfWeek is the longest clip of the week. Omitted for a week with no
+	// clips.
+	ClipOfWeek *RecapClipOfWeek `json:"clip_of_week,omitempty"`
 	// Telemetry-derived (spec 18/19); omitted when no game outcomes were recorded.
 	GameRecords    []RecapGameRecord `json:"game_records,omitempty"` // leaderboard, most wins first
 	GamesPlayed    []RecapGameTally  `json:"games_played,omitempty"` // crew-wide match counts
@@ -214,6 +240,7 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	var totalGameMin int
 	sessionCount := 0
 	gameDurations := make(map[string]int)
+	gameMinutes := make(map[string]int)
 	actorActivity := make(map[string]int)
 	actorClips := make(map[string]int)
 	actorWins := make(map[string]int)
@@ -266,6 +293,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 			sessionCount++
 			totalGameMin += reportableMinutes(d.DurationMin, d.ActiveMin)
 			gameDurations[d.GameName] += d.DurationMin
+			if d.GameName != "" {
+				gameMinutes[d.GameName] += reportableMinutes(d.DurationMin, d.ActiveMin)
+			}
 			matches := d.Wins + d.Losses + d.Draws
 			if matches > 0 {
 				gameMatches[d.GameName] += matches
@@ -292,6 +322,7 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 			actorClips[c.ActorID]++
 		}
 	}
+	clipOfWeek := pickClipOfWeek(clipsDoc.Clips, startMs, endMs)
 
 	topGame := ""
 	topGameMin := 0
@@ -303,12 +334,15 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	}
 
 	mostActive := topActor(actorActivity, ctx, nk)
-	mostClipped := topActor(actorClips, ctx, nk)
+	// One pass picks the id and the name, so a tie cannot give the name of one
+	// member and the id of another.
+	mostClippedID, mostClippedCount := topKeyCount(actorClips)
+	mostClipped := resolveOrID(ctx, nk, mostClippedID)
 	topMembers := topActors(actorActivity, 3, ctx, nk)
 	gameRecords := buildGameRecords(actorWins, actorLosses, ctx, nk)
 
 	bestStreakName := resolveOrID(ctx, nk, bestStreakActor)
-	gamesPlayed := buildGamesPlayed(gameMatches)
+	gamesPlayed := buildGamesPlayedWithMinutes(gameMatches, gameMinutes)
 	awards := buildAwards(ctx, nk, actorMatches, bestStreak, bestStreakName, worstStreak, worstStreakActor)
 
 	recap := WeeklyRecapData{
@@ -325,6 +359,9 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 		ClipCount:         clipCount,
 		MostActive:        mostActive,
 		MostClipped:       mostClipped,
+		MostClippedUserID: mostClippedID,
+		MostClippedCount:  mostClippedCount,
+		ClipOfWeek:        clipOfWeek,
 		TopMembers:        topMembers,
 		GameRecords:       gameRecords,
 		GamesPlayed:       gamesPlayed,
@@ -495,6 +532,71 @@ func buildGamesPlayed(gameMatches map[string]int) []RecapGameTally {
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Matches > out[j].Matches })
 	return out
+}
+
+// buildGamesPlayedWithMinutes lists every game of the week with its matches and
+// its minutes: the most minutes first, then the most matches, then the name.
+// A game with minutes and no recorded matches is in the list. Pure.
+func buildGamesPlayedWithMinutes(gameMatches, gameMinutes map[string]int) []RecapGameTally {
+	names := map[string]bool{}
+	for g := range gameMatches {
+		names[g] = true
+	}
+	for g, m := range gameMinutes {
+		if m > 0 {
+			names[g] = true
+		}
+	}
+	out := make([]RecapGameTally, 0, len(names))
+	for g := range names {
+		out = append(out, RecapGameTally{Game: g, Matches: gameMatches[g], Minutes: gameMinutes[g]})
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Minutes != out[j].Minutes {
+			return out[i].Minutes > out[j].Minutes
+		}
+		if out[i].Matches != out[j].Matches {
+			return out[i].Matches > out[j].Matches
+		}
+		return out[i].Game < out[j].Game
+	})
+	return out
+}
+
+// pickClipOfWeek is the longest clip with a timestamp in [startMs, endMs].
+// Plays are not tracked, so length ranks the clips. A tie goes to the newer
+// clip. It returns nil for a week with no clips. The title reads "Leo clipped
+// that". Pure.
+func pickClipOfWeek(clips []StoredClip, startMs, endMs int64) *RecapClipOfWeek {
+	var best *StoredClip
+	for i := range clips {
+		c := &clips[i]
+		if c.Ts < startMs || c.Ts > endMs {
+			continue
+		}
+		if best == nil || c.DurationSeconds > best.DurationSeconds ||
+			(c.DurationSeconds == best.DurationSeconds && c.Ts > best.Ts) {
+			best = c
+		}
+	}
+	if best == nil {
+		return nil
+	}
+	title := "Clipped"
+	if best.ClipperName != "" {
+		title = best.ClipperName + " clipped that"
+	}
+	return &RecapClipOfWeek{
+		ClipID:           best.ClipID,
+		Title:            title,
+		DurationSeconds:  best.DurationSeconds,
+		Game:             best.Game,
+		ClipperName:      best.ClipperName,
+		ParticipantNames: best.ParticipantNames,
+		Ts:               best.Ts,
+		MediaURL:         best.MediaURL,
+		Waveform:         best.Waveform,
+	}
 }
 
 // buildAwards composes the week's fun superlatives: grinder of the week (most
