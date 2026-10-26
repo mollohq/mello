@@ -3907,6 +3907,8 @@ dependencies = [
  "base64 0.22.1",
  "bitflags 2.11.0",
  "chrono",
+ "directories",
+ "flate2",
  "futures",
  "keyring",
  "libc",

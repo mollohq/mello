@@ -40,6 +40,11 @@ keyring = { version = "3", features = ["apple-native", "windows-native", "sync-s
 mello-sys = { path = "../mello-sys" }
 bitflags = "2"
 async-trait = "0.1"
+# Client log bundle (client/log_bundle.rs): gzip, and the app log directory
+# as the client makes it. Both are in Cargo.lock already (png and skia use
+# flate2; the client uses directories).
+flate2 = "1"
+directories = "5"
 
 # OAuth
 tiny_http = "0.12"

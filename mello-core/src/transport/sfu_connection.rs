@@ -1923,6 +1923,20 @@ impl SignalListener {
                     }
                 }
             }
+            // --- mello-admin: client log bundle (01-SFU.md §8.8) ---
+            "request_logs" => {
+                let ws_tx = Arc::clone(&self.ws_tx);
+                crate::client::log_bundle::on_request(&sig.data, move |text| {
+                    let ws_tx = Arc::clone(&ws_tx);
+                    async move {
+                        let mut tx = ws_tx.lock().await;
+                        tx.send(Message::Text(text))
+                            .await
+                            .map_err(|e| e.to_string())
+                    }
+                });
+            }
+            // --- end mello-admin: client log bundle ---
             "error" => {
                 let code = sig.data.get("code").and_then(|v| v.as_str()).unwrap_or("");
                 let error_msg = sig

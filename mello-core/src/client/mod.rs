@@ -8,6 +8,7 @@ mod connection_tests;
 mod crew;
 mod diagnostics;
 mod game_services;
+pub mod log_bundle;
 #[cfg(test)]
 pub(crate) mod loop_hold;
 pub mod loop_watchdog;
@@ -350,6 +351,7 @@ impl Client {
     ) -> Self {
         let (telemetry_event_tx, telemetry_event_rx) =
             std::sync::mpsc::channel::<crate::telemetry::TelemetryEvent>();
+        log_bundle::set_event_sender(event_tx.clone());
         Self {
             nakama: NakamaClient::new(config),
             voice,
