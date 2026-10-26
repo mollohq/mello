@@ -1897,18 +1897,15 @@ component GameSessionCard inherits Rectangle {
     }
 }
 
-// Recent games card (mockup frame A). One row per game: the art, the name in
-// Oxanium with the hours under it, and "TRACKED" at the right when the game
-// sensor knows the game. Art ladder: the runtime icon, the local Steam header,
-// then a two-letter monogram in the game's hue. The art slot is 76 px wide, the
-// shape of a Steam header (460 by 215), two corners cut.
+// Recent games list row (one owner, or the side column). Fixed columns, the
+// same on every row: a square 48 px icon slot, the name in Oxanium on one line
+// with the last played line under it ("2 days ago, 4 h", Barlow 300, one
+// line), and the owner pips right-aligned. Icon rung: the exe or crew icon,
+// then the monogram. A header capsule never shows here. No TRACKED label.
 component RecentGameTileCell inherits Rectangle {
     in property <RecentGameTile> tile;
-    // TRACKED stands at the far right of a roomy row (frame B). In a narrow
-    // row it moves to the hours line so the name keeps the whole row.
-    property <bool> tracked-right: tile.tracked && root.width >= 300px;
 
-    height: 36px;
+    height: 48px;
     background: transparent;
 
     HorizontalLayout {
@@ -1921,10 +1918,8 @@ component RecentGameTileCell inherits Rectangle {
             hue-index: tile.hue-index;
             icon: tile.game-icon;
             has-icon: tile.has-icon;
-            capsule: tile.capsule;
-            has-capsule: tile.has-capsule;
-            size: 36px;
-            art-width: 76px;
+            has-capsule: false;
+            size: 48px;
         }
 
         VerticalLayout {
@@ -1939,34 +1934,21 @@ component RecentGameTileCell inherits Rectangle {
                 font-size: 13px;
                 color: Theme.text-value;
                 overflow: elide;
+                wrap: no-wrap;
             }
-            // TRACKED sits on the hours line, so the name has the whole row.
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                if tile.hours != "" || tile.when != "": Text {
-                    font-family: Theme.font-label;
-                    font-weight: Theme.weight-label;
-                    // From three PCs the line says when, not how long.
-                    text: (tile.when != "" ? tile.when : tile.hours).to-uppercase();
-                    font-size: 9px;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-dim;
-                    overflow: elide;
-                }
-                if tile.tracked && !root.tracked-right: Text {
-                    text: "TRACKED";
-                    font-family: Theme.font-label;
-                    font-weight: Theme.weight-label;
-                    font-size: 9px;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-value;
-                }
+            if tile.caption != "": Text {
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                text: tile.caption;
+                font-size: 11px;
+                color: Theme.text-sub;
+                overflow: elide;
+                wrap: no-wrap;
             }
         }
 
-        // Who owns it, as small octagons at the right (frame E).
-        if !root.tracked-right && tile.owners.length > 0: HorizontalLayout {
+        // Who owns it, as small octagons, right-aligned.
+        if tile.owners.length > 0: HorizontalLayout {
             spacing: 4px;
             alignment: end;
             cross-axis-alignment: center;
@@ -1977,16 +1959,6 @@ component RecentGameTileCell inherits Rectangle {
                 color-index: o.hue-index;
                 size: 16px;
             }
-        }
-
-        if root.tracked-right: Text {
-            text: "TRACKED";
-            font-family: Theme.font-label;
-            font-weight: Theme.weight-label;
-            font-size: 9px;
-            letter-spacing: Theme.track-label;
-            color: Theme.text-value;
-            vertical-alignment: center;
         }
     }
 }
@@ -2118,7 +2090,7 @@ component RecentGamesCard inherits Rectangle {
             spacing: 12px;
             for tile[i] in card.recent-games: RecentGameTileCell {
                 visible: i < 3;
-                height: i < 3 ? 36px : 0px;
+                height: i < 3 ? 48px : 0px;
                 tile: tile;
             }
         }
@@ -4421,11 +4393,11 @@ export component PreviewFeedNewCrew inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", tracked: true,
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", caption: "Today, 4,167 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
-                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", tracked: true,
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", caption: "2 days ago, 12.6 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
-                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", caption: "Last week, 3 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
                 ],
             },
@@ -4982,11 +4954,11 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,168 H", tracked: true,
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,168 H", caption: "Today, 4,168 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
-                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", tracked: true,
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", caption: "2 days ago, 12.6 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
-                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", caption: "Last week, 3 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
                 ],
             },

@@ -1749,6 +1749,15 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
                     String::new()
                 }
                 .into(),
+                caption: crate::recent_games::caption_label(
+                    &crate::recent_games::when_label(
+                        row.get("last_played").and_then(|v| v.as_i64()).unwrap_or(0),
+                        crate::converters::current_time_ms(),
+                    ),
+                    minutes,
+                    &launcher,
+                )
+                .into(),
                 tracked,
                 owners: Rc::new(VecModel::from(
                     owner_ids
