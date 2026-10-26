@@ -513,7 +513,12 @@ component PairRow inherits Rectangle {
                     color: Theme.text-value;
                 }
                 UserAvatar { initials: root.pair.initials; avatar: root.pair.avatar; has-avatar: root.pair.has-avatar; color-index: root.pair.hue-index; size: 20px; }
-                if root.more > 0: MorePairs { count: root.more; }
+                // Zero width: the label must not widen the column, or the
+                // two columns of the grid stop being equal.
+                if root.more > 0: Rectangle {
+                    width: 0px;
+                    MorePairs { x: 4px; count: root.more; }
+                }
             }
         }
         if root.pair.has-chip: HeldChip {
