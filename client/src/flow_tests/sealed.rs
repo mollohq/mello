@@ -657,3 +657,95 @@ fn the_first_day_of_own_chips_is_stored() {
     open_solo(&mut h, solo_feed(4167.0));
     assert!(h.settings().borrow().own_seal_since.contains_key("crew-0"));
 }
+
+// ---- The centre card fits the feed panel ---------------------------------
+
+fn bounds_of(h: &Harness, name: &str) -> (f32, f32, f32, f32) {
+    let found: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), name).collect();
+    assert_eq!(found.len(), 1, "{name}");
+    let (p, s) = (found[0].absolute_position(), found[0].size());
+    (p.x, p.y, s.width, s.height)
+}
+
+/// Size the window so that the feed panel is `panel_w` by `panel_h`.
+fn size_feed_panel(h: &Harness, panel_w: f32, panel_h: f32) {
+    let (_, _, w0, h0) = bounds_of(h, "CrewFeed");
+    let win = h.app().window().size();
+    h.app().window().set_size(slint::PhysicalSize::new(
+        (win.width as f32 + panel_w - w0) as u32,
+        (win.height as f32 + panel_h - h0) as u32,
+    ));
+    let (_, _, w, hh) = bounds_of(h, "CrewFeed");
+    assert!(
+        (w - panel_w).abs() < 1.0 && (hh - panel_h).abs() < 1.0,
+        "the panel is {w} by {hh}"
+    );
+}
+
+/// The card at rest keeps 40 px of the panel on every side and is centred.
+fn assert_card_inside_panel(h: &Harness) {
+    let (px, py, pw, ph) = bounds_of(h, "CrewFeed");
+    let (x, y, w, hgt) = bounds_of(h, "SealedCardBounds");
+    let msg = format!("card {x},{y} {w}x{hgt} in panel {px},{py} {pw}x{ph}");
+    assert!(x >= px + 40.0 - 0.5 && y >= py + 40.0 - 0.5, "{msg}");
+    assert!(
+        x + w <= px + pw - 40.0 + 0.5 && y + hgt <= py + ph - 40.0 + 0.5,
+        "{msg}"
+    );
+    assert!(
+        ((x + w / 2.0) - (px + pw / 2.0)).abs() < 1.0
+            && ((y + hgt / 2.0) - (py + ph / 2.0)).abs() < 1.0,
+        "centred: {msg}"
+    );
+}
+
+fn open_recap_in_the_centre(panel_w: f32, panel_h: f32) -> Harness {
+    let mut h = Harness::new();
+    emit_recap(&mut h, serde_json::json!({"week_end": now_ms()}));
+    size_feed_panel(&h, panel_w, panel_h);
+    at(&h, 0);
+    h.click_label("Sealed recap, open it");
+    at(&h, 1800);
+    h
+}
+
+/// Bob's centre recap was taller than the panel: the top cut off, the belts held
+/// row visible and "See the week" half outside. The card scales to
+/// `min(1, (panel height - 80) / card height, (panel width - 80) / card width)`.
+#[test]
+fn the_opened_recap_is_inside_a_900_px_tall_feed_panel() {
+    let h = open_recap_in_the_centre(1008.0, 900.0);
+    assert_card_inside_panel(&h);
+    // It does not grow past its own size.
+    let (_, _, w, _) = bounds_of(&h, "SealedCardBounds");
+    let (_, _, sw, _) = bounds_of(&h, "RecapCard");
+    assert!(w <= sw + 0.5, "card {w} wide from a {sw} wide slot");
+}
+
+#[test]
+fn the_opened_recap_shrinks_to_a_short_and_narrow_panel() {
+    for (pw, ph) in [(1008.0, 400.0), (520.0, 900.0), (480.0, 460.0)] {
+        let h = open_recap_in_the_centre(pw, ph);
+        assert_card_inside_panel(&h);
+    }
+}
+
+#[test]
+fn the_big_belt_is_inside_the_panel_and_never_larger_than_800_by_400() {
+    for (pw, ph) in [
+        (1008.0, 900.0),
+        (1008.0, 420.0),
+        (500.0, 900.0),
+        (480.0, 480.0),
+    ] {
+        let mut h = Harness::new();
+        open_feed(&mut h, feed_with_belts_moved(2, 30));
+        size_feed_panel(&h, pw, ph);
+        at(&h, 0);
+        h.click_label("Sealed belt, open it");
+        at(&h, 1800);
+        assert_card_inside_panel(&h);
+        let (_, _, w, hgt) = bounds_of(&h, "SealedCardBounds");
+        assert!(w <= 800.5 && hgt <= 400.5, "{w}x{hgt}");
+    }
+}

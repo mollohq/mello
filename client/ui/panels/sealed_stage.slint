@@ -319,6 +319,11 @@ component BigBeltFace inherits Rectangle {
     }
 }
 
+/// The box of the card at rest. It draws nothing and is no control.
+component SealedCardBounds inherits Rectangle {
+    background: transparent;
+}
+
 /// The centre view. Put the face of a recap card inside it as the child: it
 /// shows from the flip, and `count` runs 0 to 1 for its numbers.
 export component SealedStage inherits Rectangle {
@@ -349,13 +354,15 @@ export component SealedStage inherits Rectangle {
     property <length> bw: root.is-recap ? SealedUi.from.w : 800px;
     property <length> bh: root.is-recap ? SealedUi.from.h : 400px;
     property <float> s0: SealedUi.from.h / root.bh;
-    // The recap is near full height already: it moves to the centre and grows
-    // only as far as the pop leaves room for.
-    property <float> s1: root.is-recap ? min(1.1, (root.height - 70px) / root.bh / 1.06) : 1;
+    // At rest the card keeps 40 px of the panel on every side. It shrinks to
+    // fit the panel in height and in width, and never grows past its own size:
+    // the recap and the big belt are never taller or wider than the feed.
+    property <length> margin: 40px;
+    property <float> s1: min(1, (root.height - 2 * root.margin) / root.bh, (root.width - 2 * root.margin) / root.bw);
     property <length> fx: SealedUi.from.x - root.page-x + SealedUi.from.w / 2;
     property <length> fy: SealedUi.from.y - root.page-y + SealedUi.from.h / 2;
     property <length> tx: root.width / 2;
-    property <length> ty: root.height / 2 - 14px;
+    property <length> ty: root.height / 2;
     property <length> cx: root.fx + (root.tx - root.fx) * root.k;
     property <length> cy: root.fy + (root.ty - root.fy) * root.k;
     property <float> scale: root.s0 + (root.s1 - root.s0) * root.k;
@@ -466,6 +473,16 @@ export component SealedStage inherits Rectangle {
         opacity: 1 - self.u;
     }
 
+    // The box the card fills at rest, in the panel. Drawn as nothing: the harness
+    // reads it, because the card itself is scaled by a transform that element
+    // queries do not report.
+    SealedCardBounds {
+        x: root.cx - root.bw * root.scale / 2;
+        y: root.cy - root.bh * root.scale / 2;
+        width: root.bw * root.scale;
+        height: root.bh * root.scale;
+    }
+
     // ---- The card -------------------------------------------------------
     Rectangle {
         x: root.cx - root.bw / 2 + root.shake-x;
@@ -542,7 +559,7 @@ export component SealedStage inherits Rectangle {
         horizontal-alignment: center;
         x: 0;
         width: root.width;
-        y: root.cy + root.bh * root.scale / 2 + 28px;
+        y: root.cy + root.bh * root.scale / 2 + 12px;
         opacity: Ease.span(root.t, 1600ms, 2000ms) * (1 - root.back);
     }
 

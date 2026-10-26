@@ -1148,7 +1148,9 @@ component RecapCard inherits Rectangle {
     in property <float> count: 1;
     /// Two columns wide (the wide slot): the sections stand side by side.
     /// One column wide (the tall slot): they stack.
-    property <bool> wide: root.width >= 560px;
+    // One grid row high and two columns wide. A recap that is two rows high (the
+    // hero, a tall slot) stacks its sections even when it is wide.
+    property <bool> wide: root.width >= 560px && root.height < 340px;
     /// Members of Belts held that fit one octagon column of 56 px.
     property <int> max-held: Math.min(5, Math.max(1, Math.floor((root.wide ? (root.width - 28px - 34px) * 0.4 : root.width - 28px) / 56px)));
     /// With belts the card has no room for everything. The belts are the news

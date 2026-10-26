@@ -95,13 +95,13 @@ colour must not name the holder early.
 
 Sizes in the centre:
 
-- **Big belt:** 800 by 400, button shape, 36 px cut. The back is the chip at 8 times:
+- **Big belt:** 800 by 400, scaled by the same rule to fit a smaller panel, button shape, 36 px cut. The back is the chip at 8 times:
   15 by 6 cells, 32 px cells, 40 px pitch. The face has the label
   `HEAD2HEAD · BELT MOVED`, the icon and title (Oxanium 700 50 px), the value
   (Oxanium 700 120 px, unit in Barlow 300 34 px), the stat sentence (Barlow 300 18 px),
   and on the right the holder (avatar 112 px, name Oxanium 600 34 px) and
   "took it from" with the previous holder (avatar 22 px).
-- **Recap:** the recap card, scaled by `min(1.1, (page height - 70 px) / h / 1.06)`.
+- **Recap:** the recap card at the size of its slot, scaled by `min(1, (panel height - 2 * 40 px) / h, (panel width - 2 * 40 px) / w)`. The panel is the clipped stage, the feed panel. The card stands in the centre of the panel and keeps 40 px on every side.
   The back clears with radius `clear * 470 px`, 80 px soft edge. The numbers count up.
   The revealed card has a control "See the week". It opens `recap_opened.slint`.
 
