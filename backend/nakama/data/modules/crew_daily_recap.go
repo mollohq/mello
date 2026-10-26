@@ -53,11 +53,19 @@ type DailyRecapData struct {
 	BeltsMoved []RecapBeltMoved `json:"belts_moved,omitempty"`
 }
 
-// dailyRecapHasContent is the empty-card rule of a daily recap: minutes or a
-// clip. A belt alone is not content, as in the weekly recap: holding titles
-// must not turn an empty day into a card.
+// feedDailyRecapMinMembers is how many active members make a day worth a card
+// when it has no clip and no belt move.
+const feedDailyRecapMinMembers = 3
+
+// dailyRecapHasContent is the rule of a daily recap. The day needs minutes or
+// a clip (a belt alone is not content, as in the weekly recap), and it must add
+// something: at least one clip, a belt that moved that day, or three or more
+// members active. A day of one or two members with no clip and no belt moves
+// repeats the weekly recap, so it has no entry.
 func dailyRecapHasContent(d DailyRecapData) bool {
-	return d.TotalMin > 0 || d.TotalHangoutMin > 0 || d.TotalGameMin > 0 || d.ClipCount > 0
+	base := d.TotalMin > 0 || d.TotalHangoutMin > 0 || d.TotalGameMin > 0 || d.ClipCount > 0
+	adds := d.ClipCount > 0 || len(d.BeltsMoved) > 0 || len(d.MemberIDs) >= feedDailyRecapMinMembers
+	return base && adds
 }
 
 // utcDayStart is 00:00 UTC of the day that holds ms.
@@ -181,11 +189,11 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 	entries := make([]FeedEntry, 0, feedDailyRecapDays)
 	for _, a := range days {
 		a.data.TotalMin = a.data.TotalHangoutMin + a.data.TotalGameMin
+		a.data.MemberIDs = topDailyMembers(a.memberHit, feedDailyRecapMembers)
 		if !dailyRecapHasContent(a.data) {
 			continue
 		}
 		a.data.TopGame, a.data.GameID = topDailyGame(a.gameMin, a.gameIDs)
-		a.data.MemberIDs = topDailyMembers(a.memberHit, feedDailyRecapMembers)
 		ts := a.lastTs
 		if ts == 0 {
 			ts = a.data.DayStart

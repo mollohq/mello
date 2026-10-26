@@ -245,6 +245,7 @@ Card types in the bento grid:
   - Under the numbers, up to two belts that moved that day, each a title chip beside the octagon of the new holder. A day with no belt move has no belt row.
   - The card is a standard cell. It stands after the recap and the head2head entry and before the sessions. The server sends one entry for each of the last three days. The client draws the newest one.
   - A day with no minutes and no clip has no entry. A belt alone does not make a day. This is the empty-card rule below.
+  - A day also needs to add something to the weekly recap: at least one clip, or a belt that moved that day, or three or more active members. A day of one or two members with minutes only has no entry. The server applies the rule (`dailyRecapHasContent`). The client draws only the newest entry.
   - A member who joined has the joined card. The other ledger events a catch-up card showed (a moment, a leave, chat activity) have no card.
 - **Live session card** (`live-session`, `LiveSessionCard`) — a game in progress. Label NOW PLAYING with the red live pip. Red is only the pip. It shows the game art, the game name, the member octagons and "since N min". The client builds it from presence (game id, name, `started_at`) and the sensor of the viewer. It is not a ledger event.
   - One card for each game. Crewmates in the same game share one card and count from the earliest start.
