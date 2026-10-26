@@ -4753,6 +4753,68 @@ export component PreviewFeedFiveMembers inherits Rectangle {
     }
 }
 
+/// Crew history with two old recaps: the tall card in the memory grid. The
+/// first has belts (three rows) and a week number, the second has neither (two
+/// rows) and is named by its date. A game session fills the cell beside them.
+export component PreviewMemoryRecaps inherits Rectangle {
+    width: 1200px;
+    height: 900px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [];
+        memory-rows: 3;
+        memory-cards: [
+            {
+                id: "recap-a", card-type: "recap", role: "recap", size: "md",
+                recap-week: "Week 2", age-label: "2 weeks ago",
+                mem-col: 0, mem-row: 0, mem-span: 3,
+                title: "19h 40", subtitle: "11", duration: "3h 48",
+                recap-rows: 3, recap-hangout-min: 1180, recap-clips: 11, recap-longest-min: 228, recap-range: "12 to 18 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                belts-moved: [
+                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: { key: "", sealed: false } },
+                ],
+                belts-held: [
+                    { name: "Max", initials: "M", hue: 2, count: 4 },
+                    { name: "Bob", initials: "B", hue: 0, count: 4 },
+                    { name: "Sara", initials: "S", hue: 3, count: 3 },
+                ],
+            },
+            {
+                id: "recap-b", card-type: "recap", role: "recap", size: "md",
+                recap-week: "Week of 6 Oct", age-label: "3 weeks ago",
+                mem-col: 1, mem-row: 0, mem-span: 2,
+                title: "9h 10", subtitle: "5", duration: "2h 05",
+                recap-rows: 2, recap-hangout-min: 550, recap-clips: 5, recap-longest-min: 125, recap-range: "5 to 11 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+            },
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                mem-col: 2, mem-row: 0, mem-span: 1,
+                title: "Rocket League", game-name: "Rocket League",
+                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                game-record: "5W-1L", game-wins: 5, game-losses: 1,
+                game-streak-text: "W3", game-streak-positive: true,
+                game-winrate: "83%", game-matches: 6,
+                duration-human: "1h 48m", timestamp: "Yesterday",
+                actor-name: "Jonas", actor-initials: "J", participant-count: 3,
+                part0-initials: "J", part1-initials: "M", part2-initials: "L",
+            },
+        ];
+    }
+}
+
 /// Frame D with the moved belts and the weekly recap sealed.
 export component PreviewFeedSealed inherits PreviewFeedFiveMembers {
     sealed: true;
