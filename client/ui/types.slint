@@ -323,6 +323,8 @@ export struct FeedCardData {
     participants-line: string, // "Ostkatt, b0bben +1"
     actor-avatar: image,      // streamer avatar (badge on the game icon)
     actor-has-avatar: bool,
+    /// A joined card: the viewer already said hi to this member.
+    said-hi: bool,
     part0-initials: string, part0-avatar: image, part0-has-avatar: bool,
     part1-initials: string, part1-avatar: image, part1-has-avatar: bool,
     part2-initials: string, part2-avatar: image, part2-has-avatar: bool,
@@ -732,11 +734,11 @@ export global StreamCardUi {
 
 // --- end stage 9 ---
 
-/// A request to put the cursor in the crew chat. A card sets it (the joined
-/// card's "Say hi"); the chat panel answers by focusing its input. A counter,
-/// because each press is a new request.
+/// The crew chat, as the feed cards reach it. A joined card's "Say hi" sends a
+/// message at once: the click is the intent, there is no draft.
 export global ChatFocus {
-    in-out property <int> requests: 0;
+    /// "Say hi" on a joined card. The argument is the card id (`joined-<user id>`).
+    callback say-hi(/* card id */ string);
     /// The chat input has the cursor. The chat panel keeps it up to date.
     in-out property <bool> input-focused: false;
 }

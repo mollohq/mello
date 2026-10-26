@@ -187,7 +187,7 @@ export type AppState = {
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
   /** The joined cards of the feed, in grid order: a standard cell after the first row. */
   joined: { name: string; title: string; invited: string; when: string; index: number }[];
-  /** The chat input has the cursor. "Say hi" on a joined card puts it there. */
+  /** The chat input has the cursor. */
   chat_input_focused: boolean;
   /** Sealed belts and recap in the feed, and the card in the centre. */
   sealed: {

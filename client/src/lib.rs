@@ -45,6 +45,7 @@ mod platform;
 mod poll_loop;
 mod quiet_row;
 mod recent_games;
+mod say_hi;
 mod sealed;
 mod settings;
 mod snapshot_cache;

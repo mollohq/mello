@@ -2502,9 +2502,9 @@ component DormantStrip inherits Rectangle {
 // A member who joined in the last 24 hours. The smallest card the grid has is
 // a standard cell, so this is one: the joiner's octagon large, the name in
 // Oxanium, who invited and when in Barlow 300, and "Say hi", a white outline
-// action that puts the cursor in the crew chat. The surface may already hold
-// its one filled white button and the invite stays red, so this one is not
-// filled.
+// action that sends a greeting to the crew chat at once. Once said, the button
+// reads "Said hi" and is off. The surface may already hold its one filled
+// white button and the invite stays red, so this one is not filled.
 component JoinedCard inherits Rectangle {
     in property <FeedCardData> card;
 
@@ -2573,27 +2573,29 @@ component JoinedCard inherits Rectangle {
                 width: hi-label.preferred-width + 36px;
                 height: 30px;
                 accessible-role: button;
-                accessible-label: "Say hi to " + root.card.actor-name;
+                accessible-label: (root.card.said-hi ? "Said hi to " : "Say hi to ") + root.card.actor-name;
+                accessible-enabled: !root.card.said-hi;
                 CutButton {
                     width: parent.width; height: parent.height;
                     outlined: true;
-                    line-color: hi-ta.has-hover ? Theme.action : Theme.action-line-hover;
+                    line-color: root.card.said-hi ? Theme.card-border : hi-ta.has-hover ? Theme.action : Theme.action-line-hover;
                     surface-color: Theme.card-bg;
                 }
                 hi-label := Text {
-                    text: "SAY HI";
+                    text: root.card.said-hi ? "SAID HI" : "SAY HI";
                     font-family: Theme.font-label;
                     font-size: 10px;
                     font-weight: Theme.weight-label;
                     letter-spacing: Theme.track-label;
-                    color: Theme.text-primary;
+                    color: root.card.said-hi ? Theme.text-dim : Theme.text-primary;
                     width: parent.width; height: parent.height;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }
                 hi-ta := TouchArea {
-                    mouse-cursor: pointer;
-                    clicked => { ChatFocus.requests += 1; }
+                    enabled: !root.card.said-hi;
+                    mouse-cursor: root.card.said-hi ? MouseCursor.default : MouseCursor.pointer;
+                    clicked => { ChatFocus.say-hi(root.card.id); }
                 }
             }
         }

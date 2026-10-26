@@ -164,6 +164,62 @@ pub fn wire(ctx: &AppContext) {
             scroll_ctx.fire();
         });
     }
+    // "Say hi" on a joined card: a greeting that mentions the new member goes
+    // to the crew chat at once, once for each member.
+    {
+        let cmd = ctx.cmd_tx.clone();
+        let settings = ctx.settings.clone();
+        let app_weak = ctx.app.as_weak();
+        let scroll_ctx = Rc::new(ChatSendScroll {
+            scroll: ctx.chat_scroll.clone(),
+            unread: ctx.unread_tracker.clone(),
+            app: ctx.app.as_weak(),
+        });
+        ctx.app
+            .global::<crate::ChatFocus>()
+            .on_say_hi(move |card_id| {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                let Some(user_id) = crate::say_hi::user_of_card(card_id.as_str()) else {
+                    return;
+                };
+                let crew_id = app.get_active_crew_id().to_string();
+                let feed = app.get_feed_cards();
+                let Some(row) = (0..feed.row_count())
+                    .find(|&i| feed.row_data(i).is_some_and(|c| c.id == card_id))
+                else {
+                    return;
+                };
+                let Some(mut card) = feed.row_data(row) else {
+                    return;
+                };
+                let name = card.actor_name.to_string();
+                if crew_id.is_empty() || name.trim().is_empty() || card.said_hi {
+                    return;
+                }
+                {
+                    let mut s = settings.borrow_mut();
+                    let said = s.said_hi.entry(crew_id.clone()).or_default();
+                    if said.iter().any(|u| u == user_id) {
+                        return;
+                    }
+                    said.push(user_id.to_string());
+                    s.save();
+                }
+                let (content, mention) = crate::say_hi::greeting(user_id, &name);
+                log::info!("[feed] said hi to {user_id} in crew {crew_id}");
+                let _ = cmd.send(Command::SendMessage {
+                    content,
+                    reply_to: None,
+                    mentions: vec![mention],
+                });
+                scroll_ctx.fire();
+                // The card reads "Said hi" and goes off.
+                card.said_hi = true;
+                feed.set_row_data(row, card);
+            });
+    }
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_delete_message(move |message_id| {

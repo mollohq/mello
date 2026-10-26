@@ -77,10 +77,20 @@ export default journey({
       expect((await bob.state()).joined.length === 0, "bob does not see his own join");
     });
 
-    await step("alice's Say hi puts the cursor in the crew chat", async () => {
-      const name = (await alice.state()).joined[0].name;
+    await step("alice's Say hi sends a greeting that mentions bob, and the button reads Said hi", async () => {
+      const s0 = await alice.state();
+      const name = s0.joined[0].name;
       await alice.click(`Say hi to ${name}`);
-      await alice.waitFor("the cursor in the chat input", (st) => st.chat_input_focused, 10_000);
+      // The click is the intent: the message goes at once and nothing sits in the input.
+      const a = await alice.waitFor(
+        "the greeting in the chat",
+        (st) => st.messages.some((m) => m.sender === s0.user_name && m.text.includes(`@${name}`)),
+        15_000,
+      );
+      expect(!a.chat_input_focused, "the greeting is not a draft in the chat input");
+      const said = await alice.find(`Said hi to ${name}`);
+      expect(said.enabled === false, "the Said hi button is off");
+      await bob.waitFor("the greeting mentions bob", (st) => st.messages.some((m) => m.mentions_me), 15_000);
       await alice.checkpoint("two-feed-say-hi");
     });
 

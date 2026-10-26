@@ -173,7 +173,7 @@ struct Snapshot {
     /// The joined cards of the feed, in grid order. A join is the smallest card
     /// the grid has, a standard cell after the first row.
     joined: Vec<JoinedSnap>,
-    /// The chat input has the cursor ("Say hi" on a joined card puts it there).
+    /// The chat input has the cursor.
     chat_input_focused: bool,
     /// The quiet row (frame E): at most one, in the place of the recap.
     quiet_rows: Vec<JoinedRowSnap>,

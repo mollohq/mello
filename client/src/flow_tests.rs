@@ -4631,27 +4631,120 @@ fn the_join_card_stands_after_the_first_row_and_before_the_session() {
     }
 }
 
-/// "Say hi" puts the cursor in the crew chat input. It is a white outline
-/// action, not the one filled button.
+/// "Say hi" sends a greeting to the crew chat at once. The click is the intent:
+/// nothing is typed into the input first. The greeting mentions the new member
+/// in the form the chat uses, and the card then reads "Said hi" and is off.
 #[test]
-fn say_hi_puts_the_cursor_in_the_crew_chat() {
+fn say_hi_sends_a_greeting_that_mentions_the_joiner_and_a_second_click_does_nothing() {
     let mut h = Harness::new();
-    h.app()
-        .window()
-        .set_size(slint::PhysicalSize::new(1600, 1000));
     app_with_crew_of(&mut h, 2);
     set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
     h.emit(Event::FeedLoaded {
         response: feed_with_joins(vec![join_of("u2", "Jonas", "", 5 * 60_000)]),
     });
-    assert_eq!(h.app().global::<crate::ChatFocus>().get_requests(), 0);
-    h.click_label("Say hi to Jonas");
-    let chat = h.app().global::<crate::ChatFocus>();
-    assert_eq!(chat.get_requests(), 1, "one press, one request");
-    assert!(
-        chat.get_input_focused(),
-        "the chat input has the cursor after Say hi"
+    h.commands();
+    assert_eq!(h.controls_labelled("Say hi to Jonas").len(), 1);
+    assert_eq!(
+        h.controls_labelled("Say hi to Jonas")[0].accessible_enabled(),
+        Some(true)
     );
+
+    h.click_label("Say hi to Jonas");
+    let sent: Vec<_> = h
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::SendMessage {
+                content,
+                mentions,
+                reply_to,
+            } => Some((content, mentions, reply_to)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1, "one message at once: {sent:?}");
+    let (content, mentions, reply_to) = &sent[0];
+    assert!(content.contains("@Jonas"), "the mention form: {content}");
+    assert_eq!(
+        mentions,
+        &vec![mello_core::chat::MentionRef {
+            user_id: "u2".into(),
+            name: "Jonas".into()
+        }]
+    );
+    assert!(reply_to.is_none());
+    assert!(
+        !content.contains('!') && !content.to_lowercase().contains("team"),
+        "{content}"
+    );
+    assert_eq!(h.app().get_chat_input_text().as_str(), "", "no draft");
+
+    // The button reads "Said hi" and is off. A second click sends nothing.
+    let said = h.controls_labelled("Said hi to Jonas");
+    assert_eq!(said.len(), 1);
+    assert_eq!(said[0].accessible_enabled(), Some(false));
+    assert!(h.controls_labelled("Say hi to Jonas").is_empty());
+    assert!(
+        drawn_texts(&h).iter().any(|t| t == "SAID HI"),
+        "{:?}",
+        drawn_texts(&h)
+    );
+    said[0].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    assert!(
+        !h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::SendMessage { .. })),
+        "a second click does nothing"
+    );
+    // The invoke path is guarded too, not only the control.
+    h.app()
+        .global::<crate::ChatFocus>()
+        .invoke_say_hi("joined-u2".into());
+    assert!(h.commands().is_empty());
+}
+
+/// Once for each joiner, stored with the crew's local state: a restart does not
+/// switch the button on again, and another joiner can still be greeted.
+#[test]
+fn said_hi_survives_a_restart_and_is_once_for_each_joiner() {
+    let mut h = Harness::new();
+    app_with_crew_of(&mut h, 3);
+    set_roster(
+        &h,
+        &[("user-1", "Test User"), ("u2", "Jonas"), ("u3", "Max")],
+    );
+    let feed = feed_with_joins(vec![
+        join_of("u2", "Jonas", "", 5 * 60_000),
+        join_of("u3", "Max", "", 10 * 60_000),
+    ]);
+    h.emit(Event::FeedLoaded {
+        response: feed.clone(),
+    });
+    h.click_label("Say hi to Jonas");
+    assert_eq!(
+        h.settings().borrow().said_hi.get("crew-0"),
+        Some(&vec!["u2".to_string()])
+    );
+
+    // The same feed again, as after a restart: Jonas stays off, Max is open.
+    h.emit(Event::FeedLoaded {
+        response: feed.clone(),
+    });
+    assert_eq!(h.controls_labelled("Said hi to Jonas").len(), 1);
+    assert_eq!(h.controls_labelled("Say hi to Max").len(), 1);
+    h.commands();
+    h.click_label("Say hi to Max");
+    let sent: Vec<_> = h
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::SendMessage { mentions, .. } => Some(mentions),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(sent.len(), 1);
+    assert_eq!(sent[0][0].user_id, "u3");
 }
 
 #[test]

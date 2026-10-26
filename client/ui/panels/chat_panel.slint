@@ -513,9 +513,6 @@ export component ChatPanel inherits Rectangle {
     callback chat-input-changed(/* text */ string);
     callback history-prepended-done();
     in-out property <string> chat-input-text: "";
-    // "Say hi" on a joined card asks for the cursor here.
-    property <int> focus-requests: ChatFocus.requests;
-    changed focus-requests => { chat-input.focus(); }
     in-out property <int> composer-line-count: 1;
     in-out property <bool> composer-multiline: false;
     in-out property <bool> pending-newline: false;

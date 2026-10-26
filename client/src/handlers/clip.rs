@@ -537,6 +537,14 @@ fn join_cards(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) -> 
     };
     let now_ms = crate::converters::current_time_ms();
     let cache = ctx.avatar_cache.borrow();
+    // The members this user already greeted from a card, in this crew.
+    let said: Vec<String> = ctx
+        .settings
+        .borrow()
+        .said_hi
+        .get(ctx.app.get_active_crew_id().as_str())
+        .cloned()
+        .unwrap_or_default();
     crate::joined_line::rows(
         joins,
         &viewer.id,
@@ -563,6 +571,7 @@ fn join_cards(ctx: &AppContext, joins: &[mello_core::crew_events::FeedJoin]) -> 
             actor_hue_index: person.hue,
             actor_has_avatar: avatar.is_some(),
             actor_avatar: avatar.unwrap_or_default(),
+            said_hi: said.contains(&r.user_id),
             ..Default::default()
         }
     })
