@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod a11y_lint;
+mod about;
 mod activity_report;
 mod app_context;
 mod autolaunch;

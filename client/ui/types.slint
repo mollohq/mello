@@ -803,3 +803,12 @@ export global ChatFocus {
     /// The chat input has the cursor. The chat panel keeps it up to date.
     in-out property <bool> input-focused: false;
 }
+
+// One record of the Third-party notices view. Dependencies that share a
+// licence text share a record.
+export struct NoticeEntryData {
+    // One "name version" pair per line.
+    names: string,
+    license: string,
+    text: string,
+}

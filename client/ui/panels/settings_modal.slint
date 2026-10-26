@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData, InstalledGameData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -2078,6 +2078,123 @@ component GamesTab inherits VerticalLayout {
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── Settings Modal (main export) ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
+// ─── Third-party notices ────────────────────────────────────────────────
+// One record: the names that share the text, the licence name, the text.
+component NoticeEntry inherits VerticalLayout {
+    in property <NoticeEntryData> entry;
+
+    spacing: 8px;
+
+    Text {
+        text: root.entry.names;
+        font-family: Theme.font-display;
+        font-size: 13px;
+        font-weight: Theme.weight-display;
+        color: Theme.text-primary;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.entry.license;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: 1.5px;
+        color: Theme.text-tertiary;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.entry.text;
+        font-family: Theme.font-body;
+        font-size: 11px;
+        font-weight: Theme.weight-sentence;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+}
+
+component NoticesView inherits Rectangle {
+    in property <[NoticeEntryData]> notices: [];
+
+    callback back-clicked();
+
+    background: Theme.surface;
+
+    VerticalLayout {
+        // Header: back control and title
+        Rectangle {
+            height: 64px;
+
+            HorizontalLayout {
+                padding-left: 40px;
+                padding-right: 40px;
+                spacing: 24px;
+
+                Rectangle {
+                    width: 80px;
+
+                    Rectangle {
+                        height: 32px;
+                        y: (parent.height - self.height) / 2;
+                        background: back-ta.has-hover ? Theme.surface-hover : transparent;
+
+                        Text {
+                            text: "BACK";
+                            font-family: Theme.font-label;
+                            font-size: 12px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: 1.2px;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        back-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Back to About";
+                            clicked => { root.back-clicked(); }
+                        }
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: "THIRD-PARTY NOTICES";
+                    font-family: Theme.font-label;
+                    font-size: 11px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: 2.4px;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: 1px;
+                background: Theme.graphic-light;
+            }
+        }
+
+        MelloScrollArea {
+            vertical-stretch: 1;
+            content-height: list.preferred-height;
+
+            list := VerticalLayout {
+                padding: 40px;
+                padding-bottom: 80px;
+                spacing: 40px;
+                width: parent.width;
+
+                for entry in root.notices: NoticeEntry {
+                    entry: entry;
+                }
+            }
+        }
+    }
+}
+
 // ─── About tab ──────────────────────────────────────────────────────────
 // One label row: a tracked label and a value.
 component AboutRow inherits Rectangle {
@@ -2318,6 +2435,9 @@ export component SettingsModal inherits Rectangle {
     in property <string> build-commit: "unknown";
     in property <string> build-date: "unknown";
     callback about-notices-requested();
+    // The Third-party notices view, filled on the first open.
+    in property <[NoticeEntryData]> notices: [];
+    in-out property <bool> notices-open: false;
 
     // Profile
     in property <string> profile-nickname: "";
@@ -2366,6 +2486,7 @@ export component SettingsModal inherits Rectangle {
     in-out property <length> content-scroll <=> settings-scroll.scroll-y;
 
     changed active-tab => {
+        notices-open = false;
         settings-scroll.scroll-y = 0px;
     }
 
@@ -3028,8 +3149,19 @@ export component SettingsModal inherits Rectangle {
                             version: root.build-version;
                             commit: root.build-commit;
                             built: root.build-date;
-                            notices-clicked => { root.about-notices-requested(); }
+                            notices-clicked => {
+                                root.notices-open = true;
+                                root.about-notices-requested();
+                            }
                         }
+
+                    }
+
+                    if root.notices-open && active-tab == 4: NoticesView {
+                        width: parent.width;
+                        height: parent.height;
+                        notices: root.notices;
+                        back-clicked => { root.notices-open = false; }
                     }
                 }
             }
@@ -3138,6 +3270,7 @@ export component SettingsModal inherits Rectangle {
 component SettingsPreview inherits Rectangle {
     in property <int> tab: 0;
     in property <length> scroll: 0px;
+    in property <bool> notices-open: false;
 
     width: 1000px;
     height: 780px;
@@ -3148,6 +3281,12 @@ component SettingsPreview inherits Rectangle {
         height: parent.height;
         active-tab: root.tab;
         content-scroll: root.scroll;
+        notices-open: root.notices-open;
+        notices: [
+            { names: "serde 1.0.228\nserde_json 1.0.145", license: "MIT OR Apache-2.0", text: "Copyright (c) David Tolnay" },
+            { names: "opus (vcpkg)", license: "BSD-3-Clause", text: "Licence: BSD-3-Clause. The full text is at https://spdx.org/licenses/BSD-3-Clause.html and in the opus source." },
+            { names: "Oxanium", license: "OFL-1.1", text: "Copyright 2019 The Oxanium Project Authors\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1." },
+        ];
         build-version: "v0.7.0";
         build-commit: "bfe4580";
         build-date: "2026-10-26";
@@ -3184,4 +3323,5 @@ export component PreviewGeneral inherits SettingsPreview { tab: 1; }
 export component PreviewAudio inherits SettingsPreview { tab: 2; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
+export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
 export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 520px; }

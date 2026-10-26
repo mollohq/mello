@@ -32,6 +32,21 @@ fn stop_diagnostic_capture(app: &MainWindow, cmd: &UnboundedSender<Command>) {
 }
 
 pub fn wire(ctx: &AppContext) {
+    // --- About: the Third-party notices view fills its model on the first open ---
+    {
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_about_notices_requested(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            if slint::Model::row_count(&app.get_settings_notices()) == 0 {
+                let rows = crate::about::entries();
+                log::info!("[about] notices view opened, {} records", rows.len());
+                app.set_settings_notices(slint::ModelRc::new(slint::VecModel::from(rows)));
+            }
+        });
+    }
+
     // --- Settings modal open ---
     {
         let cmd = ctx.cmd_tx.clone();
