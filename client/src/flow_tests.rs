@@ -8602,7 +8602,13 @@ fn solo_session(id: &str, player: &str, player_id: &str, ago_days: i64) -> FeedE
 
 /// A title that changed hands `days` ago, with the pair that says both values.
 fn belt_entry(days: i64) -> FeedEntry {
-    let moved_at = now_ms() - days * DAY_MS - 3_600_000;
+    // Ages count UTC days. Noon of the day `days` back keeps the age the same
+    // at any time of the day: an hour back from 00:30 UTC lands a day early.
+    let moved_at = if days == 0 {
+        now_ms() - 3_600_000
+    } else {
+        (now_ms().div_euclid(DAY_MS) - days) * DAY_MS + DAY_MS / 2
+    };
     let night_owl = serde_json::json!({
         "title_id": "night_owl", "holder_user_id": "u4", "value": "03:40", "unit": "",
         "since_ms": moved_at, "moved_at_ms": moved_at, "previous_holder_user_id": "user-1",
