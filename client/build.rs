@@ -45,6 +45,20 @@ fn main() {
     // `cargo test` builds debug, so tests always get it.
     let debug_info = std::env::var("PROFILE").as_deref() == Ok("debug");
 
+    // The StatValue probe window for src/stat_value_tests.rs. Compiled first,
+    // because the last compile_with_config call wins the
+    // SLINT_INCLUDE_GENERATED variable that include_modules!() reads, and
+    // that must stay main.slint. The test includes the probe by path.
+    if debug_info {
+        slint_build::compile_with_config(
+            "ui/previews/stat_probe.slint",
+            slint_build::CompilerConfiguration::new()
+                .with_style(style.into())
+                .with_debug_info(true),
+        )
+        .unwrap();
+    }
+
     slint_build::compile_with_config(
         "ui/main.slint",
         slint_build::CompilerConfiguration::new()

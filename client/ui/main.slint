@@ -482,6 +482,7 @@ export component MainWindow inherits Window {
     // --- Crew feed ---
     in property <[FeedCardData]> feed-cards: [];
     in property <[FeedCardData]> memory-cards: [];
+    in property <int> memory-rows: 0;
     in property <YouStripData> you-strip;
     // Personal stats profile (spec 19 A2), opened from the You strip.
     in-out property <bool> stats-profile-open: false;
@@ -1046,6 +1047,7 @@ export component MainWindow inherits Window {
                             height: parent.height;
                             cards: root.feed-cards;
                             memory-cards: root.memory-cards;
+                            memory-rows: root.memory-rows;
                             you-strip: root.you-strip;
                             stream-cards: root.active-stream-cards;
                             is-hosting: root.is-hosting;

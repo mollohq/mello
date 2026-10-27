@@ -122,18 +122,14 @@ export default journey({
     });
 
     for (const app of [bob, alice]) {
-      await step(`${app.name} sees one daily recap for alice's session and no catch-up card`, async () => {
-        const s = await app.waitFor("the daily recap", (st) => st.daily_recap.present, 30_000);
-        const d = s.daily_recap;
-        // The session ended 23 h ago: today so far or yesterday, by the clock.
-        expect(d.day === "Today so far" || d.day === "Yesterday", `the day is today or yesterday, got "${d.day}"`);
-        expect(d.sessions === 1, `one session, got ${d.sessions}`);
-        expect(d.hangout !== "" && d.hangout !== "0m", `the hangout time shows, got "${d.hangout}"`);
-        expect(d.top_game === "Brawlhalla", `the top game is Brawlhalla, got "${d.top_game}"`);
-        expect(d.members >= 1, `at least one member octagon, got ${d.members}`);
-        expect(d.belts.length <= 2, `two belts at most, got ${d.belts.length}`);
+      // One session of one member, no clip and no belt move: the day adds
+      // nothing to the weekly recap, so the server sends no daily recap
+      // (CLIPS.md section 7, dailyRecapHasContent).
+      await step(`${app.name} sees no daily recap for a day that adds nothing, and no catch-up card`, async () => {
+        const s = await waitForFullFeed(app, { skeletons: 3 });
+        expect(!s.daily_recap.present, "no daily recap for one session of one member");
+        expect(!s.feed_cards.some((c) => c.card_type === "daily-recap"), "no daily recap card");
         expect(!s.feed_cards.some((c) => c.card_type === "catchup"), "no catch-up card");
-        expect(s.feed_cards.filter((c) => c.card_type === "daily-recap").length === 1, "one daily recap card");
       });
     }
 

@@ -42,6 +42,42 @@ pub fn when_label(last_played_ms: i64, now_ms: i64) -> String {
     }
 }
 
+/// The one-line caption of a list row: when it was last played, then the
+/// hours, "2 days ago, 4 h". Under an hour it reads minutes, from ten hours it
+/// has no decimal. A part the server does not know is left out. With neither,
+/// the launcher stands alone ("Epic").
+pub fn caption_label(when: &str, minutes: i64, launcher: &str) -> String {
+    let hours = if minutes <= 0 {
+        String::new()
+    } else if minutes < 60 {
+        format!("{minutes} min")
+    } else {
+        let h = minutes as f64 / 60.0;
+        if h >= 10.0 {
+            format!("{} h", grouped(h.round() as i64))
+        } else if (h - h.round()).abs() < 0.05 {
+            format!("{} h", h.round() as i64)
+        } else {
+            format!("{h:.1} h")
+        }
+    };
+    let parts: Vec<&str> = [when, hours.as_str()]
+        .into_iter()
+        .filter(|p| !p.is_empty())
+        .collect();
+    if !parts.is_empty() {
+        return parts.join(", ");
+    }
+    let mut chars = launcher.trim().chars();
+    match chars.next() {
+        Some(c) => c
+            .to_uppercase()
+            .chain(chars.flat_map(char::to_lowercase))
+            .collect(),
+        None => String::new(),
+    }
+}
+
 /// The launcher of a tile: the server's field, else the prefix of a launcher
 /// game id (`epic-fortnite`). A catalogue id such as `valorant` has none.
 pub fn launcher_of(game_id: &str, launcher: &str) -> String {
@@ -132,6 +168,18 @@ mod tests {
         assert_eq!(when_label(92 * day, now), "Last week");
         assert_eq!(when_label(79 * day, now), "3 weeks ago");
         assert_eq!(when_label(0, now), "", "no time from the server");
+    }
+
+    #[test]
+    fn the_caption_is_when_then_hours_on_one_line() {
+        assert_eq!(caption_label("2 days ago", 240, ""), "2 days ago, 4 h");
+        assert_eq!(caption_label("Today", 250_020, "steam"), "Today, 4,167 h");
+        assert_eq!(caption_label("Yesterday", 756, ""), "Yesterday, 13 h");
+        assert_eq!(caption_label("Last week", 270, ""), "Last week, 4.5 h");
+        assert_eq!(caption_label("", 45, ""), "45 min");
+        assert_eq!(caption_label("Today", 0, "epic"), "Today");
+        assert_eq!(caption_label("", 0, "epic"), "Epic");
+        assert_eq!(caption_label("", 0, ""), "");
     }
 
     #[test]

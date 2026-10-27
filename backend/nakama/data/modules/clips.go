@@ -313,6 +313,7 @@ func buildMergedTimeline(ctx context.Context, nk runtime.NakamaModule, crewID st
 	}
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
+	stampRecapWeeks(ctx, nk, crewID, recapsDoc.Recaps)
 	if len(recapsDoc.Recaps) > 0 {
 		latest := recapsDoc.Recaps[0]
 		for _, r := range recapsDoc.Recaps[1:] {

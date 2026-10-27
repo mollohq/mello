@@ -16,6 +16,7 @@ import { GameIcon } from "../components/game_icon.slint";
 import { GameArt } from "../components/game_art.slint";
 import { ClipPlayRing, DotWaveform } from "../components/clip_wave.slint";
 import { RecapDur, RecapKicker } from "../components/recap_parts.slint";
+import { StatValue } from "../components/stat.slint";
 import { RecapOpened } from "./recap_opened.slint";
 
 
@@ -527,6 +528,16 @@ component RecapHead inherits Rectangle {
             color: Theme.text-primary;
         }
 
+        // When the week was: "This week", "Last week", "3 weeks ago".
+        if card.age-label != "": Text {
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            text: card.age-label;
+            font-size: 11px;
+            color: Theme.text-sub;
+            overflow: elide;
+        }
+
         Rectangle { height: 10px; }
 
         Rectangle { height: 1px; background: Theme.card-border; }
@@ -540,13 +551,13 @@ component RecapHead inherits Rectangle {
             HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 2;
                     spacing: 2px;
                     RecapDur { minutes: Math.round(card.recap-hangout-min * root.count); }
                     RecapKicker { text: "HANGOUT"; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 3;
                     spacing: 2px;
                     Text { text: "\{Math.round(card.recap-clips * root.count)}"; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 24px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     RecapKicker { text: "CLIPS"; }
@@ -556,13 +567,13 @@ component RecapHead inherits Rectangle {
             if card.recap-longest-min > 0 || card.game-name != "": HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 2;
                     spacing: 2px;
                     if card.recap-longest-min > 0: RecapDur { minutes: Math.round(card.recap-longest-min * root.count); }
                     if card.recap-longest-min > 0: RecapKicker { text: "LONGEST"; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 3;
                     spacing: 4px;
                     if card.game-name != "": HorizontalLayout {
                         height: 29px;
@@ -581,7 +592,7 @@ component RecapHead inherits Rectangle {
                             font-weight: Theme.weight-display;
                             font-size: 12px;
                             color: Theme.text-primary;
-                            wrap: word-wrap;
+                            overflow: elide;
                             vertical-alignment: center;
                         }
                     }
@@ -621,8 +632,15 @@ component RecapPeople inherits Rectangle {
             Text { width: 78px; text: "MOST CLIPPED"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 8.5px; letter-spacing: 1.36px; color: Theme.text-dim; vertical-alignment: center; }
             UserAvatar { size: 20px; initials: card.recap-clipped.initials; color-index: card.recap-clipped.hue; avatar: card.recap-clipped.avatar; has-avatar: card.recap-clipped.has-avatar; }
             Text { horizontal-stretch: 1; text: card.recap-clipped.name; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-primary; vertical-alignment: center; }
-            Text { text: "\{card.recap-clipped.count}"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-body; vertical-alignment: center; }
-            Text { text: card.recap-clipped.count == 1 ? "clip" : "clips"; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px; color: Theme.text-dim; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                StatValue {
+                    value: "\{card.recap-clipped.count}"; unit: card.recap-clipped.count == 1 ? "clip" : "clips";
+                    value-size: 13px; unit-size: 11px;
+                    hue: Theme.text-body;
+                    gap: 6px;
+                }
+            }
         }
         Rectangle { height: 10px; }
     }
@@ -1887,18 +1905,15 @@ component GameSessionCard inherits Rectangle {
     }
 }
 
-// Recent games card (mockup frame A). One row per game: the art, the name in
-// Oxanium with the hours under it, and "TRACKED" at the right when the game
-// sensor knows the game. Art ladder: the runtime icon, the local Steam header,
-// then a two-letter monogram in the game's hue. The art slot is 76 px wide, the
-// shape of a Steam header (460 by 215), two corners cut.
+// Recent games list row (one owner, or the side column). Fixed columns, the
+// same on every row: a square 48 px icon slot, the name in Oxanium on one line
+// with the last played line under it ("2 days ago, 4 h", Barlow 300, one
+// line), and the owner pips right-aligned. Icon rung: the exe or crew icon,
+// then the monogram. A header capsule never shows here. No TRACKED label.
 component RecentGameTileCell inherits Rectangle {
     in property <RecentGameTile> tile;
-    // TRACKED stands at the far right of a roomy row (frame B). In a narrow
-    // row it moves to the hours line so the name keeps the whole row.
-    property <bool> tracked-right: tile.tracked && root.width >= 300px;
 
-    height: 36px;
+    height: 48px;
     background: transparent;
 
     HorizontalLayout {
@@ -1911,10 +1926,8 @@ component RecentGameTileCell inherits Rectangle {
             hue-index: tile.hue-index;
             icon: tile.game-icon;
             has-icon: tile.has-icon;
-            capsule: tile.capsule;
-            has-capsule: tile.has-capsule;
-            size: 36px;
-            art-width: 76px;
+            has-capsule: false;
+            size: 48px;
         }
 
         VerticalLayout {
@@ -1929,34 +1942,21 @@ component RecentGameTileCell inherits Rectangle {
                 font-size: 13px;
                 color: Theme.text-value;
                 overflow: elide;
+                wrap: no-wrap;
             }
-            // TRACKED sits on the hours line, so the name has the whole row.
-            HorizontalLayout {
-                spacing: 8px;
-                alignment: start;
-                if tile.hours != "" || tile.when != "": Text {
-                    font-family: Theme.font-label;
-                    font-weight: Theme.weight-label;
-                    // From three PCs the line says when, not how long.
-                    text: (tile.when != "" ? tile.when : tile.hours).to-uppercase();
-                    font-size: 9px;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-dim;
-                    overflow: elide;
-                }
-                if tile.tracked && !root.tracked-right: Text {
-                    text: "TRACKED";
-                    font-family: Theme.font-label;
-                    font-weight: Theme.weight-label;
-                    font-size: 9px;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-value;
-                }
+            if tile.caption != "": Text {
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                text: tile.caption;
+                font-size: 11px;
+                color: Theme.text-sub;
+                overflow: elide;
+                wrap: no-wrap;
             }
         }
 
-        // Who owns it, as small octagons at the right (frame E).
-        if !root.tracked-right && tile.owners.length > 0: HorizontalLayout {
+        // Who owns it, as small octagons, right-aligned.
+        if tile.owners.length > 0: HorizontalLayout {
             spacing: 4px;
             alignment: end;
             cross-axis-alignment: center;
@@ -1967,16 +1967,6 @@ component RecentGameTileCell inherits Rectangle {
                 color-index: o.hue-index;
                 size: 16px;
             }
-        }
-
-        if root.tracked-right: Text {
-            text: "TRACKED";
-            font-family: Theme.font-label;
-            font-weight: Theme.weight-label;
-            font-size: 9px;
-            letter-spacing: Theme.track-label;
-            color: Theme.text-value;
-            vertical-alignment: center;
         }
     }
 }
@@ -2108,7 +2098,7 @@ component RecentGamesCard inherits Rectangle {
             spacing: 12px;
             for tile[i] in card.recent-games: RecentGameTileCell {
                 visible: i < 3;
-                height: i < 3 ? 36px : 0px;
+                height: i < 3 ? 48px : 0px;
                 tile: tile;
             }
         }
@@ -2973,6 +2963,8 @@ export component CrewFeed inherits Rectangle {
     /// The dormant strip: at most one strip across the top (frame F).
     in property <[FeedCardData]> dormant-cards: [];
     in property <[FeedCardData]> memory-cards: [];
+    /// Grid rows of Crew history, tall cards counted (`place_memory`).
+    in property <int> memory-rows: 0;
     in property <[StreamCardData]> stream-cards: [];
     /// Two members stream now: they share the wide hero (frame D). The client
     /// holds one remote streamer today, so the data path for a second one is a
@@ -3783,15 +3775,19 @@ export component CrewFeed inherits Rectangle {
                         background: Theme.card-border;
                     }
 
-                    for r in Math.ceil(memory-cards.length / 3.0): HorizontalLayout {
-                        height: Theme.feed-row;
-                        spacing: 12px;
+                    // Three columns. A recap is the tall card: one column, two
+                    // rows (three with belts). `place_memory` gives each card
+                    // its cell.
+                    Rectangle {
+                        height: root.memory-rows * Theme.feed-row + Math.max(0, root.memory-rows - 1) * 12px;
+                        property <length> cell-w: (self.width - 24px) / 3;
 
-                        for c in 3: FeedSlot {
-                            property <int> mem-idx: r * 3 + c;
-                            visible: mem-idx < memory-cards.length;
-                            horizontal-stretch: 1;
-                            card: mem-idx < memory-cards.length ? memory-cards[mem-idx] : { card-type: "" };
+                        for c[i] in memory-cards: FeedSlot {
+                            x: c.mem-col * (parent.cell-w + 12px);
+                            y: c.mem-row * (Theme.feed-row + 12px);
+                            width: parent.cell-w;
+                            height: c.mem-span * Theme.feed-row + (c.mem-span - 1) * 12px;
+                            card: c;
                             playing-path: root.clip-playing-path;
                             clip-progress: root.clip-progress;
                             clip-paused: root.clip-paused;
@@ -4405,11 +4401,11 @@ export component PreviewFeedNewCrew inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", tracked: true,
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,167 H", caption: "Today, 4,167 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
-                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", tracked: true,
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", caption: "2 days ago, 12.6 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
-                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", caption: "Last week, 3 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
                 ],
             },
@@ -4670,7 +4666,7 @@ export component PreviewFeedFiveMembers inherits Rectangle {
             {
                 id: "h2h", card-type: "head2head", role: "standard", size: "lg",
                 head2head: {
-                    variant: "pairs", member-count: 5, open-seats: 0,
+                    variant: "pairs", member-count: 9, open-seats: 0, more-pairs: 2,
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
@@ -4681,6 +4677,10 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                           chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
                           chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                        { name: "Kim", initials: "K", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 2, has-chip: true,
+                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "21", unit: "installed", hue-index: 1 } },
+                        { name: "Ola", initials: "O", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 1, them-count: 3, has-chip: true,
+                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "7.2", unit: "h this week", hue-index: 2 } },
                     ],
                 },
             },
@@ -4713,7 +4713,7 @@ export component PreviewFeedFiveMembers inherits Rectangle {
             {
                 id: "invite", card-type: "invite", role: "standard", size: "md",
                 head2head: {
-                    variant: "invite", member-count: 5,
+                    variant: "invite", member-count: 9, more-members: 4,
                     members: [bob, jonas, sara, max, leo],
                 },
             },
@@ -4735,6 +4735,129 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 duration-human: "2h 05m", timestamp: "5h ago",
                 actor-name: "Bob", actor-initials: "B", participant-count: 2,
                 part0-initials: "B", part1-initials: "S",
+            },
+        ];
+    }
+}
+
+/// A crew of twenty: the wide head2head card draws its six closest pairs, three
+/// in each column, with "+N more" in the last row. No invite card from ten
+/// members. Recent games is the poster grid.
+export component PreviewFeedTwentyMembers inherits Rectangle {
+    width: 1200px;
+    height: 360px;
+    background: Theme.bg-app;
+
+    property <H2hPerson> bob: { id: "u1", name: "Bob", initials: "B", hue-index: 0 };
+    property <H2hPerson> jonas: { id: "u2", name: "Jonas", initials: "J", hue-index: 1 };
+    property <H2hPerson> sara: { id: "u3", name: "Sara", initials: "S", hue-index: 3 };
+    property <H2hPerson> max: { id: "u4", name: "Max", initials: "M", hue-index: 2 };
+    property <H2hPerson> leo: { id: "u5", name: "Leo", initials: "L", hue-index: 4 };
+    out property <BeltReveal> carry: { key: "", sealed: false };
+    out property <BeltReveal> owl: { key: "", sealed: false };
+    out property <BeltReveal> marathon: { key: "", sealed: false };
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "h2h", card-type: "head2head", role: "standard", size: "lg",
+                head2head: {
+                    variant: "pairs", member-count: 20, open-seats: 0, more-pairs: 13,
+                    left-name: "Bob", left-initials: "B", left-hue-index: 0,
+                    pairs: [
+                        { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
+                        { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
+                        { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
+                        { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
+                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                        { name: "Kim", initials: "K", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 2, has-chip: true,
+                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "21", unit: "installed", hue-index: 1 } },
+                        { name: "Ola", initials: "O", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 1, them-count: 3, has-chip: true,
+                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "7.2", unit: "h this week", hue-index: 2 } },
+                    ],
+                },
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "14 sessions, 31 h this week", recent-pc-count: 5,
+                recent-games: [
+                    { game-id: "steam-252950", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "812 H", when: "Today",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png"), owners: [jonas, max] },
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,201 H", when: "Today",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png"), owners: [bob, sara, leo] },
+                    { game-id: "valorant", game-name: "Valorant", monogram: "VA", hue-index: 3, hours: "91 H", when: "Tuesday",
+                      owners: [sara, max] },
+                    { game-id: "steam-1097150", game-name: "Fall Guys", monogram: "FG", hue-index: 4, hours: "34 H", when: "Last week",
+                      has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-5.png"), owners: [leo, jonas] },
+                ],
+            },
+        ];
+    }
+}
+
+/// Crew history with two old recaps: the tall card in the memory grid. The
+/// first has belts (three rows) and a week number, the second has neither (two
+/// rows) and is named by its date. A game session fills the cell beside them.
+export component PreviewMemoryRecaps inherits Rectangle {
+    width: 1200px;
+    height: 900px;
+    background: Theme.bg-app;
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [];
+        memory-rows: 3;
+        memory-cards: [
+            {
+                id: "recap-a", card-type: "recap", role: "recap", size: "md",
+                recap-week: "Week 2", age-label: "2 weeks ago",
+                mem-col: 0, mem-row: 0, mem-span: 3,
+                title: "19h 40", subtitle: "11", duration: "3h 48",
+                recap-rows: 3, recap-hangout-min: 1180, recap-clips: 11, recap-longest-min: 228, recap-range: "12 to 18 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+                belts-moved: [
+                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: { key: "", sealed: false } },
+                ],
+                belts-held: [
+                    { name: "Max", initials: "M", hue: 2, count: 4 },
+                    { name: "Bob", initials: "B", hue: 0, count: 4 },
+                    { name: "Sara", initials: "S", hue: 3, count: 3 },
+                ],
+            },
+            {
+                id: "recap-b", card-type: "recap", role: "recap", size: "md",
+                recap-week: "Week of 6 Oct", age-label: "3 weeks ago",
+                mem-col: 1, mem-row: 0, mem-span: 2,
+                title: "9h 10", subtitle: "5", duration: "2h 05",
+                recap-rows: 2, recap-hangout-min: 550, recap-clips: 5, recap-longest-min: 125, recap-range: "5 to 11 October",
+                recap-active: RecapFixtures.active, recap-clipped: RecapFixtures.clipped,
+                recap-games: RecapFixtures.games, recap-games-min: RecapFixtures.games-min, recap-clip: RecapFixtures.clip,
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+            },
+            {
+                id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,
+                mem-col: 2, mem-row: 0, mem-span: 1,
+                title: "Rocket League", game-name: "Rocket League",
+                game-short-name: "RL", game-monogram: "RL", game-hue-index: 1,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
+                game-record: "5W-1L", game-wins: 5, game-losses: 1,
+                game-streak-text: "W3", game-streak-positive: true,
+                game-winrate: "83%", game-matches: 6,
+                duration-human: "1h 48m", timestamp: "Yesterday",
+                actor-name: "Jonas", actor-initials: "J", participant-count: 3,
+                part0-initials: "J", part1-initials: "M", part2-initials: "L",
             },
         ];
     }
@@ -4910,11 +5033,11 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
                 title: "RECENT GAMES", subtitle: "",
                 recent-games: [
-                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,168 H", tracked: true,
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4,168 H", caption: "Today, 4,168 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-1.png") },
-                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", tracked: true,
+                    { game-id: "steam-2300340", game-name: "Night Stones", monogram: "NS", hue-index: 2, hours: "12.6 H", caption: "2 days ago, 12.6 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-3.png") },
-                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", tracked: true,
+                    { game-id: "epic-rl", game-name: "Rocket League", monogram: "RL", hue-index: 1, hours: "EPIC", caption: "Last week, 3 h",
                       has-capsule: true, capsule: @image-url("../previews/fixtures/capsule-sample-2.png") },
                 ],
             },

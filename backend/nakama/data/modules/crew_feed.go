@@ -822,7 +822,8 @@ func decodeCardData[T any](raw interface{}) (T, bool) {
 //   - session: needs reportable minutes. Zero-minute sessions never emit.
 //   - session-preview: needs at least one snapshot.
 //   - recent-games: needs a tile with minutes or with a member who has it.
-//   - daily-recap: needs minutes or a clip (dailyRecapHasContent).
+//   - daily-recap: needs minutes or a clip, and a clip, a belt move or three
+//     active members (dailyRecapHasContent).
 //
 // Every other type is its own content (a clip, a join, a lock). A payload that
 // is absent or cannot be decoded cannot be judged, so the card is kept.
@@ -1223,6 +1224,7 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 	entries := make([]FeedEntry, 0, feedMemoryPageSize)
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
+	stampRecapWeeks(ctx, nk, crewID, recapsDoc.Recaps)
 	for _, r := range recapsDoc.Recaps {
 		if r.WeekStart == shownRecapWeekStart || isEmptyRecap(r) {
 			continue

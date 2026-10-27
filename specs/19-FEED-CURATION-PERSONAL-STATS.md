@@ -264,6 +264,8 @@ from the sources the weekly recap reads. See
 - A day with no minutes and no clip has no entry (`dailyRecapHasContent`). A
   belt that moved on that day does not make it a day. Holding titles is a
   standing state, as in the weekly recap.
+- The day must also add something: a clip, a belt moved that day, or three or
+  more active members. Otherwise it repeats the weekly recap and has no entry.
 
 | Field | Content |
 |---|---|

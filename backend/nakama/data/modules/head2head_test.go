@@ -202,6 +202,36 @@ func TestOneTrick(t *testing.T) {
 	}
 }
 
+// A member with one game has no One Trick value, and so does a member with
+// under ten hours in all. Neither contends, so neither can hold or win it.
+func TestOneTrickNeedsTwoGamesAndTenHours(t *testing.T) {
+	d := compute(nil, h2hNow, 4,
+		member("u1", hdoc(hgame("steam-1", 9000))),                       // one game
+		member("u2", hdoc(hgame("steam-1", 400), hgame("steam-2", 100))), // 8 h
+		member("u3", hdoc(hgame("steam-1", 700), hgame("steam-2", 100))), // 87.5%
+		member("u4", hdoc(hgame("steam-1", 500), hgame("steam-2", 500))),
+	)
+	o := titleOf(t, d, titleOneTrick)
+	if o.HolderUserID != "u3" || o.Value != 88 {
+		t.Fatalf("one_trick: %+v", o)
+	}
+	for _, p := range d.Pairs {
+		for _, v := range p.Values {
+			if v.TitleID == titleOneTrick && (p.A != "u3" && p.B != "u3" || p.A == "u1" || p.B == "u1") {
+				t.Fatalf("one_trick in a pair with a member with no value: %+v", p)
+			}
+		}
+	}
+	for _, id := range []string{"u1", "u2"} {
+		vs := computeOwnValues(member(id, hdoc(hgame("steam-1", 9000))), h2hNow)
+		for _, v := range vs {
+			if v.TitleID == titleOneTrick {
+				t.Fatalf("%s has a one_trick value: %+v", id, v)
+			}
+		}
+	}
+}
+
 // ---- night_owl ----
 
 func sessionAt(gameID string, utc time.Time, tz *int) UserGameStats {
@@ -294,10 +324,10 @@ func TestPairCounts(t *testing.T) {
 		t.Fatalf("pair %s/%s missing", a, b)
 		return Head2headPair{}
 	}
-	// u1 v u2: carry u1, locked_in u2, has_a_life u1, collector u1, sampler u1, one_trick:
-	// u1 3000/3020 = 99%, u2 100%, so u2. sampler is a tie at one game, the lower id wins.
+	// u1 v u2: carry u1, locked_in u2, has_a_life u1, collector u1, sampler tie.
+	// u2 has one game, so it has no one_trick value and does not contend.
 	p := get("u1", "u2")
-	if p.ACount != 4 || p.BCount != 2 {
+	if p.ACount != 4 || p.BCount != 1 {
 		t.Fatalf("u1/u2: %+v", p)
 	}
 	// Every pair counts each contested title with both members as contenders once.
@@ -316,12 +346,14 @@ func TestPairOnlyCountsTitlesBothContend(t *testing.T) {
 		member("u3", nil, played("steam-1", 1, 100)),
 	)
 	for _, p := range d.Pairs {
-		// u1 and u3 share one_trick only. u1/u2 share carry, collector, one_trick.
-		if p.A == "u1" && p.B == "u3" && p.ACount+p.BCount != 1 {
-			t.Fatalf("u1/u3 share one contested title: %+v", p)
+		// u3 has one game with 100 min: no one_trick value, so u1/u3 share
+		// no title. u1/u2 share carry and collector: u2
+		// has one game, so it has no one_trick value.
+		if p.A == "u1" && p.B == "u3" && p.ACount+p.BCount != 0 {
+			t.Fatalf("u1/u3 share no contested title: %+v", p)
 		}
-		if p.A == "u1" && p.B == "u2" && p.ACount+p.BCount != 3 {
-			t.Fatalf("u1/u2 share three contested titles: %+v", p)
+		if p.A == "u1" && p.B == "u2" && p.ACount+p.BCount != 2 {
+			t.Fatalf("u1/u2 share two contested titles: %+v", p)
 		}
 	}
 }

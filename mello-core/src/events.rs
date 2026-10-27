@@ -777,6 +777,14 @@ pub enum Event {
         message: String,
     },
 
+    /// Mello support asked for this app's log: the client sends the last
+    /// 24 h of it to the voice and stream server (`client::log_bundle`).
+    /// There is no prompt; the UI can show a notice.
+    LogsRequested {
+        /// The SFU's request id (32 hex digits).
+        request_id: String,
+    },
+
     /// Periodic runtime snapshot (1 Hz) for debug panel and perf harness.
     StatsUpdated {
         stats: crate::stats::MelloStats,

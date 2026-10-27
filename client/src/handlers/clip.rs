@@ -191,6 +191,17 @@ fn extract_title(data: &serde_json::Value, backend_type: &str, actor: &str) -> S
     }
 }
 
+/// The start of the recap week. `week_start_ms` is the server's name for it;
+/// recaps stored before it have `week_start`, and the oldest only `week_end`.
+/// 0 when none is there.
+fn recap_week_start_ms(data: &serde_json::Value) -> i64 {
+    let num = |k: &str| data.get(k).and_then(|v| v.as_i64()).filter(|&n| n > 0);
+    num("week_start_ms")
+        .or_else(|| num("week_start"))
+        .or_else(|| num("week_end").map(|e| e - 7 * 24 * 60 * 60 * 1000))
+        .unwrap_or(0)
+}
+
 /// Minutes the recap card leads with: `total_min` (voice, stream and game), or
 /// `total_hangout_min` for recaps stored before `total_min` existed.
 fn recap_lead_minutes(data: &serde_json::Value) -> f64 {
@@ -503,7 +514,7 @@ fn head2head_cards(
     }
     // From five members the cell loses its seats and button. The invite card
     // takes over, with the viewer first and then the crew.
-    if model.member_count >= head2head::SEATS {
+    if (head2head::SEATS..=head2head::INVITE_CARD_MAX_MEMBERS).contains(&model.member_count) {
         let mut shown = vec![viewer.clone()];
         shown.extend(members.iter().filter(|m| m.id != viewer.id).cloned());
         cards.push(FeedCardData {
@@ -1838,6 +1849,15 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
                     String::new()
                 }
                 .into(),
+                caption: crate::recent_games::caption_label(
+                    &crate::recent_games::when_label(
+                        row.get("last_played").and_then(|v| v.as_i64()).unwrap_or(0),
+                        crate::converters::current_time_ms(),
+                    ),
+                    minutes,
+                    &launcher,
+                )
+                .into(),
                 tracked,
                 owners: Rc::new(VecModel::from(
                     owner_ids
@@ -2386,13 +2406,20 @@ fn build_feed_card(
         actor_initials: make_initials(&actor).into(),
         actor_hue_index: avatar_color_index(actor_avatar_id.unwrap_or(&actor)),
         // "Week 4" when the server counts the crew's weeks (`week_number`).
-        recap_week: data
-            .get("week_number")
-            .and_then(|v| v.as_i64())
-            .filter(|&n| n > 0)
-            .map(|n| format!("Week {n}"))
-            .unwrap_or_default()
-            .into(),
+        // An older recap has no number: "Week of 6 Oct" from its start.
+        recap_week: if backend_type == "weekly_recap" {
+            match data
+                .get("week_number")
+                .and_then(|v| v.as_i64())
+                .filter(|&n| n > 0)
+            {
+                Some(n) => format!("Week {n}"),
+                None => crate::feed_age::week_of_label(recap_week_start_ms(&data)),
+            }
+        } else {
+            String::new()
+        }
+        .into(),
         recap_hangout_min: if backend_type == "weekly_recap" {
             recap_lead_minutes(&data).round() as i32
         } else {
@@ -2423,7 +2450,7 @@ fn build_feed_card(
         },
         age_label: if backend_type == "weekly_recap" {
             crate::feed_age::recap_age_label(
-                data.get("week_end").and_then(|v| v.as_i64()).unwrap_or(0),
+                recap_week_start_ms(&data),
                 crate::converters::current_time_ms(),
             )
         } else {
@@ -2491,6 +2518,9 @@ fn build_feed_card(
         mvp2_has_avatar: mvp2_has_av,
         games_summary: recap_games_summary.into(),
         recap_rows,
+        mem_col: 0,
+        mem_row: 0,
+        mem_span: 1,
         recap_active,
         recap_clipped,
         recap_games: ModelRc::new(VecModel::from(recap_games)),
@@ -2722,6 +2752,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             ctx.app
                 .set_feed_cards(Rc::new(slint::VecModel::from(cards)).into());
+            let (memory, memory_rows) = crate::feed_grid::place_memory(memory);
+            ctx.app.set_memory_rows(memory_rows);
             ctx.app
                 .set_memory_cards(Rc::new(slint::VecModel::from(memory)).into());
             ctx.app.set_feed_cold_start(is_cold);
