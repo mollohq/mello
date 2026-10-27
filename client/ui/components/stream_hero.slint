@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutButtonShape, CutShape, CutMask } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
+import { StatValue } from "stat.slint";
 import { HeroStreamData } from "../types.slint";
 
 // ============================================================
@@ -62,24 +63,16 @@ export component StreamTag inherits MediaChip {
         height: 12px;
         background: #FFFFFF47;
     }
-    if root.count != "": HorizontalLayout {
-        spacing: 5px;
-        cross-axis-alignment: center;
-        Text {
-            text: root.count;
-            font-family: Theme.font-display;
-            font-weight: Theme.weight-display-bold;
-            font-size: 12px;
-            color: Theme.text-primary;
-        }
-        Text {
-            text: root.count-label;
-            font-family: Theme.font-label;
-            font-weight: Theme.weight-label;
-            font-size: 9px;
-            letter-spacing: 1.4px;
-            color: Theme.text-primary;
-        }
+    if root.count != "": StatValue {
+        value: root.count; unit: root.count-label;
+        value-size: 12px; unit-size: 9px;
+        value-weight: Theme.weight-display-bold;
+        unit-font: Theme.font-label;
+        unit-weight: Theme.weight-label;
+        unit-spacing: 1.4px;
+        hue: Theme.text-primary;
+        unit-color: Theme.text-primary;
+        gap: 5px;
     }
 }
 

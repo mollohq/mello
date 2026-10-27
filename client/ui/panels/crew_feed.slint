@@ -16,6 +16,7 @@ import { GameIcon } from "../components/game_icon.slint";
 import { GameArt } from "../components/game_art.slint";
 import { ClipPlayRing, DotWaveform } from "../components/clip_wave.slint";
 import { RecapDur, RecapKicker } from "../components/recap_parts.slint";
+import { StatValue } from "../components/stat.slint";
 import { RecapOpened } from "./recap_opened.slint";
 
 
@@ -631,8 +632,15 @@ component RecapPeople inherits Rectangle {
             Text { width: 78px; text: "MOST CLIPPED"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 8.5px; letter-spacing: 1.36px; color: Theme.text-dim; vertical-alignment: center; }
             UserAvatar { size: 20px; initials: card.recap-clipped.initials; color-index: card.recap-clipped.hue; avatar: card.recap-clipped.avatar; has-avatar: card.recap-clipped.has-avatar; }
             Text { horizontal-stretch: 1; text: card.recap-clipped.name; overflow: elide; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-primary; vertical-alignment: center; }
-            Text { text: "\{card.recap-clipped.count}"; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 13px; color: Theme.text-body; vertical-alignment: center; }
-            Text { text: card.recap-clipped.count == 1 ? "clip" : "clips"; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px; color: Theme.text-dim; vertical-alignment: center; }
+            VerticalLayout {
+                alignment: center;
+                StatValue {
+                    value: "\{card.recap-clipped.count}"; unit: card.recap-clipped.count == 1 ? "clip" : "clips";
+                    value-size: 13px; unit-size: 11px;
+                    hue: Theme.text-body;
+                    gap: 6px;
+                }
+            }
         }
         Rectangle { height: 10px; }
     }

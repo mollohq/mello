@@ -50,6 +50,8 @@ mod sealed;
 mod settings;
 mod snapshot_cache;
 mod snapshot_loader;
+#[cfg(test)]
+mod stat_value_tests;
 mod stream_frame_timer;
 // stage 9 (streaming-quality): the watched stream in its own window
 mod stream_popout;

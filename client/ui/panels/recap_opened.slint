@@ -6,6 +6,7 @@ import { SealedBelt, SealedUi, SealedFmt } from "../components/sealed.slint";
 import { GameArt } from "../components/game_art.slint";
 import { ClipPlayRing, DotWaveform } from "../components/clip_wave.slint";
 import { RecapDur } from "../components/recap_parts.slint";
+import { StatValue } from "../components/stat.slint";
 import { FeedCardData, RecapBeltHeldRow, RecapGameRow, RecapHeldTitle } from "../types.slint";
 import { RecapFixtures } from "../previews/recap_fixtures.slint";
 
@@ -436,11 +437,16 @@ export component RecapOpened inherits Rectangle {
                                 FieldKicker { text: "NOW HELD BY"; }
                                 Text { text: SealedUi.hides(b.belt) ? "Sealed" : b.holder-name; font-family: Theme.font-display; font-size: 22px; font-weight: Theme.weight-display; letter-spacing: -0.44px; color: Theme.text-primary; overflow: elide; }
                             }
-                            if !SealedUi.hides(b.belt): HorizontalLayout {
-                                alignment: end;
-                                spacing: 3px;
-                                Text { text: b.value; font-family: Theme.font-display; font-size: 38px; font-weight: Theme.weight-display-bold; letter-spacing: -1.14px; color: H2hHue.of(b.holder-hue); vertical-alignment: center; }
-                                if b.unit != "": Text { text: b.unit; font-family: Theme.font-display; font-size: 18px; font-weight: Theme.weight-display-bold; color: H2hHue.of(b.holder-hue); vertical-alignment: bottom; }
+                            if !SealedUi.hides(b.belt): StatValue {
+                                value: b.value; unit: b.unit;
+                                value-size: 38px; unit-size: 18px;
+                                value-weight: Theme.weight-display-bold;
+                                value-spacing: -1.14px;
+                                unit-font: Theme.font-display;
+                                unit-weight: Theme.weight-display-bold;
+                                hue: H2hHue.of(b.holder-hue);
+                                unit-color: H2hHue.of(b.holder-hue);
+                                gap: 3px;
                             }
                         }
                     }

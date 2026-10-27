@@ -1,6 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape, CutButton } from "cut.slint";
 import { UserAvatar } from "avatar.slint";
+import { StatValue } from "stat.slint";
 import { BeltSlot, SealedUi } from "sealed.slint";
 import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
 
@@ -79,24 +80,9 @@ export component TitleChip inherits Rectangle {
                 color: Theme.text-body;
                 overflow: elide;
             }
-            HorizontalLayout {
-                alignment: start;
-                spacing: 4px;
-                cross-axis-alignment: end;
-                Text {
-                    text: root.value;
-                    font-family: Theme.font-display;
-                    font-size: 20px;
-                    font-weight: Theme.weight-display;
-                    color: Theme.text-value;
-                }
-                if root.unit != "": Text {
-                    text: root.unit;
-                    font-family: Theme.font-body;
-                    font-size: 12px;
-                    font-weight: Theme.weight-sentence;
-                    color: Theme.text-dim;
-                }
+            StatValue {
+                value: root.value; unit: root.unit;
+                value-size: 20px; unit-size: 12px;
             }
         }
     }
@@ -125,24 +111,9 @@ export component TitleChip inherits Rectangle {
                 overflow: elide;
             }
         }
-        HorizontalLayout {
-            alignment: start;
-            spacing: 3px;
-            cross-axis-alignment: end;
-            Text {
-                text: root.value;
-                font-family: Theme.font-display;
-                font-size: root.dense ? 13px : 15px;
-                font-weight: Theme.weight-display;
-                color: Theme.text-value;
-            }
-            if root.unit != "": Text {
-                text: root.unit;
-                font-family: Theme.font-body;
-                font-size: 10px;
-                font-weight: Theme.weight-sentence;
-                color: Theme.text-dim;
-            }
+        StatValue {
+            value: root.value; unit: root.unit;
+            value-size: root.dense ? 13px : 15px; unit-size: 10px;
         }
     }
 }
