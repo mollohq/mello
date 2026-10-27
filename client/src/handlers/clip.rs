@@ -514,7 +514,7 @@ fn head2head_cards(
     }
     // From five members the cell loses its seats and button. The invite card
     // takes over, with the viewer first and then the crew.
-    if model.member_count >= head2head::SEATS {
+    if (head2head::SEATS..=head2head::INVITE_CARD_MAX_MEMBERS).contains(&model.member_count) {
         let mut shown = vec![viewer.clone()];
         shown.extend(members.iter().filter(|m| m.id != viewer.id).cloned());
         cards.push(FeedCardData {
@@ -1748,6 +1748,15 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
                 } else {
                     String::new()
                 }
+                .into(),
+                caption: crate::recent_games::caption_label(
+                    &crate::recent_games::when_label(
+                        row.get("last_played").and_then(|v| v.as_i64()).unwrap_or(0),
+                        crate::converters::current_time_ms(),
+                    ),
+                    minutes,
+                    &launcher,
+                )
                 .into(),
                 tracked,
                 owners: Rc::new(VecModel::from(

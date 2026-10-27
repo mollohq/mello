@@ -87,7 +87,7 @@ export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => v
   expect(s.skeleton_trio === trio, `skeleton_trio is ${trio} at this crew size, got ${s.skeleton_trio}`);
   for (const c of s.feed_cards) {
     expect(c.card_type !== "", `feed card ${c.id} has a type`);
-    expect(c.title !== "" || c.actor_name !== "" || c.card_type === "head2head" || c.card_type === "invite" || c.card_type === "recent-games",
+    expect(c.title !== "" || c.actor_name !== "" || c.card_type === "head2head" || c.card_type === "invite" || c.card_type === "recent-games" || c.card_type === "voice-idle",
       `feed card ${c.id} (${c.card_type}) is not empty`);
   }
   expect(s.head2head.present, "the head2head card is there");
@@ -98,9 +98,9 @@ export function expectFullFeed(s: AppState, expect: (c: unknown, m: string) => v
 export { crewFeed };
 
 /**
- * A crew of `seeded + 1`: head2head is the wide card with no seats that draws the
- * viewer's four closest pairs in two columns and a "+N more" line, the invite card shows
- * eight octagons and a "+N", recent games keeps six tiles, and the feed loads
+ * A crew of `seeded + 1` (ten or more): head2head is the wide card with no seats that
+ * draws the viewer's six closest pairs, three in each column, with "+N more" in the last
+ * row, there is no invite card, recent games keeps six tiles, and the feed loads
  * in under three seconds. Plan next-gen-feed.md section 3 and spec HEAD2HEAD
  * section 5, rules for large crews.
  */
@@ -119,18 +119,16 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
     expect(h.placement === "wide" || h.placement === "versus", `placement is wide or versus, got ${h.placement}`);
     expect(h.open_seats === 0, `open_seats is 0, got ${h.open_seats}`);
     if (h.placement === "wide") {
-      expect(h.pair_rows === 4, `the wide card draws the four closest pairs, got ${h.pair_rows}`);
-      expect(h.more_pairs === total - 1 - 4, `the +N more line says ${total - 5}, got ${h.more_pairs}`);
-      expect((await bob.find(`+${total - 5} more`)).role === "Button", "the +N more line is a control");
+      expect(h.pair_rows === 6, `the wide card draws the six closest pairs, got ${h.pair_rows}`);
+      expect(h.more_pairs === total - 1 - 6, `the +N more line says ${total - 7}, got ${h.more_pairs}`);
+      expect((await bob.find(`+${total - 7} more`, 0, 20_000)).role === "Button", "the +N more line is a control");
     }
   });
 
-  await step("the invite card shows eight octagons and a +N", async () => {
-    const s = await bob.waitFor("the invite card with eight octagons", (st) => st.invite_card.present && st.invite_card.octagons === 8, 15_000);
-    expect(s.invite_card.present, "the invite card shows");
-    expect(s.invite_card.octagons === 8, `eight octagons, got ${s.invite_card.octagons}`);
-    expect(s.invite_card.more_count === total - 8, `+${total - 8}, got ${s.invite_card.more_count}`);
-    await bob.waitFor("the octagons wear their avatars", (st) => st.invite_card.with_avatar === 8, 20_000);
+  await step("there is no invite card from ten members", async () => {
+    const s = await waitForFullFeed(bob);
+    expect(!s.invite_card.present, "the invite card is not emitted");
+    expect(!s.feed_cards.some((c) => c.card_type === "invite"), "no invite card in the feed");
   });
 
   await step("recent games stays at six tiles at most, and no card is empty", async () => {
@@ -143,8 +141,8 @@ export async function bigCrewStage(ctx: JourneyContext, seeded: number, label: s
     const s = await bob.state();
     const types = s.feed_cards.map((c) => c.card_type);
     const at = types.indexOf("recent-games");
-    // Plain grid: head2head, invite and one card, then one card and the wide
-    // slot (client/src/feed_grid.rs). Cards 0 to 4 are the first two rows.
+    // Plain grid: head2head and two cards, then one card and the wide slot
+    // (client/src/feed_grid.rs). Cards 0 to 4 are the first two rows.
     expect(at >= 0 && at <= 4, `recent games is in the first two rows, at card ${at} of ${types.join(",")}`);
     const wide = 4;
     expect(types[wide] !== "clip", `no clip in the wide slot, card ${wide} is ${types[wide]}`);

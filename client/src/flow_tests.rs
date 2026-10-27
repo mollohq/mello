@@ -4792,9 +4792,9 @@ fn no_join_in_the_last_day_gives_no_join_card() {
     assert_eq!(count_of(&h, "JoinedCard"), 0);
 }
 
-/// The tile shows hours in capitals, the launcher when the hours are unknown,
-/// "TRACKED" only for a game the sensor catalogue knows, and a two-letter
-/// monogram for a game with no art. Never the name clipped into a badge.
+/// The list row caption reads the hours, the launcher when the hours are
+/// unknown, and a two-letter monogram for a game with no art. No row says
+/// TRACKED. Never the name clipped into a badge.
 #[test]
 fn recent_games_tiles_read_like_the_mockup() {
     let mut h = Harness::new();
@@ -4812,13 +4812,12 @@ fn recent_games_tiles_read_like_the_mockup() {
         ]))]),
     });
     let texts = drawn_texts(&h);
-    for want in ["4,167 H", "EPIC", "12.6 H", "ZU", "NS", "RECENT GAMES"] {
+    for want in ["4,167 h", "Epic", "13 h", "ZU", "NS", "RECENT GAMES"] {
         assert!(texts.iter().any(|t| t == want), "missing {want}: {texts:?}");
     }
-    assert_eq!(
-        texts.iter().filter(|t| t.as_str() == "TRACKED").count(),
-        1,
-        "only the catalogue game is tracked: {texts:?}"
+    assert!(
+        !texts.iter().any(|t| t.eq_ignore_ascii_case("TRACKED")),
+        "no row says TRACKED: {texts:?}"
     );
     assert!(
         !texts.iter().any(|t| t == "From this PC"),
@@ -4826,11 +4825,11 @@ fn recent_games_tiles_read_like_the_mockup() {
     );
 }
 
-/// The name in a recent games tile has the whole row: TRACKED sits on the
-/// hours line. "Counter-Strike 2" elided to "Counter-Stri..." at 1440 px, in
-/// the card beside the wide head2head card of a solo crew.
+/// The list: a square 48 px icon slot, the name on one line with the whole
+/// column to itself ("Counter-Strike 2" is not elided at 1440 or 2000 px),
+/// no TRACKED text, and three rows that share their columns.
 #[test]
-fn a_recent_games_name_is_not_elided_at_1440_and_2000_px() {
+fn the_recent_games_list_has_a_square_icon_slot_and_aligned_columns() {
     for width in [1440u32, 2000] {
         let mut h = Harness::new();
         h.app()
@@ -4847,29 +4846,65 @@ fn a_recent_games_name_is_not_elided_at_1440_and_2000_px() {
                     None,
                 ),
                 recent_games_entry(serde_json::json!([
-                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam" }
+                    { "game_id": "steam-730", "game_name": "Counter-Strike 2", "minutes": 250_020, "launcher": "steam", "last_played": crate::converters::current_time_ms() - 2 * 86_400_000 },
+                    { "game_id": "epic-zzunknown", "game_name": "Zz Unknown Game", "minutes": 240, "launcher": "epic", "member_ids": ["user-1"] },
+                    { "game_id": "steam-4999999", "game_name": "Night Stones", "minutes": 756 }
                 ])),
             ]),
         });
-        let find = |label: &str| {
-            ElementHandle::find_by_element_type_name(h.app(), "Text")
-                .find(|e| e.accessible_label().is_some_and(|l| l == label))
-        };
-        let name = find("Counter-Strike 2").expect("the name is drawn");
-        let tracked = find("TRACKED").expect("TRACKED is drawn");
-        // The name takes the whole row beside the 76 px art and the 12 px gap.
-        let cell = ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell")
-            .next()
-            .expect("the tile row");
-        let room = cell.size().width - 76.0 - 12.0;
+        let texts = drawn_texts(&h);
         assert!(
-            (name.size().width - room).abs() < 1.0,
-            "{width}: the name has {} px of the {room} px beside the art",
-            name.size().width
+            !texts.iter().any(|t| t.eq_ignore_ascii_case("TRACKED")),
+            "{width}: no TRACKED: {texts:?}"
         );
         assert!(
-            tracked.absolute_position().y > name.absolute_position().y,
-            "{width}: TRACKED is under the name, not beside it"
+            texts.iter().any(|t| t == "2 days ago, 4,167 h"),
+            "{width}: caption on one line: {texts:?}"
+        );
+
+        let cells: Vec<_> =
+            ElementHandle::find_by_element_type_name(h.app(), "RecentGameTileCell").collect();
+        assert_eq!(cells.len(), 3, "{width}: three rows");
+        let arts: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "GameArt").collect();
+        assert_eq!(arts.len(), 3, "{width}: one icon slot per row");
+        for a in &arts {
+            assert_eq!(
+                (a.size().width, a.size().height),
+                (48.0, 48.0),
+                "{width}: the icon slot is square"
+            );
+        }
+        let name = |label: &str| {
+            ElementHandle::find_by_element_type_name(h.app(), "Text")
+                .find(|e| e.accessible_label().is_some_and(|l| l == label))
+                .unwrap_or_else(|| panic!("{label} is drawn"))
+        };
+        let names = [
+            name("Counter-Strike 2"),
+            name("Zz Unknown Game"),
+            name("Night Stones"),
+        ];
+        let x0 = names[0].absolute_position().x;
+        for n in &names {
+            assert_eq!(
+                n.absolute_position().x,
+                x0,
+                "{width}: the name column aligns"
+            );
+        }
+        let ax0 = arts[0].absolute_position().x;
+        assert!(
+            arts.iter().all(|a| a.absolute_position().x == ax0),
+            "{width}: icons align"
+        );
+        let ys: Vec<f32> = cells.iter().map(|c| c.absolute_position().y).collect();
+        assert_eq!(ys[1] - ys[0], ys[2] - ys[1], "{width}: even row pitch");
+        // The row without owners gives the name the whole column beside the icon.
+        let room = cells[0].size().width - 48.0 - 12.0;
+        assert!(
+            (names[0].size().width - room).abs() < 1.0,
+            "{width}: the name has {} px of {room} px",
+            names[0].size().width
         );
     }
 }
@@ -5721,32 +5756,42 @@ fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
     );
 }
 
-/// More than eight members show eight octagons and a "+N".
+/// The invite card shows for 5 to 9 members: eight octagons and a "+N" at
+/// nine. From 10 it is not emitted. The share link stays in the crew menu.
 #[test]
-fn invite_card_shows_eight_members_then_a_count() {
-    let mut h = Harness::new();
-    app_with_crew_of(&mut h, 11);
-    let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
-    roster.extend((2..=11).map(|i| (format!("u{i}"), format!("Kim {i}"))));
-    let roster_ref: Vec<(&str, &str)> = roster
-        .iter()
-        .map(|(a, b)| (a.as_str(), b.as_str()))
-        .collect();
-    set_roster(&h, &roster_ref);
+fn invite_card_shows_up_to_nine_members_and_is_gone_from_ten() {
+    for (n, invite_cards) in [(9, 1usize), (10, 0), (11, 0)] {
+        let mut h = Harness::new();
+        app_with_crew_of(&mut h, n);
+        let mut roster = vec![("user-1".to_string(), "Test User".to_string())];
+        roster.extend((2..=n).map(|i| (format!("u{i}"), format!("Kim {i}"))));
+        let roster_ref: Vec<(&str, &str)> = roster
+            .iter()
+            .map(|(a, b)| (a.as_str(), b.as_str()))
+            .collect();
+        set_roster(&h, &roster_ref);
 
-    h.emit(Event::FeedLoaded {
-        response: feed_of(vec![h2h_entry(11, vec![], vec![], None)]),
-    });
+        h.emit(Event::FeedLoaded {
+            response: feed_of(vec![h2h_entry(
+                n,
+                vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
+                vec![h2h_pair("u2", 1, 2)],
+                None,
+            )]),
+        });
 
-    assert_eq!(
-        count_of(&h, "Head2headCell"),
-        0,
-        "no data, no head2head cell"
-    );
-    let card = first_card(&h);
-    assert_eq!(card.card_type.as_str(), "invite");
-    assert_eq!(card.head2head.members.row_count(), 8);
-    assert_eq!(card.head2head.more_members, 3);
+        assert_eq!(count_of(&h, "InviteCard"), invite_cards, "{n} members");
+        let invite = (0..h.app().get_feed_cards().row_count())
+            .filter_map(|i| h.app().get_feed_cards().row_data(i))
+            .find(|c| c.card_type.as_str() == "invite");
+        match invite {
+            Some(card) => {
+                assert_eq!(card.head2head.members.row_count(), 8);
+                assert_eq!(card.head2head.more_members, 1);
+            }
+            None => assert!(invite_cards == 0),
+        }
+    }
 }
 
 /// The chip on a pair row is the contested title with the largest gap: the
@@ -8557,7 +8602,13 @@ fn solo_session(id: &str, player: &str, player_id: &str, ago_days: i64) -> FeedE
 
 /// A title that changed hands `days` ago, with the pair that says both values.
 fn belt_entry(days: i64) -> FeedEntry {
-    let moved_at = now_ms() - days * DAY_MS - 3_600_000;
+    // Ages count UTC days. Noon of the day `days` back keeps the age the same
+    // at any time of the day: an hour back from 00:30 UTC lands a day early.
+    let moved_at = if days == 0 {
+        now_ms() - 3_600_000
+    } else {
+        (now_ms().div_euclid(DAY_MS) - days) * DAY_MS + DAY_MS / 2
+    };
     let night_owl = serde_json::json!({
         "title_id": "night_owl", "holder_user_id": "u4", "value": "03:40", "unit": "",
         "since_ms": moved_at, "moved_at_ms": moved_at, "previous_holder_user_id": "user-1",
@@ -9730,7 +9781,7 @@ fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_co
 
         let pairs = (members - 1) as usize;
         let rows = pair_row_positions(&h);
-        assert_eq!(rows.len(), pairs.min(4), "{members} members: {rows:?}");
+        assert_eq!(rows.len(), pairs.min(6), "{members} members: {rows:?}");
         let mut xs: Vec<i32> = rows.iter().map(|r| r.0 as i32).collect();
         xs.sort();
         xs.dedup();
@@ -9744,8 +9795,23 @@ fn head2head_is_two_columns_wide_at_every_crew_size_with_the_pair_rows_in_two_co
             ys.dedup();
             assert_eq!(ys.len(), 2, "two rows of pairs: {rows:?}");
         }
-        // The line that stands for the pairs that do not fit.
-        let more = pairs.saturating_sub(4);
+        // Nine members: three rows in each column, and the rows reach the
+        // lower half of the card.
+        if members == 9 {
+            let mut ys: Vec<i32> = rows.iter().map(|r| r.1 as i32).collect();
+            ys.sort();
+            ys.dedup();
+            assert_eq!(ys.len(), 3, "three rows of pairs: {rows:?}");
+            let card = ElementHandle::find_by_element_type_name(h.app(), "Head2headCardPairs")
+                .next()
+                .expect("the pairs card");
+            let mid = card.absolute_position().y + card.size().height / 2.0;
+            let last = *ys.last().expect("rows") as f32;
+            assert!(last > mid - 40.0, "no empty lower half: {last} vs {mid}");
+        }
+        // The line that stands for the pairs that do not fit. It stands in
+        // the last row, not under the rows.
+        let more = pairs.saturating_sub(6);
         assert_eq!(
             h.controls_labelled(&format!("+{more} more")).len(),
             usize::from(more > 0),

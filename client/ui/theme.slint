@@ -179,6 +179,23 @@ export global Theme {
     out property <string> font-mono: font-label;
     out property <string> font-sans: font-body;
 
+    //  Where the baseline sits above the bottom of a Slint Text box, as a
+    //  fraction of the font size. Source: the hhea table of the files in
+    //  ./fonts (unitsPerEm 1000 in all four, read with fontTools):
+    //      Oxanium SemiBold and Bold  ascender 790, descender -210, lineGap 250
+    //      Barlow Light and SemiBold  ascender 1000, descender -200, lineGap 0
+    //  Slint's line box is ascender + descender + lineGap tall, with half the
+    //  gap below the descender, so the bottom offset is (descender + lineGap / 2)
+    //  / unitsPerEm. Checked against renders: Oxanium 120px gives a 150px box
+    //  with the baseline 110px under its top; Barlow 34px gives 41px and 34px.
+    out property <float> descent-oxanium: 0.335;
+    out property <float> descent-barlow:  0.2;
+    /// Baseline offset above the box bottom for a font family, as a fraction
+    /// of the font size. Used by StatValue to put a unit on its number's baseline.
+    pure public function descent(family: string) -> float {
+        return family == font-display ? descent-oxanium : descent-barlow;
+    }
+
     out property <int>    weight-display: 600;   // titles, names
     out property <int>    weight-display-bold: 700;
     out property <int>    weight-sentence: 300;

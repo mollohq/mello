@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { H2hHue } from "../components/head2head.slint";
+import { StatValue } from "../components/stat.slint";
 import { BeltReveal } from "../types.slint";
 import { Clock, Ease, SealedUi, SealedFmt, SealedRecap } from "../components/sealed.slint";
 
@@ -216,24 +217,14 @@ component BigBeltFace inherits Rectangle {
             }
         }
 
-        HorizontalLayout {
-            spacing: 10px;
-            alignment: start;
-            Text {
-                text: SealedFmt.belt(root.belt.kind, root.belt.amount * root.count, root.belt.decimals);
-                font-family: Theme.font-display;
-                font-weight: Theme.weight-display-bold;
-                font-size: 120px;
-                color: Theme.text-primary;
-            }
-            if root.belt.unit != "": Text {
-                text: root.belt.unit;
-                vertical-alignment: bottom;
-                font-family: Theme.font-body;
-                font-weight: Theme.weight-sentence;
-                font-size: 34px;
-                color: Theme.text-secondary;
-            }
+        StatValue {
+            value: SealedFmt.belt(root.belt.kind, root.belt.amount * root.count, root.belt.decimals);
+            unit: root.belt.unit;
+            value-size: 120px; unit-size: 34px;
+            value-weight: Theme.weight-display-bold;
+            hue: Theme.text-primary;
+            unit-color: Theme.text-secondary;
+            gap: 10px;
         }
 
         Text {

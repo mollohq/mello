@@ -1,0 +1,21 @@
+// The harness probe for StatValue (src/stat_value_tests.rs). Two size pairs:
+// the sealed stage face and the chip. Compiled by build.rs in debug builds only.
+import { StatValue } from "../components/stat.slint";
+
+export component StatProbe inherits Window {
+    width: 400px;
+    height: 300px;
+    VerticalLayout {
+        alignment: start;
+        spacing: 20px;
+        big := StatValue {
+            value: "4,201"; unit: "h";
+            value-size: 120px; unit-size: 34px;
+            value-weight: 700;
+        }
+        small := StatValue {
+            value: "21"; unit: "installed";
+            value-size: 20px; unit-size: 11px;
+        }
+    }
+}

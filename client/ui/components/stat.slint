@@ -1,0 +1,70 @@
+import { Theme } from "../theme.slint";
+
+// ============================================================
+//  StatValue: a number with its unit, on one baseline.
+//
+//  Two Text elements in different fonts and sizes sit box-aligned, not
+//  baseline-aligned: the bigger face has a deeper box under its baseline, so
+//  a bottom-aligned unit floats above the number's feet. StatValue lifts the
+//  unit by the difference of the two bottom offsets (Theme.descent), so both
+//  baselines coincide.
+//
+//  Never lay a number and its unit out as two free Text elements. Use this.
+//  The unit sits beside the number ("4,201 h", "21 installed"), or between
+//  two numbers when `tail` is set ("19 h 40").
+// ============================================================
+export component StatValue inherits HorizontalLayout {
+    in property <string> value;
+    in property <string> unit;
+    /// The number after a middle unit: value "19", unit "h", tail "40".
+    in property <string> tail;
+    in property <length> value-size: 20px;
+    in property <length> unit-size: 12px;
+    in property <string> value-font: Theme.font-display;
+    in property <string> unit-font: Theme.font-body;
+    in property <int> value-weight: Theme.weight-display;
+    in property <int> unit-weight: Theme.weight-sentence;
+    in property <length> value-spacing: 0px;
+    in property <length> unit-spacing: 0px;
+    /// The colour of the number (and of the tail).
+    in property <color> hue: Theme.text-value;
+    in property <color> unit-color: Theme.text-dim;
+    in property <length> gap: 4px;
+    /// How far the unit is raised above the bottom of its box. Out so the
+    /// harness can check it against the font metrics.
+    out property <length> lift: max(0px,
+        root.value-size * Theme.descent(root.value-font)
+        - root.unit-size * Theme.descent(root.unit-font));
+
+    alignment: start;
+    spacing: root.gap;
+    cross-axis-alignment: end;
+
+    value-text := Text {
+        text: root.value;
+        font-family: root.value-font;
+        font-weight: root.value-weight;
+        font-size: root.value-size;
+        letter-spacing: root.value-spacing;
+        color: root.hue;
+    }
+    if root.unit != "": VerticalLayout {
+        padding-bottom: root.lift;
+        unit-text := Text {
+            text: root.unit;
+            font-family: root.unit-font;
+            font-weight: root.unit-weight;
+            font-size: root.unit-size;
+            letter-spacing: root.unit-spacing;
+            color: root.unit-color;
+        }
+    }
+    if root.tail != "": Text {
+        text: root.tail;
+        font-family: root.value-font;
+        font-weight: root.value-weight;
+        font-size: root.value-size;
+        letter-spacing: root.value-spacing;
+        color: root.hue;
+    }
+}

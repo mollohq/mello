@@ -217,6 +217,9 @@ export struct RecentGameTile {
     owners: [H2hPerson],
     // When it was last played: "Yesterday", "2 days ago". "" when unknown.
     when: string,
+    // The list row's caption on one line: when it was last played, then the
+    // hours, "2 days ago, 4 h". Either part is left out when unknown.
+    caption: string,
 }
 
 // One head2head title and who holds it. Display strings are pre-formatted in
@@ -255,6 +258,9 @@ export struct H2hPairRow {
     you-count: int,
     them-count: int,
     has-chip: bool,
+    /// Every contested title of the pair ties: the chip is drawn without the
+    /// holder's hue.
+    chip-ties: bool,
     chip: TitleHeld,
     /// A belt of this pair moved in the last 24 h and the viewer has not
     /// opened the feed since. Draws the red dot before the label.

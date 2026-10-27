@@ -45,10 +45,10 @@ func TestDailyRecapsGroupByUTCDay(t *testing.T) {
 		voiceAt("v-today", dailyAt(0, 9), 30, "u1", "u2"),
 		gameAt("g-today", dailyAt(0, 11), "Rocket League", "rocket-league", 60, "u1"),
 		clipAt("c-today", dailyAt(0, 12), "u2"),
-		voiceAt("v-yday", dailyAt(1, 23), 20, "u3"),
+		voiceAt("v-yday", dailyAt(1, 23), 20, "u3", "u4", "u5"),
 		// 00:00 sharp belongs to the day that starts, not the one that ends.
 		voiceAt("v-edge", dailyAt(1, 0), 10, "u3"),
-		gameAt("g-2d", dailyAt(2, 20), "Valorant", "valorant", 45, "u1", "u3"),
+		gameAt("g-2d", dailyAt(2, 20), "Valorant", "valorant", 45, "u1", "u3", "u4"),
 		voiceAt("v-3d", dailyAt(3, 12), 99, "u9"),
 	}
 	got := buildDailyRecaps(cards, nil, dailyNow)
@@ -88,8 +88,8 @@ func TestDailyRecapsGroupByUTCDay(t *testing.T) {
 // A day with nothing has no card. The days around it keep theirs.
 func TestDailyRecapSkipsAnEmptyDay(t *testing.T) {
 	cards := []feedCard{
-		voiceAt("v-today", dailyAt(0, 9), 30, "u1"),
-		voiceAt("v-2d", dailyAt(2, 9), 15, "u1"),
+		voiceAt("v-today", dailyAt(0, 9), 30, "u1", "u2", "u3"),
+		voiceAt("v-2d", dailyAt(2, 9), 15, "u1", "u2", "u3"),
 	}
 	got := buildDailyRecaps(cards, nil, dailyNow)
 	if len(got) != 2 {
@@ -154,7 +154,7 @@ func TestDailyRecapsSitAfterTheRecapBeforeSessions(t *testing.T) {
 	cards := []feedCard{
 		recapAt("recap_1", dailyAt(0, 1)),
 		voiceAt("v-today", dailyAt(0, 9), 30, "u1"),
-		gameAt("g-today", dailyAt(0, 10), "Rocket League", "rocket-league", 60, "u1"),
+		gameAt("g-today", dailyAt(0, 10), "Rocket League", "rocket-league", 60, "u1", "u2", "u3"),
 	}
 	cards[0].data = WeeklyRecapData{TotalHangoutMin: 90, ClipCount: 1}
 	entries := buildThisWeek(cards, dailyNow)
@@ -177,11 +177,44 @@ func TestDailyRecapsSitAfterTheRecapBeforeSessions(t *testing.T) {
 
 func TestDailyRecapTopGameTiesGoByName(t *testing.T) {
 	cards := []feedCard{
-		gameAt("g1", dailyAt(0, 9), "Valorant", "valorant", 30, "u1"),
+		gameAt("g1", dailyAt(0, 9), "Valorant", "valorant", 30, "u1", "u2", "u3"),
 		gameAt("g2", dailyAt(0, 10), "Fall Guys", "fall-guys", 30, "u1"),
 	}
 	d := dailyData(t, buildDailyRecaps(cards, nil, dailyNow)[0])
 	if d.TopGame != "Fall Guys" || d.GameID != "fall-guys" {
 		t.Fatalf("top game %q (%q)", d.TopGame, d.GameID)
+	}
+}
+
+// A day shows only when it adds something to the weekly recap: a clip, a belt
+// that moved that day, or three or more active members. Two members with
+// minutes and nothing else is a repeat.
+func TestDailyRecapOnlyWhenItAddsSomething(t *testing.T) {
+	belt := RecapBeltMoved{TitleID: "the_carry", HolderUserID: "u1", MovedAtMs: dailyAt(1, 10)}
+	cards := []feedCard{
+		// Today: two members, minutes only. No entry.
+		voiceAt("v-today", dailyAt(0, 9), 233, "u1", "u2"),
+		// Yesterday: two members, a belt moved. Entry.
+		voiceAt("v-yday", dailyAt(1, 9), 40, "u1", "u2"),
+		// Two days ago: two members and a clip. Entry.
+		voiceAt("v-2d", dailyAt(2, 9), 40, "u1", "u2"),
+		clipAt("c-2d", dailyAt(2, 10), "u1"),
+	}
+	got := buildDailyRecaps(cards, []RecapBeltMoved{belt}, dailyNow)
+	var ids []string
+	for _, e := range got {
+		ids = append(ids, e.ID)
+	}
+	if want := []string{"daily_20261021", "daily_20261020"}; !reflect.DeepEqual(ids, want) {
+		t.Fatalf("ids %v, want %v", ids, want)
+	}
+
+	three := []feedCard{voiceAt("v3", dailyAt(0, 9), 30, "u1", "u2", "u3")}
+	if n := len(buildDailyRecaps(three, nil, dailyNow)); n != 1 {
+		t.Fatalf("three members, want an entry, got %d", n)
+	}
+	one := []feedCard{voiceAt("v1", dailyAt(0, 9), 30, "u1")}
+	if n := len(buildDailyRecaps(one, nil, dailyNow)); n != 0 {
+		t.Fatalf("one member, want no entry, got %d", n)
 	}
 }
