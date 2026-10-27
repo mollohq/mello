@@ -63,6 +63,56 @@ func writeRecapsDoc(ctx context.Context, nk runtime.NakamaModule, crewID string,
 	return err
 }
 
+const weekMs = 7 * 24 * 60 * 60 * 1000
+
+// mondayStartMs is Monday 00:00 UTC of the week that holds ms.
+func mondayStartMs(ms int64) int64 {
+	t := time.UnixMilli(ms).UTC()
+	day := time.Date(t.Year(), t.Month(), t.Day(), 0, 0, 0, 0, time.UTC)
+	back := (int(day.Weekday()) + 6) % 7
+	return day.AddDate(0, 0, -back).UnixMilli()
+}
+
+// recapWeekNumber counts the crew's weeks. Weeks run Monday to Monday, UTC.
+// Week 1 is the week the crew was created in, even when it was created
+// mid-week. 0 when either time is unknown.
+func recapWeekNumber(crewCreatedMs, weekStartMs int64) int {
+	if crewCreatedMs <= 0 || weekStartMs <= 0 {
+		return 0
+	}
+	n := int((mondayStartMs(weekStartMs)-mondayStartMs(crewCreatedMs))/weekMs) + 1
+	if n < 1 {
+		return 1
+	}
+	return n
+}
+
+// crewCreatedMs is the create time of the crew group, 0 when unknown.
+func crewCreatedMs(ctx context.Context, nk runtime.NakamaModule, crewID string) int64 {
+	groups, err := nk.GroupsGetId(ctx, []string{crewID})
+	if err != nil || len(groups) == 0 || groups[0].GetCreateTime() == nil {
+		return 0
+	}
+	return groups[0].GetCreateTime().GetSeconds() * 1000
+}
+
+// stampRecapWeeks fills week_start_ms and week_number on recaps that lack
+// them. It reads the group once, and only when a recap needs it.
+func stampRecapWeeks(ctx context.Context, nk runtime.NakamaModule, crewID string, recaps []WeeklyRecapData) {
+	created := int64(-1)
+	for i := range recaps {
+		r := &recaps[i]
+		r.WeekStartMs = r.WeekStart
+		if r.WeekNumber > 0 {
+			continue
+		}
+		if created < 0 {
+			created = crewCreatedMs(ctx, nk, crewID)
+		}
+		r.WeekNumber = recapWeekNumber(created, r.WeekStart)
+	}
+}
+
 // AppendRecap appends a recap to the durable recaps doc and retries on version
 // conflict. No cap: recaps are tiny and one per crew per week.
 func AppendRecap(ctx context.Context, nk runtime.NakamaModule, crewID string, recap WeeklyRecapData) error {
@@ -158,6 +208,13 @@ type WeeklyRecapData struct {
 	CrewID    string `json:"crew_id"`
 	WeekStart int64  `json:"week_start"`
 	WeekEnd   int64  `json:"week_end"`
+	// WeekStartMs repeats WeekStart under the name the client reads for the
+	// age line ("Last week"). WeekNumber counts the crew's weeks: 1 is the
+	// week the crew was created in. 0 means unknown (the crew has no create
+	// time), and the client falls back to the date. Both are filled by
+	// stampRecapWeeks, so recaps stored before these fields get them too.
+	WeekStartMs int64 `json:"week_start_ms"`
+	WeekNumber  int   `json:"week_number,omitempty"`
 	// Voice plus stream minutes only (CLIPS.md 10.1). Game time is separate.
 	TotalHangoutMin int `json:"total_hangout_min"`
 	// Game session minutes, counted by reportableMinutes so the recap agrees
@@ -398,6 +455,10 @@ func generateWeeklyRecapAt(ctx context.Context, nk runtime.NakamaModule, logger 
 	// Belts only join a recap that has activity. Holding titles is a standing
 	// state and must not turn an empty week into a recap with content.
 	attachRecapBelts(ctx, nk, logger, crewID, &recap, startMs, weekEnd.UnixMilli())
+
+	stamp := []WeeklyRecapData{recap}
+	stampRecapWeeks(ctx, nk, crewID, stamp)
+	recap = stamp[0]
 
 	if err := AppendRecap(ctx, nk, crewID, recap); err != nil {
 		logger.Error("Failed to store weekly recap for crew %s: %v", crewID, err)
@@ -879,6 +940,7 @@ func CrewRecapsRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk ru
 	}
 
 	doc, _ := readRecapsDoc(ctx, nk, req.CrewID)
+	stampRecapWeeks(ctx, nk, req.CrewID, doc.Recaps)
 
 	sort.Slice(doc.Recaps, func(i, j int) bool {
 		return doc.Recaps[i].WeekStart > doc.Recaps[j].WeekStart

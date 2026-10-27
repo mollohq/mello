@@ -1223,6 +1223,7 @@ func buildMemorySection(ctx context.Context, nk runtime.NakamaModule, crewID str
 	entries := make([]FeedEntry, 0, feedMemoryPageSize)
 
 	recapsDoc, _ := readRecapsDoc(ctx, nk, crewID)
+	stampRecapWeeks(ctx, nk, crewID, recapsDoc.Recaps)
 	for _, r := range recapsDoc.Recaps {
 		if r.WeekStart == shownRecapWeekStart || isEmptyRecap(r) {
 			continue

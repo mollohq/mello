@@ -7372,6 +7372,37 @@ fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
     assert_eq!(first_recap(&h).recap_rows, 2);
 }
 
+/// The recap names its week and says how old it is: "Week 5" over "This week",
+/// "Last week" or "3 weeks ago", counted from `week_start_ms`.
+#[test]
+fn the_recap_title_is_the_week_number_and_the_line_under_it_is_its_age() {
+    for (days_ago, want) in [(2, "This week"), (9, "Last week"), (22, "3 weeks ago")] {
+        let mut week = week_without_belts();
+        week["week_number"] = serde_json::json!(5);
+        week["week_start_ms"] = serde_json::json!(now_ms() - days_ago * DAY_MS);
+        let h = tall_recap_crew(week);
+        let texts = drawn_texts(&h);
+        assert!(texts.iter().any(|t| t == "Week 5"), "{texts:?}");
+        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
+        assert_eq!(first_recap(&h).age_label.as_str(), want);
+    }
+}
+
+/// A recap stored before the server numbered the weeks has no `week_number`
+/// and no `week_start_ms`. It still parses: the title is the date.
+#[test]
+fn an_old_recap_without_a_week_number_is_named_by_its_date() {
+    let mut week = week_without_belts();
+    week.as_object_mut().expect("object").remove("week_number");
+    // Tuesday 6 October 2026, 00:00 UTC. Only `week_start` is there.
+    week["week_start"] = serde_json::json!(20_732 * DAY_MS);
+    week["week_end"] = serde_json::json!(20_739 * DAY_MS);
+    let h = tall_recap_crew(week);
+    let texts = drawn_texts(&h);
+    assert!(texts.iter().any(|t| t == "Week of 6 Oct"), "{texts:?}");
+    assert!(!texts.iter().any(|t| t == "This week"), "{texts:?}");
+}
+
 fn first_recap(h: &Harness) -> FeedCardData {
     use slint::Model;
     h.app()
@@ -8886,7 +8917,7 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
                 "recap",
                 "recap",
                 serde_json::json!({
-                    "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
+                    "week_start_ms": recap_end - 7 * DAY_MS, "week_end": recap_end, "total_hangout_min": 375, "clip_count": 3,
                     "top_members": [], "top_game": "Rocket League", "longest_session_min": 140,
                     "belts_held": [{"user_id": "u4", "display_name": "Sara", "count": 3, "title_ids": ["night_owl"]}],
                 }),
@@ -8925,7 +8956,7 @@ fn a_dormant_feed_keeps_the_last_recap_with_its_age_and_adds_a_strip() {
         .filter_map(|i| feed.row_data(i))
         .find(|c| c.card_type.as_str() == "recap")
         .expect("the last recap stays");
-    assert_eq!(recap.age_label.as_str(), "3 weeks ago");
+    assert_eq!(recap.age_label.as_str(), "4 weeks ago");
     let types = card_types(&h);
     // Head2head leads, the recap stands beside it (tall), two cells under it.
     assert_eq!(types[0], "head2head:pairs", "{types:?}");
@@ -9813,6 +9844,140 @@ fn upsell_shows(h: &Harness) -> bool {
         || drawn_texts(h)
             .iter()
             .any(|t| t == "Unlock your crew's full story")
+}
+
+/// A crew whose Crew history holds two opened recaps (week 1 of the week
+/// start 11, with belts, and 12, without), in a window `width` wide.
+fn crew_history_of_two_recaps(width: u32, top_game: &str) -> Harness {
+    let mut h = Harness::new();
+    // Both recaps are open: the cards show, not the sealed ones.
+    h.settings().borrow_mut().sealed_opened.insert(
+        "crew-0".into(),
+        vec![crate::sealed::recap_key(11), crate::sealed::recap_key(12)],
+    );
+    app_with_crew_of(&mut h, 5);
+    set_roster(
+        &h,
+        &[
+            ("user-1", "Test User"),
+            ("u2", "Jonas"),
+            ("u3", "Sara"),
+            ("u4", "Max"),
+            ("u5", "Leo"),
+        ],
+    );
+    // Tall enough for the memory band to stand on screen.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(width, 3600));
+    let old_recap = |id: &str, week_start: i64, belts: bool| {
+        let mut week = if belts {
+            week_with_everything()
+        } else {
+            week_without_belts()
+        };
+        week["week_start"] = serde_json::json!(week_start);
+        week["top_game"] = serde_json::json!(top_game);
+        let mut e = recap_entry(week);
+        e.id = id.into();
+        e
+    };
+    h.emit(Event::FeedLoaded {
+        response: feed_with_memory(
+            vec![h2h_entry(5, vec![], vec![], None)],
+            vec![
+                old_recap("recap-a", 11, true),
+                old_recap("recap-b", 12, false),
+            ],
+        ),
+    });
+
+    h
+}
+
+/// A recap in Crew history is the tall card as in the week: one column, two
+/// rows (three with belts). "Most active" and "See the week" stand inside it.
+#[test]
+fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+    let h = crew_history_of_two_recaps(1280, "Rocket League");
+    let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
+    assert_eq!(slots.len(), 2, "both recaps are drawn");
+    let see = h.controls_labelled("See the week");
+    assert_eq!(see.len(), 2);
+    let kickers: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
+        .filter(|e| e.accessible_label().is_some_and(|l| l == "MOST ACTIVE"))
+        .collect();
+    assert_eq!(kickers.len(), 2);
+    let mut rows: Vec<i32> = Vec::new();
+    for slot in &slots {
+        let card = rect_of(slot);
+        let r = ((slot.size().height + 12.0) / (232.0 + 12.0)).round() as i32;
+        rows.push(r);
+        assert!(
+            slot.size().width < slot.size().height,
+            "one column, not a wide card: {card:?}"
+        );
+        for inner in see.iter().map(rect_of).chain(kickers.iter().map(rect_of)) {
+            let centre = ((inner.0 + inner.2) / 2.0, (inner.1 + inner.3) / 2.0);
+            let inside = centre.0 >= card.0
+                && centre.0 <= card.2
+                && centre.1 >= card.1
+                && centre.1 <= card.3;
+            if inside {
+                assert!(
+                    inner.0 >= card.0 - 0.5
+                        && inner.2 <= card.2 + 0.5
+                        && inner.1 >= card.1 - 0.5
+                        && inner.3 <= card.3 + 0.5,
+                    "{inner:?} runs off the card {card:?}"
+                );
+            }
+        }
+    }
+    rows.sort();
+    assert_eq!(rows, vec![2, 3], "two rows without belts, three with");
+    // Each card holds its own control and its own label.
+    for kind in [&see, &kickers] {
+        for slot in &slots {
+            let card = rect_of(slot);
+            let n = kind
+                .iter()
+                .map(rect_of)
+                .filter(|r| {
+                    r.0 >= card.0 - 0.5
+                        && r.2 <= card.2 + 0.5
+                        && r.1 >= card.1 - 0.5
+                        && r.3 <= card.3 + 0.5
+                })
+                .count();
+            assert_eq!(n, 1, "one inside the card {card:?}");
+        }
+    }
+}
+
+/// "Counter-Strike 2" is the top game in the 2 by 2 numbers of the tall card in
+/// Crew history. The name is one line (a line is 15 px high, two are 30) at
+/// every window width. At the default width, 1600 px, the cell is wide enough
+/// to show all of it (124 px at 12 px); a narrower card elides it.
+#[test]
+fn the_top_game_name_stays_on_one_line() {
+    for width in [1200, 1280, 1440, 1600] {
+        let h = crew_history_of_two_recaps(width, "Counter-Strike 2");
+        let names: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
+            .filter(|e| {
+                e.accessible_label()
+                    .is_some_and(|l| l == "Counter-Strike 2")
+            })
+            .collect();
+        assert_eq!(names.len(), 2, "the top game of each recap");
+        for name in &names {
+            let r = rect_of(name);
+            assert!(r.3 - r.1 < 20.0, "{width}: {r:?} wraps to a second line");
+            if width == 1600 {
+                assert!(r.2 - r.0 >= 120.0, "{width}: {r:?} is elided");
+            }
+        }
+    }
 }
 
 /// Day 0: the server still sends the upsell, and the feed shows neither the

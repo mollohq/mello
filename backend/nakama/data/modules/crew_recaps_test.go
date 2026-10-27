@@ -3,9 +3,13 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/heroiclabs/nakama-common/api"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestBuildGamesPlayed_Sorted(t *testing.T) {
@@ -383,5 +387,97 @@ func TestRecapPayload_ClipFieldsAndOldRecapsStillRead(t *testing.T) {
 	}
 	if old.ClipOfWeek != nil || old.MostClippedCount != 0 || old.GamesPlayed[0].Minutes != 0 {
 		t.Fatalf("old = %+v", old)
+	}
+}
+
+// ---- week numbers ----
+
+func utcMs(y int, m time.Month, d, h int) int64 {
+	return time.Date(y, m, d, h, 0, 0, 0, time.UTC).UnixMilli()
+}
+
+// Week 1 is the week the crew was created in, even when that was mid-week.
+func TestRecapWeekNumberCountsFromTheCreationWeek(t *testing.T) {
+	created := utcMs(2026, time.October, 7, 10) // Wednesday
+	for _, c := range []struct {
+		weekStart int64
+		want      int
+	}{
+		{utcMs(2026, time.October, 5, 0), 1},    // Monday of the creation week
+		{utcMs(2026, time.October, 12, 0), 2},   // the next Monday
+		{utcMs(2026, time.October, 19, 0), 3},   // and the next
+		{utcMs(2026, time.November, 30, 0), 9},  // eight Mondays on
+		{utcMs(2026, time.September, 28, 0), 1}, // before the crew: never below 1
+	} {
+		if got := recapWeekNumber(created, c.weekStart); got != c.want {
+			t.Errorf("week of %s: got %d, want %d", time.UnixMilli(c.weekStart).UTC().Format("2 Jan"), got, c.want)
+		}
+	}
+}
+
+// A crew made late on a Sunday is in week 1 for one hour, then week 2 starts.
+func TestRecapWeekNumberSundayCreationIsWeekOneUntilMonday(t *testing.T) {
+	created := utcMs(2026, time.October, 11, 23)
+	if got := recapWeekNumber(created, utcMs(2026, time.October, 5, 0)); got != 1 {
+		t.Errorf("creation week: got %d, want 1", got)
+	}
+	if got := recapWeekNumber(created, utcMs(2026, time.October, 12, 0)); got != 2 {
+		t.Errorf("next Monday: got %d, want 2", got)
+	}
+}
+
+func TestRecapWeekNumberUnknownIsZero(t *testing.T) {
+	if got := recapWeekNumber(0, utcMs(2026, time.October, 12, 0)); got != 0 {
+		t.Errorf("no create time: got %d, want 0", got)
+	}
+}
+
+func crewCreatedOn(nk *fakeGuestNk, id string, ms int64) {
+	nk.groups[id] = &api.Group{Id: id, CreateTime: timestamppb.New(time.UnixMilli(ms))}
+}
+
+// The memory section carries the number and the start of every recap, old
+// ones included (stored without either field).
+func TestMemoryRecapsCarryWeekNumberAndStart(t *testing.T) {
+	nk := newFakeGuestNk()
+	crewCreatedOn(nk, "c1", utcMs(2026, time.October, 7, 10))
+	w1, w3 := utcMs(2026, time.October, 5, 0), utcMs(2026, time.October, 19, 0)
+	nk.put(CrewRecapsCollection, "c1", SystemUserID, CrewRecapsDoc{CrewID: "c1", Recaps: []WeeklyRecapData{
+		{WeekStart: w1, GeneratedAt: 1, TotalGameMin: 45, SessionCount: 1},
+		{WeekStart: w3, GeneratedAt: 3, TotalGameMin: 45, SessionCount: 1},
+	}})
+
+	entries := buildMemorySection(context.Background(), nk, "c1", -1, nil, nil)
+
+	for id, want := range map[string]int{fmt.Sprintf("recap_%d", w1): 1, fmt.Sprintf("recap_%d", w3): 3} {
+		e := findEntry(entries, id)
+		if e == nil {
+			t.Fatalf("%s missing", id)
+		}
+		raw, _ := json.Marshal(e.Data)
+		var got struct {
+			WeekNumber  int   `json:"week_number"`
+			WeekStartMs int64 `json:"week_start_ms"`
+		}
+		if err := json.Unmarshal(raw, &got); err != nil {
+			t.Fatal(err)
+		}
+		if got.WeekNumber != want || got.WeekStartMs == 0 {
+			t.Errorf("%s: %+v, want week_number %d and a start", id, got, want)
+		}
+	}
+}
+
+// A crew the server cannot find leaves the number out: the client then shows
+// the date.
+func TestRecapWithoutCreateTimeHasNoWeekNumber(t *testing.T) {
+	nk := newFakeGuestNk()
+	recaps := []WeeklyRecapData{{WeekStart: utcMs(2026, time.October, 5, 0)}}
+	stampRecapWeeks(context.Background(), nk, "nope", recaps)
+	if recaps[0].WeekNumber != 0 {
+		t.Fatalf("week_number %d, want 0", recaps[0].WeekNumber)
+	}
+	if recaps[0].WeekStartMs != recaps[0].WeekStart {
+		t.Fatalf("week_start_ms %d", recaps[0].WeekStartMs)
 	}
 }

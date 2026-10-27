@@ -109,21 +109,30 @@ pub fn day_label(day_start_ms: i64, now_ms: i64) -> String {
     }
 }
 
-/// How old a weekly recap is, at the right of its label: "Last week", then
-/// "3 weeks ago". The feed keeps the last real recap through a quiet spell, so
-/// this label is what tells an old recap from a new one (frame F). A recap
-/// from the current week has no label: the day it came out is a note, not
-/// data. `week_end_ms` is the end of the recap week, the Monday it came out.
-/// Empty when the recap has no time.
-pub fn recap_age_label(week_end_ms: i64, now_ms: i64) -> String {
-    if week_end_ms <= 0 {
+/// How old a weekly recap is, the line under its title: "This week", "Last
+/// week", then "3 weeks ago". The feed keeps the last real recap through a
+/// quiet spell, so this line is what tells an old recap from a new one. It
+/// counts from the start of the recap week (`week_start_ms`). Empty when the
+/// recap has no time.
+pub fn recap_age_label(week_start_ms: i64, now_ms: i64) -> String {
+    if week_start_ms <= 0 {
         return String::new();
     }
-    match days_between(week_end_ms, now_ms) {
-        0..=6 => String::new(),
+    match days_between(week_start_ms, now_ms) {
+        0..=6 => "This week".to_string(),
         7..=13 => "Last week".to_string(),
         d => format!("{} weeks ago", d / 7),
     }
+}
+
+/// The title of a recap the server did not number: "Week of 6 Oct", from the
+/// start of the recap week. Empty without a time.
+pub fn week_of_label(week_start_ms: i64) -> String {
+    if week_start_ms <= 0 {
+        return String::new();
+    }
+    let (day, month, _) = civil(week_start_ms);
+    format!("Week of {day} {}", &MONTHS[month][..3])
 }
 
 #[cfg(test)]
@@ -186,14 +195,20 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_has_no_label_in_its_week_then_reads_as_weeks() {
-        let came = MON_5_OCT;
-        assert_eq!(recap_age_label(came, came + 3_600_000), "");
-        // Frame D: Thursday, the recap came out on Monday.
-        assert_eq!(recap_age_label(came, came + 3 * DAY), "");
-        assert_eq!(recap_age_label(came, came + 8 * DAY), "Last week");
-        // Frame F: Monday 26 October, three weeks on.
-        assert_eq!(recap_age_label(came, came + 21 * DAY), "3 weeks ago");
-        assert_eq!(recap_age_label(0, came), "");
+    fn a_recap_reads_as_this_week_last_week_then_weeks() {
+        let start = MON_5_OCT;
+        assert_eq!(recap_age_label(start, start + 3_600_000), "This week");
+        assert_eq!(recap_age_label(start, start + 6 * DAY), "This week");
+        assert_eq!(recap_age_label(start, start + 7 * DAY), "Last week");
+        assert_eq!(recap_age_label(start, start + 13 * DAY), "Last week");
+        assert_eq!(recap_age_label(start, start + 14 * DAY), "2 weeks ago");
+        assert_eq!(recap_age_label(start, start + 21 * DAY), "3 weeks ago");
+        assert_eq!(recap_age_label(0, start), "");
+    }
+
+    #[test]
+    fn an_unnumbered_recap_is_named_by_its_week() {
+        assert_eq!(week_of_label(MON_5_OCT + DAY), "Week of 6 Oct");
+        assert_eq!(week_of_label(0), "");
     }
 }
