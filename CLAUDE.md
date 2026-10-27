@@ -177,6 +177,12 @@ Two failure modes have each cost a day. Check for both:
   `width` smaller than its parent defaults to **horizontally centered** in Slint, so omitting
   `x: 0` makes the bar grow from the center outward. See `debug_panel.slint` `StatBar` for
   the canonical pattern (`x: 0`, `clip: true` on the track).
+- **A number followed by a unit is never two free `Text` elements.** "4,201 h",
+  "21 installed", "since 12 min" use `StatValue` (`client/ui/components/stat.slint`).
+  It lifts the unit by the descender difference of the two fonts (`Theme.descent`,
+  from the font tables), so both sit on one baseline. Bottom-aligned or
+  centred boxes do not: the bigger face has a deeper box. A middle unit
+  ("19 h 40") uses its `tail`. `stat_value_tests.rs` guards it at 120/34 and 20/11.
 - **The bundled fonts carry no symbol glyphs.** Oxanium and Barlow have letters,
   digits, the middot and dashes. They do not have `✂ ▾ ✓ ▶ › ●`. A symbol
   written as text renders as a tofu box. Use an SVG from `client/ui/icons/`
