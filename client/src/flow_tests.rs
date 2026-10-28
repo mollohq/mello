@@ -7255,7 +7255,11 @@ fn recap_without_belts_shows_neither_section() {
 
 /// Sessions for the cells under head2head in frame F.
 fn tall_recap_crew(recap: serde_json::Value) -> Harness {
-    let mut h = Harness::new();
+    tall_recap_crew_in(Harness::new(), recap)
+}
+
+/// [`tall_recap_crew`] in a harness the caller built, for a fake art server.
+fn tall_recap_crew_in(mut h: Harness, recap: serde_json::Value) -> Harness {
     // The recap of week 1 is open: the card shows, not the sealed one.
     open_recap(&h, 1);
     app_with_crew_of(&mut h, 5);

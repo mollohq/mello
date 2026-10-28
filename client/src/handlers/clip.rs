@@ -1179,7 +1179,7 @@ pub(super) fn refresh_game_art(ctx: &AppContext) {
                     "",
                     row.game_id.as_str(),
                     row.name.as_str(),
-                    ArtSlot::Capsule,
+                    ArtSlot::Header,
                 );
                 if art.has_capsule || art.has_icon {
                     row.icon = art.icon;
@@ -1603,7 +1603,7 @@ fn extract_recap_games(ctx: &AppContext, data: &serde_json::Value) -> (Vec<Recap
                 "",
                 &game_id,
                 &name,
-                mello_core::art::ArtSlot::Capsule,
+                mello_core::art::ArtSlot::Header,
             );
             Some(RecapGameRow {
                 monogram: crate::recent_games::monogram(&name).into(),

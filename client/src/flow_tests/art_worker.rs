@@ -577,3 +577,47 @@ fn the_stream_source_menu_takes_the_worker_icon() {
     serve(&mut h, &ids, slot);
     assert_eq!(menu_badges(&h), 0, "the menu row draws the Worker icon");
 }
+
+/// The games played strip and the opened recap grid are header frames (460 by
+/// 215). Their rows ask for the header slot and never the capsule slot.
+#[test]
+fn the_recap_games_strip_asks_for_header_art() {
+    let fake = FakeArt::start();
+    let ids = crate::game_icons::worker_ids("rocket-league", "rocket-league", "Rocket League", &[]);
+    assert!(!ids.is_empty(), "the catalogue names the game");
+    fake.put(&ids[0], "header", jpeg(1280, 720));
+    let mut h = tall_recap_crew_in(Harness::with_art_server(&fake.base), week_with_everything());
+    let asks = art_requests(&mut h);
+    assert!(!asks.is_empty(), "the recap games asked for art");
+    assert!(
+        asks.iter().all(|(_, s)| *s != ArtSlot::Capsule),
+        "no frame draws the capsule slot: {asks:?}"
+    );
+    let (hids, slot) = asks
+        .iter()
+        .find(|(i, s)| *s == ArtSlot::Header && i.contains(&ids[0]))
+        .cloned()
+        .expect("the strip asked for the header slot");
+    assert_eq!(slot, ArtSlot::Header);
+    serve(&mut h, &hids, slot);
+
+    let card = h
+        .app()
+        .get_feed_cards()
+        .iter()
+        .find(|c| c.card_type.as_str() == "recap")
+        .expect("the recap card");
+    let row = card
+        .recap_games
+        .iter()
+        .find(|r| r.name.as_str() == "Rocket League")
+        .expect("the game row");
+    assert!(row.has_capsule, "the header art is in the row");
+    assert!(!row.has_icon, "an art frame never takes an icon");
+    let size = row.capsule.size();
+    assert_eq!(
+        (size.width, size.height),
+        (460, 215),
+        "cut to the header frame"
+    );
+}
