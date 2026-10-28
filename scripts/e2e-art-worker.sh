@@ -57,7 +57,12 @@ down)
     if [ -f "$STATE/wrangler.pid" ]; then
         pid=$(cat "$STATE/wrangler.pid")
         # wrangler runs workerd as a child: stop the process group members.
-        pkill -P "$pid" 2>/dev/null || true
+        # Git Bash on Windows has no pkill; taskkill ends the process tree there.
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -P "$pid" 2>/dev/null || true
+        elif command -v taskkill.exe >/dev/null 2>&1; then
+            taskkill.exe //PID "$pid" //T //F >/dev/null 2>&1 || true
+        fi
         kill "$pid" 2>/dev/null || true
         rm -f "$STATE/wrangler.pid"
     fi
