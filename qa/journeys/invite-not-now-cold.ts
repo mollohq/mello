@@ -3,6 +3,7 @@
 // bob creates his own crew, and finishing onboarding does not join alice's
 // crew. Both sides are checked.
 
+import { openInvite } from "./lib/crew.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { createCrewAtStep1, inviteWelcome, linkEmailAtStep3, onboardWithNewCrew, profileAtStep2 } from "./lib/onboarding.ts";
 
@@ -19,7 +20,7 @@ export default journey({
     let code = "";
     await step("alice: creates a crew and reads the invite link", async () => {
       await onboardWithNewCrew(alice, aliceCrew, aliceName);
-      await alice.click("Share invite link");
+      await openInvite(alice);
       const m = (await alice.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
       expect(m, "the invite modal shows a join link");
       code = m![1];

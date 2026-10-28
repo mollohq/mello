@@ -3,6 +3,7 @@
 import type { App } from "../../../tools/mello-driver/src/app.ts";
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
 import { onboardFromInvite, onboardWithNewCrew, type Credentials, type Visibility } from "./onboarding.ts";
+import { openInvite } from "./crew.ts";
 
 export type Crew = { alice: App; bob: App; crew: string; aliceName: string; bobName: string; aliceCreds: Credentials };
 
@@ -56,8 +57,7 @@ export async function selectCrew(app: App, crew: string): Promise<void> {
  * ("Share invite link"). Both ask for the same code.
  */
 export async function readInviteCode(app: App): Promise<string> {
-  const labels = (await app.controls()).map((c) => c.label);
-  await app.click(labels.includes("Invite your crew") ? "Invite your crew" : "Share invite link");
+  await openInvite(app);
   const m = (await app.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
   if (!m) throw new Error("the invite modal shows no join link");
   await app.click("Copy link");

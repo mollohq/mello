@@ -8,6 +8,7 @@
 import { setTimeout as sleep } from "node:timers/promises";
 
 import { DriverError, type App } from "../../tools/mello-driver/src/app.ts";
+import { openInvite } from "./lib/crew.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./lib/onboarding.ts";
 
@@ -44,7 +45,7 @@ export default journey({
 
     let code = "";
     await step("alice reads the invite code", async () => {
-      await alice.click("Share invite link");
+      await openInvite(alice);
       const m = (await alice.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
       expect(m, "the invite modal shows a join link");
       code = m![1];

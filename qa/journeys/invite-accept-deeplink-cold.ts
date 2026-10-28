@@ -4,6 +4,7 @@
 // 02"), and bob is a member of the crew when onboarding ends. Both sides are
 // checked. Two journeys: a private crew (the app's default) and a public crew.
 
+import { openInvite } from "./lib/crew.ts";
 import { journey, type Journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
 import {
   inviteWelcome,
@@ -39,7 +40,7 @@ async function run({ runId, launch, step, expect }: JourneyContext, visibility: 
 
   let code = "";
   await step("alice: opens the invite modal and reads the link on screen", async () => {
-    await alice.click("Share invite link");
+    await openInvite(alice);
     const link = await alice.find("Invite link");
     const m = link.value.match(/\/join\/([A-Z0-9-]+)$/);
     expect(m, `the invite link field shows a join URL, got "${link.value}"`);

@@ -12,6 +12,7 @@
 //
 // Needs the local lounge (`npm run dev` in mello-site) next to the stack.
 
+import { openInvite } from "./lib/crew.ts";
 import { journey, type Journey, type JourneyContext } from "../../tools/mello-driver/src/journey.ts";
 import { downloadFromLounge, LOUNGE, loungeUp } from "../../tools/mello-driver/src/browser.ts";
 import { DriverError } from "../../tools/mello-driver/src/app.ts";
@@ -43,7 +44,7 @@ async function run({ runId, launch, step, expect, clipboard }: JourneyContext, w
   let code = "";
   await step("alice: fresh install, creates a crew, reads her invite link", async () => {
     await onboardWithNewCrew(alice, crew, aliceName);
-    await alice.click("Share invite link");
+    await openInvite(alice);
     const link = await alice.find("Invite link");
     const m = link.value.match(/\/join\/([A-Z0-9-]+)$/);
     expect(m, `the invite link field shows a join URL, got "${link.value}"`);
