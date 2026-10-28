@@ -826,26 +826,10 @@ impl super::Client {
 
         // libmello's enumerator returns the whole process table by design — the
         // game database decides what is a game (spec 17 §2.1), not libmello. The
-        // buffer therefore has to fit a real process table: at 32 entries it
-        // truncated in *boot order*, so the list was System, smss, csrss, wininit,
-        // services, lsass, svchost... and never reached a game.
-        const MAX_PROCESSES: usize = 512;
-        let mut games_raw = vec![
-            mello_sys::MelloGameProcess {
-                pid: 0,
-                name: [0i8; 128],
-                exe: [0i8; 260],
-                is_fullscreen: false,
-                path: [0i8; 520],
-                title: [0i8; 256],
-                is_foreground: false,
-                started_at_ms: 0,
-            };
-            MAX_PROCESSES
-        ];
-        let game_count = unsafe {
-            mello_sys::mello_enumerate_games(ctx, games_raw.as_mut_ptr(), MAX_PROCESSES as i32)
-        };
+        // sensor's enumerator owns the buffer sizing: a fixed buffer truncated
+        // in boot order, first at 32 entries (System, smss, csrss... and never a
+        // game) and then at 512 (cs2.exe at entry 961 of 1036).
+        let games_raw = crate::game_sensing::enumerate_game_processes(ctx);
 
         let head = catalogue();
         let own_pid = std::process::id();
@@ -857,29 +841,17 @@ impl super::Client {
         // streamable instead of disappearing from the picker entirely.
         let mut known = Vec::new();
         let mut other = Vec::new();
-        for game in games_raw.iter().take(game_count as usize) {
+        for game in games_raw {
             if game.pid == own_pid {
                 continue;
             }
-            let exe = unsafe { std::ffi::CStr::from_ptr(game.exe.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-            let title = unsafe { std::ffi::CStr::from_ptr(game.title.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-            let path = unsafe { std::ffi::CStr::from_ptr(game.path.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
-            let process_name = unsafe { std::ffi::CStr::from_ptr(game.name.as_ptr()) }
-                .to_string_lossy()
-                .to_string();
             let Some((is_known, source)) = game_capture_source(
                 head,
                 game.pid,
-                exe,
-                &path,
-                title,
-                process_name,
+                game.exe,
+                &game.path,
+                game.window_title,
+                game.name,
                 game.is_fullscreen,
             ) else {
                 continue;

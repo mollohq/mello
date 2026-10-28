@@ -20,7 +20,23 @@ const ACTIVE_CADENCE_SCANS: u32 = 8;
 /// Reading a few hundred small manifests is cheap but not free, and a game
 /// installed mid-session only has to be noticed eventually.
 const LIBRARY_RESCAN_SCANS: u32 = 20;
-const MAX_PROCESSES: usize = 512;
+/// First size of the process buffer handed to libmello. The enumerator returns
+/// the whole process table, not just games, and reports the table's true size,
+/// so a larger table grows the buffer instead of being cut off. A fixed 512
+/// once hid cs2.exe: it was entry 961 of 1036 on a machine with hundreds of
+/// leaked helper processes, and the sensor never saw it.
+const INITIAL_PROCESS_CAPACITY: usize = 512;
+/// Headroom added when the buffer grows, so a table that creeps up by a few
+/// processes does not cost a second enumeration every scan.
+const PROCESS_CAPACITY_HEADROOM: usize = 128;
+/// Enumeration attempts per scan. Each retry sizes the buffer from the last
+/// reported total, so two attempts normally suffice; the bound only guards
+/// against a table that grows faster than the retries.
+const MAX_ENUMERATION_ATTEMPTS: u32 = 4;
+/// Buffer size learned from previous scans, shared by the sensor and the
+/// stream picker so neither pays the retry after the other has grown it.
+static PROCESS_CAPACITY: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(INITIAL_PROCESS_CAPACITY);
 /// How many consecutive scans a resolved game may present no window before its
 /// session is closed.
 ///
@@ -572,7 +588,6 @@ const UNKNOWN_PATH_DENYLIST: &[&str] = &[
 #[derive(Clone)]
 pub(crate) struct RawGameProcess {
     pub(crate) pid: u32,
-    #[allow(dead_code)]
     pub(crate) name: String,
     pub(crate) exe: String,
     pub(crate) is_fullscreen: bool,
@@ -585,23 +600,55 @@ pub(crate) struct RawGameProcess {
     pub(crate) started_at_ms: i64,
 }
 
-fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGameProcess> {
-    let mut buf = vec![
-        mello_sys::MelloGameProcess {
-            pid: 0,
-            name: [0i8; 128],
-            exe: [0i8; 260],
-            is_fullscreen: false,
-            path: [0i8; 520],
-            title: [0i8; 256],
-            is_foreground: false,
-            started_at_ms: 0,
-        };
-        MAX_PROCESSES
-    ];
+/// Buffer size for the next attempt after libmello reported `total` processes
+/// into a buffer of `capacity`, or `None` when the buffer held them all and the
+/// list is complete.
+fn grown_capacity(total: usize, capacity: usize) -> Option<usize> {
+    (total > capacity).then(|| total + PROCESS_CAPACITY_HEADROOM)
+}
 
-    let count =
-        unsafe { mello_sys::mello_enumerate_games(ctx, buf.as_mut_ptr(), MAX_PROCESSES as i32) };
+/// Every running process, as libmello sees it. The game database decides which
+/// of them are games (spec 17 §2.1), so the list must be complete: a buffer
+/// that is too small is grown and the enumeration repeated.
+pub(crate) fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGameProcess> {
+    use std::sync::atomic::Ordering;
+
+    let empty = mello_sys::MelloGameProcess {
+        pid: 0,
+        name: [0i8; 128],
+        exe: [0i8; 260],
+        is_fullscreen: false,
+        path: [0i8; 520],
+        title: [0i8; 256],
+        is_foreground: false,
+        started_at_ms: 0,
+    };
+
+    let mut capacity = PROCESS_CAPACITY.load(Ordering::Relaxed);
+    let mut attempt = 1;
+    let (buf, count) = loop {
+        let mut buf = vec![empty; capacity];
+        let total =
+            unsafe { mello_sys::mello_enumerate_games(ctx, buf.as_mut_ptr(), capacity as i32) }
+                .max(0) as usize;
+        match grown_capacity(total, capacity) {
+            Some(next) if attempt < MAX_ENUMERATION_ATTEMPTS => {
+                log::info!(
+                    "[game-sensor] process table has {total} entries, buffer held {capacity}; growing to {next}"
+                );
+                PROCESS_CAPACITY.store(next, Ordering::Relaxed);
+                capacity = next;
+                attempt += 1;
+            }
+            Some(_) => {
+                log::warn!(
+                    "[game-sensor] process table still has {total} entries after {attempt} attempts; scanning the first {capacity}"
+                );
+                break (buf, capacity);
+            }
+            None => break (buf, total),
+        }
+    };
 
     let cstr = |arr: &[i8]| {
         unsafe { std::ffi::CStr::from_ptr(arr.as_ptr()) }
@@ -609,8 +656,8 @@ fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec<RawGamePro
             .to_string()
     };
 
-    let mut out = Vec::new();
-    for gp in buf.iter().take(count.max(0) as usize) {
+    let mut out = Vec::with_capacity(count);
+    for gp in buf.iter().take(count) {
         out.push(RawGameProcess {
             pid: gp.pid,
             name: cstr(&gp.name),
@@ -1727,6 +1774,27 @@ mod tests {
         // The game exits entirely; nothing is detected for that pid any more.
         drop_windowless(Vec::new(), &[], &mut seen);
         assert!(seen.is_empty(), "counts must be pruned with the process");
+    }
+
+    #[test]
+    fn a_complete_process_table_needs_no_larger_buffer() {
+        assert_eq!(grown_capacity(0, 512), None);
+        assert_eq!(grown_capacity(511, 512), None);
+        assert_eq!(grown_capacity(512, 512), None);
+    }
+
+    #[test]
+    fn a_cut_process_table_grows_the_buffer_past_the_total() {
+        // cs2.exe was entry 961 of 1036 behind a 512 buffer. The next buffer
+        // must hold the whole table plus headroom, so a table that creeps up
+        // by a few processes does not force a retry on every scan.
+        let next = grown_capacity(1036, 512).expect("a cut table grows");
+        assert_eq!(next, 1036 + PROCESS_CAPACITY_HEADROOM);
+        assert!(next > 1036);
+        assert_eq!(
+            grown_capacity(513, 512),
+            Some(513 + PROCESS_CAPACITY_HEADROOM)
+        );
     }
 
     #[test]

@@ -58,6 +58,14 @@ libmello supplies the process list through `mello_enumerate_games`. It fills
 full path, the window title, the fullscreen flag, the foreground flag and the
 process creation time.
 
+The list is the whole process table, not only games. The call writes at most
+`max_count` records and returns the total number of processes. A total above
+`max_count` means the list was cut. `enumerate_game_processes` then grows its
+buffer to the total plus headroom and calls again, and keeps the learned size
+for the next scan. The stream picker uses the same function. A fixed buffer
+cut the table in boot order: at 512 entries it never reached `cs2.exe`, which
+was entry 961 on a machine with hundreds of leaked helper processes.
+
 The loop runs at two rates.
 
 | Constant | Value | Condition |
