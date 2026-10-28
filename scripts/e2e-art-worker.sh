@@ -25,8 +25,8 @@
 # otherwise kill the Worker. macOS has no setsid, so a perl setpgrp wrapper
 # starts it, with job control (set -m) as the fallback. `down` kills the pid
 # (the group leader) and its children. On Windows (Git Bash) there is no
-# process group kill: the Worker survives the caller, and `down` uses
-# taskkill /T on the pid to end the tree.
+# process group kill: the Worker survives the caller, and `down` ends the tree
+# with taskkill and sweeps the processes that run from the Worker directory.
 set -eu
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -49,14 +49,14 @@ up)
     if command -v perl >/dev/null 2>&1; then
         (cd "$WORKER" && exec perl -e 'setpgrp(0,0); exec @ARGV' -- \
             npx wrangler dev --port "$PORT" --ip 127.0.0.1 \
-            --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1) &
+            --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1 </dev/null) &
         echo $! >"$STATE/wrangler.pid"
     else
         # No perl: job control gives the background job its own group.
         (
             set -m
             (cd "$WORKER" && exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 \
-                --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1) &
+                --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1 </dev/null) &
             echo $! >"$STATE/wrangler.pid"
         )
     fi
@@ -76,11 +76,17 @@ down)
     if [ -f "$STATE/wrangler.pid" ]; then
         pid=$(cat "$STATE/wrangler.pid")
         # wrangler runs workerd as a child: stop the process group members.
-        # Git Bash on Windows has no pkill; taskkill ends the process tree there.
         if command -v pkill >/dev/null 2>&1; then
             pkill -P "$pid" 2>/dev/null || true
         elif command -v taskkill.exe >/dev/null 2>&1; then
-            taskkill.exe //PID "$pid" //T //F >/dev/null 2>&1 || true
+            # Git Bash on Windows has no pkill, and its $! is an MSYS pid that
+            # taskkill does not know: use the Windows pid. npx also leaves
+            # wrangler and workerd outside the tree of that pid, so a sweep
+            # stops what still runs from the Worker directory (only ours).
+            winpid=$(cat "/proc/$pid/winpid" 2>/dev/null || echo "$pid")
+            taskkill.exe //PID "$winpid" //T //F >/dev/null 2>&1 || true
+            winworker=$(cd "$WORKER" && pwd -W)
+            powershell.exe -NoProfile -Command "Get-CimInstance Win32_Process | Where-Object { \$_.CommandLine -like '*$winworker*' -and \$_.ProcessId -ne \$PID } | ForEach-Object { Stop-Process -Id \$_.ProcessId -Force }" >/dev/null 2>&1 || true
         fi
         kill "$pid" 2>/dev/null || true
         rm -f "$STATE/wrangler.pid"
