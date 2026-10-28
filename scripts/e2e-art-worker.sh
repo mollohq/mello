@@ -19,6 +19,14 @@
 # A journey that uses this Worker declares `needs: ["art"]`. `mello-driver run`
 # then checks <base>/health once before the first journey, only on a local
 # address, and stops with the fix when it does not answer.
+#
+# wrangler runs in its own process group. A caller that runs `up` in a process
+# group and kills the group when `up` returns (the QA harness does) would
+# otherwise kill the Worker. macOS has no setsid, so a perl setpgrp wrapper
+# starts it, with job control (set -m) as the fallback. `down` kills the pid
+# (the group leader) and its children. On Windows (Git Bash) there is no
+# process group kill: the Worker survives the caller, and `down` uses
+# taskkill /T on the pid to end the tree.
 set -eu
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -38,9 +46,20 @@ up)
     (cd "$WORKER" && node scripts/build-index.ts "$HERE/qa/fixtures/art-index" "$STATE/index-out")
     (cd "$WORKER" && npx wrangler kv bulk put "$STATE/index-out/kv-000.json" \
         --binding ART_INDEX --local --persist-to "$STATE/kv-state")
-    (cd "$WORKER" && exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 \
-        --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1) &
-    echo $! >"$STATE/wrangler.pid"
+    if command -v perl >/dev/null 2>&1; then
+        (cd "$WORKER" && exec perl -e 'setpgrp(0,0); exec @ARGV' -- \
+            npx wrangler dev --port "$PORT" --ip 127.0.0.1 \
+            --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1) &
+        echo $! >"$STATE/wrangler.pid"
+    else
+        # No perl: job control gives the background job its own group.
+        (
+            set -m
+            (cd "$WORKER" && exec npx wrangler dev --port "$PORT" --ip 127.0.0.1 \
+                --persist-to "$STATE/kv-state" >"$STATE/wrangler.log" 2>&1) &
+            echo $! >"$STATE/wrangler.pid"
+        )
+    fi
     i=0
     while [ $i -lt 60 ]; do
         if curl -sf "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
