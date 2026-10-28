@@ -63,8 +63,12 @@ case "$(uname -s)" in
 esac
 
 # shellcheck disable=SC2086
+# The two WebRTC overlays are ON by default. A build-ci left from the time they
+# defaulted OFF on Apple keeps OFF in its cache, so pass them every time.
 run cmake -B libmello/build-ci -S libmello \
     -DMELLO_BUILD_TESTS=ON \
+    -DMELLO_WEBRTC_VIDEO_TIMING=ON \
+    -DMELLO_WEBRTC_GOOG_CC=ON \
     -DCMAKE_TOOLCHAIN_FILE="$ROOT/external/vcpkg/scripts/buildsystems/vcpkg.cmake" \
     -DCMAKE_BUILD_TYPE=Release \
     $ARCH_ARGS

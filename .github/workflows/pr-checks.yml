@@ -183,6 +183,8 @@ jobs:
         run: |
           cmake -B libmello/build-ci -S libmello `
             -DMELLO_BUILD_TESTS=ON `
+            -DMELLO_WEBRTC_VIDEO_TIMING=ON `
+            -DMELLO_WEBRTC_GOOG_CC=ON `
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" `
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
           cmake --build libmello/build-ci --config Release --parallel $env:NUMBER_OF_PROCESSORS
@@ -253,6 +255,8 @@ jobs:
         run: |
           cmake -B libmello/build-ci -S libmello \
             -DMELLO_BUILD_TESTS=ON \
+            -DMELLO_WEBRTC_VIDEO_TIMING=ON \
+            -DMELLO_WEBRTC_GOOG_CC=ON \
             -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" \
             -DVCPKG_TARGET_TRIPLET=arm64-osx \
             -DVCPKG_HOST_TRIPLET=arm64-osx \
