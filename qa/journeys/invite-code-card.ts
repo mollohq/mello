@@ -10,6 +10,7 @@
 //  - afterLogout: hank has a device account and logged out. He types the
 //    link into the card, and finalize joins the crew into his account.
 
+import { openInvite } from "./lib/crew.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { inviteWelcome, joinFromWelcome, linkEmailAtStep3, onboardWithNewCrew, profileAtStep2 } from "./lib/onboarding.ts";
 
@@ -27,7 +28,7 @@ export const typedLink = journey({
     let link = "";
     await step("alice: creates a crew and reads the invite link on screen", async () => {
       await onboardWithNewCrew(alice, crew, aliceName);
-      await alice.click("Share invite link");
+      await openInvite(alice);
       link = (await alice.find("Invite link")).value;
       expect(/^https?:\/\/[^/]+\/join\/[A-Z0-9-]+$/.test(link), `the invite link field shows a join URL, got "${link}"`);
       await alice.checkpoint("invite-link");
@@ -166,7 +167,7 @@ export const afterLogout = journey({
     let link = "";
     await step("alice: creates a crew and reads the invite link", async () => {
       await onboardWithNewCrew(alice, aliceCrew, aliceName);
-      await alice.click("Share invite link");
+      await openInvite(alice);
       link = (await alice.find("Invite link")).value;
       expect(/\/join\/[A-Z0-9-]+$/.test(link), `the invite link field shows a join URL, got "${link}"`);
     });

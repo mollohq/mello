@@ -2,6 +2,7 @@
 // invite link; the OS hands the link to his running app, which offers the
 // crew. He joins without restarting.
 
+import { openInvite } from "./lib/crew.ts";
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./lib/onboarding.ts";
 
@@ -25,7 +26,7 @@ export default journey({
     });
 
     await step("alice reads the invite link", async () => {
-      await alice.click("Share invite link");
+      await openInvite(alice);
       const m = (await alice.find("Invite link")).value.match(/\/join\/([A-Z0-9-]+)$/);
       expect(m, "the invite modal shows a join link");
       code = m![1];
