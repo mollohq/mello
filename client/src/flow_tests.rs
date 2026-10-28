@@ -10182,6 +10182,31 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
 }
 
 #[test]
+fn the_services_list_names_only_free_and_open_source_services() {
+    let mut h = Harness::new();
+    about_tab(&mut h);
+    h.click_label("ABOUT");
+    scroll_settings_to_the_end(&mut h);
+    let kept = "Nakama (Heroic Labs) · IGDB · DiceBear · Giphy · Google STUN · Steam · Epic Games · GOG · Riot Games";
+    assert_eq!(labelled_count(&h, kept), 1, "the services line");
+    for vendor in [
+        "Render",
+        "Cloudflare",
+        "Apple",
+        "Plausible",
+        "GitHub",
+        "Azure",
+        "Discord",
+        "Twitch",
+    ] {
+        assert!(
+            !kept.contains(vendor) && labelled_count(&h, vendor) == 0,
+            "{vendor} is not thanked"
+        );
+    }
+}
+
+#[test]
 fn the_about_tab_shows_the_version_of_this_build() {
     let mut h = Harness::new();
     about_tab(&mut h);

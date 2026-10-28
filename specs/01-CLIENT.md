@@ -165,7 +165,7 @@ The ABOUT tab is read-only. It has these parts, top to bottom.
 |---|---|
 | M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date) and MADE BY ("Mollo Tech AB, Göteborg"). The stamp comes from `client/src/build_info.rs`. |
 | THANK YOU | One sentence: m3llo runs on the work of many people and services, and this page names them. |
-| SERVICES WE USE | Names only: Nakama (Heroic Labs), Render, Cloudflare, IGDB, DiceBear, Giphy, Plausible (website only), Apple, Google STUN, Steam, Epic Games, GOG, Riot Games, Discord, Twitch, GitHub. |
+| SERVICES WE USE | Names only, and only services that are free or open source: Nakama (Heroic Labs), IGDB, DiceBear, Giphy, Google STUN, Steam, Epic Games, GOG, Riot Games. Paid vendors and sign-in providers are not listed. |
 | OPEN SOURCE WE SHIP | Names only: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, OpenMoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
 | CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0". |
 
