@@ -179,10 +179,10 @@ The recent games card gets its data from the `crew_feed` RPC. Entry type: `recen
 - The header line comes from sessions only. With no sessions the line is empty.
 - Tiles: at most six, keyed by game id. A legacy event with no id uses the lower-case game name.
 - `launcher`: the launcher prefix of the library entry (`steam`, `epic`, `gog`). Absent for a game only seen in sessions.
-- Art ladder, first hit wins: the runtime game icon (cached or crew-shared), then the local Steam header art, then the monogram.
+- Art ladder: one art form per frame shape (section 6.1). The list row draws the icon slot. The poster grid draws the header slot.
 - Local Steam art: `mello_core::library::local_steam_art` reads `<steam root>/appcache/librarycache/`. It tries `<appid>_header.jpg`, then `header.jpg` and `library_header.jpg` in `<appid>/` and in each hash folder under it, then `library_600x900.jpg`. It reads the disk only. Nothing is fetched or uploaded. The log carries counts only.
 - Monogram: two letters, the first letters of the first two words of the name (one word: its first two letters), on a two-corner tile in an identity hue chosen from the game id.
-- Client: `RecentGamesCard` in `crew_feed.slint`. The list variant (one owner, or the side column) has one row per game, at most three. The columns are the same on every row: a square icon slot (48 px; the icon rung is the exe or crew icon, then the monogram, never a header capsule), the name in Oxanium on one line with elision at the column width, and under it the last played time and the hours in Barlow 300 on one line ("2 days ago, 4 h"; the launcher alone when both are unknown). The owner octagons stand at the right of the row. No row says TRACKED, in the list or in the grid.
+- Client: `RecentGamesCard` in `crew_feed.slint`. The list variant (one owner, or the side column) has one row per game, at most three. The columns are the same on every row: a square icon slot (48 px; the icon slot ladder of section 6.1, never header art), the name in Oxanium on one line with elision at the column width, and under it the last played time and the hours in Barlow 300 on one line ("2 days ago, 4 h"; the launcher alone when both are unknown). The owner octagons stand at the right of the row. No row says TRACKED, in the list or in the grid.
 - Header: "RECENT GAMES" on the left. The right side is the sessions line (`subtitle`), or empty. It never says where the games come from.
 - The sidebar list still uses live presence only.
 
@@ -311,6 +311,44 @@ these icons. Keep `exe_icon.rs` and this constant in step.
 The icon reaches the UI as `game-runtime-icon` and `game-has-runtime-icon`,
 through `control_bar.slint` and `main.slint`. Surfaces show the `short_name`
 badge on the game colour when extraction fails.
+
+### 6.1 Art slots per frame
+
+One art form per frame shape. A game never shows in two forms side by side.
+The `capsule` slot is not used in any frame.
+
+| Frame | Slot | Ladder, first hit wins |
+|---|---|---|
+| Square, any size | `icon` | Exe icon or crew icon, Worker `icon`, monogram |
+| Wide, 460:215 | `header` | Local Steam header, Worker `header`, monogram |
+| Poster | `hero` | Local Steam poster, Worker `hero` |
+
+| Surface | Frame | Slot |
+|---|---|---|
+| NOW PLAYING pill | Square | `icon` |
+| Stream source menu, game row | Square | `icon` |
+| Stats strip (You) | Square 40 px | `icon` |
+| Stats profile cards | Square 40 px | `icon` |
+| Settings, game integration rows | Square 36 px | `icon` |
+| Settings, hidden games rows | Square 28 px | `icon` |
+| Recent games, list row | Square 48 px | `icon` |
+| Session card, stream card | Square 40 px | `icon` |
+| Game session compact body | Square 32 or 36 px | `icon` |
+| Live session card tile | Square 40 px | `icon` |
+| Recent games, poster grid | Wide | `header` |
+| Recap card, game tile | Wide | `header` |
+| Recap games played strip | Wide | `header` |
+| Opened recap, games grid | Wide | `header` |
+| Daily recap card, game tile | Wide | `header` |
+| Live session card, wide slot | Poster | `hero` |
+
+`GameArt` enforces the rule. A frame with `art-width` set draws `capsule`
+(header art) and never `icon`. A frame without it draws `icon` and never
+`capsule`. Without art for its shape, a frame draws the monogram.
+
+`game_icons::resolve_tile_art_slot` returns the `icon` slot in `TileArt.icon`
+and every other slot in `TileArt.capsule`. The art Worker serves `icon` as a
+cover thumbnail.
 
 ---
 
