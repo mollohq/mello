@@ -139,6 +139,17 @@ impl Harness {
             std::env::temp_dir().join("m3llo-no-steam-root"),
         ));
 
+        // Nor the exe icon cache or art cache of the machine: a fresh temp
+        // root per harness.
+        static NEXT_CACHE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let cache_root = std::env::temp_dir().join(format!(
+            "m3llo-cache-harness-{}-{}",
+            std::process::id(),
+            NEXT_CACHE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&cache_root);
+        crate::platform::exe_icon::set_cache_root_override(Some(cache_root));
+
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
             .build()
@@ -355,6 +366,20 @@ mod tests {
     use mello_core::VoiceMode;
 
     /// UI → core, through the real `callbacks::wire_all`.
+    #[test]
+    fn the_harness_caches_live_under_the_temp_dir() {
+        let _h = Harness::new();
+        let tmp = std::env::temp_dir();
+        let icons = crate::platform::exe_icon::icon_cache_dir().unwrap();
+        let art = crate::platform::exe_icon::art_cache_dir().unwrap();
+        assert!(icons.starts_with(&tmp), "{icons:?}");
+        assert!(art.starts_with(&tmp), "{art:?}");
+        assert!(
+            !icons.exists(),
+            "a fresh harness starts with no cached icons"
+        );
+    }
+
     #[test]
     fn ui_callback_reaches_core_as_a_command() {
         let mut h = Harness::new();

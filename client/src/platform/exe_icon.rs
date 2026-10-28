@@ -21,6 +21,44 @@ use std::path::PathBuf;
 /// Windows-only): the `directories` app-data dir, matching the log-dir
 /// pattern in `main.rs`.
 pub fn icon_cache_dir() -> Option<PathBuf> {
+    #[cfg(test)]
+    {
+        Some(test_cache_root().join("game_icons"))
+    }
+    #[cfg(not(test))]
+    {
+        icon_cache_dir_real()
+    }
+}
+
+/// Tests: the thread's override, else a process-wide temp dir. Never the
+/// host's real app-data dir, so a developer's cached icons stay out of a run.
+#[cfg(test)]
+fn test_cache_root() -> PathBuf {
+    if let Some(root) = CACHE_ROOT_OVERRIDE.with(|r| r.borrow().clone()) {
+        return root;
+    }
+    static FALLBACK: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new();
+    FALLBACK
+        .get_or_init(|| std::env::temp_dir().join(format!("m3llo-icons-{}", std::process::id())))
+        .clone()
+}
+
+#[cfg(test)]
+thread_local! {
+    static CACHE_ROOT_OVERRIDE: std::cell::RefCell<Option<PathBuf>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Tests: point this thread's icon and art caches under `root`
+/// (`game_icons`, `game_art`). A thread-local, so parallel tests stay apart.
+#[cfg(test)]
+pub fn set_cache_root_override(root: Option<PathBuf>) {
+    CACHE_ROOT_OVERRIDE.with(|r| *r.borrow_mut() = root);
+}
+
+#[cfg(not(test))]
+fn icon_cache_dir_real() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
     if let Some(base) = std::env::var_os("LOCALAPPDATA").map(PathBuf::from) {
         return Some(base.join("Mello").join("game_icons"));
@@ -32,6 +70,7 @@ pub fn icon_cache_dir() -> Option<PathBuf> {
 /// Disk cache dir for the art Worker images, beside the icon cache.
 /// `MELLO_ART_CACHE_DIR` replaces it (the e2e driver gives each app its own).
 pub fn art_cache_dir() -> Option<PathBuf> {
+    #[cfg(not(test))]
     if let Some(dir) = std::env::var_os("MELLO_ART_CACHE_DIR").filter(|d| !d.is_empty()) {
         return Some(PathBuf::from(dir));
     }
