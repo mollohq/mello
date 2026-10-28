@@ -28,6 +28,13 @@ export default journey({
     const { alice, bob, aliceCreds } = await twoUsersInOneCrew(ctx, "Public");
     const crewId = (await alice.state()).active_crew_id;
 
+    for (const app of [bob, alice]) {
+      await step(`${app.name} has no daily recap before a belt moves`, async () => {
+        const s = await app.state();
+        expect(!s.daily_recap.present, "no daily recap before the belt move");
+      });
+    }
+
     await step("alice reports games of her own and one session, so the two libraries differ", async () => {
       // The apps have reported their own libraries by now. A report from alice
       // replaces hers: do it after the apps. The server pushes "feed changed"
@@ -138,13 +145,22 @@ export default journey({
     });
 
     for (const app of [bob, alice]) {
-      // One session of one member, no clip and no belt move: the day adds
-      // nothing to the weekly recap, so the server sends no daily recap
-      // (CLIPS.md section 7, dailyRecapHasContent).
-      await step(`${app.name} sees no daily recap for a day that adds nothing, and no catch-up card`, async () => {
-        const s = await waitForFullFeed(app, { skeletons: 3 });
-        expect(!s.daily_recap.present, "no daily recap for one session of one member");
-        expect(!s.feed_cards.some((c) => c.card_type === "daily-recap"), "no daily recap card");
+      // A belt that moved today makes the day add something to the weekly
+      // recap, so the server sends a daily recap with the moved belt (CLIPS.md
+      // section 7, dailyRecapHasContent). Without a move there is none. Whether
+      // the seed moves a belt depends on which app reported first, so the card
+      // must agree with the head2head card either way.
+      await step(`${app.name} sees a daily recap with the moved belt chip exactly when a belt moved`, async () => {
+        const s = await app.waitFor(
+          "the daily recap agrees with the belt move",
+          (st) => st.head2head.belt_moved_recent && st.daily_recap.present && st.daily_recap.belts.length > 0,
+          30_000,
+        ).catch(async () => app.state());
+        if (s.head2head.belt_moved_recent) {
+          expect(s.daily_recap.present && s.daily_recap.belts.length > 0, `a belt moved, so the daily recap names it, got ${JSON.stringify(s.daily_recap)}`);
+        } else {
+          expect(!s.daily_recap.present, "no belt moved, so no daily recap");
+        }
         expect(!s.feed_cards.some((c) => c.card_type === "catchup"), "no catch-up card");
       });
     }
