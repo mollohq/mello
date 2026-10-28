@@ -52,12 +52,14 @@ export type Journey = {
    * - "sfu": the local SFU answers (the same as `voice: true`).
    * - "lounge": the local lounge answers and reads the local Nakama
    *   (guard.ts, checkLounge).
+   * - "art": the local art Worker answers at MELLO_E2E_ART_BASE, or
+   *   http://127.0.0.1:8787 (config.ts, checkArtWorker).
    */
   needs?: Need[];
   run(ctx: JourneyContext): Promise<void>;
 };
 
-export type Need = "sfu" | "lounge";
+export type Need = "sfu" | "lounge" | "art";
 
 export function journey(j: Journey): Journey {
   return j;

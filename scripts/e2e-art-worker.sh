@@ -15,6 +15,10 @@
 #
 # The driver points the apps at it: tools/mello-driver launchEnv sets
 # MELLO_ART_BASE to http://127.0.0.1:8787 (MELLO_E2E_ART_BASE overrides).
+#
+# A journey that uses this Worker declares `needs: ["art"]`. `mello-driver run`
+# then checks <base>/health once before the first journey, only on a local
+# address, and stops with the fix when it does not answer.
 set -eu
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)

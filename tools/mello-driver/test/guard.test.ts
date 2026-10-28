@@ -6,6 +6,8 @@
 
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
+import { createServer as createHttpServer, type IncomingMessage, type ServerResponse } from "node:http";
+import type { AddressInfo } from "node:net";
 import { existsSync, mkdtempSync } from "node:fs";
 import { createServer as netServer } from "node:net";
 import { tmpdir } from "node:os";
@@ -13,6 +15,7 @@ import { join, resolve } from "node:path";
 import { test } from "node:test";
 
 import { App } from "../src/app.ts";
+import { artBase, checkArtWorker } from "../src/config.ts";
 import { checkLounge, checkSfuRegions, classifyHost, isLocalAddress, loungeBoot, ProductionGuardError, type Lookup } from "../src/guard.ts";
 import { journeyNeeds } from "../src/journey.ts";
 import { fakeLounge, fakeNakama } from "./fixtures/stack.ts";
@@ -164,6 +167,51 @@ test("a journey needs the SFU for voice, and what it lists", () => {
   assert.deepEqual(journeyNeeds({ id: "a", flows: [], run }), []);
   assert.deepEqual(journeyNeeds({ id: "a", flows: [], voice: true, run }), ["sfu"]);
   assert.deepEqual(journeyNeeds({ id: "a", flows: [], voice: true, needs: ["lounge", "sfu"], run }), ["sfu", "lounge"]);
+  assert.deepEqual(journeyNeeds({ id: "a", flows: [], needs: ["art"], run }), ["art"]);
+});
+
+/** A server on loopback that answers every request with `handler`. */
+async function health(handler: (req: IncomingMessage, res: ServerResponse) => void): Promise<{ base: string; close(): void }> {
+  const srv = createHttpServer(handler);
+  await new Promise<void>((ok) => srv.listen(0, "127.0.0.1", ok));
+  return { base: `http://127.0.0.1:${(srv.address() as AddressInfo).port}`, close: () => srv.close() };
+}
+
+test("the art Worker check passes on health status ok", async () => {
+  let path = "";
+  const w = await health((req, res) => {
+    path = req.url ?? "";
+    res.end(JSON.stringify({ status: "ok" }));
+  });
+  try {
+    await checkArtWorker(w.base);
+    assert.equal(path, "/health");
+  } finally {
+    w.close();
+  }
+});
+
+test("the art Worker check names the fix when the Worker is down or not ok", async () => {
+  await assert.rejects(checkArtWorker("http://127.0.0.1:1"), /no local art Worker at http:\/\/127\.0\.0\.1:1\/health .*scripts\/e2e-art-worker\.sh up.*MELLO_E2E_ART_BASE/);
+  const w = await health((_req, res) => res.end(JSON.stringify({ status: "starting" })));
+  try {
+    await assert.rejects(checkArtWorker(w.base), /not "ok"/);
+  } finally {
+    w.close();
+  }
+});
+
+test("the art base is MELLO_E2E_ART_BASE, else the local default", () => {
+  const was = process.env.MELLO_E2E_ART_BASE;
+  try {
+    delete process.env.MELLO_E2E_ART_BASE;
+    assert.equal(artBase(), "http://127.0.0.1:8787");
+    process.env.MELLO_E2E_ART_BASE = "http://127.0.0.1:9999";
+    assert.equal(artBase(), "http://127.0.0.1:9999");
+  } finally {
+    if (was === undefined) delete process.env.MELLO_E2E_ART_BASE;
+    else process.env.MELLO_E2E_ART_BASE = was;
+  }
 });
 
 // ── The CLI preflight ────────────────────────────────────────────
@@ -242,5 +290,45 @@ test("cli: a journey that needs the lounge runs when the lounge reads the local 
   } finally {
     nakama.close();
     lounge.close();
+  }
+});
+
+test("cli: a journey that needs art stops when the Worker does not answer", async () => {
+  const nakama = await fakeNakama();
+  try {
+    const env = { NAKAMA_HOST: "127.0.0.1", NAKAMA_PORT: String(nakama.port), MELLO_E2E_ART_BASE: "http://127.0.0.1:1" };
+    const r = await cliRun(`${journeysFile}#art`, env);
+    assert.equal(r.status, 2, r.out);
+    assert.match(r.out, /no local art Worker/);
+    assert.ok(!existsSync(r.artifacts), "no journey ran");
+    const plain = await cliRun(`${journeysFile}#plain`, env);
+    assert.equal(plain.status, 0, `a journey with no art does not check it\n${plain.out}`);
+  } finally {
+    nakama.close();
+  }
+});
+
+test("cli: a journey that needs art refuses a public Worker address", async () => {
+  const nakama = await fakeNakama();
+  try {
+    const r = await cliRun(`${journeysFile}#art`, { NAKAMA_HOST: "127.0.0.1", NAKAMA_PORT: String(nakama.port), MELLO_E2E_ART_BASE: `http://${PUBLIC}:8787` });
+    assert.equal(r.status, 2, r.out);
+    assert.match(r.out, /refusing to run: the art Worker \(MELLO_E2E_ART_BASE\) is /);
+    assert.ok(!existsSync(r.artifacts), "no journey ran");
+  } finally {
+    nakama.close();
+  }
+});
+
+test("cli: a journey that needs art runs when the Worker answers", async () => {
+  const nakama = await fakeNakama();
+  const w = await health((_req, res) => res.end(JSON.stringify({ status: "ok" })));
+  try {
+    const r = await cliRun(`${journeysFile}#art`, { NAKAMA_HOST: "127.0.0.1", NAKAMA_PORT: String(nakama.port), MELLO_E2E_ART_BASE: w.base });
+    assert.equal(r.status, 0, r.out);
+    assert.match(r.out, /fake\.art: 1\/1 passed/);
+  } finally {
+    nakama.close();
+    w.close();
   }
 });

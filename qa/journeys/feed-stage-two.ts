@@ -10,7 +10,6 @@
 // first: scripts/e2e-art-worker.sh up.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { DEFAULT_ART_BASE } from "../../tools/mello-driver/src/app.ts";
 import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 import { endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
@@ -18,13 +17,9 @@ import { twoUsersInOneCrew } from "./lib/setup.ts";
 export default journey({
   id: "feed.stage-two",
   flows: ["FEED-04"],
+  needs: ["art"],
   async run(ctx) {
     const { step, expect } = ctx;
-    await step("the local art Worker answers", async () => {
-      const base = process.env.MELLO_E2E_ART_BASE ?? DEFAULT_ART_BASE;
-      const ok = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3_000) }).then((r) => r.ok, () => false);
-      expect(ok, `no art Worker at ${base}; run scripts/e2e-art-worker.sh up`);
-    });
     const { alice, bob, aliceCreds } = await twoUsersInOneCrew(ctx, "Public");
     const crewId = (await alice.state()).active_crew_id;
 
