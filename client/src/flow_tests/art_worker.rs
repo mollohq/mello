@@ -34,6 +34,22 @@ fn art_requests(h: &mut Harness) -> Vec<(Vec<String>, ArtSlot)> {
         .collect()
 }
 
+/// The header fetch among the requests since the last call.
+fn header_request(h: &mut Harness) -> (Vec<String>, ArtSlot) {
+    art_requests(h)
+        .into_iter()
+        .find(|(_, s)| *s == ArtSlot::Header)
+        .expect("the grid asked for the header slot")
+}
+
+/// The header fetches among the requests since the last call.
+fn header_requests(h: &mut Harness) -> Vec<(Vec<String>, ArtSlot)> {
+    art_requests(h)
+        .into_iter()
+        .filter(|(_, s)| *s == ArtSlot::Header)
+        .collect()
+}
+
 /// Do what core does for the request, then deliver the reply.
 fn serve(h: &mut Harness, ids: &[String], slot: ArtSlot) -> Option<String> {
     let store = h.ctx().art.clone();
@@ -44,7 +60,15 @@ fn serve(h: &mut Harness, ids: &[String], slot: ArtSlot) -> Option<String> {
     got
 }
 
+/// A recent games card of two PCs: the poster grid, header frames.
 fn recent_feed(games: serde_json::Value) -> FeedResponse {
+    let mut entry = recent_games_entry(games);
+    entry.data["pc_count"] = serde_json::json!(2);
+    feed_of(vec![entry])
+}
+
+/// A recent games card of one PC: the list, 48 px square rows.
+fn recent_list_feed(games: serde_json::Value) -> FeedResponse {
     feed_of(vec![recent_games_entry(games)])
 }
 
@@ -71,13 +95,11 @@ fn a_tile_without_local_art_asks_the_worker_and_shows_the_header_crop() {
         ])),
     });
     assert!(!first_tile(&h).has_capsule, "monogram until the art lands");
-    let asks = art_requests(&mut h);
-    assert!(!asks.is_empty(), "the UI asked the Worker");
-    let (ids, slot) = &asks[0];
-    assert_eq!(*slot, ArtSlot::Header);
+    let (ids, slot) = header_request(&mut h);
+    assert_eq!(slot, ArtSlot::Header);
     assert_eq!(ids[0], "steam-2300340");
 
-    assert_eq!(serve(&mut h, ids, *slot).as_deref(), Some("steam-2300340"));
+    assert_eq!(serve(&mut h, &ids, slot).as_deref(), Some("steam-2300340"));
     let tile = first_tile(&h);
     assert!(tile.has_capsule, "the tile shows the Worker art");
     // 16 by 9 art is cut to the 460 by 215 header frame.
@@ -98,14 +120,14 @@ fn the_hit_is_on_disk_so_a_restart_asks_nothing() {
     h.emit(Event::FeedLoaded {
         response: feed.clone(),
     });
-    let (ids, slot) = art_requests(&mut h).remove(0);
+    let (ids, slot) = header_request(&mut h);
     serve(&mut h, &ids, slot);
     // The memory copy is gone; the file stays.
     h.ctx().game_icon_cache.borrow_mut().clear();
     h.emit(Event::FeedLoaded { response: feed });
     assert!(first_tile(&h).has_capsule, "decoded from the file");
     assert!(
-        art_requests(&mut h).is_empty(),
+        header_requests(&mut h).is_empty(),
         "a fresh file is not asked again"
     );
     assert_eq!(fake.count("steam-2300340", "header"), 1);
@@ -122,7 +144,7 @@ fn a_404_falls_through_to_the_monogram_and_is_not_asked_again() {
     h.emit(Event::FeedLoaded {
         response: feed.clone(),
     });
-    let (ids, slot) = art_requests(&mut h).remove(0);
+    let (ids, slot) = header_request(&mut h);
     assert_eq!(serve(&mut h, &ids, slot), None, "the Worker has nothing");
     let asked = fake.count("steam-999999", "header");
     assert_eq!(asked, 1);
@@ -130,7 +152,7 @@ fn a_404_falls_through_to_the_monogram_and_is_not_asked_again() {
 
     // The feed is built again: the miss is remembered, so no new request.
     h.emit(Event::FeedLoaded { response: feed });
-    assert!(art_requests(&mut h).is_empty(), "negative cache");
+    assert!(header_requests(&mut h).is_empty(), "negative cache");
     assert_eq!(fake.count("steam-999999", "header"), asked);
     assert!(!first_tile(&h).has_capsule);
 }
@@ -147,7 +169,7 @@ fn art_older_than_a_week_shows_at_once_and_is_checked_with_its_etag() {
     h.emit(Event::FeedLoaded {
         response: feed.clone(),
     });
-    let (ids, slot) = art_requests(&mut h).remove(0);
+    let (ids, slot) = header_request(&mut h);
     serve(&mut h, &ids, slot);
 
     let path = match h.ctx().art.lookup("steam-2300340", ArtSlot::Header) {
@@ -164,7 +186,7 @@ fn art_older_than_a_week_shows_at_once_and_is_checked_with_its_etag() {
 
     h.emit(Event::FeedLoaded { response: feed });
     assert!(first_tile(&h).has_capsule, "the old file still shows");
-    let (ids, slot) = art_requests(&mut h).remove(0);
+    let (ids, slot) = header_request(&mut h);
     assert_eq!(ids, vec!["steam-2300340".to_string()], "one id is checked");
     serve(&mut h, &ids, slot);
     let seen = fake.seen.lock().unwrap().clone();
@@ -303,12 +325,15 @@ fn an_exe_icon_stays_in_the_icon_slot_and_the_art_fills_the_frames() {
             { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
         ])),
     });
-    let (ids, slot) = art_requests(&mut h).remove(0);
+    let (ids, slot) = header_request(&mut h);
     assert_eq!(slot, ArtSlot::Header, "the frame asks for header art");
     serve(&mut h, &ids, slot);
     let tile = first_tile(&h);
     assert!(tile.has_capsule, "the art is in the header frame");
-    assert!(!tile.has_icon, "the exe icon is not in an art frame");
+    assert!(
+        tile.has_icon,
+        "the exe icon is in the square slot of the tile, not in the header frame"
+    );
 
     h.emit(game_detected(
         "steam-2300340",
@@ -339,15 +364,82 @@ fn the_pill_without_an_exe_icon_takes_the_worker_icon() {
         "Night Stones",
         now_ms() - 60_000,
     ));
-    assert!(!h.app().get_game_has_capsule(), "monogram until it lands");
+    assert!(
+        !h.app().get_game_has_runtime_icon(),
+        "monogram until it lands"
+    );
     let (ids, slot) = art_requests(&mut h)
         .into_iter()
         .find(|(_, s)| *s == ArtSlot::Icon)
         .expect("the pill asked for the icon slot");
     serve(&mut h, &ids, slot);
     assert!(
-        h.app().get_game_has_capsule(),
-        "the Worker icon fills the pill"
+        h.app().get_game_has_runtime_icon(),
+        "the Worker icon fills the pill as an icon"
     );
-    assert!(!h.app().get_game_has_runtime_icon());
+    assert!(!h.app().get_game_has_capsule());
+}
+
+fn count_of_type(h: &Harness, name: &str) -> usize {
+    ElementHandle::find_by_element_type_name(h.app(), name).count()
+}
+
+/// The list row is a 48 px square: it asks for the icon slot, draws the
+/// Worker icon in a `GameIcon` and never asks for the header.
+#[test]
+fn the_recent_games_list_row_draws_the_worker_icon() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    fake.put("steam-2300340", "header", jpeg(1280, 720));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::FeedLoaded {
+        response: recent_list_feed(serde_json::json!([
+            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
+        ])),
+    });
+    assert_eq!(count_of_type(&h, "RecentGameTileCell"), 1, "the list");
+    assert!(!first_tile(&h).has_icon, "monogram until the art lands");
+    assert_eq!(count_of_type(&h, "GameIcon"), 0);
+    let asks = art_requests(&mut h);
+    assert!(
+        asks.iter().all(|(_, s)| *s == ArtSlot::Icon),
+        "a list asks for the icon slot only: {asks:?}"
+    );
+    let (ids, slot) = asks.into_iter().next().expect("the row asked for art");
+    serve(&mut h, &ids, slot);
+
+    let tile = first_tile(&h);
+    assert!(tile.has_icon, "the Worker icon is on the tile");
+    assert!(!tile.has_capsule);
+    assert_eq!(count_of_type(&h, "GameIcon"), 1, "the cell draws the image");
+    assert_eq!(count_of_type(&h, "GameBadge"), 0, "no monogram");
+}
+
+/// Art in one slot does not stop the search in the other: a tile that has its
+/// header still gets its icon when the icon lands.
+#[test]
+fn refresh_looks_up_each_slot_of_a_tile_on_its_own() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "header", jpeg(1280, 720));
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::FeedLoaded {
+        response: recent_feed(serde_json::json!([
+            { "game_id": "steam-2300340", "game_name": "Night Stones", "minutes": 600 }
+        ])),
+    });
+    let asks = art_requests(&mut h);
+    let header = asks.iter().find(|(_, s)| *s == ArtSlot::Header).cloned();
+    let icon = asks.iter().find(|(_, s)| *s == ArtSlot::Icon).cloned();
+    let (hids, hslot) = header.expect("the grid asks for the header");
+    let (iids, islot) = icon.expect("the grid keeps a list for narrow slots");
+    serve(&mut h, &hids, hslot);
+    let tile = first_tile(&h);
+    assert!(tile.has_capsule && !tile.has_icon);
+    serve(&mut h, &iids, islot);
+    let tile = first_tile(&h);
+    assert!(tile.has_capsule, "the header stays");
+    assert!(tile.has_icon, "the icon landed after the header");
 }

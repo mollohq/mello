@@ -1127,24 +1127,42 @@ pub(super) fn refresh_game_art(ctx: &AppContext) {
                 }
             }
             let tiles = card.recent_games.clone();
+            let grid = crate::recent_games::is_grid(i64::from(card.recent_pc_count));
             for t in 0..tiles.row_count() {
                 let Some(mut tile) = tiles.row_data(t) else {
                     continue;
                 };
-                if tile.has_icon || tile.has_capsule {
-                    continue;
+                // Each slot is looked up on its own: art in one slot does not
+                // stop the search for the other.
+                let mut changed_tile = false;
+                if !tile.has_icon {
+                    let art = crate::game_icons::resolve_tile_art_slot(
+                        ctx,
+                        "",
+                        tile.game_id.as_str(),
+                        tile.game_name.as_str(),
+                        ArtSlot::Icon,
+                    );
+                    if art.has_icon {
+                        tile.game_icon = art.icon;
+                        tile.has_icon = true;
+                        changed_tile = true;
+                    }
                 }
-                let art = crate::game_icons::resolve_tile_art(
-                    ctx,
-                    "",
-                    tile.game_id.as_str(),
-                    tile.game_name.as_str(),
-                );
-                if art.has_capsule || art.has_icon {
-                    tile.game_icon = art.icon;
-                    tile.has_icon = art.has_icon;
-                    tile.capsule = art.capsule;
-                    tile.has_capsule = art.has_capsule;
+                if grid && !tile.has_capsule {
+                    let art = crate::game_icons::resolve_tile_art(
+                        ctx,
+                        "",
+                        tile.game_id.as_str(),
+                        tile.game_name.as_str(),
+                    );
+                    if art.has_capsule {
+                        tile.capsule = art.capsule;
+                        tile.has_capsule = true;
+                        changed_tile = true;
+                    }
+                }
+                if changed_tile {
                     tiles.set_row_data(t, tile);
                 }
             }
@@ -1804,10 +1822,24 @@ fn extract_recent_game_tiles(ctx: &AppContext, data: &serde_json::Value) -> Rece
             let wire_launcher = row.get("launcher").and_then(|v| v.as_str()).unwrap_or("");
             let (game_id, _, _) = resolve_game_meta(ctx, wire_id, game_name);
 
-            let art = crate::game_icons::resolve_tile_art(ctx, wire_id, &game_id, game_name);
-            let (game_icon, has_icon) = (art.icon, art.has_icon);
-            let (capsule, has_capsule) = (art.capsule, art.has_capsule);
-            if has_capsule {
+            // One art form per frame shape. The list row is a 48 px square
+            // (icon slot). The poster grid is a header frame (header slot),
+            // asked for only when the card can be a grid.
+            let square = crate::game_icons::resolve_tile_art_slot(
+                ctx,
+                wire_id,
+                &game_id,
+                game_name,
+                mello_core::art::ArtSlot::Icon,
+            );
+            let (game_icon, has_icon) = (square.icon, square.has_icon);
+            let (capsule, has_capsule) = if crate::recent_games::is_grid(pc_count) {
+                let art = crate::game_icons::resolve_tile_art(ctx, wire_id, &game_id, game_name);
+                (art.capsule, art.has_capsule)
+            } else {
+                (slint::Image::default(), false)
+            };
+            if has_capsule || has_icon {
                 local_art += 1;
             }
             let tracked = mello_core::game_sensing::is_tracked_game(wire_id, game_name)

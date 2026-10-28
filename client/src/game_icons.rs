@@ -389,22 +389,29 @@ pub fn resolve_tile_art_slot(
         let wids = worker_ids(wire_id, game_id, name, &ctx.installed_games.borrow());
         resolve_art_worker(ctx, &wids, slot)
     };
-    let art = if slot == ArtSlot::Icon {
-        if let Some(icon) = resolve_or_fetch_icon(ctx, game_id) {
-            return TileArt {
+    // One art form per frame shape: the icon slot fills `icon` (the exe icon,
+    // else the Worker thumb); every other slot fills `capsule`.
+    if slot == ArtSlot::Icon {
+        let icon = resolve_or_fetch_icon(ctx, game_id).or_else(worker);
+        return match icon {
+            Some(icon) => TileArt {
                 icon,
                 has_icon: true,
                 capsule: none(),
                 has_capsule: false,
-            };
-        }
-        worker()
-    } else {
-        art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
-            .iter()
-            .find_map(|id| resolve_local_steam_art(ctx, id))
-            .or_else(worker)
-    };
+            },
+            None => TileArt {
+                icon: none(),
+                has_icon: false,
+                capsule: none(),
+                has_capsule: false,
+            },
+        };
+    }
+    let art = art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
+        .iter()
+        .find_map(|id| resolve_local_steam_art(ctx, id))
+        .or_else(worker);
     match art {
         Some(capsule) => TileArt {
             icon: none(),

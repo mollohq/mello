@@ -1908,8 +1908,9 @@ component GameSessionCard inherits Rectangle {
 // Recent games list row (one owner, or the side column). Fixed columns, the
 // same on every row: a square 48 px icon slot, the name in Oxanium on one line
 // with the last played line under it ("2 days ago, 4 h", Barlow 300, one
-// line), and the owner pips right-aligned. Icon rung: the exe or crew icon,
-// then the monogram. A header capsule never shows here. No TRACKED label.
+// line), and the owner pips right-aligned. Square frame, icon slot: the exe or
+// crew icon, else the Worker icon, then the monogram. Header art never shows
+// here. No TRACKED label.
 component RecentGameTileCell inherits Rectangle {
     in property <RecentGameTile> tile;
 
@@ -1926,7 +1927,6 @@ component RecentGameTileCell inherits Rectangle {
             hue-index: tile.hue-index;
             icon: tile.game-icon;
             has-icon: tile.has-icon;
-            has-capsule: false;
             size: 48px;
         }
 
@@ -1987,8 +1987,7 @@ component RecentGamePoster inherits Rectangle {
             game-id: tile.game-id;
             monogram: tile.monogram;
             hue-index: tile.hue-index;
-            icon: tile.game-icon;
-            has-icon: tile.has-icon;
+            has-icon: false;
             capsule: tile.capsule;
             has-capsule: tile.has-capsule;
             size: 36px;

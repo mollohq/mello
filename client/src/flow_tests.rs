@@ -8097,11 +8097,13 @@ fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
         let _art = install_with_header(&h, "291550", "Brawlhalla", installed);
         let case = format!("installed {installed}, id {wire_id}");
 
-        // Recent games tile.
+        // Recent games tile, in the poster grid (two PCs): the header frame.
+        let mut entry = recent_games_entry(serde_json::json!([
+            { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
+        ]));
+        entry.data["pc_count"] = serde_json::json!(2);
         h.emit(Event::FeedLoaded {
-            response: feed_of(vec![recent_games_entry(serde_json::json!([
-                { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
-            ]))]),
+            response: feed_of(vec![entry]),
         });
         let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
         assert!(tile.has_capsule, "{case}: the tile has Steam art");
