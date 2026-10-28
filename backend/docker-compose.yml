@@ -134,49 +134,6 @@ services:
       timeout: 5s
       retries: 5
 
-  # The local SFU. The SFU is the only media transport for voice and streams,
-  # so client-dev needs it. It is off by default, so the production default of
-  # SFU_ENDPOINT_EU stays as it is. To start it:
-  #
-  #   ./scripts/dev-sfu-keys.sh        # one time: key pair + .env lines
-  #   docker compose --profile sfu up -d --build
-  #
-  # MELLO_SFU_DIR is the mello-sfu checkout (default: next to this repo).
-  # SFU_PUBLIC_IP is the address in the ICE candidates. 127.0.0.1 is only for
-  # clients on this machine; set the LAN address in .env for a second computer.
-  sfu:
-    profiles: ["sfu"]
-    build: ${MELLO_SFU_DIR:-../../mello-sfu}
-    container_name: mello-sfu
-    depends_on:
-      minio-init:
-        condition: service_completed_successfully
-    volumes:
-      - ${SFU_JWT_PUB_KEY_FILE:-./sfu_public.pem}:/certs/jwt_pub.pem:ro
-    ports:
-      - "8443:8443" # signaling (ws)
-      - "8080:8080" # health and admin
-      - "10000-10100:10000-10100/udp" # media
-      - "10000:10000/tcp" # media over ICE-TCP
-    environment:
-      SFU_ADDR: ":8443"
-      SFU_ADMIN_ADDR: ":8080"
-      SFU_PUBLIC_IP: "${SFU_PUBLIC_IP:-127.0.0.1}"
-      # The backend's region name: the SFU refuses a token signed for
-      # another region (mello-sfu 01-SFU.md section 7.1). SFU_ENDPOINT_EU
-      # points here, so the backend signs eu-west.
-      SFU_REGION: "eu-west"
-      SFU_SERVER_ID: "sfu-local"
-      SFU_LOG_LEVEL: "debug"
-      SFU_JWT_PUB_KEY: "/certs/jwt_pub.pem"
-      # Empty means the admin API needs no password (local only).
-      SFU_ADMIN_PASSWORD: "${SFU_ADMIN_PASSWORD:-}"
-      SFU_R2_ENDPOINT: "http://minio:9000"
-      SFU_R2_BUCKET: "mello-snapshots"
-      SFU_R2_ACCESS_KEY_ID: "minioadmin"
-      SFU_R2_SECRET_ACCESS_KEY: "minioadmin"
-      SFU_SNAPSHOT_INTERVAL_S: "10"
-
 volumes:
   postgres_data:
   minio_data:
