@@ -109,6 +109,26 @@ RPC contract check. No Docker, no backend, no devices.
 `check-full.sh` adds the two suites needing a native toolchain — libmello's C++
 gtest suite and the Nakama Go modules.
 
+### On Windows
+
+The QA harness runs the same `.sh` scripts on Windows with `sh.exe` of Git for
+Windows (`C:\Program Files\Git\bin\sh.exe`), with `CI=true`. Use Git Bash, not
+WSL. In an SSH session the rustup shims `cargo` and `rustc` fail (os error 448):
+put `...\.rustup\toolchains\stable-x86_64-pc-windows-msvc\bin` first on `PATH` and
+set `RUSTC` to the toolchain `rustc.exe`.
+
+- `check.sh`: about 35 min on a cold `target\`, then a few minutes. Needs Go and
+  Node 24 on `PATH`, or it skips those steps.
+- `check-full.sh`: the first run resolves vcpkg packages (`x64-windows-static-md`)
+  and builds libmello in `libmello\build-ci`. About 15 min with a warm Rust build.
+- `mutation-check.sh`: needs `perl` (Git for Windows has it in `usr\bin`). About 20 min,
+  because each mutation rebuilds and runs the client tests.
+- `e2e.sh --keep --no-seed`: needs Docker Desktop and `openssl` (Git for Windows
+  has it). Nakama stays on 7350.
+- `e2e-art-worker.sh up|down`: needs `mello-art-worker` next to `mello` with
+  `npm install` done, or `MELLO_ART_WORKER_DIR`. `down` ends the Worker tree with
+  `taskkill` and the Worker's own processes, and leaves no `workerd`.
+
 ---
 
 ## Quick reference

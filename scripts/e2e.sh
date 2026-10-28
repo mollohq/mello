@@ -53,10 +53,10 @@ fi
 
 cleanup() {
     if [ "$KEEP" -eq 0 ]; then
-        echo "\n▸ tearing down stack"
+        printf '\n▸ tearing down stack\n'
         $COMPOSE down >/dev/null 2>&1 || true
     else
-        echo "\n▸ leaving stack running (--keep). Stop it with:"
+        printf '\n▸ leaving stack running (--keep). Stop it with:\n'
         echo "  $COMPOSE down"
     fi
 }
@@ -91,4 +91,4 @@ echo "▸ running e2e tests"
 # reachable they fail rather than skipping, so this can never pass vacuously.
 MELLO_E2E=1 CI=true cargo test -p e2e --test backend -- --nocapture
 
-echo "\n✓ e2e suite passed against a live backend"
+printf '\n✓ e2e suite passed against a live backend\n'
