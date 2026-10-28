@@ -677,9 +677,12 @@ export struct AudioDeviceData {
 export struct GameIntegrationData {
     game-id: string,
     name: string,
-    // Badge styling (games.json); icon images can replace the badge later.
+    // Badge styling (games.json), the fallback of the icon.
     short-name: string,
     color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     // "found" | "not-found" | "" (unknown)
     install-status: string,
     // Enabling writes a config file for the game to pick up.
@@ -695,6 +698,9 @@ export struct InstalledGameData {
     game-id: string,
     name: string,
     short-name: string,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     // Hidden from the crew: by the user, or in Steam.
     hidden: bool,
     // Hidden in Steam. The user cannot change it here.

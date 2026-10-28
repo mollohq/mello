@@ -483,3 +483,56 @@ fn the_stats_strip_and_profile_cards_take_the_worker_icon() {
     assert!(h.app().get_you_strip().has_icon);
     assert!(art_requests(&mut h).is_empty());
 }
+
+/// The Games settings tab: an integration row and a hidden games row are
+/// square frames. Both take the Worker icon, and a landing icon reaches only
+/// the rows that it names.
+#[test]
+fn the_settings_game_rows_take_the_worker_icon() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::GamesSettings {
+        games: vec![mello_core::events::GameIntegrationStatus {
+            game_id: "steam-2300340".into(),
+            name: "Night Stones".into(),
+            short_name: "NS".into(),
+            color: "#6E8FB8".into(),
+            installed: Some(true),
+            writes_files: false,
+            note: String::new(),
+            account_link: None,
+        }],
+    });
+    h.emit(Event::InstalledGames {
+        games: vec![
+            mello_core::events::InstalledGameInfo {
+                game_id: "steam-2300340".into(),
+                name: "Night Stones".into(),
+                steam_hidden: false,
+            },
+            mello_core::events::InstalledGameInfo {
+                game_id: "steam-999999".into(),
+                name: "No Art Game".into(),
+                steam_hidden: false,
+            },
+        ],
+    });
+    assert!(!h.app().get_games_list().row_data(0).unwrap().has_icon);
+    assert!(!h.app().get_installed_games().row_data(0).unwrap().has_icon);
+    let asks = art_requests(&mut h);
+    let (ids, slot) = asks
+        .into_iter()
+        .find(|(ids, s)| *s == ArtSlot::Icon && ids[0] == "steam-2300340")
+        .expect("the rows asked for the icon slot");
+    serve(&mut h, &ids, slot);
+
+    assert!(h.app().get_games_list().row_data(0).unwrap().has_icon);
+    let installed = h.app().get_installed_games();
+    assert!(installed.row_data(0).unwrap().has_icon);
+    assert!(
+        !installed.row_data(1).unwrap().has_icon,
+        "a game that the icon does not name keeps its monogram"
+    );
+}

@@ -125,7 +125,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // The image is on disk. Cards that have no art yet look again;
             // the lookup decodes the file once.
             log::info!("[game-art] {} art ready", slot.as_str());
-            let _ = game_id;
+            if slot == mello_core::art::ArtSlot::Icon {
+                super::games::on_icon_art_loaded(ctx, &game_id);
+            }
             super::clip::refresh_game_art(ctx);
         }
         Event::SessionSummary {

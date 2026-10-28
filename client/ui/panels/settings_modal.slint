@@ -1768,6 +1768,8 @@ component GameIntegrationRow inherits Rectangle {
                 game-id: game.game-id;
                 short-name: game.short-name;
                 badge-color: game.color;
+                runtime-icon: game.icon;
+                has-runtime-icon: game.has-icon;
                 size: 36px;
             }
         }
@@ -1854,6 +1856,8 @@ component InstalledGameRow inherits Rectangle {
             game-id: game.game-id;
             short-name: game.short-name;
             badge-color: Theme.raised;
+            runtime-icon: game.icon;
+            has-runtime-icon: game.has-icon;
             size: 28px;
         }
 
