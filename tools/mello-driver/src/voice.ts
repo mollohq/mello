@@ -46,7 +46,8 @@ export async function expectSfuVoice(app: App, timeoutMs = 20_000): Promise<void
   if (transport === "disconnected") {
     throw new DriverError(
       `${app.name}: the voice call did not start (VoiceStateChanged reports no transport); see ${app.logPath}. ` +
-        `Voice journeys run only through the local SFU (${sfuHealthUrl()}).`,
+        `Voice journeys run only through the local SFU (${sfuHealthUrl()}). ` +
+        "If the SFU answers its health check but ICE never connects, its image is stale: rebuild it with `docker compose up -d --build` in mello-sfu.",
     );
   }
   throw new DriverError(

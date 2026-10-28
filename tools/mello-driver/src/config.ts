@@ -71,7 +71,8 @@ export async function checkSfu(url = sfuHealthUrl()): Promise<void> {
   }
   throw new Error(
     `no local SFU at ${url} (${why}). Voice journeys run only through the local SFU. ` +
-      "Start the local SFU, or set MELLO_E2E_SFU_HEALTH to its health address.",
+      "Start the local SFU with `docker compose up -d --build` in mello-sfu (without --build, compose reuses an old image), " +
+      "or set MELLO_E2E_SFU_HEALTH to its health address.",
   );
 }
 
