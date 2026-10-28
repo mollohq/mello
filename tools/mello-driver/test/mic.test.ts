@@ -75,6 +75,7 @@ test("a journey sets the permission for each user, with or without a deep link",
     repoRoot: root,
     artifactsRoot: join(dir, "artifacts"),
     mcpPortBase: await freeBase(),
+    log: () => {},
   });
   assert.equal(r.ok, true, r.error);
   assert.deepEqual(seen, { alice: "granted", bob: "undetermined", carol: "denied" });
@@ -94,6 +95,7 @@ test("a deep link as the second argument still works", async () => {
     repoRoot: root,
     artifactsRoot: join(tmp(), "artifacts"),
     mcpPortBase: await freeBase(),
+    log: () => {},
   });
   assert.equal(r.ok, true, r.error);
 });

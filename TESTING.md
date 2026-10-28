@@ -66,13 +66,14 @@ retries, and never `ctest --repeat until-pass`. A suite you re-run until it
 goes green tells you nothing, and the habit spreads.
 
 Every flaky test found in this codebase so far had the same cause: **the test
-asserted on a race it did not control.** Three examples, all in libmello RTP:
+asserted on a race it did not control.** Examples (libmello RTP, and the Node driver tests):
 
 | Test | The race | The fix |
 |---|---|---|
 | `QueueOverflowEntersIdrGate` | Needed the send queue to overflow; paced 20 Mbps against 16 tiny frames, so the pacer usually drained them first | Starve the pacer (8 kbps) and send 48 frames — overflow becomes arithmetic |
 | `BoundedBurst…QueueOverflow` | Same, but through a peer connection with no settable pacing | Overflow by volume instead: 24 × 512 KB against a 4 MB bound |
 | `ParityFecRepairs…WithoutPli` | Needed the queue *not* to overflow; a flat 3 ms sleep assumed the pacer kept up | Keep the sleep (the receiver needs it) and also wait for the queue to drain |
+| `tools/mello-driver` test files that call `runJourney` (`events`, `mic`, `voice`) | The runner's worker sends results to the parent over stdout. `runJourney` wrote its progress lines to the same stdout, so a line landed inside a result frame under load. Parent failed the file with `Unable to deserialize cloned data` (7 of 12 runs) | `RunOptions.log` sink. Tests pass `log: () => {}`, so nothing else writes to the worker's stdout |
 
 The pattern to reach for: **make the condition true by construction**, not by
 hoping the machine cooperates. Starve a producer, exceed a bound by volume, or

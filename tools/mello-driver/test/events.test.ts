@@ -61,6 +61,7 @@ async function runOpts(extra: Partial<RunOptions> = {}): Promise<RunOptions & { 
     mcpPortBase: await freeBase(),
     env: { FAKE_APP_LOG: requests },
     requests,
+    log: () => {},
     ...extra,
   };
 }
