@@ -621,3 +621,74 @@ fn the_recap_games_strip_asks_for_header_art() {
         "cut to the header frame"
     );
 }
+
+/// The session card tile is a 40 px square: it asks for the icon slot, not
+/// the header, and draws the Worker icon uncropped from a header.
+#[test]
+fn the_session_card_tile_takes_the_icon_slot() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    fake.put("steam-2300340", "header", jpeg(1280, 720));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    let mut feed = zero_telemetry_game_session_feed();
+    feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Night Stones");
+    feed.sections[0].entries[0].data["game_id"] = serde_json::json!("steam-2300340");
+    h.emit(Event::FeedLoaded { response: feed });
+    let card = first_card(&h);
+    assert!(!card.game_has_icon && !card.game_has_capsule);
+    let asks = art_requests(&mut h);
+    assert!(!asks.is_empty(), "the card asked for art");
+    assert!(
+        asks.iter().all(|(_, s)| *s == ArtSlot::Icon),
+        "a square tile asks for the icon slot only: {asks:?}"
+    );
+    let (ids, slot) = asks.into_iter().next().expect("an ask");
+    serve(&mut h, &ids, slot);
+    let card = first_card(&h);
+    assert!(card.game_has_icon, "the Worker icon is on the card");
+    assert!(!card.game_has_capsule, "no header in a square frame");
+    let size = card.game_icon.size();
+    assert_eq!(
+        (size.width, size.height),
+        (90, 90),
+        "the icon keeps its shape"
+    );
+}
+
+/// The live card tile is a square too: the icon slot, and the hero for the
+/// poster.
+#[test]
+fn the_live_card_tile_takes_the_icon_slot() {
+    let fake = FakeArt::start();
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 2);
+    set_roster(&h, &[("user-1", "Test User"), ("u2", "Jonas")]);
+    h.emit(Event::FeedLoaded {
+        response: feed_of(vec![]),
+    });
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    h.emit(game_detected(
+        "steam-2300340",
+        "Night Stones",
+        now_ms() - 60_000,
+    ));
+    let asks = art_requests(&mut h);
+    assert!(
+        asks.iter().all(|(_, s)| *s != ArtSlot::Header),
+        "the live card does not ask for a header: {asks:?}"
+    );
+    let asks_dbg = asks.clone();
+    let (iids, slot) = asks
+        .into_iter()
+        .find(|(_, s)| *s == ArtSlot::Icon)
+        .unwrap_or_else(|| panic!("the live card asked for the icon slot: {asks_dbg:?}"));
+    serve(&mut h, &iids, slot);
+    let live = h
+        .app()
+        .get_feed_cards()
+        .iter()
+        .find(|c| c.card_type.as_str() == "live-session")
+        .expect("the live card");
+    assert!(live.game_has_icon && !live.game_has_capsule);
+}

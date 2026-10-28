@@ -1005,7 +1005,14 @@ pub(crate) fn live_session_cards(ctx: &AppContext) -> Vec<FeedCardData> {
 
             let (game_id, _, _) = resolve_game_meta(ctx, &g.game_id, &g.game_name);
             // The shared art ladder: the same ids and order as every tile.
-            let art = crate::game_icons::resolve_tile_art(ctx, &g.game_id, &game_id, &g.game_name);
+            // The 40 px square: the icon slot.
+            let art = crate::game_icons::resolve_tile_art_slot(
+                ctx,
+                &g.game_id,
+                &game_id,
+                &g.game_name,
+                mello_core::art::ArtSlot::Icon,
+            );
             let (game_icon, game_has_icon) = (art.icon, art.has_icon);
             let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
             // Poster art for the wide slot: only a game installed on this
@@ -1096,6 +1103,15 @@ pub(super) fn refresh_live_session_cards(ctx: &AppContext) {
     refresh_feed_skeletons(ctx);
 }
 
+/// The art slot that the game frame of a card draws. The recap cards draw a
+/// header frame (460:215); every other card draws a square, the icon slot.
+fn card_art_slot(card_type: &str) -> mello_core::art::ArtSlot {
+    match card_type {
+        "recap" | "daily-recap" => mello_core::art::ArtSlot::Header,
+        _ => mello_core::art::ArtSlot::Icon,
+    }
+}
+
 /// Look for art again on every card, tile and recap row that has none, and on
 /// the NOW PLAYING pill. Runs when the art Worker delivered an image. A card
 /// that already has art is left as it is, so nothing flickers.
@@ -1107,16 +1123,19 @@ pub(super) fn refresh_game_art(ctx: &AppContext) {
                 continue;
             };
             let mut changed = false;
-            if !card.game_id.is_empty()
-                && !card.game_has_icon
-                && !card.game_has_capsule
-                && card.card_type != "head2head"
-            {
-                let art = crate::game_icons::resolve_tile_art(
+            let slot = card_art_slot(card.card_type.as_str());
+            let drawn = if slot == ArtSlot::Icon {
+                card.game_has_icon
+            } else {
+                card.game_has_capsule
+            };
+            if !card.game_id.is_empty() && !drawn && card.card_type != "head2head" {
+                let art = crate::game_icons::resolve_tile_art_slot(
                     ctx,
                     "",
                     card.game_id.as_str(),
                     card.game_name.as_str(),
+                    slot,
                 );
                 if art.has_capsule || art.has_icon {
                     card.game_icon = art.icon;
@@ -2086,7 +2105,15 @@ fn build_feed_card(
     ));
     // Runtime icon (exe-extracted / crew-shared) for games without bundled
     // art; a cache miss requests the crew copy once per run.
-    let art = crate::game_icons::resolve_tile_art(ctx, &wire_game_id, &game_id, &game);
+    // One art form per frame shape: the recap cards draw a header frame, every
+    // other card a square (icon slot).
+    let art = crate::game_icons::resolve_tile_art_slot(
+        ctx,
+        &wire_game_id,
+        &game_id,
+        &game,
+        card_art_slot(feed_type),
+    );
     let (game_icon, game_has_icon) = (art.icon, art.has_icon);
     let (game_capsule, game_has_capsule) = (art.capsule, art.has_capsule);
     let game_monogram = crate::recent_games::monogram(&game);

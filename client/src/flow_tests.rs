@@ -8080,12 +8080,12 @@ fn install_with_header(h: &Harness, appid: &str, name: &str, installed: bool) ->
     PosterArt(root)
 }
 
-/// One game id, one kind of art on every surface. Brawlhalla has Steam art on
-/// disk. The recent games tile (library id or catalogue id), the session card
-/// and the NOW PLAYING pill all show it. Before the shared lookup, the tile
-/// and the pill showed the monogram when the id was the catalogue id.
+/// One game id, one art form per frame shape. Brawlhalla has Steam art on
+/// disk and an exe icon. The poster tile (a header frame, library id or
+/// catalogue id) shows the Steam header. The session card and the NOW PLAYING
+/// pill (square frames) show the icon and never the header.
 #[test]
-fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
+fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
     // (installed list knows the game, id the recent games row carries)
     for (installed, wire_id) in [
         (true, "steam-291550"),
@@ -8112,25 +8112,27 @@ fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
         let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
         assert!(tile.has_capsule, "{case}: the tile has Steam art");
 
-        // Session card.
+        // Session card (40 px square) and the NOW PLAYING pill: both are
+        // icon slot frames, so both take the exe icon and never the header.
+        h.ctx().game_icon_cache.borrow_mut().insert(
+            "brawlhalla".into(),
+            crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4),
+        );
         let mut feed = zero_telemetry_game_session_feed();
         feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Brawlhalla");
         feed.sections[0].entries[0].data["game_id"] = serde_json::json!("brawlhalla");
         h.emit(Event::FeedLoaded { response: feed });
         let card = first_card(&h);
         assert!(
-            card.game_has_capsule,
-            "{case}: the session card has Steam art"
+            card.game_has_icon && !card.game_has_capsule,
+            "{case}: the session card takes the icon, not the header"
         );
 
-        // NOW PLAYING pill: the icon slot has no local Steam art; it is the
-        // exe icon, then the Worker icon, then the monogram.
         h.emit(game_detected("brawlhalla", "Brawlhalla", now_ms() - 60_000));
         assert!(
-            !h.app().get_game_has_capsule(),
-            "{case}: the pill does not take Steam header art"
+            h.app().get_game_has_runtime_icon() && !h.app().get_game_has_capsule(),
+            "{case}: the pill takes the same icon"
         );
-        assert!(!h.app().get_game_has_runtime_icon());
         assert_eq!(h.app().get_game_monogram().as_str(), "BR");
     }
 }
