@@ -215,6 +215,8 @@ export component ControlBar inherits Rectangle {
 
     // Clip
     callback clip-captured();
+    // Preview only: render the clip button hovered.
+    in property <bool> preview-clip-hover: false;
     in property <string> voice-channel-name: "";
     background: Theme.surface;
     border-width: 0px;
@@ -980,7 +982,7 @@ export component ControlBar inherits Rectangle {
                     height: parent.height;
                     n: 9px;
                     inset: Theme.keyline;
-                    fill: clip-hover.has-hover ? Theme.live-bg : Theme.surface;
+                    fill: (clip-hover.has-hover || root.preview-clip-hover) ? Theme.raised-hover : Theme.surface;
                 }
 
                 clip-row := HorizontalLayout {
@@ -1049,6 +1051,24 @@ export component Preview inherits Rectangle {
         game-monogram: "CS";
         game-color: #DE9B35;
         can-stream: true;
+        bar-state: 1;
+    }
+}
+
+export component PreviewClipHover inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        preview-clip-hover: true;
         bar-state: 1;
     }
 }
