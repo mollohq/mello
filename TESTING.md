@@ -122,6 +122,7 @@ gtest suite and the Nakama Go modules.
 | `dev_fault` RPC | Backend fault injection | Yes (live Nakama) | No (manual/integration) | RPC call, gated by `MELLO_ENABLE_DEV_FAULT=1` |
 | `scripts/e2e-head2head.sh` | Head2head feed entry: library_report, crew_feed, belt move, night_owl | Yes (own local Nakama stack) | No (manual, ~70 s) | `./scripts/e2e-head2head.sh` |
 | `mello-driver seed-crew` | Seeds crewmates (library, sessions, clips, belt) into your crew on the local stack | Yes (local Nakama) | No (manual) | `node tools/mello-driver/src/cli.ts seed-crew <invite code> [--members N] [--belts] [--clips N] [--recap]` |
+| `mello-driver run` needs | A journey lists `needs` (`sfu`, `lounge`, `art`); `voice: true` implies `sfu`. `run` checks each need once before the first journey, and only on a local address. `art` is the art Worker health at `MELLO_E2E_ART_BASE` (default `http://127.0.0.1:8787`); start it with `scripts/e2e-art-worker.sh up`. `sfu` is the SFU health at `MELLO_E2E_SFU_HEALTH`. | Yes (local stack) | No (manual) | `node tools/mello-driver/src/cli.ts run <journey>` |
 | SFU `go test` | SFU server | No | ⚠️ not wired (run locally) | `cd mello-sfu && go test ./...` |
 | `voice-soak` | SFU load/churn/resilience | Yes (live SFU) | No (manual/integration) | `go run ./tools/voice-soak ...` |
 | `stream-soak` | SFU H.264 RTP stream relay | Yes (live SFU) | No (manual/integration) | `go run ./tools/stream-soak ...` |

@@ -152,6 +152,42 @@ Stream audio has its own volume. This slider does not change it.
 
 The e2e state port reports `id`, `volume` and `local_muted` for each voice member.
 
+### Settings tabs
+
+The settings modal (`settings_modal.slint`) has five tabs, in this order:
+PROFILE, GENERAL, AUDIO, GAMES, ABOUT.
+
+#### ABOUT tab
+
+The ABOUT tab is read-only. It has these parts, top to bottom.
+
+| Part | Content |
+|---|---|
+| M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date) and MADE BY ("Mollo Tech AB, Göteborg"). The stamp comes from `client/src/build_info.rs`. |
+| THANK YOU | One sentence: m3llo runs on the work of many people and services, and this page names them. |
+| SERVICES WE USE | Names only: Nakama (Heroic Labs), Render, Cloudflare, IGDB, DiceBear, Giphy, Plausible (website only), Apple, Google STUN, Steam, Epic Games, GOG, Riot Games, Discord, Twitch, GitHub. |
+| OPEN SOURCE WE SHIP | Names only: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, OpenMoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
+| CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0". |
+
+The "Third-party notices" button opens a view in the same modal. A back control returns to ABOUT.
+The view lists each licence text once, with the names of the dependencies that share it.
+
+**Attribution obligations.** Two licences require a visible line in the app.
+
+- The Slint royalty-free licence requires visible attribution. The CREDITS line "Made with Slint" meets it.
+- OpenMoji uses CC BY-SA 4.0. The CREDITS line for OpenMoji, with its address and the licence name, meets it.
+
+Do not remove either line. Do not move them out of the ABOUT tab.
+
+**Notices asset.** `client/build_notices.rs` runs from `client/build.rs` at build time.
+It writes `third_party_notices.txt` into `OUT_DIR`. The client embeds it, and `client/src/about.rs` parses it.
+
+- Records are separated by U+001E. Each record has three fields separated by U+001F: the names (one `name version` pair per line), the licence name and the licence text.
+- Dependencies with the same licence text share one record.
+- Sources: the Rust crates (`cargo tree` for the shipped targets, normal dependencies only, with the licence files in the crate source), `libmello/vcpkg.json` and `libmello/third_party`, the font licences in `client/ui/fonts`, and OpenMoji and Slint by name.
+
+---
+
 ---
 
 ## 5. Theme System

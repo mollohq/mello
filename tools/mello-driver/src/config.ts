@@ -5,6 +5,7 @@ import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
+import { DEFAULT_ART_BASE } from "./app.ts";
 import { LOUNGE } from "./browser.ts";
 import { checkLounge, checkSfuRegions, dnsLookup, nakamaBase, nakamaTarget, requireLocalHost, type Lookup } from "./guard.ts";
 import { journeyNeeds, type Journey, type RunOptions } from "./journey.ts";
@@ -24,6 +25,33 @@ export function defaultOptions(): RunOptions {
 /** The health address of the local SFU. MELLO_E2E_SFU_HEALTH overrides it. */
 export function sfuHealthUrl(): string {
   return process.env.MELLO_E2E_SFU_HEALTH ?? "http://127.0.0.1:8080/health";
+}
+
+/** The base address of the local art Worker. MELLO_E2E_ART_BASE overrides it. */
+export function artBase(): string {
+  return process.env.MELLO_E2E_ART_BASE ?? DEFAULT_ART_BASE;
+}
+
+/**
+ * Fail early when the local art Worker does not answer. Without it, the art
+ * steps of a journey fail one by one with no clue about the cause.
+ * The Worker is healthy when `<base>/health` answers JSON with status "ok".
+ */
+export async function checkArtWorker(base = artBase()): Promise<void> {
+  const url = `${base.replace(/\/+$/, "")}/health`;
+  let why: string;
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(3_000) });
+    const body = (await r.json().catch(() => null)) as { status?: unknown } | null;
+    if (r.ok && body?.status === "ok") return;
+    why = r.ok ? `status ${JSON.stringify(body?.status)}, not "ok"` : `HTTP ${r.status}`;
+  } catch (e) {
+    why = String(e);
+  }
+  throw new Error(
+    `no local art Worker at ${url} (${why}). ` +
+      "Start it with scripts/e2e-art-worker.sh up, or set MELLO_E2E_ART_BASE to its address.",
+  );
 }
 
 /**
@@ -80,6 +108,11 @@ export async function preflight(opts: RunOptions, journeys: Journey[] = [], reso
     const health = sfuHealthUrl();
     await requireLocalHost("the SFU health address (MELLO_E2E_SFU_HEALTH)", new URL(health).hostname, "Use the local SFU.", resolve);
     await checkSfu(health);
+  }
+  if (needs.has("art")) {
+    const base = artBase();
+    await requireLocalHost("the art Worker (MELLO_E2E_ART_BASE)", new URL(base).hostname, "Use the local art Worker.", resolve);
+    await checkArtWorker(base);
   }
   if (needs.has("lounge")) await checkLounge(LOUNGE, base, resolve);
 }

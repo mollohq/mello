@@ -5,7 +5,7 @@
 // Sharing is on, the onboarding default, so the library report runs and the
 // server returns the viewer's own values.
 //
-// Day 0 reveal (plans/SEALED-REVEAL.md section 9): the own chips of a new crew
+// Day 0 reveal (specs/features/SEALED-REVEAL.md section 9): the own chips of a new crew
 // arrive sealed, each under its own key. The control is labelled "Sealed belt,
 // open it", the same label as a belt that moved. A click opens one chip in the
 // centre with the face "You", and the return leaves that chip open.

@@ -1,4 +1,4 @@
-//! Sealed belts and the sealed weekly recap (plan `SEALED-REVEAL.md`).
+//! Sealed belts and the sealed weekly recap (spec `SEALED-REVEAL.md`).
 //!
 //! A belt that moved, and the weekly recap, show sealed in the feed until the
 //! user opens them. This module owns what the UI needs to draw a sealed card:

@@ -15,6 +15,10 @@
 #
 # The driver points the apps at it: tools/mello-driver launchEnv sets
 # MELLO_ART_BASE to http://127.0.0.1:8787 (MELLO_E2E_ART_BASE overrides).
+#
+# A journey that uses this Worker declares `needs: ["art"]`. `mello-driver run`
+# then checks <base>/health once before the first journey, only on a local
+# address, and stops with the fix when it does not answer.
 set -eu
 
 HERE=$(cd "$(dirname "$0")/.." && pwd)
@@ -53,7 +57,12 @@ down)
     if [ -f "$STATE/wrangler.pid" ]; then
         pid=$(cat "$STATE/wrangler.pid")
         # wrangler runs workerd as a child: stop the process group members.
-        pkill -P "$pid" 2>/dev/null || true
+        # Git Bash on Windows has no pkill; taskkill ends the process tree there.
+        if command -v pkill >/dev/null 2>&1; then
+            pkill -P "$pid" 2>/dev/null || true
+        elif command -v taskkill.exe >/dev/null 2>&1; then
+            taskkill.exe //PID "$pid" //T //F >/dev/null 2>&1 || true
+        fi
         kill "$pid" 2>/dev/null || true
         rm -f "$STATE/wrangler.pid"
     fi

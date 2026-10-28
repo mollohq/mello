@@ -1,6 +1,6 @@
 // FEED-10: a belt that moved arrives sealed. A click opens it in the centre of
 // the feed, the face shows, and a click on the scrim sends it back to its slot,
-// open, with the unread dot cleared. Plan SEALED-REVEAL.md. bob is real, four
+// open, with the unread dot cleared. Spec SEALED-REVEAL.md. bob is real, four
 // members are seeded over REST, and one of them takes the_carry (the move of
 // feed-stage-five).
 

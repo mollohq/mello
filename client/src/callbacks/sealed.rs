@@ -1,4 +1,4 @@
-//! The centre view of a sealed card (`sealed.rs`, plan `SEALED-REVEAL.md`).
+//! The centre view of a sealed card (`sealed.rs`, spec `SEALED-REVEAL.md`).
 
 use slint::ComponentHandle;
 

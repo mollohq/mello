@@ -20,3 +20,13 @@ export const lounge = journey({
     await launch("alice");
   },
 });
+
+/** A journey that needs the art Worker: the runner checks it before it starts. */
+export const art = journey({
+  id: "fake.art",
+  flows: [],
+  needs: ["art"],
+  async run({ launch }) {
+    await launch("alice");
+  },
+});
