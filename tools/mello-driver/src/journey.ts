@@ -78,6 +78,8 @@ export type RunOptions = {
   events?: EventWriter;
   /** Live screenshot interval in ms with `events`; 0 turns them off. Default 2000. */
   liveScreenshotMs?: number;
+  /** Where progress lines go. Default: stdout. Tests pass their own sink. */
+  log?: (line: string) => void;
 };
 
 export const DEFAULT_LIVE_SCREENSHOT_MS = 2000;
@@ -101,7 +103,7 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
   const users = new Map<string, App>();
   const steps: StepRecord[] = [];
   const started = Date.now();
-  const log = (line: string) => process.stdout.write(`${line}\n`);
+  const log = opts.log ?? ((line: string) => void process.stdout.write(`${line}\n`));
   const events = opts.events;
   events?.beginJourney();
   events?.emit("journey_start", { id: j.id, dir });

@@ -87,6 +87,7 @@ async function runVoice(transport: string) {
     artifactsRoot: join(dir, "artifacts"),
     mcpPortBase: await freeBase(),
     env: { FAKE_APP_VOICE_TRANSPORT: transport },
+    log: () => {},
   };
   return runJourney(inVoice, opts);
 }
