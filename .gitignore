@@ -90,3 +90,8 @@ scripts/.catalogue_work/
 
 # Streaming quality gate: reference clips rendered on first use (tools/stream-gate)
 benchmarks/clips/
+!qa/fixtures/art-index/*.csv
+
+# Renders live in /tmp or target/, never in the tree
+/preview-*.png
+/*.png

@@ -110,6 +110,26 @@ pub struct Harness {
 impl Harness {
     /// Build a harness with all callbacks wired and no OS resources touched.
     pub fn new() -> Self {
+        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::disabled()))
+    }
+
+    /// A harness whose art Worker rung asks `base` and keeps its files in a
+    /// temp dir of its own. The commands the UI sends are read with
+    /// [`Harness::commands`]; a test runs them against the store itself.
+    pub fn with_art_server(base: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "m3llo-art-harness-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::new(
+            base, dir,
+        )))
+    }
+
+    fn build(art: std::sync::Arc<mello_core::art::ArtStore>) -> Self {
         init_test_backend();
         redirect_settings_to_temp_dir();
         assert_element_queries_work();
@@ -118,6 +138,17 @@ impl Harness {
         mello_core::library::set_steam_root_override(Some(
             std::env::temp_dir().join("m3llo-no-steam-root"),
         ));
+
+        // Nor the exe icon cache or art cache of the machine: a fresh temp
+        // root per harness.
+        static NEXT_CACHE: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let cache_root = std::env::temp_dir().join(format!(
+            "m3llo-cache-harness-{}-{}",
+            std::process::id(),
+            NEXT_CACHE.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&cache_root);
+        crate::platform::exe_icon::set_cache_root_override(Some(cache_root));
 
         let rt = tokio::runtime::Builder::new_current_thread()
             .enable_all()
@@ -129,7 +160,8 @@ impl Harness {
         let (event_tx, event_rx) = std::sync::mpsc::channel::<Event>();
         let (update_tx, update_rx) = std::sync::mpsc::channel::<crate::updater::UpdateEvent>();
 
-        let ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
+        let mut ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
+        ctx.art = art;
 
         // The real wiring — not a copy of it.
         crate::callbacks::wire_all(&ctx);
@@ -334,6 +366,20 @@ mod tests {
     use mello_core::VoiceMode;
 
     /// UI → core, through the real `callbacks::wire_all`.
+    #[test]
+    fn the_harness_caches_live_under_the_temp_dir() {
+        let _h = Harness::new();
+        let tmp = std::env::temp_dir();
+        let icons = crate::platform::exe_icon::icon_cache_dir().unwrap();
+        let art = crate::platform::exe_icon::art_cache_dir().unwrap();
+        assert!(icons.starts_with(&tmp), "{icons:?}");
+        assert!(art.starts_with(&tmp), "{art:?}");
+        assert!(
+            !icons.exists(),
+            "a fresh harness starts with no cached icons"
+        );
+    }
+
     #[test]
     fn ui_callback_reaches_core_as_a_command() {
         let mut h = Harness::new();

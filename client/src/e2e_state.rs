@@ -162,6 +162,8 @@ struct Snapshot {
     invite_card: InviteCardSnap,
     /// The recent games card of the feed, if any.
     recent_games: RecentGamesSnap,
+    /// The stats strip: the viewer's last game with its square icon.
+    you_strip: YouStripSnap,
     /// The live session cards of the feed, in screen order.
     live_sessions: Vec<LiveSessionSnap>,
     /// The daily recap card of the feed, if any.
@@ -483,7 +485,21 @@ struct RecentGameTileSnap {
     /// Lower case: `"steam"`, `"epic"`, `"gog"`, or empty when unknown.
     launcher: String,
     tracked: bool,
-    /// `"image"` (game art or icon) or `"monogram"` (the two-letter fallback).
+    /// What the shape of the card draws: `"image"` (the header art in the
+    /// grid, the icon in the list) or `"monogram"` (the two-letter fallback).
+    art: &'static str,
+    /// The tile holds icon art (the square of the list row).
+    has_icon: bool,
+    /// The tile holds header art (the frame of the poster grid).
+    has_header: bool,
+}
+
+/// The stats strip of the feed, the viewer's own.
+#[derive(Serialize)]
+struct YouStripSnap {
+    has_stats: bool,
+    game_name: String,
+    /// `"image"` (icon slot art) or `"monogram"`.
     art: &'static str,
 }
 
@@ -758,13 +774,10 @@ fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
             tiles: Vec::new(),
         };
     };
+    let grid = crate::recent_games::is_grid(i64::from(card.recent_pc_count));
     RecentGamesSnap {
         header_line: card.subtitle.to_string(),
-        shape: if crate::recent_games::is_grid(i64::from(card.recent_pc_count)) {
-            "grid"
-        } else {
-            "list"
-        },
+        shape: if grid { "grid" } else { "list" },
         pc_count: card.recent_pc_count,
         tiles: first_rows(&card.recent_games, |t| {
             // The tile shows the launcher in place of hours when it has none.
@@ -780,11 +793,13 @@ fn read_recent_games(app: &MainWindow) -> RecentGamesSnap {
                 hours_text: hours,
                 launcher,
                 tracked: t.tracked,
-                art: if t.has_capsule || t.has_icon {
+                art: if (grid && t.has_capsule) || (!grid && t.has_icon) {
                     "image"
                 } else {
                     "monogram"
                 },
+                has_icon: t.has_icon,
+                has_header: t.has_capsule,
             }
         }),
     }
@@ -1249,6 +1264,14 @@ fn read(app: &MainWindow) -> Snapshot {
         sealed: read_sealed(app),
         invite_card: read_invite_card(app),
         recent_games: read_recent_games(app),
+        you_strip: {
+            let strip = app.get_you_strip();
+            YouStripSnap {
+                has_stats: strip.has_stats,
+                game_name: strip.game_name.to_string(),
+                art: if strip.has_icon { "image" } else { "monogram" },
+            }
+        },
         daily_recap: read_daily_recap(app),
         live_sessions: app
             .get_feed_cards()
@@ -1602,7 +1625,7 @@ mod tests {
             game_id: id.into(),
             game_name: name.into(),
             hours: hours.into(),
-            has_capsule: capsule,
+            has_icon: capsule,
             tracked: capsule,
             ..Default::default()
         };
@@ -1660,9 +1683,9 @@ mod tests {
             s["recent_games"],
             json!({"header_line": "14 sessions, 31 h this week", "shape": "list", "pc_count": 0, "tiles": [
                 {"name": "Brawlhalla", "hours_text": "4,167 H", "launcher": "steam",
-                 "owners": 0, "tracked": true, "art": "image"},
+                 "owners": 0, "tracked": true, "art": "image", "has_icon": true, "has_header": false},
                 {"name": "Fortnite", "hours_text": "EPIC", "launcher": "epic",
-                 "owners": 0, "tracked": false, "art": "monogram"}]})
+                 "owners": 0, "tracked": false, "art": "monogram", "has_icon": false, "has_header": false}]})
         );
         assert_eq!(s["skeleton_trio"], 2);
     }

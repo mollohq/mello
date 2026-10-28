@@ -7255,7 +7255,11 @@ fn recap_without_belts_shows_neither_section() {
 
 /// Sessions for the cells under head2head in frame F.
 fn tall_recap_crew(recap: serde_json::Value) -> Harness {
-    let mut h = Harness::new();
+    tall_recap_crew_in(Harness::new(), recap)
+}
+
+/// [`tall_recap_crew`] in a harness the caller built, for a fake art server.
+fn tall_recap_crew_in(mut h: Harness, recap: serde_json::Value) -> Harness {
     // The recap of week 1 is open: the card shows, not the sealed one.
     open_recap(&h, 1);
     app_with_crew_of(&mut h, 5);
@@ -8076,12 +8080,12 @@ fn install_with_header(h: &Harness, appid: &str, name: &str, installed: bool) ->
     PosterArt(root)
 }
 
-/// One game id, one kind of art on every surface. Brawlhalla has Steam art on
-/// disk. The recent games tile (library id or catalogue id), the session card
-/// and the NOW PLAYING pill all show it. Before the shared lookup, the tile
-/// and the pill showed the monogram when the id was the catalogue id.
+/// One game id, one art form per frame shape. Brawlhalla has Steam art on
+/// disk and an exe icon. The poster tile (a header frame, library id or
+/// catalogue id) shows the Steam header. The session card and the NOW PLAYING
+/// pill (square frames) show the icon and never the header.
 #[test]
-fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
+fn one_game_id_resolves_to_one_art_form_per_frame_shape() {
     // (installed list knows the game, id the recent games row carries)
     for (installed, wire_id) in [
         (true, "steam-291550"),
@@ -8097,33 +8101,38 @@ fn one_game_id_resolves_to_the_same_art_on_tile_session_card_and_pill() {
         let _art = install_with_header(&h, "291550", "Brawlhalla", installed);
         let case = format!("installed {installed}, id {wire_id}");
 
-        // Recent games tile.
+        // Recent games tile, in the poster grid (two PCs): the header frame.
+        let mut entry = recent_games_entry(serde_json::json!([
+            { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
+        ]));
+        entry.data["pc_count"] = serde_json::json!(2);
         h.emit(Event::FeedLoaded {
-            response: feed_of(vec![recent_games_entry(serde_json::json!([
-                { "game_id": wire_id, "game_name": "Brawlhalla", "minutes": 2500, "launcher": "steam" }
-            ]))]),
+            response: feed_of(vec![entry]),
         });
         let tile = first_card(&h).recent_games.row_data(0).expect("a tile");
         assert!(tile.has_capsule, "{case}: the tile has Steam art");
 
-        // Session card.
+        // Session card (40 px square) and the NOW PLAYING pill: both are
+        // icon slot frames, so both take the exe icon and never the header.
+        h.ctx().game_icon_cache.borrow_mut().insert(
+            "brawlhalla".into(),
+            crate::avatar::rgba_to_image(&[255u8; 4 * 4 * 4], 4, 4),
+        );
         let mut feed = zero_telemetry_game_session_feed();
         feed.sections[0].entries[0].data["game_name"] = serde_json::json!("Brawlhalla");
         feed.sections[0].entries[0].data["game_id"] = serde_json::json!("brawlhalla");
         h.emit(Event::FeedLoaded { response: feed });
         let card = first_card(&h);
         assert!(
-            card.game_has_capsule,
-            "{case}: the session card has Steam art"
+            card.game_has_icon && !card.game_has_capsule,
+            "{case}: the session card takes the icon, not the header"
         );
 
-        // NOW PLAYING pill.
         h.emit(game_detected("brawlhalla", "Brawlhalla", now_ms() - 60_000));
         assert!(
-            h.app().get_game_has_capsule(),
-            "{case}: the pill has Steam art"
+            h.app().get_game_has_runtime_icon() && !h.app().get_game_has_capsule(),
+            "{case}: the pill takes the same icon"
         );
-        assert!(!h.app().get_game_has_runtime_icon());
         assert_eq!(h.app().get_game_monogram().as_str(), "BR");
     }
 }
@@ -9601,6 +9610,7 @@ fn the_format_label_follows_the_rung_and_the_decoded_size() {
     viewer_format::reset_viewer_format();
 }
 
+mod art_worker;
 mod sealed;
 
 // ---- the recap is never a one-cell card ----
@@ -10109,4 +10119,121 @@ fn a_crew_with_history_shows_crew_history_and_the_upsell_only_behind_the_flag() 
 #[test]
 fn the_plus_upsell_flag_defaults_to_off() {
     assert!(!crate::settings::Settings::default().plus_upsell_enabled);
+}
+
+// ---------------------------------------------------------------------------
+// About: the ABOUT tab, the credits and the Third-party notices view
+// ---------------------------------------------------------------------------
+
+fn about_tab(h: &mut Harness) {
+    // A tall window keeps every row inside the settings scroll area, where a
+    // click can reach it.
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 3000));
+    logged_in_app(h);
+    crate::about::show_build(h.app());
+    h.app().set_settings_open(true);
+    h.pump();
+}
+
+/// Scroll the settings content to its end with the mouse wheel. The modal is
+/// 680 px high, so the lower sections are clipped, and clipped elements are
+/// absent from queries.
+fn scroll_settings_to_the_end(h: &mut Harness) {
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(800.0, 1500.0),
+            delta_x: 0.0,
+            delta_y: -5000.0,
+        });
+    h.pump();
+}
+
+fn labelled_count(h: &Harness, label: &str) -> usize {
+    ElementHandle::find_by_accessible_label(h.app(), label).count()
+}
+
+#[test]
+fn the_about_tab_is_a_control_and_opens_the_credits() {
+    let mut h = Harness::new();
+    about_tab(&mut h);
+    let tabs = h.controls_labelled("ABOUT");
+    assert_eq!(tabs.len(), 1, "one ABOUT control in the settings sidebar");
+    assert_eq!(
+        tabs[0].accessible_role(),
+        Some(i_slint_backend_testing::AccessibleRole::Tab)
+    );
+    assert_eq!(
+        labelled_count(&h, "Made with Slint"),
+        0,
+        "the credits sit on the ABOUT tab only"
+    );
+    h.click_label("ABOUT");
+    scroll_settings_to_the_end(&mut h);
+    assert_eq!(labelled_count(&h, "Made with Slint"), 1);
+    assert_eq!(
+        labelled_count(&h, "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0"),
+        1,
+        "the OpenMoji line reads as the licence asks"
+    );
+    assert_eq!(labelled_count(&h, "Game data and artwork by IGDB"), 1);
+}
+
+#[test]
+fn the_about_tab_shows_the_version_of_this_build() {
+    let mut h = Harness::new();
+    about_tab(&mut h);
+    let version = format!("v{}", env!("CARGO_PKG_VERSION"));
+    assert_eq!(h.app().get_settings_build_version().as_str(), version);
+    h.click_label("ABOUT");
+    // The sidebar shows the version on every tab. The About row is the
+    // second text with it.
+    assert!(
+        labelled_count(&h, &version) >= 2,
+        "the About tab shows {version}"
+    );
+    assert_ne!(h.app().get_settings_build_commit().as_str(), "unknown");
+}
+
+#[test]
+fn the_notices_view_opens_lists_crates_libraries_and_fonts_and_goes_back() {
+    let mut h = Harness::new();
+    about_tab(&mut h);
+    h.click_label("ABOUT");
+    assert!(
+        h.controls_labelled("Back to About").is_empty(),
+        "the notices view is closed"
+    );
+    scroll_settings_to_the_end(&mut h);
+    h.click_label("Third-party notices");
+    assert!(
+        !h.controls_labelled("Back to About").is_empty(),
+        "the notices view is open"
+    );
+
+    let names: Vec<String> = h
+        .app()
+        .get_settings_notices()
+        .iter()
+        .map(|e| e.names.to_string())
+        .collect();
+    assert!(names.len() > 50, "{} records", names.len());
+    let listed = |needle: &str| names.iter().any(|n| n.contains(needle));
+    assert!(listed("serde "), "a Rust crate");
+    assert!(listed("opus (vcpkg)"), "a libmello library");
+    assert!(listed("Oxanium"), "the Oxanium font");
+    assert!(listed("Barlow"), "the Barlow font");
+    assert!(listed("OpenMoji"), "the OpenMoji line");
+    for e in h.app().get_settings_notices().iter() {
+        assert!(!e.license.is_empty() && !e.text.is_empty(), "{}", e.names);
+    }
+
+    h.click_label("Back to About");
+    assert!(h.controls_labelled("Back to About").is_empty());
+    assert!(
+        !h.controls_labelled("Third-party notices").is_empty(),
+        "the About tab is back"
+    );
 }

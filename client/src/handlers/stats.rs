@@ -1,6 +1,6 @@
 use mello_core::crew_events::UserGameStats;
 use mello_core::Event;
-use slint::{Color, ModelRc, SharedString, VecModel};
+use slint::{Color, Model, ModelRc, SharedString, VecModel};
 
 use crate::app_context::AppContext;
 use crate::{GameStatsCardData, YouStripData};
@@ -8,9 +8,78 @@ use crate::{GameStatsCardData, YouStripData};
 pub fn handle(ctx: &AppContext, event: Event) {
     if let Event::UserGameStatsLoaded { games } = event {
         log::info!("[ui] user game stats loaded ({} games)", games.len());
-        ctx.app.set_you_strip(build_you_strip(&games));
+        let mut strip = build_you_strip(&games);
+        if strip.has_stats {
+            attach_icon(ctx, &strip.game_id, &strip.game_name, |img, has| {
+                strip.icon = img;
+                strip.has_icon = has;
+            });
+        }
+        ctx.app.set_you_strip(strip);
+        let mut cards = build_profile_cards(&games);
+        for c in &mut cards {
+            attach_icon(ctx, &c.game_id, &c.game_name, |img, has| {
+                c.icon = img;
+                c.has_icon = has;
+            });
+        }
         ctx.app
-            .set_stats_profile_games(ModelRc::new(VecModel::from(build_profile_cards(&games))));
+            .set_stats_profile_games(ModelRc::new(VecModel::from(cards)));
+    }
+}
+
+/// The square icon of a game, from the icon slot ladder (exe or crew icon,
+/// then the art Worker icon). `set` gets the image and whether there is one;
+/// without art the surface draws the monogram.
+fn attach_icon(
+    ctx: &AppContext,
+    game_id: &SharedString,
+    name: &SharedString,
+    set: impl FnOnce(slint::Image, bool),
+) {
+    let art = crate::game_icons::resolve_tile_art_slot(
+        ctx,
+        game_id.as_str(),
+        game_id.as_str(),
+        name.as_str(),
+        mello_core::art::ArtSlot::Icon,
+    );
+    set(art.icon, art.has_icon);
+}
+
+/// Look for the icon again on the strip and the profile cards that have none.
+/// Runs when the art Worker delivered an image.
+pub(super) fn refresh_art(ctx: &AppContext) {
+    let mut strip = ctx.app.get_you_strip();
+    if strip.has_stats && !strip.has_icon {
+        attach_icon(
+            ctx,
+            &strip.game_id.clone(),
+            &strip.game_name.clone(),
+            |img, has| {
+                strip.icon = img;
+                strip.has_icon = has;
+            },
+        );
+        if strip.has_icon {
+            ctx.app.set_you_strip(strip);
+        }
+    }
+    let cards = ctx.app.get_stats_profile_games();
+    for i in 0..cards.row_count() {
+        let Some(mut c) = cards.row_data(i) else {
+            continue;
+        };
+        if c.has_icon {
+            continue;
+        }
+        attach_icon(ctx, &c.game_id.clone(), &c.game_name.clone(), |img, has| {
+            c.icon = img;
+            c.has_icon = has;
+        });
+        if c.has_icon {
+            cards.set_row_data(i, c);
+        }
     }
 }
 
@@ -123,6 +192,8 @@ fn empty_strip() -> YouStripData {
         game_name: SharedString::new(),
         short_name: SharedString::new(),
         game_color: Color::default(),
+        icon: Default::default(),
+        has_icon: false,
         has_record: false,
         streak_text: SharedString::new(),
         streak_positive: true,
@@ -197,6 +268,8 @@ fn build_you_strip(games: &[UserGameStats]) -> YouStripData {
         game_name: name.into(),
         short_name: short.into(),
         game_color: color,
+        icon: Default::default(),
+        has_icon: false,
         has_record,
         streak_text: streak_text(g.current_streak).into(),
         streak_positive: g.current_streak >= 0,
@@ -229,6 +302,8 @@ fn build_profile_cards(games: &[UserGameStats]) -> Vec<GameStatsCardData> {
                 game_name: name.into(),
                 short_name: short.into(),
                 game_color: color,
+                icon: Default::default(),
+                has_icon: false,
                 record_text: record_text(g).into(),
                 win_rate_text: win_rate_text(g.wins, g.losses).into(),
                 streak_text: streak_text(g.current_streak).into(),

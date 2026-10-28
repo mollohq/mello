@@ -5,6 +5,8 @@
 
 use slint::ComponentHandle;
 
+use mello_core::art::ArtSlot;
+
 use crate::app_context::AppContext;
 
 /// Resolve a runtime icon for a game id: memory cache first, then the disk
@@ -99,6 +101,11 @@ fn decode_capsule(path: &std::path::Path) -> Option<(Vec<u8>, u32, u32)> {
 /// Decode an image to RGBA, shrunk to `max_width` wide at most.
 fn decode_scaled(path: &std::path::Path, max_width: u32) -> Option<(Vec<u8>, u32, u32)> {
     let decoded = image::open(path).ok()?.to_rgba8();
+    scale_to_width(decoded, max_width)
+}
+
+/// Shrink to `max_width` wide at most. `None` for an empty image.
+fn scale_to_width(decoded: image::RgbaImage, max_width: u32) -> Option<(Vec<u8>, u32, u32)> {
     let (w, h) = decoded.dimensions();
     if w == 0 || h == 0 {
         return None;
@@ -106,7 +113,7 @@ fn decode_scaled(path: &std::path::Path, max_width: u32) -> Option<(Vec<u8>, u32
     if w <= max_width {
         return Some((decoded.into_raw(), w, h));
     }
-    let nh = ((h as u64 * max_width as u64) / w as u64).max(1) as u32;
+    let nh = ((h as u64 * max_width as u64 + w as u64 / 2) / w as u64).max(1) as u32;
     let small = image::imageops::resize(
         &decoded,
         max_width,
@@ -114,6 +121,143 @@ fn decode_scaled(path: &std::path::Path, max_width: u32) -> Option<(Vec<u8>, u32
         image::imageops::FilterType::Triangle,
     );
     Some((small.into_raw(), max_width, nh))
+}
+
+/// The header frame of a tile, in pixels (width, height).
+pub const HEADER_FRAME: (u32, u32) = (460, 215);
+/// The hero frame of the live and session posters.
+pub const HERO_FRAME: (u32, u32) = (1920, 620);
+
+/// Centre crop to the shape of `frame` with cover fit: the whole frame is
+/// filled and the overflow of the longer side is cut away equally on both
+/// ends. The pixels are not scaled.
+pub fn crop_cover(img: image::RgbaImage, frame: (u32, u32)) -> image::RgbaImage {
+    let (sw, sh) = img.dimensions();
+    let (fw, fh) = frame;
+    if sw == 0 || sh == 0 || fw == 0 || fh == 0 {
+        return img;
+    }
+    // Compare the shapes without division: sw/sh against fw/fh.
+    let (cw, ch) = if u64::from(sw) * u64::from(fh) > u64::from(sh) * u64::from(fw) {
+        (
+            (u64::from(sh) * u64::from(fw) / u64::from(fh)).max(1) as u32,
+            sh,
+        )
+    } else {
+        (
+            sw,
+            (u64::from(sw) * u64::from(fh) / u64::from(fw)).max(1) as u32,
+        )
+    };
+    let (cw, ch) = (cw.min(sw), ch.min(sh));
+    image::imageops::crop_imm(&img, (sw - cw) / 2, (sh - ch) / 2, cw, ch).to_image()
+}
+
+/// Decode a cached Worker image for its slot: crop to the frame of the slot
+/// (header and hero), then shrink to what the surface draws at 2x.
+fn decode_art(path: &std::path::Path, slot: ArtSlot) -> Option<(Vec<u8>, u32, u32)> {
+    let decoded = image::open(path).ok()?.to_rgba8();
+    match slot {
+        ArtSlot::Header => scale_to_width(crop_cover(decoded, HEADER_FRAME), HEADER_FRAME.0),
+        ArtSlot::Hero => scale_to_width(crop_cover(decoded, HERO_FRAME), POSTER_MAX_WIDTH),
+        // The cover keeps its own shape; the tile fits it with cover.
+        ArtSlot::Capsule => scale_to_width(decoded, 264),
+        ArtSlot::Icon => scale_to_width(decoded, CAPSULE_MAX_WIDTH),
+    }
+}
+
+/// `igdb-<id>` of the catalogue game that `id` (or else `name`) names.
+fn igdb_id_of_catalogue_game(id: &str, name: &str) -> Option<String> {
+    thread_local! {
+        static HEAD: Option<mello_core::catalogue::Head> = mello_core::catalogue::Head::bundled();
+    }
+    HEAD.with(|head| {
+        let head = head.as_ref()?;
+        let entry = head.by_game_id(id).or_else(|| head.by_name(name))?;
+        Some(format!("igdb-{}", entry.igdb_id))
+    })
+}
+
+/// The ids that the art Worker takes (`steam-`, `epic-`, `gog-`, `igdb-`) for
+/// a game, from the candidates of [`art_candidates`]. A catalogue id becomes
+/// the `igdb-` id of its entry, which the Worker answers with one lookup.
+pub fn worker_ids(
+    wire_id: &str,
+    game_id: &str,
+    name: &str,
+    installed: &[mello_core::events::InstalledGameInfo],
+) -> Vec<String> {
+    let mut out: Vec<String> = Vec::new();
+    for c in art_candidates(wire_id, game_id, name, installed) {
+        let id = if ["steam-", "epic-", "gog-", "igdb-"]
+            .iter()
+            .any(|p| c.starts_with(p))
+        {
+            Some(c)
+        } else {
+            igdb_id_of_catalogue_game(&c, name)
+        };
+        if let Some(id) = id {
+            if !out.contains(&id) {
+                out.push(id);
+            }
+        }
+    }
+    out
+}
+
+/// The art Worker rung. Never waits for the network. Order of work:
+/// the decoded image in memory, then the file in the art cache (decoded once),
+/// then a `FetchGameArt` command for the ids that are not known yet. A reply
+/// arrives as `Event::GameArtLoaded` and the cards are built again. `None`
+/// sends the tile down to the next rung.
+pub fn resolve_art_worker(ctx: &AppContext, ids: &[String], slot: ArtSlot) -> Option<slint::Image> {
+    use mello_core::art::ArtLookup;
+    if !ctx.art.enabled() || ids.is_empty() {
+        return None;
+    }
+    let key = |id: &str| format!("art:{id}:{}", slot.as_str());
+    for id in ids {
+        if let Some(img) = ctx.game_icon_cache.borrow().get(&key(id)) {
+            return Some(img.clone());
+        }
+    }
+    let mut want: Vec<String> = Vec::new();
+    for id in ids {
+        match ctx.art.lookup(id, slot) {
+            ArtLookup::Fresh(path) | ArtLookup::Stale(path) => {
+                let stale = matches!(ctx.art.lookup(id, slot), ArtLookup::Stale(_));
+                match decode_art(&path, slot) {
+                    Some((rgba, w, h)) => {
+                        let img = crate::avatar::rgba_to_image(&rgba, w, h);
+                        ctx.game_icon_cache
+                            .borrow_mut()
+                            .insert(key(id), img.clone());
+                        if stale {
+                            let _ = ctx.cmd_tx.send(mello_core::Command::FetchGameArt {
+                                ids: vec![id.clone()],
+                                slot,
+                            });
+                        }
+                        return Some(img);
+                    }
+                    None => {
+                        // A damaged file: drop it and ask again.
+                        let _ = std::fs::remove_file(&path);
+                        want.push(id.clone());
+                    }
+                }
+            }
+            ArtLookup::Unknown => want.push(id.clone()),
+            ArtLookup::Negative => {}
+        }
+    }
+    if !want.is_empty() {
+        let _ = ctx
+            .cmd_tx
+            .send(mello_core::Command::FetchGameArt { ids: want, slot });
+    }
+    None
 }
 
 /// Make sure a detected game has art, extracting the executable's own icon if
@@ -226,23 +370,49 @@ fn steam_ids_of_catalogue_game(id: &str, name: &str) -> Vec<String> {
     ids
 }
 
-/// The one art ladder of every game tile: the server icon (cached, or the
-/// crew copy), then the local Steam art under any id that names the game
-/// ([`art_candidates`]), then nothing, which draws the monogram. The recent
-/// games card, the session card, the live card and the NOW PLAYING pill all
-/// call this, so one game gets one kind of art everywhere.
-pub fn resolve_tile_art(ctx: &AppContext, wire_id: &str, game_id: &str, name: &str) -> TileArt {
+/// The art ladder of a game, per slot.
+///
+/// - `Icon` (the NOW PLAYING pill): the crew-shared exe icon, then the art
+///   Worker `icon`, then nothing, which draws the monogram.
+/// - `Header`, `Hero`, `Capsule` (art frames): the local Steam art under any id
+///   that names the game ([`art_candidates`]), then the art Worker, then the
+///   monogram. The exe icon never fills an art frame.
+pub fn resolve_tile_art_slot(
+    ctx: &AppContext,
+    wire_id: &str,
+    game_id: &str,
+    name: &str,
+    slot: ArtSlot,
+) -> TileArt {
     let none = slint::Image::default;
-    if let Some(icon) = resolve_or_fetch_icon(ctx, game_id) {
-        return TileArt {
-            icon,
-            has_icon: true,
-            capsule: none(),
-            has_capsule: false,
+    let worker = || {
+        let wids = worker_ids(wire_id, game_id, name, &ctx.installed_games.borrow());
+        resolve_art_worker(ctx, &wids, slot)
+    };
+    // One art form per frame shape: the icon slot fills `icon` (the exe icon,
+    // else the Worker thumb); every other slot fills `capsule`.
+    if slot == ArtSlot::Icon {
+        let icon = resolve_or_fetch_icon(ctx, game_id).or_else(worker);
+        return match icon {
+            Some(icon) => TileArt {
+                icon,
+                has_icon: true,
+                capsule: none(),
+                has_capsule: false,
+            },
+            None => TileArt {
+                icon: none(),
+                has_icon: false,
+                capsule: none(),
+                has_capsule: false,
+            },
         };
     }
-    let ids = art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow());
-    match ids.iter().find_map(|id| resolve_local_steam_art(ctx, id)) {
+    let art = art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
+        .iter()
+        .find_map(|id| resolve_local_steam_art(ctx, id))
+        .or_else(worker);
+    match art {
         Some(capsule) => TileArt {
             icon: none(),
             has_icon: false,
@@ -258,7 +428,13 @@ pub fn resolve_tile_art(ctx: &AppContext, wire_id: &str, game_id: &str, name: &s
     }
 }
 
-/// Local Steam poster for the wide live card, under the same ids as the tile.
+/// [`resolve_tile_art_slot`] for the header slot, the art of a tile.
+pub fn resolve_tile_art(ctx: &AppContext, wire_id: &str, game_id: &str, name: &str) -> TileArt {
+    resolve_tile_art_slot(ctx, wire_id, game_id, name, ArtSlot::Header)
+}
+
+/// Poster for the wide live card: the local Steam poster under the same ids as
+/// the tile, then the Worker hero.
 pub fn resolve_poster(
     ctx: &AppContext,
     wire_id: &str,
@@ -268,12 +444,16 @@ pub fn resolve_poster(
     art_candidates(wire_id, game_id, name, &ctx.installed_games.borrow())
         .iter()
         .find_map(|id| resolve_local_steam_poster(ctx, id))
+        .or_else(|| {
+            let wids = worker_ids(wire_id, game_id, name, &ctx.installed_games.borrow());
+            resolve_art_worker(ctx, &wids, ArtSlot::Hero)
+        })
 }
 
 /// Set the NOW PLAYING pill from the shared ladder. The pill is the game the
 /// sensor detected, so its id is both the wire id and the catalogue id.
 pub fn push_bar_art(ctx: &AppContext, game_id: &str, name: &str) {
-    let art = resolve_tile_art(ctx, game_id, game_id, name);
+    let art = resolve_tile_art_slot(ctx, game_id, game_id, name, ArtSlot::Icon);
     ctx.app.set_game_runtime_icon(art.icon);
     ctx.app.set_game_has_runtime_icon(art.has_icon);
     ctx.app.set_game_capsule(art.capsule);

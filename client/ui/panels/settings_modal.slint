@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData, InstalledGameData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -1768,6 +1768,8 @@ component GameIntegrationRow inherits Rectangle {
                 game-id: game.game-id;
                 short-name: game.short-name;
                 badge-color: game.color;
+                runtime-icon: game.icon;
+                has-runtime-icon: game.has-icon;
                 size: 36px;
             }
         }
@@ -1854,6 +1856,8 @@ component InstalledGameRow inherits Rectangle {
             game-id: game.game-id;
             short-name: game.short-name;
             badge-color: Theme.raised;
+            runtime-icon: game.icon;
+            has-runtime-icon: game.has-icon;
             size: 28px;
         }
 
@@ -2078,6 +2082,326 @@ component GamesTab inherits VerticalLayout {
 // ═══════════════════════════════════════════════════════════════════════════
 // ─── Settings Modal (main export) ──────────────────────────────────────────
 // ═══════════════════════════════════════════════════════════════════════════
+// ─── Third-party notices ────────────────────────────────────────────────
+// One record: the names that share the text, the licence name, the text.
+component NoticeEntry inherits VerticalLayout {
+    in property <NoticeEntryData> entry;
+
+    spacing: 8px;
+
+    Text {
+        text: root.entry.names;
+        font-family: Theme.font-display;
+        font-size: 13px;
+        font-weight: Theme.weight-display;
+        color: Theme.text-primary;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.entry.license;
+        font-family: Theme.font-label;
+        font-size: 10px;
+        font-weight: Theme.weight-label;
+        letter-spacing: 1.5px;
+        color: Theme.text-tertiary;
+        wrap: word-wrap;
+    }
+
+    Text {
+        text: root.entry.text;
+        font-family: Theme.font-body;
+        font-size: 11px;
+        font-weight: Theme.weight-sentence;
+        color: Theme.text-secondary;
+        wrap: word-wrap;
+    }
+}
+
+component NoticesView inherits Rectangle {
+    in property <[NoticeEntryData]> notices: [];
+
+    callback back-clicked();
+
+    background: Theme.surface;
+
+    VerticalLayout {
+        // Header: back control and title
+        Rectangle {
+            height: 64px;
+
+            HorizontalLayout {
+                padding-left: 40px;
+                padding-right: 40px;
+                spacing: 24px;
+
+                Rectangle {
+                    width: 80px;
+
+                    Rectangle {
+                        height: 32px;
+                        y: (parent.height - self.height) / 2;
+                        background: back-ta.has-hover ? Theme.surface-hover : transparent;
+
+                        Text {
+                            text: "BACK";
+                            font-family: Theme.font-label;
+                            font-size: 12px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: 1.2px;
+                            color: Theme.text-primary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        back-ta := TouchArea {
+                            accessible-role: button;
+                            accessible-label: "Back to About";
+                            clicked => { root.back-clicked(); }
+                        }
+                    }
+                }
+
+                Text {
+                    horizontal-stretch: 1;
+                    text: "THIRD-PARTY NOTICES";
+                    font-family: Theme.font-label;
+                    font-size: 11px;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: 2.4px;
+                    color: Theme.accent;
+                    vertical-alignment: center;
+                }
+            }
+
+            Rectangle {
+                y: parent.height - self.height;
+                height: 1px;
+                background: Theme.graphic-light;
+            }
+        }
+
+        MelloScrollArea {
+            vertical-stretch: 1;
+            content-height: list.preferred-height;
+
+            list := VerticalLayout {
+                padding: 40px;
+                padding-bottom: 80px;
+                spacing: 40px;
+                width: parent.width;
+
+                for entry in root.notices: NoticeEntry {
+                    entry: entry;
+                }
+            }
+        }
+    }
+}
+
+// ─── About tab ──────────────────────────────────────────────────────────
+// One label row: a tracked label and a value.
+component AboutRow inherits Rectangle {
+    in property <string> label;
+    in property <string> value;
+
+    height: 24px;
+
+    HorizontalLayout {
+        spacing: 16px;
+
+        Text {
+            width: 96px;
+            text: root.label;
+            font-family: Theme.font-label;
+            font-size: 10px;
+            font-weight: Theme.weight-label;
+            letter-spacing: 2px;
+            color: Theme.text-tertiary;
+            vertical-alignment: center;
+        }
+
+        Text {
+            horizontal-stretch: 1;
+            text: root.value;
+            font-family: Theme.font-display;
+            font-size: 13px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+            vertical-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
+// A sentence in the Barlow 300 register.
+component AboutSentence inherits Text {
+    font-family: Theme.font-body;
+    font-size: 13px;
+    font-weight: Theme.weight-sentence;
+    color: Theme.text-secondary;
+    wrap: word-wrap;
+}
+
+// A run of names in Oxanium, joined with middots.
+component AboutNames inherits Text {
+    font-family: Theme.font-display;
+    font-size: 13px;
+    font-weight: Theme.weight-display;
+    color: Theme.text-primary;
+    wrap: word-wrap;
+}
+
+component AboutTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 80px;
+    spacing: 48px;
+
+    in property <string> version;
+    in property <string> commit;
+    in property <string> built;
+
+    // Opens the Third-party notices view.
+    callback notices-clicked();
+
+    // M3LLO
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "M3LLO"; }
+
+        // The wordmark. The 3 is the red of the mark.
+        HorizontalLayout {
+            alignment: start;
+            Text {
+                text: "m";
+                font-family: Theme.font-display;
+                font-size: 32px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.text-primary;
+            }
+            Text {
+                text: "3";
+                font-family: Theme.font-display;
+                font-size: 32px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.live;
+            }
+            Text {
+                text: "llo";
+                font-family: Theme.font-display;
+                font-size: 32px;
+                font-weight: Theme.weight-display-bold;
+                color: Theme.text-primary;
+            }
+        }
+
+        VerticalLayout {
+            spacing: 4px;
+            AboutRow { label: "VERSION"; value: root.version; }
+            AboutRow { label: "BUILD"; value: root.commit; }
+            AboutRow { label: "BUILT"; value: root.built; }
+            AboutRow { label: "MADE BY"; value: "Mollo Tech AB, Göteborg"; }
+        }
+    }
+
+    // THANK YOU
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "THANK YOU"; }
+
+        AboutSentence {
+            text: "m3llo runs on the work of many people and services. This page names them.";
+        }
+    }
+
+    // SERVICES WE USE
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "SERVICES WE USE"; }
+
+        AboutNames {
+            text: "Nakama (Heroic Labs) · Render · Cloudflare · IGDB · DiceBear · Giphy · Plausible (website only) · Apple · Google STUN · Steam · Epic Games · GOG · Riot Games · Discord · Twitch · GitHub";
+        }
+    }
+
+    // OPEN SOURCE WE SHIP
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "OPEN SOURCE WE SHIP"; }
+
+        AboutNames {
+            text: "Slint · Velopack · RNNoise · WebRTC audio processing · ONNX Runtime · Silero VAD · OpenH264 · Opus · OpenSSL · libdatachannel · Pion · OpenMoji · Oxanium · Barlow";
+        }
+
+        AboutSentence {
+            text: "And the Rust crates listed in the third-party notices.";
+        }
+
+        // Third-party notices (outlined: the white fill stays on Close)
+        Rectangle {
+            height: 40px;
+
+            HorizontalLayout {
+                alignment: start;
+
+                Rectangle {
+                    width: 200px;
+                    height: 40px;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: Theme.graphic-med;
+                    }
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        inset: Theme.keyline;
+                        fill: notices-ta.has-hover ? Theme.surface-hover : Theme.surface;
+                    }
+
+                    Text {
+                        text: "Third-party notices";
+                        font-family: Theme.font-label;
+                        font-size: 12px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: 0.6px;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+
+                    notices-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Third-party notices";
+                        clicked => { root.notices-clicked(); }
+                    }
+                }
+            }
+        }
+    }
+
+    // CREDITS
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "CREDITS"; }
+
+        VerticalLayout {
+            spacing: 8px;
+            AboutSentence { text: "Game data and artwork by IGDB"; }
+            AboutSentence { text: "Made with Slint"; }
+            AboutSentence { text: "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0"; }
+        }
+    }
+}
+
 export component SettingsModal inherits Rectangle {
     // Audio device properties
     in property <[AudioDeviceData]> capture-devices: [];
@@ -2112,6 +2436,12 @@ export component SettingsModal inherits Rectangle {
 
     // Version
     in property <string> build-version: "v0.1.0";
+    in property <string> build-commit: "unknown";
+    in property <string> build-date: "unknown";
+    callback about-notices-requested();
+    // The Third-party notices view, filled on the first open.
+    in property <[NoticeEntryData]> notices: [];
+    in-out property <bool> notices-open: false;
 
     // Profile
     in property <string> profile-nickname: "";
@@ -2153,10 +2483,14 @@ export component SettingsModal inherits Rectangle {
     // Saved indicator
     in-out property <bool> show-saved: false;
 
-    // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video
+    // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video, 3 = Games, 4 = About
     in-out property <int> active-tab: 0;
 
+    // The scroll offset of the content area. Previews set it to show the lower sections.
+    in-out property <length> content-scroll <=> settings-scroll.scroll-y;
+
     changed active-tab => {
+        notices-open = false;
         settings-scroll.scroll-y = 0px;
     }
 
@@ -2542,6 +2876,53 @@ export component SettingsModal inherits Rectangle {
                                 }
                             }
 
+                            // About
+                            Rectangle {
+                                height: 40px;
+                                background: transparent;
+
+                                if active-tab == 4 || about-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 4 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 4: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
+
+                                Image {
+                                    source: @image-url("../icons/info.svg");
+                                    width: 16px;
+                                    height: 16px;
+                                    colorize: active-tab == 4 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px;
+                                    y: (parent.height - self.height) / 2;
+                                    opacity: 0.8;
+                                }
+
+                                Text {
+                                    text: "ABOUT";
+                                    font-family: Theme.font-label;
+                                    font-size: 12px;
+                                    font-weight: Theme.weight-label;
+                                    letter-spacing: 0.6px;
+                                    color: active-tab == 4 ? Theme.text-primary : Theme.text-secondary;
+                                    x: 12px + 16px + 12px;
+                                    y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                about-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "ABOUT";
+                                    clicked => { active-tab = 4; }
+                                }
+                            }
+
                             // Spacer
                             Rectangle { height: 16px; }
 
@@ -2640,7 +3021,7 @@ export component SettingsModal inherits Rectangle {
                     settings-scroll := MelloScrollArea {
                         width: parent.width;
                         height: parent.height;
-                        content-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : (active-tab == 2 ? audio-tab.preferred-height : games-tab.preferred-height));
+                        content-height: active-tab == 0 ? profile-tab.preferred-height : (active-tab == 1 ? general-tab.preferred-height : (active-tab == 2 ? audio-tab.preferred-height : (active-tab == 3 ? games-tab.preferred-height : about-tab.preferred-height)));
 
                         profile-tab := ProfileTab {
                             visible: active-tab == 0;
@@ -2765,6 +3146,26 @@ export component SettingsModal inherits Rectangle {
                             riot-connect-clicked => { root.riot-connect-clicked(); }
                             riot-disconnect-clicked => { root.riot-disconnect-clicked(); }
                         }
+
+                        about-tab := AboutTab {
+                            visible: active-tab == 4;
+                            width: parent.width;
+                            version: root.build-version;
+                            commit: root.build-commit;
+                            built: root.build-date;
+                            notices-clicked => {
+                                root.notices-open = true;
+                                root.about-notices-requested();
+                            }
+                        }
+
+                    }
+
+                    if root.notices-open && active-tab == 4: NoticesView {
+                        width: parent.width;
+                        height: parent.height;
+                        notices: root.notices;
+                        back-clicked => { root.notices-open = false; }
                     }
                 }
             }
@@ -2872,6 +3273,8 @@ export component SettingsModal inherits Rectangle {
 //     client/ui/panels/settings_modal.slint
 component SettingsPreview inherits Rectangle {
     in property <int> tab: 0;
+    in property <length> scroll: 0px;
+    in property <bool> notices-open: false;
 
     width: 1000px;
     height: 780px;
@@ -2881,6 +3284,16 @@ component SettingsPreview inherits Rectangle {
         width: parent.width;
         height: parent.height;
         active-tab: root.tab;
+        content-scroll: root.scroll;
+        notices-open: root.notices-open;
+        notices: [
+            { names: "serde 1.0.228\nserde_json 1.0.145", license: "MIT OR Apache-2.0", text: "Copyright (c) David Tolnay" },
+            { names: "opus (vcpkg)", license: "BSD-3-Clause", text: "Licence: BSD-3-Clause. The full text is at https://spdx.org/licenses/BSD-3-Clause.html and in the opus source." },
+            { names: "Oxanium", license: "OFL-1.1", text: "Copyright 2019 The Oxanium Project Authors\n\nThis Font Software is licensed under the SIL Open Font License, Version 1.1." },
+        ];
+        build-version: "v0.7.0";
+        build-commit: "bfe4580";
+        build-date: "2026-10-26";
         profile-nickname-value: "b0bben";
         capture-devices: [
             { id: "a", name: "Yeti X", is-default: true },
@@ -2896,13 +3309,15 @@ component SettingsPreview inherits Rectangle {
         games-list: [
             { game-id: "cs2", name: "Counter-Strike 2", short-name: "CS2",
               color: #DE9B35, install-status: "found", writes-files: true,
+              has-icon: true, icon: @image-url("../previews/fixtures/capsule-sample-1.png"),
               note: "Writes a config file", enabled: true, has-account-link: false },
             { game-id: "lol", name: "League of Legends", short-name: "LOL",
               color: #C8AA6E, install-status: "not-found", writes-files: false,
               note: "", enabled: false, has-account-link: true },
         ];
         installed-games: [
-            { game-id: "steam-620", name: "Portal 2", short-name: "Portal 2", hidden: false, locked: false },
+            { game-id: "steam-620", name: "Portal 2", short-name: "Portal 2", hidden: false, locked: false,
+              has-icon: true, icon: @image-url("../previews/fixtures/capsule-sample-3.png") },
             { game-id: "steam-730", name: "Counter-Strike 2", short-name: "CS2", hidden: true, locked: false },
             { game-id: "steam-999", name: "Steam Hidden Game", short-name: "SHG", hidden: true, locked: true },
         ];
@@ -2913,3 +3328,6 @@ export component Preview inherits SettingsPreview { tab: 0; }
 export component PreviewGeneral inherits SettingsPreview { tab: 1; }
 export component PreviewAudio inherits SettingsPreview { tab: 2; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
+export component PreviewAbout inherits SettingsPreview { tab: 4; }
+export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
+export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 520px; }

@@ -53,6 +53,33 @@ pub fn current_json() -> String {
     .to_json()
 }
 
+/// The commit for the About page: seven hex digits, with "(modified)" after a
+/// dirty tree. "unknown" stays "unknown".
+pub fn commit_label() -> String {
+    label_for(build_stamp::COMMIT, build_stamp::DIRTY)
+}
+
+/// The build day for the About page, `YYYY-MM-DD` from the RFC 3339 stamp.
+pub fn built_date() -> String {
+    date_of(build_stamp::BUILT_AT)
+}
+
+fn label_for(commit: &str, dirty: bool) -> String {
+    let short: String = commit.chars().take(7).collect();
+    if dirty && commit != "unknown" {
+        format!("{short} (modified)")
+    } else {
+        short
+    }
+}
+
+fn date_of(built_at: &str) -> String {
+    match built_at.split_once('T') {
+        Some((day, _)) => day.to_string(),
+        None => built_at.to_string(),
+    }
+}
+
 /// True when the flag is anywhere in the arguments after the program name.
 ///
 /// `args` must not include argv[0].
@@ -137,6 +164,15 @@ mod tests {
             features.contains(&"production"),
             cfg!(feature = "production")
         );
+    }
+
+    #[test]
+    fn the_about_labels_shorten_the_stamp() {
+        assert_eq!(label_for(COMMIT, false), "0123456");
+        assert_eq!(label_for(COMMIT, true), "0123456 (modified)");
+        assert_eq!(label_for("unknown", true), "unknown");
+        assert_eq!(date_of("2026-10-02T09:12:00Z"), "2026-10-02");
+        assert_eq!(date_of("unknown"), "unknown");
     }
 
     #[test]

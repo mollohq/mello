@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod a11y_lint;
+mod about;
 mod activity_report;
 mod app_context;
 mod autolaunch;
@@ -398,7 +399,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     let app = MainWindow::new()?;
-    app.set_settings_build_version(format!("v{}", env!("CARGO_PKG_VERSION")).into());
+    about::show_build(&app);
 
     // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
     // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the
@@ -605,6 +606,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         last_feed: Rc::new(RefCell::new(None)),
         live_games: Rc::new(RefCell::new(Default::default())),
         game_icon_cache: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        art: match platform::exe_icon::art_cache_dir() {
+            Some(dir) => mello_core::art::init(dir),
+            None => mello_core::art::global(),
+        },
         hud_manager: hud_mgr,
         fg_monitor,
         pending_deep_link: Rc::new(RefCell::new(pending_deep_link)),

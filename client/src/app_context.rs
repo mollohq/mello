@@ -94,6 +94,9 @@ pub struct AppContext {
     /// Populated from the disk cache on demand; misses are negative-cached
     /// per run by the fetch glue.
     pub game_icon_cache: Rc<RefCell<HashMap<String, slint::Image>>>,
+    /// Disk cache and negative cache of the art Worker rung. In a test it has
+    /// its own temp dir and no network unless the test points it at a fake.
+    pub art: Arc<mello_core::art::ArtStore>,
     pub hud_manager: Rc<HudManager>,
     pub fg_monitor: Rc<RefCell<ForegroundMonitor>>,
     pub pending_deep_link: Rc<RefCell<Option<crate::deep_link::DeepLink>>>,
@@ -200,6 +203,7 @@ impl AppContext {
             last_feed: Rc::new(RefCell::new(None)),
             live_games: Rc::new(RefCell::new(Default::default())),
             game_icon_cache: Rc::new(RefCell::new(HashMap::new())),
+            art: Arc::new(mello_core::art::ArtStore::disabled()),
             hud_manager: Rc::new(HudManager::start(false)),
             fg_monitor: Rc::new(RefCell::new(ForegroundMonitor::new(false))),
             pending_deep_link: Rc::new(RefCell::new(None)),
@@ -264,6 +268,7 @@ impl Clone for AppContext {
             last_feed: self.last_feed.clone(),
             live_games: self.live_games.clone(),
             game_icon_cache: self.game_icon_cache.clone(),
+            art: self.art.clone(),
             hud_manager: self.hud_manager.clone(),
             fg_monitor: self.fg_monitor.clone(),
             pending_deep_link: self.pending_deep_link.clone(),

@@ -514,6 +514,9 @@ export struct GameStatsCardData {
     game-name: string,
     short-name: string,
     game-color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     record-text: string,      // "12W 5L" / "12W 5L 2D"
     win-rate-text: string,    // "62%" / "—"
     streak-text: string,      // "W4" / "L2" / "—"
@@ -531,6 +534,9 @@ export struct YouStripData {
     game-name: string,
     short-name: string,
     game-color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     has-record: bool,       // true → W/L stats; false → weekly hours only
     streak-text: string,    // "W4" / "L2" / "—"
     streak-positive: bool,
@@ -671,9 +677,12 @@ export struct AudioDeviceData {
 export struct GameIntegrationData {
     game-id: string,
     name: string,
-    // Badge styling (games.json); icon images can replace the badge later.
+    // Badge styling (games.json), the fallback of the icon.
     short-name: string,
     color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     // "found" | "not-found" | "" (unknown)
     install-status: string,
     // Enabling writes a config file for the game to pick up.
@@ -689,6 +698,9 @@ export struct InstalledGameData {
     game-id: string,
     name: string,
     short-name: string,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     // Hidden from the crew: by the user, or in Steam.
     hidden: bool,
     // Hidden in Steam. The user cannot change it here.
@@ -813,4 +825,13 @@ export global ChatFocus {
     callback say-hi(/* card id */ string);
     /// The chat input has the cursor. The chat panel keeps it up to date.
     in-out property <bool> input-focused: false;
+}
+
+// One record of the Third-party notices view. Dependencies that share a
+// licence text share a record.
+export struct NoticeEntryData {
+    // One "name version" pair per line.
+    names: string,
+    license: string,
+    text: string,
 }

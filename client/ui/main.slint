@@ -33,6 +33,7 @@ import {
     HeroStreamData,
     GameIntegrationData,
     InstalledGameData,
+    NoticeEntryData,
     InvitePersonData,
     VideoRect,
 } from "types.slint";
@@ -65,7 +66,7 @@ export { StreamCardUi, StreamStatsData }
 // --- end stage 9 ---
 
 
-export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "Mello";
@@ -301,6 +302,10 @@ export component MainWindow inherits Window {
     in-out property <float> settings-vad-threshold: -40.0;
     in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
+    in property <string> settings-build-commit: "unknown";
+    in property <string> settings-build-date: "unknown";
+    in property <[NoticeEntryData]> settings-notices: [];
+    callback about-notices-requested();
     in-out property <bool> settings-show-saved: false;
     // HUD settings
     in-out property <bool> settings-hud-enabled: true;
@@ -1715,6 +1720,10 @@ export component MainWindow inherits Window {
         vad-threshold <=> root.settings-vad-threshold;
         vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
+        build-commit: root.settings-build-commit;
+        build-date: root.settings-build-date;
+        notices: root.settings-notices;
+        about-notices-requested => { root.about-notices-requested(); }
         show-saved <=> root.settings-show-saved;
         // HUD
         settings-hud-enabled <=> root.settings-hud-enabled;

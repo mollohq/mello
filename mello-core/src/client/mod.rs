@@ -1245,6 +1245,21 @@ impl Client {
                     Err(e) => log::warn!("[game-icon] upload for {game_id} failed: {e}"),
                 }
             }
+            Command::FetchGameArt { ids, slot } => {
+                // A walk can take several round trips; keep the command loop free.
+                let store = crate::art::global();
+                let key = format!("{}|{}", ids.join(","), slot.as_str());
+                if !store.enabled() || !store.begin(&key) {
+                    return;
+                }
+                let tx = self.event_tx.clone();
+                tokio::spawn(async move {
+                    if let Some(game_id) = store.walk(&ids, slot).await {
+                        let _ = tx.send(Event::GameArtLoaded { game_id, slot });
+                    }
+                    store.finish(&key);
+                });
+            }
             Command::FetchGameIcon { game_id } => {
                 use base64::Engine as _;
                 match self.nakama.game_icon_get(&game_id).await {

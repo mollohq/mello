@@ -5,9 +5,12 @@ import { H2hHue } from "head2head.slint";
 
 /// The one game tile. Every surface that shows a game draws this: the recent
 /// games card, the session card, the live card and the NOW PLAYING pill. The
-/// art ladder is the same for all of them and is resolved in Rust
-/// (`game_icons::resolve_tile_art`): the server icon, then the local Steam
-/// art, then a two-letter monogram in the game's hue.
+/// art is resolved in Rust (`game_icons::resolve_tile_art_slot`).
+///
+/// One art form per frame shape. A square frame (no `art-width`) draws `icon`
+/// and never `capsule`. A header frame (`art-width` set) draws `capsule` and
+/// never `icon`. With no art for its shape a frame draws the monogram.
+/// `capsule` always holds header art, never an icon.
 export component GameArt inherits Rectangle {
     in property <string> game-id;
     in property <string> monogram;
@@ -27,7 +30,11 @@ export component GameArt inherits Rectangle {
     height: art-height > 0px ? art-height : size;
     background: transparent;
 
-    if has-icon: GameIcon {
+    property <bool> wide: art-width > 0px;
+    property <bool> show-icon: has-icon && !wide;
+    property <bool> show-capsule: has-capsule && wide;
+
+    if show-icon: GameIcon {
         x: 0px;
         game-id: root.game-id;
         short-name: root.monogram;
@@ -36,7 +43,7 @@ export component GameArt inherits Rectangle {
         bg-color: root.bg-color;
         size: root.size;
     }
-    if !has-icon && has-capsule: Rectangle {
+    if show-capsule: Rectangle {
         width: parent.width;
         height: parent.height;
         clip: true;
@@ -49,7 +56,7 @@ export component GameArt inherits Rectangle {
         CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "tl"; fill: root.bg-color; }
         CutMask { width: parent.width; height: parent.height; n: max(4px, root.size * 0.22); corner: "br"; fill: root.bg-color; }
     }
-    if !has-icon && !has-capsule: Rectangle {
+    if !show-icon && !show-capsule: Rectangle {
         width: parent.width;
         height: parent.height;
         CutButtonShape {

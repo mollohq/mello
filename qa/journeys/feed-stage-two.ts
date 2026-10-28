@@ -5,9 +5,12 @@
 // games, so recent games is a poster grid of at most five tiles with owner pips,
 // "From 2 PCs" on its header. The skeleton trio stays (frame B2). alice sees the
 // join card for bob, who came by her invite link: a standard cell after the
-// first row, with "Say hi".
+// first row, with "Say hi". The art Worker serves Brawlhalla, Rocket League and
+// Fall Guys (qa/fixtures/art-index): their tiles show art. Start the Worker
+// first: scripts/e2e-art-worker.sh up.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
+import { DEFAULT_ART_BASE } from "../../tools/mello-driver/src/app.ts";
 import { expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
 import { endSession, reportLibrary, signInEmail } from "./lib/seed.ts";
 import { twoUsersInOneCrew } from "./lib/setup.ts";
@@ -17,8 +20,20 @@ export default journey({
   flows: ["FEED-04"],
   async run(ctx) {
     const { step, expect } = ctx;
+    await step("the local art Worker answers", async () => {
+      const base = process.env.MELLO_E2E_ART_BASE ?? DEFAULT_ART_BASE;
+      const ok = await fetch(`${base}/health`, { signal: AbortSignal.timeout(3_000) }).then((r) => r.ok, () => false);
+      expect(ok, `no art Worker at ${base}; run scripts/e2e-art-worker.sh up`);
+    });
     const { alice, bob, aliceCreds } = await twoUsersInOneCrew(ctx, "Public");
     const crewId = (await alice.state()).active_crew_id;
+
+    for (const app of [bob, alice]) {
+      await step(`${app.name} has no daily recap before a belt moves`, async () => {
+        const s = await app.state();
+        expect(!s.daily_recap.present, "no daily recap before the belt move");
+      });
+    }
 
     await step("alice reports games of her own and one session, so the two libraries differ", async () => {
       // The apps have reported their own libraries by now. A report from alice
@@ -64,6 +79,30 @@ export default journey({
       });
     }
 
+    for (const app of [bob, alice]) {
+      await step(`${app.name} sees Worker art on the tiles of the indexed games`, async () => {
+        const s = await app.waitFor(
+          "art on the tiles of the indexed games",
+          (st) =>
+            ["Brawlhalla", "Rocket League", "Fall Guys"].every((n) => {
+              const t = st.recent_games.tiles.find((x) => x.name === n);
+              return !t || t.art === "image";
+            }) && st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.art === "image"),
+          30_000,
+        );
+        for (const name of ["Brawlhalla", "Rocket League", "Fall Guys"]) {
+          const t = s.recent_games.tiles.find((x) => x.name === name);
+          if (t) expect(t.art === "image", `${name} is in the art index and shows art, got ${t.art}`);
+        }
+        // The list variant is a 48 px square: it draws the icon slot, so the
+        // tile holds icon art beside the header art of the grid.
+        const brawl = s.recent_games.tiles.find((x) => x.name === "Brawlhalla");
+        expect(brawl?.has_header === true, "Brawlhalla holds header art for the grid");
+        await app.waitFor("icon art on the list variant", (st) => st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.has_icon), 30_000);
+        await app.checkpoint("two-feed-art");
+      });
+    }
+
     await step("alice sees bob as a join card in the grid, bob does not see his own join", async () => {
       const a = await alice.waitFor("the join card", (st) => st.joined.length > 0, 30_000);
       expect(a.joined.length === 1, `one join card, got ${a.joined.length}`);
@@ -94,14 +133,34 @@ export default journey({
       await alice.checkpoint("two-feed-say-hi");
     });
 
+    // The server writes stats for the account that ends the session, so only
+    // alice has them. The app loads them when it selects the crew, which was
+    // before the session ended: a restart selects the crew again. The strip
+    // shows Brawlhalla with its square icon from the art Worker.
+    await step("alice sees the Worker icon on the stats strip", async () => {
+      await alice.restart();
+      const s = await alice.waitFor("the stats strip with an icon", (st) => st.you_strip.has_stats && st.you_strip.art === "image", 45_000);
+      expect(s.you_strip.game_name === "Brawlhalla", `the strip shows Brawlhalla, got ${s.you_strip.game_name}`);
+      await alice.checkpoint("two-stats-strip-icon");
+    });
+
     for (const app of [bob, alice]) {
-      // One session of one member, no clip and no belt move: the day adds
-      // nothing to the weekly recap, so the server sends no daily recap
-      // (CLIPS.md section 7, dailyRecapHasContent).
-      await step(`${app.name} sees no daily recap for a day that adds nothing, and no catch-up card`, async () => {
-        const s = await waitForFullFeed(app, { skeletons: 3 });
-        expect(!s.daily_recap.present, "no daily recap for one session of one member");
-        expect(!s.feed_cards.some((c) => c.card_type === "daily-recap"), "no daily recap card");
+      // A belt that moved today makes the day add something to the weekly
+      // recap, so the server sends a daily recap with the moved belt (CLIPS.md
+      // section 7, dailyRecapHasContent). Without a move there is none. Whether
+      // the seed moves a belt depends on which app reported first, so the card
+      // must agree with the head2head card either way.
+      await step(`${app.name} sees a daily recap with the moved belt chip exactly when a belt moved`, async () => {
+        const s = await app.waitFor(
+          "the daily recap agrees with the belt move",
+          (st) => st.head2head.belt_moved_recent && st.daily_recap.present && st.daily_recap.belts.length > 0,
+          30_000,
+        ).catch(async () => app.state());
+        if (s.head2head.belt_moved_recent) {
+          expect(s.daily_recap.present && s.daily_recap.belts.length > 0, `a belt moved, so the daily recap names it, got ${JSON.stringify(s.daily_recap)}`);
+        } else {
+          expect(!s.daily_recap.present, "no belt moved, so no daily recap");
+        }
         expect(!s.feed_cards.some((c) => c.card_type === "catchup"), "no catch-up card");
       });
     }
