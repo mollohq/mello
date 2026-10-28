@@ -295,7 +295,7 @@ struct BeltHeroSnap {
     age: String,
 }
 
-/// The sealed cards of the feed (plan `SEALED-REVEAL.md`).
+/// The sealed cards of the feed (spec `SEALED-REVEAL.md`).
 #[derive(Serialize)]
 struct SealedSnap {
     /// Different sealed belts in the feed. A belt in two slots counts once. The

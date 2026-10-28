@@ -1,9 +1,9 @@
 # SEALED-REVEAL
 
 > **Component:** Crew Feed, Head2head, Weekly Recap
-> **Status:** plan, in work on `feat/next-gen-feed`
+> **Status:** shipped (v0.7.0)
 > **Depends on:** `specs/features/HEAD2HEAD.md`, `specs/19-FEED-CURATION-PERSONAL-STATS.md`
-> **Origin:** the fx lab (a private scratch project). Bob approved its look and motion.
+> **Origin:** the fx lab. Its look and motion are approved.
 
 A belt that moved, and the weekly recap, arrive sealed in the feed. A click opens
 the card in the centre of the feed. A second click sends it back to its slot, open.

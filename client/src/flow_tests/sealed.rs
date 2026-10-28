@@ -1,5 +1,5 @@
 //! Sealed belts and the weekly recap, and the centre view that opens them
-//! (plan `SEALED-REVEAL.md`). The `Clock` is manual here, so a frame at a given
+//! (spec `SEALED-REVEAL.md`). The `Clock` is manual here, so a frame at a given
 //! time is the same on every run.
 
 use super::*;

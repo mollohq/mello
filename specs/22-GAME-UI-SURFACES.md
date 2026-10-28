@@ -314,6 +314,8 @@ badge on the game colour when extraction fails.
 
 ### 6.1 Art slots per frame
 
+The art Worker, its cache and its interface are in `specs/features/GAME-ART.md`.
+
 One art form per frame shape. A game never shows in two forms side by side.
 The `capsule` slot is not used in any frame.
 
