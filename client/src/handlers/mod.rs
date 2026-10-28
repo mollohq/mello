@@ -190,6 +190,9 @@ fn dispatch(ctx: &AppContext, event: Event) {
         // Raw timeline is kept for later deep-scroll; no UI handler yet.
         | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
 
+        // About tab
+        Event::TesterAvatarLoaded { .. } => crate::about::on_avatar_loaded(ctx),
+
         // Game sensing + telemetry
         Event::GameDetected { .. }
         | Event::GameEnded { .. }

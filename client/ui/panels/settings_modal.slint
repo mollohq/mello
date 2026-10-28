@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -2252,6 +2252,56 @@ component AboutNames inherits Text {
     wrap: word-wrap;
 }
 
+// One tester: the octagon (a control that opens the Steam profile) and the
+// name under it.
+component TesterTile inherits Rectangle {
+    in property <TesterData> tester;
+    callback clicked();
+
+    width: 72px;
+    height: 56px + 10px + 18px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        Rectangle {
+            height: 56px;
+            background: transparent;
+
+            UserAvatar {
+                x: (parent.width - self.width) / 2;
+                initials: root.tester.initials;
+                avatar: root.tester.avatar;
+                has-avatar: root.tester.has-avatar;
+                color-index: root.tester.color-index;
+                size: 56px;
+                bg-color: Theme.bg-app;
+            }
+
+            // An octagon with a pointer and nothing to say would be mute to
+            // a screen reader: the control names the person and the place.
+            tester-ta := TouchArea {
+                accessible-role: button;
+                accessible-label: "\{root.tester.name} on Steam";
+                mouse-cursor: pointer;
+                clicked => { root.clicked(); }
+            }
+        }
+
+        Text {
+            text: root.tester.name;
+            font-family: Theme.font-display;
+            font-size: 12px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
+}
+
 component AboutTab inherits VerticalLayout {
     padding: 40px;
     padding-bottom: 80px;
@@ -2261,8 +2311,12 @@ component AboutTab inherits VerticalLayout {
     in property <string> commit;
     in property <string> built;
 
+    in property <[TesterData]> testers: [];
+
     // Opens the Third-party notices view.
     callback notices-clicked();
+    // A tester's octagon: open this Steam profile.
+    callback tester-clicked(/* url */ string);
 
     // M3LLO
     VerticalLayout {
@@ -2313,6 +2367,27 @@ component AboutTab inherits VerticalLayout {
 
         AboutSentence {
             text: "m3llo runs on the work of many people and services. This page names them.";
+        }
+    }
+
+    // THE TESTERS
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "THE TESTERS"; }
+
+        AboutSentence {
+            text: "They played the first builds and told me what was wrong.";
+        }
+
+        HorizontalLayout {
+            alignment: start;
+            spacing: 8px;
+
+            for t in root.testers: TesterTile {
+                tester: t;
+                clicked => { root.tester-clicked(t.url); }
+            }
         }
     }
 
@@ -2439,6 +2514,11 @@ export component SettingsModal inherits Rectangle {
     in property <string> build-commit: "unknown";
     in property <string> build-date: "unknown";
     callback about-notices-requested();
+    // The ABOUT tab was opened. The client fills `testers` and asks for the
+    // avatars that are not on disk.
+    callback about-opened();
+    in property <[TesterData]> testers: [];
+    callback tester-clicked(/* url */ string);
     // The Third-party notices view, filled on the first open.
     in property <[NoticeEntryData]> notices: [];
     in-out property <bool> notices-open: false;
@@ -2919,7 +2999,10 @@ export component SettingsModal inherits Rectangle {
                                 about-ta := TouchArea {
                                     accessible-role: tab;
                                     accessible-label: "ABOUT";
-                                    clicked => { active-tab = 4; }
+                                    clicked => {
+                                        active-tab = 4;
+                                        root.about-opened();
+                                    }
                                 }
                             }
 
@@ -3153,6 +3236,8 @@ export component SettingsModal inherits Rectangle {
                             version: root.build-version;
                             commit: root.build-commit;
                             built: root.build-date;
+                            testers: root.testers;
+                            tester-clicked(url) => { root.tester-clicked(url); }
                             notices-clicked => {
                                 root.notices-open = true;
                                 root.about-notices-requested();
@@ -3294,6 +3379,15 @@ component SettingsPreview inherits Rectangle {
         build-version: "v0.7.0";
         build-commit: "bfe4580";
         build-date: "2026-10-26";
+        testers: [
+            { name: "Ostkatt", initials: "O", url: "https://steamcommunity.com/id/Larzon/", color-index: 0, has-avatar: false },
+            { name: "Propotato", initials: "P", url: "https://steamcommunity.com/id/martin1337maden/", color-index: 1, has-avatar: true, avatar: @image-url("../previews/fixtures/capsule-sample-1.png") },
+            { name: "xtrÖm", initials: "X", url: "https://steamcommunity.com/id/xtroem/", color-index: 2, has-avatar: false },
+            { name: "Erle", initials: "E", url: "https://steamcommunity.com/id/erlexd/", color-index: 3, has-avatar: true, avatar: @image-url("../previews/fixtures/capsule-sample-3.png") },
+            { name: "Halvtokig", initials: "H", url: "https://steamcommunity.com/profiles/76561197974140093/", color-index: 4, has-avatar: false },
+            { name: "LipzzarN", initials: "L", url: "https://steamcommunity.com/profiles/76561198156554449/", color-index: 0, has-avatar: false },
+            { name: "Keyden", initials: "K", url: "https://steamcommunity.com/profiles/76561198173235561/", color-index: 1, has-avatar: false },
+        ];
         profile-nickname-value: "b0bben";
         capture-devices: [
             { id: "a", name: "Yeti X", is-default: true },
@@ -3331,3 +3425,4 @@ export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
 export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 520px; }
+export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 330px; }

@@ -110,7 +110,10 @@ pub struct Harness {
 impl Harness {
     /// Build a harness with all callbacks wired and no OS resources touched.
     pub fn new() -> Self {
-        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::disabled()))
+        Self::build(
+            std::sync::Arc::new(mello_core::art::ArtStore::disabled()),
+            std::sync::Arc::new(mello_core::testers::TesterAvatars::disabled()),
+        )
     }
 
     /// A harness whose art Worker rung asks `base` and keeps its files in a
@@ -124,12 +127,33 @@ impl Harness {
             NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
         ));
         let _ = std::fs::remove_dir_all(&dir);
-        Self::build(std::sync::Arc::new(mello_core::art::ArtStore::new(
-            base, dir,
-        )))
+        Self::build(
+            std::sync::Arc::new(mello_core::art::ArtStore::new(base, dir)),
+            std::sync::Arc::new(mello_core::testers::TesterAvatars::disabled()),
+        )
     }
 
-    fn build(art: std::sync::Arc<mello_core::art::ArtStore>) -> Self {
+    /// A harness whose About tab asks a fake Steam Community at `base` for the
+    /// tester avatars and keeps them in a temp dir of its own. A test runs
+    /// the `FetchTesterAvatars` command against `ctx().testers` itself.
+    pub fn with_steam_server(base: &str) -> Self {
+        static NEXT: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "m3llo-testers-harness-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        Self::build(
+            std::sync::Arc::new(mello_core::art::ArtStore::disabled()),
+            std::sync::Arc::new(mello_core::testers::TesterAvatars::new(base, dir)),
+        )
+    }
+
+    fn build(
+        art: std::sync::Arc<mello_core::art::ArtStore>,
+        testers: std::sync::Arc<mello_core::testers::TesterAvatars>,
+    ) -> Self {
         init_test_backend();
         redirect_settings_to_temp_dir();
         assert_element_queries_work();
@@ -162,6 +186,7 @@ impl Harness {
 
         let mut ctx = AppContext::for_test(app, cmd_tx, rt.handle().clone());
         ctx.art = art;
+        ctx.testers = testers;
 
         // The real wiring — not a copy of it.
         crate::callbacks::wire_all(&ctx);

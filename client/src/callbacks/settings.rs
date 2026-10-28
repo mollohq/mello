@@ -47,6 +47,19 @@ pub fn wire(ctx: &AppContext) {
         });
     }
 
+    // --- About: opening the tab shows the testers and asks for their avatars ---
+    {
+        let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
+        let store = ctx.testers.clone();
+        ctx.app.on_about_opened(move || {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            crate::about::on_opened(&app, &store, &cmd);
+        });
+    }
+
     // --- Settings modal open ---
     {
         let cmd = ctx.cmd_tx.clone();

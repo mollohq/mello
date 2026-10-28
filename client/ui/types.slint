@@ -827,6 +827,18 @@ export global ChatFocus {
     in-out property <bool> input-focused: false;
 }
 
+// One tester on the About tab. `avatar` is the Steam avatar when it is on
+// disk; without it the tile shows the monogram in an identity hue.
+export struct TesterData {
+    name: string,
+    initials: string,
+    // The Steam profile the tile opens in the browser.
+    url: string,
+    color-index: int,
+    has-avatar: bool,
+    avatar: image,
+}
+
 // One record of the Third-party notices view. Dependencies that share a
 // licence text share a record.
 export struct NoticeEntryData {
