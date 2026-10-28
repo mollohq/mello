@@ -3309,13 +3309,15 @@ component SettingsPreview inherits Rectangle {
         games-list: [
             { game-id: "cs2", name: "Counter-Strike 2", short-name: "CS2",
               color: #DE9B35, install-status: "found", writes-files: true,
+              has-icon: true, icon: @image-url("../previews/fixtures/capsule-sample-1.png"),
               note: "Writes a config file", enabled: true, has-account-link: false },
             { game-id: "lol", name: "League of Legends", short-name: "LOL",
               color: #C8AA6E, install-status: "not-found", writes-files: false,
               note: "", enabled: false, has-account-link: true },
         ];
         installed-games: [
-            { game-id: "steam-620", name: "Portal 2", short-name: "Portal 2", hidden: false, locked: false },
+            { game-id: "steam-620", name: "Portal 2", short-name: "Portal 2", hidden: false, locked: false,
+              has-icon: true, icon: @image-url("../previews/fixtures/capsule-sample-3.png") },
             { game-id: "steam-730", name: "Counter-Strike 2", short-name: "CS2", hidden: true, locked: false },
             { game-id: "steam-999", name: "Steam Hidden Game", short-name: "SHG", hidden: true, locked: true },
         ];
