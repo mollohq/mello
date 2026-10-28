@@ -536,3 +536,44 @@ fn the_settings_game_rows_take_the_worker_icon() {
         "a game that the icon does not name keeps its monogram"
     );
 }
+
+/// The stream source menu row of the detected game is a square frame. With no
+/// exe icon it takes the Worker icon, as the pill beside it does.
+#[test]
+fn the_stream_source_menu_takes_the_worker_icon() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    h.emit(game_detected(
+        "steam-2300340",
+        "Night Stones",
+        now_ms() - 60_000,
+    ));
+    h.app().set_source_menu_open(true);
+    let menu_badges = |h: &Harness| {
+        let menu = ElementHandle::find_by_element_type_name(h.app(), "StreamSourceMenu")
+            .next()
+            .expect("the menu is open");
+        let (pos, size) = (menu.absolute_position(), menu.size());
+        ElementHandle::find_by_element_type_name(h.app(), "GameBadge")
+            .filter(|i| {
+                let p = i.absolute_position();
+                p.x >= pos.x
+                    && p.x <= pos.x + size.width
+                    && p.y >= pos.y
+                    && p.y <= pos.y + size.height
+            })
+            .count()
+    };
+    assert_eq!(menu_badges(&h), 1, "the monogram until the icon lands");
+    let (ids, slot) = art_requests(&mut h)
+        .into_iter()
+        .find(|(_, s)| *s == ArtSlot::Icon)
+        .expect("the game asked for the icon slot");
+    serve(&mut h, &ids, slot);
+    assert_eq!(menu_badges(&h), 0, "the menu row draws the Worker icon");
+}
