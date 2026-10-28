@@ -1196,6 +1196,7 @@ pub(super) fn refresh_game_art(ctx: &AppContext) {
     }
     fill(ctx, ctx.app.get_feed_cards());
     fill(ctx, ctx.app.get_memory_cards());
+    super::stats::refresh_art(ctx);
     // A live card that got its poster moves to the wide slot, so it is built
     // and arranged again; it does nothing when the live cards did not change.
     refresh_live_session_cards(ctx);

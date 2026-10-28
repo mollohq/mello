@@ -514,6 +514,9 @@ export struct GameStatsCardData {
     game-name: string,
     short-name: string,
     game-color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     record-text: string,      // "12W 5L" / "12W 5L 2D"
     win-rate-text: string,    // "62%" / "—"
     streak-text: string,      // "W4" / "L2" / "—"
@@ -531,6 +534,9 @@ export struct YouStripData {
     game-name: string,
     short-name: string,
     game-color: color,
+    // Square art, icon slot: the exe or crew icon, else the Worker icon.
+    icon: image,
+    has-icon: bool,
     has-record: bool,       // true → W/L stats; false → weekly hours only
     streak-text: string,    // "W4" / "L2" / "—"
     streak-positive: bool,

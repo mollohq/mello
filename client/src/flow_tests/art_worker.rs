@@ -443,3 +443,43 @@ fn refresh_looks_up_each_slot_of_a_tile_on_its_own() {
     assert!(tile.has_capsule, "the header stays");
     assert!(tile.has_icon, "the icon landed after the header");
 }
+
+fn stats_of(id: &str) -> mello_core::crew_events::UserGameStats {
+    mello_core::crew_events::UserGameStats {
+        game_id: id.into(),
+        wins: 3,
+        losses: 1,
+        ..Default::default()
+    }
+}
+
+/// The stats strip and the profile cards are square frames: they ask for the
+/// icon slot and draw the Worker icon, with the monogram until it lands.
+#[test]
+fn the_stats_strip_and_profile_cards_take_the_worker_icon() {
+    let fake = FakeArt::start();
+    fake.put("steam-2300340", "icon", jpeg(90, 90));
+    let mut h = Harness::with_art_server(&fake.base);
+    app_with_crew_of(&mut h, 1);
+    h.emit(Event::UserGameStatsLoaded {
+        games: vec![stats_of("steam-2300340")],
+    });
+    assert!(!h.app().get_you_strip().has_icon, "monogram until it lands");
+    let (ids, slot) = art_requests(&mut h)
+        .into_iter()
+        .find(|(_, s)| *s == ArtSlot::Icon)
+        .expect("the strip asked for the icon slot");
+    serve(&mut h, &ids, slot);
+
+    assert!(h.app().get_you_strip().has_icon, "the strip has the icon");
+    let cards = h.app().get_stats_profile_games();
+    assert_eq!(cards.row_count(), 1);
+    assert!(cards.row_data(0).expect("a card").has_icon);
+
+    // A later build finds the file on disk and asks nothing.
+    h.emit(Event::UserGameStatsLoaded {
+        games: vec![stats_of("steam-2300340")],
+    });
+    assert!(h.app().get_you_strip().has_icon);
+    assert!(art_requests(&mut h).is_empty());
+}
