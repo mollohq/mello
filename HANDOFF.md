@@ -108,7 +108,7 @@ Scripts (`run-stream-viewer.ps1` first, then `run-stream-host.ps1`) are unchange
 Suggested local run:
 ```powershell
 $env:SFU_PUBLIC_IP = "127.0.0.1"
-# mello-sfu: go run ./cmd/sfu  (from mello-sfu repo, phase2 branch)
+# mello-sfu: docker compose up -d --build  (from the mello-sfu repo; on Windows SFU_PUBLIC_IP is the LAN address)
 .\mello\scripts\run-stream-viewer.ps1 -Session auto -ViewerLog C:\temp\viewer.log
 .\mello\scripts\run-stream-host.ps1 -Fps 30 -BitrateKbps 2000 -SourceIndex N -HostLog C:\temp\host.log
 ```

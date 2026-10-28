@@ -1090,8 +1090,9 @@ It reports SFU `joined` to the first packet heard in each direction, and VAD
 open to the remote `VoiceActivity`. Ignored by default:
 
 ```bash
-# mello-sfu
-SFU_PUBLIC_IP=127.0.0.1 SFU_ADMIN_PASSWORD=devpass go run ./cmd/sfu
+# mello-sfu, in Docker (see "Run the SFU locally")
+SFU_ADMIN_PASSWORD=devpass docker compose \
+  -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build
 # mello
 MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
   cargo test -p mello-core --lib -- --ignored --nocapture slots_live
@@ -1120,20 +1121,18 @@ Unit tests run in `cargo test --workspace` and in libmello `ctest`:
 measures the reconnect against a real SFU in Docker. It kills or pauses the
 container three times and reports the time to the "reconnecting" state and
 from the link coming back to audio in both directions, with the event
-timeline. Ignored by default. Build the SFU with Go 1.24 in the builder
-image (native Go 1.26.1 on Windows has golang/go#77975) and run it with the
-LAN address:
+timeline. Ignored by default. Start the SFU from the mello-sfu compose (built
+with Go 1.24, as production; see "Run the SFU locally"). Its container is
+`mello-sfu-sfu-1`, the default of `MELLO_TEST_SFU_CONTAINER`. On Windows set
+`SFU_PUBLIC_IP` to the LAN address:
 
 ```bash
-# mello-sfu, from Git Bash
-MSYS_NO_PATHCONV=1 docker run --rm -v "$(cygpath -w "$PWD"):/src:ro" -v "C:\\tmp\\sfu:/out" \
-  mello-sfu-builder:latest sh -c 'cp -r /src /tmp/b && cd /tmp/b && go build -tags openh264 -o /out/sfu ./cmd/sfu'
-MSYS_NO_PATHCONV=1 docker run -d --name mello-sfu-stage6 -p 8443:8443 -p 8080:8080 -p 10000:10000/udp \
-  -e SFU_PUBLIC_IP=<lan-ip> -e SFU_ADMIN_PASSWORD=devpass -v "C:\\tmp\\sfu:/opt/sfu" \
-  mello-sfu-builder:latest /opt/sfu/sfu
+# mello-sfu
+SFU_ADMIN_PASSWORD=devpass docker compose \
+  -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build
 # mello
 MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
-MELLO_TEST_SFU_HEALTH=http://127.0.0.1:8080/health MELLO_TEST_SFU_CONTAINER=mello-sfu-stage6 \
+MELLO_TEST_SFU_HEALTH=http://127.0.0.1:8080/health \
 MELLO_TEST_FAULT=kill MELLO_TEST_OUTAGE_MS=3000 \
   cargo test -p mello-core --lib -- --ignored --nocapture sfu_reconnect_live
 ```
@@ -1173,6 +1172,7 @@ older SFU fails it with an empty list for the first viewer. Ignored by
 default:
 
 ```bash
+# needs the compose SFU in test mode (see "Run the SFU locally")
 MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
   cargo test -p mello-core --lib -- --ignored --nocapture stream_members_live
 ```
@@ -1253,12 +1253,30 @@ go test ./...
 
 ### Run the SFU locally
 
+The SFU that tests, journeys, soaks and the QA harness use runs in Docker from
+the `mello-sfu` compose, built with `--build`, on every machine. Do not use
+`go run` for it.
+
 ```bash
 cd mello-sfu
-SFU_ADMIN_PASSWORD=devpass go run ./cmd/sfu
+# plain: no test mode
+docker compose up -d --build
+# test mode: the soaks and the harness connect with ?test_password=
+SFU_ADMIN_PASSWORD=devpass docker compose \
+  -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build
 # health:  http://localhost:8080/health
-# admin:   http://localhost:8080/admin
 ```
+
+- The container is `mello-sfu-sfu-1`. The media store is on the `sfu-data`
+  volume.
+- Ports: 8443 signaling, 8080 health and admin, UDP 10000-10100 media, TCP
+  10000 for ICE-TCP.
+- `SFU_PUBLIC_IP` defaults to `127.0.0.1`, which works only for clients on the
+  same machine. On Windows and for any LAN run, set it to the LAN address:
+  `SFU_PUBLIC_IP=192.168.1.67 docker compose ... up -d --build`. Pion clients
+  do not use loopback candidates.
+- A native SFU (`go run ./cmd/sfu`) is only for developing the SFU itself and
+  for the stream gate, which builds its own.
 
 ### `voice-soak` — voice load / churn / resilience
 
@@ -1280,8 +1298,8 @@ is real Opus speech with real timestamps; `--vad-gaps` adds talk spurts and the
 in-band speaking messages. Each client offers 16 receive slots
 (`--recv-slots`); `--max-offers-within-slots 0` fails the run when an offer
 reaches a client that the slots still cover (stage 4 gate). On Windows, start
-the SFU with `SFU_PUBLIC_IP` set to the LAN address: Pion clients do not use
-loopback candidates.
+the compose SFU with `SFU_PUBLIC_IP` set to the LAN address: Pion clients do
+not use loopback candidates.
 Capacity sweep / auto-search: `--sweep-clients 25,50,75,100` or
 `--auto-capacity-search`. (Full flag list in `mello-sfu/README.md`.)
 
@@ -1529,7 +1547,7 @@ For AI-driven UI exploration in dev, `client-dev.sh` enables Slint 1.17 MCP
    GitHub-hosted `ubuntu-latest` runner. SFU `go test` lives in the `mello-sfu`
    repo and is still unwired here.
 2. **Integration (on demand / nightly):** `docker-compose up` the backend +
-   `go run ./cmd/sfu`, seed a test account/crew/channel, then run
+   the mello-sfu compose, seed a test account/crew/channel, then run
    `scenarios/smoke.json` (must pass) and `scenarios/reconnect.json`, plus a
    short `voice-soak` churn gate. These need live services and are too heavy/
    flaky for the per-PR lane.
