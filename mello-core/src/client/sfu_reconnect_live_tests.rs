@@ -2,12 +2,21 @@
 //! (plans/voice-quality.md stage 6, spec 10 section 7.6).
 //!
 //! Ignored by default. It needs a mello-sfu container in test-password mode
-//! that the test may kill, pause, start and unpause:
+//! that the test may kill, pause, start and unpause. Start it from the
+//! mello-sfu compose; its container is `mello-sfu-sfu-1`, the default of
+//! `MELLO_TEST_SFU_CONTAINER`:
+//!
+//! ```bash
+//! # mello-sfu
+//! SFU_ADMIN_PASSWORD=devpass docker compose \
+//!   -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build
+//! # mello
+//! ```
 //!
 //! ```bash
 //! MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
 //! MELLO_TEST_SFU_HEALTH=http://127.0.0.1:8080/health \
-//! MELLO_TEST_SFU_CONTAINER=mello-sfu-stage6 MELLO_TEST_FAULT=kill \
+//! MELLO_TEST_FAULT=kill \
 //! MELLO_TEST_OUTAGE_MS=3000 \
 //!   cargo test -p mello-core --lib -- --ignored --nocapture sfu_reconnect_live
 //! ```
@@ -55,7 +64,7 @@ fn live() -> Option<Live> {
         endpoint: var("MELLO_TEST_SFU")?,
         password: var("MELLO_TEST_SFU_PASSWORD")?,
         health: var("MELLO_TEST_SFU_HEALTH")?,
-        container: var("MELLO_TEST_SFU_CONTAINER")?,
+        container: var("MELLO_TEST_SFU_CONTAINER").unwrap_or_else(|| "mello-sfu-sfu-1".into()),
         fault: var("MELLO_TEST_FAULT").unwrap_or_else(|| "kill".into()),
         outage: Duration::from_millis(
             var("MELLO_TEST_OUTAGE_MS")
@@ -305,7 +314,7 @@ fn after(t: Option<Instant>, from: Instant) -> String {
 }
 
 #[tokio::test(flavor = "current_thread")]
-#[ignore = "needs a local SFU container: MELLO_TEST_SFU and MELLO_TEST_SFU_CONTAINER"]
+#[ignore = "needs the mello-sfu compose container: MELLO_TEST_SFU, MELLO_TEST_SFU_PASSWORD and MELLO_TEST_SFU_HEALTH"]
 async fn sfu_reconnect_live_timings() {
     let Some(live) = live() else {
         println!("[reconnect-live] skipped: MELLO_TEST_SFU is not set");

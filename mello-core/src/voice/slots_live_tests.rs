@@ -4,8 +4,10 @@
 //! Ignored by default: it needs a running mello-sfu in test-password mode.
 //!
 //! ```bash
-//! # mello-sfu
-//! SFU_PUBLIC_IP=127.0.0.1 SFU_ADMIN_PASSWORD=devpass go run ./cmd/sfu
+//! # mello-sfu, in Docker from its compose (Windows and LAN runs also set
+//! # SFU_PUBLIC_IP to the LAN address)
+//! SFU_ADMIN_PASSWORD=devpass docker compose \
+//!   -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build
 //! # mello
 //! MELLO_TEST_SFU=ws://127.0.0.1:8443/ws MELLO_TEST_SFU_PASSWORD=devpass \
 //!   cargo test -p mello-core --lib -- --ignored --nocapture slots_live
