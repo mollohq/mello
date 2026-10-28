@@ -87,6 +87,11 @@ export default journey({
           const t = s.recent_games.tiles.find((x) => x.name === name);
           if (t) expect(t.art === "image", `${name} is in the art index and shows art, got ${t.art}`);
         }
+        // The list variant is a 48 px square: it draws the icon slot, so the
+        // tile holds icon art beside the header art of the grid.
+        const brawl = s.recent_games.tiles.find((x) => x.name === "Brawlhalla");
+        expect(brawl?.has_header === true, "Brawlhalla holds header art for the grid");
+        await app.waitFor("icon art on the list variant", (st) => st.recent_games.tiles.some((t) => t.name === "Brawlhalla" && t.has_icon), 30_000);
         await app.checkpoint("two-feed-art");
       });
     }
@@ -119,6 +124,17 @@ export default journey({
       expect(said.enabled === false, "the Said hi button is off");
       await bob.waitFor("the greeting mentions bob", (st) => st.messages.some((m) => m.mentions_me), 15_000);
       await alice.checkpoint("two-feed-say-hi");
+    });
+
+    // The server writes stats for the account that ends the session, so only
+    // alice has them. The app loads them when it selects the crew, which was
+    // before the session ended: a restart selects the crew again. The strip
+    // shows Brawlhalla with its square icon from the art Worker.
+    await step("alice sees the Worker icon on the stats strip", async () => {
+      await alice.restart();
+      const s = await alice.waitFor("the stats strip with an icon", (st) => st.you_strip.has_stats && st.you_strip.art === "image", 45_000);
+      expect(s.you_strip.game_name === "Brawlhalla", `the strip shows Brawlhalla, got ${s.you_strip.game_name}`);
+      await alice.checkpoint("two-stats-strip-icon");
     });
 
     for (const app of [bob, alice]) {

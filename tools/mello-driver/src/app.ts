@@ -169,8 +169,11 @@ export type AppState = {
     /** "grid" from two PCs on, "list" for one, "" with no card. */
     shape: "grid" | "list" | "";
     pc_count: number;
-    tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram" }[];
+    /** `art` is what the shape draws: the header in the grid, the icon in the list. */
+    tiles: { name: string; owners: number; hours_text: string; launcher: string; tracked: boolean; art: "image" | "monogram"; has_icon: boolean; has_header: boolean }[];
   };
+  /** The stats strip of the feed: the viewer's last game, with its square icon. */
+  you_strip: { has_stats: boolean; game_name: string; art: "image" | "monogram" };
   /** The daily recap card of the feed. `present` is false when the feed has none. */
   daily_recap: {
     present: boolean;
