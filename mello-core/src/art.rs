@@ -88,8 +88,17 @@ pub struct ArtStore {
     dir: PathBuf,
     negative: Mutex<HashMap<(String, ArtSlot), Instant>>,
     inflight: Mutex<HashSet<String>>,
+    /// At most [`MAX_CONCURRENT`] downloads run at once. The rest queue here.
+    permits: tokio::sync::Semaphore,
+    /// Downloads running now and the most seen at once (for the cap test).
+    running: std::sync::atomic::AtomicUsize,
+    peak: std::sync::atomic::AtomicUsize,
     http: reqwest::Client,
 }
+
+/// Most Worker downloads in flight at once. A long library asks for one icon
+/// per game on first load.
+pub const MAX_CONCURRENT: usize = 4;
 
 static GLOBAL: OnceLock<Arc<ArtStore>> = OnceLock::new();
 
@@ -145,6 +154,9 @@ impl ArtStore {
             dir,
             negative: Mutex::new(HashMap::new()),
             inflight: Mutex::new(HashSet::new()),
+            permits: tokio::sync::Semaphore::new(MAX_CONCURRENT),
+            running: Default::default(),
+            peak: Default::default(),
             http,
         }
     }
@@ -244,6 +256,21 @@ impl ArtStore {
         let (Some(url), Some(path)) = (self.url(id, slot), self.image_path(id, slot)) else {
             return Fetched::Miss;
         };
+        // Wait for a free slot; the permit is held until the download ends.
+        let _permit = self.permits.acquire().await.ok();
+        let now = self
+            .running
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
+        self.peak
+            .fetch_max(now, std::sync::atomic::Ordering::SeqCst);
+        struct Running<'a>(&'a std::sync::atomic::AtomicUsize);
+        impl Drop for Running<'_> {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+            }
+        }
+        let _running = Running(&self.running);
         let etag_path = Self::etag_path(&path);
         let cached = path.exists();
         let mut req = self.http.get(&url);
@@ -626,5 +653,33 @@ mod tests {
         assert!(!s.begin("k"));
         s.finish("k");
         assert!(s.begin("k"));
+    }
+
+    #[test]
+    fn twenty_requests_run_at_most_four_at_once() {
+        let fake = FakeArt::start();
+        for i in 0..20 {
+            fake.put(&format!("steam-{i}"), "icon", jpeg_bytes(i as u8));
+        }
+        let s = std::sync::Arc::new(ArtStore::new(&fake.base, dir("cap")));
+        let hits = run(async {
+            let tasks: Vec<_> = (0..20)
+                .map(|i| {
+                    let s = s.clone();
+                    tokio::spawn(async move { s.fetch(&format!("steam-{i}"), ArtSlot::Icon).await })
+                })
+                .collect();
+            let mut hits = 0;
+            for t in tasks {
+                if matches!(t.await.unwrap(), Fetched::Hit(_)) {
+                    hits += 1;
+                }
+            }
+            hits
+        });
+        assert_eq!(hits, 20, "every queued request still runs");
+        let peak = s.peak.load(std::sync::atomic::Ordering::SeqCst);
+        assert!(peak <= MAX_CONCURRENT, "peak in flight was {peak}");
+        assert_eq!(s.running.load(std::sync::atomic::Ordering::SeqCst), 0);
     }
 }
