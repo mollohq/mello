@@ -40,6 +40,19 @@ Three things that are easy to get wrong:
 - **Hidden elements are absent from queries.** There is no visibility predicate.
   "The screen is blank" is expressed as "no screen root matched", which is what
   `assert_not_blank()` does.
+- **A `Harness` owes the process no descriptors.** Each one builds a
+  `new_current_thread()` runtime, which holds one kqueue/epoll descriptor for as
+  long as any `Handle` clone is alive. macOS gives a process 256 descriptors
+  and the suite runs about 800 harnesses on 16 threads, so a harness that is
+  not freed fails the run with `Too many open files` at runtime build. Measured
+  peak with the fix: about 100 descriptors for the whole `--lib` run, flat.
+  Before it: 818 and climbing, one leaked runtime per harness. The cause was a
+  cycle: a callback on a Slint global captured a strong `AppContext`, which owns
+  the window that owns the callback. `Harness::drop` clears those callbacks;
+  `dropping_a_harness_releases_its_descriptors` fails if a new one leaks.
+  The rule: a callback registered on a `MainWindow` or its globals captures
+  `as_weak()`, never `ctx.clone()`, unless `Harness::drop` clears it. Check
+  with `(ulimit -n 256; CI=true cargo test -p mello-client --lib)`.
 - **`MainWindow`'s default state renders nothing.** `onboarding-step 0` with
   `logged-in false` matches no branch in `main.slint`. Set a state before
   asserting, or the test passes while testing nothing.

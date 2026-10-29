@@ -107,6 +107,27 @@ pub struct Harness {
     _rt: tokio::runtime::Runtime,
 }
 
+impl Drop for Harness {
+    /// Cut the cycles that would keep the window, and with it the runtime's
+    /// kqueue, open for the rest of the process.
+    ///
+    /// A few callbacks on `StreamCardUi` and `SealedUi` capture a strong
+    /// `AppContext` clone. That clone owns the `MainWindow` that owns the
+    /// callback, so the window never drops, and every closure in it keeps a
+    /// `Handle` clone that keeps the runtime's I/O driver (one descriptor)
+    /// alive. In the app the window lives as long as the process, so only
+    /// the harness has to break it.
+    fn drop(&mut self) {
+        use slint::ComponentHandle as _;
+        let ui = self.ctx.app.global::<crate::StreamCardUi>();
+        ui.on_volume_changed(|_| {});
+        ui.on_mute_changed(|_| {});
+        ui.on_expand_requested(|_| {});
+        ui.on_popout_requested(|_| {});
+        self.ctx.app.global::<crate::SealedUi>().on_landed(|| {});
+    }
+}
+
 impl Harness {
     /// Build a harness with all callbacks wired and no OS resources touched.
     pub fn new() -> Self {
@@ -504,6 +525,26 @@ mod tests {
         assert!(
             result.is_err(),
             "clicking a missing element must fail the test, not silently no-op"
+        );
+    }
+
+    /// Descriptors this process has open right now.
+    fn open_fds() -> usize {
+        std::fs::read_dir("/dev/fd").map(|d| d.count()).unwrap_or(0)
+    }
+
+    #[test]
+    fn dropping_a_harness_releases_its_descriptors() {
+        drop(Harness::new()); // warm one-time state
+        let before = open_fds();
+        for _ in 0..20 {
+            drop(Harness::new());
+        }
+        let after = open_fds();
+        assert!(
+            after <= before + 2,
+            "20 dropped harnesses left {} descriptors open",
+            after.saturating_sub(before)
         );
     }
 }
