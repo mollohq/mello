@@ -1406,8 +1406,12 @@ int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_coun
     if (!ctx || !out || max_count <= 0) return 0;
     try {
         auto games = mello::video::enumerate_game_processes();
-        int count = static_cast<int>(games.size());
-        if (count > max_count) count = max_count;
+        // Report the whole table even when the buffer is short, so the caller
+        // can tell truncation from a complete list and come back with a larger
+        // buffer. A silent clamp here once hid cs2.exe behind 960 other
+        // processes: it was simply past the caller's 512 entries.
+        int total = static_cast<int>(games.size());
+        int count = total > max_count ? max_count : total;
         for (int i = 0; i < count; ++i) {
             out[i].pid = games[i].pid;
             out[i].is_fullscreen = games[i].is_fullscreen;
@@ -1422,7 +1426,7 @@ int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_coun
             strncpy(out[i].title, games[i].window_title.c_str(), sizeof(out[i].title) - 1);
             out[i].title[sizeof(out[i].title) - 1] = '\0';
         }
-        return count;
+        return total;
     } catch (...) { return 0; }
 }
 

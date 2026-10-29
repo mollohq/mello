@@ -867,7 +867,10 @@ typedef struct MelloGameProcess {
     int64_t  started_at_ms;
 } MelloGameProcess;
 
-/** List running processes matching the bundled game list. */
+/** List every running process; the caller's game database decides what is a
+ * game. Writes at most max_count entries to out and returns the total number
+ * of processes found. A return value above max_count means the list was
+ * truncated: call again with a buffer of at least that size. */
 MELLO_API int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_count);
 
 typedef struct MelloWindow {
