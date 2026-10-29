@@ -526,6 +526,13 @@ pub enum Command {
         ids: Vec<String>,
         slot: crate::art::ArtSlot,
     },
+    /// Fetch the Steam avatars of the testers on the About tab, for the
+    /// slugs in `slugs` (see `testers::TESTERS`). Replies with
+    /// `Event::TesterAvatarLoaded` per avatar that is on disk; quiet for a
+    /// private profile or an error.
+    FetchTesterAvatars {
+        slugs: Vec<String>,
+    },
     /// Fetch the viewer's own per-game stats (for the personal "You strip").
     GetUserGameStats,
 

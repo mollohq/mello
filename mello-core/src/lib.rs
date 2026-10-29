@@ -32,6 +32,7 @@ pub mod session_store;
 pub mod stats;
 pub mod stream;
 pub mod telemetry;
+pub mod testers;
 pub mod transport;
 pub mod unresolved;
 pub mod voice;

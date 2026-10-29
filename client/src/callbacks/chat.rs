@@ -311,9 +311,7 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         ctx.app.on_link_clicked(|url| {
-            if let Err(e) = open::that(url.as_str()) {
-                log::warn!("Failed to open URL {}: {}", url, e);
-            }
+            crate::open_url::open(url.as_str());
         });
     }
     {

@@ -721,6 +721,10 @@ pub enum Event {
         game_id: String,
         slot: crate::art::ArtSlot,
     },
+    /// A tester's Steam avatar is on disk (About tab).
+    TesterAvatarLoaded {
+        slug: String,
+    },
     /// The viewer's per-game personal stats loaded (backs the "You strip").
     UserGameStatsLoaded {
         games: Vec<crate::crew_events::UserGameStats>,

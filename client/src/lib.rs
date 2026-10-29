@@ -41,6 +41,7 @@ mod member_audio;
 mod notifications;
 mod onboarding;
 mod onboarding_invite;
+mod open_url;
 mod perf_mode;
 mod platform;
 mod poll_loop;
@@ -609,6 +610,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         art: match platform::exe_icon::art_cache_dir() {
             Some(dir) => mello_core::art::init(dir),
             None => mello_core::art::global(),
+        },
+        testers: match platform::exe_icon::tester_avatar_dir() {
+            Some(dir) => mello_core::testers::init(dir),
+            None => mello_core::testers::global(),
         },
         hud_manager: hud_mgr,
         fg_monitor,

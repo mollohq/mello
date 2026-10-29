@@ -1,7 +1,7 @@
 import { Theme, MelloInputField, MelloScrollArea } from "../theme.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
-import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData } from "../types.slint";
+import { AudioDeviceData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData } from "../types.slint";
 import { AvatarCard } from "../components/avatar_card.slint";
 import { GameIcon } from "../components/game_icon.slint";
 import { SmallToggle } from "../components/small_toggle.slint";
@@ -2243,13 +2243,129 @@ component AboutSentence inherits Text {
     wrap: word-wrap;
 }
 
-// A run of names in Oxanium, joined with middots.
-component AboutNames inherits Text {
-    font-family: Theme.font-display;
-    font-size: 13px;
-    font-weight: Theme.weight-display;
-    color: Theme.text-primary;
-    wrap: word-wrap;
+// A named party and the place it lives.
+struct AboutLinkData {
+    name: string,
+    url: string,
+}
+
+// A name that opens a website. White action text, a line under it on hover.
+component AboutLink inherits Rectangle {
+    in property <string> name;
+    in property <string> url;
+    // The accessible label. Empty means "<name> website".
+    in property <string> label;
+    callback clicked(/* url */ string);
+
+    width: link-text.preferred-width;
+    height: link-text.preferred-height;
+
+    link-text := Text {
+        text: root.name;
+        font-family: Theme.font-display;
+        font-size: 13px;
+        font-weight: Theme.weight-display;
+        color: Theme.action;
+    }
+
+    // The hover: a line under the name.
+    if link-ta.has-hover: Rectangle {
+        x: 0;
+        y: parent.height - 1px;
+        width: parent.width;
+        height: 1px;
+        background: Theme.action;
+    }
+
+    link-ta := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label != "" ? root.label : "\{root.name} website";
+        mouse-cursor: pointer;
+        clicked => { root.clicked(root.url); }
+    }
+}
+
+// One line of links joined with middots. A longer list is several lines.
+component AboutLinks inherits HorizontalLayout {
+    in property <[AboutLinkData]> links;
+    callback clicked(/* url */ string);
+
+    alignment: start;
+    spacing: 6px;
+
+    for l[i] in root.links: HorizontalLayout {
+        spacing: 6px;
+        if i > 0: Text {
+            text: "·";
+            font-family: Theme.font-display;
+            font-size: 13px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+        }
+        // A name with no address (Google STUN) is plain text, not a control.
+        if l.url != "": AboutLink {
+            name: l.name;
+            url: l.url;
+            clicked(url) => { root.clicked(url); }
+        }
+        if l.url == "": Text {
+            text: l.name;
+            font-family: Theme.font-display;
+            font-size: 13px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+        }
+    }
+}
+
+// One tester: the octagon (a control that opens the Steam profile) and the
+// name under it.
+component TesterTile inherits Rectangle {
+    in property <TesterData> tester;
+    callback clicked();
+
+    width: 72px;
+    height: 56px + 10px + 18px;
+    background: transparent;
+
+    VerticalLayout {
+        spacing: 10px;
+        alignment: start;
+
+        Rectangle {
+            height: 56px;
+            background: transparent;
+
+            UserAvatar {
+                x: (parent.width - self.width) / 2;
+                initials: root.tester.initials;
+                avatar: root.tester.avatar;
+                has-avatar: root.tester.has-avatar;
+                color-index: root.tester.color-index;
+                size: 56px;
+                bg-color: Theme.bg-app;
+            }
+
+            // An octagon with a pointer and nothing to say would be mute to
+            // a screen reader: the control names the person and the place.
+            tester-ta := TouchArea {
+                accessible-role: button;
+                accessible-label: "\{root.tester.name} on Steam";
+                mouse-cursor: pointer;
+                clicked => { root.clicked(); }
+            }
+        }
+
+        Text {
+            text: root.tester.name;
+            font-family: Theme.font-display;
+            font-size: 12px;
+            font-weight: Theme.weight-display;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            overflow: elide;
+        }
+    }
 }
 
 component AboutTab inherits VerticalLayout {
@@ -2261,8 +2377,14 @@ component AboutTab inherits VerticalLayout {
     in property <string> commit;
     in property <string> built;
 
+    in property <[TesterData]> testers: [];
+
     // Opens the Third-party notices view.
     callback notices-clicked();
+    // A tester's octagon: open this Steam profile.
+    callback tester-clicked(/* url */ string);
+    // A link in the thank-you lists or the credits: open this address.
+    callback link-clicked(/* url */ string);
 
     // M3LLO
     VerticalLayout {
@@ -2301,18 +2423,59 @@ component AboutTab inherits VerticalLayout {
             AboutRow { label: "VERSION"; value: root.version; }
             AboutRow { label: "BUILD"; value: root.commit; }
             AboutRow { label: "BUILT"; value: root.built; }
-            AboutRow { label: "MADE BY"; value: "Mollo Tech AB, Göteborg"; }
+            AboutRow { label: "COPYRIGHT"; value: "© 2026 Mollo Tech AB, Göteborg, Sweden"; }
+            Rectangle {
+                height: 24px;
+                HorizontalLayout {
+                    spacing: 16px;
+                    Text {
+                        width: 96px;
+                        text: "CREATED BY";
+                        font-family: Theme.font-label;
+                        font-size: 10px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: 2px;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                    AboutLink {
+                        name: "b0bben (bob@mollo.io)";
+                        url: "mailto:bob@mollo.io";
+                        label: "Email b0bben";
+                        y: (parent.height - self.height) / 2;
+                        clicked(url) => { root.link-clicked(url); }
+                    }
+                    Rectangle { horizontal-stretch: 1; }
+                }
+            }
         }
     }
 
-    // THANK YOU
+    // THANKS: one centred sentence, no label and no rule.
+    Text {
+        text: "m3llo runs on the work of many people and services.\nWe couldn't have done this without them.";
+        font-family: Theme.font-body;
+        font-size: Theme.font-lg;
+        font-weight: Theme.weight-sentence;
+        color: Theme.text-primary;
+        horizontal-alignment: center;
+        wrap: word-wrap;
+    }
+
+    // THE TESTERS
     VerticalLayout {
         spacing: 24px;
 
-        SectionHeader { title: "THANK YOU"; }
+        SectionHeader { title: "THE OG CREW THAT HELPED SHAPE M3LLO"; }
 
-        AboutSentence {
-            text: "m3llo runs on the work of many people and services. This page names them.";
+        HorizontalLayout {
+            alignment: start;
+            spacing: 8px;
+
+            for t in root.testers: TesterTile {
+                tester: t;
+                clicked => { root.tester-clicked(t.url); }
+            }
         }
     }
 
@@ -2322,8 +2485,17 @@ component AboutTab inherits VerticalLayout {
 
         SectionHeader { title: "SERVICES WE USE"; }
 
-        AboutNames {
-            text: "Nakama (Heroic Labs) · Render · Cloudflare · IGDB · DiceBear · Giphy · Plausible (website only) · Apple · Google STUN · Steam · Epic Games · GOG · Riot Games · Discord · Twitch · GitHub";
+        VerticalLayout {
+            spacing: 6px;
+        AboutLinks {
+            links: [{ name: "Nakama (Heroic Labs)", url: "https://heroiclabs.com" }, { name: "IGDB", url: "https://www.igdb.com" }, { name: "DiceBear", url: "https://www.dicebear.com" }, { name: "Giphy", url: "https://giphy.com" }, { name: "Google STUN", url: "" }];
+            clicked(url) => { root.link-clicked(url); }
+        }
+
+        AboutLinks {
+            links: [{ name: "Steam", url: "https://store.steampowered.com" }, { name: "Epic Games", url: "https://store.epicgames.com" }, { name: "GOG", url: "https://www.gog.com" }, { name: "Riot Games", url: "https://developer.riotgames.com" }];
+            clicked(url) => { root.link-clicked(url); }
+        }
         }
     }
 
@@ -2333,8 +2505,22 @@ component AboutTab inherits VerticalLayout {
 
         SectionHeader { title: "OPEN SOURCE WE SHIP"; }
 
-        AboutNames {
-            text: "Slint · Velopack · RNNoise · WebRTC audio processing · ONNX Runtime · Silero VAD · OpenH264 · Opus · OpenSSL · libdatachannel · Pion · OpenMoji · Oxanium · Barlow";
+        VerticalLayout {
+            spacing: 6px;
+        AboutLinks {
+            links: [{ name: "Slint", url: "https://slint.dev" }, { name: "Velopack", url: "https://velopack.io" }, { name: "RNNoise", url: "https://gitlab.xiph.org/xiph/rnnoise" }, { name: "WebRTC audio processing", url: "https://webrtc.org" }, { name: "ONNX Runtime", url: "https://onnxruntime.ai" }];
+            clicked(url) => { root.link-clicked(url); }
+        }
+
+        AboutLinks {
+            links: [{ name: "Silero VAD", url: "https://github.com/snakers4/silero-vad" }, { name: "OpenH264", url: "https://www.openh264.org" }, { name: "Opus", url: "https://opus-codec.org" }, { name: "OpenSSL", url: "https://www.openssl.org" }, { name: "libdatachannel", url: "https://github.com/paullouisageneau/libdatachannel" }];
+            clicked(url) => { root.link-clicked(url); }
+        }
+
+        AboutLinks {
+            links: [{ name: "Pion", url: "https://pion.ly" }, { name: "OpenMoji", url: "https://openmoji.org" }, { name: "Oxanium", url: "https://fonts.google.com/specimen/Oxanium" }, { name: "Barlow", url: "https://fonts.google.com/specimen/Barlow" }];
+            clicked(url) => { root.link-clicked(url); }
+        }
         }
 
         AboutSentence {
@@ -2395,9 +2581,25 @@ component AboutTab inherits VerticalLayout {
 
         VerticalLayout {
             spacing: 8px;
-            AboutSentence { text: "Game data and artwork by IGDB"; }
-            AboutSentence { text: "Made with Slint"; }
-            AboutSentence { text: "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0"; }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                AboutSentence { text: "Game data and artwork by"; }
+                AboutLink { name: "IGDB"; url: "https://www.igdb.com"; clicked(url) => { root.link-clicked(url); } }
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                AboutSentence { text: "Made with"; }
+                AboutLink { name: "Slint"; url: "https://slint.dev"; clicked(url) => { root.link-clicked(url); } }
+            }
+            HorizontalLayout {
+                alignment: start;
+                spacing: 4px;
+                AboutSentence { text: "Emoji by"; }
+                AboutLink { name: "OpenMoji"; url: "https://openmoji.org"; clicked(url) => { root.link-clicked(url); } }
+                AboutSentence { text: "(https://openmoji.org), CC BY-SA 4.0"; }
+            }
         }
     }
 }
@@ -2439,6 +2641,12 @@ export component SettingsModal inherits Rectangle {
     in property <string> build-commit: "unknown";
     in property <string> build-date: "unknown";
     callback about-notices-requested();
+    // The ABOUT tab was opened. The client fills `testers` and asks for the
+    // avatars that are not on disk.
+    callback about-opened();
+    in property <[TesterData]> testers: [];
+    callback tester-clicked(/* url */ string);
+    callback link-clicked(/* url */ string);
     // The Third-party notices view, filled on the first open.
     in property <[NoticeEntryData]> notices: [];
     in-out property <bool> notices-open: false;
@@ -2919,7 +3127,10 @@ export component SettingsModal inherits Rectangle {
                                 about-ta := TouchArea {
                                     accessible-role: tab;
                                     accessible-label: "ABOUT";
-                                    clicked => { active-tab = 4; }
+                                    clicked => {
+                                        active-tab = 4;
+                                        root.about-opened();
+                                    }
                                 }
                             }
 
@@ -3153,6 +3364,9 @@ export component SettingsModal inherits Rectangle {
                             version: root.build-version;
                             commit: root.build-commit;
                             built: root.build-date;
+                            testers: root.testers;
+                            tester-clicked(url) => { root.tester-clicked(url); }
+                            link-clicked(url) => { root.link-clicked(url); }
                             notices-clicked => {
                                 root.notices-open = true;
                                 root.about-notices-requested();
@@ -3294,6 +3508,15 @@ component SettingsPreview inherits Rectangle {
         build-version: "v0.7.0";
         build-commit: "bfe4580";
         build-date: "2026-10-26";
+        testers: [
+            { name: "Ostkatt", initials: "O", url: "https://steamcommunity.com/id/Larzon/", color-index: 0, has-avatar: false },
+            { name: "Propotato", initials: "P", url: "https://steamcommunity.com/id/martin1337maden/", color-index: 1, has-avatar: true, avatar: @image-url("../previews/fixtures/capsule-sample-1.png") },
+            { name: "xtrÖm", initials: "X", url: "https://steamcommunity.com/id/xtroem/", color-index: 2, has-avatar: false },
+            { name: "Erle", initials: "E", url: "https://steamcommunity.com/id/erlexd/", color-index: 3, has-avatar: true, avatar: @image-url("../previews/fixtures/capsule-sample-3.png") },
+            { name: "Halvtokig", initials: "H", url: "https://steamcommunity.com/profiles/76561197974140093/", color-index: 4, has-avatar: false },
+            { name: "LipzzarN", initials: "L", url: "https://steamcommunity.com/profiles/76561198156554449/", color-index: 0, has-avatar: false },
+            { name: "Keyden", initials: "K", url: "https://steamcommunity.com/profiles/76561198173235561/", color-index: 1, has-avatar: false },
+        ];
         profile-nickname-value: "b0bben";
         capture-devices: [
             { id: "a", name: "Yeti X", is-default: true },
@@ -3330,4 +3553,5 @@ export component PreviewAudio inherits SettingsPreview { tab: 2; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
-export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 520px; }
+export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 700px; }
+export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 290px; }

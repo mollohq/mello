@@ -1260,6 +1260,24 @@ impl Client {
                     store.finish(&key);
                 });
             }
+            Command::FetchTesterAvatars { slugs } => {
+                let store = crate::testers::global();
+                if !store.enabled() {
+                    return;
+                }
+                for slug in slugs {
+                    if !store.begin(&slug) {
+                        continue;
+                    }
+                    let (store, tx) = (store.clone(), self.event_tx.clone());
+                    tokio::spawn(async move {
+                        if let crate::testers::Fetched::Hit(_) = store.fetch(&slug).await {
+                            let _ = tx.send(Event::TesterAvatarLoaded { slug: slug.clone() });
+                        }
+                        store.finish(&slug);
+                    });
+                }
+            }
             Command::FetchGameIcon { game_id } => {
                 use base64::Engine as _;
                 match self.nakama.game_icon_get(&game_id).await {

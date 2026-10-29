@@ -77,6 +77,12 @@ pub fn art_cache_dir() -> Option<PathBuf> {
     icon_cache_dir().map(|d| d.with_file_name("game_art"))
 }
 
+/// Disk cache dir for the tester avatars, beside the icon cache:
+/// `tester_avatars/<slug>.jpg`.
+pub fn tester_avatar_dir() -> Option<PathBuf> {
+    icon_cache_dir().map(|d| d.with_file_name("tester_avatars"))
+}
+
 pub fn cached_icon_path(game_id: &str) -> Option<PathBuf> {
     // Ids are slugs ([a-z0-9-]); refuse anything path-ish defensively.
     if game_id.is_empty()
