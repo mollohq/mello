@@ -1730,6 +1730,7 @@ export component MainWindow inherits Window {
         testers: root.settings-testers;
         about-opened => { root.about-opened(); }
         tester-clicked(url) => { root.link-clicked(url); }
+        link-clicked(url) => { root.link-clicked(url); }
         show-saved <=> root.settings-show-saved;
         // HUD
         settings-hud-enabled <=> root.settings-hud-enabled;

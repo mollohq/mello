@@ -10167,29 +10167,81 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
         Some(i_slint_backend_testing::AccessibleRole::Tab)
     );
     assert_eq!(
-        labelled_count(&h, "Made with Slint"),
+        labelled_count(&h, "Slint website"),
         0,
         "the credits sit on the ABOUT tab only"
     );
     h.click_label("ABOUT");
     scroll_settings_to_the_end(&mut h);
-    assert_eq!(labelled_count(&h, "Made with Slint"), 1);
+    // Each of these names is in a list and in the credits.
+    for (name, url) in [
+        ("IGDB", "https://www.igdb.com"),
+        ("Slint", "https://slint.dev"),
+        ("OpenMoji", "https://openmoji.org"),
+    ] {
+        let links = h.controls_labelled(&format!("{name} website"));
+        assert_eq!(links.len(), 2, "{name}: the list and the credits");
+        let _ = crate::open_url::take_opened();
+        // The credits come last.
+        links[1].mock_single_click(slint::platform::PointerEventButton::Left);
+        h.pump();
+        assert_eq!(
+            crate::open_url::take_opened(),
+            vec![url.to_string()],
+            "{name}"
+        );
+    }
+    for text in ["Game data and artwork by", "Made with", "Emoji by"] {
+        assert_eq!(labelled_count(&h, text), 1, "{text}");
+    }
     assert_eq!(
-        labelled_count(&h, "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0"),
+        labelled_count(&h, "(https://openmoji.org), CC BY-SA 4.0"),
         1,
-        "the OpenMoji line reads as the licence asks"
+        "the OpenMoji licence line stays"
     );
-    assert_eq!(labelled_count(&h, "Game data and artwork by IGDB"), 1);
 }
 
 #[test]
-fn the_services_list_names_only_free_and_open_source_services() {
+fn the_services_and_open_source_names_are_links_and_only_free_ones_are_thanked() {
     let mut h = Harness::new();
     about_tab(&mut h);
     h.click_label("ABOUT");
     scroll_settings_to_the_end(&mut h);
-    let kept = "Nakama (Heroic Labs) · IGDB · DiceBear · Giphy · Google STUN · Steam · Epic Games · GOG · Riot Games";
-    assert_eq!(labelled_count(&h, kept), 1, "the services line");
+    let linked = [
+        ("Nakama (Heroic Labs)", "https://heroiclabs.com"),
+        ("DiceBear", "https://www.dicebear.com"),
+        ("Giphy", "https://giphy.com"),
+        ("Steam", "https://store.steampowered.com"),
+        ("Epic Games", "https://store.epicgames.com"),
+        ("GOG", "https://www.gog.com"),
+        ("Riot Games", "https://developer.riotgames.com"),
+        ("Velopack", "https://velopack.io"),
+        ("RNNoise", "https://gitlab.xiph.org/xiph/rnnoise"),
+        ("WebRTC audio processing", "https://webrtc.org"),
+        ("ONNX Runtime", "https://onnxruntime.ai"),
+        ("Silero VAD", "https://github.com/snakers4/silero-vad"),
+        ("OpenH264", "https://www.openh264.org"),
+        ("Opus", "https://opus-codec.org"),
+        ("OpenSSL", "https://www.openssl.org"),
+        (
+            "libdatachannel",
+            "https://github.com/paullouisageneau/libdatachannel",
+        ),
+        ("Pion", "https://pion.ly"),
+        ("Oxanium", "https://fonts.google.com/specimen/Oxanium"),
+        ("Barlow", "https://fonts.google.com/specimen/Barlow"),
+    ];
+    for (name, url) in linked {
+        let _ = crate::open_url::take_opened();
+        h.click_label(&format!("{name} website"));
+        assert_eq!(
+            crate::open_url::take_opened(),
+            vec![url.to_string()],
+            "{name}"
+        );
+    }
+    assert_eq!(labelled_count(&h, "Google STUN"), 1, "plain text, no site");
+    assert!(h.controls_labelled("Google STUN website").is_empty());
     for vendor in [
         "Render",
         "Cloudflare",
@@ -10200,11 +10252,24 @@ fn the_services_list_names_only_free_and_open_source_services() {
         "Discord",
         "Twitch",
     ] {
-        assert!(
-            !kept.contains(vendor) && labelled_count(&h, vendor) == 0,
-            "{vendor} is not thanked"
-        );
+        assert_eq!(labelled_count(&h, vendor), 0, "{vendor} is not thanked");
+        assert!(h.controls_labelled(&format!("{vendor} website")).is_empty());
     }
+}
+
+#[test]
+fn the_about_tab_has_a_copyright_row_and_an_email_link_to_its_maker() {
+    let mut h = Harness::new();
+    about_tab(&mut h);
+    h.click_label("ABOUT");
+    assert_eq!(labelled_count(&h, "© 2026 Mollo Tech AB, Göteborg"), 1);
+    assert_eq!(labelled_count(&h, "MADE BY"), 0);
+    let _ = crate::open_url::take_opened();
+    h.click_label("Email b0bben");
+    assert_eq!(
+        crate::open_url::take_opened(),
+        vec!["mailto:bob@mollo.io".to_string()]
+    );
 }
 
 #[test]

@@ -67,6 +67,19 @@ fn the_tab_has_seven_octagon_controls_each_with_an_image_or_a_monogram() {
     let mut h = Harness::new();
     about_tab(&mut h);
     h.click_label("ABOUT");
+    assert_eq!(
+        labelled_count(&h, "THE OG CREW THAT HELPED SHAPE M3LLO"),
+        1,
+        "the section label"
+    );
+    assert_eq!(
+        labelled_count(
+            &h,
+            "They played the first builds and told me what was wrong."
+        ),
+        0,
+        "no line under the label"
+    );
     let rows = rows(&h);
     assert_eq!(rows.len(), 7);
     for (i, (name, _)) in PROFILES.iter().enumerate() {

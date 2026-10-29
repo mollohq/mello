@@ -163,12 +163,12 @@ The ABOUT tab is read-only. It has these parts, top to bottom.
 
 | Part | Content |
 |---|---|
-| M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date) and MADE BY ("Mollo Tech AB, Göteborg"). The stamp comes from `client/src/build_info.rs`. |
+| M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date), COPYRIGHT ("© 2026 Mollo Tech AB, Göteborg") and CREATED BY ("b0bben (bob@mollo.io)", a link that opens `mailto:bob@mollo.io`). The stamp comes from `client/src/build_info.rs`. |
 | THANK YOU | One sentence: m3llo runs on the work of many people and services, and this page names them. |
-| THE TESTERS | One line: "They played the first builds and told me what was wrong." Then a row of seven octagons, each with the tester's Steam avatar and the name under it in Oxanium 600: Ostkatt, Propotato, xtrÖm, Erle, Halvtokig, LipzzarN, Keyden. Each octagon is a control labelled "<name> on Steam" that opens the Steam profile in the browser. |
-| SERVICES WE USE | Names only, and only services that are free or open source: Nakama (Heroic Labs), IGDB, DiceBear, Giphy, Google STUN, Steam, Epic Games, GOG, Riot Games. Paid vendors and sign-in providers are not listed. |
-| OPEN SOURCE WE SHIP | Names only: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, OpenMoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
-| CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0". |
+| THE OG CREW THAT HELPED SHAPE M3LLO | A row of seven octagons, each with the tester's Steam avatar and the name under it in Oxanium 600: Ostkatt, Propotato, xtrÖm, Erle, Halvtokig, LipzzarN, Keyden. Each octagon is a control labelled "<name> on Steam" that opens the Steam profile in the browser. |
+| SERVICES WE USE | Names only, each a link to its site where one exists (a control labelled "<name> website" that opens the address in the browser through `open_url::open`), and only services that are free or open source: Nakama (Heroic Labs), IGDB, DiceBear, Giphy, Google STUN, Steam, Epic Games, GOG, Riot Games. Paid vendors and sign-in providers are not listed. |
+| OPEN SOURCE WE SHIP | Names only, each a link like the services: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, OpenMoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
+| CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0". IGDB, Slint and OpenMoji are links to igdb.com, slint.dev and openmoji.org. |
 
 The "Third-party notices" button opens a view in the same modal. A back control returns to ABOUT.
 The view lists each licence text once, with the names of the dependencies that share it.
