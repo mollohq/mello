@@ -2451,15 +2451,15 @@ component AboutTab inherits VerticalLayout {
         }
     }
 
-    // THANK YOU
-    VerticalLayout {
-        spacing: 24px;
-
-        SectionHeader { title: "THANK YOU"; }
-
-        AboutSentence {
-            text: "m3llo runs on the work of many people and services. This page names them.";
-        }
+    // THANKS: one centred sentence, no label and no rule.
+    Text {
+        text: "m3llo runs on the work of many people and services. We couldn't have done this without them.";
+        font-family: Theme.font-body;
+        font-size: Theme.font-lg;
+        font-weight: Theme.weight-sentence;
+        color: Theme.text-primary;
+        horizontal-alignment: center;
+        wrap: word-wrap;
     }
 
     // THE TESTERS
@@ -3554,4 +3554,4 @@ export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
 export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 700px; }
-export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 330px; }
+export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 290px; }
