@@ -163,7 +163,7 @@ The ABOUT tab is read-only. It has these parts, top to bottom.
 
 | Part | Content |
 |---|---|
-| M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date), COPYRIGHT ("© 2026 Mollo Tech AB, Göteborg") and CREATED BY ("b0bben (bob@mollo.io)", a link that opens `mailto:bob@mollo.io`). The stamp comes from `client/src/build_info.rs`. |
+| M3LLO | The wordmark, then four rows: VERSION, BUILD (the short commit), BUILT (the build date), COPYRIGHT ("© 2026 Mollo Tech AB, Göteborg, Sweden") and CREATED BY ("b0bben (bob@mollo.io)", a link that opens `mailto:bob@mollo.io`). The stamp comes from `client/src/build_info.rs`. |
 | THANK YOU | One sentence: m3llo runs on the work of many people and services, and this page names them. |
 | THE OG CREW THAT HELPED SHAPE M3LLO | A row of seven octagons, each with the tester's Steam avatar and the name under it in Oxanium 600: Ostkatt, Propotato, xtrÖm, Erle, Halvtokig, LipzzarN, Keyden. Each octagon is a control labelled "<name> on Steam" that opens the Steam profile in the browser. |
 | SERVICES WE USE | Names only, each a link to its site where one exists (a control labelled "<name> website" that opens the address in the browser through `open_url::open`), and only services that are free or open source: Nakama (Heroic Labs), IGDB, DiceBear, Giphy, Google STUN, Steam, Epic Games, GOG, Riot Games. Paid vendors and sign-in providers are not listed. |

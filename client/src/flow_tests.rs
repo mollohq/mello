@@ -10262,7 +10262,10 @@ fn the_about_tab_has_a_copyright_row_and_an_email_link_to_its_maker() {
     let mut h = Harness::new();
     about_tab(&mut h);
     h.click_label("ABOUT");
-    assert_eq!(labelled_count(&h, "© 2026 Mollo Tech AB, Göteborg"), 1);
+    assert_eq!(
+        labelled_count(&h, "© 2026 Mollo Tech AB, Göteborg, Sweden"),
+        1
+    );
     assert_eq!(labelled_count(&h, "MADE BY"), 0);
     let _ = crate::open_url::take_opened();
     h.click_label("Email b0bben");
