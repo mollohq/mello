@@ -48,7 +48,7 @@ function Test-Prerequisites {
     }
     $profile = Get-StreamProbeProfile $false $probeCtx.NakamaHttpBase $null
     if (-not (Test-LocalSfuReachable $profile.SfuHealthUrl)) {
-        throw "SFU not reachable at $($profile.SfuHealthUrl). Start mello-sfu locally."
+        throw "SFU not reachable at $($profile.SfuHealthUrl). Start it from the mello-sfu compose: cd ..\mello-sfu; docker compose -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build (SFU_ADMIN_PASSWORD and, on Windows, SFU_PUBLIC_IP set to the LAN address)."
     }
     Add-GateResult "prerequisites" $true "Nakama + SFU reachable"
 }

@@ -381,7 +381,7 @@ function Initialize-StreamProbeContext {
 
     if (-not $SkipSfuCheck -and $profileName -eq "local" -and -not (Test-LocalSfuReachable $profile.SfuHealthUrl)) {
         Write-Host "  warning: local SFU health check failed ($($profile.SfuHealthUrl))" -ForegroundColor Yellow
-        Write-Host "           start SFU: `$env:SFU_PUBLIC_IP='127.0.0.1'; `$env:SFU_ADMIN_PASSWORD='devpass'; go run ./cmd/sfu" -ForegroundColor DarkGray
+        Write-Host "           start SFU: cd ..\mello-sfu; `$env:SFU_PUBLIC_IP='<LAN address>'; `$env:SFU_ADMIN_PASSWORD='devpass'; docker compose -f docker-compose.yml -f docker-compose.test-mode.yml up -d --build" -ForegroundColor DarkGray
     }
 
     $token = Resolve-StreamProbeAuthToken $profile $AuthToken $RefreshAuth

@@ -66,6 +66,13 @@ else
     # SFU mode needs a signing key on Nakama. A throwaway key is enough: the
     # test makes no media connection. The endpoint is the local SFU, never the
     # production one that the compose file defaults to.
+    # 8443 is signaling, 8080 is the SFU health and admin port. The SFU runs in
+    # Docker from the mello-sfu compose.
+    if ! curl -sf -o /dev/null --max-time 3 "http://127.0.0.1:8080/health"; then
+        echo "The local SFU is not up (http://127.0.0.1:8080/health). Start it:" >&2
+        echo "  (cd ../mello-sfu && docker compose up -d --build)" >&2
+        exit 1
+    fi
     command -v openssl >/dev/null 2>&1 || { echo "openssl is needed for the throwaway SFU key" >&2; exit 1; }
     SFU_JWT_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)"
     export SFU_JWT_PRIVATE_KEY
@@ -74,7 +81,7 @@ else
     PUSH_WORKER_URL="http://host.docker.internal:$MELLO_E2E_PUSH_PORT"
     PUSH_WORKER_TOKEN="e2e-push-token"
     export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN
-    export SFU_ENDPOINT_EU="ws://127.0.0.1:8080/ws"
+    export SFU_ENDPOINT_EU="ws://127.0.0.1:8443/ws"
     # Distinct container names and ports, so it lives next to the main stack.
     cat >"$TMP/override.yml" <<YML
 services:
