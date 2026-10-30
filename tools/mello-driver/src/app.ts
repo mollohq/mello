@@ -185,6 +185,9 @@ export type AppState = {
     members: number;
     index: number;
     belts: string[];
+    /** The day card: a day that is over, two columns wide with its sessions as rows. */
+    wide: boolean;
+    rows: number;
   };
   /** The live session cards (a game in progress), in screen order. `index` is the place in `feed_cards`. */
   live_sessions: { game_name: string; member_names: string[]; since_min: number; since_text: string; index: number; octagons: number; with_avatar: number; poster: boolean }[];
@@ -324,6 +327,9 @@ export type UserOptions = {
   deeplink?: string;
   /** Default: DEFAULT_MIC_PERMISSION. */
   micPermission?: MicPermission;
+  /** Extra environment for this user's app, over the run's. For example
+   *  MELLO_E2E_CLOCK_SHIFT_MS, the app's clock moved ahead. */
+  env?: Record<string, string>;
 };
 
 export type AppOptions = {
@@ -736,8 +742,15 @@ export class App {
    * is on screen: a control below the fold is absent from the element tree.
    */
   async scrollToControl(label: string, x = 450, y = 300, maxSteps = 10): Promise<void> {
+    // The control bar covers the foot of the window (Theme.control-bar-height,
+    // 81 px). A control that exists but sits under it is not clickable yet:
+    // scroll on until its bottom edge is above the bar.
+    const [win] = await this.ui.props([await this.ui.window()]);
+    const bar = 81 + 8;
+    const clear = win?.size ? win.size.height - bar : Number.POSITIVE_INFINITY;
     for (let i = 0; i < maxSteps; i++) {
-      if ((await this.ui.controls()).some((c) => c.label === label)) return;
+      const c = (await this.ui.controls()).find((c) => c.label === label);
+      if (c && c.y + c.height <= clear) return;
       await this.ui.scrollAt(x, y, -300);
       await sleep(200);
     }

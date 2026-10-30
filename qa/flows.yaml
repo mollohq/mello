@@ -531,6 +531,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-11
+    title: "The day card: a daily recap of a day that is over is two columns wide with its sessions as rows, and those sessions are not cards"
+    priority: P1
+    users: 1
+    harness: [the_day_card_takes_the_wide_slot_after_the_recap, a_day_that_is_over_with_sessions_is_wide_and_today_is_not, the_sessions_of_the_folded_day_are_not_cards]
+    journeys: [qa/journeys/feed-day-card.ts]
+    protocol: []
+    issues: []
+
   - id: FEED-10
     title: "A belt that moved is sealed in the feed, opens in the centre with the reveal, and returns open with the dot cleared"
     priority: P1

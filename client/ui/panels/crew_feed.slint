@@ -1264,13 +1264,13 @@ component DayNumbers inherits Rectangle {
             HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 0.8;
                     spacing: 2px;
                     Text { text: card.title; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 1.2;
                     spacing: 2px;
                     Text { text: card.clip-count; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
@@ -1280,13 +1280,13 @@ component DayNumbers inherits Rectangle {
             HorizontalLayout {
                 spacing: 14px;
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 0.8;
                     spacing: 2px;
                     Text { text: card.day-sessions; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
                     Text { text: "SESSIONS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
                 }
                 VerticalLayout {
-                    horizontal-stretch: 1;
+                    horizontal-stretch: 1.2;
                     spacing: 4px;
                     if card.game-name != "": HorizontalLayout {
                         height: 29px;

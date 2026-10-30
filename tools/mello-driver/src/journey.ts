@@ -115,7 +115,7 @@ export async function runJourney(j: Journey, opts: RunOptions): Promise<RunResul
     cwd: opts.repoRoot,
     runDir: dir,
     mcpPort: port,
-    env: opts.env,
+    env: { ...opts.env, ...user.env },
     micPermission: user.micPermission,
     onAction: events ? (user, text) => events.emit("action", { user, text }) : undefined,
   });

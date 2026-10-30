@@ -324,12 +324,17 @@ fn is_fixed(t: &str) -> bool {
             | "head2head"
             | "invite"
             | "recap"
-            | "daily-recap"
             | "recent-games"
             | "locked"
             | "live-session"
             | "joined"
     )
+}
+
+/// A card that keeps its place: a fixed kind, or the day card (two columns:
+/// it never swaps into a cell). A daily recap that is a cell may swap.
+fn is_fixed_card(c: &CardInfo) -> bool {
+    is_fixed(&c.card_type) || c.day_wide
 }
 
 /// The new order, as indices into `cards`.
@@ -646,7 +651,7 @@ fn tall_trio_order(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         .iter()
         .skip(start)
         .copied()
-        .filter(|&i| !is_fixed(&cards[i].card_type))
+        .filter(|&i| !is_fixed_card(&cards[i]))
         .take(2)
         .collect();
     if plain.len() < 2 {
@@ -680,7 +685,7 @@ fn clips_leave_wide(cards: &[CardInfo], order: &mut [usize], start: usize) {
                 p < order.len()
                     && p >= start
                     && !wide.contains(&p)
-                    && !is_fixed(&cards[order[p]].card_type)
+                    && !is_fixed_card(&cards[order[p]])
             })
         });
         if let Some(p) = swap {
@@ -839,10 +844,29 @@ mod tests {
             "day card at {at}, wide slots {wide:?}, order {:?}",
             types(&cards, &order)
         );
-        // A day card that is a cell (today so far) is not moved.
+        // A day card that is a cell (today so far) is not moved by the wide
+        // rule, and it still swaps with a clip that lands in a wide slot (the
+        // sealed journey clicks its chip there).
         let cards = vec![card("daily-recap"), card("clip"), card("clip")];
         let order = arrange(&cards, 0);
         assert_eq!(types(&cards, &order), ["daily-recap", "clip", "clip"]);
+        let mut day = card("daily-recap");
+        day.day_wide = true;
+        let cards = vec![
+            h2h("pairs"),
+            card("invite"),
+            card("clip"),
+            day,
+            card("clip"),
+        ];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let wide = wide_slots(&layout(&infos, 0), infos.len());
+        let at = infos.iter().position(|c| c.day_wide).unwrap();
+        assert!(
+            wide.contains(&at),
+            "the wide day card never swaps into a cell: at {at}, wide {wide:?}"
+        );
     }
 
     #[test]
