@@ -526,11 +526,13 @@ fn head2head_cards(
             ..Default::default()
         });
     }
-    // A crew of five or more with nothing to compare has no cell. The invite
+    // A crew of five or more with fewer than two contested pairs has no cell:
+    // one row in a two-column card is an empty card with a score in the corner
+    // (production, 2026-10-30). The belt still shows in the recaps. The invite
     // card stays.
     if model.placement == Placement::Pairs
         && model.member_count >= head2head::SEATS
-        && model.pairs.is_empty()
+        && model.pairs.len() < head2head::MIN_PAIR_ROWS
     {
         cards.remove(0);
     }

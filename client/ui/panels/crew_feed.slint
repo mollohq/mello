@@ -1955,17 +1955,30 @@ component RecentGameTileCell inherits Rectangle {
             }
         }
 
-        // Who owns it, as small octagons, right-aligned.
+        // Who owns it, as small octagons, right-aligned: three, then "+N".
+        // The name keeps its line; a crew of five on one game must not push
+        // it to "Counter...".
         if tile.owners.length > 0: HorizontalLayout {
             spacing: 4px;
             alignment: end;
             cross-axis-alignment: center;
-            for o in tile.owners: UserAvatar {
+            for o[i] in tile.owners: UserAvatar {
+                visible: i < 3;
+                width: i < 3 ? 16px : 0px;
                 initials: o.initials;
                 avatar: o.avatar;
                 has-avatar: o.has-avatar;
                 color-index: o.hue-index;
                 size: 16px;
+            }
+            if tile.owners.length > 3: Text {
+                text: "+" + (tile.owners.length - 3);
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                font-size: 9px;
+                letter-spacing: 0.5px;
+                color: Theme.text-dim;
+                vertical-alignment: center;
             }
         }
     }
@@ -4734,6 +4747,102 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 duration-human: "2h 05m", timestamp: "5h ago",
                 actor-name: "Bob", actor-initials: "B", participant-count: 2,
                 part0-initials: "B", part1-initials: "S",
+            },
+        ];
+    }
+}
+
+/// Production on day 3 of a crew of ten (2026-10-30): nine pairs and one of
+/// them contested, under the two the pairs card needs, so no head2head card;
+/// the weekly recap of the first week; a daily recap with two sealed belt
+/// moves; last night's voice session; two voice clips; recent games as the
+/// list in the side column, the first game owned by five members. The cases
+/// the other fixtures never had.
+///
+///   slint-viewer --screenshot out.png --component PreviewFeedProdCases \
+///     client/ui/panels/crew_feed.slint
+export component PreviewFeedProdCases inherits Rectangle {
+    width: 1200px;
+    height: 1180px;
+    background: Theme.bg-app;
+
+    property <H2hPerson> bob: { id: "u1", name: "bObben", initials: "BO", hue-index: 1 };
+    property <H2hPerson> ostkatt: { id: "u2", name: "Ostkatt", initials: "OS", hue-index: 2 };
+    property <H2hPerson> xtrom: { id: "u3", name: "xtrÖm", initials: "XT", hue-index: 1 };
+    property <H2hPerson> halv: { id: "u4", name: "Halvtokig", initials: "HA", hue-index: 0 };
+    property <H2hPerson> strom: { id: "u5", name: "stromvap", initials: "ST", hue-index: 3 };
+    property <H2hPerson> erle: { id: "u6", name: "Erle", initials: "ER", hue-index: 4 };
+
+    out property <BeltReveal> collector: {
+        key: "the_collector:4410", sealed: true, seed: 4410, code: SealedFixtures.carry-code, cells: SealedFixtures.carry-cells,
+        title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), hue-index: 3, kind: 0, amount: 9, unit: "installed",
+        stat: "Most games installed.", holder: root.strom, prev: root.bob,
+    };
+    out property <BeltReveal> owl: {
+        key: "night_owl:4411", sealed: true, seed: 4411, code: SealedFixtures.owl-code, cells: SealedFixtures.owl-cells,
+        title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), hue-index: 2, kind: 2, amount: 220,
+        stat: "Latest local time of a last session.", holder: root.ostkatt, prev: root.bob,
+    };
+
+    CrewFeed {
+        width: parent.width;
+        height: parent.height;
+        is-cold-start: false;
+        cards: [
+            {
+                id: "recap", card-type: "recap", role: "recap", size: "lg", recap-week: "Week 31",
+                title: "5h 59", subtitle: "0", duration: "3h 48",
+                recap-rows: 2, recap-hangout-min: 359, recap-clips: 0, recap-longest-min: 228, recap-range: "Last week",
+                recap-active: { name: "bObben", initials: "BO", hue: 1, count: 9, has-avatar: false },
+                game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
+            },
+            {
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Yesterday", title: "3h 14m", clip-count: 0, day-sessions: 2,
+                game-name: "Old School RuneScape", game-monogram: "OS", game-hue-index: 2,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-3.png"),
+                day-members: [strom],
+                belts-moved: [
+                    { title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), value: "9", unit: "installed", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "stromvap", holder-initials: "ST", holder-hue: 3, belt: root.collector },
+                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "Ostkatt", holder-initials: "OS", holder-hue: 2, belt: root.owl },
+                ],
+            },
+            {
+                id: "voice", card-type: "session", role: "standard", size: "md",
+                session-kind: "voice", title: "Counter-Strike", channel-name: "Counter-Strike",
+                duration-human: "3h 58m", peak-count: 5, participant-count: 5,
+                part0-initials: "HA", part1-initials: "XT", part2-initials: "ST",
+                participants-line: "Halvtokig, xtrÖm +3", timestamp: "2 days ago",
+            },
+            {
+                id: "clip-1", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "bObben clipped that", subtitle: "",
+                actor-name: "bObben", actor-initials: "BO",
+                duration: "0:30", timestamp: "2 days ago",
+                participant-count: 2, clip-path: "",
+            },
+            {
+                id: "clip-2", card-type: "clip", is-hero: false, is-skeleton: false,
+                title: "bObben clipped that", subtitle: "",
+                actor-name: "bObben", actor-initials: "BO",
+                duration: "0:30", timestamp: "2 days ago",
+                participant-count: 2, clip-path: "",
+            },
+            {
+                id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,
+                title: "RECENT GAMES", subtitle: "7 sessions, 9 h this week", recent-pc-count: 5,
+                recent-games: [
+                    { game-id: "steam-730", game-name: "Counter-Strike 2", monogram: "CS", hue-index: 0, hours: "4 H", when: "Yesterday",
+                      caption: "Yesterday, 4 h",
+                      has-icon: true, game-icon: @image-url("../previews/fixtures/capsule-sample-1.png"), owners: [ostkatt, xtrom, halv, strom, bob] },
+                    { game-id: "steam-1343370", game-name: "Old School RuneScape", monogram: "OS", hue-index: 2, hours: "2.7 H", when: "Yesterday",
+                      caption: "Yesterday, 2.7 h",
+                      has-icon: true, game-icon: @image-url("../previews/fixtures/capsule-sample-3.png"), owners: [strom] },
+                    { game-id: "steam-1190970", game-name: "House Flipper 2", monogram: "HF", hue-index: 4, hours: "23 H", when: "2 days ago",
+                      caption: "2 days ago, 23 h",
+                      owners: [halv] },
+                ],
             },
         ];
     }

@@ -21,6 +21,9 @@ pub const INVITE_CARD_MAX_MEMBERS: i32 = 9;
 /// Most pair rows on the card: two columns of two. The card is always two grid
 /// columns wide. A "+N more" line counts the pairs that do not fit.
 pub const PAIR_ROWS: usize = 6;
+/// From five members the pairs card needs this many contested pairs. Fewer
+/// make an empty two-column card; the crew's belts then show in the recaps.
+pub const MIN_PAIR_ROWS: usize = 2;
 /// Most octagons on the invite card. More members show as "+N".
 pub const INVITE_CARD_MEMBERS: usize = 8;
 /// Chips on the wide card and the versus card.
@@ -751,11 +754,14 @@ pub fn build_rows_sealed(
         .map(|t| chip_of(t, roster, now_ms, moved_id.as_deref() == Some(&t.title_id)))
         .collect();
 
-    // The viewer is A in every pair. Rows keep the payload order.
+    // The viewer is A in every pair. Rows keep the payload order. A pair with
+    // no contested title (0:0, the two have nothing in common yet) is not a
+    // row: it would sort as the closest tally of all and lead the card with
+    // nothing to say.
     let mut pairs: Vec<(PairRow, &WirePair)> = wire
         .pairs
         .iter()
-        .filter(|p| p.a == viewer.id)
+        .filter(|p| p.a == viewer.id && p.a_count + p.b_count > 0)
         .map(|p| {
             (
                 PairRow {
@@ -1636,7 +1642,7 @@ mod tests {
     }
 
     #[test]
-    fn a_pair_without_values_has_no_chip() {
+    fn a_pair_without_a_contested_title_is_not_a_row() {
         let data = feed(
             3,
             vec![title("the_carry", "u3", json!(9000.0), "h")],
@@ -1644,11 +1650,25 @@ mod tests {
             None,
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert!(m.pairs[0].deciding.is_none());
+        assert!(m.pairs.is_empty() && m.pairs_total == 0);
         let data = json!({"member_count": 2, "open_seats": 3, "titles": [],
             "pairs": [{"a": "me", "b": "u2", "a_count": 0, "b_count": 0, "values": null}]});
         let m = build(&data, &me(), &roster, NOW).unwrap();
-        assert!(m.pairs[0].deciding.is_none());
+        assert!(m.pairs.is_empty());
+    }
+
+    #[test]
+    fn empty_pairs_never_lead_the_card() {
+        // Production on day 3 of a crew of ten: nine pairs, one contested.
+        // The empty ones used to sort first (gap 0) and push the real pair to
+        // the last row.
+        let mut pairs: Vec<Value> = (2..10).map(|i| pair(&format!("u{i}"), 0, 0)).collect();
+        pairs.push(pair("u10", 0, 2));
+        let data = feed(10, vec![], pairs, None);
+        let m = build(&data, &me(), &roster, NOW).unwrap();
+        let order: Vec<&str> = m.pairs.iter().map(|p| p.opponent.id.as_str()).collect();
+        assert_eq!(order, ["u10"]);
+        assert_eq!((m.pairs_total, to_slint(&m, &|_| None).more_pairs), (1, 0));
     }
 
     #[test]
@@ -1664,7 +1684,7 @@ mod tests {
         );
         let m = build(&data, &me(), &roster, NOW).unwrap();
         assert!(m.titles.is_empty());
-        assert!(m.pairs[0].deciding.is_none());
+        assert!(m.pairs.is_empty());
     }
 
     #[test]
