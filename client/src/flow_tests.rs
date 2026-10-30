@@ -5712,11 +5712,12 @@ fn crew_of_five_shows_the_wide_card_without_seats_and_the_invite_card() {
 fn a_feed_that_loads_before_the_member_list_is_built_again_with_the_roster() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 5);
+    // Two contested pairs: from five members the pairs card needs two.
     h.emit(Event::FeedLoaded {
         response: feed_of(vec![h2h_entry(
             5,
             vec![h2h_title("the_carry", "u2", serde_json::json!(4167.0), "h")],
-            vec![h2h_pair("u2", 1, 2)],
+            vec![h2h_pair("u2", 1, 2), h2h_pair("u3", 0, 1)],
             None,
         )]),
     });
