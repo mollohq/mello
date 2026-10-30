@@ -1253,6 +1253,9 @@ fn build_this_week(
     let mut lead: Vec<FeedCardData> = Vec::new();
     let mut cards: Vec<FeedCardData> = Vec::new();
     let mut daily_shown = false;
+    // The day a wide day card lists: its sessions are rows there, not cards.
+    let mut folded: Option<(i64, i64)> = None;
+    let now_ms = crate::converters::current_time_ms();
     for e in entries {
         if is_empty_recap_entry(&e.entry_type, &e.data) {
             continue;
@@ -1268,6 +1271,10 @@ fn build_this_week(
                 continue;
             }
             daily_shown = true;
+            folded = crate::day_card::folded_day(&e.data, now_ms);
+        }
+        if crate::day_card::folds(folded, &e.entry_type, e.ts) {
+            continue;
         }
         if e.entry_type == "head2head" {
             if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
@@ -2023,6 +2030,48 @@ fn daily_recap_members(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate:
         .collect()
 }
 
+/// The session rows of a wide day card: the people as octagons (three, then
+/// "+N"), the title, the line under it and the start on the viewer's clock.
+fn daily_recap_rows(
+    ctx: &AppContext,
+    data: &serde_json::Value,
+    now_ms: i64,
+) -> Vec<crate::DaySession> {
+    let (viewer, members) = h2h_roster(ctx);
+    let person = |id: &str| -> Option<Person> {
+        if id == viewer.id {
+            Some(viewer.clone())
+        } else {
+            members.iter().find(|m| m.id == id).cloned()
+        }
+    };
+    let tz = mello_core::crew_events::local_tz_offset_min(now_ms);
+    crate::day_card::rows(data)
+        .iter()
+        .take(crate::day_card::ROWS)
+        .map(|r| {
+            let people: Vec<Person> = r.member_ids.iter().filter_map(|id| person(id)).collect();
+            let first_name = people.first().map(|p| p.name.clone()).unwrap_or_default();
+            let more = people.len().saturating_sub(crate::day_card::ROW_PEOPLE);
+            crate::DaySession {
+                kind: r.kind.as_str().into(),
+                title: crate::day_card::title(&r.kind, &r.title).into(),
+                meta: crate::day_card::meta_line(&r.kind, r.duration_min, r.peak, &first_name)
+                    .into(),
+                time: crate::day_card::clock(r.end_ms, r.duration_min, tz).into(),
+                members: ModelRc::new(VecModel::from(
+                    people
+                        .iter()
+                        .take(crate::day_card::ROW_PEOPLE)
+                        .map(|p| live_person(ctx, p))
+                        .collect::<Vec<_>>(),
+                )),
+                more: more as i32,
+            }
+        })
+        .collect()
+}
+
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
 fn build_feed_card(
@@ -2440,6 +2489,13 @@ fn build_feed_card(
         .filter(|_| is_daily_recap)
         .unwrap_or(0)
         .clamp(0, i64::from(i32::MAX)) as i32;
+    let now_ms = crate::converters::current_time_ms();
+    let day_wide = is_daily_recap && crate::day_card::is_wide(&data, now_ms);
+    let day_rows = if day_wide {
+        daily_recap_rows(ctx, &data, now_ms)
+    } else {
+        Vec::new()
+    };
     let was_seen = ctx
         .settings
         .borrow()
@@ -2603,6 +2659,8 @@ fn build_feed_card(
         day_label: day_label.into(),
         day_sessions,
         day_members: ModelRc::new(VecModel::from(day_members)),
+        day_wide,
+        day_rows: ModelRc::new(VecModel::from(day_rows)),
         belts_held: ModelRc::new(VecModel::from(recap_belts_held)),
         game_record: game_record.into(),
         game_wins,

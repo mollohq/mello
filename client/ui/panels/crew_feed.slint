@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { BeltReveal, ChatFocus, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { BeltReveal, ChatFocus, DaySession, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
@@ -1174,10 +1174,154 @@ component RecapCard inherits Rectangle {
 // type. The label, the day with the members who took part, a two by two of
 // numbers (hangout, clips, sessions, top game) and up to two belts that moved
 // that day, each with the holder.
+// One session row of the wide day card: the people, the title with its line
+// under it, the start time at the right (mockup frame H).
+component DaySessionRow inherits Rectangle {
+    in property <DaySession> session;
+    in property <bool> rule: true;
+    height: 38px;
+    background: transparent;
+    HorizontalLayout {
+        spacing: 12px;
+        cross-axis-alignment: center;
+        HorizontalLayout {
+            width: 92px;
+            spacing: 4px;
+            alignment: start;
+            cross-axis-alignment: center;
+            for p[i] in session.members: UserAvatar {
+                visible: i < 3;
+                width: i < 3 ? 20px : 0px;
+                size: 20px;
+                initials: p.initials; color-index: p.hue-index; avatar: p.avatar; has-avatar: p.has-avatar;
+            }
+            if session.more > 0: Text {
+                text: "+" + session.more;
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                font-size: 9px;
+                letter-spacing: 0.5px;
+                color: Theme.text-dim;
+                vertical-alignment: center;
+            }
+        }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            alignment: center;
+            spacing: 1px;
+            Text { text: session.title; font-family: Theme.font-display; font-weight: Theme.weight-display; font-size: 12.5px; color: Theme.text-primary; overflow: elide; wrap: no-wrap; }
+            if session.meta != "": Text { text: session.meta; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px; color: Theme.text-sub; overflow: elide; wrap: no-wrap; }
+        }
+        Text { text: session.time; font-family: Theme.font-body; font-weight: Theme.weight-sentence; font-size: 11px; color: Theme.text-dim; vertical-alignment: center; }
+    }
+    if root.rule: Rectangle { y: parent.height - 1px; height: 1px; width: parent.width; background: Theme.card-border; }
+}
+
+// The belts that moved that day: the holder and the title, side by side.
+component DayBelts inherits HorizontalLayout {
+    in property <FeedCardData> card;
+    spacing: 8px;
+    height: 34px;
+    for b[i] in card.belts-moved: HorizontalLayout {
+        visible: i < 2;
+        horizontal-stretch: i < 2 ? 1 : 0;
+        max-width: i < 2 ? 10000px : 0px;
+        spacing: 4px;
+        cross-axis-alignment: center;
+        UserAvatar {
+            size: 22px;
+            muted: SealedUi.hides(b.belt);
+            initials: SealedUi.hides(b.belt) ? "?" : b.holder-initials;
+            color-index: b.holder-hue;
+            avatar: b.holder-avatar;
+            has-avatar: !SealedUi.hides(b.belt) && b.holder-has-avatar;
+        }
+        BeltSlot {
+            horizontal-stretch: 1;
+            height: 34px;
+            tight: true;
+            belt: b.belt;
+            slot-id: "daily-" + i;
+            TitleChip {
+                width: parent.width;
+                compact: true;
+                dense: true;
+                hue: H2hHue.of(b.holder-hue);
+                icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+            }
+        }
+    }
+}
+
+// The numbers of the day, two by two (the weekly recap's .rc-nums): the
+// hangout time, the clips, the sessions and the top game.
+component DayNumbers inherits Rectangle {
+    in property <FeedCardData> card;
+    background: transparent;
+    VerticalLayout {
+            spacing: 8px;
+
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.title; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.clip-count; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+            }
+
+            HorizontalLayout {
+                spacing: 14px;
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 2px;
+                    Text { text: card.day-sessions; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
+                    Text { text: "SESSIONS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+                VerticalLayout {
+                    horizontal-stretch: 1;
+                    spacing: 4px;
+                    if card.game-name != "": HorizontalLayout {
+                        height: 29px;
+                        spacing: 8px;
+                        cross-axis-alignment: center;
+                        GameArt {
+                            game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index;
+                            icon: card.game-icon; has-icon: card.game-has-icon;
+                            capsule: card.game-capsule; has-capsule: card.game-has-capsule;
+                            size: 29px; art-width: 52px;
+                        }
+                        Text {
+                            horizontal-stretch: 1;
+                            text: card.game-name;
+                            font-family: Theme.font-display;
+                            font-weight: Theme.weight-display;
+                            font-size: 12px;
+                            color: Theme.text-primary;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                    }
+                    if card.game-name != "": Text { text: "TOP GAME"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+                }
+            }
+    }
+}
+
 component DailyRecapCard inherits Rectangle {
     in property <FeedCardData> card;
     /// Octagons that fit beside the day word, 4 px apart.
     property <int> max-people: Math.max(0, Math.min(6, Math.floor((root.width - 28px - day-word.preferred-width - 12px) / 26px)));
+    /// The day card: a day that is over, in a two-column slot. The numbers
+    /// stand left, the sessions and the belts of the day right (frame H).
+    property <bool> wide: card.day-wide && root.width >= 420px;
 
     clip: true;
     background: transparent;
@@ -1248,98 +1392,32 @@ component DailyRecapCard inherits Rectangle {
         Rectangle { height: 1px; background: Theme.card-border; }
         Rectangle { height: 8px; }
 
-        // The numbers of the day, two by two (the weekly recap's .rc-nums).
-        VerticalLayout {
-            spacing: 8px;
-
-            HorizontalLayout {
-                spacing: 14px;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    Text { text: card.title; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    Text { text: "HANGOUT"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
+        // The day card: numbers left, the sessions of the day right, the belts
+        // under them. The columns share the body height.
+        if root.wide: HorizontalLayout {
+            spacing: 22px;
+            DayNumbers { width: (root.width - 28px - 22px) * 0.46; card: root.card; }
+            Rectangle { width: 1px; background: Theme.card-border; }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                spacing: 0px;
+                alignment: start;
+                for r[i] in card.day-rows: DaySessionRow {
+                    visible: i < 2;
+                    height: i < 2 ? 38px : 0px;
+                    session: r;
+                    rule: i < card.day-rows.length - 1 && i < 1;
                 }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    Text { text: card.clip-count; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    Text { text: "CLIPS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
-                }
-            }
-
-            HorizontalLayout {
-                spacing: 14px;
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 2px;
-                    Text { text: card.day-sessions; font-family: Theme.font-display; font-weight: Theme.weight-display-bold; font-size: 22px; letter-spacing: -0.5px; color: Theme.text-primary; }
-                    Text { text: "SESSIONS"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
-                }
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    spacing: 4px;
-                    if card.game-name != "": HorizontalLayout {
-                        height: 29px;
-                        spacing: 8px;
-                        cross-axis-alignment: center;
-                        GameArt {
-                            game-id: card.game-id; monogram: card.game-monogram; hue-index: card.game-hue-index;
-                            icon: card.game-icon; has-icon: card.game-has-icon;
-                            capsule: card.game-capsule; has-capsule: card.game-has-capsule;
-                            size: 29px; art-width: 52px;
-                        }
-                        Text {
-                            horizontal-stretch: 1;
-                            text: card.game-name;
-                            font-family: Theme.font-display;
-                            font-weight: Theme.weight-display;
-                            font-size: 12px;
-                            color: Theme.text-primary;
-                            overflow: elide;
-                            vertical-alignment: center;
-                        }
-                    }
-                    if card.game-name != "": Text { text: "TOP GAME"; font-family: Theme.font-label; font-weight: Theme.weight-label; font-size: 9px; letter-spacing: 1.8px; color: Theme.text-dim; }
-                }
+                if card.belts-moved.length > 0: Rectangle { height: 8px; }
+                if card.belts-moved.length > 0: DayBelts { card: root.card; }
             }
         }
+
+        if !root.wide: DayNumbers { card: root.card; }
 
         // Belts that moved that day: the holder and the title, side by side.
-        if card.belts-moved.length > 0: Rectangle { height: 10px; }
-        if card.belts-moved.length > 0: HorizontalLayout {
-            spacing: 8px;
-            height: 34px;
-            for b[i] in card.belts-moved: HorizontalLayout {
-                visible: i < 2;
-                horizontal-stretch: i < 2 ? 1 : 0;
-                max-width: i < 2 ? 10000px : 0px;
-                spacing: 4px;
-                cross-axis-alignment: center;
-                UserAvatar {
-                    size: 22px;
-                    muted: SealedUi.hides(b.belt);
-                    initials: SealedUi.hides(b.belt) ? "?" : b.holder-initials;
-                    color-index: b.holder-hue;
-                    avatar: b.holder-avatar;
-                    has-avatar: !SealedUi.hides(b.belt) && b.holder-has-avatar;
-                }
-                BeltSlot {
-                    horizontal-stretch: 1;
-                    height: 34px;
-                    tight: true;
-                    belt: b.belt;
-                    slot-id: "daily-" + i;
-                    TitleChip {
-                        width: parent.width;
-                        compact: true;
-                        dense: true;
-                        hue: H2hHue.of(b.holder-hue);
-                        icon: b.icon; title: b.title; value: b.value; unit: b.unit;
-                    }
-                }
-            }
-        }
+        if !root.wide && card.belts-moved.length > 0: Rectangle { height: 10px; }
+        if !root.wide && card.belts-moved.length > 0: DayBelts { card: root.card; }
     }
 }
 
@@ -3134,7 +3212,9 @@ export component CrewFeed inherits Rectangle {
             || (cards[row2-base].card-type == "recent-games"
             && cards[row2-base].recent-pc-count >= 2)
             || (cards[row2-base].card-type == "recap"
-                && cards[row2-base].recap-rows > 0));
+                && cards[row2-base].recap-rows > 0)
+            || (cards[row2-base].card-type == "daily-recap"
+                && cards[row2-base].day-wide));
     // The tall recap is one column wide and three rows high with belts (two
     // without), beside the hero, the stream, or head2head and its two cells.
     // Its third row leaves two columns under the lead, so the row after the
@@ -4754,10 +4834,13 @@ export component PreviewFeedFiveMembers inherits Rectangle {
 
 /// Production on day 3 of a crew of ten (2026-10-30): nine pairs and one of
 /// them contested, under the two the pairs card needs, so no head2head card;
-/// the weekly recap of the first week; a daily recap with two sealed belt
-/// moves; last night's voice session; two voice clips; recent games as the
-/// list in the side column, the first game owned by five members. The cases
-/// the other fixtures never had.
+/// the weekly recap of the first week; the day card of yesterday, two columns
+/// with last night's voice session and a game session as rows and two sealed
+/// belt moves under them (the voice session is a row, not a card); two voice
+/// clips; recent games as the list in the side column, the first game owned
+/// by five members. The cases the other fixtures never had. The cards stand
+/// in the order feed_grid.rs gives them: the recap leads as the hero block,
+/// the day card takes the wide slot of row 2.
 ///
 ///   slint-viewer --screenshot out.png --component PreviewFeedProdCases \
 ///     client/ui/panels/crew_feed.slint
@@ -4798,24 +4881,6 @@ export component PreviewFeedProdCases inherits Rectangle {
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
             },
             {
-                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
-                day-label: "Yesterday", title: "3h 14m", clip-count: 0, day-sessions: 2,
-                game-name: "Old School RuneScape", game-monogram: "OS", game-hue-index: 2,
-                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-3.png"),
-                day-members: [strom],
-                belts-moved: [
-                    { title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), value: "9", unit: "installed", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "stromvap", holder-initials: "ST", holder-hue: 3, belt: root.collector },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "Ostkatt", holder-initials: "OS", holder-hue: 2, belt: root.owl },
-                ],
-            },
-            {
-                id: "voice", card-type: "session", role: "standard", size: "md",
-                session-kind: "voice", title: "Counter-Strike", channel-name: "Counter-Strike",
-                duration-human: "3h 58m", peak-count: 5, participant-count: 5,
-                part0-initials: "HA", part1-initials: "XT", part2-initials: "ST",
-                participants-line: "Halvtokig, xtrÖm +3", timestamp: "2 days ago",
-            },
-            {
                 id: "clip-1", card-type: "clip", is-hero: false, is-skeleton: false,
                 title: "bObben clipped that", subtitle: "",
                 actor-name: "bObben", actor-initials: "BO",
@@ -4828,6 +4893,22 @@ export component PreviewFeedProdCases inherits Rectangle {
                 actor-name: "bObben", actor-initials: "BO",
                 duration: "0:30", timestamp: "2 days ago",
                 participant-count: 2, clip-path: "",
+            },
+            {
+                id: "daily", card-type: "daily-recap", role: "standard", size: "md",
+                day-label: "Yesterday", title: "3h 14m", clip-count: 0, day-sessions: 2,
+                game-name: "Old School RuneScape", game-monogram: "OS", game-hue-index: 2,
+                game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-3.png"),
+                day-members: [strom, halv, xtrom, ostkatt, erle],
+                day-wide: true,
+                day-rows: [
+                    { kind: "voice", title: "Counter-Strike", meta: "Voice, 3h 58m, 5 in the call", time: "20:12", members: [halv, xtrom, strom], more: 2 },
+                    { kind: "game", title: "Old School RuneScape", meta: "2h 40m, stromvap", time: "17:40", members: [strom], more: 0 },
+                ],
+                belts-moved: [
+                    { title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), value: "9", unit: "installed", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "stromvap", holder-initials: "ST", holder-hue: 3, belt: root.collector },
+                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "Ostkatt", holder-initials: "OS", holder-hue: 2, belt: root.owl },
+                ],
             },
             {
                 id: "rg", card-type: "recent-games", is-hero: false, is-skeleton: false,

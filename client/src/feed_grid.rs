@@ -58,6 +58,9 @@ pub struct CardInfo {
     pub recap_belts: bool,
     /// The recent games card as a poster grid: two or more members own games.
     pub recent_grid: bool,
+    /// The day card: a daily recap of a day that is over, with its sessions
+    /// listed. Two columns, like the weekly recap in a wide slot.
+    pub day_wide: bool,
 }
 
 impl CardInfo {
@@ -70,6 +73,7 @@ impl CardInfo {
             recent_grid: c.card_type == "recent-games" && c.recent_pc_count >= 2,
             recap_has_content: c.card_type == "recap" && c.recap_rows > 0,
             recap_belts: c.card_type == "recap" && c.recap_rows >= 3,
+            day_wide: c.card_type == "daily-recap" && c.day_wide,
         }
     }
 }
@@ -89,9 +93,9 @@ impl CardInfo {
     }
 
     /// A card that takes two columns when the grid has the room: head2head,
-    /// the recap and the poster grid.
+    /// the recap, the day card and the poster grid.
     fn is_wide_card(&self) -> bool {
-        self.is_h2h_wide() || self.is_recap() || self.recent_grid
+        self.is_h2h_wide() || self.is_recap() || self.day_wide || self.recent_grid
     }
 }
 
@@ -320,6 +324,7 @@ fn is_fixed(t: &str) -> bool {
             | "head2head"
             | "invite"
             | "recap"
+            | "daily-recap"
             | "recent-games"
             | "locked"
             | "live-session"
@@ -506,11 +511,13 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
     } else {
         order.iter().copied().find(|&i| cards[i].is_recap())
     };
+    // The day card takes the wide slot after the recap, before the games.
+    let day = order.iter().copied().find(|&i| cards[i].day_wide);
     let games = order
         .iter()
         .copied()
         .find(|&i| cards[i].card_type == "recent-games");
-    order.retain(|&i| Some(i) != h2h && Some(i) != recap && Some(i) != games);
+    order.retain(|&i| Some(i) != h2h && Some(i) != recap && Some(i) != day && Some(i) != games);
 
     // The wide slot of row 3 is the second card of the row: row 3 holds one
     // card and a wide card.
@@ -541,6 +548,12 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
     }
 
     if let Some(id) = recap {
+        let l = layout(&infos_of(cards, order), start);
+        let at = next_slot(order, &l);
+        order.insert(at.min(order.len()), id);
+    }
+
+    if let Some(id) = day {
         let l = layout(&infos_of(cards, order), start);
         let at = next_slot(order, &l);
         order.insert(at.min(order.len()), id);
@@ -804,6 +817,32 @@ mod tests {
         let l = layout(&infos, 0);
         assert_eq!(l.lead, Lead::Wide);
         assert_eq!(wide_slots(&l, infos.len())[..2], [0, 2]);
+    }
+
+    #[test]
+    fn the_day_card_takes_the_wide_slot_after_the_recap() {
+        // Production on day 3 (PreviewFeedProdCases): no head2head card, the
+        // weekly recap leads, two clips, the day card and the games list. The
+        // day card is two columns: it must land in a wide slot, never a cell.
+        let mut day = card("daily-recap");
+        day.day_wide = true;
+        let mut recap = card("recap");
+        recap.recap_has_content = true;
+        let cards = vec![recap, day, card("clip"), card("clip"), card("recent-games")];
+        let order = arrange(&cards, 0);
+        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+        let l = layout(&infos, 0);
+        let wide = wide_slots(&l, infos.len());
+        let at = infos.iter().position(|c| c.day_wide).unwrap();
+        assert!(
+            wide.contains(&at),
+            "day card at {at}, wide slots {wide:?}, order {:?}",
+            types(&cards, &order)
+        );
+        // A day card that is a cell (today so far) is not moved.
+        let cards = vec![card("daily-recap"), card("clip"), card("clip")];
+        let order = arrange(&cards, 0);
+        assert_eq!(types(&cards, &order), ["daily-recap", "clip", "clip"]);
     }
 
     #[test]

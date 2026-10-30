@@ -395,6 +395,10 @@ struct DailyRecapSnap {
     index: usize,
     /// One entry for each belt: `"The Carry"`.
     belts: Vec<String>,
+    /// The day card: two columns wide with its sessions listed.
+    wide: bool,
+    /// The session rows the day card carries.
+    rows: usize,
 }
 
 /// A live session card (a game in progress).
@@ -744,6 +748,8 @@ fn read_daily_recap(app: &MainWindow) -> DailyRecapSnap {
             members: 0,
             index: 0,
             belts: Vec::new(),
+            wide: false,
+            rows: 0,
         };
     };
     DailyRecapSnap {
@@ -755,6 +761,8 @@ fn read_daily_recap(app: &MainWindow) -> DailyRecapSnap {
         top_game: card.game_name.to_string(),
         members: card.day_members.row_count(),
         index,
+        wide: card.day_wide,
+        rows: card.day_rows.row_count(),
         belts: card
             .belts_moved
             .iter()

@@ -218,3 +218,48 @@ func TestDailyRecapOnlyWhenItAddsSomething(t *testing.T) {
 		t.Fatalf("one member, want no entry, got %d", n)
 	}
 }
+
+// The day lists its sessions, the one that ended last first, at most four,
+// with who was there, what and how long. A stream names its game, not its
+// window title.
+func TestDailyRecapListsTheDaysSessionsNewestFirstAndCapped(t *testing.T) {
+	cards := []feedCard{
+		gameAt("g1", dailyAt(1, 10), "Valorant", "valorant", 45, "u1"),
+		voiceAt("v1", dailyAt(1, 20), 238, "u1", "u2", "u3", "u4", "u5"),
+		gameAt("g2", dailyAt(1, 17), "Old School RuneScape", "osrs", 160, "u5"),
+		{id: "s1", feedType: "session", backendType: "stream_session", ts: dailyAt(1, 21),
+			data: StreamSessionData{StreamerID: "u2", Title: "UniFi Devices | UOS", Game: "Counter-Strike 2", DurationMin: 54, PeakViewers: 3, ViewerIDs: []string{"u1", "u3"}}},
+		gameAt("g3", dailyAt(1, 8), "Fall Guys", "fall-guys", 30, "u3"),
+		// Not reportable: no minutes. Not listed.
+		voiceAt("v0", dailyAt(1, 9), 0, "u1", "u2"),
+	}
+	got := buildDailyRecaps(cards, nil, dailyNow)
+	if len(got) != 1 {
+		t.Fatalf("want 1 day, got %d", len(got))
+	}
+	d := dailyData(t, got[0])
+	if len(d.Sessions) != feedDailyRecapSessions {
+		t.Fatalf("sessions %+v, want %d", d.Sessions, feedDailyRecapSessions)
+	}
+	kinds := []string{d.Sessions[0].Kind, d.Sessions[1].Kind, d.Sessions[2].Kind, d.Sessions[3].Kind}
+	if want := []string{"stream", "voice", "game", "game"}; !reflect.DeepEqual(kinds, want) {
+		t.Fatalf("kinds %v, want %v (ended last first)", kinds, want)
+	}
+	s := d.Sessions[0]
+	if s.Title != "Counter-Strike 2" || s.Peak != 3 || s.DurationMin != 54 || s.EndMs != dailyAt(1, 21) {
+		t.Fatalf("stream session %+v", s)
+	}
+	if want := []string{"u2", "u1", "u3"}; !reflect.DeepEqual(s.MemberIDs, want) {
+		t.Fatalf("stream members %v, want the host first then the viewers", s.MemberIDs)
+	}
+	v := d.Sessions[1]
+	if v.Kind != "voice" || v.Peak != 5 || len(v.MemberIDs) != 5 || v.DurationMin != 238 {
+		t.Fatalf("voice session %+v", v)
+	}
+	if d.Sessions[3].Title != "Valorant" {
+		t.Fatalf("the oldest kept is the 10:00 game, got %+v; Fall Guys at 08:00 is the fifth and is cut", d.Sessions[3])
+	}
+	if d.SessionCount != 5 {
+		t.Fatalf("session count %d counts every reportable session, the list is capped", d.SessionCount)
+	}
+}

@@ -278,6 +278,22 @@ from the sources the weekly recap reads. See
 | `top_game`, `game_id` | The game with the most reportable minutes. A tie goes to the name that sorts first |
 | `member_ids` | Members who took part, the most active first, at most eight |
 | `belts_moved` | Titles whose `moved_at_ms` is in the day, newest first, at most two. The same shape as the weekly recap |
+| `sessions` | The sessions of the day with reportable minutes, the one that ended last first, at most four: `kind` (`voice`, `stream`, `game`), `title` (the channel, the game of a stream, the game; never a window title), `game_id`, `member_ids` (a stream: the host first), `duration_min`, `peak` (people in the call or watching, at least the participants), `end_ms` |
+
+#### The day card
+
+A daily recap of a day that is over, with a session to list, is the day card:
+two columns wide, in the first wide slot after the weekly recap
+(`feed_grid.rs`, `day_wide`). The numbers of the day stand left; right, the
+sessions of the day as rows (two at most on the card: three octagons then
+"+N", the title, "Voice, 3h 58m, 5 in the call" or "2h 40m, stromvap" under
+it, the start on the viewer's clock), and the belts that moved that day under
+them. The session cards of that day are rows here, not cards of their own:
+`this_week` drops a `session` or `session-preview` entry whose `ts` is inside
+the card's day (`day_card.rs`). Clips stay cards. Today so far is a cell as
+before, and the sessions of today stay cards until the day is over. An older
+server sends no `sessions`: the card stays a cell. Mockup
+`next-gen-feed.html` frame H.
 
 The ledger events a catch-up card showed (`moment`, `member_joined`,
 `member_left`, `chat_activity`) have no feed card. A join is the joined row.
