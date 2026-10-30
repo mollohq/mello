@@ -531,6 +531,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-11
+    title: "The day card: a daily recap with sessions is two columns wide with the day's sessions as rows, and a voice session is never a card"
+    priority: P1
+    users: 1
+    harness: [the_day_card_takes_the_wide_slot_after_the_recap, a_day_with_sessions_is_wide_today_included, a_voice_session_is_never_a_card]
+    journeys: [qa/journeys/feed-day-card.ts]
+    protocol: []
+    issues: []
+
   - id: FEED-10
     title: "A belt that moved is sealed in the feed, opens in the centre with the reveal, and returns open with the dot cleared"
     priority: P1

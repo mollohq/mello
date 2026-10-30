@@ -9,6 +9,7 @@ mod build_info;
 pub(crate) mod callbacks;
 mod chat_ui;
 mod converters;
+mod day_card;
 #[cfg(target_os = "windows")]
 pub mod dcomp_presenter;
 mod deep_link;

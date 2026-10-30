@@ -23,6 +23,8 @@ const (
 	feedDailyRecapBelts = 2
 	// feedDailyRecapMembers is the most active members a daily recap lists.
 	feedDailyRecapMembers = 8
+	// feedDailyRecapSessions is how many sessions a day lists.
+	feedDailyRecapSessions = 4
 
 	dayMs = 24 * 60 * 60 * 1000
 )
@@ -51,6 +53,26 @@ type DailyRecapData struct {
 	// BeltsMoved are the belts that changed hands that day, newest first, at
 	// most feedDailyRecapBelts.
 	BeltsMoved []RecapBeltMoved `json:"belts_moved,omitempty"`
+	// Sessions are the sessions of the day with reportable minutes, the one
+	// that ended last first, at most feedDailyRecapSessions. The wide day card
+	// lists them (spec 19 section 3.5a).
+	Sessions []DailyRecapSession `json:"sessions,omitempty"`
+}
+
+// DailyRecapSession is one session of the day: who, what, how long, when it
+// ended. A stream names its game, never its window title (that can be a
+// document name).
+type DailyRecapSession struct {
+	// Kind is voice, stream or game.
+	Kind string `json:"kind"`
+	// Title is the voice channel, the game of a stream, or the game.
+	Title       string   `json:"title"`
+	GameID      string   `json:"game_id,omitempty"`
+	MemberIDs   []string `json:"member_ids"`
+	DurationMin int      `json:"duration_min"`
+	// Peak is the most people in the call or watching at once.
+	Peak  int   `json:"peak,omitempty"`
+	EndMs int64 `json:"end_ms"`
 }
 
 // feedDailyRecapMinMembers is how many active members make a day worth a card
@@ -143,6 +165,16 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 			a.data.TotalHangoutMin += d.DurationMin
 			a.data.SessionCount++
 			a.touch(d.ParticipantIDs...)
+			// The peak is at least everyone who took part: an older event has
+			// no peak count.
+			peak := d.PeakCount
+			if peak < len(d.ParticipantIDs) {
+				peak = len(d.ParticipantIDs)
+			}
+			a.data.Sessions = append(a.data.Sessions, DailyRecapSession{
+				Kind: "voice", Title: d.ChannelName, MemberIDs: nonNil(d.ParticipantIDs),
+				DurationMin: d.DurationMin, Peak: peak, EndMs: c.ts,
+			})
 			counted = true
 		case c.backendType == "stream_session":
 			d, _ := decodeCardData[StreamSessionData](c.data)
@@ -153,6 +185,11 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 			a.data.SessionCount++
 			a.touch(d.StreamerID)
 			a.touch(d.ViewerIDs...)
+			ids := append([]string{d.StreamerID}, d.ViewerIDs...)
+			a.data.Sessions = append(a.data.Sessions, DailyRecapSession{
+				Kind: "stream", Title: d.Game, MemberIDs: ids,
+				DurationMin: d.DurationMin, Peak: d.PeakViewers, EndMs: c.ts,
+			})
 			counted = true
 		case c.backendType == "game_session":
 			d, _ := decodeCardData[GameSessionData](c.data)
@@ -169,6 +206,10 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 				}
 			}
 			a.touch(d.PlayerIDs...)
+			a.data.Sessions = append(a.data.Sessions, DailyRecapSession{
+				Kind: "game", Title: d.GameName, GameID: d.GameID, MemberIDs: nonNil(d.PlayerIDs),
+				DurationMin: min, EndMs: c.ts,
+			})
 			counted = true
 		}
 		if counted && c.ts > a.lastTs {
@@ -189,6 +230,13 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 	entries := make([]FeedEntry, 0, feedDailyRecapDays)
 	for _, a := range days {
 		a.data.TotalMin = a.data.TotalHangoutMin + a.data.TotalGameMin
+		// The session that ended last first; the cards come in no fixed order.
+		sort.SliceStable(a.data.Sessions, func(i, j int) bool {
+			return a.data.Sessions[i].EndMs > a.data.Sessions[j].EndMs
+		})
+		if len(a.data.Sessions) > feedDailyRecapSessions {
+			a.data.Sessions = a.data.Sessions[:feedDailyRecapSessions]
+		}
 		a.data.MemberIDs = topDailyMembers(a.memberHit, feedDailyRecapMembers)
 		if !dailyRecapHasContent(a.data) {
 			continue
@@ -208,6 +256,14 @@ func buildDailyRecaps(cards []feedCard, belts []RecapBeltMoved, nowMs int64) []F
 		})
 	}
 	return entries
+}
+
+// nonNil keeps a session's member list a list in JSON, never null.
+func nonNil(ids []string) []string {
+	if ids == nil {
+		return []string{}
+	}
+	return ids
 }
 
 func dailyRecapID(dayStart int64) string {

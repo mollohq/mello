@@ -75,6 +75,19 @@ export struct H2hPerson {
     has-avatar: bool,
 }
 
+// One session of a day on the wide day card (card-type "daily-recap" with
+// `day-wide`): who was there as octagons, what, the line under it ("Voice,
+// 3h 58m, 5 in the call") and when it started on the viewer's clock.
+export struct DaySession {
+    kind: string,
+    title: string,
+    meta: string,
+    time: string,
+    members: [H2hPerson],
+    // People past the octagons drawn: "+N". 0 for none.
+    more: int,
+}
+
 // A belt that moved, as the sealed chip and the centre view draw it (plan
 // SEALED-REVEAL.md). One move has one `key` and one `seed`, so the code is the
 // same in every slot. `code` is the Path commands of the 15 by 6 cells, 4 units
@@ -364,7 +377,7 @@ export struct FeedCardData {
     game-monogram: string,
     game-hue-index: int,
     // Session card redesign (voice/stream): typed content, pre-formatted.
-    session-kind: string,     // "stream" | "voice" | "" (non-session cards)
+    session-kind: string,     // "stream" | "" (non-session cards)
     duration-human: string,   // "3m" / "9h 7m"
     peak-count: int,          // stream: peak viewers; voice: peak participants
     channel-name: string,     // voice channel display name
@@ -430,6 +443,11 @@ export struct FeedCardData {
     day-label: string,
     day-sessions: int,
     day-members: [H2hPerson],
+    // A day that is over with sessions to list: the card is two columns wide
+    // and `day-rows` are its sessions, the one that ended last first. The
+    // sessions of that day are then rows here, not cards (feed_grid.rs).
+    day-wide: bool,
+    day-rows: [DaySession],
 
     // Rich game-session card (spec 19 B2). Pre-formatted in Rust.
     game-record: string,        // "5W–3L" (with draws: "5W–3L–1D")

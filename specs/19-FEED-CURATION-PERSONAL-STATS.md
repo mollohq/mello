@@ -256,7 +256,8 @@ from the sources the weekly recap reads. See
 [CLIPS.md](./features/CLIPS.md) section 7.1 for the card.
 
 - `crew_feed` puts one `daily-recap` entry in `this_week` for each of the last
-  three days (UTC), newest first. Role `standard`, size `md`.
+  three days (UTC), newest first. Role `standard`, size `md`. The client draws
+  the newest, as the day card when it has sessions.
 - The entries stand after the recap and the head2head entry, before the
   sessions. They take no filler slot.
 - A day belongs to the UTC day of the event timestamp. The day that is not over
@@ -278,10 +279,24 @@ from the sources the weekly recap reads. See
 | `top_game`, `game_id` | The game with the most reportable minutes. A tie goes to the name that sorts first |
 | `member_ids` | Members who took part, the most active first, at most eight |
 | `belts_moved` | Titles whose `moved_at_ms` is in the day, newest first, at most two. The same shape as the weekly recap |
+| `sessions` | The sessions of the day with reportable minutes, the one that ended last first, at most four: `kind` (`voice`, `stream`, `game`), `title` (the channel, the game of a stream, the game; never a window title), `game_id`, `member_ids` (a stream: the host first), `duration_min`, `peak` (people in the call or watching, at least the participants), `end_ms` |
 
-The ledger events a catch-up card showed (`moment`, `member_joined`,
-`member_left`, `chat_activity`) have no feed card. A join is the joined row.
-The client does not draw a `catchup` entry that an older server sends.
+#### The day card
+
+A daily recap with a session to list is the day card: two columns wide, in
+the first wide slot after the weekly recap (`feed_grid.rs`, `day_wide`). The
+numbers of the day stand left; right, the sessions of the day as rows (two at
+most on the card: three octagons then "+N", the title, "Voice, 3h 58m, 5 in
+the call" or "2h 40m, stromvap" under it, the start on the viewer's clock),
+and the belts that moved that day under them. Today so far is the day card
+too, as soon as the day has a session.
+
+A voice session is a row of the day card and never a card of its own: the
+server leaves `voice_session` cards out of `this_week` (`dropVoiceSessions`),
+and the client draws none from an older server (`day_card.rs`). The daily
+recap and the recent games card still count it. Game sessions and stream
+replays stay cards. An older server sends no `sessions`: the card stays a
+cell. Mockup `next-gen-feed.html` frame H.
 
 ### 3.6 Per-game data degradation
 

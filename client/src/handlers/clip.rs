@@ -526,11 +526,13 @@ fn head2head_cards(
             ..Default::default()
         });
     }
-    // A crew of five or more with nothing to compare has no cell. The invite
+    // A crew of five or more with fewer than two contested pairs has no cell:
+    // one row in a two-column card is an empty card with a score in the corner
+    // (production, 2026-10-30). The belt still shows in the recaps. The invite
     // card stays.
     if model.placement == Placement::Pairs
         && model.member_count >= head2head::SEATS
-        && model.pairs.is_empty()
+        && model.pairs.len() < head2head::MIN_PAIR_ROWS
     {
         cards.remove(0);
     }
@@ -1255,8 +1257,15 @@ fn build_this_week(
         if is_empty_recap_entry(&e.entry_type, &e.data) {
             continue;
         }
-        // An older server still sends catch-up cards. They are not drawn.
+        // An older server still sends catch-up cards and voice session cards.
+        // They are not drawn: a voice session is a row of the day card.
         if e.entry_type == "catchup" {
+            continue;
+        }
+        if crate::day_card::is_voice_session_card(
+            &e.entry_type,
+            derive_backend_type(&e.entry_type, &normalized_entry_data(&e.data)),
+        ) {
             continue;
         }
         // The server sends a daily recap for each of the last three days, the
@@ -2021,6 +2030,44 @@ fn daily_recap_members(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate:
         .collect()
 }
 
+/// The session rows of a wide day card: the people as octagons (three, then
+/// "+N"), the title, the line under it and the start on the viewer's clock.
+fn daily_recap_rows(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::DaySession> {
+    let (viewer, members) = h2h_roster(ctx);
+    let person = |id: &str| -> Option<Person> {
+        if id == viewer.id {
+            Some(viewer.clone())
+        } else {
+            members.iter().find(|m| m.id == id).cloned()
+        }
+    };
+    let tz = mello_core::crew_events::local_tz_offset_min(crate::converters::current_time_ms());
+    crate::day_card::rows(data)
+        .iter()
+        .take(crate::day_card::ROWS)
+        .map(|r| {
+            let people: Vec<Person> = r.member_ids.iter().filter_map(|id| person(id)).collect();
+            let first_name = people.first().map(|p| p.name.clone()).unwrap_or_default();
+            let more = people.len().saturating_sub(crate::day_card::ROW_PEOPLE);
+            crate::DaySession {
+                kind: r.kind.as_str().into(),
+                title: crate::day_card::title(&r.kind, &r.title).into(),
+                meta: crate::day_card::meta_line(&r.kind, r.duration_min, r.peak, &first_name)
+                    .into(),
+                time: crate::day_card::clock(r.end_ms, r.duration_min, tz).into(),
+                members: ModelRc::new(VecModel::from(
+                    people
+                        .iter()
+                        .take(crate::day_card::ROW_PEOPLE)
+                        .map(|p| live_person(ctx, p))
+                        .collect::<Vec<_>>(),
+                )),
+                more: more as i32,
+            }
+        })
+        .collect()
+}
+
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
 fn build_feed_card(
@@ -2286,7 +2333,6 @@ fn build_feed_card(
     let session_kind = if feed_type == "session" || feed_type == "session-preview" {
         match backend_type {
             "stream_session" => "stream",
-            "voice_session" => "voice",
             _ => "",
         }
     } else {
@@ -2438,6 +2484,12 @@ fn build_feed_card(
         .filter(|_| is_daily_recap)
         .unwrap_or(0)
         .clamp(0, i64::from(i32::MAX)) as i32;
+    let day_wide = is_daily_recap && crate::day_card::is_wide(&data);
+    let day_rows = if day_wide {
+        daily_recap_rows(ctx, &data)
+    } else {
+        Vec::new()
+    };
     let was_seen = ctx
         .settings
         .borrow()
@@ -2601,6 +2653,8 @@ fn build_feed_card(
         day_label: day_label.into(),
         day_sessions,
         day_members: ModelRc::new(VecModel::from(day_members)),
+        day_wide,
+        day_rows: ModelRc::new(VecModel::from(day_rows)),
         belts_held: ModelRc::new(VecModel::from(recap_belts_held)),
         game_record: game_record.into(),
         game_wins,

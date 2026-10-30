@@ -43,15 +43,11 @@ const (
 	feedRecentGamesMaxTiles = 6
 )
 
-// feedQuietBackendTypes are the low-signal pulse events rendered as quiet rows
-// (ports isQuietRow from Timeline.swift plus the desktop priority). Clips are
-// full cards and are intentionally absent here. Joins, leaves, chat and moments
-// have no card at all (mapCardType).
-// game_session is not in this map: T0-only sessions render compact (quiet);
-// telemetry-backed sessions that survive pruning use standard size (spec 19 B2).
-var feedQuietBackendTypes = map[string]bool{
-	"voice_session": true,
-}
+// Quiet rows: a T0-only game session renders compact (quiet); a
+// telemetry-backed session that survives pruning is standard (spec 19 B2).
+// Clips are full cards. Joins, leaves, chat and moments have no card at all
+// (mapCardType). A voice session is a row of the day card, never a card
+// (dropVoiceSessions).
 
 // ---------------------------------------------------------------------------
 // Contract
@@ -900,15 +896,12 @@ func feedEntryFromCard(c feedCard, role, size string) FeedEntry {
 	return FeedEntry{ID: c.id, Type: c.feedType, Role: role, Size: size, Ts: c.ts, Data: c.data}
 }
 
-// fillerRole assigns standard vs quiet. Quiet: the low-signal pulse types and
+// fillerRole assigns standard vs quiet. Quiet: T0-only game sessions and
 // short/weak session-previews. Everything else (clips, strong previews,
 // moments) is standard.
 func fillerRole(c feedCard) string {
 	if c.feedType == "recent-games" {
 		return "standard"
-	}
-	if feedQuietBackendTypes[c.backendType] {
-		return "quiet"
 	}
 	if c.backendType == "game_session" {
 		if d, ok := decodeGameSessionData(c.data); ok {
@@ -1025,6 +1018,18 @@ func buildThisWeekWithLibraries(cards []feedCard, nowMs int64, libs map[string]*
 // entry is not a ledger card. It is the hero when a title moved in the last
 // 24 h and nothing ranks above it. Otherwise it follows the hero and the
 // recap, and it never takes a filler slot.
+// dropVoiceSessions leaves the voice sessions out: the day card lists them.
+func dropVoiceSessions(cards []feedCard) []feedCard {
+	out := make([]feedCard, 0, len(cards))
+	for _, c := range cards {
+		if c.backendType == "voice_session" {
+			continue
+		}
+		out = append(out, c)
+	}
+	return out
+}
+
 func buildThisWeekFull(cards []feedCard, nowMs int64, libs map[string]*LibraryDoc, h2h *Head2headFeedData) []FeedEntry {
 	return buildThisWeekDaily(cards, nowMs, libs, h2h, nil)
 }
@@ -1044,6 +1049,10 @@ func buildThisWeekDaily(cards []feedCard, nowMs int64, libs map[string]*LibraryD
 	// The recent games card counts every game session in the window, before
 	// pruning, so its header matches the week and not only the pruned part.
 	recent, hasRecent := buildRecentGames(cards, libs)
+
+	// A voice session is a row of the day card, never a card of its own (spec
+	// 19 section 3.5a). It stays in the counts above.
+	cards = dropVoiceSessions(cards)
 
 	// Budget game sessions first: adaptive floor/cap decides which earn a card.
 	// Pruned sessions are not carded; the recent games card carries their time.
