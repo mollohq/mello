@@ -54,7 +54,7 @@ func TestHeroPrefersStrongSessionPreviewOverClip(t *testing.T) {
 		typedCard("recap", "recap", "weekly_recap"),
 		typedCard("clip", "clip", "clip"),
 		previewCard("short", 1, 2),
-		typedCard("voice", "session", "voice_session"),
+		typedCard("stream", "session", "stream_session"),
 		previewCard("long", 21, 50),
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
@@ -74,7 +74,7 @@ func TestIncludesOneOfEachTypeWhenPresent(t *testing.T) {
 	cards := []feedCard{
 		typedCard("recap", "recap", "weekly_recap"),
 		typedCard("game", "session", "game_session"),
-		typedCard("voice", "session", "voice_session"),
+		typedCard("stream", "session", "stream_session"),
 		previewCard("p1", 1, 2),
 		typedCard("clip", "clip", "clip"),
 		previewCard("p2", 21, 30),
@@ -107,8 +107,8 @@ func TestLongPreviewSurvivesNoiseSessions(t *testing.T) {
 	cards := []feedCard{
 		typedCard("recap", "recap", "weekly_recap"),
 		typedCard("g70", "session", "game_session"),
-		typedCard("v4", "session", "voice_session"),
-		typedCard("v49", "session", "voice_session"),
+		typedCard("s4", "session", "stream_session"),
+		typedCard("s49", "session", "stream_session"),
 		previewCard("short", 1, 2),
 		previewCard("long", 21, 40),
 	}
@@ -206,21 +206,21 @@ func TestStreamSessionMappingBySnapshots(t *testing.T) {
 	}
 }
 
-// Low-signal pulse types collapse to a compact quiet row; living content stays
-// standard. This is the iOS quiet-row rule moved server-side.
+// A T0-only game session collapses to a compact quiet row; living content
+// stays standard. This is the iOS quiet-row rule moved server-side.
 func TestLowSignalFillersAreQuiet(t *testing.T) {
 	cards := []feedCard{
 		typedCard("clip", "clip", "clip"),
-		typedCard("voice", "session", "voice_session"),
+		gsCardT0("t0", 45, []string{"u1"}, 0, 0, 0, 0),
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 
-	voice := findEntry(entries, "voice")
-	if voice == nil {
-		t.Fatal("voice entry missing")
+	t0 := findEntry(entries, "t0")
+	if t0 == nil {
+		t.Fatal("game session entry missing")
 	}
-	if voice.Role != "quiet" || voice.Size != "sm" {
-		t.Fatalf("voice session: got role=%q size=%q want quiet/sm", voice.Role, voice.Size)
+	if t0.Role != "quiet" || t0.Size != "sm" {
+		t.Fatalf("T0 game session: got role=%q size=%q want quiet/sm", t0.Role, t0.Size)
 	}
 	clip := findEntry(entries, "clip")
 	if clip == nil {
@@ -236,7 +236,7 @@ func TestLowSignalFillersAreQuiet(t *testing.T) {
 func TestWideSlotGetsLargeSize(t *testing.T) {
 	cards := make([]feedCard, 0, 6)
 	for i := 0; i < 6; i++ {
-		cards = append(cards, typedCard("voice"+string(rune('0'+i)), "session", "voice_session"))
+		cards = append(cards, typedCard("stream"+string(rune('0'+i)), "session", "stream_session"))
 	}
 	entries := buildThisWeek(cards, feedTestNowMs)
 

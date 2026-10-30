@@ -256,7 +256,8 @@ from the sources the weekly recap reads. See
 [CLIPS.md](./features/CLIPS.md) section 7.1 for the card.
 
 - `crew_feed` puts one `daily-recap` entry in `this_week` for each of the last
-  three days (UTC), newest first. Role `standard`, size `md`.
+  three days (UTC), newest first. Role `standard`, size `md`. The client draws
+  the newest, as the day card when it has sessions.
 - The entries stand after the recap and the head2head entry, before the
   sessions. They take no filler slot.
 - A day belongs to the UTC day of the event timestamp. The day that is not over
@@ -282,22 +283,20 @@ from the sources the weekly recap reads. See
 
 #### The day card
 
-A daily recap of a day that is over, with a session to list, is the day card:
-two columns wide, in the first wide slot after the weekly recap
-(`feed_grid.rs`, `day_wide`). The numbers of the day stand left; right, the
-sessions of the day as rows (two at most on the card: three octagons then
-"+N", the title, "Voice, 3h 58m, 5 in the call" or "2h 40m, stromvap" under
-it, the start on the viewer's clock), and the belts that moved that day under
-them. The session cards of that day are rows here, not cards of their own:
-`this_week` drops a `session` or `session-preview` entry whose `ts` is inside
-the card's day (`day_card.rs`). Clips stay cards. Today so far is a cell as
-before, and the sessions of today stay cards until the day is over. An older
-server sends no `sessions`: the card stays a cell. Mockup
-`next-gen-feed.html` frame H.
+A daily recap with a session to list is the day card: two columns wide, in
+the first wide slot after the weekly recap (`feed_grid.rs`, `day_wide`). The
+numbers of the day stand left; right, the sessions of the day as rows (two at
+most on the card: three octagons then "+N", the title, "Voice, 3h 58m, 5 in
+the call" or "2h 40m, stromvap" under it, the start on the viewer's clock),
+and the belts that moved that day under them. Today so far is the day card
+too, as soon as the day has a session.
 
-The ledger events a catch-up card showed (`moment`, `member_joined`,
-`member_left`, `chat_activity`) have no feed card. A join is the joined row.
-The client does not draw a `catchup` entry that an older server sends.
+A voice session is a row of the day card and never a card of its own: the
+server leaves `voice_session` cards out of `this_week` (`dropVoiceSessions`),
+and the client draws none from an older server (`day_card.rs`). The daily
+recap and the recent games card still count it. Game sessions and stream
+replays stay cards. An older server sends no `sessions`: the card stays a
+cell. Mockup `next-gen-feed.html` frame H.
 
 ### 3.6 Per-game data degradation
 

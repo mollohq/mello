@@ -1253,15 +1253,19 @@ fn build_this_week(
     let mut lead: Vec<FeedCardData> = Vec::new();
     let mut cards: Vec<FeedCardData> = Vec::new();
     let mut daily_shown = false;
-    // The day a wide day card lists: its sessions are rows there, not cards.
-    let mut folded: Option<(i64, i64)> = None;
-    let now_ms = crate::converters::current_time_ms();
     for e in entries {
         if is_empty_recap_entry(&e.entry_type, &e.data) {
             continue;
         }
-        // An older server still sends catch-up cards. They are not drawn.
+        // An older server still sends catch-up cards and voice session cards.
+        // They are not drawn: a voice session is a row of the day card.
         if e.entry_type == "catchup" {
+            continue;
+        }
+        if crate::day_card::is_voice_session_card(
+            &e.entry_type,
+            derive_backend_type(&e.entry_type, &normalized_entry_data(&e.data)),
+        ) {
             continue;
         }
         // The server sends a daily recap for each of the last three days, the
@@ -1271,10 +1275,6 @@ fn build_this_week(
                 continue;
             }
             daily_shown = true;
-            folded = crate::day_card::folded_day(&e.data, now_ms);
-        }
-        if crate::day_card::folds(folded, &e.entry_type, e.ts) {
-            continue;
         }
         if e.entry_type == "head2head" {
             if let Some((placement, group)) = head2head_cards(ctx, e, entries) {
@@ -2032,11 +2032,7 @@ fn daily_recap_members(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate:
 
 /// The session rows of a wide day card: the people as octagons (three, then
 /// "+N"), the title, the line under it and the start on the viewer's clock.
-fn daily_recap_rows(
-    ctx: &AppContext,
-    data: &serde_json::Value,
-    now_ms: i64,
-) -> Vec<crate::DaySession> {
+fn daily_recap_rows(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::DaySession> {
     let (viewer, members) = h2h_roster(ctx);
     let person = |id: &str| -> Option<Person> {
         if id == viewer.id {
@@ -2045,7 +2041,7 @@ fn daily_recap_rows(
             members.iter().find(|m| m.id == id).cloned()
         }
     };
-    let tz = mello_core::crew_events::local_tz_offset_min(now_ms);
+    let tz = mello_core::crew_events::local_tz_offset_min(crate::converters::current_time_ms());
     crate::day_card::rows(data)
         .iter()
         .take(crate::day_card::ROWS)
@@ -2337,7 +2333,6 @@ fn build_feed_card(
     let session_kind = if feed_type == "session" || feed_type == "session-preview" {
         match backend_type {
             "stream_session" => "stream",
-            "voice_session" => "voice",
             _ => "",
         }
     } else {
@@ -2489,10 +2484,9 @@ fn build_feed_card(
         .filter(|_| is_daily_recap)
         .unwrap_or(0)
         .clamp(0, i64::from(i32::MAX)) as i32;
-    let now_ms = crate::converters::current_time_ms();
-    let day_wide = is_daily_recap && crate::day_card::is_wide(&data, now_ms);
+    let day_wide = is_daily_recap && crate::day_card::is_wide(&data);
     let day_rows = if day_wide {
-        daily_recap_rows(ctx, &data, now_ms)
+        daily_recap_rows(ctx, &data)
     } else {
         Vec::new()
     };

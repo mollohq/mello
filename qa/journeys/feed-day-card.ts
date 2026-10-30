@@ -1,10 +1,6 @@
-// FEED-11: the day card. A daily recap of a day that is over, with a session
-// to list, is two columns wide with the day's sessions as rows, and those
-// sessions are not cards of their own (spec 19 section 3.5a, mockup frame H).
-//
-// The server builds the recap of its today from the sessions seeded now. bob's
-// app runs with its clock 26 hours ahead (MELLO_E2E_CLOCK_SHIFT_MS), so that
-// day is over for him: the card is "Yesterday", wide, with rows.
+// FEED-11: the day card. A daily recap with sessions to list is two columns
+// wide with the day's sessions as rows (spec 19 section 3.5a, mockup frame H).
+// A voice session is a row there, never a card.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./lib/onboarding.ts";
@@ -17,15 +13,13 @@ export default journey({
   async run(ctx) {
     const { step, expect, runId, launch } = ctx;
     const crew = `Day ${runId}`;
-    const bob = await launch("bob", {
-      env: { MELLO_E2E_CLOCK_SHIFT_MS: String(26 * 3_600_000) },
-    });
+    const bob = await launch("bob");
     let code = "";
     let token = "";
     let crewId = "";
 
     await step(
-      "setup: bob, a day ahead, creates a crew and reads the invite link",
+      "setup: bob creates a crew and reads the invite link",
       async () => {
         const creds = await onboardWithNewCrew(
           bob,
@@ -45,9 +39,9 @@ export default journey({
     );
 
     await step(
-      "setup: two members join over REST and three people play today, on the server's clock",
+      "setup: two members join over REST and three people play today",
       async () => {
-        // The first two profiles post no clips, so nothing else makes the day.
+        // The first two profiles post no clips, so the sessions make the day.
         const members = await seedCrew(code, profilesFrom(0, 2, runId), runId);
         const played = [
           [token, { id: "steam-730", name: "Counter-Strike 2" }, 95, 21 * 60],
@@ -80,7 +74,7 @@ export default journey({
     );
 
     await step(
-      "the day card: yesterday for bob, two columns, the sessions as rows",
+      "the day card: today so far, two columns, the sessions as rows",
       async () => {
         await bob.restart();
         const s = await bob.waitFor(
@@ -90,8 +84,8 @@ export default journey({
         );
         const d = s.daily_recap;
         expect(
-          d.day === "Yesterday",
-          `the day is over for bob, got "${d.day}"`,
+          d.day === "Today so far",
+          `the day that is not over, got "${d.day}"`,
         );
         expect(
           d.rows >= 1 && d.rows <= 2,
@@ -104,21 +98,12 @@ export default journey({
             1,
           "one daily recap card",
         );
+        expect(
+          s.feed_cards.some((c) => c.card_type === "recent-games"),
+          "the recent games card stays",
+        );
         await bob.checkpoint("day-card");
       },
     );
-
-    await step("the sessions of that day are rows, not cards", async () => {
-      const s = await bob.state();
-      const sessions = s.feed_cards.filter((c) => c.card_type === "session");
-      expect(
-        sessions.length === 0,
-        `no session card for the folded day, got ${sessions.map((c) => c.title).join(", ")}`,
-      );
-      expect(
-        s.feed_cards.some((c) => c.card_type === "recent-games"),
-        "the recent games card stays",
-      );
-    });
   },
 });

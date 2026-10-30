@@ -327,9 +327,6 @@ export type UserOptions = {
   deeplink?: string;
   /** Default: DEFAULT_MIC_PERMISSION. */
   micPermission?: MicPermission;
-  /** Extra environment for this user's app, over the run's. For example
-   *  MELLO_E2E_CLOCK_SHIFT_MS, the app's clock moved ahead. */
-  env?: Record<string, string>;
 };
 
 export type AppOptions = {

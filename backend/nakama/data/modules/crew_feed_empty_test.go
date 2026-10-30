@@ -62,10 +62,39 @@ func TestBuildThisWeekDropsEmptyCards(t *testing.T) {
 			t.Errorf("empty card %q was emitted", id)
 		}
 	}
-	for _, id := range []string{"real-voice", "clip"} {
-		if findEntry(entries, id) == nil {
-			t.Errorf("real card %q was dropped", id)
+	if findEntry(entries, "clip") == nil {
+		t.Errorf("real card %q was dropped", "clip")
+	}
+	// A voice session with minutes is a row of the day card, not a card.
+	if findEntry(entries, "real-voice") != nil {
+		t.Errorf("the voice session was emitted as a card")
+	}
+}
+
+// A voice session is never a card of this_week. The daily recap of its day
+// still counts it and lists it (spec 19 section 3.5a).
+func TestVoiceSessionsAreRowsOfTheDayCardNotCards(t *testing.T) {
+	now := feedTestNowMs
+	cards := []feedCard{
+		{id: "voice", feedType: "session", backendType: "voice_session", ts: now - 1, data: VoiceSessionData{ChannelName: "General", DurationMin: 30, ParticipantIDs: []string{"u1", "u2", "u3"}}},
+		clipCard("clip", now-6),
+	}
+	entries := buildThisWeek(cards, now)
+	if findEntry(entries, "voice") != nil {
+		t.Fatalf("the voice session is a card")
+	}
+	var daily *FeedEntry
+	for i := range entries {
+		if entries[i].Type == "daily-recap" {
+			daily = &entries[i]
 		}
+	}
+	if daily == nil {
+		t.Fatalf("no daily recap for the day of the voice session: %+v", entries)
+	}
+	d, ok := daily.Data.(DailyRecapData)
+	if !ok || d.SessionCount != 1 || len(d.Sessions) != 1 || d.Sessions[0].Kind != "voice" {
+		t.Fatalf("daily recap %+v", daily.Data)
 	}
 }
 

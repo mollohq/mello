@@ -1,6 +1,7 @@
-//! The day card: a daily recap of a day that is over, with the sessions of
-//! that day listed beside its numbers (spec 19 section 3.5a, mockup
-//! next-gen-feed.html frame H). Pure: the handler maps the rows to Slint.
+//! The day card: a daily recap with the sessions of its day listed beside its
+//! numbers (spec 19 section 3.5a, mockup next-gen-feed.html frame H). A voice
+//! session is a row here, never a card. Pure: the handler maps the rows to
+//! Slint.
 
 use serde_json::Value;
 
@@ -44,26 +45,16 @@ pub fn rows(data: &Value) -> Vec<DayRow> {
         .collect()
 }
 
-/// The day card is two columns wide when the day is over and it has a
-/// session to list. Today so far stays a cell: its sessions are still cards.
-pub fn is_wide(data: &Value, now_ms: i64) -> bool {
-    let day_end = int_of(data, "day_end");
-    day_end > 0 && day_end <= now_ms && !rows(data).is_empty()
+/// The day card is two columns wide when it has a session to list. An older
+/// server sends no sessions: the card stays a cell.
+pub fn is_wide(data: &Value) -> bool {
+    !rows(data).is_empty()
 }
 
-/// The day a wide day card covers, `[start, end)`. The sessions of that day
-/// are rows of the card, not cards of their own.
-pub fn folded_day(data: &Value, now_ms: i64) -> Option<(i64, i64)> {
-    if !is_wide(data, now_ms) {
-        return None;
-    }
-    Some((int_of(data, "day_start"), int_of(data, "day_end")))
-}
-
-/// True when a session entry of `ts` belongs to the folded day.
-pub fn folds(day: Option<(i64, i64)>, entry_type: &str, ts: i64) -> bool {
-    matches!(entry_type, "session" | "session-preview")
-        && day.is_some_and(|(start, end)| ts >= start && ts < end)
+/// A voice session card from an older server. The server leaves voice
+/// sessions out of `this_week`; the client draws none either way.
+pub fn is_voice_session_card(entry_type: &str, backend_type: &str) -> bool {
+    entry_type == "session" && backend_type == "voice_session"
 }
 
 /// The line under a row's title. Voice: "Voice, 3h 58m, 5 in the call".
@@ -143,28 +134,21 @@ mod tests {
     }
 
     #[test]
-    fn a_day_that_is_over_with_sessions_is_wide_and_today_is_not() {
+    fn a_day_with_sessions_is_wide_today_included() {
         let d = day(
             json!([{"kind": "voice", "title": "General", "member_ids": ["a"], "duration_min": 30, "peak": 2, "end_ms": 10 * DAY + 1000}]),
         );
-        assert!(is_wide(&d, 11 * DAY + 5));
-        assert!(!is_wide(&d, 10 * DAY + 5000), "today so far");
-        assert!(!is_wide(&day(json!([])), 12 * DAY), "nothing to list");
-        assert!(
-            !is_wide(&json!({"day_start": 1}), 12 * DAY),
-            "an older server"
-        );
-        assert_eq!(folded_day(&d, 11 * DAY + 5), Some((10 * DAY, 11 * DAY)));
+        assert!(is_wide(&d));
+        assert!(!is_wide(&day(json!([]))), "nothing to list");
+        assert!(!is_wide(&json!({"day_start": 1})), "an older server");
     }
 
     #[test]
-    fn the_sessions_of_the_folded_day_are_not_cards() {
-        let d = Some((10 * DAY, 11 * DAY));
-        assert!(folds(d, "session", 10 * DAY + 7));
-        assert!(folds(d, "session-preview", 11 * DAY - 1));
-        assert!(!folds(d, "session", 11 * DAY), "the next day");
-        assert!(!folds(d, "clip", 10 * DAY + 7), "a clip stays a card");
-        assert!(!folds(None, "session", 10 * DAY + 7));
+    fn a_voice_session_is_never_a_card() {
+        assert!(is_voice_session_card("session", "voice_session"));
+        assert!(!is_voice_session_card("session", "stream_session"));
+        assert!(!is_voice_session_card("session", "game_session"));
+        assert!(!is_voice_session_card("clip", "voice_session"));
     }
 
     #[test]

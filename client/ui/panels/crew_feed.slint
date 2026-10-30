@@ -1422,10 +1422,10 @@ component DailyRecapCard inherits Rectangle {
 }
 
 // Session card
-// Voice/stream session card, redesigned per designs/feed/
-// session-cards-redesign.html (Option B: game/channel-first). Typed header,
-// real avatars, humanized duration, peak stat — a card must answer "who did
-// what, for how long" at a glance.
+// The stream session card, per designs/feed/session-cards-redesign.html
+// (Option B: game first). Typed header, real avatars, humanized duration,
+// peak stat: a card answers "who did what, for how long" at a glance. A voice
+// session is a row of the day card, never a card (spec 19 section 3.5a).
 component SessionCard inherits Rectangle {
     in property <FeedCardData> card;
 
@@ -1456,7 +1456,7 @@ component SessionCard inherits Rectangle {
         padding: 14px;
         spacing: 8px;
 
-        // Typed header: colored dot + STREAM / VOICE.
+        // Typed header: colored dot + STREAM.
         HorizontalLayout {
             spacing: 6px;
             Rectangle {
@@ -1471,7 +1471,7 @@ component SessionCard inherits Rectangle {
             }
             Text {
                 font-family: Theme.font-label;
-                text: is-stream ? "STREAM" : card.session-kind == "voice" ? "VOICE" : "SESSION";
+                text: is-stream ? "STREAM" : "SESSION";
                 font-size: 10px;
                 font-weight: Theme.weight-label;
                 color: kind-color;
@@ -1534,74 +1534,6 @@ component SessionCard inherits Rectangle {
             text: "\{card.peak-count} watched at peak";
             font-size: 11px;
             color: Theme.text-sub;
-        }
-
-        // ── VOICE: the people are the content, so they get the space ──
-        // Channel + meta as a compact heading, then a large avatar cluster
-        // that fills the card instead of an empty stretch gap.
-        if !is-stream: VerticalLayout {
-            spacing: 2px;
-            Text {
-                font-family: Theme.font-display;
-                text: card.channel-name != "" ? card.channel-name : card.title;
-                font-size: 13px;
-                font-weight: Theme.weight-display;
-                color: Theme.text-primary;
-                overflow: elide;
-            }
-            Text {
-                font-weight: Theme.weight-sentence;
-                font-family: Theme.font-body;
-                text: card.duration-human
-                    + (card.peak-count > 0 ? " · \{card.peak-count} in call" : "");
-                font-size: 11px;
-                color: Theme.text-sub;
-                overflow: elide;
-            }
-        }
-
-        if !is-stream: Rectangle { height: 6px; }
-
-        if !is-stream && card.participant-count > 0: HorizontalLayout {
-            spacing: 4px;
-            alignment: start;
-            height: 40px;
-
-            UserAvatar {
-                initials: card.part0-initials;
-                avatar: card.part0-avatar;
-                has-avatar: card.part0-has-avatar;
-                color-index: 0;
-                size: 40px;
-            }
-            if card.participant-count > 1: UserAvatar {
-                initials: card.part1-initials;
-                avatar: card.part1-avatar;
-                has-avatar: card.part1-has-avatar;
-                color-index: 1;
-                size: 40px;
-            }
-            if card.participant-count > 2: UserAvatar {
-                initials: card.part2-initials;
-                avatar: card.part2-avatar;
-                has-avatar: card.part2-has-avatar;
-                color-index: 2;
-                size: 40px;
-            }
-            // Overflow chip: the roster is wider than the three avatar slots.
-            if card.participant-count > 3: AvatarOverflow {
-                count: card.participant-count - 3;
-                size: 40px;
-            }
-        }
-
-        if !is-stream && card.participants-line != "": Text {
-            font-weight: Theme.weight-sentence;
-            font-family: Theme.font-body;
-            text: card.participants-line;
-            font-size: 11px;
-            color: Theme.text-sub;
-            overflow: elide;
         }
 
         Rectangle { vertical-stretch: 1; }
@@ -5266,13 +5198,6 @@ export component PreviewFeedThreeMembers inherits Rectangle {
                 duration-min: 72, participant-count: 3, timestamp: "Yesterday",
                 snapshot-urls: ["a", "b", "c"], snapshot-poster-ready: true,
                 snapshot-poster: @image-url("../previews/fixtures/stream-sample-1.png"),
-            },
-            {
-                id: "voice", card-type: "session", role: "standard", size: "md",
-                session-kind: "voice", title: "General", channel-name: "General",
-                duration-human: "2h 14m", peak-count: 3, participant-count: 3,
-                part0-initials: "B", part1-initials: "J", part2-initials: "M",
-                participants-line: "Bob, Jonas and Max", timestamp: "Last night 22:40",
             },
             {
                 id: "gs1", card-type: "game-session", is-hero: false, is-skeleton: false,

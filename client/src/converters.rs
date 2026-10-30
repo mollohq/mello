@@ -330,31 +330,11 @@ pub struct VoiceUiCtx<'a> {
     pub member_audio: &'a crate::member_audio::MemberAudioTable,
 }
 
-/// The clock of the app. An e2e build shifts it by `MELLO_E2E_CLOCK_SHIFT_MS`
-/// (a journey that looks at a day that is over, specs/features/CLIPS.md 7.1).
-/// The server keeps its own clock: the shift moves what the app calls today.
 pub fn current_time_ms() -> i64 {
-    let now = std::time::SystemTime::now()
+    std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default()
-        .as_millis() as i64;
-    now + clock_shift_ms()
-}
-
-#[cfg(feature = "e2e")]
-fn clock_shift_ms() -> i64 {
-    static SHIFT: std::sync::OnceLock<i64> = std::sync::OnceLock::new();
-    *SHIFT.get_or_init(|| {
-        std::env::var("MELLO_E2E_CLOCK_SHIFT_MS")
-            .ok()
-            .and_then(|v| v.trim().parse().ok())
-            .unwrap_or(0)
-    })
-}
-
-#[cfg(not(feature = "e2e"))]
-fn clock_shift_ms() -> i64 {
-    0
+        .as_millis() as i64
 }
 
 /// Humanized elapsed play time for member rows: "3m", "47m", "1h 23m".
