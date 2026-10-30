@@ -27,7 +27,15 @@ for arg in "$@"; do
     esac
 done
 
-COMPOSE="docker compose -f backend/docker-compose.yml"
+# Nakama's environment comes from backend/.env, as on the shared local stack
+# (MELLO_ENV_FILE picks another file, as scripts/e2e-oauth-stack.sh does).
+# Compose passes SFU_JWT_PRIVATE_KEY and the other keys through from it.
+ENV_FILE="${MELLO_ENV_FILE:-backend/.env}"
+if [ -f "$ENV_FILE" ]; then
+    COMPOSE="docker compose --env-file $ENV_FILE -f backend/docker-compose.yml"
+else
+    COMPOSE="docker compose -f backend/docker-compose.yml"
+fi
 
 # Remote push: Nakama posts to a stub Worker that the push e2e test serves on
 # the host (spec 23). Compose recreates Nakama when these change.
@@ -40,8 +48,12 @@ export MELLO_E2E_PUSH_PORT PUSH_WORKER_URL PUSH_WORKER_TOKEN PUSH_DESKTOP_GRACE_
 
 # The SFU is the only voice and stream transport: without a signing key,
 # voice_join and start_stream return SFU_UNAVAILABLE. The RPC tests only need
-# the token, not a running SFU, so an unset key gets a key for this run.
-if [ -z "${SFU_JWT_PRIVATE_KEY:-}" ]; then
+# the token, not a running SFU, so a stack with no key gets a key for this run.
+# A stack with a key keeps it: a key made here would stay on a --keep stack,
+# and the local SFU rejects every token signed with it (its public key is the
+# one of backend/.env).
+if [ -z "${SFU_JWT_PRIVATE_KEY:-}" ] \
+    && ! { [ -f "$ENV_FILE" ] && grep -q '^SFU_JWT_PRIVATE_KEY=' "$ENV_FILE"; }; then
     SFU_JWT_PRIVATE_KEY="$(openssl genrsa 2048 2>/dev/null)"
     export SFU_JWT_PRIVATE_KEY
 fi
