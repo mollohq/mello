@@ -43,6 +43,7 @@ accessibility = [
 ]
 default = []
 raw-window-handle-06 = ["i-slint-core/raw-window-handle-06"]
+renderer-d2d = ["dep:i-slint-renderer-d2d"]
 renderer-femtovg = [
     "i-slint-renderer-femtovg/opengl",
     "dep:glutin",
@@ -154,6 +155,10 @@ default-features = false
 version = "=1.18.1"
 optional = true
 default-features = false
+
+[dependencies.i-slint-renderer-d2d]
+path = "../../renderer-d2d"
+optional = true
 
 [dependencies.i-slint-renderer-femtovg]
 version = "=1.18.1"

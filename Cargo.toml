@@ -7,6 +7,7 @@ members = [
     "mello-core",
     "mello-core-ffi",
     "mello-sys",
+    "renderer-d2d",
     "tools/stream-host",
     "tools/rtp-client-test",
     "tools/sfu-stream-viewer-probe",
@@ -44,8 +45,11 @@ reqwest = { version = "0.12", features = ["json"] }
 
 # Slint 1.18.1 on Windows leaves the window transparent after a minimize and
 # restore (slint-ui/slint#13537). This is i-slint-backend-winit 1.18.1 with the
-# upstream fix (slint-ui/slint#13568) applied. Remove it when Slint 1.18.2 ships
-# with the fix: mollohq/mello#159.
+# upstream fix (slint-ui/slint#13568) applied, and with the hook for mello's
+# Direct2D renderer (renderer-d2d, feature renderer-d2d): the backend's renderer
+# trait is private, so a new renderer needs this copy. The backport can go at
+# Slint 1.18.2 (mollohq/mello#159); the hook stays until Slint has a public
+# renderer hook (m3llo-fx-lab D2D-RENDERER.md, risk 2).
 [patch.crates-io]
 i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }
 
