@@ -117,7 +117,7 @@ fn main() {
 
 ### 3.1 Renderer
 
-Mello ships one Slint renderer: Skia. The `slint` dependency turns off the default features, because they add FemtoVG and the Slint software renderer.
+Mello ships two Slint renderers on Windows and one on macOS. The `slint` dependency turns off the default features, because they add FemtoVG and the Slint software renderer.
 
 ```toml
 # client/Cargo.toml, hud/Cargo.toml
@@ -127,19 +127,27 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
 ```
 
-- On Windows, Skia renders on the CPU (renderer name `skia-software`). `configure_slint_platform` selects it always.
-- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game.
+- On Windows, the default is mello's own Direct2D renderer, name `d2d`, crate `renderer-d2d`: a D3D11 flip swapchain on the window, Direct2D for the drawing, DirectWrite for the glyph runs that Slint lays out in core. It is hooked into the vendored winit backend (`third_party/i-slint-backend-winit`, feature `renderer-d2d`, `renderer/d2d.rs`) because the backend's renderer trait is private.
+- The fallback is Skia's CPU rasterizer, name `skia-software`. `client/src/renderer_choice.rs` picks between the two, in this order:
+  1. `MELLO_RENDERER=d2d|skia-software` overrides everything (debug).
+  2. The "Hardware Acceleration" setting off means `skia-software`, with no GPU device created.
+  3. The client creates the D3D11 device once (`i_slint_renderer_d2d::probe`). If that fails (no GPU driver, a remote desktop session, a driver being updated), `skia-software`.
+  4. Otherwise `d2d`.
+  The choice is logged at startup with its reason. `renderer_choice.rs` has the unit tests for all four rules; keep them passing.
+- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game. Measured (m3llo-fx-lab WINDOWS.md 3.6, release build, idle shown, no voice channel, 2026-10-31):
 
-  | Windows, idle | Working set | Private | GPU memory |
+  | Windows, idle | Working set | Private working set | GPU memory |
   |---|---|---|---|
-  | Skia CPU rasterizer | 134 MB | 95 MB | 12 MB |
-  | Skia on wgpu (D3D12) | 387 MB | 414 MB | 189 MB |
+  | `d2d` (default) | 117 MB | 54 MB | 33 MB |
+  | `skia-software` (fallback) | 108 MB | 49 MB | 11 MB |
+  | Skia on wgpu (D3D12), not shipped | 224 MB | 133 MB | 182 MB |
+  | Skia on OpenGL, not shipped | 227 MB | 144 MB | 75 MB |
 
 - On macOS, Skia renders on the GPU through wgpu (Metal). When the GPU surface fails, Skia falls back to its CPU rasterizer.
 - On macOS, `--software-rendering` forces the CPU rasterizer. It is a debug switch.
 - Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.
-- Backport (Slint 1.18.1, Windows): after a minimize and restore, Slint 1.18.1 repaints only the parts of the window that changed, and the rest shows as transparent ([slint#13537](https://github.com/slint-ui/slint/issues/13537)). The fix is [slint#13568](https://github.com/slint-ui/slint/pull/13568), which is not in a release yet. `third_party/i-slint-backend-winit` is `i-slint-backend-winit` 1.18.1 with that fix applied, and the root `Cargo.toml` patches it in. When a release has the fix (expected 1.18.2), upgrade and remove the backport and this line ([mollohq/mello#159](https://github.com/mollohq/mello/issues/159)).
-- Do not add `renderer-software` or `renderer-femtovg`. They add binary size and never run.
+- Backport (Slint 1.18.1, Windows): after a minimize and restore, Slint 1.18.1 repaints only the parts of the window that changed, and the rest shows as transparent ([slint#13537](https://github.com/slint-ui/slint/issues/13537)). The fix is [slint#13568](https://github.com/slint-ui/slint/pull/13568), which is not in a release yet. `third_party/i-slint-backend-winit` is `i-slint-backend-winit` 1.18.1 with that fix applied and with the `renderer-d2d` hook, and the root `Cargo.toml` patches it in. When a release has the fix (expected 1.18.2), upgrade and remove the backport ([mollohq/mello#159](https://github.com/mollohq/mello/issues/159)); the hook stays until Slint has a public renderer hook.
+- Do not add `renderer-software`, `renderer-femtovg` or `renderer-skia-opengl`. They add binary size and never run.
 
 ### 3.2 Opaque windows on macOS
 

@@ -48,6 +48,7 @@ mod platform;
 mod poll_loop;
 mod quiet_row;
 mod recent_games;
+mod renderer_choice;
 mod say_hi;
 mod sealed;
 mod settings;
