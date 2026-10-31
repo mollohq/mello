@@ -3726,6 +3726,77 @@ fn the_clip_key_captures_a_voice_clip_only_in_voice() {
     assert_eq!(capture(&h.commands()), 1);
 }
 
+/// The clip button names the clip key, F7 on a new install.
+#[test]
+fn the_clip_button_names_the_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_in_voice(true);
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert!(drawn_texts(&h).iter().any(|t| t == "F7"));
+}
+
+/// The clip key is bound in Settings, Keybinds: the new key is saved, and
+/// the clip button shows it.
+#[test]
+fn keybinds_rebinds_the_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("KEYBINDS");
+    h.click_label("Voice clip key");
+    assert!(h.app().get_settings_clip_binding(), "the field listens");
+
+    // Shift+F8, F8 as Slint reports it. Shift stores the same on every
+    // platform; the label is the platform's ("Shift + F8", "⇧ + F8").
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, true, false);
+    h.pump();
+
+    assert!(!h.app().get_settings_clip_binding());
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("Shift+F8"));
+    let (_, label) = crate::platform::hotkeys::parse_ptt_string("Shift+F8").expect("label");
+    assert_eq!(h.app().get_clip_key_label().as_str(), label);
+    assert!(h.app().get_settings_clip_key_warning().is_empty());
+}
+
+/// A key that push-to-talk uses is refused. The clip key stays as it was.
+#[test]
+fn keybinds_refuses_the_push_to_talk_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.settings().borrow_mut().ptt_key = Some("KeyV".into());
+
+    h.app()
+        .invoke_settings_clip_key_captured("v".into(), false, false, false, false);
+    h.pump();
+
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+    assert_eq!(
+        h.app().get_settings_clip_key_warning().as_str(),
+        "Push-to-talk uses V. Pick another key."
+    );
+}
+
+/// Reset to defaults gives the clip key back to F7.
+#[test]
+fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F8");
+
+    h.app().invoke_settings_reset_defaults();
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+}
+
 /// Hangup must change the screen on click, before the core answers.
 #[test]
 fn hangup_click_updates_ui_before_core_confirms() {

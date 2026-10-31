@@ -2604,6 +2604,176 @@ component AboutTab inherits VerticalLayout {
     }
 }
 
+// ─── Keybind Row (title + description + key field) ────────────────────────
+// A click on the field listens for the next key. Escape stops listening.
+// The field is a plain rectangle, as every field is.
+component KeybindRow inherits Rectangle {
+    in property <string> title;
+    in property <string> description;
+    /// "F7", "Ctrl+F7", or "" when no key is bound.
+    in property <string> key-label;
+    /// The state under the field, for a key that another binding takes.
+    /// The field keeps the key it had.
+    in property <string> warning: "";
+    in-out property <bool> binding: false;
+    callback key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+
+    height: row-layout.preferred-height;
+    background: transparent;
+
+    row-layout := HorizontalLayout {
+        padding-top: 14px;
+        padding-bottom: 14px;
+        padding-left: 20px;
+        padding-right: 20px;
+        spacing: 32px;
+
+        VerticalLayout {
+            horizontal-stretch: 1;
+            spacing: 6px;
+            alignment: center;
+
+            Text {
+                font-family: Theme.font-display;
+                text: root.title;
+                font-size: 15px;
+                font-weight: Theme.weight-display;
+                color: Theme.text-primary;
+                letter-spacing: 0.3px;
+            }
+
+            Text {
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                text: root.description;
+                font-size: 13px;
+                color: Theme.text-secondary;
+                wrap: word-wrap;
+            }
+        }
+
+        VerticalLayout {
+            width: 200px;
+            alignment: center;
+            spacing: 6px;
+
+            Rectangle {
+                height: 40px;
+                background: root.binding ? Theme.bg-app : Theme.surface;
+                border-width: 2px;
+                border-color: root.binding ? Theme.accent
+                    : root.warning != "" ? Theme.live
+                    : bind-ta.has-hover ? Theme.text-tertiary
+                    : Theme.graphic-light;
+
+                HorizontalLayout {
+                    padding-left: 16px;
+                    padding-right: 16px;
+
+                    Text {
+                        letter-spacing: Theme.track-label;
+                        font-weight: Theme.weight-label;
+                        text: root.binding ? "Press any key…"
+                            : root.key-label != "" ? root.key-label
+                            : "Click to bind...";
+                        font-family: Theme.font-label;
+                        font-size: 14px;
+                        color: root.binding ? Theme.accent
+                            : root.key-label != "" ? Theme.text-primary
+                            : Theme.text-tertiary;
+                        horizontal-stretch: 1;
+                        vertical-alignment: center;
+                    }
+
+                    Image {
+                        source: @image-url("../icons/key.svg");
+                        width: 13px;
+                        height: 13px;
+                        colorize: Theme.text-secondary;
+                        y: (parent.height - self.height) / 2;
+                    }
+                }
+
+                key-focus := FocusScope {
+                    key-pressed(event) => {
+                        if root.binding {
+                            // A modifier alone is not a key.
+                            if event.text != Key.Shift && event.text != Key.ShiftR
+                                && event.text != Key.Control && event.text != Key.ControlR
+                                && event.text != Key.Alt && event.text != Key.AltGr
+                                && event.text != Key.Meta && event.text != Key.MetaR
+                                && event.text != Key.CapsLock {
+                                if event.text == Key.Escape {
+                                    root.binding = false;
+                                } else {
+                                    root.key-captured(
+                                        event.text,
+                                        event.modifiers.control,
+                                        event.modifiers.alt,
+                                        event.modifiers.shift,
+                                        event.modifiers.meta
+                                    );
+                                }
+                            }
+                            accept
+                        } else {
+                            reject
+                        }
+                    }
+                }
+
+                bind-ta := TouchArea {
+                    accessible-role: button;
+                    accessible-label: root.title + " key";
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if !root.binding {
+                            root.binding = true;
+                            key-focus.focus();
+                        }
+                    }
+                }
+            }
+
+            if root.warning != "": Text {
+                text: root.warning;
+                font-family: Theme.font-body;
+                font-weight: Theme.weight-sentence;
+                font-size: 12px;
+                color: Theme.live;
+                wrap: word-wrap;
+            }
+        }
+    }
+}
+
+// ─── Keybinds tab ─────────────────────────────────────────────────────────
+component KeybindsTab inherits VerticalLayout {
+    padding: 40px;
+    padding-bottom: 80px;
+    spacing: 48px;
+
+    in property <string> clip-key-label: "F7";
+    in property <string> clip-key-warning: "";
+    in-out property <bool> clip-binding: false;
+    callback clip-key-captured(string, bool, bool, bool, bool);
+
+    VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "CLIPS"; }
+
+        KeybindRow {
+            title: "Voice clip";
+            description: "Saves the last 30 seconds of voice. Works in any app while you are in voice.";
+            key-label: root.clip-key-label;
+            warning: root.clip-key-warning;
+            binding <=> root.clip-binding;
+            key-captured(k, c, a, s, m) => { root.clip-key-captured(k, c, a, s, m); }
+        }
+    }
+}
+
 export component SettingsModal inherits Rectangle {
     // Audio device properties
     in property <[AudioDeviceData]> capture-devices: [];
@@ -2691,8 +2861,15 @@ export component SettingsModal inherits Rectangle {
     // Saved indicator
     in-out property <bool> show-saved: false;
 
-    // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video, 3 = Games, 4 = About
+    // Tab state: 0 = Profile, 1 = General, 2 = Audio & Video, 3 = Games, 4 = About,
+    // 5 = Keybinds
     in-out property <int> active-tab: 0;
+
+    // Keybinds: the voice clip key (CLIPS.md 3.1).
+    in property <string> clip-key-label: "F7";
+    in property <string> clip-key-warning: "";
+    in-out property <bool> clip-binding: false;
+    callback clip-key-captured(string, bool, bool, bool, bool);
 
     // The scroll offset of the content area. Previews set it to show the lower sections.
     in-out property <length> content-scroll <=> settings-scroll.scroll-y;
@@ -3137,16 +3314,30 @@ export component SettingsModal inherits Rectangle {
                             // Spacer
                             Rectangle { height: 16px; }
 
-                            // Keybinds (disabled)
+                            // Keybinds
                             Rectangle {
                                 height: 40px;
-                                opacity: 0.5;
+                                background: transparent;
+
+                                if active-tab == 5 || keybinds-ta.has-hover: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    fill: active-tab == 5 ? Theme.graphic-light : Theme.surface-hover;
+                                }
+                                if active-tab == 5: CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: Theme.cut;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface;
+                                }
 
                                 Image {
                                     source: @image-url("../icons/key.svg");
                                     width: 16px;
                                     height: 16px;
-                                    colorize: Theme.text-secondary;
+                                    colorize: active-tab == 5 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px;
                                     y: (parent.height - self.height) / 2;
                                     opacity: 0.8;
@@ -3158,9 +3349,15 @@ export component SettingsModal inherits Rectangle {
                                     font-size: 12px;
                                     font-weight: Theme.weight-label;
                                     letter-spacing: 0.6px;
-                                    color: Theme.text-secondary;
+                                    color: active-tab == 5 ? Theme.text-primary : Theme.text-secondary;
                                     x: 12px + 16px + 12px;
                                     y: (parent.height - self.preferred-height) / 2;
+                                }
+
+                                keybinds-ta := TouchArea {
+                                    accessible-role: tab;
+                                    accessible-label: "KEYBINDS";
+                                    clicked => { active-tab = 5; }
                                 }
                             }
 
@@ -3358,6 +3555,15 @@ export component SettingsModal inherits Rectangle {
                             riot-disconnect-clicked => { root.riot-disconnect-clicked(); }
                         }
 
+                        keybinds-tab := KeybindsTab {
+                            visible: active-tab == 5;
+                            width: parent.width;
+                            clip-key-label: root.clip-key-label;
+                            clip-key-warning: root.clip-key-warning;
+                            clip-binding <=> root.clip-binding;
+                            clip-key-captured(k, c, a, s, m) => { root.clip-key-captured(k, c, a, s, m); }
+                        }
+
                         about-tab := AboutTab {
                             visible: active-tab == 4;
                             width: parent.width;
@@ -3489,6 +3695,9 @@ component SettingsPreview inherits Rectangle {
     in property <int> tab: 0;
     in property <length> scroll: 0px;
     in property <bool> notices-open: false;
+    in property <string> clip-key: "F7";
+    in property <string> clip-warning: "";
+    in property <bool> clip-listening: false;
 
     width: 1000px;
     height: 780px;
@@ -3500,6 +3709,9 @@ component SettingsPreview inherits Rectangle {
         active-tab: root.tab;
         content-scroll: root.scroll;
         notices-open: root.notices-open;
+        clip-key-label: root.clip-key;
+        clip-key-warning: root.clip-warning;
+        clip-binding: root.clip-listening;
         notices: [
             { names: "serde 1.0.228\nserde_json 1.0.145", license: "MIT OR Apache-2.0", text: "Copyright (c) David Tolnay" },
             { names: "opus (vcpkg)", license: "BSD-3-Clause", text: "Licence: BSD-3-Clause. The full text is at https://spdx.org/licenses/BSD-3-Clause.html and in the opus source." },
@@ -3555,3 +3767,6 @@ export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }
 export component PreviewAboutLower inherits SettingsPreview { tab: 4; scroll: 700px; }
 export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 290px; }
+export component PreviewKeybinds inherits SettingsPreview { tab: 5; }
+export component PreviewKeybindsListening inherits SettingsPreview { tab: 5; clip-listening: true; }
+export component PreviewKeybindsTaken inherits SettingsPreview { tab: 5; clip-key: "F7"; clip-warning: "Push-to-talk uses V. Pick another key."; }

@@ -217,6 +217,9 @@ export component ControlBar inherits Rectangle {
 
     // Clip
     callback clip-captured();
+    /// The voice clip key as Settings shows it ("F7"), or "" when no key is
+    /// bound. The clip button names it.
+    in property <string> clip-key-label: "";
     // Preview only: render the clip button hovered.
     in property <bool> preview-clip-hover: false;
     // Preview only: render the END STREAM button hovered.
@@ -1047,6 +1050,24 @@ export component ControlBar inherits Rectangle {
                         color: Theme.live;
                         vertical-alignment: center;
                     }
+
+                    // The key in a plain box, as the key field in Settings.
+                    if clip-key-label != "": Rectangle {
+                        width: key-text.preferred-width + 10px;
+                        height: 18px;
+                        border-width: 1px;
+                        border-color: Theme.graphic-med;
+                        key-text := Text {
+                            text: clip-key-label;
+                            font-family: Theme.font-label;
+                            font-size: 9.5px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
 
                 clip-hover := TouchArea {
@@ -1164,5 +1185,48 @@ export component PreviewHostingPaused inherits Rectangle {
         stream-host-paused: true;
         preview-end-hover: true;
         bar-state: 1;
+    }
+}
+
+export component PreviewClipKey inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        game-active: true;
+        game-id: "counter-strike-2";
+        game-name: "Counter-Strike 2";
+        game-short-name: "CS2";
+        game-monogram: "CS";
+        game-color: #DE9B35;
+        can-stream: true;
+        bar-state: 1;
+        clip-key-label: "F7";
+    }
+}
+
+export component PreviewClipKeyCombo inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        bar-state: 1;
+        clip-key-label: "Ctrl+F7";
     }
 }

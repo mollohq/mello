@@ -43,12 +43,14 @@ Good for capturing funny conversations, heated arguments, singing, whatever happ
 
 **Requires:** An active voice session. The client maintains a rolling disk buffer of mixed audio output.
 
-**Hotkey:** F7 captures a voice clip from any app, a game included. It does what the clip button does, and only when the clip button shows: in voice, with microphone access.
+**Hotkey:** the clip key captures a voice clip from any app, a game included. It does what the clip button does, and only when the clip button shows: in voice, with microphone access.
 
-- A press of F7 with a modifier does nothing.
+- The key is F7 on a new install (`DEFAULT_CLIP_KEY`). Settings, KEYBINDS changes it (specs/01-CLIENT.md, Settings tabs). It is stored as `Settings::clip_key`, in the format of `ptt_key` ("F7", "Ctrl+F7").
+- The modifiers must match the binding. F7 with Shift does not clip when the key is F7.
 - A held key makes one clip. Auto-repeat does not make more.
-- When push-to-talk is on and its key is F7, F7 stays push-to-talk.
-- F7 is not bindable yet. The listener is `client/src/platform/hotkeys.rs` (`CLIP_KEY`).
+- KEYBINDS refuses a key that push-to-talk uses. When push-to-talk is on and gets the clip key later, the key stays push-to-talk.
+- The clip button shows the key after "CLIP 30S", in a plain box. With no key, the box is not there.
+- The listener is `client/src/platform/hotkeys.rs` (`register_clip`, `clip_key_step`).
 
 ### 3.2 Stream Clip (Future)
 
