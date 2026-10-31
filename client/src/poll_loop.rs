@@ -237,6 +237,11 @@ impl PollState {
                 set_voice_member_speaking(&poll_ctx.app, my_id.as_str(), pressed);
             }
 
+            // --- Clip key (F7) ---
+            while poll_ctx.hotkey_mgr.borrow().poll_clip() {
+                clip_key_pressed(&poll_ctx.app);
+            }
+
             // --- HUD foreground monitor + state push ---
             if poll_ctx.hud_manager.is_enabled() {
                 // Update foreground monitor with current voice state
@@ -330,6 +335,17 @@ impl PollState {
 }
 
 /// Run the action of a tray menu or macOS menu bar item.
+/// The clip key does what the CLIP 30S button does, and only when the
+/// control bar shows that button: in voice, with mic access.
+pub(crate) fn clip_key_pressed(app: &MainWindow) {
+    if app.get_in_voice() && app.get_mic_permission_granted() {
+        log::info!("[hotkeys] clip key: capture a voice clip");
+        app.invoke_clip_captured();
+    } else {
+        log::debug!("[hotkeys] clip key ignored: not in voice or no mic access");
+    }
+}
+
 pub(crate) fn handle_menu_item(poll_ctx: &AppContext, id: &str) {
     match id {
         "tray_open" => {

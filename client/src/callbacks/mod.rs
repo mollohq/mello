@@ -7,7 +7,7 @@ mod game;
 mod games;
 pub(crate) mod onboarding;
 mod sealed;
-mod settings;
+pub(crate) mod settings;
 mod streaming;
 mod voice;
 

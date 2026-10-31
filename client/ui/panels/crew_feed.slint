@@ -6,7 +6,7 @@ import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
-import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue } from "../components/head2head.slint";
+import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue, ChipTipPreview } from "../components/head2head.slint";
 import { BeltSlot, SealedRecap, SealedUi, SealedFmt, Ease, Clock } from "../components/sealed.slint";
 import { SealedStage } from "./sealed_stage.slint";
 import { SealedFixtures } from "../previews/sealed_fixtures.slint";
@@ -810,9 +810,10 @@ component RecapMoved inherits Rectangle {
                     spacing: 0px;
                     // A row past the limit has no height. The 6px gap sits
                     // inside the row, so a hidden row leaves no gap either.
+                    // No clip: the chip's tooltip stands above the row.
                     for b[i] in card.belts-moved: Rectangle {
                       height: i < root.max-belt-rows ? 42px : 0px;
-                      clip: true;
+                      visible: i < root.max-belt-rows;
                       HorizontalLayout {
                         spacing: 6px;
                         padding-bottom: 6px;
@@ -845,6 +846,7 @@ component RecapMoved inherits Rectangle {
                                 dense: true;
                                 hue: H2hHue.of(b.holder-hue);
                                 icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                                tip: SealedUi.hides(b.belt) ? "" : b.stat-line;
                             }
                         }
                       }
@@ -1248,6 +1250,7 @@ component DayBelts inherits HorizontalLayout {
                 dense: true;
                 hue: H2hHue.of(b.holder-hue);
                 icon: b.icon; title: b.title; value: b.value; unit: b.unit;
+                tip: SealedUi.hides(b.belt) ? "" : b.stat-line;
             }
         }
     }
@@ -4257,9 +4260,9 @@ export component PreviewSessionHero inherits Rectangle {
                     { kind: "skid", title: "Roughest patch", name: "Ostkatt", detail: "4-loss skid" },
                 ],
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "h", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Jonas", holder-initials: "Jo", holder-hue: 1 },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Sara", holder-initials: "Sa", holder-hue: 3 },
-                    { title: "Sampler", icon: @image-url("../icons/h2h-sampler.svg"), value: "9", unit: "games", prev-name: "Sara", prev-initials: "Sa", prev-hue: 3, holder-name: "Max", holder-initials: "Ma", holder-hue: 2 },
+                    { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "h", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Jonas", holder-initials: "Jo", holder-hue: 1 },
+                    { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "Bo", prev-hue: 0, holder-name: "Sara", holder-initials: "Sa", holder-hue: 3 },
+                    { title: "Sampler", stat-line: "Most different games in the last 14 days.", icon: @image-url("../icons/h2h-sampler.svg"), value: "9", unit: "games", prev-name: "Sara", prev-initials: "Sa", prev-hue: 3, holder-name: "Max", holder-initials: "Ma", holder-hue: 2 },
                 ],
                 belts-held: [
                     { name: "Max", initials: "Ma", hue: 2, count: 5 },
@@ -4414,10 +4417,10 @@ export component PreviewFeedNewCrew inherits Rectangle {
                     left-name: "bobbyfeedtest1", left-initials: "BO", left-hue-index: 4,
                     // The viewer's own values: their hue, no holder, no held days.
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 4, belt: root.own-carry },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 4, belt: root.own-owl },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 4, belt: root.own-collector },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 4, belt: root.own-locked },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 4, belt: root.own-carry },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 4, belt: root.own-owl },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "5", unit: "installed", hue-index: 4, belt: root.own-collector },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "4.6", unit: "h this week", hue-index: 4, belt: root.own-locked },
                     ],
                 },
             },
@@ -4465,10 +4468,10 @@ export component PreviewFeedFirstFriend inherits Rectangle {
                     right-name: "Jonas", right-initials: "J", right-hue-index: 1,
                     left-score: 4, right-score: 3,
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "14", unit: "installed", hue-index: 1 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "4.6", unit: "h this week", hue-index: 0 },
                     ],
                 },
             },
@@ -4558,10 +4561,10 @@ export component PreviewFeedRecapWide inherits Rectangle {
                     right-name: "Jonas", right-initials: "J", right-hue-index: 1,
                     left-score: 4, right-score: 3,
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h this week", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "14", unit: "installed", hue-index: 1 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "4.6", unit: "h this week", hue-index: 0 },
                     ],
                 },
             },
@@ -4575,9 +4578,9 @@ export component PreviewFeedRecapWide inherits Rectangle {
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: root.carry },
-                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2, belt: root.marathon },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3, belt: root.owl },
+                    { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: root.carry },
+                    { title: "Marathon", stat-line: "Longest single game session.", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2, belt: root.marathon },
+                    { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3, belt: root.owl },
                 ],
                 belts-held: [
                     { name: "Max", initials: "M", hue: 2, count: 4 },
@@ -4675,9 +4678,9 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: root.carry },
-                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2, belt: root.marathon },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3, belt: root.owl },
+                    { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: root.carry },
+                    { title: "Marathon", stat-line: "Longest single game session.", icon: @image-url("../icons/h2h-belt.svg"), value: "3 h 48", unit: "", prev-name: "Sara", prev-initials: "S", prev-hue: 3, holder-name: "Max", holder-initials: "M", holder-hue: 2, belt: root.marathon },
+                    { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3, belt: root.owl },
                 ],
                 belts-held: [
                     { name: "Max", initials: "M", hue: 2, count: 4 },
@@ -4694,17 +4697,17 @@ export component PreviewFeedFiveMembers inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
                         { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", stat-line: "Longest single game session.", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
-                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", stat-line: "Most different games in the last 14 days.", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
                         { name: "Kim", initials: "K", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 2, has-chip: true,
-                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "21", unit: "installed", hue-index: 1 } },
+                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "21", unit: "installed", hue-index: 1 } },
                         { name: "Ola", initials: "O", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 1, them-count: 3, has-chip: true,
-                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "7.2", unit: "h this week", hue-index: 2 } },
+                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "7.2", unit: "h this week", hue-index: 2 } },
                     ],
                 },
             },
@@ -4838,8 +4841,8 @@ export component PreviewFeedProdCases inherits Rectangle {
                     { kind: "game", title: "Old School RuneScape", meta: "2h 40m, stromvap", time: "17:40", members: [strom], more: 0 },
                 ],
                 belts-moved: [
-                    { title: "The Collector", icon: @image-url("../icons/h2h-collector.svg"), value: "9", unit: "installed", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "stromvap", holder-initials: "ST", holder-hue: 3, belt: root.collector },
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "Ostkatt", holder-initials: "OS", holder-hue: 2, belt: root.owl },
+                    { title: "The Collector", stat-line: "Most installed games.", icon: @image-url("../icons/h2h-collector.svg"), value: "9", unit: "installed", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "stromvap", holder-initials: "ST", holder-hue: 3, belt: root.collector },
+                    { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "bObben", prev-initials: "BO", prev-hue: 1, holder-name: "Ostkatt", holder-initials: "OS", holder-hue: 2, belt: root.owl },
                 ],
             },
             {
@@ -4890,17 +4893,17 @@ export component PreviewFeedTwentyMembers inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days", belt: root.carry } },
                         { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:40", unit: "", hue-index: 3, held-days: 1, held-label: "held 1 day", belt: root.owl } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", stat-line: "Longest single game session.", value: "4 h 05", unit: "", hue-index: 2, belt: root.marathon } },
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 3, has-chip: true,
-                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
+                          chip: { id: "sampler", icon: @image-url("../icons/h2h-sampler.svg"), title: "Sampler", stat-line: "Most different games in the last 14 days.", value: "9", unit: "games", hue-index: 4, held-days: 3, held-label: "held 3 days" } },
                         { name: "Kim", initials: "K", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 2, has-chip: true,
-                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "21", unit: "installed", hue-index: 1 } },
+                          chip: { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "21", unit: "installed", hue-index: 1 } },
                         { name: "Ola", initials: "O", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 1, them-count: 3, has-chip: true,
-                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "7.2", unit: "h this week", hue-index: 2 } },
+                          chip: { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "7.2", unit: "h this week", hue-index: 2 } },
                     ],
                 },
             },
@@ -4948,7 +4951,7 @@ export component PreviewMemoryRecaps inherits Rectangle {
                 game-name: "Counter-Strike 2", game-monogram: "CS", game-hue-index: 0,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-1.png"),
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: { key: "", sealed: false } },
+                    { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1, belt: { key: "", sealed: false } },
                 ],
                 belts-held: [
                     { name: "Max", initials: "M", hue: 2, count: 4 },
@@ -5058,7 +5061,7 @@ export component PreviewFeedLiveStreamSolo inherits Rectangle {
                     variant: "wide", member-count: 1, open-seats: 4,
                     left-name: "b0bben", left-initials: "B0", left-hue-index: 0,
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 0 },
                     ],
                 },
             },
@@ -5144,10 +5147,10 @@ export component PreviewFeedAfterOneSession inherits Rectangle {
                     variant: "wide", member-count: 1, open-seats: 4,
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     chips: [
-                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,168", unit: "h", hue-index: 0 },
-                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
-                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "6.0", unit: "h this week", hue-index: 0 },
+                        { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,168", unit: "h", hue-index: 0 },
+                        { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                        { id: "the_collector", icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "5", unit: "installed", hue-index: 0 },
+                        { id: "locked_in", icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "6.0", unit: "h this week", hue-index: 0 },
                     ],
                 },
             },
@@ -5218,9 +5221,9 @@ export component PreviewFeedThreeMembers inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,171", unit: "h", hue-index: 0 } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,171", unit: "h", hue-index: 0 } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2 } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", stat-line: "Longest single game session.", value: "4 h 05", unit: "", hue-index: 2 } },
                     ],
                 },
             },
@@ -5299,11 +5302,11 @@ export component PreviewFeedQuiet inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days" } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,201", unit: "h", hue-index: 1, held-days: 9, held-label: "held 9 days" } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, held-days: 9, held-label: "held 9 days" } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", stat-line: "Longest single game session.", value: "4 h 05", unit: "", hue-index: 2, held-days: 9, held-label: "held 9 days" } },
                         { name: "Sara", initials: "S", hue-index: 3, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:40", unit: "", hue-index: 3, held-days: 2, held-label: "held 2 days" } },
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:40", unit: "", hue-index: 3, held-days: 2, held-label: "held 2 days" } },
                     ],
                 },
             },
@@ -5313,7 +5316,7 @@ export component PreviewFeedQuiet inherits Rectangle {
                 game-name: "Valorant", game-monogram: "VA", game-hue-index: 3,
                 day-members: [sara],
                 belts-moved: [
-                    { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
+                    { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
                 ],
             },
             {
@@ -5384,11 +5387,11 @@ export component PreviewFeedDormant inherits Rectangle {
                     left-name: "Bob", left-initials: "B", left-hue-index: 0,
                     pairs: [
                         { name: "Leo", initials: "L", hue-index: 4, you-initials: "B", you-hue-index: 0, you-count: 3, them-count: 4, has-chip: true,
-                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,172", unit: "h", hue-index: 4, held-days: 24, held-label: "held 24 days" } },
+                          chip: { id: "the_carry", icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,172", unit: "h", hue-index: 4, held-days: 24, held-label: "held 24 days" } },
                         { name: "Max", initials: "M", hue-index: 2, you-initials: "B", you-hue-index: 0, you-count: 4, them-count: 3, has-chip: true,
-                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", value: "4 h 05", unit: "", hue-index: 2, held-days: 24, held-label: "held 24 days" } },
+                          chip: { id: "marathon", icon: @image-url("../icons/h2h-belt.svg"), title: "Marathon", stat-line: "Longest single game session.", value: "4 h 05", unit: "", hue-index: 2, held-days: 24, held-label: "held 24 days" } },
                         { name: "Jonas", initials: "J", hue-index: 1, you-initials: "B", you-hue-index: 0, you-count: 2, them-count: 5, has-chip: true,
-                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:22", unit: "", hue-index: 1, held-days: 24, held-label: "held 24 days" } },
+                          chip: { id: "night_owl", icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:22", unit: "", hue-index: 1, held-days: 24, held-label: "held 24 days" } },
                     ],
                 },
             },
@@ -5401,8 +5404,8 @@ export component PreviewFeedDormant inherits Rectangle {
                 game-name: "Rocket League", game-monogram: "RL", game-hue-index: 1,
                 game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
                 belts-moved: [
-                    { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,172", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Leo", holder-initials: "L", holder-hue: 4 },
-                    { title: "Marathon", icon: @image-url("../icons/h2h-belt.svg"), value: "4 h 05", unit: "", prev-name: "Max", prev-initials: "M", prev-hue: 2, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
+                    { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,172", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Leo", holder-initials: "L", holder-hue: 4 },
+                    { title: "Marathon", stat-line: "Longest single game session.", icon: @image-url("../icons/h2h-belt.svg"), value: "4 h 05", unit: "", prev-name: "Max", prev-initials: "M", prev-hue: 2, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
                 ],
                 belts-held: [
                     { name: "Jonas", initials: "J", hue: 1, count: 4 },
@@ -5457,10 +5460,32 @@ export component PreviewDailyRecap inherits Rectangle {
         game-has-capsule: true, game-capsule: @image-url("../previews/fixtures/capsule-sample-2.png"),
         day-members: [bob, jonas, max],
         belts-moved: [
-            { title: "The Carry", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
-            { title: "Night Owl", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
+            { title: "The Carry", stat-line: "Most hours in the top shared game.", icon: @image-url("../icons/h2h-carry.svg"), value: "4,201", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Jonas", holder-initials: "J", holder-hue: 1 },
+            { title: "Night Owl", stat-line: "Latest local time of a last session.", icon: @image-url("../icons/h2h-night-owl.svg"), value: "03:40", unit: "", prev-name: "Bob", prev-initials: "B", prev-hue: 0, holder-name: "Sara", holder-initials: "S", holder-hue: 3 },
         ],
     };
     DailyRecapCard { x: 20px; y: 10px; width: 378px; height: 232px; card: root.day; }
     DailyRecapCard { x: 420px; y: 10px; width: 260px; height: 232px; card: root.day; }
+}
+
+/// The pointer on an opened belt: The Carry explains itself, in the pair row
+/// and in the recap.
+export component PreviewBeltTip inherits PreviewFeedFiveMembers {
+    init => {
+        ChipTipPreview.title = "The Carry";
+    }
+}
+
+/// The longest sentence, on a chip in the right column of the pairs card.
+export component PreviewBeltTipLong inherits PreviewFeedFiveMembers {
+    init => {
+        ChipTipPreview.title = "Locked In";
+    }
+}
+
+/// The pointer on a belt that moved, in the weekly recap.
+export component PreviewBeltTipRecap inherits PreviewFeedFiveMembers {
+    init => {
+        ChipTipPreview.title = "Marathon";
+    }
 }
