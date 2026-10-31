@@ -223,6 +223,23 @@ impl PollState {
                 handle_menu_item(poll_ctx, event.id().as_ref());
             }
 
+            // --- Linux tray (StatusNotifierItem): the same menu ids ---
+            #[cfg(target_os = "linux")]
+            {
+                let ids = poll_ctx.status_item.borrow().poll_linux();
+                for id in ids {
+                    if id == platform::linux_tray::TOGGLE_WINDOW {
+                        if poll_ctx.app.window().is_visible() {
+                            poll_ctx.app.hide().ok();
+                        } else {
+                            poll_ctx.app.show().ok();
+                        }
+                    } else {
+                        handle_menu_item(poll_ctx, &id);
+                    }
+                }
+            }
+
             // --- PTT hotkey events ---
             while let Some(event) = poll_ctx.hotkey_mgr.borrow().poll() {
                 let pressed = event == platform::hotkeys::PttEvent::Pressed;

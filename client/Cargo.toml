@@ -105,6 +105,18 @@ i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
 [target.'cfg(target_os = "linux")'.dependencies]
 # Renderer selection (updater/startup_update.rs): Skia's CPU rasterizer.
 i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
+# The tray as a StatusNotifierItem (platform/linux_tray.rs). tray-icon builds
+# its Linux menu with GTK, which needs a GTK main loop the client does not run.
+# async-io, not tokio: ksni's tokio feature turns on zbus's tokio mode for the
+# whole binary, and then every zbus user outside a tokio runtime (notify-rust,
+# rfd) panics with "there is no reactor running" (2026-10-31).
+ksni = { version = "0.3.7", default-features = false, features = ["async-io", "blocking"] }
+# The GlobalShortcuts portal for push-to-talk on Wayland
+# (platform/linux_shortcuts.rs). 0.11.1 with async-std: the version and the
+# runtime feature rfd already uses (ashpd refuses tokio and async-std at once).
+ashpd = { version = "0.11.1", default-features = false, features = ["async-std"] }
+# StreamExt for the portal's signal streams. Already in the tree (zbus, rfd).
+futures-util = "0.3"
 
 [features]
 default = ["development"]

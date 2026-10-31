@@ -6,6 +6,10 @@ pub mod hang_dump;
 pub mod hotkeys;
 #[cfg(target_os = "linux")]
 pub mod linux_desktop;
+#[cfg(target_os = "linux")]
+pub mod linux_shortcuts;
+#[cfg(target_os = "linux")]
+pub mod linux_tray;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]
@@ -13,8 +17,12 @@ pub mod macos_url_events;
 #[cfg(target_os = "windows")]
 pub mod taskbar_toolbar;
 
-use tray_icon::menu::{CheckMenuItem, Menu, MenuId, MenuItem, PredefinedMenuItem};
-use tray_icon::{Icon, TrayIcon, TrayIconBuilder, TrayIconEvent};
+use tray_icon::menu::{CheckMenuItem, Menu, MenuItem};
+#[cfg(not(target_os = "linux"))]
+use tray_icon::menu::{MenuId, PredefinedMenuItem};
+#[cfg(not(target_os = "linux"))]
+use tray_icon::TrayIconBuilder;
+use tray_icon::{Icon, TrayIcon, TrayIconEvent};
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub enum VoiceState {
@@ -27,6 +35,8 @@ pub enum VoiceState {
 /// Native tray handles. Absent when the tray could not be created, or when
 /// running headless (tests, CI) — the surrounding `StatusItem` degrades to
 /// no-ops rather than forcing every caller to handle an `Option`.
+/// Linux uses `linux_tray` instead.
+#[cfg_attr(target_os = "linux", allow(dead_code))]
 struct TrayHandles {
     _tray: TrayIcon,
     _menu: Menu,
@@ -36,7 +46,10 @@ struct TrayHandles {
 
 pub struct StatusItem {
     tray: Option<TrayHandles>,
+    #[cfg(target_os = "linux")]
+    linux: Option<linux_tray::LinuxTray>,
     current_state: VoiceState,
+    muted: bool,
 }
 
 impl StatusItem {
@@ -48,19 +61,27 @@ impl StatusItem {
     pub fn disabled() -> Self {
         Self {
             tray: None,
+            #[cfg(target_os = "linux")]
+            linux: None,
             current_state: VoiceState::Inactive,
+            muted: false,
         }
     }
 
+    /// Linux: a StatusNotifierItem (`linux_tray`). tray-icon 0.21 builds its
+    /// Linux menu with GTK, which needs a GTK main loop the client does not
+    /// run; its menu constructor panicked.
+    #[cfg(target_os = "linux")]
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        // tray-icon 0.21 builds its Linux menu with GTK. GTK must be
-        // initialised, and its main loop must run on the thread that owns the
-        // tray. The client runs neither, so the menu constructor panics. Linux
-        // runs without a tray until it gets a StatusNotifierItem tray.
-        if cfg!(target_os = "linux") {
-            return Err("no tray on Linux yet (needs the StatusNotifierItem tray)".into());
-        }
+        let linux = linux_tray::LinuxTray::spawn(VoiceState::Inactive)?;
+        Ok(Self {
+            linux: Some(linux),
+            ..Self::disabled()
+        })
+    }
 
+    #[cfg(not(target_os = "linux"))]
+    pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
         let icon = Self::render_icon(VoiceState::Inactive);
 
         let menu = Menu::new();
@@ -102,13 +123,28 @@ impl StatusItem {
                 leave_item,
             }),
             current_state: VoiceState::Inactive,
+            muted: false,
         })
     }
 
     /// True when a native tray icon exists. Without one, hiding the window
     /// would leave the user no way to bring it back.
     pub fn is_present(&self) -> bool {
+        #[cfg(target_os = "linux")]
+        if let Some(linux) = self.linux.as_ref() {
+            // A StatusNotifierItem without a host (GNOME without the
+            // AppIndicator extension) is not on screen.
+            return linux.is_shown();
+        }
         self.tray.is_some()
+    }
+
+    /// Linux: the tray menu ids since the last call, for
+    /// `poll_loop::handle_menu_item` (and `linux_tray::TOGGLE_WINDOW` for a
+    /// click on the icon). UI thread.
+    #[cfg(target_os = "linux")]
+    pub fn poll_linux(&self) -> Vec<String> {
+        self.linux.as_ref().map(|l| l.poll()).unwrap_or_default()
     }
 
     pub fn set_voice_state(&mut self, state: VoiceState) {
@@ -116,6 +152,12 @@ impl StatusItem {
             return;
         }
         self.current_state = state;
+        self.muted = matches!(state, VoiceState::Muted);
+
+        #[cfg(target_os = "linux")]
+        if let Some(linux) = self.linux.as_ref() {
+            linux.set_state(state, self.muted);
+        }
 
         let Some(tray) = self.tray.as_ref() else {
             return;
@@ -133,6 +175,11 @@ impl StatusItem {
     }
 
     pub fn set_mute_checked(&mut self, muted: bool) {
+        self.muted = muted;
+        #[cfg(target_os = "linux")]
+        if let Some(linux) = self.linux.as_ref() {
+            linux.set_muted(muted);
+        }
         if let Some(tray) = self.tray.as_ref() {
             tray.mute_item.set_checked(muted);
         }
@@ -144,36 +191,43 @@ impl StatusItem {
     }
 
     fn render_icon(state: VoiceState) -> Icon {
-        let (r, g, b, a): (u8, u8, u8, u8) = match state {
-            VoiceState::Inactive => (255, 255, 255, 153), // white 60%
-            VoiceState::Connected => (255, 255, 255, 255), // white 100%
-            VoiceState::Speaking => (68, 204, 68, 255),   // green
-            VoiceState::Muted => (255, 68, 68, 255),      // red
-        };
+        let (rgba, size) = state_icon_rgba(state);
+        Icon::from_rgba(rgba, size, size).expect("icon render failed")
+    }
+}
 
-        // Rasterise a filled circle into a 22x22 RGBA buffer
-        let size = 22usize;
-        let cx = (size / 2) as f32;
-        let cy = (size / 2) as f32;
-        let radius = 7.0f32;
-        let mut rgba = vec![0u8; size * size * 4];
+/// The tray icon of a voice state: a filled circle in a 22x22 RGBA buffer.
+/// Returns the pixels and the side length.
+fn state_icon_rgba(state: VoiceState) -> (Vec<u8>, u32) {
+    let (r, g, b, a): (u8, u8, u8, u8) = match state {
+        VoiceState::Inactive => (255, 255, 255, 153), // white 60%
+        VoiceState::Connected => (255, 255, 255, 255), // white 100%
+        VoiceState::Speaking => (68, 204, 68, 255),   // green
+        VoiceState::Muted => (255, 68, 68, 255),      // red
+    };
 
-        for py in 0..size {
-            for px in 0..size {
-                let dx = px as f32 - cx;
-                let dy = py as f32 - cy;
-                if dx * dx + dy * dy <= radius * radius {
-                    let i = (py * size + px) * 4;
-                    rgba[i] = r;
-                    rgba[i + 1] = g;
-                    rgba[i + 2] = b;
-                    rgba[i + 3] = a;
-                }
+    // Rasterise a filled circle into a 22x22 RGBA buffer
+    let size = 22usize;
+    let cx = (size / 2) as f32;
+    let cy = (size / 2) as f32;
+    let radius = 7.0f32;
+    let mut rgba = vec![0u8; size * size * 4];
+
+    for py in 0..size {
+        for px in 0..size {
+            let dx = px as f32 - cx;
+            let dy = py as f32 - cy;
+            if dx * dx + dy * dy <= radius * radius {
+                let i = (py * size + px) * 4;
+                rgba[i] = r;
+                rgba[i + 1] = g;
+                rgba[i + 2] = b;
+                rgba[i + 3] = a;
             }
         }
-
-        Icon::from_rgba(rgba, size as u32, size as u32).expect("icon render failed")
     }
+
+    (rgba, size as u32)
 }
 
 /// Bring the main Mello window to the foreground on Windows.
@@ -221,9 +275,15 @@ mod tests {
         assert!(!StatusItem::disabled().is_present());
     }
 
+    /// Without a session bus or a StatusNotifierWatcher (CI, GNOME without
+    /// the extension) the tray does not start and close must not hide the
+    /// window. With a watcher, the started tray is on screen.
     #[cfg(target_os = "linux")]
     #[test]
-    fn linux_reports_no_tray_instead_of_panicking() {
-        assert!(StatusItem::new().is_err());
+    fn linux_tray_is_present_exactly_when_it_started() {
+        match StatusItem::new() {
+            Ok(item) => assert!(item.is_present()),
+            Err(_) => assert!(!StatusItem::disabled().is_present()),
+        }
     }
 }
