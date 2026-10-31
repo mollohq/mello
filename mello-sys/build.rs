@@ -224,12 +224,18 @@ fn main() {
             }
         }
         _ => {
-            let so = "libonnxruntime.so";
-            let src = ort_lib.join(so);
-            if src.exists() {
-                let _ = std::fs::copy(&src, target_dir.join(so));
-                if let Some(parent) = target_dir.parent() {
-                    let _ = std::fs::copy(&src, parent.join(so));
+            // Copy every libonnxruntime.so name (the file and its symlinks).
+            // Binaries ask for the soname, libonnxruntime.so.1, not the bare
+            // libonnxruntime.so link.
+            if let Ok(entries) = std::fs::read_dir(&ort_lib) {
+                for entry in entries.filter_map(|e| e.ok()) {
+                    let name = entry.file_name();
+                    if name.to_string_lossy().starts_with("libonnxruntime.so") {
+                        let _ = copy_file_or_symlink(&entry.path(), &target_dir.join(&name));
+                        if let Some(parent) = target_dir.parent() {
+                            let _ = copy_file_or_symlink(&entry.path(), &parent.join(&name));
+                        }
+                    }
                 }
             }
         }

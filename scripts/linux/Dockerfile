@@ -30,8 +30,11 @@ RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 \
     && update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-12 120
 
 ENV RUSTUP_HOME=/usr/local/rustup CARGO_HOME=/usr/local/cargo PATH=/usr/local/cargo/bin:$PATH
+# Pinned to the toolchain on the developer Mac: a newer clippy brings new
+# lints, and check.sh must give the same answer here as there.
+ARG RUST_VERSION=1.94.0
 RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
-        --default-toolchain stable --component rustfmt,clippy \
+        --default-toolchain "$RUST_VERSION" --component rustfmt,clippy \
     && rustc --version
 
 # Velopack packaging: vpk runs on .NET 8 and builds the AppImage with
@@ -49,4 +52,3 @@ ENV PATH=/opt/vpk:$PATH DOTNET_CLI_TELEMETRY_OPTOUT=1
 RUN apt-get update && apt-get install -y --no-install-recommends xvfb xauth \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /src

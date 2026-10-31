@@ -98,3 +98,5 @@ benchmarks/clips/
 
 # Linux build output (scripts/linux-build.sh)
 dist-linux/
+# vcpkg binary cache of the Linux build container
+external/vcpkg-cache/
