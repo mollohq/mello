@@ -43,6 +43,13 @@ Good for capturing funny conversations, heated arguments, singing, whatever happ
 
 **Requires:** An active voice session. The client maintains a rolling disk buffer of mixed audio output.
 
+**Hotkey:** F7 captures a voice clip from any app, a game included. It does what the clip button does, and only when the clip button shows: in voice, with microphone access.
+
+- A press of F7 with a modifier does nothing.
+- A held key makes one clip. Auto-repeat does not make more.
+- When push-to-talk is on and its key is F7, F7 stays push-to-talk.
+- F7 is not bindable yet. The listener is `client/src/platform/hotkeys.rs` (`CLIP_KEY`).
+
 ### 3.2 Stream Clip (Future)
 
 Captured by a viewer while watching a crew member's stream. Contains:
@@ -122,7 +129,7 @@ Not needed for v1. Becomes essential when share export ships.
 v1 is quick clip only. No trim UI. User taps the clip button, last 30 seconds are grabbed immediately.
 
 ```
-User taps clip button (scissors icon, bottom bar)
+User taps clip button (scissors icon, bottom bar) or presses F7
     │
     ▼
 Client reads last 30 seconds from disk buffer

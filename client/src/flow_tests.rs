@@ -3691,6 +3691,41 @@ fn the_control_bar_ends_the_stream_while_you_host() {
     );
 }
 
+/// F7 clips the voice, as the CLIP 30S button does, and only when the bar
+/// shows that button: in voice, with mic access.
+#[test]
+fn the_clip_key_captures_a_voice_clip_only_in_voice() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let capture = |cmds: &[Command]| {
+        cmds.iter()
+            .filter(|c| matches!(c, Command::CaptureClip { .. }))
+            .count()
+    };
+
+    h.app().set_in_voice(false);
+    let _ = h.commands();
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(
+        capture(&h.commands()),
+        0,
+        "out of voice the key does nothing"
+    );
+
+    h.app().set_in_voice(true);
+    h.app().set_mic_permission_granted(false);
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(
+        capture(&h.commands()),
+        0,
+        "without mic access the key does nothing"
+    );
+
+    h.app().set_mic_permission_granted(true);
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(capture(&h.commands()), 1);
+}
+
 /// Hangup must change the screen on click, before the core answers.
 #[test]
 fn hangup_click_updates_ui_before_core_confirms() {
