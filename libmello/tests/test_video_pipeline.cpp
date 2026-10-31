@@ -748,6 +748,15 @@ private:
     }
 };
 
+// True where Encoder has an encode entry point. Linux has none until its
+// VA-API and NVENC encoders exist; there encode_once() cannot encode, and a
+// test that waits for an encode would wait forever.
+#if defined(_WIN32) || defined(__APPLE__)
+constexpr bool kHasEncodeEntry = true;
+#else
+constexpr bool kHasEncodeEntry = false;
+#endif
+
 // One encode through the control with the platform's arguments: a texture on
 // Windows, a pixel buffer and its capture time on Apple (encoder_control.hpp).
 bool encode_once(EncoderControl& control, EncodedPacket& packet) {
@@ -765,6 +774,7 @@ bool encode_once(EncoderControl& control, EncodedPacket& packet) {
 } // namespace
 
 TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
+    if (!kHasEncodeEntry) GTEST_SKIP() << "no encoder entry point on this platform yet";
     TornStateEncoder encoder;
     EncoderControl control;
     control.attach(&encoder);
@@ -801,6 +811,7 @@ TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
 // A setter must never wait for an encode: an encode can be stuck in the display
 // driver for minutes (2026-09-16), and the caller is a Rust stream thread.
 TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
+    if (!kHasEncodeEntry) GTEST_SKIP() << "no encoder entry point on this platform yet";
     TornStateEncoder encoder;
     EncoderControl control;
     control.attach(&encoder);

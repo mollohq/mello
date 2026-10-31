@@ -300,6 +300,17 @@ elseif(APPLE)
         src/audio/clip_encoder_audiotoolbox.cpp
         src/audio/mic_permission_macos.mm
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # PipeWire capture, playback and device list. No microphone permission on
+    # Linux outside a sandbox, so the permission stub answers "granted".
+    list(APPEND MELLO_SOURCES
+        src/audio/pipewire_stream.cpp
+        src/audio/capture_pipewire.cpp
+        src/audio/playback_pipewire.cpp
+        src/audio/audio_backend_pipewire.cpp
+        src/audio/device_enumerator_pipewire.cpp
+        src/audio/mic_permission_stub.cpp
+    )
 else()
     list(APPEND MELLO_SOURCES
         src/audio/audio_backend_stub.cpp
@@ -444,6 +455,14 @@ if(MELLO_WEBRTC_GOOG_CC)
     target_link_libraries(mello PUBLIC webrtc_goog_cc)
 else()
     target_sources(mello PRIVATE src/transport/goog_cc_controller.cpp)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The Linux audio backend. Linked from the system: every target
+    # distribution ships libpipewire-0.3.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    target_link_libraries(mello PUBLIC PkgConfig::PIPEWIRE)
 endif()
 
 if(WIN32)

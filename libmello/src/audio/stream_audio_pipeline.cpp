@@ -49,12 +49,13 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
     stop();
 
 #if !defined(_WIN32) && !defined(__APPLE__)
-    (void)callback;
-    (void)capture_pid;
-    (void)external_source;
-    MELLO_LOG_WARN("stream_audio", "host pipeline not implemented on this platform");
-    return false;
-#else
+    // No native game audio capture here yet. An external source (PCM fed
+    // through feed_float_pcm, as on macOS) drives the same encode path.
+    if (!external_source) {
+        MELLO_LOG_WARN("stream_audio", "no game audio capture on this platform yet");
+        return false;
+    }
+#endif
 
 #ifdef _WIN32
     if (!external_source) {
@@ -125,7 +126,6 @@ bool StreamAudioHostPipeline::start(PacketCallback callback, uint32_t capture_pi
     MELLO_LOG_INFO("stream_audio", "host pipeline started (%s, in-band FEC on)",
                    external_source ? "external source" : "own capture");
     return true;
-#endif
 }
 
 void StreamAudioHostPipeline::stop() {

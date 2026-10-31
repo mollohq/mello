@@ -57,6 +57,9 @@ case "$(uname -s)" in
     Darwin)
         ARCH_ARGS="-DVCPKG_TARGET_TRIPLET=arm64-osx -DVCPKG_HOST_TRIPLET=arm64-osx -DCMAKE_OSX_ARCHITECTURES=arm64 -DCMAKE_OSX_DEPLOYMENT_TARGET=15.0"
         ;;
+    Linux)
+        ARCH_ARGS="-DVCPKG_TARGET_TRIPLET=x64-linux"
+        ;;
     *)
         ARCH_ARGS="-DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
         ;;

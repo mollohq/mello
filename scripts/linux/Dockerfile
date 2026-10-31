@@ -10,7 +10,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # vcpkg, libmello (CMake, C++20 island needs GCC 12), bindgen (libclang),
 # Skia and winit (fontconfig, freetype, X11, Wayland, EGL), the client crates
 # (OpenSSL for native-tls, D-Bus for the keyring, GTK and appindicator for the
-# tray and file dialog, Xtst for rdev). rsync copies the source in.
+# tray and file dialog, Xtst for rdev, PipeWire for audio). rsync copies the
+# source in.
 RUN apt-get update && apt-get install -y --no-install-recommends \
         build-essential gcc-12 g++-12 cmake ninja-build pkg-config \
         curl ca-certificates zip unzip tar git perl python3 \
@@ -22,6 +23,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         libwayland-dev libegl-dev libgl-dev \
         libssl-dev libdbus-1-dev \
         libgtk-3-dev libayatana-appindicator3-dev \
+        libpipewire-0.3-dev \
     && rm -rf /var/lib/apt/lists/*
 
 RUN update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 \

@@ -1,4 +1,4 @@
-#if !defined(_WIN32) && !defined(__APPLE__)
+#if !defined(_WIN32) && !defined(__APPLE__) && !defined(__linux__)
 #include "audio_capture.hpp"
 #include "audio_playback.hpp"
 #include "audio_backend_test.hpp"
