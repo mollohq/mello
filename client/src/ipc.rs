@@ -5,10 +5,29 @@ pub fn endpoint_name(lock_name: &str) -> String {
     if cfg!(target_os = "windows") {
         format!(r"\\.\pipe\{}", lock_name)
     } else {
-        std::env::temp_dir()
-            .join(format!("{}.sock", lock_name))
-            .to_string_lossy()
-            .to_string()
+        socket_dir(
+            cfg!(target_os = "linux"),
+            std::env::var_os("XDG_RUNTIME_DIR"),
+            std::env::temp_dir(),
+        )
+        .join(format!("{}.sock", lock_name))
+        .to_string_lossy()
+        .to_string()
+    }
+}
+
+/// The folder of the socket. Linux: `$XDG_RUNTIME_DIR`, which only the user
+/// can open (mode 0700). `/tmp` is shared by every user, so another account
+/// could connect and hand the app a link. macOS: the temp folder, which is
+/// per user already.
+fn socket_dir(
+    linux: bool,
+    xdg_runtime_dir: Option<std::ffi::OsString>,
+    temp_dir: std::path::PathBuf,
+) -> std::path::PathBuf {
+    match xdg_runtime_dir.filter(|d| linux && !d.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => temp_dir,
     }
 }
 
@@ -320,6 +339,22 @@ mod tests {
         }
         let name = endpoint_name("app.mello.desktop");
         assert!(name.ends_with("app.mello.desktop.sock"));
+    }
+
+    #[test]
+    fn linux_puts_the_socket_in_the_user_runtime_dir() {
+        let tmp = std::path::PathBuf::from("/tmp");
+        assert_eq!(
+            socket_dir(true, Some("/run/user/1000".into()), tmp.clone()),
+            std::path::PathBuf::from("/run/user/1000")
+        );
+        // Without a runtime dir, or off Linux, the temp folder.
+        assert_eq!(socket_dir(true, None, tmp.clone()), tmp);
+        assert_eq!(socket_dir(true, Some("".into()), tmp.clone()), tmp);
+        assert_eq!(
+            socket_dir(false, Some("/run/user/1000".into()), tmp.clone()),
+            tmp
+        );
     }
 
     #[test]

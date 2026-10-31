@@ -45,6 +45,16 @@ pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error
             builder = builder.with_default_menu_bar(false);
         }
 
+        // Linux: the app ID on every window (Wayland app_id, X11 WM_CLASS), so
+        // the desktop matches the window to its desktop entry and icon.
+        #[cfg(target_os = "linux")]
+        {
+            use i_slint_backend_winit::winit::platform::wayland::WindowAttributesExtWayland;
+            builder = builder.with_window_attributes_hook(|attributes| {
+                attributes.with_name(crate::LINUX_APP_ID, crate::LINUX_APP_ID)
+            });
+        }
+
         slint::platform::set_platform(Box::new(builder.build()?))?;
     }
 

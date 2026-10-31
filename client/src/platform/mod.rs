@@ -4,6 +4,8 @@ pub mod exe_icon;
 #[cfg(target_os = "windows")]
 pub mod hang_dump;
 pub mod hotkeys;
+#[cfg(target_os = "linux")]
+pub mod linux_desktop;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "macos")]

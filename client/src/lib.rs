@@ -65,6 +65,14 @@ mod voice_state;
 
 pub const APP_NAME: &str = "m3llo";
 
+/// The app ID on Linux: the Wayland app_id and X11 WM_CLASS of every window,
+/// and the file name of the desktop entry (`platform::linux_desktop`). The
+/// desktop matches the window to its entry, name and icon by this string.
+/// Windows and macOS keep `app.mello.desktop`. Flathub rejects an ID that ends
+/// in `.desktop`, so Linux has its own.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const LINUX_APP_ID: &str = "app.m3llo.M3llo";
+
 slint::include_modules!();
 
 use mello_core::{Client, Command, Config, Event, FrameLifecycleSlot, FRAME_STATE_PRESENTED};
@@ -266,6 +274,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+
+    // The menu entry, icon and mello:// handler of the AppImage. First
+    // instance only: a relaying second instance exits above.
+    #[cfg(target_os = "linux")]
+    platform::linux_desktop::register();
 
     // macOS sends a mello:// link as an Apple Event, not in argv. Before any
     // Slint code: the event of a cold start arrives while the app finishes

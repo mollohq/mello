@@ -2,8 +2,19 @@ use auto_launch::AutoLaunchBuilder;
 
 use crate::APP_NAME;
 
+/// The program that autostart runs. An AppImage runs from a temporary mount
+/// that changes on every start, so on Linux autostart names the AppImage file
+/// (`$APPIMAGE`), which Velopack updates in place.
+fn app_path() -> std::path::PathBuf {
+    #[cfg(target_os = "linux")]
+    if let Some(appimage) = std::env::var_os("APPIMAGE").filter(|p| !p.is_empty()) {
+        return std::path::PathBuf::from(appimage);
+    }
+    std::env::current_exe().unwrap_or_default()
+}
+
 fn build_auto_launch() -> auto_launch::AutoLaunch {
-    let app_path = std::env::current_exe().unwrap_or_default();
+    let app_path = app_path();
     AutoLaunchBuilder::new()
         .set_app_name(APP_NAME)
         .set_app_path(app_path.to_str().unwrap_or(""))
