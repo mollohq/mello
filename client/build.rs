@@ -21,6 +21,11 @@ fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
 
+    // Linux: $ORIGIN, so the binary finds libonnxruntime.so next to itself
+    // (in the AppImage and in target/release/).
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
     #[cfg(target_os = "windows")]
     {
         let mut res = winresource::WindowsResource::new();

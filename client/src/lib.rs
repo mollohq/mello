@@ -454,8 +454,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     {
         let window_ref = app.as_weak();
         let s = settings.clone();
+        let tray = status_item.clone();
         app.window().on_close_requested(move || {
-            if s.borrow().close_to_tray {
+            // Hide to the tray only when a tray exists to bring the window
+            // back. Without one (no tray on Linux yet, or tray creation
+            // failed) a hidden window is lost, so close quits instead.
+            if s.borrow().close_to_tray && tray.borrow().is_present() {
                 if let Some(w) = window_ref.upgrade() {
                     w.hide().ok();
                 }

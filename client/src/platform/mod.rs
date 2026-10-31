@@ -51,6 +51,14 @@ impl StatusItem {
     }
 
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
+        // tray-icon 0.21 builds its Linux menu with GTK. GTK must be
+        // initialised, and its main loop must run on the thread that owns the
+        // tray. The client runs neither, so the menu constructor panics. Linux
+        // runs without a tray until it gets a StatusNotifierItem tray.
+        if cfg!(target_os = "linux") {
+            return Err("no tray on Linux yet (needs the StatusNotifierItem tray)".into());
+        }
+
         let icon = Self::render_icon(VoiceState::Inactive);
 
         let menu = Menu::new();
@@ -93,6 +101,12 @@ impl StatusItem {
             }),
             current_state: VoiceState::Inactive,
         })
+    }
+
+    /// True when a native tray icon exists. Without one, hiding the window
+    /// would leave the user no way to bring it back.
+    pub fn is_present(&self) -> bool {
+        self.tray.is_some()
     }
 
     pub fn set_voice_state(&mut self, state: VoiceState) {
@@ -193,5 +207,21 @@ pub fn bring_main_window_to_front() {
                 let _ = AttachThreadInput(our_thread, fg_thread, false);
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_disabled_status_item_has_no_tray() {
+        assert!(!StatusItem::disabled().is_present());
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_reports_no_tray_instead_of_panicking() {
+        assert!(StatusItem::new().is_err());
     }
 }

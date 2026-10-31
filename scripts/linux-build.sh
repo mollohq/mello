@@ -10,14 +10,15 @@
 #   scripts/linux-build.sh                  cargo build --release (production client)
 #   scripts/linux-build.sh check --workspace
 #   scripts/linux-build.sh shell            an interactive shell in the container
+#   scripts/linux-build.sh exec CMD ARGS    run CMD in /src in the container
 #
 # `cargo fetch` runs first: client/build_notices.rs calls `cargo tree --offline`
 # for every platform, so the crates of every target must be in the cache.
 #
-# Four parallel jobs by default: with eight, the test build of mello-client
-# ran out of memory in a Docker VM with 7.65 GB. CARGO_BUILD_JOBS overrides it.
-# Debug builds carry no debug info here (CARGO_PROFILE_DEV_DEBUG=0) for the
-# same reason: one rustc on the Slint-generated client code needs most of it.
+# Memory: one rustc on the Slint-generated client code needs more than the
+# 8 GB of a default Docker Desktop VM under Rosetta. Give Docker 24 GB
+# (Settings, Resources). Six parallel jobs by default; CARGO_BUILD_JOBS
+# overrides it.
 #
 # Build output stays in the m3llo-linux-target volume. /dist in the container
 # is dist-linux/ in this checkout, for files that must leave the container.
@@ -61,7 +62,6 @@ exec docker run --rm ${TTY[@]+"${TTY[@]}"} --platform linux/amd64 \
     -v m3llo-linux-vcpkg:/src/external/vcpkg-cache \
     -v m3llo-linux-cargo:/usr/local/cargo/registry \
     -e CI=true \
-    -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-4}" \
-    -e CARGO_PROFILE_DEV_DEBUG="${CARGO_PROFILE_DEV_DEBUG:-0}" \
+    -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}" \
     -e VCPKG_DEFAULT_BINARY_CACHE=/src/external/vcpkg-cache \
-    "$IMAGE" bash -c "set -e; $SYNC && cargo fetch --locked --quiet && if [ \"\$1\" = shell ]; then exec bash; fi; cargo \"\$@\"" bash "$@"
+    "$IMAGE" bash -c "set -e; $SYNC && cargo fetch --locked --quiet && case \"\$1\" in shell) exec bash ;; exec) shift; exec \"\$@\" ;; *) exec cargo \"\$@\" ;; esac" bash "$@"

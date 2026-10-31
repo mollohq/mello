@@ -292,8 +292,8 @@ fn main() {
         _ => {
             println!("cargo:rustc-link-lib=static=ssl");
             println!("cargo:rustc-link-lib=static=crypto");
-            println!("cargo:rustc-link-lib=dylib=asound");
-            println!("cargo:rustc-link-lib=dylib=pulse");
+            // No audio system library yet: the Linux audio backend is the stub
+            // until the PipeWire backend lands (plans: linux-client step 6).
             println!("cargo:rustc-link-lib=dylib=pthread");
             println!("cargo:rustc-link-lib=dylib=stdc++");
         }
