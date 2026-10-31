@@ -275,6 +275,16 @@ jobs:
           cargo clean
           rm -rf libmello/build-ci
 
+  # GitHub-hosted Ubuntu 22.04, defined in linux-build-test.yml so the Linux
+  # branch can run it before it has a PR.
+  test-linux:
+    name: Test (Linux)
+    needs: changes
+    # See test-windows for this condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    uses: ./.github/workflows/linux-build-test.yml
+    secrets: inherit
+
   # Pure Go unit tests over the Nakama modules — no native deps, no Docker, no
   # backend. Runs on GitHub-hosted Linux (already used by release.yml) rather
   # than competing for the single self-hosted Windows/macOS runners.

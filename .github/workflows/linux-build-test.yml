@@ -1,0 +1,114 @@
+name: Linux build and test
+
+# The Linux lane of PR Checks (pr-checks.yml calls this file), in its own file
+# so it can also run on the Linux branch before that branch has a PR.
+on:
+  workflow_call:
+  # Temporary: the Linux branch has no PR yet. Remove before merging
+  # feat/linux-client; pr-checks.yml then runs this lane for every PR.
+  push:
+    branches: [feat/linux-client]
+
+permissions:
+  contents: read
+
+env:
+  # See pr-checks.yml: hardware-dependent voice/video tests block without it.
+  CI: "true"
+
+jobs:
+  test-linux:
+    name: Test (Linux)
+    # Ubuntu 22.04: glibc 2.35, the floor of the Linux release (the AppImage
+    # builds in the same base, scripts/linux/Dockerfile).
+    runs-on: ubuntu-22.04
+    # A cold run builds the vcpkg ports, Skia's bindings and the workspace on
+    # 4 vCPU. The bound is for a wedged runner, not a slow one.
+    timeout-minutes: 120
+    env:
+      # Same reasons as the Windows job: no incremental data is reused on a
+      # fresh runner, and full debug info only slows the link.
+      CARGO_PROFILE_DEV_DEBUG: line-tables-only
+      CARGO_INCREMENTAL: "0"
+      # The toolchain of the developer Mac and the build container.
+      RUST_VERSION: "1.94.0"
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      # The hosted image has about 14 GB free. The Rust test build, Skia and
+      # the vcpkg trees need more. These toolchains are unused here.
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install build dependencies
+        run: sudo scripts/linux/install-build-deps.sh
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_VERSION"
+          rustc --version
+
+      - name: vcpkg submodule commit
+        id: vcpkg
+        run: echo "commit=$(git rev-parse HEAD:external/vcpkg)" >> "$GITHUB_OUTPUT"
+
+      # vcpkg's binary cache (the x-gha provider is gone since vcpkg 2025.06).
+      - name: Cache vcpkg packages
+        uses: actions/cache@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
+          restore-keys: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-
+
+      - name: Cache cargo registry
+        uses: actions/cache@v6
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+          key: cargo-registry-linux-${{ hashFiles('Cargo.lock') }}
+          restore-keys: cargo-registry-linux-
+
+      - name: Prepare the vcpkg cache folder
+        run: mkdir -p .vcpkg-cache
+
+      # client/build_notices.rs runs `cargo tree --offline` for every target.
+      - name: Fetch crates
+        run: cargo fetch --locked
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Clippy
+        # --workspace so crates under tools/ are linted too.
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+      - name: Run tests
+        run: cargo test --workspace
+
+      # See the Windows job in pr-checks.yml for why MELLO_BUILD_TESTS is opt-in.
+      - name: Build C++ tests
+        run: |
+          cmake -B libmello/build-ci -S libmello -G Ninja \
+            -DMELLO_BUILD_TESTS=ON \
+            -DMELLO_WEBRTC_VIDEO_TIMING=ON \
+            -DMELLO_WEBRTC_GOOG_CC=ON \
+            -DCMAKE_TOOLCHAIN_FILE="${{ github.workspace }}/external/vcpkg/scripts/buildsystems/vcpkg.cmake" \
+            -DVCPKG_TARGET_TRIPLET=x64-linux \
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build libmello/build-ci --parallel "$(nproc)"
+
+      - name: Run C++ tests
+        run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300
