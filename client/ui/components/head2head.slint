@@ -7,6 +7,12 @@ import { TitleHeld, H2hPairRow, H2hPerson, BeltHeroData } from "../types.slint";
 
 export { TitleHeld }
 
+/// Preview only: shows the tooltip of the chip with this title, as if the
+/// pointer were on it. Empty in the app.
+export global ChipTipPreview {
+    in-out property <string> title: "";
+}
+
 /// Identity hue of a person by the index `UserAvatar` takes.
 export global H2hHue {
     pure public function of(i: int) -> color {
@@ -39,8 +45,15 @@ export component TitleChip inherits Rectangle {
     in property <bool> compact: false;
     /// Four pair rows in one cell: the compact chip a little shorter.
     in property <bool> dense: false;
+    /// What the title measures (`sealed::stat_line`). On hover it shows in
+    /// a tooltip above the chip. Empty: no tooltip.
+    in property <string> tip: "";
+    /// The tooltip lines up with the left edge of the chip, for a chip at
+    /// the left edge of its card. Else it lines up with the right edge.
+    in property <bool> tip-start: false;
 
     property <length> cut: compact ? 5px : 7px;
+    property <bool> tip-shown: root.tip != "" && (tip-ta.has-hover || ChipTipPreview.title == root.title);
 
     height: root.dense ? 34px : root.compact ? 46px : 54px;
     background: transparent;
@@ -116,6 +129,32 @@ export component TitleChip inherits Rectangle {
             value-size: root.dense ? 13px : 15px; unit-size: 10px;
         }
     }
+
+    tip-ta := TouchArea {
+        // a11y: none (hover detector for the tooltip; the chip shows no control)
+    }
+
+    // Above the chip, so it covers the row above and no chip drawn after
+    // this one. The same tooltip as the state glyphs of the crew panel.
+    if root.tip-shown: Rectangle {
+        x: root.tip-start ? 0px : root.width - self.width;
+        y: -self.height - 4px;
+        width: tip-text.preferred-width + 12px;
+        height: 20px;
+        background: Theme.raised-hover;
+        border-width: 1px;
+        border-color: Theme.graphic-med;
+
+        tip-text := Text {
+            text: root.tip;
+            font-family: Theme.font-body;
+            font-weight: Theme.weight-sentence;
+            font-size: 11px;
+            color: Theme.text-primary;
+            horizontal-alignment: center;
+            vertical-alignment: center;
+        }
+    }
 }
 
 /// A TitleChip with how long the holder has held the title under it. The
@@ -134,6 +173,8 @@ export component HeldChip inherits Rectangle {
     in property <bool> neutral: false;
     /// Leaves out the "held N days" line, for a card with no room for it.
     in property <bool> hide-held: false;
+    /// The tooltip lines up with the left edge of the chip (`TitleChip`).
+    in property <bool> tip-start: false;
 
     property <length> chip-height: root.dense ? 34px : root.compact ? 46px : 54px;
     property <bool> waiting: SealedUi.hides(root.t.belt);
@@ -158,6 +199,9 @@ export component HeldChip inherits Rectangle {
             dense: root.dense;
             hue: root.neutral ? Theme.graphic-med : H2hHue.of(root.t.hue-index);
             icon: root.t.icon; title: root.t.title; value: root.t.value; unit: root.t.unit;
+            // A sealed chip hides what it holds, so it explains nothing yet.
+            tip: root.waiting ? "" : root.t.stat-line;
+            tip-start: root.tip-start;
         }
     }
     if root.t.held-label != "" && !root.dense && !root.waiting && !root.hide-held: Text {
@@ -697,6 +741,8 @@ export component VersusHero inherits Rectangle {
                 horizontal-stretch: 1;
                 t: ch;
                 slot-id: "versus-" + i;
+                // The first chip stands at the left edge of the card.
+                tip-start: i == 0;
             }
         }
 

@@ -5993,6 +5993,11 @@ fn held_days_label_sits_under_the_chip_in_a_pair_row() {
 
     let row = first_card(&h).head2head.pairs.row_data(0).unwrap();
     assert_eq!(row.chip.held_label.as_str(), "held 9 days");
+    // The tooltip of an opened chip says what the title measures.
+    assert_eq!(
+        row.chip.stat_line.as_str(),
+        "Most hours in the top shared game."
+    );
     assert!(drawn_texts(&h).iter().any(|t| t == "held 9 days"));
 }
 
