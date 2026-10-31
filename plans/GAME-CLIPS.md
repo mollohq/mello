@@ -5,6 +5,9 @@ todos:
   - id: capture-hub
     content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate"
     status: pending
+  - id: loopback-check
+    content: "Windows PC: measure WASAPI process loopback on a game process (signal present, before or after the game volume) before the ring is built on it"
+    status: pending
   - id: replay-ring
     content: "libmello: disk ring of encoded video and game audio PCM, voice tap with heard times, pinning during a capture"
     status: pending
@@ -186,6 +189,17 @@ F8 follows the voice clip key pattern in `hotkeys.rs` and `poll_loop.rs` (`regis
 - A press when the buffer is off: no clip. The HUD toast says why (not in voice, off in Settings, no game, not available for this game).
 - Two presses inside 30 s make two clips. Both clips pin the segments they need (section 5.2).
 
+### 4.3a Triggers
+
+The key is the first trigger, not the only one. In a recorded CS2 evening the player pressed no key in 40 rounds (section 14). A marker from game telemetry is the second trigger, in a later phase (section 12). The capture path does not assume a key:
+
+| Trigger | Source | Time | Window |
+|---|---|---|---|
+| `key` | The game clip key | The press | 30 s back from the press |
+| `marker` with a kind (`multi-kill`, `clutch`, `utility-kill`, ...) | A game adapter, later phase | The game moment, as receive time on the steady clock | Set by the marker source, at most 35 s back |
+
+`Command::CaptureGameClip` carries the trigger. The replay capture call is the same for both triggers.
+
 ### 4.4 Which crew gets the clip
 
 The active crew (Q6). A user is always in a crew.
@@ -208,26 +222,29 @@ Every sample carries a time on the steady clock (`mello_clock_now_us`). The mux 
 
 | Ring | Where | Content | Size at the default quality |
 |---|---|---|---|
-| Video | Disk, in the buffer folder | Annex-B access units in segment files. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. A small index per segment: capture time, size, offset, keyframe flag. | 40 segments, about 25 MB at 5 Mbps (720p60) |
-| Game audio | Disk, same folder | 48 kHz stereo int16 PCM in a ring file, with a time anchor every 10 ms chunk | 40 s, 7.7 MB |
+| Video | Disk, in the buffer folder | Annex-B access units in segment files. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. A small index per segment: capture time, size, offset, keyframe flag. | 45 segments, about 28 MB at 5 Mbps (720p60) |
+| Game audio | Disk, same folder | 48 kHz stereo int16 PCM in a ring file, with a time anchor every 10 ms chunk | 45 s, 8.6 MB |
 | Voice | Disk, the existing `ClipBuffer` ring file | Opus frames of the 48 kHz mono mix, 60 s. Add a time anchor per frame. The mux decodes the window. | 0.8 MB (exists on this branch) |
 
 - Segment files are preallocated and reused in turn. No file is created or deleted while the game runs.
-- A capture pins the segments it reads. The writer skips a pinned segment and takes the next free one. The ring has 4 spare segments for this.
+- 45 segments: a window of up to 35 s back (a marker at round end, section 4.3a), one GOP for the keyframe before the window, and spare segments for pinning.
+- A capture pins the segments it reads. The writer skips a pinned segment and takes the next free one.
 - The writer thread is not the encode thread. The encode thread hands each access unit to a bounded queue. A full queue drops the oldest unit and counts it. Disk stalls never block the encoder.
 - The game audio is PCM, not Opus. PCM needs no encode while the game runs, and the mux needs no decode. The cost is disk space, not CPU.
 
 ### 5.3 Capture and mux
 
 ```
-F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker thread
-      ─▶ mello_replay_capture(ctx, 30.0, mp4_path, poster_path)
-         1. T1 = now. T0 = the last keyframe at or before T1 minus 30 s.
-         2. Pin the segments from T0 to T1. Copy the voice ring window.
-         3. Mux: video passthrough, audio mix, AAC encode.
-         4. Unpin. Write the poster JPEG.
-      ─▶ Event::GameClipCaptured { clip_id, path, poster_path, duration, width, height }
-      ─▶ post_clip (clip_type "game") ─▶ upload (section 6.3)
+F8 ─▶ client gate ─▶ Command::CaptureGameClip { trigger } ─▶ mello-core worker thread
+      ─▶ mello_replay_capture(ctx, start_us, end_us, poster_us, mp4_path, poster_path)
+         1. A key: end = now, start = end minus 30 s, poster = none.
+            A marker: the marker source sets start and end; poster = the marker time.
+         2. T0 = the last keyframe at or before start.
+         3. Pin the segments from T0 to end. Copy the voice ring window.
+         4. Mux: video passthrough, audio mix, AAC encode.
+         5. Unpin. Write the poster JPEG.
+      ─▶ Event::GameClipCaptured { clip_id, trigger, path, poster_path, duration, width, height }
+      ─▶ post_clip (clip_type "game", trigger, tag) ─▶ upload (section 6.3)
 ```
 
 - The mux runs on a worker thread, never on the command loop.
@@ -236,7 +253,8 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker t
 - Drift: each source gets a linear resample ratio from its own time anchors over the window. 300 ppm over 30 s is 9 ms. The ratio removes it.
 - Gaps (minimized game, a dropped audio chunk) become silence on their own timeline position. Nothing moves the audio that follows a gap.
 - Mix: game and voice at unity gain, then a limiter (Q9). The levels are what the user heard only if loopback captures after the game's own volume. To measure on the Windows PC.
-- Poster: the newest captured frame at the F8 press, copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press.
+- Poster for a key press: the newest captured frame at the press, copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press.
+- Poster for a trigger with a time (a marker): the frame at that time. The capture decodes the GOP that holds it from the ring with the decoder factory, at most one GOP (1 s) of frames, only at a capture.
 
 ### 5.4 The MP4 file
 
@@ -295,7 +313,7 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 
 | Change | Detail |
 |---|---|
-| `post_clip` | Accept `clip_type` in `voice`, `game`. Reject others. A game clip carries `width`, `height`, `has_voice`. The waveform stays optional. |
+| `post_clip` | Accept `clip_type` in `voice`, `game`. Reject others. A game clip carries `width`, `height`, `has_voice`, an optional `trigger` (`key`, `marker`) and an optional `tag` (a short lowercase word such as `ace`, `clutch`, `utility-kill`, validated by length and characters). The marker phase then needs no backend change. The card can show the tag later. The waveform stays optional. |
 | `clip_upload_url` | For `game`: presign `crews/{crew_id}/{clip_id}.mp4` as `video/mp4` and `crews/{crew_id}/{clip_id}.jpg` as `image/jpeg`. Bind `Content-Length` with a cap of 64 MB for the MP4 and 1 MB for the JPEG. |
 | `clip_upload_complete` | Sets `media_url` and `poster_url` on `StoredClip`. |
 | Storage | The existing `mello-clips` bucket. Local dev: MinIO. |
@@ -329,7 +347,7 @@ The figures below are estimates. The perf gate (section 10.4) measures them on t
 | VRAM | 3 NV12 slots, about 4 MB, plus the encoder session (driver dependent) | Measure, report |
 | CPU | Capture and encode threads wait on events. Disk writes 0.8 MB/s. Loopback PCM, no Opus encode. | Under 2 % of one core |
 | Process RAM | Ring index, a 2 MB write queue, encoder bitstream buffers | At most 10 MB more than without the buffer |
-| Disk space | About 34 MB (video 25 MB, game audio 7.7 MB, voice 0.8 MB) | Fixed after start |
+| Disk space | About 37 MB (video 28 MB, game audio 8.6 MB, voice 0.8 MB) | Fixed after start |
 | Disk writes | About 0.8 MB/s, 2.9 GB per hour of play | Report. SSD wear is a known cost of every replay buffer. |
 | Install size | No new binary. OS frameworks only. | No change |
 
@@ -347,7 +365,7 @@ With a stream and the replay at the same time, the GPU does one capture, two con
 |---|---|
 | Capture | WGC window. The hook only when it is already the active capturer (Q4). No monitor or desktop capture. |
 | Encoder | NVENC (tested in the lab). AMF compiled and untested (Bob's AMD check). QSV is off unless `MELLO_ENABLE_QSV=1` (12-STREAMING.md 3.4), so an Intel-only PC has no game clips until QSV is tested. |
-| Game audio | WASAPI process loopback, include the game's process tree. Windows 10 2004 or later. Endpoint loopback is **not** a fallback for the replay: it records the crew voice and every other app twice. |
+| Game audio | WASAPI process loopback, include the game's process tree. Windows 10 2004 or later. Endpoint loopback is **not** a fallback for the replay: it records the crew voice and every other app twice. **Not yet proven for this use:** in the CS2 recording, an OBS application audio capture of `mello.exe` (the same mechanism) attached and gave digital silence for the whole session, while the endpoint mix had the voice. The cause is not known. Step 2 starts with a measurement on a game process (section 11). |
 | Border | Windows 11: hidden with consent. Windows 10: always shown. Game clips run there with the border (Q3). |
 
 ### 9.2 macOS (after Windows)
@@ -383,7 +401,7 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | Replay manager (mello-core) | The lifecycle of section 4.2 as a pure state machine: setting, game start and exit, foreground change, disk low, no encoder, ladder failed. |
 | Upload | Streamed body, pacing on and off, resume after restart. Against a local HTTP stub. |
 | Card | `build_feed_card` for a game clip: poster, length, game, unread. Render check of the card with `slint-viewer --screenshot` on its `Preview`. |
-| Backend (Go) | `clip_type` validation, game clip fields, presign content type and length cap. |
+| Backend (Go) | `clip_type` validation, game clip fields, `trigger` and `tag` validation, presign content type and length cap. |
 
 ### 10.2 libmello ctest (`check-full.sh`)
 
@@ -402,7 +420,7 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | Step | Detail |
 |---|---|
 | Source | `MELLO_CAPTURE_REFERENCE` through the capture hub to the replay consumer. Voice: marker tones through the test audio backend (`mello_voice_inject_capture` and the test output pull). |
-| Capture | `mello_replay_capture` at fixed clip times: 35 s, 47 s (across the scene cut), and twice inside 30 s (pinning). |
+| Capture | `mello_replay_capture` at fixed clip times: 35 s, 47 s (across the scene cut), and twice inside 30 s (pinning). One capture with a window 35 s back and a poster time: the frame code in the poster JPEG is the frame of the poster time. |
 | Read back | Demux and decode the MP4. Read the frame code of every frame. |
 | Gates | First frame index is T0 within one GOP. No missing frame index. VMAF, PSNR and SSIM against the clip frames, with floors per lane in `benchmarks/baselines/replay/`. Game audio burst to video frame offset within +-20 ms for every marker. Voice marker to video offset within +-20 ms. Length 30 to 31 s. |
 | Lanes | `cpu` (any machine), `hw` (the machine's encoder: NVENC on Bob's PC, AMF on an AMD box). |
@@ -437,9 +455,10 @@ No test, script or journey points at production.
 | Step | Todo id | Depends on | Lands as |
 |---|---|---|---|
 | 1 | `capture-hub` | none | Own PR. Stream gate unchanged. |
-| 2 | `replay-ring`, `replay-session`, `mp4-mux` | 1 | libmello, with the ctest tests and the replay gate lane |
+| 2a | `loopback-check` | none | A measurement on the Windows PC, before the ring: process loopback on a running game (CS2 and one other) gives a signal for the whole session, and the level before or after the game's own volume. A report, no code. If it fails, the game audio source is decided again before 2b. |
+| 2b | `replay-ring`, `replay-session`, `mp4-mux` | 1, 2a | libmello, with the ctest tests and the replay gate lane |
 | 3 | `backend` | none | Can run beside step 2 |
-| 4 | `core-lifecycle`, `upload` | 2, 3 | mello-core |
+| 4 | `core-lifecycle`, `upload` | 2b, 3 | mello-core |
 | 5 | `client-key-settings`, `feed-card-playback` | 4 | Client. Renders approved by Bob before push. |
 | 6 | `gates` | 2 to 5 | Perf scenario, harness checks, journey |
 | 7 | `specs` | 6 | Spec updates. This plan is then deleted. |
@@ -454,7 +473,21 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 - Stream clips (a viewer clips someone else's stream, CLIPS.md 3.2).
 - Trim UI and share export (CLIPS.md 14).
 - Game clip playback on iOS and in the web lounge. The MP4 (moov first, H.264, AAC) plays in `AVPlayer` and `<video>` as is. The cards there are follow-ups.
-- Auto clips from game events.
+- Auto clips from game events. The follow-up is a marker source in the CS2 adapter (`mello-core/src/telemetry/cs2_gsi.rs`). It sends `CaptureGameClip` with a `marker` trigger (section 4.3a). It reads fields that the installed GSI cfg already requests:
+
+  | Field | Marker use |
+  |---|---|
+  | `player.state.round_kills`, `round_killhs` | A delta between two payloads is a kill, a headshot |
+  | `player.state.health` | A drop to 0 is a death |
+  | The weapon in `player.weapons` with `state == "active"` | The weapon of a kill (grenade, knife, zeus) |
+  | `round.bomb` | `planted`, `defused`, `exploded` |
+  | `player.match_stats.mvps` | A delta at round end is the MVP |
+
+  Rules that found the real moments in the recording: three or more kills in a round, two kills within 3 s, the MVP, a defuse while alive, a kill with a grenade, knife or zeus in hand. CS2 quirks for that work:
+
+  - `map.round` goes up when a round ends, so the `over` phase already has the next number. A round starts when the phase leaves `over`.
+  - The last round of a match has no `over` phase. The map goes to `gameover` with `round.phase = freezetime`. The score delta gives the winner.
+  - When the player is dead, the `player` block follows the spectated teammate. Use it only when `player.steamid` equals `provider.steamid`.
 
 ---
 
@@ -475,4 +508,18 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 | Q11 | Does macOS get game clips? | Yes, after Windows. |
 | Q12 | F7 with the replay on? | F7 stays voice only. |
 
-Still to measure on the Windows PC: whether process loopback captures before or after the game's own volume (section 5.3).
+Still to measure on the Windows PC (step 2a): whether process loopback on a game process gives a signal at all (section 9.1), and whether it captures before or after the game's own volume (section 5.3).
+
+---
+
+## 14. Evidence from a CS2 recording (2026-10-30)
+
+One evening of CS2 premier (two matches, 40 rounds) was recorded on the Windows PC with a Game State Integration log beside a screen recording. A rule detector ran over the log. What it changed in this plan:
+
+| Finding | Effect on the plan |
+|---|---|
+| The player pressed no mark key in 40 rounds. The one moment named afterwards (a kill with an incendiary in the last round) got no press. Only a weapon rule found it. | F8 is the manual path. A marker is the second trigger (section 4.3a), built later (section 12). The capture path, `post_clip` and the poster take a trigger now. |
+| Detector windows: a multi-kill 12 to 36 s, a clutch 28 s, a utility kill 12 s. A marker at round end (MVP, clutch) needs up to 35 s back. | The ring has 45 segments (section 5.2). |
+| An OBS process loopback capture of `mello.exe` gave digital silence for the whole session. | Step 2a measures process loopback on a game before the ring is built (sections 9.1, 11). |
+| CS2 refuses the OBS game hook without the `-allow_third_party_software` launch option. WGC capture of the game worked with no launch option. | The replay never injects the hook (Q4). WGC window capture is the base path. |
+| Markers arrive with a receive time on the steady clock that indexes the ring. | A marker maps to a ring position with no alignment step. |
