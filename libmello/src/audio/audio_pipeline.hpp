@@ -245,7 +245,8 @@ public:
     }
     // ---- end stage 7 ----
 
-    void start_clip_buffer();
+    // False when the clip buffer could not start (low disk, no ring file).
+    bool start_clip_buffer();
     void stop_clip_buffer();
     bool clip_buffer_active() const;
     bool clip_capture(float seconds, const std::string& output_path);

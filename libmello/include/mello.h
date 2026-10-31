@@ -361,7 +361,9 @@ MELLO_API void mello_test_set_clock_ms(int64_t now_ms);
  * Clip Buffer
  * ============================================================================ */
 
-/** Start the rolling voice clip buffer. Call when joining a voice channel. */
+/** Start the rolling voice clip buffer. Call when joining a voice channel.
+ *  The buffer is a ring file of Opus frames in the OS temp folder, deleted
+ *  on stop. Fails, and stays off, when that folder has under 100 MB free. */
 MELLO_API MelloResult mello_clip_buffer_start(MelloContext* ctx);
 
 /** Stop and discard the clip buffer. Call when leaving voice. */

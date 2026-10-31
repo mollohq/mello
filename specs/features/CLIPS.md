@@ -69,7 +69,12 @@ This is the same approach ShadowPlay, Medal, and OBS Replay Buffer use. Proven p
 
 Mixed audio output written to a temp file as Opus packets. 60 seconds of voice audio is well under 1MB on disk. Essentially free.
 
-On clip capture: read back the last 30 seconds and mux into an MP4 container.
+- `ClipBuffer` (`libmello/src/audio/clip_buffer.cpp`). The render thread copies the mix (all voices, the local mic, stream game audio) into a 2 s RAM queue. It never waits on the disk.
+- A writer thread encodes the queue every 20 ms as 20 ms Opus frames (48 kHz mono, 64 kbps) into a ring file of fixed 256-byte slots: a 2-byte length, then the packet. 60 s is 3000 slots, 768 KB.
+- The ring file is in the `mello_clips` folder of the OS temp folder. It is opened delete on close (Windows) or unlinked after open (macOS), so a crash leaves no file.
+- A write error turns the buffer off.
+
+On clip capture: the buffer encodes what is still in the queue, reads the last 30 seconds of slots, decodes them to a WAV, and the clip flow muxes that into an MP4 container.
 
 ### 4.2 Stream Buffer (Future)
 

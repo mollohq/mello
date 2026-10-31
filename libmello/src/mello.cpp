@@ -556,8 +556,7 @@ void mello_test_set_clock_ms(int64_t now_ms) {
 MelloResult mello_clip_buffer_start(MelloContext* ctx) {
     if (!ctx) return MELLO_ERROR_INVALID_PARAM;
     try {
-        ctx_cast(ctx)->audio().start_clip_buffer();
-        return MELLO_OK;
+        return ctx_cast(ctx)->audio().start_clip_buffer() ? MELLO_OK : MELLO_ERROR_FAILED;
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }

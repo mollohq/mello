@@ -1314,7 +1314,7 @@ int AudioPipeline::set_playback_device(const char* device_id) {
     return ok ? (fell_back ? 2 : 1) : 0;
 }
 
-void AudioPipeline::start_clip_buffer() {
+bool AudioPipeline::start_clip_buffer() {
     if (!clip_buffer_) {
         clip_buffer_ = std::make_unique<ClipBuffer>(SAMPLE_RATE, 60);
     }
@@ -1322,7 +1322,7 @@ void AudioPipeline::start_clip_buffer() {
         local_clip_ring_ = std::make_unique<util::RingBuffer<int16_t>>(SAMPLE_RATE);
     }
     local_clip_ring_->clear();
-    clip_buffer_->start();
+    return clip_buffer_->start();
 }
 
 void AudioPipeline::stop_clip_buffer() {
