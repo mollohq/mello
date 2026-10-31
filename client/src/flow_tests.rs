@@ -3654,6 +3654,43 @@ fn end_stream_click_updates_ui_before_core_confirms() {
     );
 }
 
+/// While you stream, the control bar's STREAM button is a red END STREAM
+/// that ends the stream. It said LIVE and did nothing on a click (playtest,
+/// 2026-10-31).
+#[test]
+fn the_control_bar_ends_the_stream_while_you_host() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    assert!(!h.controls_labelled("STREAM").is_empty());
+    let idle_end = h.controls_labelled("END STREAM").len();
+
+    h.app().set_is_hosting(true);
+    h.pump();
+    assert!(h.controls_labelled("STREAM").is_empty());
+    assert!(h.controls_labelled("Stream options").is_empty());
+    assert!(h.controls_labelled("LIVE").is_empty());
+    let bar_end = h.controls_labelled("END STREAM");
+    assert_eq!(
+        bar_end.len(),
+        idle_end + 1,
+        "one END STREAM in the control bar"
+    );
+    let _ = h.commands();
+
+    bar_end
+        .last()
+        .expect("the control bar END STREAM")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+
+    assert!(!h.app().get_is_hosting());
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "END STREAM in the control bar must send StopStream, got {cmds:?}"
+    );
+}
+
 /// Hangup must change the screen on click, before the core answers.
 #[test]
 fn hangup_click_updates_ui_before_core_confirms() {

@@ -1216,6 +1216,9 @@ export component MainWindow inherits Window {
                         stream-requested => {
                             root.stream-requested();
                         }
+                        stop-stream-clicked => {
+                            root.stop-stream();
+                        }
                         reaction-tapped(sentiment) => {
                             root.reaction-tapped(sentiment);
                         }

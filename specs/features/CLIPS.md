@@ -325,7 +325,7 @@ A feed with nothing new must not look broken. The rules live in `client/src/quie
 - A recap from the current week has no age at the right of its label. An older recap says "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
 - A session older than a week shows its date ("2 October"), not "9d ago".
 
-Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
+The STREAM button in the control bar starts a stream. While the user streams, the button is a red END STREAM button, and a click ends the stream.
 
 #### Clip card waveform
 
