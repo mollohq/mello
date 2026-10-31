@@ -21,6 +21,8 @@ pub mod feed_reload;
 pub mod game_sensing;
 pub mod game_state;
 pub mod giphy;
+#[cfg(target_os = "linux")]
+mod kwin_windows;
 pub mod library;
 pub mod library_report;
 pub mod nakama;

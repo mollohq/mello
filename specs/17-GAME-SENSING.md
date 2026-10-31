@@ -206,6 +206,35 @@ a backslash as a separator on Windows only. There are two reasons. A macOS build
 must parse a path that was recorded on Windows. Steam also reports its own root
 with forward slashes.
 
+
+### 2.9 Linux
+
+libmello reads the process table from `/proc`. It lists the user's own
+processes only.
+
+| Field | Source on Linux |
+|---|---|
+| Executable and path | `/proc/<pid>/exe`. A Wine or Proton process names the Wine preloader there, so its `argv0` gives the Windows program. A `Z:` path maps to the host path: Wine maps `Z:` to `/` |
+| Start time | Field 22 of `/proc/<pid>/stat` plus the boot time |
+| Window title, fullscreen, foreground | KWin on KDE Plasma (`mello-core/src/kwin_windows.rs`). Empty on other desktops |
+
+**A session ends when its process exits.** Section 2.4 does not apply on
+Linux. Wayland gives no app the windows of another app, so the window state is
+known on KDE only. A rule that ends a session without a window would end every
+session on the other desktops.
+
+**KWin.** Each scan loads a short KWin script through
+`org.kde.kwin.Scripting`. The script lists the normal windows with pid,
+caption, fullscreen and active, calls back on the session bus
+(`app.m3llo.M3llo.Windows`), and is unloaded. A Proton game is an X11 window
+under Xwayland, and KWin reports the pid of its Wine process.
+
+| Rule | Linux behaviour |
+|---|---|
+| Primary game (§2.6) | Follows the active window on KDE. Elsewhere, the first game found |
+| Provisional game (§2.3) | Needs a window title, so only on KDE |
+| Steam library (§3.3) | `~/.local/share/Steam`, then `~/.steam/steam`, then the Flatpak Steam. Proton and the Steam Linux Runtimes are skipped by install folder |
+
 ---
 
 ## 3. Catalogue and Resolution Sources

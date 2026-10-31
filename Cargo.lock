@@ -3969,6 +3969,7 @@ dependencies = [
  "urlencoding",
  "webbrowser",
  "winreg 0.55.0",
+ "zbus",
 ]
 
 [[package]]

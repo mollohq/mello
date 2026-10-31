@@ -62,5 +62,10 @@ winreg = "0.55"
 [target.'cfg(target_os = "macos")'.dependencies]
 libc = "0.2"
 
+# Window state from KWin on Linux (kwin_windows.rs). The zbus that ashpd and
+# ksni already bring in.
+[target.'cfg(target_os = "linux")'.dependencies]
+zbus = "5"
+
 [dev-dependencies]
 tokio-test = "0.4"
