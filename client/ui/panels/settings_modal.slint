@@ -736,7 +736,7 @@ component GeneralTab inherits VerticalLayout {
 
             ToggleRow {
                 title: "Hardware Acceleration";
-                description: "Use GPU for rendering UI elements. Disabling this may resolve visual glitches.";
+                description: "Draw the window on the GPU (Direct2D). Turn it off if you see visual glitches; the CPU renderer is used instead. Takes effect at the next start.";
                 checked <=> root.hw-acceleration;
                 toggled(v) => { setting-changed-hw-acceleration(v); }
             }
