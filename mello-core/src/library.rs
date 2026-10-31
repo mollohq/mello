@@ -228,10 +228,28 @@ fn steam_root() -> Option<PathBuf> {
                 .join("Steam"),
         )
     }
-    #[cfg(not(any(windows, target_os = "macos")))]
+    #[cfg(target_os = "linux")]
+    {
+        linux_steam_root_in(&PathBuf::from(std::env::var_os("HOME")?))
+    }
+    #[cfg(not(any(windows, target_os = "macos", target_os = "linux")))]
     {
         None
     }
+}
+
+/// The Steam root under a Linux home folder: the first candidate with a
+/// `steamapps` folder. The native install, its `~/.steam/steam` link (older
+/// distribution packages), then the Flatpak Steam.
+#[cfg_attr(not(any(target_os = "linux", test)), allow(dead_code))]
+fn linux_steam_root_in(home: &Path) -> Option<PathBuf> {
+    [
+        home.join(".local/share/Steam"),
+        home.join(".steam/steam"),
+        home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam"),
+    ]
+    .into_iter()
+    .find(|root| root.join("steamapps").is_dir())
 }
 
 /// Every Steam library folder: the install root plus extras from
@@ -271,6 +289,7 @@ const NON_GAME_APPIDS: &[u32] = &[
     1070560, // Steam Linux Runtime 1.0 (scout)
     1391110, // Steam Linux Runtime 2.0 (soldier)
     1628350, // Steam Linux Runtime 3.0 (sniper)
+    4183110, // Steam Linux Runtime 4.0 (Proton 11)
     1826330, // Proton EasyAntiCheat Runtime
     1493710, // Proton Experimental
     2180100, // Proton Hotfix
@@ -777,6 +796,14 @@ fn apply_local_data(
     }
 }
 
+/// Steam's compatibility tools, which install like games: every Proton
+/// version ("Proton 9.0", "Proton - Experimental", "Proton Hotfix", the
+/// EasyAntiCheat and BattlEye runtimes) and the Steam Linux Runtimes. By
+/// install folder, so a new version needs no new appid.
+fn is_steam_tool(installdir: &str) -> bool {
+    installdir.starts_with("Proton ") || installdir.starts_with("SteamLinuxRuntime")
+}
+
 /// Pull appid / name / installdir out of an `appmanifest_*.acf`.
 ///
 /// Steam ships partially-written manifests for queued and in-progress
@@ -801,7 +828,7 @@ fn parse_app_manifest(contents: &str, steamapps: &Path) -> Option<LibraryEntry> 
     }
     let name = fields.get("name")?.trim().to_string();
     let installdir = fields.get("installdir")?.trim();
-    if name.is_empty() || installdir.is_empty() {
+    if name.is_empty() || installdir.is_empty() || is_steam_tool(installdir) {
         return None;
     }
     // `LastOwner` sits in the same file and is deliberately never read.
@@ -1024,6 +1051,39 @@ mod tests {
         "InstallLocation": "C:\\Program Files\\Epic Games\\Fortnite",
         "LaunchExecutable": "FortniteGame/Binaries/Win64/FortniteClient-Win64-Shipping.exe"
     }"#;
+
+    #[test]
+    fn steam_tools_are_not_games() {
+        for dir in [
+            "Proton 9.0",
+            "Proton - Experimental",
+            "Proton Hotfix",
+            "Proton EasyAntiCheat Runtime",
+            "SteamLinuxRuntime_sniper",
+            "SteamLinuxRuntime_4",
+        ] {
+            assert!(is_steam_tool(dir), "{dir}");
+        }
+        // A game whose name only starts the same way is still a game.
+        assert!(!is_steam_tool("Protonwars"));
+        assert!(!is_steam_tool("Counter-Strike Global Offensive"));
+        let manifest = "\"AppState\"\n{\n\t\"appid\"\t\t\"2805730\"\n\t\"name\"\t\t\"Proton 9.0\"\n\t\"installdir\"\t\t\"Proton 9.0\"\n}\n";
+        assert!(parse_app_manifest(manifest, Path::new("/s/steamapps")).is_none());
+    }
+
+    #[test]
+    fn linux_steam_root_is_the_first_with_a_steamapps_folder() {
+        let home = std::env::temp_dir().join(format!("mello-steam-root-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(linux_steam_root_in(&home), None);
+        let flatpak = home.join(".var/app/com.valvesoftware.Steam/.local/share/Steam");
+        std::fs::create_dir_all(flatpak.join("steamapps")).expect("flatpak steam");
+        assert_eq!(linux_steam_root_in(&home), Some(flatpak));
+        let native = home.join(".local/share/Steam");
+        std::fs::create_dir_all(native.join("steamapps")).expect("native steam");
+        assert_eq!(linux_steam_root_in(&home), Some(native));
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     #[test]
     fn parses_an_epic_manifest() {

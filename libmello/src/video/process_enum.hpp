@@ -32,7 +32,25 @@ struct GameProcess {
 
 /// Returns every running process. The game catalogue in mello-core decides
 /// which of them is a game (spec 17 section 2.1); libmello does not filter.
+///
+/// Linux: from /proc, the user's own processes only (another user's exe link
+/// is not readable). A Wine or Proton process reports the Windows program of
+/// its argv0, not the Wine preloader that /proc/<pid>/exe names, with the
+/// `Z:` path mapped to the host path. No window information yet: title,
+/// fullscreen and foreground stay empty.
 std::vector<GameProcess> enumerate_game_processes();
+
+namespace detail {
+
+/// The host path of a Wine path on the `Z:` drive, which Wine and Proton map
+/// to `/`: `Z:\home\bob\Game\game.exe` becomes `/home/bob/Game/game.exe`.
+/// Empty for any other drive, whose host folder depends on the prefix.
+std::string wine_path_to_host(const std::string& windows_path);
+
+/// The last component of a path, split on both `/` and `\`.
+std::string path_basename(const std::string& path);
+
+} // namespace detail
 
 struct VisibleWindow {
     void*       hwnd;

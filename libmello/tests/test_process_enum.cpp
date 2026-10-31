@@ -6,6 +6,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <chrono>
 
 #include "video/process_enum.hpp"
@@ -14,10 +15,10 @@ using mello::video::enumerate_game_processes;
 using mello::video::enumerate_visible_windows;
 
 TEST(ProcessEnum, EnumeratesProcesses) {
-#ifndef _WIN32
-    // process_enum.cpp only has a Windows implementation; the other branch
+#if !defined(_WIN32) && !defined(__linux__)
+    // process_enum.cpp enumerates on Windows and Linux; the other branch
     // returns an empty vector, so this can never pass elsewhere.
-    GTEST_SKIP() << "process enumeration is Windows-only";
+    GTEST_SKIP() << "process enumeration is Windows and Linux only";
 #else
     auto procs = enumerate_game_processes();
     ASSERT_FALSE(procs.empty());
@@ -76,8 +77,8 @@ TEST(ProcessEnum, AtMostOneForegroundProcess) {
 // when Mello launches reports the hours it actually ran rather than the minutes
 // we happened to watch. A wrong value here silently corrupts every duration.
 TEST(ProcessEnum, ProcessesCarryACreationTime) {
-#ifndef _WIN32
-    GTEST_SKIP() << "process enumeration is Windows-only";
+#if !defined(_WIN32) && !defined(__linux__)
+    GTEST_SKIP() << "process enumeration is Windows and Linux only";
 #else
     auto procs = enumerate_game_processes();
     ASSERT_FALSE(procs.empty());
@@ -110,3 +111,50 @@ TEST(ProcessEnum, VisibleWindowsExposeFullPath) {
         }
     }
 }
+
+#if defined(__linux__)
+#include <unistd.h>
+
+// Linux reads /proc. The test process itself must be in the list, under the
+// name of its executable, with the start time of a process that began
+// recently.
+TEST(ProcessEnum, LinuxListsThisProcessWithItsStartTime) {
+    const auto procs = enumerate_game_processes();
+    const uint32_t self = static_cast<uint32_t>(getpid());
+    const auto it = std::find_if(procs.begin(), procs.end(),
+                                 [&](const auto& p) { return p.pid == self; });
+    ASSERT_NE(it, procs.end());
+    EXPECT_EQ(it->exe, "mello_procenum_tests");
+    EXPECT_EQ(it->path.substr(0, 1), "/");
+    const int64_t now_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+                               std::chrono::system_clock::now().time_since_epoch())
+                               .count();
+    EXPECT_LE(it->started_at_ms, now_ms + 1000);
+    EXPECT_GT(it->started_at_ms, now_ms - 10 * 60 * 1000) << "started over 10 min ago";
+}
+#endif
+
+#if !defined(__APPLE__)
+// process_enum.cpp is not compiled on Apple (process_enum_macos.mm is), so
+// the helpers it defines are tested elsewhere only.
+using mello::video::detail::path_basename;
+using mello::video::detail::wine_path_to_host;
+
+TEST(ProcessEnum, WineZDriveMapsToTheHostPath) {
+    EXPECT_EQ(wine_path_to_host(R"(Z:\home\bob\.local\share\Steam\steamapps\common\Game\game.exe)"),
+              "/home/bob/.local/share/Steam/steamapps/common/Game/game.exe");
+    EXPECT_EQ(wine_path_to_host(R"(z:\opt\g.exe)"), "/opt/g.exe");
+}
+
+TEST(ProcessEnum, OtherWineDrivesHaveNoHostPath) {
+    EXPECT_EQ(wine_path_to_host(R"(C:\windows\system32\steam.exe)"), "");
+    EXPECT_EQ(wine_path_to_host("Z:"), "");
+    EXPECT_EQ(wine_path_to_host("game.exe"), "");
+}
+
+TEST(ProcessEnum, BasenameSplitsOnBothSeparators) {
+    EXPECT_EQ(path_basename(R"(Z:\a\b\cs2.exe)"), "cs2.exe");
+    EXPECT_EQ(path_basename("/usr/bin/mello"), "mello");
+    EXPECT_EQ(path_basename("plain"), "plain");
+}
+#endif
