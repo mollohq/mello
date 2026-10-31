@@ -86,7 +86,7 @@ bool Stream::open(const char* node_name, bool capture, ProcessFn process) {
     return true;
 }
 
-bool Stream::connect(uint32_t channels, const std::string& target) {
+bool Stream::connect(uint32_t channels, const std::string& target, bool rt_process) {
     if (!stream_ || !loop_) return false;
     if (channels < 1) channels = 1;
 
@@ -113,8 +113,9 @@ bool Stream::connect(uint32_t channels, const std::string& target) {
     }
     const spa_pod* params[1] = {spa_format_audio_raw_build(&b, SPA_PARAM_EnumFormat, &info)};
 
-    const auto flags = static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT |
-                                                    PW_STREAM_FLAG_MAP_BUFFERS);
+    auto flags = static_cast<pw_stream_flags>(PW_STREAM_FLAG_AUTOCONNECT |
+                                              PW_STREAM_FLAG_MAP_BUFFERS);
+    if (rt_process) flags = static_cast<pw_stream_flags>(flags | PW_STREAM_FLAG_RT_PROCESS);
     state_ = PW_STREAM_STATE_CONNECTING;
     int res = pw_stream_connect(stream_, capture_ ? PW_DIRECTION_INPUT : PW_DIRECTION_OUTPUT,
                                 PW_ID_ANY, flags, params, 1);

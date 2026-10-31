@@ -33,10 +33,10 @@ std::string parse_default_node_name(const char* json);
 /// One pw_stream on its own pw_thread_loop.
 ///
 /// Threads: open(), connect(), disconnect() and close() run on the caller's
-/// thread and take the loop lock. The process callback runs on the loop
-/// thread, with the loop lock held, so a disconnect() waits for a process
-/// call that runs now. The stream is not RT_PROCESS: the callbacks do APM,
-/// ONNX and NetEQ work, which must not run on PipeWire's real-time thread.
+/// thread and take the loop lock. Without `rt_process` the process callback
+/// runs on the loop thread with the loop lock held, so a disconnect() waits
+/// for a process call that runs now. With `rt_process` it runs on PipeWire's
+/// real-time data thread; pw_stream_disconnect() stops it.
 class Stream {
 public:
     using ProcessFn = std::function<void(pw_stream*)>;
@@ -53,7 +53,10 @@ public:
     /// Make the node: negotiate S16 at 48 kHz with `channels` channels, routed
     /// to `target` (a node.name; empty means the default device). Waits up to
     /// 3 s for the node to be ready. False on error or timeout.
-    bool connect(uint32_t channels, const std::string& target);
+    ///
+    /// `rt_process`: the process callback runs on PipeWire's real-time data
+    /// thread, without the loop lock. It must then only copy and signal.
+    bool connect(uint32_t channels, const std::string& target, bool rt_process = false);
 
     /// Remove the node. The stream object stays, so connect() works again.
     void disconnect();
