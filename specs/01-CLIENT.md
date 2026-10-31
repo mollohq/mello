@@ -154,8 +154,17 @@ The e2e state port reports `id`, `volume` and `local_muted` for each voice membe
 
 ### Settings tabs
 
-The settings modal (`settings_modal.slint`) has five tabs, in this order:
-PROFILE, GENERAL, AUDIO, GAMES, ABOUT.
+The settings modal (`settings_modal.slint`) has six tabs, in this order:
+PROFILE, GENERAL, AUDIO, GAMES, ABOUT, KEYBINDS.
+
+#### KEYBINDS tab
+
+The KEYBINDS tab has one section, CLIPS, with one row: "Voice clip".
+
+- The row has a key field like the push-to-talk key field. A click on the field (a control labelled "Voice clip key") listens for the next key. Escape stops listening. A modifier alone is not a key.
+- A key that push-to-talk uses is refused. The field keeps the key it had, gets a red border, and shows "Push-to-talk uses <key>. Pick another key." under it.
+- The key is saved at once. RESET TO DEFAULTS gives F7 back.
+- The push-to-talk key stays in the AUDIO tab.
 
 #### ABOUT tab
 

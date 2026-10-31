@@ -32,6 +32,9 @@ pub struct Settings {
     pub onboarding_via_invite: bool,
     pub start_on_boot: bool,
     pub ptt_key: Option<String>,
+    /// The voice clip key, as `ptt_key` stores a key ("F7", "Ctrl+F7").
+    /// `None` turns the key off.
+    pub clip_key: Option<String>,
     // General tab
     pub start_minimized: bool,
     pub close_to_tray: bool,
@@ -115,6 +118,7 @@ impl Default for Settings {
             onboarding_via_invite: false,
             start_on_boot: true,
             ptt_key: None,
+            clip_key: Some(crate::platform::hotkeys::DEFAULT_CLIP_KEY.to_string()),
             start_minimized: false,
             close_to_tray: true,
             auto_connect: false,

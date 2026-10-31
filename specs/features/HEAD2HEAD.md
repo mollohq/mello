@@ -216,6 +216,14 @@ Each pair row on the card shows one chip: the title that decides the pair. The c
 - The chip shows the value of the member who would hold the title in the pair. Held days come from the crew holder, only when the crew holder is that member.
 - A pair with no `values` shows no chip.
 
+### Chip tooltip
+
+A pointer on an open chip shows a tooltip above the chip. The tooltip is the stat sentence of the title (`sealed::stat_line`), for example "Most hours in the top shared game."
+
+- A sealed chip has no tooltip.
+- The tooltip shows on the pair rows, the wide card, the versus hero, and the belts moved rows of the weekly and the daily recap.
+- The tooltip lines up with the right edge of the chip. The first chip of the versus hero is at the left edge of the card, so its tooltip lines up with the left edge.
+
 ---
 
 ## 6. Recap sections

@@ -4,7 +4,7 @@ import { GameArt } from "../components/game_art.slint";
 import { CutShape, CutButtonShape, OctAvatar, OctMask } from "../components/cut.slint";
 
 /// Control-bar icon button. `on` = a live toggle, so it wears a white
-/// keyline. `danger` = leave call, the one red fill in the bar.
+/// keyline. `danger` = leave call, a red fill: it commits.
 component IconButton inherits Rectangle {
     in property <image> icon;
     /// Accessible label: what the button does, for screen readers and the e2e driver.
@@ -188,7 +188,7 @@ export component ControlBar inherits Rectangle {
     in property <bool> is-hosting: false;
     in property <bool> is-watching: false;
     /// Host pause UX: our capture target is gone and viewers see the pause
-    /// card. Shown as a hint next to the LIVE button.
+    /// card. Shown as a hint next to the END STREAM button.
     in property <bool> stream-host-paused: false;
     // 0=idle, 1=now-playing, 2=post-game, 3=moment-input, 4=confirmed
     in-out property <int> bar-state: 0;
@@ -203,6 +203,8 @@ export component ControlBar inherits Rectangle {
     callback open-mic-settings();
     callback go-live-clicked();
 
+    callback stop-stream-clicked();
+
     // Game callbacks
     callback stream-requested();
     callback reaction-tapped(string);
@@ -215,8 +217,13 @@ export component ControlBar inherits Rectangle {
 
     // Clip
     callback clip-captured();
+    /// The voice clip key as Settings shows it ("F7"), or "" when no key is
+    /// bound. The clip button names it.
+    in property <string> clip-key-label: "";
     // Preview only: render the clip button hovered.
     in property <bool> preview-clip-hover: false;
+    // Preview only: render the END STREAM button hovered.
+    in property <bool> preview-end-hover: false;
     in property <string> voice-channel-name: "";
     background: Theme.surface;
     border-width: 0px;
@@ -565,8 +572,43 @@ export component ControlBar inherits Rectangle {
             HorizontalLayout {
                 spacing: 0px;
                 cross-axis-alignment: center;
+                // END STREAM — red, because ending a stream commits. One
+                // button with both cuts: there is nothing else to pick
+                // while you are live.
+                if is-hosting: Rectangle {
+                    width: end-label.preferred-width + 40px;
+                    height: 40px;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: Theme.cut;
+                        fill: end-ta.has-hover || preview-end-hover ? Theme.confirm-press : Theme.confirm;
+                    }
+
+                    end-label := Text {
+                        text: "END STREAM";
+                        font-family: Theme.font-label;
+                        font-size: 10px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.on-confirm;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                    }
+
+                    end-ta := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "END STREAM";
+                        mouse-cursor: pointer;
+                        clicked => {
+                            stop-stream-clicked();
+                        }
+                    }
+                }
+
                 // STREAM — white, because white is the action colour
-                Rectangle {
+                if !is-hosting: Rectangle {
                     width: stream-label.preferred-width + 40px;
                     height: 40px;
 
@@ -582,7 +624,7 @@ export component ControlBar inherits Rectangle {
                     }
 
                     stream-label := Text {
-                        text: is-hosting ? "LIVE" : "STREAM";
+                        text: "STREAM";
                         font-family: Theme.font-label;
                         font-size: 10px;
                         font-weight: Theme.weight-label;
@@ -594,7 +636,7 @@ export component ControlBar inherits Rectangle {
 
                     stream-ta := TouchArea {
                         accessible-role: button;
-                        accessible-label: is-hosting ? "LIVE" : "STREAM";
+                        accessible-label: "STREAM";
                         mouse-cursor: pointer;
                         clicked => {
                             // With a game detected, STREAM streams it: that
@@ -611,7 +653,7 @@ export component ControlBar inherits Rectangle {
                 }
 
                 // caret — the same shape continues: stream something else
-                Rectangle {
+                if !is-hosting: Rectangle {
                     width: 30px;
                     height: 40px;
 
@@ -651,14 +693,17 @@ export component ControlBar inherits Rectangle {
 
                 // Host pause UX: capture target gone (minimized/tabbed-out),
                 // viewers see the pause card. Tab back in to resume.
-                if is-hosting && stream-host-paused: Text {
-                    text: "VIEWERS SEE PAUSED";
-                    font-family: Theme.font-label;
-                    font-size: 9px;
-                    font-weight: Theme.weight-label;
-                    letter-spacing: Theme.track-label;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
+                if is-hosting && stream-host-paused: HorizontalLayout {
+                    padding-left: 10px;
+                    Text {
+                        text: "VIEWERS SEE PAUSED";
+                        font-family: Theme.font-label;
+                        font-size: 9px;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        color: Theme.text-secondary;
+                        vertical-alignment: center;
+                    }
                 }
             }
 
@@ -1005,6 +1050,24 @@ export component ControlBar inherits Rectangle {
                         color: Theme.live;
                         vertical-alignment: center;
                     }
+
+                    // The key in a plain box, as the key field in Settings.
+                    if clip-key-label != "": Rectangle {
+                        width: key-text.preferred-width + 10px;
+                        height: 18px;
+                        border-width: 1px;
+                        border-color: Theme.graphic-med;
+                        key-text := Text {
+                            text: clip-key-label;
+                            font-family: Theme.font-label;
+                            font-size: 9.5px;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            color: Theme.text-secondary;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+                    }
                 }
 
                 clip-hover := TouchArea {
@@ -1070,5 +1133,100 @@ export component PreviewClipHover inherits Rectangle {
         mic-permission-granted: true;
         preview-clip-hover: true;
         bar-state: 1;
+    }
+}
+
+export component PreviewHosting inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        game-active: true;
+        game-id: "counter-strike-2";
+        game-name: "Counter-Strike 2";
+        game-short-name: "CS2";
+        game-monogram: "CS";
+        game-color: #DE9B35;
+        can-stream: true;
+        is-hosting: true;
+        bar-state: 1;
+    }
+}
+
+export component PreviewHostingPaused inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        game-active: true;
+        game-id: "counter-strike-2";
+        game-name: "Counter-Strike 2";
+        game-short-name: "CS2";
+        game-monogram: "CS";
+        game-color: #DE9B35;
+        can-stream: true;
+        is-hosting: true;
+        stream-host-paused: true;
+        preview-end-hover: true;
+        bar-state: 1;
+    }
+}
+
+export component PreviewClipKey inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        game-active: true;
+        game-id: "counter-strike-2";
+        game-name: "Counter-Strike 2";
+        game-short-name: "CS2";
+        game-monogram: "CS";
+        game-color: #DE9B35;
+        can-stream: true;
+        bar-state: 1;
+        clip-key-label: "F7";
+    }
+}
+
+export component PreviewClipKeyCombo inherits Rectangle {
+    width: 900px;
+    height: Theme.control-bar-height;
+    background: #111114;
+    ControlBar {
+        width: parent.width;
+        height: parent.height;
+        user-name: "Navigator";
+        user-initials: "N";
+        user-tag: "#001";
+        in-voice: true;
+        voice-channel-name: "GENERAL";
+        mic-permission-granted: true;
+        bar-state: 1;
+        clip-key-label: "Ctrl+F7";
     }
 }

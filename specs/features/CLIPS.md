@@ -43,6 +43,15 @@ Good for capturing funny conversations, heated arguments, singing, whatever happ
 
 **Requires:** An active voice session. The client maintains a rolling disk buffer of mixed audio output.
 
+**Hotkey:** the clip key captures a voice clip from any app, a game included. It does what the clip button does, and only when the clip button shows: in voice, with microphone access.
+
+- The key is F7 on a new install (`DEFAULT_CLIP_KEY`). Settings, KEYBINDS changes it (specs/01-CLIENT.md, Settings tabs). It is stored as `Settings::clip_key`, in the format of `ptt_key` ("F7", "Ctrl+F7").
+- The modifiers must match the binding. F7 with Shift does not clip when the key is F7.
+- A held key makes one clip. Auto-repeat does not make more.
+- KEYBINDS refuses a key that push-to-talk uses. When push-to-talk is on and gets the clip key later, the key stays push-to-talk.
+- The clip button shows the key after "CLIP 30S", in a plain box. With no key, the box is not there.
+- The listener is `client/src/platform/hotkeys.rs` (`register_clip`, `clip_key_step`).
+
 ### 3.2 Stream Clip (Future)
 
 Captured by a viewer while watching a crew member's stream. Contains:
@@ -127,7 +136,7 @@ Not needed for v1. Becomes essential when share export ships.
 v1 is quick clip only. No trim UI. User taps the clip button, last 30 seconds are grabbed immediately.
 
 ```
-User taps clip button (scissors icon, bottom bar)
+User taps clip button (scissors icon, bottom bar) or presses F7
     │
     ▼
 Client reads last 30 seconds from disk buffer
@@ -330,7 +339,7 @@ A feed with nothing new must not look broken. The rules live in `client/src/quie
 - A recap from the current week has no age at the right of its label. An older recap says "Last week", then "3 weeks ago" (`feed_age::recap_age_label`). "Week 4" shows when the server sends `week_number`. Until then the card says "This week".
 - A session older than a week shows its date ("2 October"), not "9d ago".
 
-Streaming is initiated via the broadcast icon in the action bar (control bar, always visible).
+The STREAM button in the control bar starts a stream. While the user streams, the button is a red END STREAM button, and a click ends the stream.
 
 #### Clip card waveform
 

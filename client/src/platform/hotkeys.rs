@@ -9,9 +9,9 @@ pub enum PttEvent {
     Released,
 }
 
-/// Platform-agnostic key identifier for PTT matching.
+/// Platform-agnostic key identifier for PTT and clip key matching.
 /// On macOS we match via raw VK code; elsewhere via rdev::Key.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PttBinding {
     pub code_str: String,
     pub ctrl: bool,
@@ -20,10 +20,47 @@ pub struct PttBinding {
     pub meta: bool,
 }
 
+/// The voice clip key of a new install (CLIPS.md section 3.1), in the
+/// storage format of `Settings::clip_key`. Keybinds in Settings changes it.
+pub const DEFAULT_CLIP_KEY: &str = "F7";
+
+/// One step of the clip key: `held` is true while the key is down, so a
+/// key that auto-repeats clips once. Returns true on the press that clips.
+/// The modifiers must match the binding. A PTT binding on the same keys
+/// keeps the keys for talking.
+pub(crate) fn clip_key_step(
+    held: &mut bool,
+    is_clip_key: bool,
+    pressed: bool,
+    mods_match: bool,
+    ptt_on_clip_key: bool,
+) -> bool {
+    if !is_clip_key {
+        return false;
+    }
+    if !pressed {
+        *held = false;
+        return false;
+    }
+    if *held || !mods_match || ptt_on_clip_key {
+        return false;
+    }
+    *held = true;
+    true
+}
+
+/// PTT and the clip on the same keys: the keys stay with PTT. Settings
+/// refuses a clip key that PTT uses, so this guards a PTT key bound later.
+fn ptt_on_clip_key(ptt: &Option<PttBinding>, clip: &PttBinding) -> bool {
+    ptt.as_ref() == Some(clip)
+}
+
 pub struct HotkeyManager {
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_rx: mpsc::Receiver<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_rx: mpsc::Receiver<()>,
 }
 
 impl HotkeyManager {
@@ -35,10 +72,13 @@ impl HotkeyManager {
     /// Accessibility permission, which a CI runner will not have granted.
     pub fn disabled() -> Self {
         let (_tx, event_rx) = mpsc::channel();
+        let (_clip_tx, clip_rx) = mpsc::channel();
         Self {
             binding: Arc::new(Mutex::new(None)),
             active: Arc::new(AtomicBool::new(false)),
             event_rx,
+            clip_binding: Arc::new(Mutex::new(None)),
+            clip_rx,
         }
     }
 
@@ -46,13 +86,23 @@ impl HotkeyManager {
         let binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
         let active = Arc::new(AtomicBool::new(false));
         let (event_tx, event_rx) = mpsc::channel();
+        let clip_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
+        let (clip_tx, clip_rx) = mpsc::channel();
 
-        start_listener(binding.clone(), active.clone(), event_tx)?;
+        start_listener(
+            binding.clone(),
+            active.clone(),
+            event_tx,
+            clip_binding.clone(),
+            clip_tx,
+        )?;
 
         Ok(Self {
             binding,
             active,
             event_rx,
+            clip_binding,
+            clip_rx,
         })
     }
 
@@ -71,6 +121,17 @@ impl HotkeyManager {
     pub fn poll(&self) -> Option<PttEvent> {
         self.event_rx.try_recv().ok()
     }
+
+    /// The voice clip key. `None` turns the key off.
+    pub fn register_clip(&self, binding: Option<PttBinding>) {
+        *self.clip_binding.lock().unwrap() = binding;
+    }
+
+    /// True once for each press of the clip key since the last call. The
+    /// clip key works with PTT on or off.
+    pub fn poll_clip(&self) -> bool {
+        self.clip_rx.try_recv().is_ok()
+    }
 }
 
 // ── macOS: direct CGEventTap (avoids rdev's TSM crash on bg threads) ───────
@@ -80,6 +141,8 @@ fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::os::raw::c_void;
 
@@ -105,7 +168,10 @@ fn start_listener(
         binding: Arc<Mutex<Option<PttBinding>>>,
         active: Arc<AtomicBool>,
         event_tx: mpsc::Sender<PttEvent>,
+        clip_binding: Arc<Mutex<Option<PttBinding>>>,
+        clip_tx: mpsc::Sender<()>,
         ptt_held: bool,
+        clip_held: bool,
         prev_modifier_flags: u64,
     }
 
@@ -116,6 +182,30 @@ fn start_listener(
         user_info: *mut c_void,
     ) -> *mut c_void {
         let ctx = &mut *(user_info as *mut Ctx);
+
+        // The clip key comes before the PTT gate: it works with PTT off.
+        let ev = event_type as u64;
+        let clip = ctx.clip_binding.lock().unwrap().clone();
+        if let (Some(clip), true) = (clip, ev == K_CG_EVENT_KEY_DOWN || ev == K_CG_EVENT_KEY_UP) {
+            let vk = CGEventGetIntegerValueField(event, K_CG_KEYBOARD_EVENT_KEYCODE) as u16;
+            let flags = CGEventGetFlags(event);
+            let mods_match = (flags & FLAG_CONTROL != 0) == clip.ctrl
+                && (flags & FLAG_ALT != 0) == clip.alt
+                && (flags & FLAG_SHIFT != 0) == clip.shift
+                && (flags & FLAG_COMMAND != 0) == clip.meta;
+            let ptt_on_clip = ptt_on_clip_key(&ctx.binding.lock().unwrap(), &clip)
+                && ctx.active.load(Ordering::Relaxed);
+            if clip_key_step(
+                &mut ctx.clip_held,
+                Some(vk) == code_str_to_macos_vk(&clip.code_str),
+                ev == K_CG_EVENT_KEY_DOWN,
+                mods_match,
+                ptt_on_clip,
+            ) {
+                log::info!("[hotkeys] clip key pressed");
+                let _ = ctx.clip_tx.send(());
+            }
+        }
 
         if !ctx.active.load(Ordering::Relaxed) {
             if ctx.ptt_held {
@@ -187,7 +277,10 @@ fn start_listener(
         binding,
         active,
         event_tx,
+        clip_binding,
+        clip_tx,
         ptt_held: false,
+        clip_held: false,
         prev_modifier_flags: 0,
     });
     // Safety: Ctx only contains Send types (Arc, mpsc::Sender, bool, u64).
@@ -339,6 +432,8 @@ fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rdev::{self, EventType, Key};
 
@@ -458,14 +553,33 @@ fn start_listener(
             log::info!("[hotkeys] rdev listener thread started");
             let mut mods = ModifierState::default();
             let mut ptt_held = false;
+            // The PTT state resets while PTT is off; the clip key keeps its own.
+            let mut clip_mods = ModifierState::default();
+            let mut clip_held = false;
 
             if let Err(e) = rdev::listen(move |event| {
-                let is_key = matches!(
-                    event.event_type,
-                    EventType::KeyPress(_) | EventType::KeyRelease(_)
-                );
-                if !is_key {
-                    return;
+                let (key, pressed) = match event.event_type {
+                    EventType::KeyPress(k) => (k, true),
+                    EventType::KeyRelease(k) => (k, false),
+                    _ => return,
+                };
+
+                // The clip key comes before the PTT gate: it works with PTT off.
+                clip_mods.update(&key, pressed);
+                let clip = clip_binding.lock().unwrap().clone();
+                if let Some(clip) = clip {
+                    let ptt_on_clip = ptt_on_clip_key(&binding.lock().unwrap(), &clip)
+                        && active.load(Ordering::Relaxed);
+                    if clip_key_step(
+                        &mut clip_held,
+                        Some(key) == code_str_to_rdev_key(&clip.code_str),
+                        pressed,
+                        clip_mods.matches(&clip),
+                        ptt_on_clip,
+                    ) {
+                        log::info!("[hotkeys] clip key pressed");
+                        let _ = clip_tx.send(());
+                    }
                 }
 
                 if !active.load(Ordering::Relaxed) {
@@ -714,4 +828,71 @@ fn hotkey_display_label(hotkey_str: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" + ")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Feeds key events through `clip_key_step` and counts the clips.
+    /// An event is (is the clip key, pressed, the modifiers match).
+    fn clips(events: &[(bool, bool, bool)], ptt_on_clip_key: bool) -> usize {
+        let mut held = false;
+        events
+            .iter()
+            .filter(|&&(is_clip, pressed, mods_match)| {
+                clip_key_step(&mut held, is_clip, pressed, mods_match, ptt_on_clip_key)
+            })
+            .count()
+    }
+
+    #[test]
+    fn a_press_of_the_clip_key_clips_once_even_when_it_repeats() {
+        // Down, two auto-repeats, up: one clip.
+        let held_down = [
+            (true, true, true),
+            (true, true, true),
+            (true, true, true),
+            (true, false, true),
+        ];
+        assert_eq!(clips(&held_down, false), 1);
+        // Two separate presses: two clips.
+        let twice = [
+            (true, true, true),
+            (true, false, true),
+            (true, true, true),
+            (true, false, true),
+        ];
+        assert_eq!(clips(&twice, false), 2);
+    }
+
+    #[test]
+    fn other_keys_and_other_modifiers_do_not_clip() {
+        assert_eq!(
+            clips(&[(false, true, true), (false, false, true)], false),
+            0
+        );
+        assert_eq!(
+            clips(&[(true, true, false), (true, false, false)], false),
+            0
+        );
+    }
+
+    #[test]
+    fn a_ptt_binding_on_the_clip_keys_keeps_the_keys_for_talking() {
+        assert_eq!(clips(&[(true, true, true), (true, false, true)], true), 0);
+        let (f7, _) = parse_ptt_string("F7").expect("F7");
+        let (ctrl_f7, _) = parse_ptt_string("Ctrl+F7").expect("Ctrl+F7");
+        assert!(ptt_on_clip_key(&Some(f7.clone()), &f7));
+        assert!(!ptt_on_clip_key(&Some(ctrl_f7), &f7));
+        assert!(!ptt_on_clip_key(&None, &f7));
+    }
+
+    #[test]
+    fn the_default_clip_key_parses() {
+        let (b, label) = parse_ptt_string(DEFAULT_CLIP_KEY).expect("default clip key");
+        assert_eq!(b.code_str, "F7");
+        assert!(!(b.ctrl || b.alt || b.shift || b.meta));
+        assert_eq!(label, "F7");
+    }
 }

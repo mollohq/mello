@@ -133,6 +133,8 @@ export struct RecapSeal {
 // split as on TitleChip. Hues are identity hue indexes of the two members.
 export struct RecapBeltMovedRow {
     title: string,
+    /// What the title measures, for the tooltip (`sealed::stat_line`).
+    stat-line: string,
     icon: image,
     value: string,
     unit: string,
@@ -249,6 +251,8 @@ export struct TitleHeld {
     held-days: int,
     /// "held 9 days", "held 1 day", or "" under one day. Built in Rust.
     held-label: string,
+    /// What the title measures, for the tooltip (`sealed::stat_line`).
+    stat-line: string,
     moved-recent: bool,
     /// The move behind the chip. `belt.key` is empty for a title that never
     /// changed hands, or when the chip shows a member who does not hold it.

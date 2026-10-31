@@ -977,6 +977,7 @@ fn title_held(
         holder_id: c.holder_id.as_str().into(),
         held_days: c.held_days,
         held_label: held_label(c.held_days).as_str().into(),
+        stat_line: crate::sealed::stat_line(&c.id).into(),
         moved_recent: c.moved_recent,
     }
 }

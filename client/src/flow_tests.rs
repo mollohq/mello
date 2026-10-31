@@ -3654,6 +3654,149 @@ fn end_stream_click_updates_ui_before_core_confirms() {
     );
 }
 
+/// While you stream, the control bar's STREAM button is a red END STREAM
+/// that ends the stream. It said LIVE and did nothing on a click (playtest,
+/// 2026-10-31).
+#[test]
+fn the_control_bar_ends_the_stream_while_you_host() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    assert!(!h.controls_labelled("STREAM").is_empty());
+    let idle_end = h.controls_labelled("END STREAM").len();
+
+    h.app().set_is_hosting(true);
+    h.pump();
+    assert!(h.controls_labelled("STREAM").is_empty());
+    assert!(h.controls_labelled("Stream options").is_empty());
+    assert!(h.controls_labelled("LIVE").is_empty());
+    let bar_end = h.controls_labelled("END STREAM");
+    assert_eq!(
+        bar_end.len(),
+        idle_end + 1,
+        "one END STREAM in the control bar"
+    );
+    let _ = h.commands();
+
+    bar_end
+        .last()
+        .expect("the control bar END STREAM")
+        .mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+
+    assert!(!h.app().get_is_hosting());
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::StopStream)),
+        "END STREAM in the control bar must send StopStream, got {cmds:?}"
+    );
+}
+
+/// F7 clips the voice, as the CLIP 30S button does, and only when the bar
+/// shows that button: in voice, with mic access.
+#[test]
+fn the_clip_key_captures_a_voice_clip_only_in_voice() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let capture = |cmds: &[Command]| {
+        cmds.iter()
+            .filter(|c| matches!(c, Command::CaptureClip { .. }))
+            .count()
+    };
+
+    h.app().set_in_voice(false);
+    let _ = h.commands();
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(
+        capture(&h.commands()),
+        0,
+        "out of voice the key does nothing"
+    );
+
+    h.app().set_in_voice(true);
+    h.app().set_mic_permission_granted(false);
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(
+        capture(&h.commands()),
+        0,
+        "without mic access the key does nothing"
+    );
+
+    h.app().set_mic_permission_granted(true);
+    crate::poll_loop::clip_key_pressed(h.app());
+    assert_eq!(capture(&h.commands()), 1);
+}
+
+/// The clip button names the clip key, F7 on a new install.
+#[test]
+fn the_clip_button_names_the_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_in_voice(true);
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert!(drawn_texts(&h).iter().any(|t| t == "F7"));
+}
+
+/// The clip key is bound in Settings, Keybinds: the new key is saved, and
+/// the clip button shows it.
+#[test]
+fn keybinds_rebinds_the_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("KEYBINDS");
+    h.click_label("Voice clip key");
+    assert!(h.app().get_settings_clip_binding(), "the field listens");
+
+    // Shift+F8, F8 as Slint reports it. Shift stores the same on every
+    // platform; the label is the platform's ("Shift + F8", "⇧ + F8").
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, true, false);
+    h.pump();
+
+    assert!(!h.app().get_settings_clip_binding());
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("Shift+F8"));
+    let (_, label) = crate::platform::hotkeys::parse_ptt_string("Shift+F8").expect("label");
+    assert_eq!(h.app().get_clip_key_label().as_str(), label);
+    assert!(h.app().get_settings_clip_key_warning().is_empty());
+}
+
+/// A key that push-to-talk uses is refused. The clip key stays as it was.
+#[test]
+fn keybinds_refuses_the_push_to_talk_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.settings().borrow_mut().ptt_key = Some("KeyV".into());
+
+    h.app()
+        .invoke_settings_clip_key_captured("v".into(), false, false, false, false);
+    h.pump();
+
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+    assert_eq!(
+        h.app().get_settings_clip_key_warning().as_str(),
+        "Push-to-talk uses V. Pick another key."
+    );
+}
+
+/// Reset to defaults gives the clip key back to F7.
+#[test]
+fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F8");
+
+    h.app().invoke_settings_reset_defaults();
+    h.pump();
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+}
+
 /// Hangup must change the screen on click, before the core answers.
 #[test]
 fn hangup_click_updates_ui_before_core_confirms() {
@@ -5993,6 +6136,11 @@ fn held_days_label_sits_under_the_chip_in_a_pair_row() {
 
     let row = first_card(&h).head2head.pairs.row_data(0).unwrap();
     assert_eq!(row.chip.held_label.as_str(), "held 9 days");
+    // The tooltip of an opened chip says what the title measures.
+    assert_eq!(
+        row.chip.stat_line.as_str(),
+        "Most hours in the top shared game."
+    );
     assert!(drawn_texts(&h).iter().any(|t| t == "held 9 days"));
 }
 

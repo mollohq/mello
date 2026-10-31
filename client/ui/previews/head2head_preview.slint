@@ -10,7 +10,7 @@ import { Theme } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { GameBadge } from "../components/game_badge.slint";
-import { Head2headCardWide, VersusHero } from "../components/head2head.slint";
+import { Head2headCardWide, VersusHero, ChipTipPreview } from "../components/head2head.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 
 // Same frame as CrewFeed: 20px side padding, 16px top, 12px gaps, 232px rows.
@@ -209,10 +209,10 @@ export component PreviewDayOneAlone inherits Window {
                 hue-index: 0;
                 open-seats: 4;
                 titles: [
-                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "4.6", unit: "h", hue-index: 0 },
                 ];
             }
             RecentGamesCard { width: root.cw; }
@@ -245,10 +245,10 @@ export component PreviewDayOnePlaying inherits Window {
                 hue-index: 0;
                 open-seats: 4;
                 titles: [
-                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,168", unit: "h", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "5", unit: "installed", hue-index: 0 },
-                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "6.0", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,168", unit: "h", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "5", unit: "installed", hue-index: 0 },
+                    { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "6.0", unit: "h", hue-index: 0 },
                 ];
             }
         }
@@ -284,10 +284,10 @@ export component PreviewFirstFriend inherits Window {
             left-score: 4; right-score: 3;
             open-seats: 3;
             titles: [
-                { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", value: "4,167", unit: "h", hue-index: 0 },
-                { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", value: "03:14", unit: "", hue-index: 0 },
-                { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", value: "14", unit: "installed", hue-index: 1 },
-                { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", value: "4.6", unit: "h", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-carry.svg"), title: "The Carry", stat-line: "Most hours in the top shared game.", value: "4,167", unit: "h", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-night-owl.svg"), title: "Night Owl", stat-line: "Latest local time of a last session.", value: "03:14", unit: "", hue-index: 0 },
+                { icon: @image-url("../icons/h2h-collector.svg"), title: "The Collector", stat-line: "Most installed games.", value: "14", unit: "installed", hue-index: 1 },
+                { icon: @image-url("../icons/h2h-locked-in.svg"), title: "Locked In", stat-line: "Most game hours in the last 7 days.", value: "4.6", unit: "h", hue-index: 0 },
             ];
         }
         HorizontalLayout {
@@ -297,5 +297,19 @@ export component PreviewFirstFriend inherits Window {
             SessionCell { width: root.cw; }
         }
         SkeletonTrio { }
+    }
+}
+
+/// Frame B2 with the pointer on the first belt: its tooltip lines up left.
+export component PreviewFirstFriendTip inherits PreviewFirstFriend {
+    init => {
+        ChipTipPreview.title = "The Carry";
+    }
+}
+
+/// Frame B2 with the pointer on the last belt: its tooltip lines up right.
+export component PreviewFirstFriendTipEnd inherits PreviewFirstFriend {
+    init => {
+        ChipTipPreview.title = "Locked In";
     }
 }
