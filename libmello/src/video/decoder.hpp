@@ -1,6 +1,7 @@
 #pragma once
 #include "graphics_device.hpp"
 #include "encoder.hpp" // for VideoCodec
+#include <cstddef>
 #include <cstdint>
 
 #ifdef _WIN32

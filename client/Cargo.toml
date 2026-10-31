@@ -102,6 +102,10 @@ muda = "0.17"
 objc2 = "0.6"
 i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
 
+[target.'cfg(target_os = "linux")'.dependencies]
+# Renderer selection (updater/startup_update.rs): Skia's CPU rasterizer.
+i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
+
 [features]
 default = ["development"]
 production = []

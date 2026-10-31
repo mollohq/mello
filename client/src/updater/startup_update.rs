@@ -8,26 +8,34 @@ use slint::ComponentHandle;
 use super::{UpdateEvent, Updater};
 use crate::ForceUpdateWindow;
 
+// The dialog size, for centering on Windows and macOS. Linux has no
+// centering: Wayland does not let a client place its window, and on X11 the
+// window manager places it.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FORCE_UPDATE_WIDTH: f32 = 360.0;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FORCE_UPDATE_HEIGHT: f32 = 188.0;
 
 /// Skia's CPU rasterizer. Slint's own software renderer is not compiled in
 /// (spec 12-NATIVE-PLATFORM §3.1).
-#[cfg(any(target_os = "windows", target_os = "macos"))]
+#[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
 const SKIA_CPU_RENDERER: &str = "skia-software";
 
 /// Installs the winit backend. The builder does not read `SLINT_BACKEND`, so
 /// the renderer choice is made here. Other platforms keep Slint's default.
 pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
         let mut builder = i_slint_backend_winit::Backend::builder();
 
-        // Windows: always Skia's CPU rasterizer. Skia on wgpu (D3D12) adds
-        // ~250 MB of RAM and ~190 MB of GPU memory at idle, and a gaming
-        // companion must not take GPU time from the game.
+        // Windows and Linux: always Skia's CPU rasterizer. Skia on wgpu (D3D12)
+        // adds ~250 MB of RAM and ~190 MB of GPU memory at idle on Windows, and
+        // a gaming companion must not take GPU time from the game. On Linux the
+        // Slint 1.18 default is also Skia on wgpu (Vulkan or GL).
         // macOS: Skia on wgpu (Metal); the debug switch forces the CPU rasterizer.
-        if cfg!(target_os = "windows") || std::env::args().any(|a| a == "--software-rendering") {
+        if cfg!(any(target_os = "windows", target_os = "linux"))
+            || std::env::args().any(|a| a == "--software-rendering")
+        {
             log::info!("[startup] Slint renderer: {SKIA_CPU_RENDERER}");
             builder = builder.with_renderer_name(SKIA_CPU_RENDERER);
         }

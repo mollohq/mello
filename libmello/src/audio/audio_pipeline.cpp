@@ -695,7 +695,7 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 sum += s * s;
             }
             rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
-            float db = 20.0f * std::log10f(rms + 1e-10f);
+            float db = 20.0f * std::log10(rms + 1e-10f);
             float level = (db + 60.0f) / 60.0f;
             if (level < 0.0f) level = 0.0f;
             if (level > 1.0f) level = 1.0f;
