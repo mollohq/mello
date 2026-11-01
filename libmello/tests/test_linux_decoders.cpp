@@ -74,41 +74,67 @@ TEST(LinuxGpu, NoDrmTreeIsNoGpu) {
     EXPECT_TRUE(list_linux_gpus("/nonexistent/drm").empty());
 }
 
-TEST(LinuxVaDriver, AHybridAmdLaptopNamesRadeonsi) {
+
+
+
+constexpr uint64_t GiB = 1ull << 30;
+
+// As on Windows, one GPU does all video work: the one with the most
+// dedicated memory, whatever the brand.
+TEST(LinuxVideoGpu, TheGpuWithTheMostVideoMemoryWinsWhateverTheBrand) {
+    // A hybrid laptop: the AMD APU shows its carve-out, NVIDIA nothing.
+    std::vector<LinuxGpu> hybrid = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                    {kVendorAmd, true, "/dev/dri/renderD128", "", GiB / 2}};
+    EXPECT_EQ(video_gpu(hybrid)->vendor, kVendorNvidia);
+    EXPECT_EQ(video_render_node(hybrid), "/dev/dri/renderD129");
+    // A discrete AMD card beats an NVIDIA GPU of unknown memory...
+    std::vector<LinuxGpu> desk = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                  {kVendorAmd, true, "/dev/dri/renderD128", "", 8 * GiB}};
+    EXPECT_EQ(video_gpu(desk)->vendor, kVendorAmd);
+    // ...and loses to one that reports more (NVML).
+    desk[0].vram_bytes = 12 * GiB;
+    EXPECT_EQ(video_gpu(desk)->vendor, kVendorNvidia);
+    // Two AMD GPUs: the discrete one.
+    std::vector<LinuxGpu> amd = {{kVendorAmd, true, "/dev/dri/renderD128", "", GiB / 2},
+                                 {kVendorAmd, false, "/dev/dri/renderD129", "", 8 * GiB}};
+    EXPECT_EQ(video_render_node(amd), "/dev/dri/renderD129");
+    // A tie goes to the primary GPU.
+    std::vector<LinuxGpu> intel = {{kVendorIntel, false, "/dev/dri/renderD129"},
+                                   {kVendorIntel, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(video_render_node(intel), "/dev/dri/renderD128");
+    EXPECT_EQ(video_gpu({}), nullptr);
+}
+
+TEST(LinuxDecoderOrder, AHybridLaptopDecodesOnItsNvidiaGpuAsWindowsDoes) {
+    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                  {kVendorAmd, true, "/dev/dri/renderD128", "", GiB / 2}};
+    EXPECT_EQ(linux_decoder_order(gpus, false, ""),
+              (std::vector<std::string>{"NVDEC", "VA-API", "OpenH264"}));
+    EXPECT_EQ(linux_encoder_order(gpus, false, ""), (std::vector<std::string>{"NVENC", "VA-API"}));
+}
+
+TEST(LinuxVaDriver, TheVideoGpusVaDriverIsNamedWithTwoGpus) {
     char tmpl[] = "/tmp/m3llo-va-XXXXXX";
     const std::string dir = mkdtemp(tmpl);
     std::ofstream(dir + "/radeonsi_drv_video.so") << "";
-    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, "/dev/dri/renderD129"},
-                                  {kVendorAmd, true, "/dev/dri/renderD128"}};
-    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {"/nonexistent", dir}), "radeonsi");
-    // One GPU: nothing to keep asleep, libva picks the driver itself.
-    EXPECT_EQ(va_driver_for_primary_gpu({gpus[1]}, {dir}), "");
-    // An NVIDIA primary GPU decodes with NVDEC first; VA is left alone.
-    gpus[0].primary = true;
-    gpus[1].primary = false;
-    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "");
-    std::error_code ec;
-    std::filesystem::remove_all(dir, ec);
-}
-
-TEST(LinuxVaDriver, AnIntelPrimaryTakesTheDriverThatIsInstalled) {
-    char tmpl[] = "/tmp/m3llo-va-XXXXXX";
-    const std::string dir = mkdtemp(tmpl);
-    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, ""}, {kVendorIntel, true, "/dev/dri/renderD128"}};
-    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "");  // none installed
-    std::ofstream(dir + "/i965_drv_video.so") << "";
-    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "i965");
+    // An AMD card with an Intel iGPU: radeonsi.
+    std::vector<LinuxGpu> gpus = {{kVendorIntel, true, "/dev/dri/renderD128"},
+                                  {kVendorAmd, false, "/dev/dri/renderD129", "", 8 * GiB}};
+    EXPECT_EQ(va_driver_for_video_gpu(gpus, {"/nonexistent", dir}), "radeonsi");
+    // One GPU: libva picks the driver itself.
+    EXPECT_EQ(va_driver_for_video_gpu({gpus[1]}, {dir}), "");
+    // NVIDIA as the video GPU decodes with NVDEC: VA is left alone.
+    std::vector<LinuxGpu> hybrid = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                    {kVendorAmd, true, "/dev/dri/renderD128", "", GiB / 2}};
+    EXPECT_EQ(va_driver_for_video_gpu(hybrid, {dir}), "");
+    // Two Intel GPUs: the driver that is installed.
+    std::vector<LinuxGpu> intel = {{kVendorIntel, true, "/dev/dri/renderD128"},
+                                   {kVendorIntel, false, "/dev/dri/renderD129"}};
+    EXPECT_EQ(va_driver_for_video_gpu(intel, {dir}), "");
     std::ofstream(dir + "/iHD_drv_video.so") << "";
-    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "iHD");
+    EXPECT_EQ(va_driver_for_video_gpu(intel, {dir}), "iHD");
     std::error_code ec;
     std::filesystem::remove_all(dir, ec);
-}
-
-TEST(LinuxDecoderOrder, AnAmdPrimaryKeepsTheNvidiaGpuAsleep) {
-    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, "/dev/dri/renderD129"},
-                                  {kVendorAmd, true, "/dev/dri/renderD128"}};
-    EXPECT_EQ(linux_decoder_order(gpus, false, ""),
-              (std::vector<std::string>{"VA-API", "NVDEC", "OpenH264"}));
 }
 
 TEST(LinuxDecoderOrder, AnNvidiaDesktopTakesNvdecFirst) {
@@ -137,7 +163,7 @@ TEST(LinuxEncoderOrder, TheDiscreteGpusEncoderFirstAndNoSoftwareEncoder) {
     std::vector<LinuxGpu> hybrid = {{kVendorNvidia, false, "/dev/dri/renderD129"},
                                     {kVendorAmd, true, "/dev/dri/renderD128", "", 512ull << 20}};
     EXPECT_EQ(linux_encoder_order(hybrid, false, ""), (std::vector<std::string>{"NVENC", "VA-API"}));
-    EXPECT_EQ(encode_render_node(hybrid), "/dev/dri/renderD129");
+    EXPECT_EQ(video_render_node(hybrid), "/dev/dri/renderD129");
     std::vector<LinuxGpu> amd_only = {{kVendorAmd, true, "/dev/dri/renderD128"}};
     EXPECT_EQ(linux_encoder_order(amd_only, false, ""), (std::vector<std::string>{"VA-API", "NVENC"}));
 }
@@ -145,7 +171,7 @@ TEST(LinuxEncoderOrder, TheDiscreteGpusEncoderFirstAndNoSoftwareEncoder) {
 TEST(LinuxEncoderOrder, TwoAmdGpusEncodeOnTheOneWithMoreVideoMemory) {
     std::vector<LinuxGpu> gpus = {{kVendorAmd, true, "/dev/dri/renderD128", "", 512ull << 20},
                                   {kVendorAmd, false, "/dev/dri/renderD129", "", 8ull << 30}};
-    EXPECT_EQ(encode_render_node(gpus), "/dev/dri/renderD129");
+    EXPECT_EQ(video_render_node(gpus), "/dev/dri/renderD129");
     EXPECT_EQ(linux_encoder_order(gpus, false, "")[0], "VA-API");
 }
 

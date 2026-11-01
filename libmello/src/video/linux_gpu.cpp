@@ -5,6 +5,7 @@
 #include <climits>
 #include <cstdlib>
 #include <dirent.h>
+#include <dlfcn.h>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -25,6 +26,31 @@ static std::string read_line(const std::string& path) {
 static std::string real_path(const std::string& path) {
     char buf[PATH_MAX];
     return realpath(path.c_str(), buf) ? std::string(buf) : std::string{};
+}
+
+// NVIDIA has no integrated GPUs on PCs: with its memory unknown it counts
+// as this much, more than any integrated GPU's carve-out.
+static constexpr uint64_t kAssumedNvidiaVram = 2ull << 30;
+
+// Total memory of the NVIDIA GPU at `pci_address` from NVML, the NVIDIA
+// driver's management library; 0 when it does not answer.
+static uint64_t nvidia_vram(const std::string& pci_address) {
+    struct NvmlMemory { unsigned long long total, free, used; };
+    void* nvml = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
+    if (!nvml) return 0;
+    auto init = reinterpret_cast<int (*)()>(dlsym(nvml, "nvmlInit_v2"));
+    auto by_pci = reinterpret_cast<int (*)(const char*, void**)>(dlsym(nvml, "nvmlDeviceGetHandleByPciBusId_v2"));
+    auto memory = reinterpret_cast<int (*)(void*, NvmlMemory*)>(dlsym(nvml, "nvmlDeviceGetMemoryInfo"));
+    auto shutdown = reinterpret_cast<int (*)()>(dlsym(nvml, "nvmlShutdown"));
+    uint64_t total = 0;
+    if (init && by_pci && memory && shutdown && init() == 0) {
+        void* device = nullptr;
+        NvmlMemory m{};
+        if (by_pci(pci_address.c_str(), &device) == 0 && memory(device, &m) == 0) total = m.total;
+        shutdown();
+    }
+    dlclose(nvml);
+    return total;
 }
 
 std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root) {
@@ -59,22 +85,45 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root) {
         gpu.vram_bytes = std::strtoull(read_line(base + "/mem_info_vram_total").c_str(), nullptr, 10);
         const auto it = render_of.find(real_path(base));
         if (it != render_of.end()) gpu.render_node = it->second;
+        gpu.pci_address = real_path(base);
+        gpu.pci_address = gpu.pci_address.substr(gpu.pci_address.rfind('/') + 1);
         gpus.push_back(gpu);
     }
+    // NVIDIA's memory only matters against a GPU with as much as NVIDIA is
+    // assumed to have (a discrete AMD GPU); NVML wakes the GPU, so only then.
+    const bool rival = std::any_of(gpus.begin(), gpus.end(), [](const LinuxGpu& g) {
+        return g.vendor != kVendorNvidia && g.vram_bytes >= kAssumedNvidiaVram;
+    });
+    if (rival) {
+        for (LinuxGpu& g : gpus) {
+            if (g.vendor == kVendorNvidia && g.vram_bytes == 0) g.vram_bytes = nvidia_vram(g.pci_address);
+        }
+    }
     return gpus;
+}
+
+static uint64_t ranking_vram(const LinuxGpu& g) {
+    if (g.vendor == kVendorNvidia && g.vram_bytes == 0) return kAssumedNvidiaVram;
+    return g.vram_bytes;
+}
+
+const LinuxGpu* video_gpu(const std::vector<LinuxGpu>& gpus) {
+    const LinuxGpu* best = nullptr;
+    for (const LinuxGpu& g : gpus) {
+        if (!best || ranking_vram(g) > ranking_vram(*best) ||
+            (ranking_vram(g) == ranking_vram(*best) && g.primary)) {
+            best = &g;
+        }
+    }
+    return best;
 }
 
 std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced) {
     if (soft) return {"OpenH264"};
-    const LinuxGpu* primary = nullptr;
-    for (const LinuxGpu& g : gpus) {
-        if (g.primary) primary = &g;
-    }
-    if (!primary && gpus.size() == 1) primary = &gpus[0];
-
+    const LinuxGpu* gpu = video_gpu(gpus);
     std::vector<std::string> order;
-    if (primary && primary->vendor == kVendorNvidia) {
+    if (gpu && gpu->vendor == kVendorNvidia) {
         order = {"NVDEC", "VA-API", "OpenH264"};
     } else {
         order = {"VA-API", "NVDEC", "OpenH264"};
@@ -90,21 +139,10 @@ std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, 
     return order;
 }
 
-const LinuxGpu* encode_gpu(const std::vector<LinuxGpu>& gpus) {
-    const LinuxGpu* best = nullptr;
-    for (const LinuxGpu& g : gpus) {
-        if (g.vendor == kVendorNvidia) return &g;
-        if (!best || g.vram_bytes > best->vram_bytes || (g.vram_bytes == best->vram_bytes && g.primary)) {
-            best = &g;
-        }
-    }
-    return best;
-}
-
 std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced) {
     if (soft || forced == "openh264") return {"OpenH264"};
-    const LinuxGpu* gpu = encode_gpu(gpus);
+    const LinuxGpu* gpu = video_gpu(gpus);
     std::vector<std::string> order;
     if (gpu && gpu->vendor == kVendorNvidia) {
         order = {"NVENC", "VA-API"};
@@ -116,8 +154,8 @@ std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, 
     return order;
 }
 
-std::string encode_render_node(const std::vector<LinuxGpu>& gpus) {
-    const LinuxGpu* gpu = encode_gpu(gpus);
+std::string video_render_node(const std::vector<LinuxGpu>& gpus) {
+    const LinuxGpu* gpu = video_gpu(gpus);
     return gpu ? gpu->render_node : std::string{};
 }
 
@@ -133,17 +171,15 @@ static bool file_exists(const std::string& path) {
     return stat(path.c_str(), &st) == 0;
 }
 
-std::string va_driver_for_primary_gpu(const std::vector<LinuxGpu>& gpus,
-                                      const std::vector<std::string>& driver_dirs) {
+std::string va_driver_for_video_gpu(const std::vector<LinuxGpu>& gpus,
+                                    const std::vector<std::string>& driver_dirs) {
     if (gpus.size() < 2) return {};
-    const LinuxGpu* primary = nullptr;
-    for (const LinuxGpu& g : gpus) {
-        if (g.primary) primary = &g;
-    }
-    if (!primary) return {};
+    const LinuxGpu* gpu = video_gpu(gpus);
+    if (!gpu) return {};
+    // Two GPUs of one vendor share one VA driver; naming it changes nothing.
     std::vector<std::string> candidates;
-    if (primary->vendor == kVendorAmd) candidates = {"radeonsi"};
-    if (primary->vendor == kVendorIntel) candidates = {"iHD", "i965"};
+    if (gpu->vendor == kVendorAmd) candidates = {"radeonsi"};
+    if (gpu->vendor == kVendorIntel) candidates = {"iHD", "i965"};
     for (const std::string& name : candidates) {
         for (const std::string& dir : driver_dirs) {
             if (file_exists(dir + "/" + name + "_drv_video.so")) return name;
@@ -172,11 +208,11 @@ void prepare_va_driver_env() {
         // surface (an EGL window surface failed with EGL_BAD_ALLOC there).
         setenv("GST_GL_WINDOW", "surfaceless", 0);
         if (std::getenv("LIBVA_DRIVER_NAME")) return;
-        const std::string driver = va_driver_for_primary_gpu(list_linux_gpus(), va_driver_dirs());
+        const std::string driver = va_driver_for_video_gpu(list_linux_gpus(), va_driver_dirs());
         if (driver.empty()) return;
         setenv("LIBVA_DRIVER_NAME", driver.c_str(), 0);
-        MELLO_LOG_INFO("video/decoder", "VA-API: LIBVA_DRIVER_NAME=%s (the primary GPU's driver, so "
-                                        "GStreamer leaves the other GPU asleep)", driver.c_str());
+        MELLO_LOG_INFO("video/decoder", "VA-API: LIBVA_DRIVER_NAME=%s (the video GPU's driver: GStreamer's VA "
+                                        "plugin does not open the other GPU)", driver.c_str());
     });
 }
 

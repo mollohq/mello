@@ -81,13 +81,12 @@ const Api& api();
 bool has_factory(const char* name);
 
 /// The VA element of `kind` ("h264dec", "h264enc", "postproc") on the
-/// primary GPU: `va<kind>` on GStreamer's first VA device, else
+/// video GPU (linux_gpu.hpp video_gpu): `va<kind>` on GStreamer's first VA device, else
 /// `varenderD<N><kind>`. Empty when GStreamer or the element is missing.
 /// Chosen once per process and kind: reading an element's device opens it.
 std::string va_element(const std::string& kind);
 
-/// As va_element, on the GPU of `render_node` (empty: the primary GPU). The
-/// encoder runs on the encode GPU (linux_gpu.hpp encode_gpu).
+/// As va_element, on the GPU of `render_node` (empty: the video GPU).
 std::string va_element_on(const std::string& kind, const std::string& render_node);
 
 /// True when the DMA-BUF entry points (libgstallocators) loaded.

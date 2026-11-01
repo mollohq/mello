@@ -85,7 +85,7 @@ static std::vector<DmaBufFormat> pad_dmabuf_formats(GstElement* el, const char* 
 
 static std::vector<DmaBufFormat> va_dmabuf_formats() {
     const gst::Api& a = gst::api();
-    const std::string post = gst::va_element_on("postproc", encode_render_node(list_linux_gpus()));
+    const std::string post = gst::va_element_on("postproc", video_render_node(list_linux_gpus()));
     if (post.empty()) return {};
     GstElement* el = a.factory_make(post.c_str(), nullptr);
     if (!el) return {};
@@ -95,9 +95,13 @@ static std::vector<DmaBufFormat> va_dmabuf_formats() {
     return formats;
 }
 
-// The NVIDIA GPU's DRM card, or empty.
+// The DRM card of the video GPU when it is NVIDIA, else of any NVIDIA GPU
+// (NVENC as a fallback), or empty.
 static std::string nvidia_card() {
-    for (const LinuxGpu& g : list_linux_gpus()) {
+    const auto gpus = list_linux_gpus();
+    const LinuxGpu* video = video_gpu(gpus);
+    if (video && video->vendor == kVendorNvidia) return video->card_node;
+    for (const LinuxGpu& g : gpus) {
         if (g.vendor == kVendorNvidia) return g.card_node;
     }
     return {};
@@ -157,11 +161,14 @@ std::vector<DmaBufFormat> GstEncoder::dmabuf_formats(GstEncoderKind kind) {
             formats[i] = va_dmabuf_formats();
         } else if (nvenc_gpu_path()) {
             formats[i] = gl_dmabuf_formats();
-            // The desktop on another GPU (a hybrid laptop): its buffers reach
-            // the NVIDIA GPU only in the linear layout.
-            const auto gpus = list_linux_gpus();
-            const std::string desktop = primary_render_node(gpus);
-            if (!desktop.empty() && desktop != encode_render_node(gpus)) {
+        }
+        // The desktop on another GPU than the video GPU (a hybrid laptop):
+        // its buffers reach the video GPU only in the linear layout.
+        const auto gpus = list_linux_gpus();
+        const std::string desktop = primary_render_node(gpus);
+        if (!formats[i].empty() || kind == GstEncoderKind::Nvenc) {
+            if (!desktop.empty() && desktop != video_render_node(gpus) &&
+                (kind == GstEncoderKind::VaApi || nvenc_gpu_path())) {
                 for (uint32_t fourcc : {kDrmXRGB8888, kDrmARGB8888}) {
                     auto f = std::find_if(formats[i].begin(), formats[i].end(),
                                           [fourcc](const DmaBufFormat& d) { return d.drm_fourcc == fourcc; });
@@ -221,7 +228,7 @@ GstEncoder::~GstEncoder() {
 
 bool GstEncoder::is_available(GstEncoderKind kind) {
     if (kind == GstEncoderKind::VaApi) {
-        return !gst::va_element_on("h264enc", encode_render_node(list_linux_gpus())).empty() && !gst::va_element_on("postproc", encode_render_node(list_linux_gpus())).empty();
+        return !gst::va_element_on("h264enc", video_render_node(list_linux_gpus())).empty() && !gst::va_element_on("postproc", video_render_node(list_linux_gpus())).empty();
     }
     if (!gst::has_factory("nvh264enc")) return false;
     return !nvenc_gpu_path() ||
@@ -257,8 +264,8 @@ bool GstEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                                                    : "no nvh264enc (gst-plugins-bad nvcodec) or GL elements");
     }
     const bool va = kind_ == GstEncoderKind::VaApi;
-    const std::string enc = va ? gst::va_element_on("h264enc", encode_render_node(list_linux_gpus())) : "nvh264enc";
-    const std::string post = va ? gst::va_element_on("postproc", encode_render_node(list_linux_gpus())) : "";
+    const std::string enc = va ? gst::va_element_on("h264enc", video_render_node(list_linux_gpus())) : "nvh264enc";
+    const std::string post = va ? gst::va_element_on("postproc", video_render_node(list_linux_gpus())) : "";
     cpu_convert_ = !va && !nvenc_gpu_path();
     config_ = config;
 

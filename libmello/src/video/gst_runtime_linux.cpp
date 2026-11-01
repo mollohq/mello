@@ -117,7 +117,8 @@ std::string device_path_of(const char* factory) {
 
 std::string find_va_element(const std::string& kind, const std::string& on_node) {
     const std::string first = "va" + kind;  // vah264enc
-    const std::string node = on_node.empty() ? primary_render_node(list_linux_gpus()) : on_node;
+    // VA work runs on the video GPU (linux_gpu.hpp), as every video device.
+    const std::string node = on_node.empty() ? video_render_node(list_linux_gpus()) : on_node;
     if (!node.empty()) {
         const std::string leaf = node.substr(node.rfind('/') + 1);  // renderD128
         const std::string named = "va" + leaf + kind;               // varenderD129h264enc
