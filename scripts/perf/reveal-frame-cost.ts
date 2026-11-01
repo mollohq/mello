@@ -73,8 +73,27 @@ export default journey({
       console.log(`reveal-frame-cost ${process.env.MELLO_RENDERER ?? "default"}: CPU at rest ${percent.toFixed(1)} % of the machine (${(100 * used / wall).toFixed(0)} % of one core)`);
       await bob.checkpoint("reveal-rest");
     });
+
+    await step("the belt closed, the client idle again", async () => {
+      console.log(`reveal-frame-cost: private working set at rest ${privateMb(bob.pid)} MB`);
+      await bob.click("Close");
+      await bob.waitFor("the card landed", (st) => st.sealed.open_center === "none", 10_000);
+      await sleep(15_000);
+      console.log(`reveal-frame-cost: private working set 15 s after the close ${privateMb(bob.pid)} MB`);
+    });
   },
 });
+
+/** The private working set of a process (Task Manager "Memory"), in MB. */
+function privateMb(pid: number | undefined): number {
+  if (pid === undefined) throw new Error("bob is not running");
+  const out = execFileSync(
+    "powershell",
+    ["-NoProfile", "-Command", `[int]((Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter "IDProcess=${pid}").WorkingSetPrivate / 1MB)`],
+    { encoding: "utf8" },
+  );
+  return Number(out.trim());
+}
 
 /** The CPU time of a process so far, in seconds. */
 function cpuSeconds(pid: number | undefined): number {

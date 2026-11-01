@@ -153,6 +153,16 @@ slint-build = { version = "1.18", default-features = false, features = ["compat-
 
 A window with a frame must have an opaque `background`. Slint 1.18 makes an `NSWindow` transparent only when the background is translucent or the window has no frame. On macOS 27, a transparent window has no title bar background.
 
+### 3.3 Process memory on Windows
+
+The client target is under 80 MB private working set (Task Manager "Memory") idle in a voice call. Two settings serve it. Measurements: `specs/features/D2D-RENDERER.md` section 8.4.
+
+- **Segment heap.** The client manifest (`client/build.rs`, `res.set_manifest`) selects the segment heap for the process heap. It holds the same allocations in about 6 MB less memory than the NT heap. Windows 10 2004 and later; older builds ignore it. The manifest has nothing else, so every other default stays as without a manifest.
+- **Working-set trim.** `client/src/memory_trim.rs` calls `SetProcessWorkingSetSize(-1, -1)` 10 s (`QUIET`) after the last settle point: the window shown at startup, a login, a crew load, a voice join or voice state change, the window hidden to the tray. Windows does the same to a minimized window. The pages stay committed; the ones the client touches again come back as soft faults. It changes no memory contents.
+  - Do not trim during animations or on a timer that ignores activity: the soft faults cost a few milliseconds.
+  - Under real memory pressure Windows may write trimmed pages to the pagefile. The next touch then reads from disk. The audio thread touches its buffers every 10 ms, so they return at once after a trim.
+- Private bytes (committed memory) do not change with either setting. Report both numbers when you measure.
+
 ---
 
 ## 4. Native Menus (`muda`)
