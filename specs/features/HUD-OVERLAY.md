@@ -2,11 +2,24 @@
 
 > **Component:** Crew HUD (Client, Windows)
 > **Version:** 0.4
-> **Status:** Implemented (Windows), Planned (macOS)
+> **Status:** Off (2026-11-01): `hud_manager::HUD_AVAILABLE` is `false` until a redesign. Implemented (Windows), Planned (macOS)
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)
 > **Related:** [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md), [13-VOICE-CHANNELS.md](./13-VOICE-CHANNELS.md)
 
 ---
+
+## 0. The HUD is off
+
+The HUD does not ship (2026-11-01). It cannot draw over fullscreen games, users
+report it as a distraction, and it costs 7 MB of private working set while
+hidden and 11 MB while it shows in a voice call. The client target is under
+80 MB in a call (spec features/D2D-RENDERER.md section 8.4).
+
+- `hud_manager::HUD_AVAILABLE` is `false`. No overlay thread starts, whatever
+  the stored `hud_enabled` setting says.
+- The General tab hides the HUD section (`hud-available` in
+  `settings_modal.slint`). Set both to turn the HUD on again.
+- The code stays for the redesign. The sections below describe it as built.
 
 ## 1. Overview
 
@@ -44,6 +57,8 @@ mello.exe
 ```
 
 `HudManager` owns the `mpsc::Sender` and pushes state/settings/shutdown messages. The overlay thread creates its Win32 window, sets up the DComp rendering pipeline, and enters a message loop that drains both Win32 messages and channel messages every ~16ms.
+
+The overlay thread starts with the first state that shows the HUD (mode `Overlay`), not at client start. After the HUD has been hidden for 30 s (`HIDE_GRACE`), `HudManager::tick` stops the thread, and its window and D3D11 / Direct2D stack go with it. The last settings are sent again to each new thread. A dead thread (a panic, a lost device) is forgotten, and the next shown state starts a new one. Unit tests: `hud_manager::lifetime_tests`.
 
 ### 2.2 Message protocol
 
@@ -195,9 +210,9 @@ The HUD must have zero measurable impact on game frame rate or input latency.
 
 | Failure | Behaviour |
 |---|---|
-| Overlay thread panics | Main client continues running; HUD unavailable until restart |
+| Overlay thread panics | Main client continues running; the next state that shows the HUD starts a new overlay thread |
 | Avatar bitmap missing or corrupt | Render initials fallback: rounded rect with state-colored background, initials centered |
-| Direct2D/DComp device lost | Overlay thread exits; HUD unavailable until restart |
+| Direct2D/DComp device lost | Overlay thread exits; the next state that shows the HUD starts a new one |
 
 ---
 
@@ -209,3 +224,4 @@ The HUD must have zero measurable impact on game frame rate or input latency.
 - Push-to-talk indicator in overlay
 - Per-monitor DPI awareness for mixed-scaling multi-monitor setups
 - Global hotkey to toggle HUD visibility
+- The redesign: draw over fullscreen games, less distraction, and one GPU device with the main window (the overlay's own D3D11 / Direct2D stack is most of its memory)

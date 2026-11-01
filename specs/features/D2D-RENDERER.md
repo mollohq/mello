@@ -259,6 +259,42 @@ recap animations cover most of the window.
 Every frame after a loss drew. Private working set stayed between 29 and 34 MB with
 no upward trend; the run without losses ended at 34 MB.
 
+### 8.4 Under 80 MB in a call
+
+`scripts/perf/voice-idle-memory.ts`, release build with the e2e feature, `d2d`,
+2026-11-01. The runs in one sitting are comparable; numbers from different
+sittings differ by a few MB, since Windows trims working sets when free memory
+is low.
+
+Where the private working set goes, idle in a call, before the cuts
+(`win\ws-breakdown.py` in m3llo-fx-lab): about 48 MB in Windows heap segments
+(Rust, Slint, libmello and ONNX Runtime allocations), 4 MB of image pages, the
+rest in driver and runtime allocations.
+
+| Variant | Logged in, idle | Idle in a call |
+|---|---|---|
+| HUD on (it shows in the call when another window is focused, as with Task Manager open) | 78 MB | 94 MB |
+| HUD off | 71 MB | 83 MB |
+| HUD on, ONNX Runtime arena off | 78 MB | 93 MB (no effect) |
+| HUD off, segment heap (shipped) | 66 MB | 76 MB |
+| HUD off, segment heap, working-set trim (not shipped) | 17 MB | 24 - 26 MB after 5 min |
+
+A second sitting of the shipped build (commit 05df32e2, no trim): 63 MB logged
+in and 72 MB in a call; with a 5-minute hold, 61 - 65 MB logged in and 71 - 74 MB
+in the call, with no upward trend.
+
+The last row is a trial: `SetProcessWorkingSetSize(-1, -1)` 10 s after each
+settle point (startup, a crew load, a voice join). It shows what the client
+touches again after a trim; a sealed belt reveal held open and closed brought it
+to 29 MB, and committed memory did not change. It is not shipped (spec 12 section
+3.3). Windows does a similar trim itself: a client in daily use, twenty minutes
+in a call with the window minimized once, showed 48 MB private working set and
+160 MB committed.
+
+The HUD overlay is off (spec features/HUD-OVERLAY.md section 0): 7 MB while
+hidden and 11 MB while it shows in a call, for its own window, D3D11 device,
+Direct2D and DirectWrite stack.
+
 ## 9. Tests and checks
 
 - `client/src/renderer_choice.rs` has unit tests for every selection rule. They run on

@@ -153,6 +153,14 @@ slint-build = { version = "1.18", default-features = false, features = ["compat-
 
 A window with a frame must have an opaque `background`. Slint 1.18 makes an `NSWindow` transparent only when the background is translucent or the window has no frame. On macOS 27, a transparent window has no title bar background.
 
+### 3.3 Process memory on Windows
+
+The client target is under 80 MB private working set (Task Manager "Memory") idle in a voice call. The HUD overlay is off (spec features/HUD-OVERLAY.md section 0) and the client uses the segment heap. Measurements: `specs/features/D2D-RENDERER.md` section 8.4.
+
+- **Segment heap.** The client manifest (`client/build.rs`, `res.set_manifest`) selects the segment heap for the process heap. It holds the same allocations in about 6 MB less memory than the NT heap. Windows 10 2004 and later; older builds ignore it. The manifest has nothing else, so every other default stays as without a manifest.
+- **No forced working-set trim.** The client does not call `SetProcessWorkingSetSize(-1, -1)` or `EmptyWorkingSet`. A trim brings a call to 24 - 26 MB (D2D-RENDERER section 8.4), but it adds page faults at times the client does not control and can send pages to the pagefile under memory pressure. Windows trims the working set itself when the window is minimized and when free memory is low.
+- Private bytes (committed memory) do not change with the segment heap. Report both numbers when you measure.
+
 ---
 
 ## 4. Native Menus (`muda`)

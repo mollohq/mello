@@ -11,9 +11,15 @@
 // logged in, then joins General with bob, then holds idle in the call. A
 // sampler reads alice's private working set (Task Manager "Memory") and GPU
 // memory every two seconds. The result goes to stdout and to
-// target/perf/voice-idle-memory-<renderer>.json. The window stays shown.
+// target/perf/voice-idle-memory-<tag>.json, where the tag is MELLO_PERF_TAG or
+// the renderer. The window stays shown.
+//
+// MELLO_PERF_INSPECT runs a command halfway through each hold, with {pid}
+// replaced by alice's process id, and saves its output next to the JSON as
+// <tag>-idle.txt and <tag>-voice.txt. For example a working-set breakdown:
+// MELLO_PERF_INSPECT="python ../m3llo-fx-lab/win/ws-breakdown.py {pid}".
 
-import { execFileSync } from "node:child_process";
+import { execFileSync, execSync } from "node:child_process";
 import { mkdirSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
 
@@ -41,13 +47,20 @@ function sample(pid: number): { privateMb: number; gpuMb: number } {
   return { privateMb, gpuMb };
 }
 
-async function hold(app: App, ms: number): Promise<Sample[]> {
+async function hold(app: App, ms: number, inspectTo: string): Promise<Sample[]> {
   const pid = app.pid;
   if (pid === undefined) throw new Error(`${app.name} is not running`);
+  const inspect = process.env.MELLO_PERF_INSPECT;
   const samples: Sample[] = [];
   const start = Date.now();
+  let inspected = false;
   while (Date.now() - start < ms) {
     samples.push({ t: Math.round((Date.now() - start) / 1000), ...sample(pid) });
+    if (inspect && !inspected && Date.now() - start >= ms / 2) {
+      inspected = true;
+      const out = execSync(inspect.replaceAll("{pid}", String(pid)), { encoding: "utf8" });
+      writeFileSync(inspectTo, out);
+    }
     await sleep(EVERY_MS);
   }
   return samples;
@@ -66,34 +79,37 @@ export default journey({
   async run(ctx) {
     const { step } = ctx;
     const renderer = process.env.MELLO_RENDERER ?? "default";
+    const tag = process.env.MELLO_PERF_TAG ?? renderer;
+    const out = `target/perf/voice-idle-memory-${tag}`;
+    mkdirSync("target/perf", { recursive: true });
     const { alice, bob } = await twoUsersInOneCrew(ctx);
     const phases: Record<string, Sample[]> = {};
 
     await step("alice idle, logged in, not in voice", async () => {
       await sleep(SETTLE_MS);
-      phases.idle = await hold(alice, HOLD_MS);
+      phases.idle = await hold(alice, HOLD_MS, `${out}-idle.txt`);
     });
 
     await step(`alice and bob join ${CHANNEL}, alice idle in the call`, async () => {
       await joinVoice(alice, CHANNEL);
       await joinVoice(bob, CHANNEL);
       await sleep(SETTLE_MS);
-      phases.voice = await hold(alice, HOLD_MS);
+      phases.voice = await hold(alice, HOLD_MS, `${out}-voice.txt`);
       await alice.checkpoint("idle-in-voice");
     });
 
     const result = {
       renderer,
+      tag,
       holdMs: HOLD_MS,
       idle: { privateMb: steady(phases.idle, "privateMb"), gpuMb: steady(phases.idle, "gpuMb") },
       voice: { privateMb: steady(phases.voice, "privateMb"), gpuMb: steady(phases.voice, "gpuMb") },
       samples: phases,
     };
     console.log(
-      `voice-idle-memory ${renderer}: idle ${result.idle.privateMb} MB private (GPU ${result.idle.gpuMb}), ` +
+      `voice-idle-memory ${tag}: idle ${result.idle.privateMb} MB private (GPU ${result.idle.gpuMb}), ` +
         `in voice ${result.voice.privateMb} MB private (GPU ${result.voice.gpuMb})`,
     );
-    mkdirSync("target/perf", { recursive: true });
-    writeFileSync(`target/perf/voice-idle-memory-${renderer}.json`, JSON.stringify(result, null, 2));
+    writeFileSync(`${out}.json`, JSON.stringify(result, null, 2));
   },
 });

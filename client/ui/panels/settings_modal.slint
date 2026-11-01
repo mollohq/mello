@@ -653,7 +653,9 @@ component GeneralTab inherits VerticalLayout {
     in-out property <bool> auto-connect: false;
     in-out property <bool> minimize-on-join: false;
     in-out property <bool> hw-acceleration: true;
-    // HUD settings
+    // HUD settings. The section shows only while the HUD ships
+    // (hud_manager::HUD_AVAILABLE); it is off while the overlay is redesigned.
+    in property <bool> hud-available: false;
     in-out property <bool> hud-enabled: true;
     in-out property <float> hud-overlay-opacity: 0.8;
     in-out property <bool> hud-clip-toasts: true;
@@ -744,7 +746,7 @@ component GeneralTab inherits VerticalLayout {
     }
 
     // HUD & OVERLAY
-    VerticalLayout {
+    if root.hud-available : VerticalLayout {
         spacing: 24px;
 
         SectionHeader { title: "HUD"; }

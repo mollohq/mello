@@ -526,7 +526,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // --- HUD manager ---
-    let hud_enabled = settings.borrow().hud_enabled;
+    let hud_enabled = hud_manager::HUD_AVAILABLE && settings.borrow().hud_enabled;
     let hud_mgr = Rc::new(hud_manager::HudManager::start(hud_enabled));
     if hud_enabled {
         let s = settings.borrow();

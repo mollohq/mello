@@ -1,4 +1,6 @@
+use std::cell::{Cell, RefCell};
 use std::sync::mpsc;
+use std::time::{Duration, Instant};
 
 use serde::{Deserialize, Serialize};
 
@@ -110,40 +112,59 @@ pub enum HudAction {
 
 // ── HudManager ────────────────────────────────────────────────────────────
 
-/// Manages the in-process HUD overlay thread.
+/// The HUD overlay ships only when this is true. It is off (2026-11-01): it
+/// cannot draw over fullscreen games, users report it as a distraction, and it
+/// costs 7 - 11 MB of private working set in a voice call, which breaks the
+/// 80 MB target. The overlay waits for a redesign (spec features/HUD-OVERLAY.md).
+/// While it is off, no overlay thread starts and the settings tab hides the HUD
+/// section, whatever the stored `hud_enabled` setting says.
+pub const HUD_AVAILABLE: bool = false;
+
+/// How long the overlay thread stays up after the HUD hides. A switch between
+/// the game and the client must not rebuild the window and its GPU device each
+/// time; a HUD that stays hidden must not keep them (about 7 MB of private
+/// working set, spec features/HUD-OVERLAY.md section 2.1).
+pub const HIDE_GRACE: Duration = Duration::from_secs(30);
+
+/// Starts an overlay thread and returns the sender of its channel.
+type Spawn = Box<dyn Fn() -> mpsc::Sender<HudMessage>>;
+
+/// Manages the in-process HUD overlay thread. The thread, its window and its
+/// D3D11 / Direct2D stack exist only while the HUD shows, and for
+/// [`HIDE_GRACE`] after it hides.
 pub struct HudManager {
-    tx: mpsc::Sender<HudMessage>,
     enabled: bool,
+    spawn: Spawn,
+    overlay: RefCell<Option<mpsc::Sender<HudMessage>>>,
+    /// The last settings, sent again to each new overlay thread.
+    settings: RefCell<Option<HudSettings>>,
+    /// When the HUD hid, while the overlay thread still runs.
+    hidden_since: Cell<Option<Instant>>,
 }
 
 impl HudManager {
-    /// Start the HUD manager. If enabled (and on Windows), spawns the overlay
-    /// thread. Returns the manager handle.
+    /// The HUD manager. Nothing starts here: the overlay thread starts with the
+    /// first state that shows the HUD. Disabled, or not on Windows, it does nothing.
     pub fn start(enabled: bool) -> Self {
-        let enabled = enabled && cfg!(target_os = "windows");
-
-        let tx = if enabled {
-            #[cfg(target_os = "windows")]
-            {
-                let sender = crate::hud_overlay::spawn();
-                log::info!("[hud_mgr] overlay thread spawned");
-                sender
-            }
-            #[cfg(not(target_os = "windows"))]
-            {
-                // Unreachable due to the check above, but keeps the compiler happy
-                let (sender, _) = mpsc::channel();
-                sender
-            }
-        } else {
-            let (sender, _) = mpsc::channel();
-            sender
-        };
-
-        Self { tx, enabled }
+        #[cfg(target_os = "windows")]
+        let spawn: Spawn = Box::new(crate::hud_overlay::spawn);
+        #[cfg(not(target_os = "windows"))]
+        let spawn: Spawn = Box::new(|| mpsc::channel().0);
+        Self::with_spawner(enabled && cfg!(target_os = "windows"), spawn)
     }
 
-    /// Push a state update to the overlay.
+    fn with_spawner(enabled: bool, spawn: Spawn) -> Self {
+        Self {
+            enabled,
+            spawn,
+            overlay: RefCell::new(None),
+            settings: RefCell::new(None),
+            hidden_since: Cell::new(None),
+        }
+    }
+
+    /// Push a state update to the overlay. A state that shows the HUD starts the
+    /// overlay thread if it does not run.
     pub fn push_state(&self, state: HudState) {
         if !self.enabled {
             return;
@@ -154,17 +175,32 @@ impl HudManager {
             state.crew.is_some(),
             state.voice.as_ref().map_or(0, |v| v.members.len()),
         );
-        if let Err(e) = self.tx.send(HudMessage::State(Box::new(state))) {
-            log::error!("[hud_mgr] send failed (overlay thread dead?): {}", e);
+        if state.mode == HudMode::Overlay {
+            self.hidden_since.set(None);
+            self.ensure_overlay();
+        } else if self.overlay.borrow().is_some() && self.hidden_since.get().is_none() {
+            self.hidden_since.set(Some(Instant::now()));
         }
+        self.send(HudMessage::State(Box::new(state)));
     }
 
-    /// Push a settings update to the overlay.
+    /// Push a settings update to the overlay. Kept for the next overlay thread.
     pub fn push_settings(&self, settings: HudSettings) {
         if !self.enabled {
             return;
         }
-        let _ = self.tx.send(HudMessage::Settings(settings));
+        *self.settings.borrow_mut() = Some(settings.clone());
+        self.send(HudMessage::Settings(settings));
+    }
+
+    /// Call often (the poll loop does): stops the overlay thread once the HUD has
+    /// been hidden for [`HIDE_GRACE`].
+    pub fn tick(&self, now: Instant) {
+        if let Some(since) = self.hidden_since.get() {
+            if now.duration_since(since) >= HIDE_GRACE {
+                self.stop_overlay("hidden for 30 s");
+            }
+        }
     }
 
     /// Poll for user actions from the HUD (currently unused -- overlay is click-through).
@@ -174,11 +210,50 @@ impl HudManager {
 
     /// Send shutdown to the overlay thread.
     pub fn shutdown(&self) {
-        let _ = self.tx.send(HudMessage::Shutdown);
+        self.stop_overlay("client shutdown");
     }
 
     pub fn is_enabled(&self) -> bool {
         self.enabled
+    }
+
+    /// True while the overlay thread runs.
+    pub fn overlay_running(&self) -> bool {
+        self.overlay.borrow().is_some()
+    }
+
+    fn ensure_overlay(&self) {
+        if self.overlay.borrow().is_some() {
+            return;
+        }
+        let tx = (self.spawn)();
+        log::info!("[hud_mgr] overlay thread spawned (HUD shown)");
+        if let Some(settings) = self.settings.borrow().clone() {
+            let _ = tx.send(HudMessage::Settings(settings));
+        }
+        *self.overlay.borrow_mut() = Some(tx);
+    }
+
+    fn stop_overlay(&self, why: &str) {
+        self.hidden_since.set(None);
+        if let Some(tx) = self.overlay.borrow_mut().take() {
+            let _ = tx.send(HudMessage::Shutdown);
+            log::info!("[hud_mgr] overlay thread stopped ({why})");
+        }
+    }
+
+    /// Sends to the overlay thread if it runs. A dead thread (a panic, a lost
+    /// device) is forgotten, so the next state that shows the HUD starts a new one.
+    fn send(&self, msg: HudMessage) {
+        let failed = match self.overlay.borrow().as_ref() {
+            Some(tx) => tx.send(msg).is_err(),
+            None => false,
+        };
+        if failed {
+            log::error!("[hud_mgr] overlay thread is gone; the next shown state starts a new one");
+            *self.overlay.borrow_mut() = None;
+            self.hidden_since.set(None);
+        }
     }
 }
 
@@ -200,6 +275,148 @@ pub fn derive_initials(name: &str) -> String {
             let second = words[1].chars().next().unwrap_or('?');
             format!("{}{}", first, second).to_uppercase()
         }
+    }
+}
+
+#[cfg(test)]
+mod lifetime_tests {
+    //! The overlay thread exists only while the HUD shows, and for HIDE_GRACE
+    //! after it hides. A fake spawner stands in for the Win32 overlay thread.
+
+    use super::*;
+    use std::rc::Rc;
+
+    struct Spawned {
+        rx: Vec<mpsc::Receiver<HudMessage>>,
+    }
+
+    fn manager() -> (HudManager, Rc<RefCell<Spawned>>) {
+        let spawned = Rc::new(RefCell::new(Spawned { rx: Vec::new() }));
+        let s = spawned.clone();
+        let spawn: Spawn = Box::new(move || {
+            let (tx, rx) = mpsc::channel();
+            s.borrow_mut().rx.push(rx);
+            tx
+        });
+        (HudManager::with_spawner(true, spawn), spawned)
+    }
+
+    fn state(mode: HudMode) -> HudState {
+        HudState {
+            mode,
+            ..Default::default()
+        }
+    }
+
+    fn settings() -> HudSettings {
+        HudSettings {
+            overlay_opacity: 0.8,
+            show_clip_toasts: true,
+        }
+    }
+
+    fn drain(rx: &mpsc::Receiver<HudMessage>) -> Vec<&'static str> {
+        rx.try_iter()
+            .map(|m| match m {
+                HudMessage::State(s) if s.mode == HudMode::Overlay => "shown",
+                HudMessage::State(_) => "hidden",
+                HudMessage::Settings(_) => "settings",
+                HudMessage::Shutdown => "shutdown",
+            })
+            .collect()
+    }
+
+    #[test]
+    fn nothing_starts_while_the_hud_stays_hidden() {
+        let (hud, spawned) = manager();
+        hud.push_settings(settings());
+        hud.push_state(state(HudMode::Hidden));
+        hud.tick(Instant::now() + HIDE_GRACE * 2);
+        assert!(!hud.overlay_running());
+        assert_eq!(spawned.borrow().rx.len(), 0);
+    }
+
+    #[test]
+    fn the_first_shown_state_starts_the_overlay_with_the_last_settings() {
+        let (hud, spawned) = manager();
+        hud.push_settings(settings());
+        hud.push_state(state(HudMode::Overlay));
+        assert!(hud.overlay_running());
+        let spawned = spawned.borrow();
+        assert_eq!(spawned.rx.len(), 1);
+        assert_eq!(drain(&spawned.rx[0]), ["settings", "shown"]);
+    }
+
+    #[test]
+    fn a_hidden_hud_stops_the_overlay_after_the_grace_and_not_before() {
+        let (hud, spawned) = manager();
+        hud.push_state(state(HudMode::Overlay));
+        hud.push_state(state(HudMode::Hidden));
+        let hidden_at = Instant::now();
+        hud.tick(hidden_at + HIDE_GRACE / 2);
+        assert!(
+            hud.overlay_running(),
+            "a short switch away keeps the overlay"
+        );
+        hud.tick(hidden_at + HIDE_GRACE + Duration::from_secs(1));
+        assert!(!hud.overlay_running());
+        assert_eq!(
+            drain(&spawned.borrow().rx[0]),
+            ["shown", "hidden", "shutdown"]
+        );
+    }
+
+    #[test]
+    fn showing_again_within_the_grace_keeps_the_same_overlay() {
+        let (hud, spawned) = manager();
+        hud.push_state(state(HudMode::Overlay));
+        hud.push_state(state(HudMode::Hidden));
+        hud.push_state(state(HudMode::Overlay));
+        hud.tick(Instant::now() + HIDE_GRACE * 2);
+        assert!(hud.overlay_running());
+        assert_eq!(spawned.borrow().rx.len(), 1);
+    }
+
+    #[test]
+    fn showing_after_a_stop_starts_a_new_overlay() {
+        let (hud, spawned) = manager();
+        hud.push_settings(settings());
+        hud.push_state(state(HudMode::Overlay));
+        hud.push_state(state(HudMode::Hidden));
+        hud.tick(Instant::now() + HIDE_GRACE * 2);
+        hud.push_state(state(HudMode::Overlay));
+        let spawned = spawned.borrow();
+        assert_eq!(spawned.rx.len(), 2);
+        assert_eq!(drain(&spawned.rx[1]), ["settings", "shown"]);
+    }
+
+    #[test]
+    fn a_dead_overlay_thread_is_replaced_by_the_next_shown_state() {
+        let (hud, spawned) = manager();
+        hud.push_state(state(HudMode::Overlay));
+        spawned.borrow_mut().rx.clear(); // the thread died: its receiver is gone
+        hud.push_state(state(HudMode::Overlay));
+        assert!(!hud.overlay_running(), "the failed send forgets the thread");
+        hud.push_state(state(HudMode::Overlay));
+        assert!(hud.overlay_running());
+        assert_eq!(spawned.borrow().rx.len(), 1);
+    }
+
+    #[test]
+    fn a_disabled_manager_never_starts_the_overlay() {
+        let spawn: Spawn = Box::new(|| panic!("must not spawn"));
+        let hud = HudManager::with_spawner(false, spawn);
+        hud.push_state(state(HudMode::Overlay));
+        assert!(!hud.overlay_running());
+    }
+
+    #[test]
+    fn shutdown_stops_a_running_overlay() {
+        let (hud, spawned) = manager();
+        hud.push_state(state(HudMode::Overlay));
+        hud.shutdown();
+        assert!(!hud.overlay_running());
+        assert_eq!(drain(&spawned.borrow().rx[0]), ["shown", "shutdown"]);
     }
 }
 
