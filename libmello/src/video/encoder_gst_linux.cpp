@@ -269,8 +269,13 @@ bool GstEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                                " max-bitrate=" + std::to_string(max_kbps) +
                                " vbv-buffer-size=" + std::to_string(vbv_kbits) + " gop-size=" + gop +
                                " bframes=0 rc-lookahead=0 zerolatency=true spatial-aq=true temporal-aq=true"
-                               " aq-strength=8 repeat-sequence-header=true";
-        const std::string nv_plain = " ! nvh264enc name=enc bitrate=" + kbps + " gop-size=" + gop + " bframes=0";
+                               " aq-strength=8 repeat-sequence-header=true aud=false";
+        // aud=false: nvh264enc puts an access unit delimiter (NAL 9) before
+        // every frame by default. The macOS decoder hands each non-SPS/PPS
+        // NAL to VideoToolbox as a sample, the delimiter fails, and the
+        // viewer stayed black (2026-11-01). Windows encoders send none.
+        const std::string nv_plain = " ! nvh264enc name=enc bitrate=" + kbps + " gop-size=" + gop +
+                                     " bframes=0 aud=false";
         // GPU path: GL imports, converts to RGBA (glcolorscale scales RGBA
         // only), scales, and converts to NV12 (BT.709). Each step checked
         // with gst-launch on the laptop's NVIDIA GPU (2026-11-01). CPU path:
@@ -392,7 +397,7 @@ bool GstEncoder::encode(const CaptureFrame& frame, uint64_t capture_us, EncodedP
         a.object_set(p_->src, "caps", caps, nullptr);
         a.mini_object_unref(GST_MINI_OBJECT_CAST(caps));
         input_caps_ = caps_text;
-        MELLO_LOG_INFO(TAG, "VA-API encoder input: %s", caps_text.c_str());
+        MELLO_LOG_INFO(TAG, "%s encoder input: %s", name(), caps_text.c_str());
     }
 
     GstBuffer* buf = nullptr;

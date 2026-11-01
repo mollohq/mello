@@ -280,6 +280,14 @@ TEST(LinuxHardwareEncoder, NvencEncodesAStreamOpenH264Reads) {
     enc.shutdown();
     ASSERT_EQ(aus.size(), 10u);
     EXPECT_TRUE(aus.front().is_keyframe);
+    // No access unit delimiter (NAL 9): the macOS decoder cannot take one.
+    for (const auto& au : aus) {
+        for (size_t k = 0; k + 3 < au.data.size(); ++k) {
+            if (au.data[k] == 0 && au.data[k + 1] == 0 && au.data[k + 2] == 1) {
+                EXPECT_NE(au.data[k + 3] & 0x1f, 9) << "an access unit delimiter";
+            }
+        }
+    }
     OpenH264Decoder dec;
     ASSERT_TRUE(dec.initialize(create_cpu_device(), DecoderConfig{320, 180}));
     int at = -1;
