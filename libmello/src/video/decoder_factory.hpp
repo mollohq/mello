@@ -24,6 +24,10 @@ bool soft_decoder_requested();
 /// decoder's name when a decoder stops working mid-stream.
 std::unique_ptr<Decoder> create_next_decoder(const GraphicsDevice& device, const DecoderConfig& config,
                                              const std::vector<std::string>& tried);
+
+/// Linux: loads the first decoder's libraries in the background at start, so
+/// the first watch does not wait for them. Called from mello_init.
+void warm_linux_decoders();
 #endif
 
 /// Returns all decoder backend names available on this machine.

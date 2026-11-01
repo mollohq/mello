@@ -19,6 +19,7 @@
 #include "linux_gpu.hpp"
 #include <algorithm>
 #include <string>
+#include <thread>
 #endif
 
 namespace mello::video {
@@ -36,6 +37,16 @@ static std::unique_ptr<Decoder> make_linux_decoder(const std::string& name) {
 static std::vector<std::string> linux_order() {
     const char* forced = std::getenv("MELLO_LINUX_DECODER");
     return linux_decoder_order(list_linux_gpus(), soft_decoder_requested(), forced ? forced : "");
+}
+
+void warm_linux_decoders() {
+    // Only the first decoder: warming NVDEC would wake an NVIDIA GPU that
+    // the order keeps asleep. Detached like the Windows hook offsets
+    // (mello.cpp): nothing waits for it.
+    const std::vector<std::string> order = linux_order();
+    if (!order.empty() && order.front() == "VA-API") {
+        std::thread([] { GstVaDecoder::warm_up(); }).detach();
+    }
 }
 
 std::unique_ptr<Decoder> create_next_decoder(const GraphicsDevice& device, const DecoderConfig& config,

@@ -201,6 +201,11 @@ MelloContext* mello_init(void) {
         // waits for a helper process on the command loop.
         mello::video::hook::warm_offsets_cache();
 #endif
+#if defined(__linux__)
+        // GStreamer and the VA device take about a second to load: done
+        // now, so the first watch does not wait for them.
+        mello::video::warm_linux_decoders();
+#endif
         auto* ctx = new mello::Context();
         if (!ctx->initialize()) {
             MELLO_LOG_ERROR("api", "mello_init: context init failed");

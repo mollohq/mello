@@ -4,6 +4,7 @@
 #include "../util/log.hpp"
 
 #include <dlfcn.h>
+#include <chrono>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -141,7 +142,7 @@ std::string device_path_of(const char* factory) {
 
 // The VA H.264 decoder element of the primary GPU. GStreamer registers
 // `vah264dec` for the first VA device and `varenderD<N>h264dec` for others.
-std::string va_element_for_primary_gpu() {
+std::string find_va_element() {
     const std::string node = primary_render_node(list_linux_gpus());
     if (!node.empty()) {
         const std::string leaf = node.substr(node.rfind('/') + 1);  // renderD128
@@ -150,6 +151,18 @@ std::string va_element_for_primary_gpu() {
         if (has_factory("vah264dec") && device_path_of("vah264dec") == node) return "vah264dec";
     }
     return has_factory("vah264dec") ? "vah264dec" : std::string{};
+}
+
+// Opening a VA device to read its path costs a VA initialization, so the
+// choice is made once per process. Empty without GStreamer or h264parse.
+std::once_flag g_element_once;
+std::string g_element;
+
+const std::string& va_element_for_primary_gpu() {
+    std::call_once(g_element_once, [] {
+        if (gstreamer() && has_factory("h264parse")) g_element = find_va_element();
+    });
+    return g_element;
 }
 
 } // namespace
@@ -169,7 +182,15 @@ GstVaDecoder::~GstVaDecoder() {
 }
 
 bool GstVaDecoder::is_available() {
-    return gstreamer() && has_factory("h264parse") && !va_element_for_primary_gpu().empty();
+    return !va_element_for_primary_gpu().empty();
+}
+
+void GstVaDecoder::warm_up() {
+    const auto t0 = std::chrono::steady_clock::now();
+    const std::string& element = va_element_for_primary_gpu();
+    const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(std::chrono::steady_clock::now() - t0);
+    MELLO_LOG_INFO(TAG, "VA-API warm-up: %s in %lld ms", element.empty() ? "no VA H.264 decoder" : element.c_str(),
+                   static_cast<long long>(ms.count()));
 }
 
 bool GstVaDecoder::initialize(const GraphicsDevice& device, const DecoderConfig& config) {
@@ -180,10 +201,12 @@ bool GstVaDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
         return false;
     };
     if (config.codec != VideoCodec::H264) return fail("not H.264");
+    const auto t0 = std::chrono::steady_clock::now();
     if (!gstreamer()) return fail("GStreamer not found");
     if (!has_factory("h264parse")) return fail("no h264parse (gst-plugins-bad)");
     const std::string element = va_element_for_primary_gpu();
     if (element.empty()) return fail("no VA H.264 decoder (gst-plugin-va)");
+    const auto t1 = std::chrono::steady_clock::now();
 
     // compliance=flexible: show each picture as soon as it is decoded. Our
     // hosts send no reordered frames, and a live viewer must not wait for
@@ -218,8 +241,11 @@ bool GstVaDecoder::initialize(const GraphicsDevice& device, const DecoderConfig&
     if (g_api.set_state(p_->pipeline, GST_STATE_PLAYING) == GST_STATE_CHANGE_FAILURE) {
         return fail("the pipeline does not start");
     }
-    MELLO_LOG_INFO(TAG, "Selected decoder: VA-API (GStreamer %s) codec=H264 resolution=%ux%u",
-                   element.c_str(), config.width, config.height);
+    const auto t2 = std::chrono::steady_clock::now();
+    auto ms = [](auto d) { return static_cast<long long>(std::chrono::duration_cast<std::chrono::milliseconds>(d).count()); };
+    MELLO_LOG_INFO(TAG, "Selected decoder: VA-API (GStreamer %s) codec=H264 resolution=%ux%u "
+                        "(GStreamer and element %lld ms, pipeline %lld ms)",
+                   element.c_str(), config.width, config.height, ms(t1 - t0), ms(t2 - t1));
     return true;
 }
 

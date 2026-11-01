@@ -25,6 +25,10 @@ public:
     /// True when GStreamer loads and has h264parse and a VA H.264 decoder.
     static bool is_available();
 
+    /// Loads GStreamer and picks the VA element, once per process, so the
+    /// first watch does not wait for it. Any thread.
+    static void warm_up();
+
     bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
     void             shutdown() override;
     DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) override;
