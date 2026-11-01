@@ -162,23 +162,18 @@ std::vector<DmaBufFormat> GstEncoder::dmabuf_formats(GstEncoderKind kind) {
         } else if (nvenc_gpu_path()) {
             formats[i] = gl_dmabuf_formats();
         }
-        // The desktop on another GPU than the video GPU (a hybrid laptop):
-        // its buffers reach the video GPU only in the linear layout.
+        // The desktop drawn by another GPU than the video GPU (a hybrid
+        // laptop): its buffers live in that GPU's memory, and the video GPU
+        // reads them as black. Linear DMA-BUF from KWin on the AMD GPU came
+        // through NVIDIA's import as an all-black picture (2026-11-01).
+        // Windows copies between adapters in the OS; Linux has no such copy,
+        // so the capture sends shared memory then.
         const auto gpus = list_linux_gpus();
         const std::string desktop = primary_render_node(gpus);
-        if (!formats[i].empty() || kind == GstEncoderKind::Nvenc) {
-            if (!desktop.empty() && desktop != video_render_node(gpus) &&
-                (kind == GstEncoderKind::VaApi || nvenc_gpu_path())) {
-                for (uint32_t fourcc : {kDrmXRGB8888, kDrmARGB8888}) {
-                    auto f = std::find_if(formats[i].begin(), formats[i].end(),
-                                          [fourcc](const DmaBufFormat& d) { return d.drm_fourcc == fourcc; });
-                    if (f == formats[i].end()) {
-                        formats[i].push_back(DmaBufFormat{fourcc, {0}});
-                    } else if (std::find(f->modifiers.begin(), f->modifiers.end(), 0) == f->modifiers.end()) {
-                        f->modifiers.push_back(0);
-                    }
-                }
-            }
+        if (!formats[i].empty() && !desktop.empty() && desktop != video_render_node(gpus)) {
+            MELLO_LOG_INFO(TAG, "%s encoder: the desktop is on another GPU, no DMA-BUF across GPUs",
+                           kind == GstEncoderKind::VaApi ? "VA-API" : "NVENC");
+            formats[i].clear();
         }
         for (const DmaBufFormat& f : formats[i]) {
             MELLO_LOG_INFO(TAG, "%s encoder imports DMA-BUF %.4s with %zu modifier(s)",
