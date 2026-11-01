@@ -149,7 +149,7 @@ impl Updater {
                         download_size: Some(size),
                     })
                     .ok();
-                self.cached_update = Some(info);
+                self.cached_update = Some(*info);
                 true
             }
             Ok(UpdateCheck::NoUpdateAvailable | UpdateCheck::RemoteIsEmpty) => {
