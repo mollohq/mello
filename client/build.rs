@@ -25,6 +25,22 @@ fn main() {
     {
         let mut res = winresource::WindowsResource::new();
         res.set_icon("assets/icons/mello.ico");
+        // The segment heap instead of the NT heap for the process heap: about
+        // 6 MB less private working set idle in a voice call (spec
+        // features/D2D-RENDERER.md section 8.4). Windows 10 2004 and later;
+        // older builds ignore the element. Nothing else in this manifest, so
+        // every other default stays as it was without one.
+        res.set_manifest(
+            r#"<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
+<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
+  <application xmlns="urn:schemas-microsoft-com:asm.v3">
+    <windowsSettings>
+      <heapType xmlns="http://schemas.microsoft.com/SMI/2020/WindowsSettings">SegmentHeap</heapType>
+    </windowsSettings>
+  </application>
+</assembly>
+"#,
+        );
         res.compile().expect("failed to compile windows resources");
     }
 
