@@ -224,3 +224,38 @@ decides (Q23).
 
 Q19 stays as proposed: the stream leaves, the replay goes back to WGC window.
 That does not touch a running stream.
+
+## G. F4 revised: upload during a stream, at low priority (Bob, 2026-11-01)
+
+Bob: a clip that waits until a 4 h stream ends is bad UX. F4 ("no upload while
+a stream runs") is replaced. The upload runs during the stream as a flow that
+the stream's own controller governs. The stream never pays for it.
+
+What the code has: the host runs a GoogCC bandwidth estimate on TWCC feedback
+(`libmello/src/transport/twcc.hpp`, `GoogCcController`, `available()` false
+means the sender paces at its ceiling), and `QualityController`
+(`mello-core/src/stream/controller.rs`) moves a rung down after 2 s under the
+floor or 2 s of encoder overload, and up after 15 s over the next rung's
+restore level. The upload client is reqwest (`mello-core/src/client/clip.rs`).
+The backend presigns with aws-sdk-go-v2 (`s3.go:93`), which also presigns
+multipart parts. R2 and MinIO both support multipart upload.
+
+| # | Rule |
+|---|---|
+| G1 | The poster uploads at once, in every state. It is under 1 MB. The card appears with the poster and the state "uploading" within seconds, on every client in the crew. |
+| G2 | Budget while a stream runs: headroom = the GoogCC estimate minus the stream's current send rate. Upload rate = min(1 Mbps, 25 % of headroom). Zero when the stream is below its top rung. These two numbers are starting values; the gate (G7) confirms or moves them. |
+| G3 | Pause and resume follow the rung controller: a rung drop, a loss or overload signal, or the estimate under the stream's rate pauses the upload at once. It resumes after 15 s at the top rung with headroom, the same hold the controller uses for a rung up. The upload sheds before the stream ever moves. |
+| G4 | When GoogCC is not available (the sender paces at its ceiling), the budget is a fixed 500 kbps with the same pause rule on a rung drop. |
+| G5 | Smooth, not bursty. A token bucket feeds small writes (16 KB at 1 Mbps is one write every 128 ms), one connection, a small socket send buffer (64 KB), so the kernel cannot burst a megabyte into the home router's queue. A full router queue costs the stream RTP jitter and RTT, which TWCC then reads as congestion. The average rate is not the risk, the burst is. |
+| G6 | S3 multipart upload in 5 MB parts, each part its own presigned PUT with a signed `Content-Length`. A pause costs at most the part in flight. A client restart lists the parts and goes on. This replaces the "resume from the local file" claim (C5) with a design, and gives the size cap of C4 per part, with a HEAD at `clip_upload_complete` for the total. Backend: `CreateMultipartUpload`, a presigned `UploadPart` per part, `CompleteMultipartUpload`, and an abort after 24 h for a clip that never completes. |
+| G7 | Gate: the "stream and replay together" lane runs one upload at the budget through the shim at the lane's rate, with a clip on disk. Stream gates pass inside the spread of the `main` runs, and the TWCC RTT and the RTP jitter stay inside it too. A second case with no headroom (`rate_fraction` 1.0) proves the upload pauses and the stream does not lose a rung to it. |
+| G8 | Not streaming, in a game: 3 Mbps as in 6.3, smoothed as in G5. Idle: no cap. |
+
+Time to upload a 20 MB clip during a stream: about 3 min at 1 Mbps, about 5.5
+min at 500 kbps. The card shows "uploading" until then.
+
+Needs one new value from libmello: the host's bandwidth estimate and send rate
+in the stream telemetry, if the stream manager does not already read them.
+Add it to the `upload` todo.
+
+Q23 stays open. Q25: the starting values of G2 (1 Mbps cap, 25 % of headroom).

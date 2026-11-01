@@ -24,10 +24,10 @@ todos:
     content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game"
     status: pending
   - id: upload
-    content: "mello-core: streamed and paced upload of the MP4 and the poster, no full-file read into RAM, a persisted upload queue for the resume after a restart, no upload while a stream runs (F4)"
+    content: "mello-core: the poster at once, the MP4 as S3 multipart in 5 MB parts from disk (no full-file read into RAM), a token-bucket pace (G5), the stream budget and pause from the rung controller (G2 to G4, needs the host's GoogCC estimate and send rate in the stream telemetry), a persisted queue with the upload id and done parts for the resume after a restart"
     status: pending
   - id: backend
-    content: "Nakama: validate clip_type, game clip fields, a presign helper that signs the length cap and Cache-Control for video/mp4 and image/jpeg, clip_upload_complete checks the objects with HEAD, Go tests"
+    content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests"
     status: pending
   - id: client-key-settings
     content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests"
@@ -52,7 +52,7 @@ isProject: false
 
 # Game Clips (F8)
 
-> **Status:** Plan. Nothing is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6, Q17 to Q24, and the todos.
+> **Status:** Plan. Nothing is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
 > **Specs:** [CLIPS.md](../specs/features/CLIPS.md) sections 3 to 6, [03-LIBMELLO.md](../specs/03-LIBMELLO.md), [12-STREAMING.md](../specs/12-STREAMING.md), [14-VIDEO-PIPELINE.md](../specs/14-VIDEO-PIPELINE.md), [00-ARCHITECTURE.md](../specs/00-ARCHITECTURE.md) section 2.
 > **Builds on:** F7 voice clips (CLIPS.md 3.1, branch `fix/playtest-fixes`).
 
@@ -317,13 +317,28 @@ Bob's rule (2026-11-01): the game clips feature must not affect a stream that th
 | F1 | The capture rate (3.5 item 4) | While a stream runs, the capture rate is the stream's rate. The replay records at that rate and never raises it. |
 | F2 | A stream that starts while the replay runs (3.5 item 5, Q18) | The manager runs the stream's ladder exactly as today. The replay follows the step that the stream chose, or pauses on a step that it does not take. |
 | F3 | Overload (3.4 cost tiers) | The replay sheds first. The first overload signal (the stream's encode queue drops, its encoder wait time up, the first tier step) drops the replay to 30 fps. The next one pauses the replay. The stream's own tiers move only after the replay is paused. The replay resumes after 60 s with no overload. The ring keeps its content over a pause, and a clip shows the last frame for the gap. |
-| F4 | Upload (6.3) | No upload while a stream runs. The clip waits in the upload queue, and the clipper's card shows "uploads after the stream". The upload starts when the stream ends. A PUT of 3 Mbps on the stream's uplink is what the stream's bitrate controller reads as congestion. |
+| F4 | Upload (6.3) | Bob rejected "no upload while a stream runs": a clip that waits for the end of a 4 h stream is bad. The upload runs during the stream as a flow that the stream's own controller governs, and the stream never pays for it (rules G1 to G8 below). |
 | F5 | A replay fault (3.5 item 6) | An encoder, convert or ring error turns the replay off and logs it. The replay path never moves the ladder and never sets `device_poisoned_`. Only a device removed by the GPU is shared, because it ends the stream anyway. |
 | F6 | The poster readback (5.3) | The copy to the staging texture is on the capture thread: a submit, no wait. The map and the JPEG run on the mux worker thread. |
 | F7 | Game audio (9.1) | One game audio capture per game, shared like the video: one WASAPI process loopback on the game pid, fanned out to the stream's audio pipeline and the replay ring. Today the stream host opens its own loopback. This lands in step 2b, and the stream gate's `audio.json` gates stay unchanged. |
 | F8 | The gates (10.3, 10.4) | The "stream and replay together" lane adds an F8 press during the run, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay. The stream gates must pass inside the spread of the `main` runs in every case. The perf case "buffer on plus a stream" reports the stream's encode queue drops and frame timing. |
 
 A Settings control "Game clips while streaming" (on, off) gives a streamer who sees an effect a way out (Q23).
+
+**The upload during a stream (F4, section G of the review).** The host runs a GoogCC bandwidth estimate on TWCC feedback (`GoogCcController`, `libmello/src/transport/twcc.hpp`). `QualityController` (`mello-core/src/stream/controller.rs`) moves a rung down after 2 s under the floor or 2 s of encoder overload, and up after 15 s (`UP_DWELL`).
+
+| # | Rule |
+|---|---|
+| G1 | The poster uploads at once, in every state. It is under 1 MB. The card shows the poster and "uploading" within seconds, on every client in the crew. |
+| G2 | The budget while a stream runs: headroom = the GoogCC estimate minus the stream's send rate. Upload rate = min(1 Mbps, 25 % of headroom). Zero while the stream is under its top rung. These are starting values; the gate (G7) confirms or moves them (Q25). |
+| G3 | Pause and resume follow the rung controller. A rung drop, a loss or overload signal, or an estimate under the stream's rate pauses the upload at once. It resumes after 15 s at the top rung with headroom, the controller's own rung-up hold. The upload sheds before the stream moves. |
+| G4 | No GoogCC estimate (the sender paces at its ceiling): a fixed 500 kbps, with the same pause on a rung drop. |
+| G5 | Smooth, not bursty: a token bucket, writes of 16 KB, one connection, a socket send buffer of 64 KB. A burst into the home router's queue costs the stream RTP jitter and RTT, which TWCC reads as congestion. The burst is the risk, not the average rate. |
+| G6 | S3 multipart upload in 5 MB parts, each a presigned `UploadPart` with a signed `Content-Length`. A pause costs at most the part in flight. A client restart lists the parts and goes on (section 6.3, 6.4). |
+| G7 | Gate: the "stream and replay together" lane runs one upload at the budget through the shim. The stream gates, the TWCC RTT and the RTP jitter stay inside the spread of the `main` runs. A second case with no headroom (`rate_fraction` 1.0) proves that the upload pauses and the stream loses no rung to it. |
+| G8 | In a game with no stream: 3 Mbps as in 6.3, smoothed as in G5. No game: no cap. |
+
+A 20 MB clip takes about 3 min at 1 Mbps and about 5.5 min at 500 kbps during a stream. The card shows "uploading" until then. The upload needs the host's bandwidth estimate and send rate in the stream telemetry, if the stream manager does not read them already.
 
 ---
 
@@ -497,9 +512,10 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 |---|---|
 | Size of a 30 s clip | Estimates until the replay lane sets the bitrates (section 3.4): 720p60 at 5 Mbps (default): about 20 MB. 1080p60 at 8 Mbps: about 31 MB. 720p30 at 3 Mbps: about 12 MB. Audio adds 0.6 MB. |
 | Body | Stream the file from disk. Do not read the whole file into RAM. |
-| Pace | The upload runs in the background while the game runs, at low resource use (Q8): a rate cap of 3 Mbps, one request at a time, a low-priority thread, a small read buffer. With no game, no cap. While a stream runs, no upload: the clip waits in the queue until the stream ends (section 3.6, F4). |
-| Order | The poster first (small), then the MP4. The card shows the poster as soon as the poster is up. |
-| Retry | A failed upload retries with backoff. A persisted upload queue (in the client's data folder) holds the clips not yet up, so the upload resumes after a client restart from the local file. |
+| Pace | The upload runs in the background while the game runs, at low resource use (Q8): a rate cap of 3 Mbps, one request at a time, a low-priority thread, smoothed by a token bucket (section 3.6, G5). With no game, no cap. While a stream runs, the stream's controller sets the budget and pauses the upload (G2 to G4). |
+| Order | The poster first (small, at once in every state, G1), then the MP4. The card shows the poster as soon as the poster is up. |
+| Parts | S3 multipart upload in 5 MB parts, each part a presigned `UploadPart` with a signed `Content-Length` (G6). A pause or a failure costs at most the part in flight. |
+| Retry | A failed part retries with backoff. A persisted upload queue (in the client's data folder) holds each clip not yet up with its upload id and its done parts. After a client restart the client lists the parts and goes on. |
 | Local file | Stays on disk as the clipper's copy (CLIPS.md 6.1). |
 
 ### 6.4 Backend and storage
@@ -507,8 +523,9 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 | Change | Detail |
 |---|---|
 | `post_clip` | Accept `clip_type` in `voice`, `game`. Reject others. A game clip carries `width`, `height`, `has_voice`. The waveform stays optional. The second iteration adds a `trigger` and a `tag` (section 12). |
-| `clip_upload_url` | For `game`: presign `crews/{crew_id}/{clip_id}.mp4` as `video/mp4` and `crews/{crew_id}/{clip_id}.jpg` as `image/jpeg`. Bind `Content-Length` with a cap of 64 MB for the MP4 and 1 MB for the JPEG, and sign the `Cache-Control` header of section 6.2. Today `GeneratePresignedPUT(key, contentType, expiry)` (`s3.go`) signs neither, so this needs a new helper with a Go test. Check that R2 enforces a signed `Content-Length`: MinIO and R2 can differ. The 64 MB cap follows the bitrates of section 3.4. |
-| `clip_upload_complete` | Checks each object with a HEAD request (it exists, its size, its type), then sets `media_url` and `poster_url` on `StoredClip`. A card never shows a poster with no video. |
+| `clip_upload_url` | For `game`: the poster `crews/{crew_id}/{clip_id}.jpg` as one presigned PUT, `image/jpeg`, a signed `Content-Length` of at most 1 MB and the `Cache-Control` of section 6.2. The MP4 `crews/{crew_id}/{clip_id}.mp4` as a multipart upload (section 3.6, G6): `CreateMultipartUpload` with `video/mp4` and the `Cache-Control`, then a presigned `UploadPart` per 5 MB part with a signed `Content-Length`, then `CompleteMultipartUpload`. A total cap of 64 MB, which follows the bitrates of section 3.4. Today `GeneratePresignedPUT(key, contentType, expiry)` (`s3.go`) signs no length and no `Cache-Control`, so this needs new helpers with Go tests (aws-sdk-go-v2 presigns parts). Check that R2 enforces a signed `Content-Length`: MinIO and R2 can differ. |
+| Multipart cleanup | An upload that is not complete after 24 h is aborted (a backend job or a bucket lifecycle rule). |
+| `clip_upload_complete` | Completes the multipart upload, then checks each object with a HEAD request (it exists, its size up to the cap, its type), then sets `media_url` and `poster_url` on `StoredClip`. A card never shows a poster with no video. |
 | Storage | The existing `mello-clips` bucket. Local dev: MinIO. |
 | Retention | Game clip media is kept forever, as voice clip media is (Q10). |
 | Limits | The existing per-user daily clip limit applies to game clips. |
@@ -641,6 +658,7 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | Lanes | `cpu` (any machine), `hw` (the machine's encoder: NVENC on Bob's PC, AMF on an AMD box). |
 | Streamed playback | Serve the captured MP4 from local MinIO through a delay and rate shim (20 Mbps, 50 ms). Play it through `ClipRangeReader` and the viewer pipeline. Gates: first frame under 1 s, no stall at 20 Mbps, every frame code in order, a seek to 20 s shows the frame of 20 s within 1 s. |
 | Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same manager. The run adds an F8 press, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay (section 3.6, F8). The stream gates must pass inside the spread of the `main` runs in every case. This lane also proves the capture manager refactor. |
+| Upload during a stream (section 3.6, G7) | The same lane runs one clip upload at the budget through the shim, against local MinIO. The stream gates, the TWCC RTT and the RTP jitter stay inside the spread of the `main` runs. A second case with no headroom (`rate_fraction` 1.0) proves that the upload pauses and the stream loses no rung to it. |
 
 The gate runs from the QA harness, not from `check.sh`.
 
@@ -744,6 +762,8 @@ One feature branch (`feat/game-clips`), with the manager refactor as its own PR 
 | Q22 | WGC asks Windows for borderless access at the first WGC start in the process (`ensure_borderless_access`, `capture_wgc.cpp`), and Windows can show a consent dialog. With the replay on by default, the dialog can appear when the user joins voice with a game running, behind the game, with no act of the user. When does m3llo ask? | Open. Choices: ask at the first stream start or from Settings only, and the replay runs with the border until access is given; or accept the dialog at the replay start. |
 | Q23 | A Settings control "Game clips while streaming" (on, off)? | Open. Proposed by the review: yes, default on, with the rules of section 3.6. A streamer who sees any effect has a way out. |
 | Q24 | Voice times in the ring (section 5.1): the local mic sits in the mix at the render time, late by a varying queue depth, and the replay lane's voice markers prove only the mic path. | Open. Choices for the mic: keep it apart from the remote mix in the ring, each with its own anchor; or keep the mix and measure and bound the lag. For the remote path: a check in the QA journey, where a second client plays a tone burst at a known time, or no check. |
+| Q25 | The starting values of the upload budget during a stream (section 3.6, G2): at most 1 Mbps, and 25 % of the headroom. | Open. The gate (G7) confirms or moves them. A 20 MB clip then takes about 3 min. |
+| — | Upload during a stream (2026-11-01) | Decided: the upload runs during the stream, governed by the stream's controller (section 3.6, G1 to G8). "No upload while a stream runs" is rejected. |
 
 Step 2a (section 9.1): CS2 and Hearthstone are measured. Process loopback gives a signal for the whole run on both, after the game's own volume and after the game's mixer slider. Not measured yet: a game with a launcher tree that stays open (Battle.net had exited), CS2 in exclusive fullscreen under WGC window (Q21), and the QPC position against the arrival time (section 5.1).
 
