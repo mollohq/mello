@@ -73,6 +73,10 @@ Commit `570e8ec` moved the voice clip buffer to a ring file on disk. It ran only
 4. Leave voice: the file is gone. End the client process from Task Manager while in voice: the file is gone too.
 5. Report the result to Bob. He decides whether the fix gets its own PR from this branch.
 
+**Result (2026-11-01, Windows PC):** all checks pass. ClipBuffer 8 of 8. A clip from the ring has the talker's voice, 30.0 s, and plays. The ring file is 768000 bytes in voice, and it is gone after a leave and after a forced end of the process. The fix stays on this branch (Q15).
+
+Found on the way: the physical F7 key did not reach the key hook on Bob's PC, with or without Fn, while a synthetic F7 did and made a clip. The cause is not known yet. The voice clip upload held the command loop for 625 ms (`UploadClip`): the `upload` todo removes that path.
+
 ### 0.3 Step 2a: measure process loopback (a report, no code)
 
 The CS2 recording got digital silence from a process loopback capture (section 14). Measure it before the ring is built on it:
@@ -579,6 +583,7 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 | Q12 | F7 with the replay on? | F7 stays voice only. |
 | Q13 | Download a clip before playback? (2026-11-01) | No. Playback streams from R2 from the first bytes (section 6.2). |
 | Q14 | Auto highlights in the first iteration? (2026-11-01) | No. Second iteration, after a design to ask users first (section 12). |
+| Q15 | Does the voice ring fix (`570e8ec`) get its own PR? (2026-11-01) | No. It stays on `feat/game-clips`. |
 
 Still to measure on the Windows PC (step 2a): whether process loopback on a game process gives a signal at all (section 9.1), and whether it captures before or after the game's own volume (section 5.3).
 
