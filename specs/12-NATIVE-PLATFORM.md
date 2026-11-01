@@ -117,7 +117,7 @@ fn main() {
 
 ### 3.1 Renderer
 
-Mello ships two Slint renderers on Windows and one on macOS. The `slint` dependency turns off the default features, because they add FemtoVG and the Slint software renderer.
+Mello ships two Slint renderers on Windows and Linux, and one on macOS. The `slint` dependency turns off the default features, because they add FemtoVG and the Slint software renderer.
 
 ```toml
 # client/Cargo.toml, hud/Cargo.toml
@@ -143,6 +143,16 @@ slint-build = { version = "1.18", default-features = false, features = ["compat-
   | Skia on wgpu (D3D12), not shipped | 224 MB | 133 MB | 182 MB |
   | Skia on OpenGL, not shipped | 227 MB | 144 MB | 75 MB |
 
+- On Linux, the default is Skia on wgpu, name `skia-wgpu`: Vulkan on the boot GPU (`boot_vga` in `/sys/class/drm`). The fallback is `skia-software`. `renderer_choice.rs` applies the Windows rules with `skia-wgpu` as the GPU renderer: `MELLO_RENDERER=skia-wgpu|skia-software`, then the "Hardware Acceleration" setting, then a probe (`platform/linux_gpu.rs`) that needs a hardware Vulkan adapter from the wgpu 30 that Skia renders with. A software adapter (llvmpipe) fails the probe.
+- On Linux with two or more GPUs, the client sets `VK_LOADER_DRIVERS_SELECT` to the boot GPU's Vulkan driver before Slint starts, unless the user set it, `VK_DRIVER_FILES` or `VK_ICD_FILENAMES`. Without it the Vulkan loader also opens the other GPU's driver: on the test laptop (AMD boot GPU, RTX 3050 Ti) that was 20 NVIDIA handles and about 40 MB of private memory. Measured on that laptop (2026-11-01, idle shown):
+
+  | Linux, idle | Resident | Private | GPU memory |
+  |---|---|---|---|
+  | `skia-wgpu`, boot GPU driver only (default) | 193 MB | 128 MB | 59 MB VRAM, 30 MB GTT |
+  | `skia-software` (fallback) | 201 MB | 122 MB | none |
+  | `skia-wgpu`, every Vulkan driver | 276 MB | 168 MB | 55 MB VRAM, 34 MB GTT |
+
+  Watching a stream (VA-API decode), `skia-wgpu` took 52% of one core against about 65% for `skia-software`.
 - On macOS, Skia renders on the GPU through wgpu (Metal). When the GPU surface fails, Skia falls back to its CPU rasterizer.
 - On macOS, `--software-rendering` forces the CPU rasterizer. It is a debug switch.
 - Slint 1.18 compiles wgpu into the Skia renderer, and it cannot be turned off.

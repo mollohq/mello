@@ -42,13 +42,22 @@ pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error
             builder = builder.with_renderer_name(renderer);
         }
 
-        // Linux: Skia's CPU rasterizer until the GPU renderer is measured
-        // (mello-backlog plans/linux-client.md). MELLO_RENDERER may name a
-        // Skia renderer: skia-software, skia-wgpu or skia.
+        // Linux: Skia on wgpu (Vulkan) on the boot GPU by default, Skia's CPU
+        // rasterizer when the "Hardware Acceleration" setting is off or no
+        // hardware Vulkan adapter is found (renderer_choice.rs,
+        // platform/linux_gpu.rs). MELLO_RENDERER=skia-wgpu|skia-software
+        // overrides both. The Vulkan driver filter comes first, so neither the
+        // probe nor the renderer opens a second GPU's driver.
         #[cfg(target_os = "linux")]
         {
+            crate::platform::linux_gpu::prepare_vulkan_driver_env();
+            let settings = crate::settings::Settings::load();
             let override_name = std::env::var("MELLO_RENDERER").ok();
-            let (renderer, reason) = crate::renderer_choice::choose_linux(override_name.as_deref());
+            let (renderer, reason) = crate::renderer_choice::choose_linux(
+                override_name.as_deref(),
+                settings.hardware_acceleration,
+                crate::platform::linux_gpu::probe_vulkan,
+            );
             log::info!("[startup] Slint renderer: {renderer} ({reason:?})");
             builder = builder.with_renderer_name(renderer);
         }

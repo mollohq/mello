@@ -107,8 +107,14 @@ objc2 = "0.6"
 i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-# Renderer selection (updater/startup_update.rs): Skia's CPU rasterizer.
+# Renderer selection (updater/startup_update.rs): Skia on wgpu, or Skia's CPU
+# rasterizer.
 i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
+# The Vulkan probe (platform/linux_gpu.rs): the wgpu 30 that Skia renders
+# with, already in the tree. No features of our own: Slint's choice decides
+# the backends, so the probe sees what the renderer will see. (Slint's
+# `unstable-wgpu-30` re-export would also pull in FemtoVG.)
+wgpu = { version = "30", default-features = false }
 # The tray as a StatusNotifierItem (platform/linux_tray.rs). tray-icon builds
 # its Linux menu with GTK, which needs a GTK main loop the client does not run.
 # async-io, not tokio: ksni's tokio feature turns on zbus's tokio mode for the

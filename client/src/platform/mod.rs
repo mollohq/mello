@@ -7,6 +7,8 @@ pub mod hotkeys;
 #[cfg(target_os = "linux")]
 pub mod linux_desktop;
 #[cfg(target_os = "linux")]
+pub mod linux_gpu;
+#[cfg(target_os = "linux")]
 pub mod linux_shortcuts;
 #[cfg(target_os = "linux")]
 pub mod linux_tray;
