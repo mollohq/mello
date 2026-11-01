@@ -101,6 +101,85 @@ TEST(YuvConvert, TheStrideIsNotThePictureWidth) {
     for (size_t i = 0; i < px.size(); i += 4) EXPECT_EQ(px[i], 0) << i;
 }
 
+// A w x h picture of one RGB color, as PipeWire delivers it.
+std::vector<uint8_t> rgbx_solid(uint32_t w, uint32_t h, CpuPixelFormat f, uint8_t r, uint8_t g, uint8_t b) {
+    std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4);
+    for (size_t i = 0; i < px.size(); i += 4) {
+        px[i + 0] = f == CpuPixelFormat::BGRx ? b : r;
+        px[i + 1] = g;
+        px[i + 2] = f == CpuPixelFormat::BGRx ? r : b;
+        px[i + 3] = 0xAB;  // ignored
+    }
+    return px;
+}
+
+struct I420 {
+    std::vector<uint8_t> y, u, v;
+    I420(uint32_t w, uint32_t h) : y(static_cast<size_t>(w) * h), u(y.size() / 4), v(y.size() / 4) {}
+};
+
+TEST(RgbxToI420, WhiteBlackAndRedGiveStudioSwingBt709) {
+    struct Case { uint8_t r, g, b, y, u, v; };
+    // Y, U, V of BT.709 studio swing, within one step of rounding.
+    for (const Case c : {Case{255, 255, 255, 235, 128, 128}, Case{0, 0, 0, 16, 128, 128},
+                         Case{255, 0, 0, 63, 102, 240}}) {
+        auto px = rgbx_solid(4, 2, CpuPixelFormat::BGRx, c.r, c.g, c.b);
+        CpuFrame f{CpuPixelFormat::BGRx, px.data(), 16, 4, 2};
+        I420 out(4, 2);
+        rgbx_to_i420(f, 4, 2, out.y.data(), out.u.data(), out.v.data());
+        EXPECT_NEAR(out.y[0], c.y, 1) << int(c.r) << "," << int(c.g) << "," << int(c.b);
+        EXPECT_NEAR(out.u[0], c.u, 1);
+        EXPECT_NEAR(out.v[0], c.v, 1);
+    }
+}
+
+TEST(RgbxToI420, BothByteOrdersGiveTheSamePicture) {
+    auto bgr = rgbx_solid(4, 4, CpuPixelFormat::BGRx, 200, 40, 90);
+    auto rgb = rgbx_solid(4, 4, CpuPixelFormat::RGBx, 200, 40, 90);
+    I420 a(4, 4), b(4, 4);
+    rgbx_to_i420(CpuFrame{CpuPixelFormat::BGRx, bgr.data(), 16, 4, 4}, 4, 4, a.y.data(), a.u.data(), a.v.data());
+    rgbx_to_i420(CpuFrame{CpuPixelFormat::RGBx, rgb.data(), 16, 4, 4}, 4, 4, b.y.data(), b.u.data(), b.v.data());
+    EXPECT_EQ(a.y, b.y);
+    EXPECT_EQ(a.u, b.u);
+    EXPECT_EQ(a.v, b.v);
+}
+
+// A 8x4 picture, left half black and right half white, scaled to 4x2:
+// the halves stay where they were.
+TEST(RgbxToI420, ADownscaleKeepsThePictureInPlace) {
+    const uint32_t w = 8, h = 4, stride = w * 4 + 16;
+    std::vector<uint8_t> px(static_cast<size_t>(stride) * h, 0);
+    for (uint32_t y = 0; y < h; ++y) {
+        for (uint32_t x = w / 2; x < w; ++x) {
+            uint8_t* p = &px[y * stride + x * 4];
+            p[0] = p[1] = p[2] = 255;
+        }
+    }
+    I420 out(4, 2);
+    rgbx_to_i420(CpuFrame{CpuPixelFormat::BGRx, px.data(), stride, w, h}, 4, 2, out.y.data(), out.u.data(),
+                 out.v.data());
+    EXPECT_EQ(out.y[0], 16);
+    EXPECT_EQ(out.y[1], 16);
+    EXPECT_EQ(out.y[2], 235);
+    EXPECT_EQ(out.y[3], 235);
+    EXPECT_EQ(out.y[4], 16);
+    EXPECT_EQ(out.y[7], 235);
+}
+
+// The host's conversion and the viewer's conversion are inverses, within
+// the rounding of two 8-bit steps.
+TEST(RgbxToI420, TheViewerGetsTheColorBack) {
+    auto px = rgbx_solid(4, 4, CpuPixelFormat::RGBx, 30, 160, 220);
+    I420 yuv(4, 4);
+    rgbx_to_i420(CpuFrame{CpuPixelFormat::RGBx, px.data(), 16, 4, 4}, 4, 4, yuv.y.data(), yuv.u.data(),
+                 yuv.v.data());
+    CpuPicture pic{CpuPictureFormat::I420, yuv.y.data(), yuv.u.data(), yuv.v.data(), 4, 2, 4, 4};
+    auto rgba = convert(pic);
+    EXPECT_NEAR(rgba[0], 30, 3);
+    EXPECT_NEAR(rgba[1], 160, 3);
+    EXPECT_NEAR(rgba[2], 220, 3);
+}
+
 } // namespace
 } // namespace mello::video
 #endif
