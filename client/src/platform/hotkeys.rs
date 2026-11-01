@@ -432,8 +432,10 @@ fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    start_rdev_listener(binding, active, event_tx)
+    start_rdev_listener(binding, active, event_tx, clip_binding, clip_tx)
 }
 
 /// Linux: the GlobalShortcuts portal on Wayland (`rdev` sees no key while
@@ -443,11 +445,13 @@ fn start_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if super::linux_shortcuts::wayland_session() {
-        super::linux_shortcuts::start(binding, active, event_tx)
+        super::linux_shortcuts::start(binding, active, event_tx, clip_binding, clip_tx)
     } else {
-        start_rdev_listener(binding, active, event_tx)
+        start_rdev_listener(binding, active, event_tx, clip_binding, clip_tx)
     }
 }
 

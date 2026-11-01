@@ -1,14 +1,17 @@
-//! Push-to-talk on a Wayland session through the GlobalShortcuts portal.
+//! Push-to-talk and the voice clip key on a Wayland session through the
+//! GlobalShortcuts portal.
 //!
 //! Wayland gives no app the keys of another app's window, so `rdev` sees
 //! nothing while a game has focus. The portal (KDE since Plasma 5.27, GNOME
 //! since 48) delivers `Activated` and `Deactivated` for a shortcut that the
 //! user confirms once in the desktop's dialog.
 //!
-//! The thread binds nothing until push-to-talk has a key, so a user who never
-//! uses push-to-talk never sees the dialog. A new key binds again in a new
-//! session. The key is a preferred trigger only: the user may choose another
-//! one in the dialog or in the desktop's shortcut settings.
+//! The thread binds the shortcuts that have a key: push-to-talk once the user
+//! sets one, the clip key from the first start (F7 by default, CLIPS.md
+//! section 3.1). A new key binds both again in a new session. A key is a
+//! preferred trigger only: the user may choose another one in the dialog or
+//! in the desktop's shortcut settings. As in `hotkeys.rs`, push-to-talk keeps
+//! keys that the clip key also names, and the clip works with PTT off.
 //!
 //! Known KDE issue (bug 484525, Plasma 6.7): releasing another key while the
 //! push-to-talk key is held can send an early `Deactivated`.
@@ -25,6 +28,7 @@ use super::hotkeys::{PttBinding, PttEvent};
 use crate::LINUX_APP_ID;
 
 const PTT_ID: &str = "push-to-talk";
+const CLIP_ID: &str = "voice-clip";
 
 /// True on a Wayland session, where the portal is the only way to see a key
 /// while another app has focus.
@@ -38,6 +42,8 @@ pub fn start(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     std::thread::Builder::new()
         .name("ptt-portal".into())
@@ -52,7 +58,7 @@ pub fn start(
                     return;
                 }
             };
-            runtime.block_on(run(binding, active, event_tx));
+            runtime.block_on(run(binding, active, event_tx, clip_binding, clip_tx));
             log::warn!("[hotkeys] portal thread exited");
         })?;
     Ok(())
@@ -62,6 +68,8 @@ async fn run(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
 ) {
     // An app outside a sandbox names itself to the portal, so the desktop
     // files the shortcut under m3llo. xdg-desktop-portal before 1.19 has no
@@ -95,15 +103,19 @@ async fn run(
     log::info!("[hotkeys] GlobalShortcuts portal ready");
 
     let mut session: Option<Session<'_, GlobalShortcuts<'_>>> = None;
-    // The binding the current session was made for, even when the user
+    // The keys the current session was made for, even when the user
     // cancelled the dialog: a cancelled key does not open the dialog again.
-    let mut bound_for: Option<PttKey> = None;
+    let mut bound_for = Wanted::default();
     let mut held = false;
     let mut tick = tokio::time::interval(Duration::from_millis(500));
 
     loop {
         tokio::select! {
             Some(event) = activated.next() => {
+                if event.shortcut_id() == CLIP_ID && session.is_some() {
+                    log::info!("[hotkeys] clip key pressed (portal)");
+                    let _ = clip_tx.send(());
+                }
                 if event.shortcut_id() == PTT_ID && session.is_some()
                     && active.load(Ordering::Relaxed) && !held
                 {
@@ -124,7 +136,9 @@ async fn run(
                     held = false;
                     let _ = event_tx.send(PttEvent::Released);
                 }
-                let wanted = binding.lock().ok().and_then(|b| b.as_ref().map(PttKey::of));
+                let ptt = binding.lock().ok().and_then(|b| b.clone());
+                let clip = clip_binding.lock().ok().and_then(|b| b.clone());
+                let wanted = Wanted::of(ptt.as_ref(), clip.as_ref());
                 if wanted == bound_for {
                     continue;
                 }
@@ -132,18 +146,18 @@ async fn run(
                     let _ = old.close().await;
                 }
                 bound_for = wanted.clone();
-                if let Some(key) = wanted {
-                    session = bind(&portal, &key).await;
+                if !wanted.is_empty() {
+                    session = bind(&portal, &wanted).await;
                 }
             }
         }
     }
 }
 
-/// One session with the push-to-talk shortcut, after the user confirmed it.
+/// One session with the wanted shortcuts, after the user confirmed them.
 async fn bind<'a>(
     portal: &GlobalShortcuts<'a>,
-    key: &PttKey,
+    wanted: &Wanted,
 ) -> Option<Session<'a, GlobalShortcuts<'a>>> {
     let session = match portal.create_session().await {
         Ok(s) => s,
@@ -152,9 +166,19 @@ async fn bind<'a>(
             return None;
         }
     };
-    let shortcut =
-        NewShortcut::new(PTT_ID, "Push to talk").preferred_trigger(key.trigger.as_deref());
-    let response = match portal.bind_shortcuts(&session, &[shortcut], None).await {
+    let mut shortcuts = Vec::new();
+    if let Some(key) = &wanted.ptt {
+        shortcuts.push(
+            NewShortcut::new(PTT_ID, "Push to talk").preferred_trigger(key.trigger.as_deref()),
+        );
+    }
+    if let Some(key) = &wanted.clip {
+        shortcuts.push(
+            NewShortcut::new(CLIP_ID, "Clip the last moments of voice")
+                .preferred_trigger(key.trigger.as_deref()),
+        );
+    }
+    let response = match portal.bind_shortcuts(&session, &shortcuts, None).await {
         Ok(request) => request.response(),
         Err(e) => {
             log::warn!("[hotkeys] portal bind failed: {e}");
@@ -173,9 +197,31 @@ async fn bind<'a>(
             Some(session)
         }
         Err(e) => {
-            log::warn!("[hotkeys] push-to-talk shortcut not bound (dialog cancelled?): {e}");
+            log::warn!("[hotkeys] shortcuts not bound (dialog cancelled?): {e}");
             None
         }
+    }
+}
+
+/// The shortcuts a session binds. The clip key is left out when it names the
+/// push-to-talk keys: those stay with push-to-talk.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+struct Wanted {
+    ptt: Option<PttKey>,
+    clip: Option<PttKey>,
+}
+
+impl Wanted {
+    fn of(ptt: Option<&PttBinding>, clip: Option<&PttBinding>) -> Self {
+        let clip = clip.filter(|c| ptt != Some(*c));
+        Self {
+            ptt: ptt.map(PttKey::of),
+            clip: clip.map(PttKey::of),
+        }
+    }
+
+    fn is_empty(&self) -> bool {
+        self.ptt.is_none() && self.clip.is_none()
     }
 }
 
@@ -340,5 +386,23 @@ mod tests {
         let b = PttKey::of(&binding("F10", false, false, false, false));
         assert_ne!(a, b);
         assert_eq!(a, PttKey::of(&binding("F9", false, false, false, false)));
+    }
+
+    #[test]
+    fn the_clip_key_binds_without_push_to_talk() {
+        let clip = binding("F7", false, false, false, false);
+        let w = Wanted::of(None, Some(&clip));
+        assert!(w.ptt.is_none());
+        assert_eq!(w.clip, Some(PttKey::of(&clip)));
+        assert!(!w.is_empty());
+        assert!(Wanted::of(None, None).is_empty());
+    }
+
+    #[test]
+    fn push_to_talk_keeps_keys_the_clip_key_also_names() {
+        let key = binding("F7", false, false, false, false);
+        let w = Wanted::of(Some(&key), Some(&key));
+        assert_eq!(w.ptt, Some(PttKey::of(&key)));
+        assert!(w.clip.is_none());
     }
 }
