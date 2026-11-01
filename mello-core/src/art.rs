@@ -86,6 +86,7 @@ pub enum Fetched {
 pub struct ArtStore {
     base: Option<String>,
     dir: PathBuf,
+    /// When each negative entry ends.
     negative: Mutex<HashMap<(String, ArtSlot), Instant>>,
     inflight: Mutex<HashSet<String>>,
     /// At most [`MAX_CONCURRENT`] downloads run at once. The rest queue here.
@@ -192,7 +193,7 @@ impl ArtStore {
     fn is_negative(&self, id: &str, slot: ArtSlot) -> bool {
         let mut neg = self.negative.lock().unwrap_or_else(|e| e.into_inner());
         match neg.get(&(id.to_string(), slot)) {
-            Some(at) if at.elapsed() < NEGATIVE_TTL => true,
+            Some(until) if Instant::now() < *until => true,
             Some(_) => {
                 neg.remove(&(id.to_string(), slot));
                 false
@@ -205,7 +206,7 @@ impl ArtStore {
         self.negative
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .insert((id.to_string(), slot), Instant::now());
+            .insert((id.to_string(), slot), Instant::now() + NEGATIVE_TTL);
     }
 
     /// What the cache holds for the id. A file stat at most.
@@ -566,18 +567,17 @@ mod tests {
     #[test]
     fn a_negative_entry_ends_after_a_day() {
         let s = ArtStore::new("http://x.test", dir("ttl"));
+        s.negative.lock().unwrap().insert(
+            ("steam-9".into(), ArtSlot::Icon),
+            Instant::now() + NEGATIVE_TTL,
+        );
+        assert_eq!(s.lookup("steam-9", ArtSlot::Icon), ArtLookup::Negative);
+        // An entry that ended. Instant counts from boot on Windows, so a
+        // runner up for less than a day cannot subtract NEGATIVE_TTL from now.
         s.negative
             .lock()
             .unwrap()
             .insert(("steam-9".into(), ArtSlot::Icon), Instant::now());
-        assert_eq!(s.lookup("steam-9", ArtSlot::Icon), ArtLookup::Negative);
-        let old = Instant::now()
-            .checked_sub(NEGATIVE_TTL + Duration::from_secs(1))
-            .expect("clock");
-        s.negative
-            .lock()
-            .unwrap()
-            .insert(("steam-9".into(), ArtSlot::Icon), old);
         assert_eq!(s.lookup("steam-9", ArtSlot::Icon), ArtLookup::Unknown);
     }
 
