@@ -279,6 +279,10 @@ rest in driver and runtime allocations.
 | HUD off, segment heap (shipped) | 66 MB | 76 MB |
 | HUD off, segment heap, working-set trim (not shipped) | 17 MB | 24 - 26 MB after 5 min |
 
+A second sitting of the shipped build (commit 05df32e2, no trim): 63 MB logged
+in and 72 MB in a call; with a 5-minute hold, 61 - 65 MB logged in and 71 - 74 MB
+in the call, with no upward trend.
+
 The last row is a trial: `SetProcessWorkingSetSize(-1, -1)` 10 s after each
 settle point (startup, a crew load, a voice join). It shows what the client
 touches again after a trim; a sealed belt reveal held open and closed brought it
