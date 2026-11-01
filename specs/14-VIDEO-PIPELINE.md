@@ -80,24 +80,27 @@ GraphicsDevice create_d3d11_device();
 - DXGI Desktop Duplication and WGC produce textures on the device they are initialised with.
 - Cross-device copies require a CPU readback, breaking zero-copy.
 
-`create_d3d11_device()` is called once by `VideoPipeline` (§3) and its result is passed into every subsystem. No subsystem may create its own D3D11 device.
+On a Windows host, the capture manager (§4.8) calls `create_d3d11_device()` once and owns the device. The capture source, the host's preprocessor and the host's encoder all use it. A viewer `VideoPipeline` (§3) makes its own device for its decoder and converter. No other subsystem may create its own D3D11 device.
 
 ```
-VideoPipeline
+MelloStreamHost
   │
-  ├── GraphicsDevice (owns D3D11 device)
-  │
-  ├── CaptureSource   ← initialised with &device
-  ├── VideoPreprocessor ← initialised with &device
-  ├── Encoder         ← initialised with &device
-  └── Decoder         ← initialised with &device
+  └── VideoPipeline (host)
+        │
+        ├── CaptureManager (shared_ptr; owns the D3D11 device)
+        │     └── CaptureSource     ← initialised with &device
+        │
+        ├── VideoPreprocessor ← initialised with the manager's device
+        └── Encoder           ← initialised with the manager's device
 ```
+
+macOS keeps the earlier layout until the macOS work moves ScreenCaptureKit behind the manager: the host `VideoPipeline` owns the Metal device and the `CaptureSource`.
 
 ---
 
 ## 3. VideoPipeline
 
-`VideoPipeline` is the top-level C++ class owned by `MelloStreamHost` / `MelloStreamView`. It wires the subsystems together and owns the shared `GraphicsDevice`.
+`VideoPipeline` is the top-level C++ class owned by `MelloStreamHost` / `MelloStreamView`. It wires the subsystems together. A viewer pipeline owns its `GraphicsDevice`. A Windows host pipeline holds a `CaptureManager` (§4.8) and encodes on the manager's device (§2.2). The sketch below is the original shape; the header is the reference.
 
 ```cpp
 // src/video/video_pipeline.hpp
@@ -386,9 +389,11 @@ token reaches the pipeline. A walk back up keeps the old backend until the next
 one delivers its first frame (2 s at most); on failure the next backend stops
 and the old one keeps the stream. `ProcessCapture::activate` has the rules.
 
-Every method change raises `consume_swap_event()`, and the pipeline forces a
-keyframe so the viewer can resync. `state()` reports what the capture is doing
-for the pause card, and `target_exited()` ends the stream when the game quits.
+Every method change raises `consume_swap_event()`. The capture manager (§4.8)
+consumes it and increments its swap generation, and the pipeline forces a
+keyframe on the first frame of a new generation, so the viewer can resync.
+`state()` reports what the capture is doing for the pause card, and
+`target_exited()` ends the stream when the game quits.
 
 ### 4.6 Game Process Enumeration
 
@@ -448,6 +453,26 @@ Nothing in the product selects it.
 | Late frames | A frame handed over more than 2 ms after its due time counts as late (`mello_stream_reference_info`). The timestamp stays the due time. |
 | Clock | `mello_clock_now_us()` is the clock of the due times and of the viewer frame callback (`ts`), so a harness in the same process measures glass-to-glass. |
 | Game audio (stage 7) | `mello_test_set_reference_audio(ctx, path)`: raw 48 kHz stereo int16, one clip loop long. The source then has a second thread: 10 ms chunk j is captured at start + j × 10 ms (frame 0 at start, the video's clock) and handed over 10 ms later, when it is complete, as a capture device does, through `CaptureSource::set_timed_audio_callback` with that capture time. `provides_timed_audio()` is true, so `mello_stream_start_audio` opens no loopback device. The audio loops with the clip. |
+
+### 4.8 CaptureManager (Windows host)
+
+`capture_manager.{hpp,cpp}`. One capture of one target, given to every
+consumer that encodes it. Today each stream host makes a private manager with
+one consumer, its `VideoPipeline`. The game clips replay buffer becomes a
+second consumer of the same capture later (`plans/GAME-CLIPS.md` §3.5).
+
+| Item | Rule |
+|---|---|
+| Owns | The D3D11 device (`create_d3d11_device`), the `CaptureSource` (after `resolve_capture_target`), the present-to-capture histogram, the consumer list. A consumer holds the manager by `shared_ptr`, so the device lives longer than the consumer's encoder. |
+| Frames | The source's capture thread calls each consumer in the order of `add_consumer`, with `{texture, capture_us, swap_generation}`. The texture is valid only during the call. A consumer may decimate, convert on the GPU into its own ring and enqueue without a wait. It must not wait on the disk, the network or its encoder: a slow consumer stops the capture for every consumer. |
+| Swap | The manager consumes `consume_swap_event()` once per frame, before the calls, and increments the swap generation. A consumer forces a keyframe on the first frame it encodes with a new generation, whatever frames it decimated. |
+| Add | `add_consumer` before or after `start`. The next frame reaches the new consumer. At most 4 consumers. |
+| Remove | `remove_consumer` marks the consumer removed, under the same mutex as the per-call counter that a delivery increments, so no new call starts. The last consumer stops the source (the backend's own 5 s bound). Another consumer waits for its call in flight, at most 5 s. `Removed`: the manager never calls it again. `Abandoned` (the source stop timed out, or a call is stuck): the owner leaks the consumer and the manager, as `VideoPipeline::abandoned` did before. The manager is used once: after the last remove it takes no consumer. |
+| Audio | A consumer sets its own `AudioCallback` and `TimedAudioCallback`. The manager sets its own callback on the source only while a consumer has one, so a source with no listener makes no audio. A setter waits for an audio call in flight to that consumer. |
+| Queries | `width`, `height`, `backend_name`, `get_cursor`, `cursor_mode`, `state`, `failed`, `target_exited`, `method_history`, `provides_timed_audio` go to the source: every consumer sees one value. `source()` gives the source for the reference clip's timing (`mello_stream_reference_info`). |
+| Threads and locks | `add_consumer`, `start`, `remove_consumer` and the audio setters run one at a time under `op_mutex_`, never from inside a callback of the same manager. Lock order: `op_mutex_`, a lock inside the source, then the list mutex. The delivery paths take a source lock (the reference source calls its audio callback under its own mutex), then the list mutex. Nothing calls into the source under the list mutex. |
+| macOS | Not yet: the macOS host encodes inside the ScreenCaptureKit callback, which breaks the frame rule above. The macOS work adds an encode thread and moves `SCKCapture` behind the manager. |
+| Tests | `CaptureManager.*` (`tests/test_capture_manager.cpp`): a fake source that delivers on the test's threads, no GPU. |
 
 ## 5. Color Conversion
 
