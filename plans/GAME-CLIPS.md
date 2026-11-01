@@ -3,8 +3,8 @@ name: Game clips (F8)
 overview: "F8 saves the last 30 seconds of the user's own game: video, game audio and the crew voice, in one MP4. A local replay buffer runs while the user is in voice and a game is detected, also when the user does not stream. On by default. Windows first (WGC window capture, NVENC/AMF), macOS after Windows."
 todos:
   - id: capture-manager
-    content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate"
-    status: pending
+    content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate. Built on refactor/capture-manager (d724c21a, from main), check-full green; the stream gate A/B is open"
+    status: in_progress
   - id: loopback-check
     content: "Windows PC: measure WASAPI process loopback on a game process (signal present, before or after the game volume) before the ring is built on it. CS2, Hearthstone and the tone test done. Open: CS2 in exclusive Fullscreen under WGC window (A1), the QPC position of the process loopback device against the arrival time (A2)"
     status: pending
@@ -52,7 +52,7 @@ isProject: false
 
 # Game Clips (F8)
 
-> **Status:** Plan. Nothing is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
+> **Status:** Step 1 (`capture-manager`) is built on its own branch `refactor/capture-manager` (local, not pushed); its stream gate A/B is open. Nothing else is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
 > **Specs:** [CLIPS.md](../specs/features/CLIPS.md) sections 3 to 6, [03-LIBMELLO.md](../specs/03-LIBMELLO.md), [12-STREAMING.md](../specs/12-STREAMING.md), [14-VIDEO-PIPELINE.md](../specs/14-VIDEO-PIPELINE.md), [00-ARCHITECTURE.md](../specs/00-ARCHITECTURE.md) section 2.
 > **Builds on:** F7 voice clips (CLIPS.md 3.1, branch `fix/playtest-fixes`).
 
@@ -239,7 +239,7 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 **1. The thread that hands a frame to each consumer**
 
 - The backend's capture thread, as today. The manager calls the consumers in order: the stream first, then the replay.
-- Each call gets `{texture, capture_us, ladder step, swap generation}`.
+- Each call gets `{texture, capture_us, ladder step, swap generation}`. Step 1 has no ladder step field: no step 1 consumer reads it, and it needs a `ProcessCapture` change. It comes with the ladder policy per consumer (item 5) in step 2b.
 - The consumer callback may decimate, convert on the GPU into its own ring, and enqueue without a wait. It must not wait on the disk, the network or its encoder. `on_captured_frame` keeps this rule now.
 - A slow encoder drops from its own queue (newest wins, counted in its own `encode_queue_drops`). The capture and the other consumer do not wait for it.
 - A convert that hangs stops the capture thread for all consumers. This is not a new risk: the consumers share one device, and a hung device stops both (item 6).
