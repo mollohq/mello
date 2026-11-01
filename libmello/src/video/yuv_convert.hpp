@@ -22,5 +22,9 @@ void i420_to_rgba(const CpuPicture& pic, uint8_t* rgba);
 /// Thread: any. The Linux software encoder calls it on the capture thread.
 void rgbx_to_i420(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* y, uint8_t* u, uint8_t* v);
 
+/// As rgbx_to_i420, into one NV12 buffer: `dst_w * dst_h` luma bytes, then
+/// the interleaved U and V rows. For NVENC from system memory.
+void rgbx_to_nv12(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* nv12);
+
 } // namespace mello::video
 #endif

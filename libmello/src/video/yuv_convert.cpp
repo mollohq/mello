@@ -87,5 +87,18 @@ void rgbx_to_i420(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8
     }
 }
 
+void rgbx_to_nv12(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* nv12) {
+    const size_t luma = static_cast<size_t>(dst_w) * dst_h;
+    thread_local std::vector<uint8_t> u, v;
+    u.resize(luma / 4);
+    v.resize(luma / 4);
+    rgbx_to_i420(src, dst_w, dst_h, nv12, u.data(), v.data());
+    uint8_t* uv = nv12 + luma;
+    for (size_t i = 0; i < luma / 4; ++i) {
+        uv[2 * i] = u[i];
+        uv[2 * i + 1] = v[i];
+    }
+}
+
 } // namespace mello::video
 #endif

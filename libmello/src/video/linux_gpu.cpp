@@ -149,6 +149,9 @@ std::vector<std::string> va_driver_dirs() {
 void prepare_va_driver_env() {
     static std::once_flag once;
     std::call_once(once, [] {
+        // The NVENC path's GL runs headless: no window, so no window
+        // surface (an EGL window surface failed with EGL_BAD_ALLOC there).
+        setenv("GST_GL_WINDOW", "surfaceless", 0);
         if (std::getenv("LIBVA_DRIVER_NAME")) return;
         const std::string driver = va_driver_for_primary_gpu(list_linux_gpus(), va_driver_dirs());
         if (driver.empty()) return;

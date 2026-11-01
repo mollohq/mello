@@ -11,15 +11,26 @@
 
 namespace mello::video {
 
-/// VA-API H.264 encode on AMD and Intel through GStreamer
-/// (encoder_gst_va_linux.cpp): `appsrc ! vapostproc ! vah264enc ! appsink`
-/// on the primary GPU. vapostproc converts the capture's BGRx to NV12 and
-/// scales it to the encode size on the GPU; the source size may change
-/// between pictures (a window that is resized).
+/// Which hardware encoder a GstEncoder drives.
+enum class GstEncoderKind {
+    /// AMD and Intel: `appsrc ! vapostproc ! vah264enc ! appsink` on the
+    /// primary GPU. vapostproc imports, converts and scales on the GPU.
+    VaApi,
+    /// NVIDIA: nvh264enc (NVENC through GStreamer's nvcodec). With an NVIDIA
+    /// primary GPU, `glupload ! glcolorscale ! glcolorconvert` import,
+    /// scale and convert to NV12 (BT.709) on the GPU, as the Windows shader
+    /// does. Beside another primary GPU (a hybrid laptop where VA-API
+    /// failed) the picture is converted and scaled on the CPU: the GL
+    /// context there is not on the NVIDIA GPU.
+    Nvenc,
+};
+
+/// Hardware H.264 encode through GStreamer (encoder_gst_linux.cpp). The
+/// source size may change between pictures (a window that is resized).
 ///
 /// The settings follow NVENC and AMF on Windows: High profile, VBR with
-/// peaks up to 1.25x the target, no B-frames, one reference frame, an IDR
-/// every `keyframe_interval` frames and on request, the fastest preset.
+/// peaks up to 1.25x the target, no B-frames, an IDR every
+/// `keyframe_interval` frames and on request, a fast preset.
 ///
 /// One picture is in flight: `encode` pushes picture N and returns the
 /// access unit of N-1, which the GPU has finished meanwhile, so capture and
@@ -30,20 +41,24 @@ namespace mello::video {
 /// Threads: `initialize`, `encode`, `drain` and `shutdown` on the capture
 /// thread (`initialize` on the caller of start_host). The setters store
 /// atomics that `encode` applies before the next picture.
-class GstVaEncoder : public Encoder {
+class GstEncoder : public Encoder {
 public:
-    GstVaEncoder();
-    ~GstVaEncoder() override;
+    explicit GstEncoder(GstEncoderKind kind);
+    ~GstEncoder() override;
 
-    /// True when GStreamer loads and has the VA H.264 encoder and
-    /// post-processor of the primary GPU.
-    static bool is_available();
+    /// True when GStreamer loads and has the elements of `kind`.
+    static bool is_available(GstEncoderKind kind);
 
-    /// The DMA-BUF layouts vapostproc imports, for the capture to offer, so
-    /// the picture never leaves the GPU. Empty without GStreamer 1.24 (the
-    /// DMA_DRM format) or libgstallocators: the capture then sends CPU
-    /// pictures. Read once per process.
-    static std::vector<DmaBufFormat> dmabuf_formats();
+    /// The DMA-BUF layouts the encoder imports (vapostproc, or glupload on an
+    /// NVIDIA primary GPU), for the capture to offer, so the picture never
+    /// leaves the GPU. Empty without GStreamer 1.24 (the DMA_DRM format),
+    /// libgstallocators, or a GPU import path: the capture then sends CPU
+    /// pictures. Read once per process and kind.
+    static std::vector<DmaBufFormat> dmabuf_formats(GstEncoderKind kind);
+
+    /// NVENC: true when the GL path runs on the NVIDIA GPU (an NVIDIA primary
+    /// GPU, or MELLO_NVENC_GL=1 for a test).
+    static bool nvenc_gpu_path();
 
     bool        initialize(const GraphicsDevice& device, const EncoderConfig& config) override;
     void        shutdown() override;
@@ -52,7 +67,7 @@ public:
     void        set_bitrate(uint32_t kbps) override;
     void        get_stats(EncoderStats& out) const override;
     bool        supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
-    const char* name() const override { return "VA-API"; }
+    const char* name() const override { return kind_ == GstEncoderKind::VaApi ? "VA-API" : "NVENC"; }
     void        get_phase_timing(EncodePhaseTiming& out) const override;
     void        set_framerate(uint32_t fps) override;
     /// The access units that are ready, without a new picture.
@@ -62,6 +77,10 @@ private:
     struct Pipeline;
     std::unique_ptr<Pipeline> p_;
     EncoderConfig config_{};
+    GstEncoderKind kind_;
+    // NVENC beside another primary GPU: the CPU converts and scales to NV12.
+    bool cpu_convert_ = false;
+    std::vector<uint8_t> nv12_;
 
     /// Pulls every ready access unit into the backlog, waiting up to
     /// `timeout` for the first. Then hands out the oldest.

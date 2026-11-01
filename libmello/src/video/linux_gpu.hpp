@@ -61,9 +61,11 @@ std::string va_driver_for_primary_gpu(const std::vector<LinuxGpu>& gpus,
 /// defaults.
 std::vector<std::string> va_driver_dirs();
 
-/// Sets LIBVA_DRIVER_NAME to va_driver_for_primary_gpu() when it is unset.
-/// Once per process, before GStreamer loads. Call it on the thread that
-/// starts libmello: setenv must not race another thread's getenv.
+/// Sets LIBVA_DRIVER_NAME to va_driver_for_primary_gpu() when it is unset,
+/// and GST_GL_WINDOW=surfaceless (GStreamer's GL for NVENC runs without a
+/// window) when that is unset. Once per process, before GStreamer loads.
+/// Call it on the thread that starts libmello: setenv must not race another
+/// thread's getenv.
 void prepare_va_driver_env();
 
 } // namespace mello::video

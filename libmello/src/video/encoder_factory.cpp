@@ -15,7 +15,7 @@
 #include "encoder_videotoolbox.hpp"
 #elif defined(__linux__)
 #include "encoder_openh264.hpp"
-#include "encoder_gst_va.hpp"
+#include "encoder_gst.hpp"
 #include "linux_gpu.hpp"
 #include <string>
 #endif
@@ -117,10 +117,11 @@ std::unique_ptr<Encoder> create_best_encoder(
             if (enc->initialize(device, config)) return enc;
             MELLO_LOG_ERROR(TAG, "OpenH264: initialize() failed");
         } else if (name == "VA-API") {
-            auto enc = std::make_unique<GstVaEncoder>();
+            auto enc = std::make_unique<GstEncoder>(GstEncoderKind::VaApi);
             if (enc->initialize(device, config)) return enc;
-        } else {
-            MELLO_LOG_INFO(TAG, "%s: not built for Linux yet", name.c_str());
+        } else if (name == "NVENC") {
+            auto enc = std::make_unique<GstEncoder>(GstEncoderKind::Nvenc);
+            if (enc->initialize(device, config)) return enc;
         }
     }
     MELLO_LOG_ERROR(TAG, "No encoder available on Linux");
@@ -135,8 +136,12 @@ std::unique_ptr<Encoder> create_best_encoder(
 #if defined(__linux__)
 std::vector<DmaBufFormat> linux_encoder_dmabuf_formats() {
     const std::vector<std::string> order = linux_encoders();
-    if (!order.empty() && order.front() == "VA-API" && GstVaEncoder::is_available()) {
-        return GstVaEncoder::dmabuf_formats();
+    if (order.empty()) return {};
+    if (order.front() == "VA-API" && GstEncoder::is_available(GstEncoderKind::VaApi)) {
+        return GstEncoder::dmabuf_formats(GstEncoderKind::VaApi);
+    }
+    if (order.front() == "NVENC" && GstEncoder::is_available(GstEncoderKind::Nvenc)) {
+        return GstEncoder::dmabuf_formats(GstEncoderKind::Nvenc);
     }
     return {};
 }
@@ -159,7 +164,8 @@ std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
 #elif defined(__linux__)
     for (const std::string& name : linux_encoders()) {
         if (name == "OpenH264" && OpenH264Encoder::is_available()) result.push_back("OpenH264");
-        if (name == "VA-API" && GstVaEncoder::is_available()) result.push_back("VA-API");
+        if (name == "VA-API" && GstEncoder::is_available(GstEncoderKind::VaApi)) result.push_back("VA-API");
+        if (name == "NVENC" && GstEncoder::is_available(GstEncoderKind::Nvenc)) result.push_back("NVENC");
     }
 #endif
 

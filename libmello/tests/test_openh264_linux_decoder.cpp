@@ -5,7 +5,7 @@
 #include "video/decoder_openh264.hpp"
 #include "video/decoder_nvdec.hpp"
 #include "video/decoder_gst_va.hpp"
-#include "video/encoder_gst_va.hpp"
+#include "video/encoder_gst.hpp"
 #include "video/openh264_dynload.hpp"
 #include "video/graphics_device.hpp"
 #include <gtest/gtest.h>
@@ -169,9 +169,9 @@ TEST(LinuxHardwareDecoder, VaApiDecodesTheOpenH264Stream) {
 // from 640x360 to 320x180 on the GPU, comes back at the encode size and
 // close to its grey, from the first access unit (a key frame).
 TEST(LinuxHardwareEncoder, VaApiEncodesAStreamOpenH264Reads) {
-    if (!GstVaEncoder::is_available()) GTEST_SKIP() << "no GStreamer VA encoder";
+    if (!GstEncoder::is_available(GstEncoderKind::VaApi)) GTEST_SKIP() << "no GStreamer VA encoder";
     if (!OpenH264Decoder::is_available()) GTEST_SKIP() << "no OpenH264 (soname 8)";
-    GstVaEncoder enc;
+    GstEncoder enc(GstEncoderKind::VaApi);
     EncoderConfig cfg{};
     cfg.width = 320;
     cfg.height = 180;
@@ -244,6 +244,98 @@ TEST(LinuxHardwareEncoder, VaApiEncodesAStreamOpenH264Reads) {
     // RGB 128 grey is Y 126 in BT.709 studio swing.
     EXPECT_NEAR(pic.y[90 * pic.y_stride + 160], 126, 6);
     dec.shutdown();
+}
+
+// NVENC through GStreamer gives a stream OpenH264 reads, as VA-API does.
+// On an AMD or Intel primary GPU it converts on the CPU (no GL on the NVIDIA
+// GPU); MELLO_NVENC_GL=1 tries the GL path anyway.
+TEST(LinuxHardwareEncoder, NvencEncodesAStreamOpenH264Reads) {
+    if (!GstEncoder::is_available(GstEncoderKind::Nvenc)) GTEST_SKIP() << "no GStreamer NVENC";
+    if (!OpenH264Decoder::is_available()) GTEST_SKIP() << "no OpenH264 (soname 8)";
+    GstEncoder enc(GstEncoderKind::Nvenc);
+    EncoderConfig cfg{};
+    cfg.width = 320;
+    cfg.height = 180;
+    cfg.fps = 60;
+    cfg.bitrate_kbps = 2000;
+    cfg.keyframe_interval = 60;
+    if (!enc.initialize(create_cpu_device(), cfg)) GTEST_SKIP() << "NVENC does not start here";
+
+    std::vector<uint8_t> bgrx(640 * 360 * 4);
+    for (size_t i = 0; i < bgrx.size(); i += 4) bgrx[i] = bgrx[i + 1] = bgrx[i + 2] = 128;
+    CaptureFrame frame{CpuPixelFormat::BGRx, bgrx.data(), 640 * 4, 640, 360};
+    std::vector<EncodedPacket> aus;
+    for (int i = 0; i < 10; ++i) {
+        EncodedPacket au;
+        if (enc.encode(frame, 1000 + static_cast<uint64_t>(i) * 16667, au)) aus.push_back(std::move(au));
+    }
+    for (int tries = 0; tries < 100 && aus.size() < 10; ++tries) {
+        EncodedPacket au;
+        if (enc.drain(au)) {
+            aus.push_back(std::move(au));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
+    enc.shutdown();
+    ASSERT_EQ(aus.size(), 10u);
+    EXPECT_TRUE(aus.front().is_keyframe);
+    OpenH264Decoder dec;
+    ASSERT_TRUE(dec.initialize(create_cpu_device(), DecoderConfig{320, 180}));
+    int at = -1;
+    for (size_t i = 0; i < aus.size() && at < 0; ++i) {
+        if (dec.decode(aus[i].data.data(), aus[i].data.size(), aus[i].is_keyframe, 0) == DecodeFeedResult::FrameReady) {
+            at = static_cast<int>(i);
+        }
+    }
+    ASSERT_GE(at, 0);
+    CpuPicture pic{};
+    ASSERT_TRUE(dec.picture(0, pic));
+    EXPECT_EQ(pic.width, 320u);
+    EXPECT_EQ(pic.height, 180u);
+    EXPECT_NEAR(pic.y[90 * pic.y_stride + 160], 126, 6);
+    dec.shutdown();
+}
+
+// NVENC's GL chain rebuilds its pipeline when the input size changes (a
+// resized window): access units keep coming, the first of the new pipeline
+// is a key frame. Runs only where the GL path is on the NVIDIA GPU.
+TEST(LinuxHardwareEncoder, NvencGlPathRebuildsOnANewInputSize) {
+    if (!GstEncoder::is_available(GstEncoderKind::Nvenc)) GTEST_SKIP() << "no GStreamer NVENC";
+    if (!GstEncoder::nvenc_gpu_path()) GTEST_SKIP() << "the GL path is not on an NVIDIA GPU here";
+    GstEncoder enc(GstEncoderKind::Nvenc);
+    EncoderConfig cfg{};
+    cfg.width = 320;
+    cfg.height = 180;
+    cfg.fps = 60;
+    cfg.bitrate_kbps = 2000;
+    cfg.keyframe_interval = 600;
+    ASSERT_TRUE(enc.initialize(create_cpu_device(), cfg));
+    auto encode_all = [&](uint32_t w, uint32_t h, int n, uint64_t t0, std::vector<EncodedPacket>& aus) {
+        std::vector<uint8_t> px(static_cast<size_t>(w) * h * 4, 100);
+        CaptureFrame frame{CpuPixelFormat::BGRx, px.data(), w * 4, w, h};
+        for (int i = 0; i < n; ++i) {
+            EncodedPacket au;
+            if (enc.encode(frame, t0 + static_cast<uint64_t>(i) * 16667, au)) aus.push_back(std::move(au));
+        }
+        for (int tries = 0; tries < 100; ++tries) {
+            EncodedPacket au;
+            if (enc.drain(au)) {
+                aus.push_back(std::move(au));
+            } else if (tries > 20) {
+                break;
+            } else {
+                std::this_thread::sleep_for(std::chrono::milliseconds(5));
+            }
+        }
+    };
+    std::vector<EncodedPacket> before, after;
+    encode_all(640, 360, 5, 1000, before);
+    encode_all(800, 450, 5, 200000, after);
+    enc.shutdown();
+    ASSERT_GE(before.size(), 4u);
+    ASSERT_GE(after.size(), 4u);
+    EXPECT_TRUE(after.front().is_keyframe);
 }
 
 } // namespace

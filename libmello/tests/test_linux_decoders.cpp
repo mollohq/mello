@@ -2,7 +2,7 @@
 // decoder when one stops working (video_viewer.cpp).
 #if defined(__linux__)
 #include "video/linux_gpu.hpp"
-#include "video/encoder_gst_va.hpp"
+#include "video/encoder_gst.hpp"
 #include "video/decoder_openh264.hpp"
 #include "video/graphics_device.hpp"
 #include "video/video_viewer.hpp"
