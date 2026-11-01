@@ -13,6 +13,12 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
+# GitHub's ubuntu-22.04 image ships libunwind-14-dev (with its LLVM 14), which
+# conflicts with libunwind-dev, a dependency of libgstreamer1.0-dev. Nothing
+# here uses LLVM's libunwind; the build container never has it.
+if dpkg -s libunwind-14-dev >/dev/null 2>&1; then
+    apt-get remove -y libunwind-14-dev
+fi
 apt-get install -y --no-install-recommends \
     build-essential gcc-12 g++-12 cmake ninja-build pkg-config \
     curl ca-certificates zip unzip tar git perl python3 \
