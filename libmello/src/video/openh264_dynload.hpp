@@ -2,8 +2,9 @@
 // Runtime loader for Cisco's prebuilt OpenH264 DLL: the decoder, and the
 // encoder of the test lane (MELLO_SOFT_ENCODER, encoder_openh264.cpp).
 // Must use the official Cisco binary — do not build from source.
+// Linux: openh264_dynload_linux.cpp loads the shared library the same way.
 
-#ifdef _WIN32
+#if defined(_WIN32) || defined(__linux__)
 #include <cstdint>
 
 namespace mello::video::openh264 {

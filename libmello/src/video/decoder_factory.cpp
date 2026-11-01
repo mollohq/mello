@@ -12,6 +12,8 @@
 #include "decoder_openh264.hpp"
 #elif defined(__APPLE__)
 #include "decoder_videotoolbox.hpp"
+#elif defined(__linux__)
+#include "decoder_openh264.hpp"
 #endif
 
 namespace mello::video {
@@ -91,6 +93,19 @@ std::unique_ptr<Decoder> create_best_decoder(
         MELLO_LOG_WARN(TAG, "VideoToolbox: initialize() failed");
     }
     MELLO_LOG_ERROR(TAG, "No decoder available on macOS");
+#elif defined(__linux__)
+    // Software OpenH264 only; VA-API and NVDEC come later (spec 12 §7.4).
+    if (config.codec != VideoCodec::H264) {
+        MELLO_LOG_ERROR(TAG, "No decoder available: Linux decodes H.264 only");
+    } else if (OpenH264Decoder::is_available()) {
+        auto dec = std::make_unique<OpenH264Decoder>();
+        if (dec->initialize(device, config)) {
+            return dec;
+        }
+        MELLO_LOG_WARN(TAG, "OpenH264: initialize() failed");
+    } else {
+        MELLO_LOG_ERROR(TAG, "No decoder available: OpenH264 (libopenh264.so.8) not found");
+    }
 #else
     (void)device; (void)config;
     MELLO_LOG_ERROR(TAG, "No decoders available on this platform");
@@ -109,6 +124,9 @@ std::vector<const char*> enumerate_decoders(const GraphicsDevice& device) {
 #elif defined(__APPLE__)
     (void)device;
     if (VTDecoder::is_available()) result.push_back("VideoToolbox");
+#elif defined(__linux__)
+    (void)device;
+    if (OpenH264Decoder::is_available()) result.push_back("OpenH264");
 #else
     (void)device;
 #endif

@@ -377,6 +377,15 @@ else()
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # The stream viewer: OpenH264 (loaded at run time) into CPU memory,
+        # converted to RGBA on the present thread.
+        list(APPEND MELLO_SOURCES
+            src/video/decoder_openh264_linux.cpp
+            src/video/openh264_dynload_linux.cpp
+            src/video/yuv_convert.cpp
+        )
+    endif()
 endif()
 
 # Enable ARC + modules for all ObjC++ sources.

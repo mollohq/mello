@@ -127,6 +127,10 @@ private:
         uint32_t rtp_timestamp = 0;
 #ifdef _WIN32
         DecodedPicture picture;
+#elif defined(__linux__)
+        // Planes in the decoder's output slot of the same index. The decoder
+        // writes that slot again only after the slot is free.
+        CpuPicture picture;
 #else
         void* pixel_buffer = nullptr; // CVPixelBufferRef, retained
 #endif

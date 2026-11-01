@@ -10,6 +10,9 @@
 #include <windows.h>
 #include <timeapi.h>
 #endif
+#if defined(__linux__)
+#include "yuv_convert.hpp"
+#endif
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
 #include <Accelerate/Accelerate.h>
@@ -335,6 +338,8 @@ int ViewerPipeline::acquire_slot_for_decode() {
 void ViewerPipeline::release_slot_locked(RingSlot& slot) {
 #ifdef _WIN32
     slot.picture = DecodedPicture{};
+#elif defined(__linux__)
+    slot.picture = CpuPicture{};
 #elif defined(__APPLE__)
     if (slot.pixel_buffer) {
         CVPixelBufferRelease(static_cast<CVPixelBufferRef>(slot.pixel_buffer));
@@ -364,6 +369,12 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
         return result == DecodeFeedResult::Accepted;
     }
 #ifdef _WIN32
+    if (!decoder_->picture(slot_index, slot.picture)) {
+        slot.state = RingSlot::State::Free;
+        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a picture", decoder_->name());
+        return false;
+    }
+#elif defined(__linux__)
     if (!decoder_->picture(slot_index, slot.picture)) {
         slot.state = RingSlot::State::Free;
         MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a picture", decoder_->name());
@@ -497,6 +508,14 @@ void ViewerPipeline::present_slot(RingSlot& slot) {
             shown = true;
         }
         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    }
+#elif defined(__linux__)
+    const CpuPicture& pic = slot.picture;
+    if (frame_cb && pic.y && pic.width > 0 && pic.height > 0) {
+        rgba_buf_.resize(static_cast<size_t>(pic.width) * pic.height * 4);
+        i420_to_rgba(pic, rgba_buf_.data());
+        frame_cb(rgba_buf_.data(), pic.width, pic.height, ts);
+        shown = true;
     }
 #else
     (void)ts;

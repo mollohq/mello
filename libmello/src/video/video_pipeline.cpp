@@ -89,6 +89,8 @@ bool VideoPipeline::init_device() {
     device_ = create_d3d11_device();
 #elif defined(__APPLE__)
     device_ = create_metal_device();
+#elif defined(__linux__)
+    device_ = create_cpu_device();
 #endif
     return device_.handle != nullptr;
 }

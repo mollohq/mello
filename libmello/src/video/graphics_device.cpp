@@ -1,5 +1,6 @@
 #include "graphics_device.hpp"
 #include "../util/log.hpp"
+#include <cstdio>
 
 #ifdef _WIN32
 #include <d3d11.h>
@@ -149,3 +150,21 @@ GraphicsDevice create_d3d11_device() {
 #endif
 
 } // namespace mello::video
+
+#if defined(__linux__)
+namespace mello::video {
+
+GraphicsDevice create_cpu_device() {
+    // No GPU object: the address of this static only marks the device as
+    // created (VideoPipeline::init_device checks `handle`).
+    static int cpu_device_marker = 0;
+    GraphicsDevice device{};
+    device.backend = GraphicsBackend::Cpu;
+    device.handle = &cpu_device_marker;
+    std::snprintf(device.adapter_name, sizeof(device.adapter_name), "CPU");
+    device.adapter_luid = 0;
+    return device;
+}
+
+} // namespace mello::video
+#endif

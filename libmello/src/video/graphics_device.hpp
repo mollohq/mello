@@ -10,6 +10,10 @@ namespace mello::video {
 enum class GraphicsBackend {
     D3D11,
     Metal,
+    /// Linux: no GPU device. Decoders write pictures to CPU memory and the
+    /// viewer converts them on the CPU. `handle` only marks that the device
+    /// exists.
+    Cpu,
 };
 
 struct GraphicsDevice {
@@ -50,6 +54,11 @@ uint64_t video_adapter_luid();
 
 #ifdef __APPLE__
 GraphicsDevice create_metal_device();
+#endif
+
+#if defined(__linux__)
+/// The CPU device of the Linux viewer (GraphicsBackend::Cpu).
+GraphicsDevice create_cpu_device();
 #endif
 
 } // namespace mello::video

@@ -26,6 +26,8 @@ add_executable(mello_tests
     test_capture_wgc_restart.cpp
     test_video_preprocessor.cpp
     test_pipewire_metadata.cpp
+    test_yuv_convert.cpp
+    test_openh264_linux_decoder.cpp
 )
 
 # Separate target: process enumeration coverage, independent of mello_tests.
@@ -70,6 +72,8 @@ endif()
 target_include_directories(mello_tests PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/../src
     ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    # The OpenH264 v2.6.0 API headers, for the Linux decoder round trip.
+    ${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/include
     # The game capture hook's protocol header, shared with the hook project.
     ${CMAKE_CURRENT_SOURCE_DIR}/../../hook/include
     # Nullability compat shims for the vendored WAP tree (see

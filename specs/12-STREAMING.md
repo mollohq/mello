@@ -729,12 +729,19 @@ caller:
 | AMF | NV12 | The AMF surface (a texture array slice) is copied into the slot texture on the GPU, so the surface goes back to AMF's pool at once. |
 | OpenH264 | NV12 | I420 to NV12 on the CPU, then `UpdateSubresource` into the slot texture. |
 | VideoToolbox (macOS) | CVPixelBuffer | The ring retains the decoder's pixel buffer. |
+| OpenH264 (Linux) | I420 in CPU memory | The picture is copied out of the decoder's buffer into the slot. The present thread converts it to RGBA on the CPU and calls the frame callback. |
 
 There is no D3D11VA decoder. It was a stub (the raw access unit as one
 bitstream buffer, no DXVA picture parameters) that decoded nothing and was
 chosen on Intel before OpenH264; it was removed in stage 3, so an Intel viewer
 decodes with OpenH264. A full D3D11VA implementation needs an Intel box to test
 on. The order is NVDEC, AMF, OpenH264; `MELLO_SOFT_DECODER=1` forces OpenH264.
+
+Linux has no GPU device yet (`GraphicsBackend::Cpu`). The OpenH264 library
+loads at run time: Cisco's `libopenh264-2.6.0-linux64.8.so` next to the
+executable, else the system `libopenh264.so.8` (the ABI of the vendored v2.6.0
+headers). The I420 to RGBA conversion (`yuv_convert.cpp`) uses the BT.709
+studio-swing coefficients of the Windows shader. VA-API and NVDEC come later.
 
 The picture size comes from the SPS. A new size makes new slot textures; the old
 ones live on while the present thread holds them (stage 4's resolution rungs
