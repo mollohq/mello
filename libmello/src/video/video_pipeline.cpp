@@ -13,7 +13,7 @@
 
 #if defined(__linux__)
 #include "capture_pipewire_video.hpp"
-#include "cpu_frame.hpp"
+#include "capture_frame.hpp"
 #endif
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
@@ -126,6 +126,11 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     // cannot carry a stream on its own becomes its process here.
 #ifdef _WIN32
     const CaptureSourceDesc resolved = resolve_capture_target(source);
+#elif defined(__linux__)
+    // The encoder's DMA-BUF layouts, so the capture keeps the picture on the
+    // GPU when the compositor shares one of them.
+    CaptureSourceDesc resolved = source;
+    resolved.dmabuf_formats = linux_encoder_dmabuf_formats();
 #else
     const CaptureSourceDesc resolved = source;
 #endif
@@ -395,8 +400,8 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
 
     EncodedPacket packet{};
 #if defined(__linux__)
-    // The capture's CpuFrame (capture_source.hpp), not a pixel buffer.
-    const bool encoded = encoder_control_.encode(*static_cast<const CpuFrame*>(cv_pixel_buffer), timestamp_us, packet);
+    // The capture's CaptureFrame (capture_source.hpp), not a pixel buffer.
+    const bool encoded = encoder_control_.encode(*static_cast<const CaptureFrame*>(cv_pixel_buffer), timestamp_us, packet);
 #else
     const bool encoded = encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet);
 #endif

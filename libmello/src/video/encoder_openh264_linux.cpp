@@ -178,7 +178,7 @@ void OpenH264Encoder::apply_pending_controls() {
     }
 }
 
-bool OpenH264Encoder::encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) {
+bool OpenH264Encoder::encode(const CaptureFrame& frame, uint64_t capture_us, EncodedPacket& out) {
     if (!encoder_ || !frame.data || frame.width < 2 || frame.height < 2) return false;
     const auto t0 = std::chrono::steady_clock::now();
     rgbx_to_i420(frame, config_.width, config_.height, y_.data(), u_.data(), v_.data());

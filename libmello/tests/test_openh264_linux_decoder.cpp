@@ -184,7 +184,7 @@ TEST(LinuxHardwareEncoder, VaApiEncodesAStreamOpenH264Reads) {
     for (size_t i = 0; i < bgrx.size(); i += 4) {
         bgrx[i] = bgrx[i + 1] = bgrx[i + 2] = 128;
     }
-    CpuFrame frame{CpuPixelFormat::BGRx, bgrx.data(), 640 * 4, 640, 360};
+    CaptureFrame frame{CpuPixelFormat::BGRx, bgrx.data(), 640 * 4, 640, 360};
     std::vector<EncodedPacket> aus;
     for (int i = 0; i < 10; ++i) {
         EncodedPacket au;

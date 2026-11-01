@@ -12,8 +12,10 @@
 #include <gst/app/gstappsink.h>
 #include <gst/app/gstappsrc.h>
 #include <gst/video/video.h>
+#include <gst/allocators/gstdmabuf.h>
 
 #include <string>
+#include <vector>
 
 namespace mello::video::gst {
 
@@ -45,6 +47,18 @@ struct Api {
     decltype(&gst_video_info_from_caps) video_info_from_caps = nullptr;
     decltype(&gst_video_meta_api_get_type) video_meta_api_get_type = nullptr;
     decltype(&gst_video_event_new_downstream_force_key_unit) force_key_unit_event = nullptr;
+    decltype(&gst_buffer_new) buffer_new = nullptr;
+    decltype(&gst_buffer_append_memory) buffer_append_memory = nullptr;
+    decltype(&gst_buffer_add_meta) buffer_add_meta = nullptr;
+    decltype(&gst_mini_object_weak_ref) mini_object_weak_ref = nullptr;
+    decltype(&gst_element_get_static_pad) element_get_static_pad = nullptr;
+    decltype(&gst_pad_query_caps) pad_query_caps = nullptr;
+    decltype(&gst_caps_to_string) caps_to_string = nullptr;
+    decltype(&gst_buffer_add_video_meta_full) buffer_add_video_meta_full = nullptr;
+    decltype(&gst_video_crop_meta_get_info) video_crop_meta_get_info = nullptr;
+    decltype(&gst_video_format_from_string) video_format_from_string = nullptr;
+    decltype(&gst_dmabuf_allocator_new) dmabuf_allocator_new = nullptr;
+    decltype(&gst_dmabuf_allocator_alloc) dmabuf_allocator_alloc = nullptr;
     decltype(&g_object_get) object_get = nullptr;
     decltype(&g_object_set) object_set = nullptr;
     decltype(&g_error_free) error_free = nullptr;
@@ -66,6 +80,9 @@ bool has_factory(const char* name);
 /// `varenderD<N><kind>`. Empty when GStreamer or the element is missing.
 /// Chosen once per process and kind: reading an element's device opens it.
 std::string va_element(const std::string& kind);
+
+/// True when the DMA-BUF entry points (libgstallocators) loaded.
+bool has_dmabuf();
 
 /// Logs and clears the first error on `bus`. True when there was one.
 bool pop_bus_error(GstBus* bus, const char* who);

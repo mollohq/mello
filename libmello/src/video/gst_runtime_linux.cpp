@@ -15,6 +15,7 @@ namespace {
 
 Api g_api;
 bool g_loaded = false;
+bool g_dmabuf = false;
 std::once_flag g_load_once;
 
 template<typename T>
@@ -65,7 +66,21 @@ void load_once() {
               sym(gobject, "g_object_get", a.object_get) && sym(gobject, "g_object_set", a.object_set) &&
               sym(glib, "g_error_free", a.error_free) &&
               sym(glib, "g_free", a.free);
+    ok = ok && sym(gst, "gst_buffer_new", a.buffer_new) &&
+         sym(gst, "gst_buffer_append_memory", a.buffer_append_memory) &&
+         sym(gst, "gst_buffer_add_meta", a.buffer_add_meta) &&
+         sym(gst, "gst_mini_object_weak_ref", a.mini_object_weak_ref) &&
+         sym(gst, "gst_element_get_static_pad", a.element_get_static_pad) &&
+         sym(gst, "gst_pad_query_caps", a.pad_query_caps) && sym(gst, "gst_caps_to_string", a.caps_to_string) &&
+         sym(video, "gst_buffer_add_video_meta_full", a.buffer_add_video_meta_full) &&
+         sym(video, "gst_video_crop_meta_get_info", a.video_crop_meta_get_info) &&
+         sym(video, "gst_video_format_from_string", a.video_format_from_string);
     if (!ok) return;
+    // DMA-BUF import is optional: without it the encoder takes CPU pictures.
+    if (void* alloc = dlopen("libgstallocators-1.0.so.0", RTLD_NOW | RTLD_GLOBAL)) {
+        g_dmabuf = sym(alloc, "gst_dmabuf_allocator_new", a.dmabuf_allocator_new) &&
+                   sym(alloc, "gst_dmabuf_allocator_alloc", a.dmabuf_allocator_alloc);
+    }
     GError* err = nullptr;
     if (!a.init_check(nullptr, nullptr, &err)) {
         MELLO_LOG_WARN(TAG, "GStreamer: gst_init failed: %s", err ? err->message : "?");
@@ -111,6 +126,8 @@ bool load() {
 }
 
 const Api& api() { return g_api; }
+
+bool has_dmabuf() { return load() && g_dmabuf; }
 
 bool has_factory(const char* name) {
     if (!load()) return false;

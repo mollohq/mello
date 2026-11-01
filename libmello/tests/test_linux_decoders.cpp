@@ -2,6 +2,7 @@
 // decoder when one stops working (video_viewer.cpp).
 #if defined(__linux__)
 #include "video/linux_gpu.hpp"
+#include "video/encoder_gst_va.hpp"
 #include "video/decoder_openh264.hpp"
 #include "video/graphics_device.hpp"
 #include "video/video_viewer.hpp"
@@ -143,6 +144,27 @@ TEST(LinuxEncoderOrder, SoftwareOnlyOnRequestAndTheOverrideGoesFirst) {
     EXPECT_EQ(linux_encoder_order(amd, true, "va"), (std::vector<std::string>{"OpenH264"}));
     EXPECT_EQ(linux_encoder_order(amd, false, "openh264"), (std::vector<std::string>{"OpenH264"}));
     EXPECT_EQ(linux_encoder_order(amd, false, "nvenc"), (std::vector<std::string>{"NVENC", "VA-API"}));
+}
+
+// vapostproc's sink caps list DMA-BUF layouts as drm-format strings. Only
+// the 32-bit RGB ones matter to the capture; a name alone is linear.
+TEST(VaDmaBufFormats, TheRgbLayoutsComeOutOfTheCaps) {
+    const std::string caps =
+        "video/x-raw(memory:DMABuf), width=(int)[ 1, 16384 ], height=(int)[ 1, 16384 ], "
+        "format=(string)DMA_DRM, drm-format=(string){ NV12:0x0200000000000901, "
+        "XR24:0x0200000000000901, AR24:0x0200000000000901, XR24, YUYV, XB24:0x0200000000000a01 }";
+    const auto formats = parse_rgb_drm_formats(caps);
+    ASSERT_EQ(formats.size(), 3u);
+    EXPECT_EQ(formats[0].drm_fourcc, kDrmXRGB8888);
+    EXPECT_EQ(formats[0].modifiers, (std::vector<uint64_t>{0x0200000000000901ull, 0}));
+    EXPECT_EQ(formats[1].drm_fourcc, kDrmARGB8888);
+    EXPECT_EQ(formats[2].drm_fourcc, kDrmXBGR8888);
+    EXPECT_EQ(formats[2].modifiers, (std::vector<uint64_t>{0x0200000000000a01ull}));
+}
+
+TEST(VaDmaBufFormats, CapsWithoutRgbGiveNothing) {
+    EXPECT_TRUE(parse_rgb_drm_formats("video/x-raw(memory:DMABuf), drm-format=(string)NV12").empty());
+    EXPECT_TRUE(parse_rgb_drm_formats("").empty());
 }
 
 // A decoder that accepts nothing.

@@ -6,6 +6,8 @@
 #include <chrono>
 #include <deque>
 #include <memory>
+#include <string>
+#include <vector>
 
 namespace mello::video {
 
@@ -37,9 +39,15 @@ public:
     /// post-processor of the primary GPU.
     static bool is_available();
 
+    /// The DMA-BUF layouts vapostproc imports, for the capture to offer, so
+    /// the picture never leaves the GPU. Empty without GStreamer 1.24 (the
+    /// DMA_DRM format) or libgstallocators: the capture then sends CPU
+    /// pictures. Read once per process.
+    static std::vector<DmaBufFormat> dmabuf_formats();
+
     bool        initialize(const GraphicsDevice& device, const EncoderConfig& config) override;
     void        shutdown() override;
-    bool        encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) override;
+    bool        encode(const CaptureFrame& frame, uint64_t capture_us, EncodedPacket& out) override;
     void        request_keyframe() override;
     void        set_bitrate(uint32_t kbps) override;
     void        get_stats(EncoderStats& out) const override;
@@ -69,6 +77,8 @@ private:
     // Access units the encoder gave beyond one per picture; they go out
     // first, in order (none may be dropped).
     std::deque<EncodedPacket> backlog_;
+    std::string input_caps_;  // what appsrc announces now
+    void* dmabuf_allocator_ = nullptr;  // GstAllocator*, DMA-BUF import
     uint64_t first_pts_us_ = 0;
     bool failed_ = false;
 
@@ -78,6 +88,11 @@ private:
     uint64_t stats_window_bytes_ = 0;
     EncodePhaseTiming phases_{};
 };
+
+/// The 32-bit RGB DMA-BUF layouts in a caps string such as vapostproc's sink
+/// caps (`drm-format=(string){ XR24:0x0200000000000901, AR24, ... }`).
+/// A fourcc without a modifier is linear (0). Exposed for the tests.
+std::vector<DmaBufFormat> parse_rgb_drm_formats(const std::string& caps);
 
 } // namespace mello::video
 #endif

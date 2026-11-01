@@ -10,7 +10,7 @@ namespace mello::video {
 /// session. The client runs the portal (the desktop's dialog picks a monitor
 /// or a window) and passes the session's PipeWire socket and node; this
 /// connects to that node and hands each picture to the pipeline as a
-/// CpuFrame (cpu_frame.hpp). Shared memory buffers; the pointer is in the
+/// CaptureFrame (capture_frame.hpp). Shared memory buffers; the pointer is in the
 /// picture (the portal's embedded cursor mode).
 ///
 /// Threads: initialize, start and stop on the caller's thread. The frame

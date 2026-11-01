@@ -124,7 +124,7 @@ TEST(RgbxToI420, WhiteBlackAndRedGiveStudioSwingBt709) {
     for (const Case c : {Case{255, 255, 255, 235, 128, 128}, Case{0, 0, 0, 16, 128, 128},
                          Case{255, 0, 0, 63, 102, 240}}) {
         auto px = rgbx_solid(4, 2, CpuPixelFormat::BGRx, c.r, c.g, c.b);
-        CpuFrame f{CpuPixelFormat::BGRx, px.data(), 16, 4, 2};
+        CaptureFrame f{CpuPixelFormat::BGRx, px.data(), 16, 4, 2};
         I420 out(4, 2);
         rgbx_to_i420(f, 4, 2, out.y.data(), out.u.data(), out.v.data());
         EXPECT_NEAR(out.y[0], c.y, 1) << int(c.r) << "," << int(c.g) << "," << int(c.b);
@@ -137,8 +137,8 @@ TEST(RgbxToI420, BothByteOrdersGiveTheSamePicture) {
     auto bgr = rgbx_solid(4, 4, CpuPixelFormat::BGRx, 200, 40, 90);
     auto rgb = rgbx_solid(4, 4, CpuPixelFormat::RGBx, 200, 40, 90);
     I420 a(4, 4), b(4, 4);
-    rgbx_to_i420(CpuFrame{CpuPixelFormat::BGRx, bgr.data(), 16, 4, 4}, 4, 4, a.y.data(), a.u.data(), a.v.data());
-    rgbx_to_i420(CpuFrame{CpuPixelFormat::RGBx, rgb.data(), 16, 4, 4}, 4, 4, b.y.data(), b.u.data(), b.v.data());
+    rgbx_to_i420(CaptureFrame{CpuPixelFormat::BGRx, bgr.data(), 16, 4, 4}, 4, 4, a.y.data(), a.u.data(), a.v.data());
+    rgbx_to_i420(CaptureFrame{CpuPixelFormat::RGBx, rgb.data(), 16, 4, 4}, 4, 4, b.y.data(), b.u.data(), b.v.data());
     EXPECT_EQ(a.y, b.y);
     EXPECT_EQ(a.u, b.u);
     EXPECT_EQ(a.v, b.v);
@@ -156,7 +156,7 @@ TEST(RgbxToI420, ADownscaleKeepsThePictureInPlace) {
         }
     }
     I420 out(4, 2);
-    rgbx_to_i420(CpuFrame{CpuPixelFormat::BGRx, px.data(), stride, w, h}, 4, 2, out.y.data(), out.u.data(),
+    rgbx_to_i420(CaptureFrame{CpuPixelFormat::BGRx, px.data(), stride, w, h}, 4, 2, out.y.data(), out.u.data(),
                  out.v.data());
     EXPECT_EQ(out.y[0], 16);
     EXPECT_EQ(out.y[1], 16);
@@ -171,7 +171,7 @@ TEST(RgbxToI420, ADownscaleKeepsThePictureInPlace) {
 TEST(RgbxToI420, TheViewerGetsTheColorBack) {
     auto px = rgbx_solid(4, 4, CpuPixelFormat::RGBx, 30, 160, 220);
     I420 yuv(4, 4);
-    rgbx_to_i420(CpuFrame{CpuPixelFormat::RGBx, px.data(), 16, 4, 4}, 4, 4, yuv.y.data(), yuv.u.data(),
+    rgbx_to_i420(CaptureFrame{CpuPixelFormat::RGBx, px.data(), 16, 4, 4}, 4, 4, yuv.y.data(), yuv.u.data(),
                  yuv.v.data());
     CpuPicture pic{CpuPictureFormat::I420, yuv.y.data(), yuv.u.data(), yuv.v.data(), 4, 2, 4, 4};
     auto rgba = convert(pic);

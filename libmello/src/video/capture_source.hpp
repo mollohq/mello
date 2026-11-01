@@ -10,6 +10,9 @@
 #ifdef _WIN32
 #include <d3d11.h>
 #endif
+#if defined(__linux__)
+#include "capture_frame.hpp"
+#endif
 
 namespace mello::video {
 
@@ -59,6 +62,12 @@ struct CaptureSourceDesc {
     /// duplicate, the caller keeps its own) and the stream's node id.
     int      pipewire_fd = -1;
     uint32_t pipewire_node = 0;
+#if defined(__linux__)
+    /// PipeWire mode only: the DMA-BUF layouts the encoder imports. Offered
+    /// first, so the picture stays on the GPU; shared memory is the fallback.
+    /// Empty: shared memory only.
+    std::vector<DmaBufFormat> dmabuf_formats;
+#endif
 };
 
 /// The pointer as a backend sees it, in the pixels of the frames it delivers.
@@ -114,7 +123,7 @@ public:
 #ifdef _WIN32
     using FrameCallback = std::function<void(ID3D11Texture2D* texture, uint64_t timestamp_us)>;
 #elif defined(__linux__)
-    /// Linux: `frame` points at a CpuFrame (cpu_frame.hpp), valid during the
+    /// Linux: `frame` points at a CaptureFrame (capture_frame.hpp), valid during the
     /// call only.
     using FrameCallback = std::function<void(void* frame, uint64_t timestamp_us)>;
 #else

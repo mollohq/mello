@@ -1,6 +1,6 @@
 #pragma once
 #if defined(__linux__)
-#include "cpu_frame.hpp"
+#include "capture_frame.hpp"
 #include "decoder.hpp"
 #include <cstdint>
 
@@ -20,7 +20,7 @@ void i420_to_rgba(const CpuPicture& pic, uint8_t* rgba);
 /// `y`, `u`, `v` are tight planes (strides dst_w and dst_w / 2).
 ///
 /// Thread: any. The Linux software encoder calls it on the capture thread.
-void rgbx_to_i420(const CpuFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* y, uint8_t* u, uint8_t* v);
+void rgbx_to_i420(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* y, uint8_t* u, uint8_t* v);
 
 } // namespace mello::video
 #endif

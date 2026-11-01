@@ -132,6 +132,16 @@ std::unique_ptr<Encoder> create_best_encoder(
     return nullptr;
 }
 
+#if defined(__linux__)
+std::vector<DmaBufFormat> linux_encoder_dmabuf_formats() {
+    const std::vector<std::string> order = linux_encoders();
+    if (!order.empty() && order.front() == "VA-API" && GstVaEncoder::is_available()) {
+        return GstVaEncoder::dmabuf_formats();
+    }
+    return {};
+}
+#endif
+
 std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
     std::vector<const char*> result;
     (void)device;

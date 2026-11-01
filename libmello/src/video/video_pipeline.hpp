@@ -246,7 +246,7 @@ private:
 #ifdef _WIN32
     void on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us);
 #elif defined(__APPLE__) || defined(__linux__)
-    /// macOS: a CVPixelBufferRef. Linux: a CpuFrame (capture thread).
+    /// macOS: a CVPixelBufferRef. Linux: a CaptureFrame (capture thread).
     void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
 #endif
 #if defined(__linux__)

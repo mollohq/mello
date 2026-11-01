@@ -46,7 +46,7 @@ void i420_to_rgba(const CpuPicture& pic, uint8_t* rgba) {
 //   Y = 16  + ( 47 R + 157 G +  16 B) / 256
 //   U = 128 + (-26 R -  86 G + 112 B) / 256
 //   V = 128 + (112 R - 102 G -  10 B) / 256
-void rgbx_to_i420(const CpuFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* y, uint8_t* u, uint8_t* v) {
+void rgbx_to_i420(const CaptureFrame& src, uint32_t dst_w, uint32_t dst_h, uint8_t* y, uint8_t* u, uint8_t* v) {
     const bool bgr = src.format == CpuPixelFormat::BGRx;
     const int ri = bgr ? 2 : 0;
     const int bi = bgr ? 0 : 2;

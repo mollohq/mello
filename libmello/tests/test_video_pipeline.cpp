@@ -700,7 +700,7 @@ public:
 #elif defined(__APPLE__)
     bool encode(void*, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #elif defined(__linux__)
-    bool encode(const CpuFrame&, uint64_t, EncodedPacket& out) override { return run_encode(out); }
+    bool encode(const CaptureFrame&, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #endif
     void request_keyframe() override {
         enter();
@@ -765,7 +765,7 @@ bool encode_once(EncoderControl& control, EncodedPacket& packet) {
 #elif defined(__APPLE__)
     return control.encode(nullptr, 0, packet);
 #elif defined(__linux__)
-    return control.encode(CpuFrame{}, 0, packet);
+    return control.encode(CaptureFrame{}, 0, packet);
 #else
     (void)control;
     (void)packet;

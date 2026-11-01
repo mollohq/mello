@@ -7,7 +7,7 @@
 #include <d3d11.h>
 #endif
 #if defined(__linux__)
-#include "cpu_frame.hpp"
+#include "capture_frame.hpp"
 #endif
 
 namespace mello::video {
@@ -89,7 +89,7 @@ public:
 #elif defined(__linux__)
     /// Linux: a captured picture in CPU memory, at any size. The encoder
     /// converts and scales it to its configured size. `capture_us` as above.
-    virtual bool        encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) = 0;
+    virtual bool        encode(const CaptureFrame& frame, uint64_t capture_us, EncodedPacket& out) = 0;
     /// Linux: an access unit that is ready without a new picture, from an
     /// encoder that keeps one picture in flight. The pipeline calls it while
     /// the screen is still, so the last picture goes out too.
