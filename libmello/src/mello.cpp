@@ -1502,6 +1502,11 @@ MelloStreamHost* mello_stream_start_host(
                     return nullptr;
                 }
                 break;
+            case MELLO_CAPTURE_PIPEWIRE:
+                desc.mode = mello::video::CaptureMode::PipeWire;
+                desc.pipewire_fd = source->pipewire_fd;
+                desc.pipewire_node = source->pipewire_node;
+                break;
         }
         // The hook permission belongs to the request, not to the mode a caller
         // happened to pick. A window that cannot carry a stream becomes its
@@ -1516,7 +1521,9 @@ MelloStreamHost* mello_stream_start_host(
         pc.low_latency  = true;
 
         const uint32_t capture_pid =
-            (source->mode == MELLO_CAPTURE_PROCESS) ? source->pid : 0;
+            (source->mode == MELLO_CAPTURE_PROCESS || source->mode == MELLO_CAPTURE_PIPEWIRE)
+                ? source->pid
+                : 0;
         auto* host = new MelloStreamHost{c,
                                          std::make_unique<mello::video::VideoPipeline>(),
                                          on_packet,

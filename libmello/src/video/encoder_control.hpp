@@ -49,6 +49,12 @@ public:
         apply_pending_locked();
         return encoder_ && encoder_->encode(cv_pixel_buffer, capture_us, out);
     }
+#elif defined(__linux__)
+    bool encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        apply_pending_locked();
+        return encoder_ && encoder_->encode(frame, capture_us, out);
+    }
 #endif
 
     /// Gives up one quality feature. Returns true when the configuration

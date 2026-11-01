@@ -20,6 +20,10 @@ enum class CaptureMode {
     /// Test only: play a YUV clip from a file (capture_reference.hpp). The
     /// streaming quality gate uses it; nothing in the product selects it.
     Reference,
+    /// Linux: the PipeWire stream of a ScreenCast portal session
+    /// (capture_pipewire_video.hpp). The client runs the portal; the desc
+    /// carries its socket and node.
+    PipeWire,
 };
 
 /// A raw YUV 4:2:0 clip for CaptureMode::Reference: frames back to back,
@@ -51,6 +55,10 @@ struct CaptureSourceDesc {
     bool allow_hook = false;
     /// Reference mode only: the clip to play.
     ReferenceClip reference{};
+    /// PipeWire mode only: the portal's PipeWire socket (the capture keeps a
+    /// duplicate, the caller keeps its own) and the stream's node id.
+    int      pipewire_fd = -1;
+    uint32_t pipewire_node = 0;
 };
 
 /// The pointer as a backend sees it, in the pixels of the frames it delivers.
@@ -105,6 +113,10 @@ class CaptureSource {
 public:
 #ifdef _WIN32
     using FrameCallback = std::function<void(ID3D11Texture2D* texture, uint64_t timestamp_us)>;
+#elif defined(__linux__)
+    /// Linux: `frame` points at a CpuFrame (cpu_frame.hpp), valid during the
+    /// call only.
+    using FrameCallback = std::function<void(void* frame, uint64_t timestamp_us)>;
 #else
     using FrameCallback = std::function<void(void* texture, uint64_t timestamp_us)>;
 #endif

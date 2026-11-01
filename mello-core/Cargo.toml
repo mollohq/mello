@@ -66,6 +66,9 @@ libc = "0.2"
 # ksni already bring in.
 [target.'cfg(target_os = "linux")'.dependencies]
 zbus = "5"
+# The ScreenCast portal for stream hosting (stream/screencast.rs). The ashpd
+# the client already uses for the GlobalShortcuts portal, same features.
+ashpd = { version = "0.11.1", default-features = false, features = ["async-std"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

@@ -81,3 +81,65 @@ private:
 
 } // namespace mello::video
 #endif
+
+#if defined(__linux__)
+#include <atomic>
+#include <chrono>
+#include <cstdint>
+#include <vector>
+
+namespace mello::video {
+
+namespace wels_abi {
+class ISVCEncoder;
+}
+
+/// Linux: the software encoder of the Windows test lane, fed from a CPU
+/// picture (encoder_openh264_linux.cpp). The same rules: the factory picks it
+/// only with `MELLO_SOFT_ENCODER=1`, and the same low-latency settings. The
+/// picture is converted and scaled to I420 on the CPU.
+///
+/// Threads: `initialize`, `encode` and `shutdown` on the capture thread (the
+/// caller of start_host for `initialize`); the setters store atomics.
+class OpenH264Encoder : public Encoder {
+public:
+    OpenH264Encoder() = default;
+    ~OpenH264Encoder() override;
+
+    static bool is_available();
+
+    bool        initialize(const GraphicsDevice& device, const EncoderConfig& config) override;
+    void        shutdown() override;
+    bool        encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) override;
+    void        request_keyframe() override;
+    void        set_bitrate(uint32_t kbps) override;
+    void        get_stats(EncoderStats& out) const override;
+    bool        supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
+    const char* name() const override { return "OpenH264"; }
+    void        set_framerate(uint32_t fps) override;
+    void        get_phase_timing(EncodePhaseTiming& out) const override;
+
+private:
+    void apply_pending_controls();
+
+    wels_abi::ISVCEncoder* encoder_ = nullptr;
+    EncoderConfig          config_{};
+
+    // I420 planes of the current input frame, at the encode size.
+    std::vector<uint8_t> y_, u_, v_;
+
+    std::atomic<bool>     force_idr_{false};
+    std::atomic<uint32_t> pending_bitrate_kbps_{0};
+    std::atomic<uint32_t> pending_fps_{0};
+    uint32_t              applied_fps_ = 0;
+
+    uint64_t     frame_seq_ = 0;
+    EncoderStats stats_{};
+    std::chrono::steady_clock::time_point stats_window_start_{};
+    uint32_t     stats_window_frames_ = 0;
+    uint64_t     stats_window_bytes_  = 0;
+    EncodePhaseTiming phases_{};
+};
+
+} // namespace mello::video
+#endif

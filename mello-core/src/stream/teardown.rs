@@ -260,6 +260,25 @@ impl NativeTeardownGuard {
         }
     }
 
+    /// Run `after` on the teardown thread once the wrapped job is done, as
+    /// step `label`. Linux closes the ScreenCast portal session this way,
+    /// after the capture that reads from it has stopped.
+    pub fn then(
+        mut self,
+        label: &'static str,
+        after: impl FnOnce(&TeardownSteps) + Send + 'static,
+    ) -> Self {
+        let first = self.job.take();
+        self.job = Some(Box::new(move |steps: &TeardownSteps| {
+            if let Some(first) = first {
+                first(steps);
+            }
+            steps.step(label);
+            after(steps);
+        }));
+        self
+    }
+
     /// Drop the guard now and return the handle to the teardown it starts.
     pub fn teardown(mut self) -> Option<TeardownHandle> {
         self.job.take().map(|job| spawn(self.label, job))
@@ -320,6 +339,24 @@ mod tests {
 
         release_tx.send(()).expect("release");
         assert!(handle.wait_timeout(Duration::from_secs(5)));
+    }
+
+    #[test]
+    fn a_then_step_runs_after_the_job_on_the_teardown_thread() {
+        let order = Arc::new(Mutex::new(Vec::new()));
+        let (o1, o2) = (order.clone(), order.clone());
+        let guard = NativeTeardownGuard::new("test_then", move |_| {
+            o1.lock().expect("order").push("host stop");
+        })
+        .then("portal close", move |_| {
+            o2.lock().expect("order").push("portal close");
+        });
+        let handle = guard.teardown().expect("job present");
+        assert!(handle.wait_timeout(Duration::from_secs(5)));
+        assert_eq!(
+            *order.lock().expect("order"),
+            vec!["host stop", "portal close"]
+        );
     }
 
     #[test]

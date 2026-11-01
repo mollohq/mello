@@ -10,6 +10,8 @@ pub mod members;
 pub mod pacer;
 pub mod pause;
 pub mod rtp_peer;
+#[cfg(target_os = "linux")]
+pub mod screencast;
 pub mod sink;
 pub mod sink_sfu;
 pub mod teardown;

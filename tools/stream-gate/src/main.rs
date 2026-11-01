@@ -991,6 +991,8 @@ fn write_fixture(root: &Path, gf: &GateFile, out: &Path) -> Result<(), String> {
         hwnd: std::ptr::null_mut(),
         pid: 0,
         allow_hook: false,
+        pipewire_fd: -1,
+        pipewire_node: 0,
     };
     let config = mello_sys::MelloStreamConfig {
         width: 0,

@@ -6,6 +6,9 @@
 #ifdef _WIN32
 #include <d3d11.h>
 #endif
+#if defined(__linux__)
+#include "cpu_frame.hpp"
+#endif
 
 namespace mello::video {
 
@@ -83,6 +86,10 @@ public:
     /// time of the frame (stage 4; it was frame count / fps, which is wrong
     /// at the 30 fps rung and after a dropped frame).
     virtual bool        encode(void* cv_pixel_buffer, uint64_t capture_us, EncodedPacket& out) = 0;
+#elif defined(__linux__)
+    /// Linux: a captured picture in CPU memory, at any size. The encoder
+    /// converts and scales it to its configured size. `capture_us` as above.
+    virtual bool        encode(const CpuFrame& frame, uint64_t capture_us, EncodedPacket& out) = 0;
 #endif
 
     virtual void        request_keyframe() = 0;

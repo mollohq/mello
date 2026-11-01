@@ -386,6 +386,8 @@ else()
             src/video/decoder_nvdec_linux.cpp
             src/video/decoder_gst_va_linux.cpp
             src/video/linux_gpu.cpp
+            src/video/capture_pipewire_video.cpp
+            src/video/encoder_openh264_linux.cpp
             src/video/yuv_convert.cpp
         )
     endif()

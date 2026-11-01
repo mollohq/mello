@@ -13,6 +13,8 @@
 #include "encoder_openh264.hpp"
 #elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
 #include "encoder_videotoolbox.hpp"
+#elif defined(__linux__)
+#include "encoder_openh264.hpp"
 #endif
 
 namespace mello::video {
@@ -91,6 +93,22 @@ std::unique_ptr<Encoder> create_best_encoder(
         MELLO_LOG_WARN(TAG, "VideoToolbox: initialize() failed");
     }
     MELLO_LOG_ERROR(TAG, "No encoder available on macOS");
+#elif defined(__linux__)
+    // Software OpenH264 only with MELLO_SOFT_ENCODER=1, as on Windows. The
+    // VA-API (GStreamer) and NVENC encoders come next.
+    if (soft_encoder_requested()) {
+        MELLO_LOG_INFO(TAG, "MELLO_SOFT_ENCODER=1: software OpenH264 encoder only");
+        if (OpenH264Encoder::is_available()) {
+            auto enc = std::make_unique<OpenH264Encoder>();
+            if (enc->initialize(device, config)) return enc;
+            MELLO_LOG_ERROR(TAG, "OpenH264: initialize() failed");
+        } else {
+            MELLO_LOG_ERROR(TAG, "OpenH264: library with encoder entry points not found");
+        }
+        return nullptr;
+    }
+    (void)device; (void)config;
+    MELLO_LOG_ERROR(TAG, "No hardware encoder available on Linux yet");
 #else
     (void)device; (void)config;
     MELLO_LOG_ERROR(TAG, "No encoders available on this platform");
@@ -113,6 +131,8 @@ std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
     if (QsvEncoder::is_available())   result.push_back("QSV-oneVPL");
 #elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
     if (VTEncoder::is_available()) result.push_back("VideoToolbox");
+#elif defined(__linux__)
+    if (soft_encoder_requested() && OpenH264Encoder::is_available()) result.push_back("OpenH264");
 #endif
 
     return result;

@@ -699,6 +699,8 @@ public:
     bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
 #elif defined(__APPLE__)
     bool encode(void*, uint64_t, EncodedPacket& out) override { return run_encode(out); }
+#elif defined(__linux__)
+    bool encode(const CpuFrame&, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #endif
     void request_keyframe() override {
         enter();
@@ -748,10 +750,8 @@ private:
     }
 };
 
-// True where Encoder has an encode entry point. Linux has none until its
-// VA-API and NVENC encoders exist; there encode_once() cannot encode, and a
-// test that waits for an encode would wait forever.
-#if defined(_WIN32) || defined(__APPLE__)
+// True where Encoder has an encode entry point: every hosting platform.
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
 constexpr bool kHasEncodeEntry = true;
 #else
 constexpr bool kHasEncodeEntry = false;
@@ -764,6 +764,8 @@ bool encode_once(EncoderControl& control, EncodedPacket& packet) {
     return control.encode(nullptr, packet);
 #elif defined(__APPLE__)
     return control.encode(nullptr, 0, packet);
+#elif defined(__linux__)
+    return control.encode(CpuFrame{}, 0, packet);
 #else
     (void)control;
     (void)packet;

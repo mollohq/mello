@@ -3959,6 +3959,7 @@ dependencies = [
 name = "mello-core"
 version = "0.0.0-DEV"
 dependencies = [
+ "ashpd",
  "async-trait",
  "base64 0.22.1",
  "bitflags 2.11.0",

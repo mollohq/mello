@@ -271,10 +271,18 @@ std::vector<VisibleWindow> enumerate_visible_windows() {
 
 #else
 
+#if defined(__linux__)
+// Linux: the ScreenCast portal's dialog picks the monitor or the window, so
+// the picker offers one entry that starts it (mello-core stream/screencast.rs).
+std::vector<MonitorInfo> enumerate_monitors() {
+    return {MonitorInfo{0, "Screen", 0, 0, true}};
+}
+#else
 std::vector<MonitorInfo> enumerate_monitors() {
     MELLO_LOG_WARN(TAG, "Monitor enumeration not supported on this platform");
     return {};
 }
+#endif
 
 #if defined(__linux__)
 

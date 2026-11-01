@@ -103,6 +103,8 @@ pub fn source_for(
         hwnd: std::ptr::null_mut(),
         pid: 0,
         allow_hook: false,
+        pipewire_fd: -1,
+        pipewire_node: 0,
     };
     Ok(match backend {
         BenchBackend::Dxgi => mello_sys::MelloCaptureSource {
