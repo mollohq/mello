@@ -1437,6 +1437,7 @@ fn extract_recap_belts_moved(
             RecapBeltMovedRow {
                 belt,
                 title: title.into(),
+                stat_line: sealed::stat_line(&title_id).into(),
                 icon,
                 value: value.into(),
                 unit: unit.into(),

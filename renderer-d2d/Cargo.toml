@@ -1,0 +1,32 @@
+# mello's Slint renderer on Direct2D, Windows only. Design and measurements:
+# m3llo-fx-lab, D2D-RENDERER.md and WINDOWS.md 3.6. Hooked into the vendored
+# winit backend (third_party/i-slint-backend-winit, renderer/d2d.rs). The
+# Windows default; client/src/renderer_choice.rs picks it or skia-software.
+[package]
+name = "i-slint-renderer-d2d"
+version = "0.1.0"
+edition = "2021"
+publish = false
+license.workspace = true
+
+[lib]
+path = "src/lib.rs"
+
+# Windows only: the code is `#![cfg(target_os = "windows")]` and the crate is
+# empty elsewhere, so the dependencies are too. CI builds the workspace on macOS.
+[target.'cfg(target_os = "windows")'.dependencies]
+i-slint-core = { version = "=1.18.1", default-features = false, features = ["default", "std", "image-decoders", "svg", "shared-fontique", "shared-parley", "box-shadow-cache"] }
+i-slint-common = { version = "=1.18.1", default-features = false, features = ["default", "shared-fontique"] }
+raw-window-handle = { version = "0.6", features = ["alloc"] }
+lyon_path = { version = "1.0", default-features = false }
+windows-numerics = "0.3"
+windows = { version = "0.62", features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_Graphics_Direct2D",
+    "Win32_Graphics_Direct2D_Common",
+    "Win32_Graphics_DirectWrite",
+] }

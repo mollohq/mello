@@ -48,6 +48,7 @@ mod platform;
 mod poll_loop;
 mod quiet_row;
 mod recent_games;
+mod renderer_choice;
 mod say_hi;
 mod sealed;
 mod settings;
@@ -528,6 +529,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 hotkey_mgr.borrow().register_ptt(binding);
             }
         }
+        hotkey_mgr
+            .borrow()
+            .register_clip(callbacks::settings::clip_binding(&s));
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
         let _ = cmd_tx.send(Command::SetPushToTalk {

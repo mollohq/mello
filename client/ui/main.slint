@@ -300,6 +300,11 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-ptt-mode: false;
     in property <string> settings-ptt-key-label: "Unassigned";
     in-out property <bool> settings-ptt-binding: false;
+    /// The voice clip key as the clip button and Keybinds show it ("F7"),
+    /// or "" when no key is bound.
+    in property <string> clip-key-label: "";
+    in property <string> settings-clip-key-warning: "";
+    in-out property <bool> settings-clip-binding: false;
     in-out property <float> settings-vad-threshold: -40.0;
     in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
@@ -702,6 +707,7 @@ export component MainWindow inherits Window {
     callback setting-changed-vad-threshold(float);
     callback setting-changed-vad-auto(bool);
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+    callback settings-clip-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-reset-defaults();
     // HUD settings callbacks
     callback setting-changed-hud-enabled(bool);
@@ -1158,6 +1164,7 @@ export component MainWindow inherits Window {
                         deafened <=> root.deafened;
                         in-voice: root.in-voice;
                         voice-channel-name: root.voice-channel-name;
+                        clip-key-label: root.clip-key-label;
                         mic-permission-granted: root.mic-permission-granted;
                         mic-permission-denied: root.mic-permission-denied;
                         presence-status <=> root.presence-status;
@@ -1215,6 +1222,9 @@ export component MainWindow inherits Window {
                         }
                         stream-requested => {
                             root.stream-requested();
+                        }
+                        stop-stream-clicked => {
+                            root.stop-stream();
                         }
                         reaction-tapped(sentiment) => {
                             root.reaction-tapped(sentiment);
@@ -1720,6 +1730,9 @@ export component MainWindow inherits Window {
         ptt-mode <=> root.settings-ptt-mode;
         ptt-key-label: root.settings-ptt-key-label;
         ptt-binding <=> root.settings-ptt-binding;
+        clip-key-label: root.clip-key-label;
+        clip-key-warning: root.settings-clip-key-warning;
+        clip-binding <=> root.settings-clip-binding;
         vad-threshold <=> root.settings-vad-threshold;
         vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
@@ -1848,6 +1861,10 @@ export component MainWindow inherits Window {
         ptt-key-captured(key, ctrl, alt, shift, meta) => {
             root.settings-show-saved = true;
             root.settings-ptt-key-captured(key, ctrl, alt, shift, meta);
+        }
+        clip-key-captured(key, ctrl, alt, shift, meta) => {
+            root.settings-show-saved = true;
+            root.settings-clip-key-captured(key, ctrl, alt, shift, meta);
         }
         reset-defaults => {
             root.settings-show-saved = true;

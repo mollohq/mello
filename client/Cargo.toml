@@ -93,7 +93,11 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
 ] }
 windows-numerics = "0.3"
-i-slint-backend-winit = { version = "=1.18.1" }
+# renderer-d2d: mello's Direct2D renderer, the Windows default (spec 12 section 3.1,
+# m3llo-fx-lab WINDOWS.md 3.6). The feature puts it into the vendored winit backend;
+# the crate itself is used for the device probe at startup (renderer_choice.rs).
+i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-d2d"] }
+i-slint-renderer-d2d = { path = "../renderer-d2d" }
 raw-window-handle = "0.6"
 
 [target.'cfg(target_os = "macos")'.dependencies]

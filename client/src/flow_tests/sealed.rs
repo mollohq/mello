@@ -334,6 +334,12 @@ fn opening_a_belt_opens_it_in_every_slot() {
         .expect("row");
     assert!(!row.belt.sealed, "the recap row is open too");
     assert_eq!(
+        row.stat_line.as_str(),
+        crate::sealed::stat_line(row.belt.key.split(':').next().unwrap_or("")),
+        "the open recap row has the sentence for its tooltip"
+    );
+    assert!(!row.stat_line.is_empty());
+    assert_eq!(
         count_of(&h, "TitleChip"),
         3,
         "two pair rows and the recap row"

@@ -2789,6 +2789,7 @@ dependencies = [
  "i-slint-common",
  "i-slint-core",
  "i-slint-core-macros",
+ "i-slint-renderer-d2d",
  "i-slint-renderer-skia",
  "lyon_path",
  "muda 0.19.3",
@@ -2920,6 +2921,18 @@ dependencies = [
  "quote",
  "serde_json",
  "syn 3.0.6",
+]
+
+[[package]]
+name = "i-slint-renderer-d2d"
+version = "0.1.0"
+dependencies = [
+ "i-slint-common",
+ "i-slint-core",
+ "lyon_path",
+ "raw-window-handle",
+ "windows 0.62.2",
+ "windows-numerics 0.3.1",
 ]
 
 [[package]]
@@ -3903,6 +3916,7 @@ dependencies = [
  "futures-util",
  "i-slint-backend-testing",
  "i-slint-backend-winit",
+ "i-slint-renderer-d2d",
  "image",
  "ksni",
  "log",
