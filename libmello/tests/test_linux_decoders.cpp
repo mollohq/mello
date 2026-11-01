@@ -130,6 +130,21 @@ TEST(LinuxDecoderOrder, TheOverrideGoesFirstAndSoftIsOpenH264Only) {
     EXPECT_EQ(linux_decoder_order(gpus, true, "nvdec"), (std::vector<std::string>{"OpenH264"}));
 }
 
+TEST(LinuxEncoderOrder, TheBootGpusEncoderFirstAndNoSoftwareEncoder) {
+    std::vector<LinuxGpu> amd = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                 {kVendorAmd, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(linux_encoder_order(amd, false, ""), (std::vector<std::string>{"VA-API", "NVENC"}));
+    std::vector<LinuxGpu> nvidia = {{kVendorNvidia, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(linux_encoder_order(nvidia, false, ""), (std::vector<std::string>{"NVENC", "VA-API"}));
+}
+
+TEST(LinuxEncoderOrder, SoftwareOnlyOnRequestAndTheOverrideGoesFirst) {
+    std::vector<LinuxGpu> amd = {{kVendorAmd, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(linux_encoder_order(amd, true, "va"), (std::vector<std::string>{"OpenH264"}));
+    EXPECT_EQ(linux_encoder_order(amd, false, "openh264"), (std::vector<std::string>{"OpenH264"}));
+    EXPECT_EQ(linux_encoder_order(amd, false, "nvenc"), (std::vector<std::string>{"NVENC", "VA-API"}));
+}
+
 // A decoder that accepts nothing.
 class BrokenDecoder : public Decoder {
 public:

@@ -5,6 +5,7 @@
 #include "video/decoder_openh264.hpp"
 #include "video/decoder_nvdec.hpp"
 #include "video/decoder_gst_va.hpp"
+#include "video/encoder_gst_va.hpp"
 #include "video/openh264_dynload.hpp"
 #include "video/graphics_device.hpp"
 #include <gtest/gtest.h>
@@ -160,6 +161,76 @@ TEST(LinuxHardwareDecoder, VaApiDecodesTheOpenH264Stream) {
     if (!GstVaDecoder::is_available()) GTEST_SKIP() << "no GStreamer VA decoder";
     GstVaDecoder dec;
     expect_flat_decode(dec);
+}
+
+// The VA-API encoder's stream decodes: a flat grey BGRx picture, scaled
+// from 640x360 to 320x180 on the GPU, comes back at the encode size and
+// close to its grey, from the first access unit (a key frame).
+TEST(LinuxHardwareEncoder, VaApiEncodesAStreamOpenH264Reads) {
+    if (!GstVaEncoder::is_available()) GTEST_SKIP() << "no GStreamer VA encoder";
+    if (!OpenH264Decoder::is_available()) GTEST_SKIP() << "no OpenH264 (soname 8)";
+    GstVaEncoder enc;
+    EncoderConfig cfg{};
+    cfg.width = 320;
+    cfg.height = 180;
+    cfg.fps = 60;
+    cfg.bitrate_kbps = 2000;
+    cfg.keyframe_interval = 60;
+    if (!enc.initialize(create_cpu_device(), cfg)) GTEST_SKIP() << "VA encoder does not start here";
+
+    std::vector<uint8_t> bgrx(640 * 360 * 4);
+    for (size_t i = 0; i < bgrx.size(); i += 4) {
+        bgrx[i] = bgrx[i + 1] = bgrx[i + 2] = 128;
+    }
+    CpuFrame frame{CpuPixelFormat::BGRx, bgrx.data(), 640 * 4, 640, 360};
+    std::vector<EncodedPacket> aus;
+    for (int i = 0; i < 10; ++i) {
+        EncodedPacket au;
+        if (enc.encode(frame, 1000 + static_cast<uint64_t>(i) * 16667, au)) aus.push_back(std::move(au));
+    }
+    enc.shutdown();
+    ASSERT_GE(aus.size(), 5u) << "the encoder gave too few access units";
+    EXPECT_TRUE(aus.front().is_keyframe);
+
+    // The NAL unit types of each access unit, for a failure message.
+    std::string nals;
+    for (size_t i = 0; i < aus.size() && i < 3; ++i) {
+        const auto& d = aus[i].data;
+        nals += "AU" + std::to_string(i) + "(" + std::to_string(d.size()) + "B):";
+        for (size_t k = 0; k + 3 < d.size(); ++k) {
+            if (d[k] == 0 && d[k + 1] == 0 && d[k + 2] == 1) nals += " " + std::to_string(d[k + 3] & 0x1f);
+        }
+        nals += "; ";
+    }
+
+    // The access unit after which each decoder shows its first picture.
+    auto first_picture_at = [&](Decoder& d) {
+        if (!d.initialize(create_cpu_device(), DecoderConfig{320, 180})) return -2;
+        for (size_t i = 0; i < aus.size(); ++i) {
+            if (d.decode(aus[i].data.data(), aus[i].data.size(), aus[i].is_keyframe, 0) == DecodeFeedResult::FrameReady) {
+                return static_cast<int>(i);
+            }
+        }
+        return -1;
+    };
+    GstVaDecoder va;
+    const int va_at = GstVaDecoder::is_available() ? first_picture_at(va) : -3;
+    va.shutdown();
+    OpenH264Decoder dec;
+    const int oh_at = first_picture_at(dec);
+    // The VA decoder shows the key frame at once. OpenH264 shows it one unit
+    // later: the stream does not tell it that no frame is reordered (known
+    // gap, plans/linux-client.md), which costs its viewers one frame.
+    if (va_at != -3) EXPECT_EQ(va_at, 0) << nals;
+    ASSERT_GE(oh_at, 0) << nals;
+    EXPECT_LE(oh_at, 1) << nals;
+    CpuPicture pic{};
+    ASSERT_TRUE(dec.picture(0, pic));
+    EXPECT_EQ(pic.width, 320u);
+    EXPECT_EQ(pic.height, 180u);
+    // RGB 128 grey is Y 126 in BT.709 studio swing.
+    EXPECT_NEAR(pic.y[90 * pic.y_stride + 160], 126, 6);
+    dec.shutdown();
 }
 
 } // namespace

@@ -33,6 +33,16 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root = "/sys/class/
 std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced);
 
+/// The encoders to try, in order: "VA-API", "NVENC", or "OpenH264" alone.
+///
+/// - `soft`: OpenH264 only (MELLO_SOFT_ENCODER=1, the test lane as on
+///   Windows). Hardware encode only otherwise (spec 03 section 5).
+/// - `forced`: MELLO_LINUX_ENCODER (va, nvenc or openh264) goes first;
+///   openh264 means OpenH264 only.
+/// - Else the primary GPU's encoder first, as for decode.
+std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
+                                             const std::string& forced);
+
 /// The render node of the primary GPU, or of the only GPU. Empty if unknown.
 std::string primary_render_node(const std::vector<LinuxGpu>& gpus);
 

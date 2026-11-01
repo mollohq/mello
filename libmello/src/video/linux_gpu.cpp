@@ -88,6 +88,20 @@ std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, 
     return order;
 }
 
+std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
+                                             const std::string& forced) {
+    if (soft || forced == "openh264") return {"OpenH264"};
+    std::string decoder_forced;
+    if (forced == "nvenc") decoder_forced = "nvdec";
+    if (forced == "va") decoder_forced = "va";
+    std::vector<std::string> order;
+    for (const std::string& name : linux_decoder_order(gpus, false, decoder_forced)) {
+        if (name == "NVDEC") order.push_back("NVENC");
+        if (name == "VA-API") order.push_back("VA-API");
+    }
+    return order;
+}
+
 std::string primary_render_node(const std::vector<LinuxGpu>& gpus) {
     for (const LinuxGpu& g : gpus) {
         if (g.primary) return g.render_node;
