@@ -9,6 +9,7 @@
 //
 //   mello_loopback_probe --exe cs2.exe --seconds 600 --csv out.csv [--wav out.wav]
 //   mello_loopback_probe --pid 1234 ...
+//   ... --slider 10:0.5,20:1   set the target's mixer slider at 10 s and 20 s
 //
 // Windows only. Not a test: nothing runs it in ctest.
 
@@ -144,6 +145,37 @@ Session read_session(IAudioSessionManager2* mgr, const std::set<uint32_t>& tree)
     return s;
 }
 
+/// Set the volume mixer slider of the target's session, as the volume mixer
+/// does. Returns false when the tree has no session on the default endpoint.
+bool set_session_volume(IAudioSessionManager2* mgr, const std::set<uint32_t>& tree, float volume) {
+    if (!mgr) return false;
+    IAudioSessionEnumerator* sessions = nullptr;
+    if (FAILED(mgr->GetSessionEnumerator(&sessions))) return false;
+    bool done = false;
+    int count = 0;
+    sessions->GetCount(&count);
+    for (int i = 0; i < count && !done; ++i) {
+        IAudioSessionControl* ctl = nullptr;
+        if (FAILED(sessions->GetSession(i, &ctl))) continue;
+        IAudioSessionControl2* ctl2 = nullptr;
+        if (SUCCEEDED(ctl->QueryInterface(__uuidof(IAudioSessionControl2),
+                                          reinterpret_cast<void**>(&ctl2)))) {
+            DWORD pid = 0;
+            ctl2->GetProcessId(&pid);
+            ISimpleAudioVolume* vol = nullptr;
+            if (tree.count(pid) && SUCCEEDED(ctl->QueryInterface(__uuidof(ISimpleAudioVolume),
+                                                                 reinterpret_cast<void**>(&vol)))) {
+                done = SUCCEEDED(vol->SetMasterVolume(volume, nullptr));
+                vol->Release();
+            }
+            ctl2->Release();
+        }
+        ctl->Release();
+    }
+    sessions->Release();
+    return done;
+}
+
 void write_wav_header(FILE* f, uint32_t data_bytes) {
     const uint32_t rate = 48000, byte_rate = rate * 4, fmt_size = 16, riff = data_bytes + 36;
     const uint16_t pcm = 1, channels = 2, align = 4, bits = 16;
@@ -178,6 +210,18 @@ int main(int argc, char** argv) {
     const char* csv_path = arg(argc, argv, "--csv");
     const char* wav_path = arg(argc, argv, "--wav");
     const int seconds = seconds_arg ? std::atoi(seconds_arg) : 600;
+    // "--slider 10:0.5,20:1" sets the target's mixer slider at those seconds.
+    std::vector<std::pair<int, float>> slider_steps;
+    if (const char* steps = arg(argc, argv, "--slider")) {
+        for (const char* p = steps; *p;) {
+            int at = 0;
+            float value = 0.0f;
+            if (std::sscanf(p, "%d:%f", &at, &value) == 2) slider_steps.emplace_back(at, value);
+            const char* comma = std::strchr(p, ',');
+            if (!comma) break;
+            p = comma + 1;
+        }
+    }
 
     uint32_t pid = pid_arg ? static_cast<uint32_t>(std::strtoul(pid_arg, nullptr, 10)) : 0;
     if (!pid && exe) {
@@ -279,6 +323,11 @@ int main(int argc, char** argv) {
         const double rms_r = to_db(std::sqrt(b.sum_sq_r / per_ch));
         const double peak = to_db(b.peak / 32768.0);
         const double zero_pct = b.samples ? 100.0 * b.zero_samples / b.samples : 100.0;
+        for (const auto& [at, value] : slider_steps) {
+            if (at == t && !set_session_volume(sessions, process_tree(pid), value)) {
+                std::printf("slider step at %d s: no session to set\n", t);
+            }
+        }
         const Session s = read_session(sessions, process_tree(pid));
         float ep_volume = -1.0f;
         if (endpoint_volume) endpoint_volume->GetMasterVolumeLevelScalar(&ep_volume);

@@ -397,7 +397,7 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker t
 - Audio: one stereo AAC-LC track, 160 kbps. The mux places game audio and voice on a 48 kHz timeline from T0. The voice is mono, center.
 - Drift: each source gets a linear resample ratio from its own time anchors over the window. 300 ppm over 30 s is 9 ms. The ratio removes it.
 - Gaps (minimized game, a dropped audio chunk) become silence on their own timeline position. Nothing moves the audio that follows a gap.
-- Mix: game and voice at unity gain, then a limiter (Q9). Process loopback captures after the game's own volume and before the Windows volume mixer (measured, section 9.1). The voice ring is also before the mixer. Q20 decides whether the mux applies the mixer sliders.
+- Mix: game and voice at unity gain, then a limiter (Q9). Process loopback captures after the game's own volume and after the game's slider in the Windows volume mixer (measured, section 9.1). The voice ring is before m3llo's own slider. Q20 decides whether the mux applies that slider to the voice.
 - Poster: the newest captured frame at the press, copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press.
 
 ### 5.4 The MP4 file
@@ -533,12 +533,13 @@ With a stream and the replay at the same time, the GPU does one capture, two con
 |---|---|
 | Control: `mello.exe` in voice, 20 s | Signal: median −23 dBFS, 48000 frames a second, no digital-zero second. The silence of the OBS application capture in the CS2 recording (section 14) came from OBS, not from process loopback. |
 | CS2, 10 min in a match (`cs2.exe`, run 2) | Signal for the whole run: 600 of 600 s with frames (45120 to 51360 a second), 0 digital-zero seconds, median −35 dBFS. The 21 s under −60 dBFS all fall in the in-game volume step, where the level is low (−60 to −66 dBFS, not zero). |
-| CS2: the Windows volume mixer slider at 50 % for 55 s | The level does **not** follow it: −31 dBFS at 50 %, against −34 dBFS before and −30 dBFS after. A 50 % slider is at least −6 dB. Process loopback captures **before** the session volume. |
+| CS2: the Windows volume mixer slider at 50 % for 55 s | No answer: −31 dBFS at 50 %, against −34 dBFS before and −30 dBFS after. The game's own level changes by more than the 6 dB step. The tone row below answers the question. |
 | CS2: the game's master volume at 50 % | The level follows it: about −50 dBFS for the 75 s of the step, against −27 dBFS before. Process loopback captures **after** the game's own volume. |
 | CS2 in the background (run 1) | CS2 plays nothing when it is not the active window, unless its setting "Play Audio When Game In Background" is on. The loopback is then digital zero, and the session meter shows the same. A clip of an alt-tabbed CS2 has no game audio, which is what the user heard. |
-| A game with a launcher process | Not measured yet. |
+| Hearthstone, 10 min (`Hearthstone.exe`, started from Battle.net) | Signal for the whole run: 600 of 600 s with frames (45600 to 50880 a second), 0 digital-zero seconds, median −35.5 dBFS, 5 quiet seconds (not zero). The game has no child process. Its parent had exited and no Battle.net process ran, so there was no launcher tree to probe. Slider at 50 % for 82 s: −42.8 dBFS, against −36.9 dBFS before and −41.1 dBFS after, also no clear answer. |
+| A constant 1 kHz tone (ffplay through its Chocolatey shim), the slider set from the probe | The level follows the slider exactly: −36.1 dBFS at 100 %, −42.1 dBFS at 50 %, −36.1 dBFS at 100 % again. Process loopback captures **after** the Windows volume mixer slider. The session peak meter stays at −33.1 dBFS: it is before the slider, so it cannot show the slider. The probe targeted the shim's pid, and the tone came from its child `ffplay.exe`: the "include the process tree" scope works. |
 
-Effect on the mix (section 5.3): the game audio is the level that the game rendered, after its own volume, before the Windows volume mixer. The voice ring taps m3llo's mix in the render path, also before the mixer. A user who turns the game down in the Windows volume mixer to hear the crew gets a clip with the game louder than heard (Q20).
+Effect on the mix (section 5.3): the game audio is the level after the game's own volume and after the game's slider in the Windows volume mixer. The endpoint (master) volume is not measured. The voice ring taps m3llo's mix in the render path, before m3llo's own slider in the mixer. A user who turns m3llo down in the Windows volume mixer gets a clip with the crew louder than heard (Q20).
 
 ### 9.2 macOS (after Windows)
 
@@ -695,9 +696,9 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 | Q17 | Does macOS go behind the hub in step 1? | Open. Proposed: yes, with one consumer only until the macOS work (section 3.5, item 7). |
 | Q18 | A stream starts while the replay runs on WGC window, with the hook allowed: the stream shows WGC frames until the hook delivers. Accept? | Open. Proposed: yes. Today the stream waits for the hook at start. |
 | Q19 | The stream ends while the hook captures: the replay goes back to WGC window, and the hook stops. Accept? | Open. Proposed: yes. The hook permission comes with a stream start. |
-| Q20 | The Windows volume mixer slider is not in the loopback. Does the mux apply the game's and m3llo's slider values, so the clip balance is what the user heard? | Open. Proposed: yes. Record both session volumes with the ring's time anchors and apply them in the mux. |
+| Q20 | The game's mixer slider is in the loopback, m3llo's own slider is not in the voice ring. Does the mux apply m3llo's slider to the voice, so the clip balance is what the user heard? | Open. Proposed: yes. Record m3llo's session volume with the voice ring's time anchors and apply it in the mux. |
 
-Step 2a (section 9.1): CS2 is measured. Process loopback gives a signal for the whole run, after the game's own volume and before the Windows volume mixer. A game with a launcher process is still to measure.
+Step 2a (section 9.1): CS2 and Hearthstone are measured. Process loopback gives a signal for the whole run on both, after the game's own volume and after the game's mixer slider. A game with a launcher tree that stays open is not measured: Battle.net had exited.
 
 ---
 
