@@ -10,7 +10,9 @@
 #include "video/graphics_device.hpp"
 #include <gtest/gtest.h>
 #include <cstdlib>
+#include <chrono>
 #include <cstring>
+#include <thread>
 #include <vector>
 
 #include <stdbool.h>
@@ -188,8 +190,19 @@ TEST(LinuxHardwareEncoder, VaApiEncodesAStreamOpenH264Reads) {
         EncodedPacket au;
         if (enc.encode(frame, 1000 + static_cast<uint64_t>(i) * 16667, au)) aus.push_back(std::move(au));
     }
+    // One picture stays in flight; drain gives it once the GPU is done.
+    for (int tries = 0; tries < 50 && aus.size() < 10; ++tries) {
+        EncodedPacket au;
+        if (enc.drain(au)) {
+            aus.push_back(std::move(au));
+        } else {
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    }
     enc.shutdown();
-    ASSERT_GE(aus.size(), 5u) << "the encoder gave too few access units";
+    // Every picture gives exactly one access unit, in capture order.
+    ASSERT_EQ(aus.size(), 10u) << "the encoder lost or held back access units";
+    for (size_t i = 1; i < aus.size(); ++i) EXPECT_GT(aus[i].timestamp_us, aus[i - 1].timestamp_us);
     EXPECT_TRUE(aus.front().is_keyframe);
 
     // The NAL unit types of each access unit, for a failure message.

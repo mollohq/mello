@@ -19,9 +19,15 @@ namespace mello::video {
 /// peaks up to 1.25x the target, no B-frames, one reference frame, an IDR
 /// every `keyframe_interval` frames and on request, the fastest preset.
 ///
-/// Threads: `initialize`, `encode` and `shutdown` on the capture thread
-/// (`initialize` on the caller of start_host). The setters store atomics
-/// that `encode` applies before the next picture.
+/// One picture is in flight: `encode` pushes picture N and returns the
+/// access unit of N-1, which the GPU has finished meanwhile, so capture and
+/// encode overlap. `drain` gives the last one while the screen is still.
+/// The input caps carry the configured frame rate: the encoder's rate
+/// control budgets per frame from it.
+///
+/// Threads: `initialize`, `encode`, `drain` and `shutdown` on the capture
+/// thread (`initialize` on the caller of start_host). The setters store
+/// atomics that `encode` applies before the next picture.
 class GstVaEncoder : public Encoder {
 public:
     GstVaEncoder();
@@ -40,14 +46,25 @@ public:
     bool        supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
     const char* name() const override { return "VA-API"; }
     void        get_phase_timing(EncodePhaseTiming& out) const override;
+    void        set_framerate(uint32_t fps) override;
+    /// The access units that are ready, without a new picture.
+    bool        drain(EncodedPacket& out) override;
 
 private:
     struct Pipeline;
     std::unique_ptr<Pipeline> p_;
     EncoderConfig config_{};
 
+    /// Pulls every ready access unit into the backlog, waiting up to
+    /// `timeout` for the first. Then hands out the oldest.
+    bool collect(uint64_t timeout_ns, uint64_t capture_us, EncodedPacket& out);
+
     std::atomic<bool>     force_idr_{false};
     std::atomic<uint32_t> pending_bitrate_kbps_{0};
+    std::atomic<uint32_t> pending_fps_{0};
+    uint32_t fps_ = 60;  // the frame rate the input caps announce
+    // Pictures pushed whose access unit has not come out yet.
+    uint64_t in_flight_ = 0;
 
     // Access units the encoder gave beyond one per picture; they go out
     // first, in order (none may be dropped).

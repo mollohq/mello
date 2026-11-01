@@ -274,6 +274,11 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     next_emit_deadline_us_ = 0;
 
     auto self = this;
+#if defined(__linux__)
+    // A still screen sends no picture: the encoder's last access unit goes
+    // out from here.
+    capture_->set_idle_callback([self] { self->on_capture_idle(); });
+#endif
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
         self->on_captured_frame(pixel_buffer, ts);
     })) {
@@ -413,8 +418,28 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
         }
 
         if (packet_cb_) {
+#if defined(__linux__)
+            // An encoder with a picture in flight gives an earlier picture's
+            // access unit: its own capture time goes with it.
+            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, packet.timestamp_us);
+#else
             packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, timestamp_us);
+#endif
         }
+    }
+}
+#endif
+
+#if defined(__linux__)
+void VideoPipeline::on_capture_idle() {
+    if (!host_running_.load()) return;
+    EncodedPacket packet{};
+    while (encoder_control_.drain(packet)) {
+        frames_encoded_++;
+        if (packet_cb_) {
+            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, packet.timestamp_us);
+        }
+        packet = EncodedPacket{};
     }
 }
 #endif

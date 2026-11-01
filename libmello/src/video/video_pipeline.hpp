@@ -249,6 +249,10 @@ private:
     /// macOS: a CVPixelBufferRef. Linux: a CpuFrame (capture thread).
     void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
 #endif
+#if defined(__linux__)
+    /// Linux: no picture for a while; drain the encoder (capture thread).
+    void on_capture_idle();
+#endif
 
     GraphicsDevice                       device_{};
     std::unique_ptr<CaptureSource>       capture_;

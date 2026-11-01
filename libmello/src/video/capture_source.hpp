@@ -159,6 +159,13 @@ public:
     virtual bool provides_timed_audio() const { return false; }
     /// Route that audio to `cb` (null: stop). Safe before or after start().
     virtual void set_timed_audio_callback(TimedAudioCallback cb) { (void)cb; }
+#if defined(__linux__)
+    /// Linux: called on the capture thread when no picture came for a short
+    /// while (a still screen), never at the same time as the frame callback.
+    /// The pipeline drains the encoder there. Null: stop.
+    using IdleCallback = std::function<void()>;
+    virtual void set_idle_callback(IdleCallback cb) { (void)cb; }
+#endif
     // Backends with runtime source/backend switching can raise a swap event.
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }

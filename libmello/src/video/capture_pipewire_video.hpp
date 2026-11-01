@@ -35,6 +35,8 @@ public:
     /// True once the stream ended for good: the portal session closed (the
     /// user stopped sharing in the desktop) or PipeWire reported an error.
     bool failed() const override;
+    /// Fires every 20 ms without a picture, on the PipeWire loop thread.
+    void set_idle_callback(IdleCallback cb) override;
 
     struct Impl;
 

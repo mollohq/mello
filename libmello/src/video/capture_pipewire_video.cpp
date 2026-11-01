@@ -44,11 +44,15 @@ struct PipeWireVideoCapture::Impl {
 
     std::mutex callback_mutex;
     FrameCallback callback;
+    IdleCallback idle;
     uint64_t frames = 0;  // loop thread
+    uint64_t frames_at_tick = 0;  // loop thread
+    spa_source* idle_timer = nullptr;
 
     static void on_state_changed(void* data, pw_stream_state old, pw_stream_state state, const char* error);
     static void on_param_changed(void* data, uint32_t id, const spa_pod* param);
     static void on_process(void* data);
+    static void on_idle_tick(void* data, uint64_t expirations);
     void teardown();
 };
 
@@ -167,7 +171,22 @@ void PipeWireVideoCapture::Impl::on_process(void* data) {
     pw_stream_queue_buffer(self->stream, newest);
 }
 
+void PipeWireVideoCapture::Impl::on_idle_tick(void* data, uint64_t expirations) {
+    (void)expirations;
+    auto* self = static_cast<Impl*>(data);
+    std::lock_guard<std::mutex> lock(self->callback_mutex);
+    const bool still = self->frames == self->frames_at_tick;
+    self->frames_at_tick = self->frames;
+    if (still && self->idle) self->idle();
+}
+
 void PipeWireVideoCapture::Impl::teardown() {
+    if (loop && idle_timer) {
+        pw_thread_loop_lock(loop);
+        pw_loop_destroy_source(pw_thread_loop_get_loop(loop), idle_timer);
+        idle_timer = nullptr;
+        pw_thread_loop_unlock(loop);
+    }
     if (loop) pw_thread_loop_stop(loop);
     if (stream) {
         pw_stream_destroy(stream);
@@ -281,6 +300,23 @@ bool PipeWireVideoCapture::initialize(const GraphicsDevice& device, const Captur
     return true;
 }
 
+void PipeWireVideoCapture::set_idle_callback(IdleCallback cb) {
+    Impl& m = *impl_;
+    {
+        std::lock_guard<std::mutex> lock(m.callback_mutex);
+        m.idle = std::move(cb);
+    }
+    if (!m.loop || m.idle_timer) return;
+    pw_thread_loop_lock(m.loop);
+    pw_loop* loop = pw_thread_loop_get_loop(m.loop);
+    m.idle_timer = pw_loop_add_timer(loop, &Impl::on_idle_tick, &m);
+    if (m.idle_timer) {
+        timespec every{0, 20 * 1000 * 1000};
+        pw_loop_update_timer(loop, m.idle_timer, &every, &every, false);
+    }
+    pw_thread_loop_unlock(m.loop);
+}
+
 bool PipeWireVideoCapture::start(uint32_t target_fps, FrameCallback callback) {
     (void)target_fps;  // the pipeline decimates; PipeWire sends what the compositor draws
     if (!impl_->stream) return false;
@@ -302,6 +338,7 @@ void PipeWireVideoCapture::stop() {
                        static_cast<unsigned long long>(m.frames));
     }
     m.callback = nullptr;
+    m.idle = nullptr;
 }
 
 } // namespace mello::video

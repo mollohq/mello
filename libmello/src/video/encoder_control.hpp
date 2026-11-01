@@ -55,6 +55,10 @@ public:
         apply_pending_locked();
         return encoder_ && encoder_->encode(frame, capture_us, out);
     }
+    bool drain(EncodedPacket& out) {
+        std::lock_guard<std::mutex> lock(mutex_);
+        return encoder_ && encoder_->drain(out);
+    }
 #endif
 
     /// Gives up one quality feature. Returns true when the configuration
