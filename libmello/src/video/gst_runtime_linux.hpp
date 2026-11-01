@@ -59,6 +59,11 @@ struct Api {
     decltype(&gst_video_format_from_string) video_format_from_string = nullptr;
     decltype(&gst_dmabuf_allocator_new) dmabuf_allocator_new = nullptr;
     decltype(&gst_dmabuf_allocator_alloc) dmabuf_allocator_alloc = nullptr;
+    decltype(&gst_context_new) context_new = nullptr;
+    decltype(&gst_element_set_context) element_set_context = nullptr;
+    // libgstgl, typed by hand: the two calls take and give pointers only.
+    void* (*gl_display_egl_device_new)(guint device_index) = nullptr;
+    void (*context_set_gl_display)(GstContext* context, void* display) = nullptr;
     decltype(&g_object_get) object_get = nullptr;
     decltype(&g_object_set) object_set = nullptr;
     decltype(&g_error_free) error_free = nullptr;
@@ -81,8 +86,21 @@ bool has_factory(const char* name);
 /// Chosen once per process and kind: reading an element's device opens it.
 std::string va_element(const std::string& kind);
 
+/// As va_element, on the GPU of `render_node` (empty: the primary GPU). The
+/// encoder runs on the encode GPU (linux_gpu.hpp encode_gpu).
+std::string va_element_on(const std::string& kind, const std::string& render_node);
+
 /// True when the DMA-BUF entry points (libgstallocators) loaded.
 bool has_dmabuf();
+
+/// The EGL device index of a DRM card (`/dev/dri/card0`), from
+/// eglQueryDevicesEXT, or -1. Loads libEGL and every vendor's driver.
+int egl_device_index(const std::string& card_node);
+
+/// Puts GStreamer's GL of `pipeline` on EGL device `index` (no window), so
+/// NVENC's GL chain runs on the NVIDIA GPU and not on the desktop's GPU.
+/// Call before the pipeline starts. False when libgstgl lacks the calls.
+bool use_egl_device(GstElement* pipeline, int index);
 
 /// Logs and clears the first error on `bus`. True when there was one.
 bool pop_bus_error(GstBus* bus, const char* who);

@@ -16,6 +16,7 @@ namespace {
 Api g_api;
 bool g_loaded = false;
 bool g_dmabuf = false;
+bool g_gl = false;
 std::once_flag g_load_once;
 
 template<typename T>
@@ -76,6 +77,14 @@ void load_once() {
          sym(video, "gst_video_crop_meta_get_info", a.video_crop_meta_get_info) &&
          sym(video, "gst_video_format_from_string", a.video_format_from_string);
     if (!ok) return;
+    ok = ok && sym(gst, "gst_context_new", a.context_new) &&
+         sym(gst, "gst_element_set_context", a.element_set_context);
+    if (!ok) return;
+    // GL on a chosen EGL device is optional: NVENC then converts on the CPU.
+    if (void* gl = dlopen("libgstgl-1.0.so.0", RTLD_NOW | RTLD_GLOBAL)) {
+        g_gl = sym(gl, "gst_gl_display_egl_device_new", a.gl_display_egl_device_new) &&
+               sym(gl, "gst_context_set_gl_display", a.context_set_gl_display);
+    }
     // DMA-BUF import is optional: without it the encoder takes CPU pictures.
     if (void* alloc = dlopen("libgstallocators-1.0.so.0", RTLD_NOW | RTLD_GLOBAL)) {
         g_dmabuf = sym(alloc, "gst_dmabuf_allocator_new", a.dmabuf_allocator_new) &&
@@ -106,9 +115,9 @@ std::string device_path_of(const char* factory) {
     return out;
 }
 
-std::string find_va_element(const std::string& kind) {
+std::string find_va_element(const std::string& kind, const std::string& on_node) {
     const std::string first = "va" + kind;  // vah264enc
-    const std::string node = primary_render_node(list_linux_gpus());
+    const std::string node = on_node.empty() ? primary_render_node(list_linux_gpus()) : on_node;
     if (!node.empty()) {
         const std::string leaf = node.substr(node.rfind('/') + 1);  // renderD128
         const std::string named = "va" + leaf + kind;               // varenderD129h264enc
@@ -129,6 +138,48 @@ const Api& api() { return g_api; }
 
 bool has_dmabuf() { return load() && g_dmabuf; }
 
+int egl_device_index(const std::string& card_node) {
+    static std::mutex mutex;
+    static std::map<std::string, int> found;
+    std::lock_guard<std::mutex> lock(mutex);
+    auto it = found.find(card_node);
+    if (it != found.end()) return it->second;
+    int index = -1;
+    using GetProc = void* (*)(const char*);
+    using QueryDevices = int (*)(int max, void** devices, int* count);
+    using QueryDeviceString = const char* (*)(void* device, int name);
+    constexpr int kDrmDeviceFile = 0x3233;  // EGL_DRM_DEVICE_FILE_EXT
+    if (void* egl = dlopen("libEGL.so.1", RTLD_NOW | RTLD_GLOBAL)) {
+        auto get_proc = reinterpret_cast<GetProc>(dlsym(egl, "eglGetProcAddress"));
+        auto query_devices = get_proc ? reinterpret_cast<QueryDevices>(get_proc("eglQueryDevicesEXT")) : nullptr;
+        auto query_string =
+            get_proc ? reinterpret_cast<QueryDeviceString>(get_proc("eglQueryDeviceStringEXT")) : nullptr;
+        void* devices[16] = {};
+        int count = 0;
+        if (query_devices && query_string && query_devices(16, devices, &count)) {
+            for (int i = 0; i < count && index < 0; ++i) {
+                const char* file = query_string(devices[i], kDrmDeviceFile);
+                if (file && card_node == file) index = i;
+            }
+        }
+    }
+    MELLO_LOG_INFO(TAG, "EGL device of %s: %d", card_node.c_str(), index);
+    found.emplace(card_node, index);
+    return index;
+}
+
+bool use_egl_device(GstElement* pipeline, int index) {
+    if (!load() || !g_gl || index < 0) return false;
+    void* display = g_api.gl_display_egl_device_new(static_cast<guint>(index));
+    if (!display) return false;
+    GstContext* context = g_api.context_new("gst.gl.GLDisplay", TRUE);
+    g_api.context_set_gl_display(context, display);
+    g_api.element_set_context(pipeline, context);
+    g_api.mini_object_unref(GST_MINI_OBJECT_CAST(context));
+    g_api.object_unref(display);
+    return true;
+}
+
 bool has_factory(const char* name) {
     if (!load()) return false;
     GstElementFactory* f = g_api.factory_find(name);
@@ -138,13 +189,18 @@ bool has_factory(const char* name) {
 }
 
 std::string va_element(const std::string& kind) {
+    return va_element_on(kind, "");
+}
+
+std::string va_element_on(const std::string& kind, const std::string& render_node) {
     static std::mutex mutex;
     static std::map<std::string, std::string> chosen;
     std::lock_guard<std::mutex> lock(mutex);
-    auto it = chosen.find(kind);
+    const std::string key = kind + "@" + render_node;
+    auto it = chosen.find(key);
     if (it != chosen.end()) return it->second;
-    std::string element = load() ? find_va_element(kind) : std::string{};
-    chosen.emplace(kind, element);
+    std::string element = load() ? find_va_element(kind, render_node) : std::string{};
+    chosen.emplace(key, element);
     return element;
 }
 

@@ -131,12 +131,22 @@ TEST(LinuxDecoderOrder, TheOverrideGoesFirstAndSoftIsOpenH264Only) {
     EXPECT_EQ(linux_decoder_order(gpus, true, "nvdec"), (std::vector<std::string>{"OpenH264"}));
 }
 
-TEST(LinuxEncoderOrder, TheBootGpusEncoderFirstAndNoSoftwareEncoder) {
-    std::vector<LinuxGpu> amd = {{kVendorNvidia, false, "/dev/dri/renderD129"},
-                                 {kVendorAmd, true, "/dev/dri/renderD128"}};
-    EXPECT_EQ(linux_encoder_order(amd, false, ""), (std::vector<std::string>{"VA-API", "NVENC"}));
-    std::vector<LinuxGpu> nvidia = {{kVendorNvidia, true, "/dev/dri/renderD128"}};
-    EXPECT_EQ(linux_encoder_order(nvidia, false, ""), (std::vector<std::string>{"NVENC", "VA-API"}));
+// As on Windows, streams encode on the discrete GPU: on a hybrid laptop
+// that is the NVIDIA GPU the game runs on, not the boot GPU.
+TEST(LinuxEncoderOrder, TheDiscreteGpusEncoderFirstAndNoSoftwareEncoder) {
+    std::vector<LinuxGpu> hybrid = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                    {kVendorAmd, true, "/dev/dri/renderD128", "", 512ull << 20}};
+    EXPECT_EQ(linux_encoder_order(hybrid, false, ""), (std::vector<std::string>{"NVENC", "VA-API"}));
+    EXPECT_EQ(encode_render_node(hybrid), "/dev/dri/renderD129");
+    std::vector<LinuxGpu> amd_only = {{kVendorAmd, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(linux_encoder_order(amd_only, false, ""), (std::vector<std::string>{"VA-API", "NVENC"}));
+}
+
+TEST(LinuxEncoderOrder, TwoAmdGpusEncodeOnTheOneWithMoreVideoMemory) {
+    std::vector<LinuxGpu> gpus = {{kVendorAmd, true, "/dev/dri/renderD128", "", 512ull << 20},
+                                  {kVendorAmd, false, "/dev/dri/renderD129", "", 8ull << 30}};
+    EXPECT_EQ(encode_render_node(gpus), "/dev/dri/renderD129");
+    EXPECT_EQ(linux_encoder_order(gpus, false, "")[0], "VA-API");
 }
 
 TEST(LinuxEncoderOrder, SoftwareOnlyOnRequestAndTheOverrideGoesFirst) {
@@ -144,6 +154,8 @@ TEST(LinuxEncoderOrder, SoftwareOnlyOnRequestAndTheOverrideGoesFirst) {
     EXPECT_EQ(linux_encoder_order(amd, true, "va"), (std::vector<std::string>{"OpenH264"}));
     EXPECT_EQ(linux_encoder_order(amd, false, "openh264"), (std::vector<std::string>{"OpenH264"}));
     EXPECT_EQ(linux_encoder_order(amd, false, "nvenc"), (std::vector<std::string>{"NVENC", "VA-API"}));
+    std::vector<LinuxGpu> nvidia = {{kVendorNvidia, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(linux_encoder_order(nvidia, false, "va"), (std::vector<std::string>{"VA-API", "NVENC"}));
 }
 
 // vapostproc's sink caps list DMA-BUF layouts as drm-format strings. Only

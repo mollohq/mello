@@ -85,7 +85,7 @@ static std::vector<DmaBufFormat> pad_dmabuf_formats(GstElement* el, const char* 
 
 static std::vector<DmaBufFormat> va_dmabuf_formats() {
     const gst::Api& a = gst::api();
-    const std::string post = gst::va_element("postproc");
+    const std::string post = gst::va_element_on("postproc", encode_render_node(list_linux_gpus()));
     if (post.empty()) return {};
     GstElement* el = a.factory_make(post.c_str(), nullptr);
     if (!el) return {};
@@ -93,6 +93,20 @@ static std::vector<DmaBufFormat> va_dmabuf_formats() {
     auto formats = pad_dmabuf_formats(el, "sink");
     a.object_unref(el);
     return formats;
+}
+
+// The NVIDIA GPU's DRM card, or empty.
+static std::string nvidia_card() {
+    for (const LinuxGpu& g : list_linux_gpus()) {
+        if (g.vendor == kVendorNvidia) return g.card_node;
+    }
+    return {};
+}
+
+// The EGL device of the NVIDIA GPU, or -1.
+static int nvidia_egl_device() {
+    const std::string card = nvidia_card();
+    return card.empty() ? -1 : gst::egl_device_index(card);
 }
 
 // glupload lists the modifiers of its GL context once it has one: a short
@@ -110,6 +124,7 @@ static std::vector<DmaBufFormat> gl_dmabuf_formats() {
         return {};
     }
     std::vector<DmaBufFormat> formats;
+    gst::use_egl_device(pipeline, nvidia_egl_device());
     if (a.set_state(pipeline, GST_STATE_PLAYING) != GST_STATE_CHANGE_FAILURE) {
         a.get_state(pipeline, nullptr, nullptr, 500 * GST_MSECOND);
         if (GstElement* up = a.bin_get_by_name(reinterpret_cast<GstBin*>(pipeline), "up")) {
@@ -124,11 +139,7 @@ static std::vector<DmaBufFormat> gl_dmabuf_formats() {
 
 bool GstEncoder::nvenc_gpu_path() {
     if (const char* forced = std::getenv("MELLO_NVENC_GL")) return std::strcmp(forced, "1") == 0;
-    for (const LinuxGpu& g : list_linux_gpus()) {
-        if (g.primary) return g.vendor == kVendorNvidia;
-    }
-    const auto gpus = list_linux_gpus();
-    return gpus.size() == 1 && gpus[0].vendor == kVendorNvidia;
+    return nvidia_egl_device() >= 0;
 }
 
 std::vector<DmaBufFormat> GstEncoder::dmabuf_formats(GstEncoderKind kind) {
@@ -146,6 +157,21 @@ std::vector<DmaBufFormat> GstEncoder::dmabuf_formats(GstEncoderKind kind) {
             formats[i] = va_dmabuf_formats();
         } else if (nvenc_gpu_path()) {
             formats[i] = gl_dmabuf_formats();
+            // The desktop on another GPU (a hybrid laptop): its buffers reach
+            // the NVIDIA GPU only in the linear layout.
+            const auto gpus = list_linux_gpus();
+            const std::string desktop = primary_render_node(gpus);
+            if (!desktop.empty() && desktop != encode_render_node(gpus)) {
+                for (uint32_t fourcc : {kDrmXRGB8888, kDrmARGB8888}) {
+                    auto f = std::find_if(formats[i].begin(), formats[i].end(),
+                                          [fourcc](const DmaBufFormat& d) { return d.drm_fourcc == fourcc; });
+                    if (f == formats[i].end()) {
+                        formats[i].push_back(DmaBufFormat{fourcc, {0}});
+                    } else if (std::find(f->modifiers.begin(), f->modifiers.end(), 0) == f->modifiers.end()) {
+                        f->modifiers.push_back(0);
+                    }
+                }
+            }
         }
         for (const DmaBufFormat& f : formats[i]) {
             MELLO_LOG_INFO(TAG, "%s encoder imports DMA-BUF %.4s with %zu modifier(s)",
@@ -195,7 +221,7 @@ GstEncoder::~GstEncoder() {
 
 bool GstEncoder::is_available(GstEncoderKind kind) {
     if (kind == GstEncoderKind::VaApi) {
-        return !gst::va_element("h264enc").empty() && !gst::va_element("postproc").empty();
+        return !gst::va_element_on("h264enc", encode_render_node(list_linux_gpus())).empty() && !gst::va_element_on("postproc", encode_render_node(list_linux_gpus())).empty();
     }
     if (!gst::has_factory("nvh264enc")) return false;
     return !nvenc_gpu_path() ||
@@ -231,8 +257,8 @@ bool GstEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                                                    : "no nvh264enc (gst-plugins-bad nvcodec) or GL elements");
     }
     const bool va = kind_ == GstEncoderKind::VaApi;
-    const std::string enc = va ? gst::va_element("h264enc") : "nvh264enc";
-    const std::string post = va ? gst::va_element("postproc") : "";
+    const std::string enc = va ? gst::va_element_on("h264enc", encode_render_node(list_linux_gpus())) : "nvh264enc";
+    const std::string post = va ? gst::va_element_on("postproc", encode_render_node(list_linux_gpus())) : "";
     cpu_convert_ = !va && !nvenc_gpu_path();
     config_ = config;
 
@@ -299,6 +325,11 @@ bool GstEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
             continue;
         }
         p_->pipeline = pipeline;
+        if (!va && !cpu_convert_) {
+            // NVENC's GL on the NVIDIA GPU, not on the desktop's GPU.
+            const bool on_device = gst::use_egl_device(pipeline, nvidia_egl_device());
+            MELLO_LOG_INFO(TAG, "NVENC encoder: GL on %s", on_device ? "the NVIDIA EGL device" : "the default display");
+        }
         p_->src = a.bin_get_by_name(reinterpret_cast<GstBin*>(pipeline), "src");
         p_->enc = a.bin_get_by_name(reinterpret_cast<GstBin*>(pipeline), "enc");
         p_->sink = a.bin_get_by_name(reinterpret_cast<GstBin*>(pipeline), "sink");

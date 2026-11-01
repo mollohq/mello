@@ -14,6 +14,11 @@ struct LinuxGpu {
     bool primary = false;
     /// Its render node, `/dev/dri/renderD128`. Empty when it has none.
     std::string render_node;
+    /// Its primary node, `/dev/dri/card0`.
+    std::string card_node;
+    /// amdgpu's `mem_info_vram_total`: dedicated video memory (an APU's is a
+    /// small carve-out). 0 when the driver does not tell (NVIDIA, Intel).
+    uint64_t vram_bytes = 0;
 };
 
 constexpr unsigned kVendorNvidia = 0x10de;
@@ -33,15 +38,25 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root = "/sys/class/
 std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced);
 
+/// The GPU that encodes a stream, as on Windows (graphics_device.cpp: the
+/// adapter with the most dedicated video memory): an NVIDIA GPU when there
+/// is one, else the GPU with the most video memory, else the primary GPU.
+/// On a laptop that is the discrete GPU the game runs on. Viewing keeps the
+/// primary GPU (linux_decoder_order). Null without GPUs.
+const LinuxGpu* encode_gpu(const std::vector<LinuxGpu>& gpus);
+
 /// The encoders to try, in order: "VA-API", "NVENC", or "OpenH264" alone.
 ///
 /// - `soft`: OpenH264 only (MELLO_SOFT_ENCODER=1, the test lane as on
 ///   Windows). Hardware encode only otherwise (spec 03 section 5).
 /// - `forced`: MELLO_LINUX_ENCODER (va, nvenc or openh264) goes first;
 ///   openh264 means OpenH264 only.
-/// - Else the primary GPU's encoder first, as for decode.
+/// - Else the encode GPU's encoder first (encode_gpu): NVENC for NVIDIA.
 std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced);
+
+/// The render node of encode_gpu(). Empty if unknown.
+std::string encode_render_node(const std::vector<LinuxGpu>& gpus);
 
 /// The render node of the primary GPU, or of the only GPU. Empty if unknown.
 std::string primary_render_node(const std::vector<LinuxGpu>& gpus);

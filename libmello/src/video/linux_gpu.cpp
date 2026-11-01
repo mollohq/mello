@@ -55,6 +55,8 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root) {
         LinuxGpu gpu;
         gpu.vendor = static_cast<unsigned>(std::strtoul(vendor.c_str(), nullptr, 16));
         gpu.primary = read_line(base + "/boot_vga") == "1";
+        gpu.card_node = "/dev/dri/" + c;
+        gpu.vram_bytes = std::strtoull(read_line(base + "/mem_info_vram_total").c_str(), nullptr, 10);
         const auto it = render_of.find(real_path(base));
         if (it != render_of.end()) gpu.render_node = it->second;
         gpus.push_back(gpu);
@@ -88,18 +90,35 @@ std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, 
     return order;
 }
 
+const LinuxGpu* encode_gpu(const std::vector<LinuxGpu>& gpus) {
+    const LinuxGpu* best = nullptr;
+    for (const LinuxGpu& g : gpus) {
+        if (g.vendor == kVendorNvidia) return &g;
+        if (!best || g.vram_bytes > best->vram_bytes || (g.vram_bytes == best->vram_bytes && g.primary)) {
+            best = &g;
+        }
+    }
+    return best;
+}
+
 std::vector<std::string> linux_encoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced) {
     if (soft || forced == "openh264") return {"OpenH264"};
-    std::string decoder_forced;
-    if (forced == "nvenc") decoder_forced = "nvdec";
-    if (forced == "va") decoder_forced = "va";
+    const LinuxGpu* gpu = encode_gpu(gpus);
     std::vector<std::string> order;
-    for (const std::string& name : linux_decoder_order(gpus, false, decoder_forced)) {
-        if (name == "NVDEC") order.push_back("NVENC");
-        if (name == "VA-API") order.push_back("VA-API");
+    if (gpu && gpu->vendor == kVendorNvidia) {
+        order = {"NVENC", "VA-API"};
+    } else {
+        order = {"VA-API", "NVENC"};
     }
+    const std::string first = forced == "nvenc" ? "NVENC" : forced == "va" ? "VA-API" : "";
+    if (!first.empty() && order.front() != first) std::swap(order[0], order[1]);
     return order;
+}
+
+std::string encode_render_node(const std::vector<LinuxGpu>& gpus) {
+    const LinuxGpu* gpu = encode_gpu(gpus);
+    return gpu ? gpu->render_node : std::string{};
 }
 
 std::string primary_render_node(const std::vector<LinuxGpu>& gpus) {
