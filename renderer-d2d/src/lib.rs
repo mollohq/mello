@@ -36,7 +36,7 @@ mod text;
 
 use device::SharedDevice;
 use images::BitmapCache;
-use itemrenderer::{BrushCache, D2DItemRenderer, ItemBitmapCache, ShadowCache};
+use itemrenderer::{BrushCache, D2DItemRenderer, ItemBitmapCache, PathCache, ShadowCache};
 use surface::Surface;
 
 /// Creates the shared D3D11 and Direct2D device once, or says why it cannot be
@@ -60,6 +60,7 @@ pub struct D2DRenderer {
     item_cache: ItemBitmapCache,
     bitmap_cache: RefCell<BitmapCache>,
     shadow_cache: ShadowCache,
+    path_cache: PathCache,
     brush_cache: RefCell<BrushCache>,
     text_layout_cache: sharedparley::TextLayoutCache,
     pre_present: RefCell<Option<Box<dyn FnMut()>>>,
@@ -92,6 +93,7 @@ impl Default for D2DRenderer {
             item_cache: Default::default(),
             bitmap_cache: Default::default(),
             shadow_cache: Default::default(),
+            path_cache: Default::default(),
             brush_cache: Default::default(),
             text_layout_cache: Default::default(),
             pre_present: RefCell::new(None),
@@ -170,6 +172,8 @@ impl D2DRenderer {
         self.item_cache.clear_all();
         self.bitmap_cache.borrow_mut().clear();
         self.shadow_cache.clear();
+        // Geometries belong to the Direct2D factory, which a lost device replaces.
+        self.path_cache.clear_all();
         self.brush_cache.borrow_mut().clear();
     }
 
@@ -228,6 +232,7 @@ impl D2DRenderer {
         let frame_start = std::time::Instant::now();
         let window_inner = WindowInner::from_pub(window);
         self.item_cache.clear_cache_if_scale_factor_changed(window);
+        self.path_cache.clear_cache_if_scale_factor_changed(window);
         self.shadow_cache
             .clear_cache_if_scale_factor_changed(window);
         let target = surface.begin_frame()?;
@@ -260,6 +265,7 @@ impl D2DRenderer {
                 &self.item_cache,
                 &self.bitmap_cache,
                 &self.shadow_cache,
+                &self.path_cache,
                 &self.brush_cache,
                 &self.text_layout_cache,
                 window,
@@ -350,6 +356,7 @@ impl RendererSealed for D2DRenderer {
         self.text_layout_cache.component_destroyed(component);
         // Shadow bitmaps live in the item cache; the shadow cache only maps options to them.
         self.item_cache.component_destroyed(component);
+        self.path_cache.component_destroyed(component);
         Ok(())
     }
 

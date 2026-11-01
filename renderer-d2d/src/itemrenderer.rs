@@ -50,6 +50,10 @@ type PixmapUpdate<'f> = &'f dyn Fn(&mut dyn FnMut(u32, u32, &[u8]));
 /// Per-item GPU objects: image bitmaps, cached pixmaps and shadow bitmaps.
 pub type ItemBitmapCache = ItemCache<Option<Rc<CachedBitmap>>>;
 pub type ShadowCache = BoxShadowCache<Rc<CachedBitmap>>;
+/// A path item's geometry in physical pixels and its offset, kept while the
+/// item's path, fit and fill rule do not change (Skia keeps the same cache).
+/// Building the geometry is the cost of a path: Slint's fitting plus the sink.
+pub type PathCache = ItemCache<Option<(Vector2, ID2D1PathGeometry1)>>;
 
 #[derive(Clone, Copy)]
 enum Push {
@@ -86,6 +90,7 @@ pub struct D2DItemRenderer<'a> {
     item_cache: &'a ItemBitmapCache,
     bitmap_cache: &'a RefCell<BitmapCache>,
     shadow_cache: &'a ShadowCache,
+    path_cache: &'a PathCache,
     brush_cache: &'a RefCell<BrushCache>,
     text_layout_cache: &'a sharedparley::TextLayoutCache,
     window: &'a i_slint_core::api::Window,
@@ -187,6 +192,66 @@ fn is_translation(m: &Matrix3x2) -> bool {
     m.M11 == 1.0 && m.M12 == 0.0 && m.M21 == 0.0 && m.M22 == 1.0
 }
 
+/// An `ID2D1PathGeometry` from Slint's fitted path events, scaled to physical
+/// pixels. `None` when Direct2D refuses the geometry.
+fn path_geometry(
+    factory: &ID2D1Factory1,
+    fill_rule: items::FillRule,
+    events: i_slint_core::graphics::PathDataIterator,
+    sf: f32,
+) -> Option<ID2D1PathGeometry1> {
+    let geometry = unsafe { factory.CreatePathGeometry() }.ok()?;
+    let sink = unsafe { geometry.Open() }.ok()?;
+    let v = |p: lyon_path::math::Point| Vector2 {
+        X: p.x * sf,
+        Y: p.y * sf,
+    };
+    unsafe {
+        sink.SetFillMode(match fill_rule {
+            items::FillRule::Evenodd => D2D1_FILL_MODE_ALTERNATE,
+            _ => D2D1_FILL_MODE_WINDING,
+        });
+        let mut open = false;
+        for event in events.iter() {
+            match event {
+                lyon_path::Event::Begin { at } => {
+                    sink.BeginFigure(v(at), D2D1_FIGURE_BEGIN_FILLED);
+                    open = true;
+                }
+                lyon_path::Event::Line { to, .. } => sink.AddLine(v(to)),
+                lyon_path::Event::Quadratic { ctrl, to, .. } => {
+                    sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                        point1: v(ctrl),
+                        point2: v(to),
+                    })
+                }
+                lyon_path::Event::Cubic {
+                    ctrl1, ctrl2, to, ..
+                } => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: v(ctrl1),
+                    point2: v(ctrl2),
+                    point3: v(to),
+                }),
+                lyon_path::Event::End { close, .. } => {
+                    if open {
+                        sink.EndFigure(if close {
+                            D2D1_FIGURE_END_CLOSED
+                        } else {
+                            D2D1_FIGURE_END_OPEN
+                        });
+                        open = false;
+                    }
+                }
+            }
+        }
+        if open {
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+        sink.Close().ok()?;
+    }
+    Some(geometry)
+}
+
 impl<'a> D2DItemRenderer<'a> {
     /// One renderer per frame over the caches the `D2DRenderer` owns (FemtoVG's
     /// constructor has the same shape).
@@ -197,6 +262,7 @@ impl<'a> D2DItemRenderer<'a> {
         item_cache: &'a ItemBitmapCache,
         bitmap_cache: &'a RefCell<BitmapCache>,
         shadow_cache: &'a ShadowCache,
+        path_cache: &'a PathCache,
         brush_cache: &'a RefCell<BrushCache>,
         text_layout_cache: &'a sharedparley::TextLayoutCache,
         window: &'a i_slint_core::api::Window,
@@ -212,6 +278,7 @@ impl<'a> D2DItemRenderer<'a> {
             item_cache,
             bitmap_cache,
             shadow_cache,
+            path_cache,
             brush_cache,
             text_layout_cache,
             window,
@@ -1018,66 +1085,22 @@ impl<'a> D2DItemRenderer<'a> {
     }
 
     fn draw_path_impl(&mut self, path: Pin<&items::Path>, item_rc: &ItemRc, size: LogicalSize) {
-        // One geometry per draw; caps and joins take Direct2D's defaults.
-        let Some((offset, events)) = path.fitted_path_events(item_rc) else {
-            return;
-        };
+        // Caps and joins take Direct2D's defaults.
         let sf = self.scale_factor.get();
-        let Ok(geometry) = (unsafe { self.device.d2d_factory.CreatePathGeometry() }) else {
+        let factory = &self.device.d2d_factory;
+        let Some((offset, geometry)) = self.path_cache.get_or_update_cache_entry(item_rc, || {
+            let (offset, events) = path.fitted_path_events(item_rc)?;
+            let geometry = path_geometry(factory, path.fill_rule(), events, sf)?;
+            Some((
+                Vector2 {
+                    X: offset.x * sf,
+                    Y: offset.y * sf,
+                },
+                geometry,
+            ))
+        }) else {
             return;
         };
-        let Ok(sink) = (unsafe { geometry.Open() }) else {
-            return;
-        };
-        let v = |p: lyon_path::math::Point| Vector2 {
-            X: p.x * sf,
-            Y: p.y * sf,
-        };
-        unsafe {
-            sink.SetFillMode(match path.fill_rule() {
-                items::FillRule::Evenodd => D2D1_FILL_MODE_ALTERNATE,
-                _ => D2D1_FILL_MODE_WINDING,
-            });
-            let mut open = false;
-            for event in events.iter() {
-                match event {
-                    lyon_path::Event::Begin { at } => {
-                        sink.BeginFigure(v(at), D2D1_FIGURE_BEGIN_FILLED);
-                        open = true;
-                    }
-                    lyon_path::Event::Line { to, .. } => sink.AddLine(v(to)),
-                    lyon_path::Event::Quadratic { ctrl, to, .. } => {
-                        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-                            point1: v(ctrl),
-                            point2: v(to),
-                        })
-                    }
-                    lyon_path::Event::Cubic {
-                        ctrl1, ctrl2, to, ..
-                    } => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-                        point1: v(ctrl1),
-                        point2: v(ctrl2),
-                        point3: v(to),
-                    }),
-                    lyon_path::Event::End { close, .. } => {
-                        if open {
-                            sink.EndFigure(if close {
-                                D2D1_FIGURE_END_CLOSED
-                            } else {
-                                D2D1_FIGURE_END_OPEN
-                            });
-                            open = false;
-                        }
-                    }
-                }
-            }
-            if open {
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            }
-            if sink.Close().is_err() {
-                return;
-            }
-        }
         let phys_size = size * self.scale_factor;
         let fill = self.brush(&path.fill(), phys_size);
         let stroke_width = (path.stroke_width() * self.scale_factor).get();
@@ -1089,9 +1112,8 @@ impl<'a> D2DItemRenderer<'a> {
         if fill.is_none() && stroke.is_none() {
             return;
         }
-        let offset = offset * self.scale_factor;
         let saved = self.state().transform;
-        let moved = Matrix3x2::translation(offset.x, offset.y) * saved;
+        let moved = Matrix3x2::translation(offset.X, offset.Y) * saved;
         unsafe {
             self.dc.SetTransform(&moved);
             if let Some(fill) = &fill {
