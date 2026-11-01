@@ -131,6 +131,17 @@ jobs:
       - name: Verify Azure Login
         run: az account show --output table
 
+      # vpk at the version of the velopack crate the client links: the
+      # updater inside the package and the library must match.
+      - name: Install vpk
+        shell: pwsh
+        run: |
+          $lines = Get-Content Cargo.lock
+          $i = [array]::IndexOf($lines, 'name = "velopack"')
+          $version = $lines[$i + 1] -replace '^version = "(.*)"$', '$1'
+          dotnet tool update -g vpk --version $version
+          vpk --help | Select-Object -First 1
+
       - name: Velopack Package
         shell: cmd
         run: |
@@ -271,6 +282,12 @@ jobs:
               --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
               "$dylib"
           done
+
+      # vpk at the version of the velopack crate the client links.
+      - name: Install vpk
+        run: |
+          VPK_VERSION=$(grep -A1 '^name = "velopack"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          dotnet tool update -g vpk --version "$VPK_VERSION"
 
       - name: Velopack Package
         run: |
