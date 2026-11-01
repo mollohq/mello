@@ -341,7 +341,8 @@ section 3.1 is a separate item.
 
 Verified on 2026-11-01:
 
-- Idle in a voice channel: 83 MB (section 8.1).
+- Idle in a voice channel: 83 MB before the HUD was turned off (section 8.1); 72 - 76 MB with the
+  HUD off and the segment heap (section 8.4).
 - A lost device, through `FX_D2D_FAKE_DEVICE_LOSS` (section 8.3).
 - The `PopupWindow` paths: the sign-out (account menu) and create-channel (crew menu)
   journeys pass, and the window is clean after the popup closes.
