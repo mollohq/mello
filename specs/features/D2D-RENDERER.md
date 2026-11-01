@@ -276,14 +276,16 @@ rest in driver and runtime allocations.
 | HUD on (it shows in the call when another window is focused, as with Task Manager open) | 78 MB | 94 MB |
 | HUD off | 71 MB | 83 MB |
 | HUD on, ONNX Runtime arena off | 78 MB | 93 MB (no effect) |
-| HUD off, segment heap | 66 MB | 76 MB |
-| HUD off, segment heap, working-set trim (shipped) | 17 MB | 24 - 26 MB after 5 min |
+| HUD off, segment heap (shipped) | 66 MB | 76 MB |
+| HUD off, segment heap, working-set trim (not shipped) | 17 MB | 24 - 26 MB after 5 min |
 
-The last row is what the client touches again after a trim (spec 12 section 3.3).
-A sealed belt reveal held open and closed again brings it to 29 MB. Committed
-memory does not change with the trim. A client in daily use, twenty minutes in a
-call with the window minimized once, showed 48 MB private working set and 160 MB
-committed.
+The last row is a trial: `SetProcessWorkingSetSize(-1, -1)` 10 s after each
+settle point (startup, a crew load, a voice join). It shows what the client
+touches again after a trim; a sealed belt reveal held open and closed brought it
+to 29 MB, and committed memory did not change. It is not shipped (spec 12 section
+3.3). Windows does a similar trim itself: a client in daily use, twenty minutes
+in a call with the window minimized once, showed 48 MB private working set and
+160 MB committed.
 
 The HUD overlay is off (spec features/HUD-OVERLAY.md section 0): 7 MB while
 hidden and 11 MB while it shows in a call, for its own window, D3D11 device,

@@ -39,7 +39,6 @@ mod ipc;
 mod joined_line;
 mod live_session;
 mod member_audio;
-mod memory_trim;
 mod notifications;
 mod onboarding;
 mod onboarding_invite;
@@ -461,7 +460,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
                 if let Some(w) = window_ref.upgrade() {
                     w.hide().ok();
                 }
-                memory_trim::settle();
                 slint::CloseRequestResponse::KeepWindowShown
             } else {
                 log::info!("[quit] close requested (close_to_tray=false)");
@@ -719,7 +717,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     ctx.app.show()?;
     log::info!("[startup] window shown");
-    memory_trim::settle();
     if let Some(perf_rx) = perf_event_rx {
         // Resolve the device id here, on the app's own Settings instance. The
         // scenario thread cannot hold it (Rc is not Send), and loading a second
