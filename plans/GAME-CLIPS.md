@@ -397,7 +397,7 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker t
 - Audio: one stereo AAC-LC track, 160 kbps. The mux places game audio and voice on a 48 kHz timeline from T0. The voice is mono, center.
 - Drift: each source gets a linear resample ratio from its own time anchors over the window. 300 ppm over 30 s is 9 ms. The ratio removes it.
 - Gaps (minimized game, a dropped audio chunk) become silence on their own timeline position. Nothing moves the audio that follows a gap.
-- Mix: game and voice at unity gain, then a limiter (Q9). The levels are what the user heard only if loopback captures after the game's own volume. To measure on the Windows PC.
+- Mix: game and voice at unity gain, then a limiter (Q9). Process loopback captures after the game's own volume and before the Windows volume mixer (measured, section 9.1). The voice ring is also before the mixer. Q20 decides whether the mux applies the mixer sliders.
 - Poster: the newest captured frame at the press, copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press.
 
 ### 5.4 The MP4 file
@@ -526,6 +526,19 @@ With a stream and the replay at the same time, the GPU does one capture, two con
 | Encoder | NVENC (tested in the lab). AMF compiled and untested (Bob's AMD check). QSV is off unless `MELLO_ENABLE_QSV=1` (12-STREAMING.md 3.4), so an Intel-only PC has no game clips until QSV is tested. |
 | Game audio | WASAPI process loopback, include the game's process tree. Windows 10 2004 or later. Endpoint loopback is **not** a fallback for the replay: it records the crew voice and every other app twice. **Not yet proven for this use:** in the CS2 recording, an OBS application audio capture of `mello.exe` (the same mechanism) attached and gave digital silence for the whole session, while the endpoint mix had the voice. The cause is not known. Step 2 starts with a measurement on a game process (section 11). |
 | Border | Windows 11: hidden with consent. Windows 10: always shown. Game clips run there with the border (Q3). |
+
+**Step 2a measurement (2026-11-01, Windows PC).** Tool: `libmello/tests/loopback_probe.cpp` (`mello_loopback_probe`). It opens the stream host's `WasapiLoopbackCapture` with the scope "include the process tree" on a pid. It refuses endpoint loopback. Each second it logs the level, the share of digital-zero samples, the frames that arrived, and the game's session in the Windows volume mixer (slider, mute, peak meter). m3llo was in voice, with a second client that talked the whole time.
+
+| Run | Result |
+|---|---|
+| Control: `mello.exe` in voice, 20 s | Signal: median −23 dBFS, 48000 frames a second, no digital-zero second. The silence of the OBS application capture in the CS2 recording (section 14) came from OBS, not from process loopback. |
+| CS2, 10 min in a match (`cs2.exe`, run 2) | Signal for the whole run: 600 of 600 s with frames (45120 to 51360 a second), 0 digital-zero seconds, median −35 dBFS. The 21 s under −60 dBFS all fall in the in-game volume step, where the level is low (−60 to −66 dBFS, not zero). |
+| CS2: the Windows volume mixer slider at 50 % for 55 s | The level does **not** follow it: −31 dBFS at 50 %, against −34 dBFS before and −30 dBFS after. A 50 % slider is at least −6 dB. Process loopback captures **before** the session volume. |
+| CS2: the game's master volume at 50 % | The level follows it: about −50 dBFS for the 75 s of the step, against −27 dBFS before. Process loopback captures **after** the game's own volume. |
+| CS2 in the background (run 1) | CS2 plays nothing when it is not the active window, unless its setting "Play Audio When Game In Background" is on. The loopback is then digital zero, and the session meter shows the same. A clip of an alt-tabbed CS2 has no game audio, which is what the user heard. |
+| A game with a launcher process | Not measured yet. |
+
+Effect on the mix (section 5.3): the game audio is the level that the game rendered, after its own volume, before the Windows volume mixer. The voice ring taps m3llo's mix in the render path, also before the mixer. A user who turns the game down in the Windows volume mixer to hear the crew gets a clip with the game louder than heard (Q20).
 
 ### 9.2 macOS (after Windows)
 
@@ -682,8 +695,9 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 | Q17 | Does macOS go behind the hub in step 1? | Open. Proposed: yes, with one consumer only until the macOS work (section 3.5, item 7). |
 | Q18 | A stream starts while the replay runs on WGC window, with the hook allowed: the stream shows WGC frames until the hook delivers. Accept? | Open. Proposed: yes. Today the stream waits for the hook at start. |
 | Q19 | The stream ends while the hook captures: the replay goes back to WGC window, and the hook stops. Accept? | Open. Proposed: yes. The hook permission comes with a stream start. |
+| Q20 | The Windows volume mixer slider is not in the loopback. Does the mux apply the game's and m3llo's slider values, so the clip balance is what the user heard? | Open. Proposed: yes. Record both session volumes with the ring's time anchors and apply them in the mux. |
 
-Still to measure on the Windows PC (step 2a): whether process loopback on a game process gives a signal at all (section 9.1), and whether it captures before or after the game's own volume (section 5.3).
+Step 2a (section 9.1): CS2 is measured. Process loopback gives a signal for the whole run, after the game's own volume and before the Windows volume mixer. A game with a launcher process is still to measure.
 
 ---
 

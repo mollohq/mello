@@ -202,3 +202,15 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     gtest_discover_tests(mello_video_timing_spike_tests)
 endif()
 
+
+# Game clips step 2a: a manual probe of WASAPI process loopback on a running
+# game (plans/GAME-CLIPS.md section 0.3). Not a test; ctest does not run it.
+if(WIN32)
+    add_executable(mello_loopback_probe loopback_probe.cpp)
+    target_include_directories(mello_loopback_probe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    )
+    target_compile_definitions(mello_loopback_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(mello_loopback_probe PRIVATE mello ole32)
+endif()
