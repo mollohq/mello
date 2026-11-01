@@ -191,9 +191,13 @@ impl PollState {
                         | Event::CrewStateLoaded { .. }
                 );
 
+                let settles = crate::memory_trim::settles(&event);
                 #[cfg(feature = "e2e")]
                 crate::e2e_state::record_event(&event);
                 crate::handlers::handle_event(poll_ctx, event);
+                if settles {
+                    crate::memory_trim::settle();
+                }
 
                 if should_push_hud && poll_ctx.hud_manager.is_enabled() {
                     let mode = poll_ctx.fg_monitor.borrow().current_mode();
@@ -212,6 +216,7 @@ impl PollState {
                 {
                     if poll_ctx.app.window().is_visible() {
                         poll_ctx.app.hide().ok();
+                        crate::memory_trim::settle();
                     } else {
                         poll_ctx.app.show().ok();
                     }
@@ -256,6 +261,8 @@ impl PollState {
                     let state = crate::hud_state_builder::build_hud_state(poll_ctx, new_mode);
                     poll_ctx.hud_manager.push_state(state);
                 }
+                // A HUD hidden for a while gives its window and GPU device back.
+                poll_ctx.hud_manager.tick(std::time::Instant::now());
             }
 
             // --- HUD actions ---
