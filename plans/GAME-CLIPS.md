@@ -6,34 +6,40 @@ todos:
     content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate"
     status: pending
   - id: loopback-check
-    content: "Windows PC: measure WASAPI process loopback on a game process (signal present, before or after the game volume) before the ring is built on it"
+    content: "Windows PC: measure WASAPI process loopback on a game process (signal present, before or after the game volume) before the ring is built on it. CS2, Hearthstone and the tone test done. Open: CS2 in exclusive Fullscreen under WGC window (A1), the QPC position of the process loopback device against the arrival time (A2)"
+    status: pending
+  - id: f7-key-cause
+    content: "Windows PC: find why the physical F7 key does not reach the rdev hook on Bob's PC while a synthetic F7 does (Logitech G HUB runs there). F8 uses the same path. Before client-key-settings"
     status: pending
   - id: replay-ring
-    content: "libmello: disk ring of encoded video and game audio PCM, voice tap with heard times, pinning during a capture"
+    content: "libmello: one preallocated ring file of encoded video with a byte index per GOP, game audio PCM, voice tap with heard times (anchors taken in write() on the render thread), pinning during a capture with a spare rule"
     status: pending
   - id: replay-session
-    content: "libmello: mello_replay_* C API, recording encoder profile, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture)"
+    content: "libmello: mello_replay_* C API, an encoder intent (stream or recording) through EncoderFactory into NVENC and AMF with a test per encoder, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture), the stream priority rules of section 3.6, one shared game audio loopback per game (F7)"
     status: pending
   - id: mp4-mux
-    content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first) and the poster JPEG"
+    content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s"
     status: pending
   - id: core-lifecycle
-    content: "mello-core: replay manager (setting, foreground game, disk, encoder), CaptureGameClip, post_clip with clip_type game"
+    content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game"
     status: pending
   - id: upload
-    content: "mello-core: streamed and paced upload of the MP4 and the poster, no full-file read into RAM"
+    content: "mello-core: streamed and paced upload of the MP4 and the poster, no full-file read into RAM, a persisted upload queue for the resume after a restart, no upload while a stream runs (F4)"
     status: pending
   - id: backend
-    content: "Nakama: validate clip_type, game clip fields, presign video/mp4 and image/jpeg with a size cap, Go tests"
+    content: "Nakama: validate clip_type, game clip fields, a presign helper that signs the length cap and Cache-Control for video/mp4 and image/jpeg, clip_upload_complete checks the objects with HEAD, Go tests"
     status: pending
   - id: client-key-settings
     content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests"
     status: pending
-  - id: feed-card-playback
-    content: "Client: game clip card with poster, playback that streams the MP4 from R2 with HTTP range requests, through the viewer pipeline in the expanded view"
+  - id: feed-card
+    content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file"
+    status: pending
+  - id: clip-streaming-playback
+    content: "mello-core and libmello: ClipRangeReader, IMFByteStream over it, streaming AAC playback, the viewer pipeline with a clip source, the expanded view"
     status: pending
   - id: gates
-    content: "Replay lane in tools/stream-gate, perf harness scenario, QA harness checks, one mello-driver journey"
+    content: "Replay lane in tools/stream-gate (VMAF floor first, then the bitrate per quality; a hw-lane row with a real loopback tone), perf harness scenario, QA harness checks, one mello-driver journey"
     status: pending
   - id: specs
     content: "Move the shipped parts into CLIPS.md, 03-LIBMELLO.md, 12-STREAMING.md and 14-VIDEO-PIPELINE.md"
@@ -46,7 +52,7 @@ isProject: false
 
 # Game Clips (F8)
 
-> **Status:** Plan. Nothing is built. Bob answered the open questions on 2026-10-31 (section 13).
+> **Status:** Plan. Nothing is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6, Q17 to Q24, and the todos.
 > **Specs:** [CLIPS.md](../specs/features/CLIPS.md) sections 3 to 6, [03-LIBMELLO.md](../specs/03-LIBMELLO.md), [12-STREAMING.md](../specs/12-STREAMING.md), [14-VIDEO-PIPELINE.md](../specs/14-VIDEO-PIPELINE.md), [00-ARCHITECTURE.md](../specs/00-ARCHITECTURE.md) section 2.
 > **Builds on:** F7 voice clips (CLIPS.md 3.1, branch `fix/playtest-fixes`).
 
@@ -199,8 +205,12 @@ The border: Windows 11 hides the WGC border with `IsBorderRequired(false)` when 
 | GOP | 4 s plus IDR on demand | 1 s, no IDR on demand |
 | Rate control | VBR 1.25x, 0.5 s VBV | VBR 1.25x, 1 s VBV |
 | NVENC tuning | P4 ULL, then P1 | P4 high quality tuning, no ULL |
-| Cost tiers | Yes | Yes. The same overload signal. Below tier 2 the replay drops to 30 fps. |
+| Cost tiers | Yes | The replay sheds first: 30 fps, then a pause, before the stream's own tiers move (section 3.6, F3). Without a stream: the same overload signal, and below tier 2 the replay drops to 30 fps. |
 | Bitrate controller | Yes | No |
+| Bitrate | Preset | Per clip quality, from the replay lane: set the VMAF floor first, then take the lowest bitrate that passes it on the reference clip (section 10.3). The 5 Mbps of sections 5.2 and 6.3 is an estimate until then. |
+| B-frames | None (`frameIntervalP = 1`) | None. The segments (an IDR with SPS and PPS at each start) and the `IMFSinkWriter` passthrough (no decode timestamps) need it. The high quality tuning must not turn them on. AMF: `B_PIC_PATTERN = 0`. |
+| SPS and PPS | `repeatSPSPPS = 1` | The same. AMF: header insertion at each IDR. |
+| How it is set | Fixed in each encoder | A new intent field in `EncoderConfig` (stream or recording), through `EncoderFactory` into NVENC and AMF, with a unit test per encoder for the tuning, the VBV and the GOP. Today `EncoderConfig` has no such field, NVENC tries P4 ULL, P1 ULL and P1 LL (`encoder_nvenc.cpp`), and AMF sets the ultra-low-latency usage (`encoder_amf.cpp`). |
 
 The 1 s GOP sets the start error: a clip starts at the last keyframe at or before T minus 30 s, so a clip is 30 to 31 s long.
 
@@ -238,7 +248,7 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 **2. Add and remove while frames are in flight**
 
 - Add: append under the manager's list mutex. The next frame reaches the new consumer. Its first encoded frame is an IDR, as at a stream start now.
-- Deliver: copy the list of consumer pointers under the mutex, release it, then call each one. Each consumer has an in-delivery counter and a removed flag.
+- Deliver: under the mutex, copy the list of consumer pointers, and for each consumer that is not removed, increment its in-delivery counter. Release the mutex, call each one, and decrement its counter. The check and the increment are under one mutex, so a remove cannot pass between them.
 - Remove: set the removed flag (no new calls), then wait until the counter is 0, at most 5 s (the `kEncodeJoinDeadline` rule). After that the manager never calls the consumer again and the owner can free it. When the wait times out, the capture thread is stuck inside that consumer: the owner leaks the consumer, as `abandoned` does now.
 - A consumer must not remove itself from inside its callback (the rule of the voice packet sink).
 - The last remove stops the capture source and takes the manager out of the registry.
@@ -250,7 +260,7 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 | Method change (force a keyframe) | `consume_swap_event`, consumed by the pipeline | The manager consumes the source's flag once per frame, before the fan-out, and increments a swap generation. Each consumer forces its own keyframe when the generation of a frame is new to it. |
 | `state` (pause card), `failed`, `method_history` | Pulled from the source | Pulled from the manager, which asks the source. All consumers see one value. |
 | `target_exited` | Pulled at 1 Hz, ends the stream | The same for the stream. The replay manager stops the replay. |
-| Exclusive-fullscreen restart | A ladder move inside `ProcessCapture` | No change: it is a method change (row 1). |
+| Exclusive-fullscreen restart | A ladder move inside `ProcessCapture` | No change for the stream: it is a method change (row 1). The replay alone has no step to move to: WGC cannot see exclusive fullscreen (`capture_process.cpp`, `capture_state_for`), and the replay never injects the hook (Q21). |
 | Source size change | `ConvertResult::source_resized` per frame | No change: each consumer has its own preprocessor and counts its own changes. |
 | Pointer | `get_cursor`, `cursor_mode` from the active backend | Forwarded by the manager. |
 | Present-to-capture histogram | The pipeline owns it and gives it to the source | The manager owns it. The stream's telemetry reads it. |
@@ -259,14 +269,14 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 **4. Frame rate**
 
 - Step 1: one consumer, so the capture rate is the stream rate. No change.
-- Step 2b: the capture rate is the highest consumer rate. Each consumer decimates to its own rate (`decimation_accepts` does this now). When the highest rate changes (a 60 fps replay with a 30 fps stream), the manager gives the active backend the new rate through a new `CaptureSource::set_target_fps`: an atomic in the WGC, DXGI and hook throttles, and the hook's shared block.
+- Step 2b: while a stream consumer is attached, the capture rate is the stream's rate, and the replay records at that rate (section 3.6, F1). With the replay alone, the capture rate is the replay's rate. When a stream joins or leaves, the manager gives the active backend the new rate through a new `CaptureSource::set_target_fps`: an atomic in the WGC, DXGI and hook throttles, and the hook's shared block. The replay never raises the rate while a stream runs, so the hook's copy cost inside the game stays the stream's.
 
 **5. Ladder policy per consumer (step 2b, named here so that step 1 leaves room for it)**
 
 - A consumer says which ladder steps it takes. The stream takes all of them. The replay takes `WgcWindow`, and `Hook` only while a stream consumer is attached (Q4).
 - With a stream consumer, the manager runs the stream's ladder (`allow_hook` from the `start_stream` policy). With the replay alone, the ladder is `[WgcWindow]`.
 - The replay drops a frame of a step that it does not take. That is a gap in its ring.
-- A stream joins a replay on `WgcWindow`, with `allow_hook`: the manager walks up to the hook with `keep_old_until_first_frame`, as for exclusive fullscreen. The stream shows WGC frames until the hook delivers. Today a stream starts at the top of the ladder (Q18).
+- A stream joins a replay on `WgcWindow`: the manager runs the stream's ladder exactly as at a stream start today, with `keep_old_until_first_frame` and all its timings. The replay follows the step that the stream's ladder chose, or pauses on a step that it does not take (section 3.6, F2, Q18).
 - The stream leaves while the step is `Hook`, `WgcMonitor` or `Dxgi`: the manager goes back to `[WgcWindow]` with `keep_old_until_first_frame`. The replay does not keep the hook. The hook stops 5 s after the heartbeat stops (Q19).
 
 **6. The device and a poisoned device**
@@ -274,14 +284,14 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 - The manager makes the device (`create_d3d11_device`) and owns it. The capture, and every preprocessor and encoder of its consumers, use it (zero copy needs one device, 14-VIDEO-PIPELINE.md 2.2). A consumer holds the manager, so the device lives longer than its encoder.
 - This is not one more device than today: the device moves from the host pipeline to the manager. The replay of the same game uses the same device.
 - A poisoned device (`device_poisoned_`): no more ladder moves. `failed` reports it after the pass, the stream sends its `StreamError` as today, and the replay manager turns the replay off.
+- A replay fault never touches shared state: an encoder, convert or ring error turns the replay off. The replay path never moves the ladder and never sets `device_poisoned_`. A device that the GPU removed (`DXGI_ERROR_DEVICE_REMOVED`) is GPU-wide and the one exception (section 3.6, F5).
 - A manager whose stop times out leaks with its device. It leaves the registry first and is never used again. The next consumer makes a new manager on a new device. A leaked manager counts in `mello_stream_abandoned_pipelines`.
 
 **7. macOS (Q17)**
 
-- Recommended: the manager code is platform neutral, and step 1 puts `SCKCapture` behind it too, with one consumer. `VideoPipeline` then has one capture path and no `#ifdef` at each capture call.
-- The macOS pipeline encodes inside the capture callback (VideoToolbox on the SCK queue). That breaks the callback rule of item 1. So the manager refuses a second consumer on macOS until the macOS work adds an encode thread.
-- Risk: step 1 changes the macOS host path, and the Windows PC cannot run it. Check: the macOS CI lane builds it and runs the `CaptureManager` tests, and Bob streams one game on his Mac.
-- The other choice: macOS keeps the direct capture until the macOS work. That needs an `#ifdef` at each capture call in `VideoPipeline`.
+- Recommended (changed after the review of 2026-11-01): macOS keeps the direct capture until the macOS work. `VideoPipeline` keeps an `#ifdef` at each capture call until then. The step 1 PR does not change the macOS host path, which the Windows PC cannot run.
+- The reason: the macOS pipeline encodes inside the capture callback (VideoToolbox on the SCK queue). That breaks the callback rule of item 1, so a second consumer cannot run there anyway until the macOS work adds an encode thread.
+- The other choice: the manager code is platform neutral, and step 1 puts `SCKCapture` behind it too, with one consumer. One capture path, but a change to the macOS host path that only the macOS CI lane and a stream on Bob's Mac can check.
 
 **8. What does not change**
 
@@ -297,6 +307,23 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 | Changed | `video_pipeline.{hpp,cpp}`: `capture_` and `init_device` on the host side become the manager. `mello.cpp`: audio callbacks and `mello_stream_reference_info` through the manager. |
 | Tests (`CaptureManager`, fake source, no GPU) | Two consumers get every frame in order. A removed consumer gets no call after `remove` returns, and the other consumer keeps its frames. `remove` waits for a call in flight and returns "abandoned" after 5 s for a stuck one. A swap reaches each consumer once. The last remove stops the source. Audio reaches each consumer. |
 | Gate | Section 0.4: stream gate CPU and hw lanes, 3 runs each on `main` and on the branch, side by side in the PR. |
+
+### 3.6 The stream has priority
+
+Bob's rule (2026-11-01): the game clips feature must not affect a stream that the user runs. Each place where the replay meets a running stream has a rule. Source: section F of `GAME-CLIPS-REVIEW.md`.
+
+| # | Where | Rule |
+|---|---|---|
+| F1 | The capture rate (3.5 item 4) | While a stream runs, the capture rate is the stream's rate. The replay records at that rate and never raises it. |
+| F2 | A stream that starts while the replay runs (3.5 item 5, Q18) | The manager runs the stream's ladder exactly as today. The replay follows the step that the stream chose, or pauses on a step that it does not take. |
+| F3 | Overload (3.4 cost tiers) | The replay sheds first. The first overload signal (the stream's encode queue drops, its encoder wait time up, the first tier step) drops the replay to 30 fps. The next one pauses the replay. The stream's own tiers move only after the replay is paused. The replay resumes after 60 s with no overload. The ring keeps its content over a pause, and a clip shows the last frame for the gap. |
+| F4 | Upload (6.3) | No upload while a stream runs. The clip waits in the upload queue, and the clipper's card shows "uploads after the stream". The upload starts when the stream ends. A PUT of 3 Mbps on the stream's uplink is what the stream's bitrate controller reads as congestion. |
+| F5 | A replay fault (3.5 item 6) | An encoder, convert or ring error turns the replay off and logs it. The replay path never moves the ladder and never sets `device_poisoned_`. Only a device removed by the GPU is shared, because it ends the stream anyway. |
+| F6 | The poster readback (5.3) | The copy to the staging texture is on the capture thread: a submit, no wait. The map and the JPEG run on the mux worker thread. |
+| F7 | Game audio (9.1) | One game audio capture per game, shared like the video: one WASAPI process loopback on the game pid, fanned out to the stream's audio pipeline and the replay ring. Today the stream host opens its own loopback. This lands in step 2b, and the stream gate's `audio.json` gates stay unchanged. |
+| F8 | The gates (10.3, 10.4) | The "stream and replay together" lane adds an F8 press during the run, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay. The stream gates must pass inside the spread of the `main` runs in every case. The perf case "buffer on plus a stream" reports the stream's encode queue drops and frame timing. |
+
+A Settings control "Game clips while streaming" (on, off) gives a streamer who sees an effect a way out (Q23).
 
 ---
 
@@ -314,6 +341,7 @@ The replay buffer runs when all of these are true:
 | The game window is in the foreground, or was the last game window in the foreground | Foreground monitor (the HUD already uses one) |
 | A hardware encoder exists | `EncoderFactory`. No software encoder in the product (14-VIDEO-PIPELINE.md 6.7). |
 | A replay ladder step delivers frames | Section 3.3 |
+| The game is not in exclusive fullscreen, unless Q21 decides otherwise | The ladder's exclusive-fullscreen check (`SHQueryUserNotificationState` and the foreground pid). Without this condition the replay starts a capture that cannot work, and F8 says "not available" with no reason. |
 | The buffer folder has at least 2 GB free | CLIPS.md 4.4 uses 100 MB for audio. Video needs more headroom. |
 
 Voice is a condition (Q5). A game clip always has the crew voice in it.
@@ -324,12 +352,12 @@ Voice is a condition (Q5). A game clip always has the crew voice in it.
 |---|---|
 | A game starts and the rules hold, or the user joins voice while a game runs | Start the replay consumer. Make the ring folder. |
 | The user leaves voice | Stop. Delete the ring. |
-| The foreground game changes | Stop the old consumer, delete its ring, start one for the new game. One replay at a time. |
+| The foreground game changes, and the new game stays in the foreground for 10 s | Stop the old consumer, delete its ring, start one for the new game. One replay at a time. The 10 s hold keeps an alt-tab between two games from a restart each time. |
 | The game is minimized | The capture holds (no frames). The ring keeps its content. A clip shows the last frame for the gap. |
 | The game exits | Stop. Delete the ring. |
 | The user turns the setting off | Stop. Delete the ring. |
 | Disk free goes under 2 GB | Stop. Delete the ring. HUD toast once. |
-| The client starts | Delete leftover ring folders of a crash. |
+| The client starts | Delete leftover ring folders of a crash. A folder has the pid in its name, as the voice ring file does, and only folders of pids that do not run are deleted: two clients can run on one PC (`MELLO_SESSION_KEY`). |
 
 ### 4.3 F8 key
 
@@ -361,20 +389,24 @@ Every sample carries a time on the steady clock (`mello_clock_now_us`). The mux 
 | Source | Time of a sample | Notes |
 |---|---|---|
 | Video | The capture time of the frame | WGC `SystemRelativeTime`, or the hook's present time. The pipeline already carries it. |
-| Game audio | The loopback device position of the buffer (`GetBuffer` QPC position), as steady clock | Process loopback captures what the game plays, at the time it plays it. |
-| Voice | The render time of the 10 ms mix plus the output latency | The time the user heard it. The same sum that `AudioPipeline` gives the echo canceller (03-LIBMELLO.md 4, stream-delay hints). |
+| Game audio | The arrival time at `GetBuffer` minus the duration of the packet, as the stream path does (`StreamAudioHostPipeline::on_pcm`). The resample ratio of 5.3 removes the drift. | The QPC position that `GetBuffer` can give is not read today (`capture_wasapi_loopback.cpp` passes `nullptr`), and the process loopback device is virtual. It is not used before a measurement against the arrival time (section 9.1). |
+| Voice: the remote voice | The render time of the 10 ms mix plus the output latency | The time the user heard it. The same sum that `AudioPipeline` gives the echo canceller (03-LIBMELLO.md 4, stream-delay hints). |
+| Voice: the local mic | Its capture time | The ring mixes the mic into the render frame when 10 ms of mic is ready (`AudioPipeline`, the clip buffer tap). The mic then sits at the render time, late by the capture-to-render queue depth, which varies. Q24 decides. |
+
+The time anchor of the voice ring is taken in `ClipBuffer::write()` on the render thread and travels with the samples through the 2 s RAM queue. An anchor that the writer thread takes is up to 2 s wrong.
 
 ### 5.2 Rings
 
 | Ring | Where | Content | Size at the default quality |
 |---|---|---|---|
-| Video | Disk, in the buffer folder | Annex-B access units in segment files. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. A small index per segment: capture time, size, offset, keyframe flag. | 40 segments, about 25 MB at 5 Mbps (720p60) |
+| Video | Disk, in the buffer folder | Annex-B access units in one preallocated ring file. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. An index per segment: byte offset, size, capture time of each access unit, keyframe flag. | 40 segments, about 25 MB on average at 5 Mbps (720p60). The file is sized for the peak, not the average (below). |
 | Game audio | Disk, same folder | 48 kHz stereo int16 PCM in a ring file, with a time anchor every 10 ms chunk | 40 s, 7.7 MB |
 | Voice | Disk, the existing `ClipBuffer` ring file | Opus frames of the 48 kHz mono mix, 60 s. Add a time anchor per frame. The mux decodes the window. | 0.8 MB (exists on this branch) |
 
-- Segment files are preallocated and reused in turn. No file is created or deleted while the game runs.
+- One ring file, preallocated, with a byte offset per segment in the index. No file is created or deleted while the game runs. One file is simpler than a file per segment for the crash cleanup and for pinning. With VBR at 1.25x a segment's size varies, so the file holds 40 segments at the peak size: an IDR plus 1 s at 1.25x the bitrate.
 - 40 segments: the 30 s window, one GOP for the keyframe before it, and spare segments for pinning. The segment count is one constant. The second iteration raises it to 45 (a marker at round end needs 35 s back, section 14).
 - A capture pins the segments it reads. The writer skips a pinned segment and takes the next free one.
+- Spare rule: two captures inside 30 s pin up to 32 of the 40 segments, and the writer then has 8 s of free segments. A third capture while two muxes run waits for the first to unpin. The mux time is a gate: under 3 s for a 30 s clip on the Windows PC (section 10.2).
 - The writer thread is not the encode thread. The encode thread hands each access unit to a bounded queue. A full queue drops the oldest unit and counts it. Disk stalls never block the encoder.
 - The game audio is PCM, not Opus. PCM needs no encode while the game runs, and the mux needs no decode. The cost is disk space, not CPU.
 
@@ -398,7 +430,7 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker t
 - Drift: each source gets a linear resample ratio from its own time anchors over the window. 300 ppm over 30 s is 9 ms. The ratio removes it.
 - Gaps (minimized game, a dropped audio chunk) become silence on their own timeline position. Nothing moves the audio that follows a gap.
 - Mix: game and voice at unity gain, then a limiter (Q9). Process loopback captures after the game's own volume and after the game's slider in the Windows volume mixer (measured, section 9.1). The voice ring is before m3llo's own slider. Q20 decides whether the mux applies that slider to the voice.
-- Poster: the newest captured frame at the press, copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press.
+- Poster: the first captured frame after the press (the texture is valid only in the callback, section 3.5), copied to a staging texture once, written as JPEG (WIC on Windows). It costs one copy, only at a press. The copy is a submit on the capture thread; the map and the JPEG run on the mux worker (section 3.6, F6). A minimized or alt-tabbed game delivers no frame: then the poster is the last IDR of the ring, decoded once. The second iteration needs that decode for marker posters, so it is built once.
 
 ### 5.4 The MP4 file
 
@@ -453,6 +485,8 @@ A viewer never waits for a whole file. Playback starts from the first bytes and 
 | Stall | The fetch falls behind: the picture holds, the audio pauses, a buffering state shows on the player, and play goes on when 1 s is ahead again. | Same |
 
 - The own byte stream, not Media Foundation's HTTP source: mello-core then owns the cache, the retries and the logs, and both platforms read the same reader.
+- The byte stream reports `MFBYTESTREAM_IS_SEEKABLE` and carries `MF_BYTESTREAM_CONTENT_TYPE = video/mp4`, or the source resolver sniffs and fails. The source reader seeks on open. A read that waits for a range must not wait on the thread that fetches it.
+- This player is its own todo (`clip-streaming-playback`), apart from the card (`feed-card`). The card can land and be approved while the player is built; until then the clipper plays the local file.
 - Time to first frame is a gate (section 10.3): under 1 s from the click on a 20 Mbps link to the local MinIO with 50 ms added delay.
 
 Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` does. Escape closes it. Inline playback in the card is not in scope: the DComp visual is an overlay (12-STREAMING.md 14), so cards that scroll over it need the geometry sync for each card.
@@ -461,11 +495,11 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 
 | Item | Rule |
 |---|---|
-| Size of a 30 s clip | 720p60 at 5 Mbps (default): about 20 MB. 1080p60 at 8 Mbps: about 31 MB. 720p30 at 3 Mbps: about 12 MB. Audio adds 0.6 MB. |
+| Size of a 30 s clip | Estimates until the replay lane sets the bitrates (section 3.4): 720p60 at 5 Mbps (default): about 20 MB. 1080p60 at 8 Mbps: about 31 MB. 720p30 at 3 Mbps: about 12 MB. Audio adds 0.6 MB. |
 | Body | Stream the file from disk. Do not read the whole file into RAM. |
-| Pace | The upload runs in the background while the game runs, at low resource use (Q8): a rate cap of 3 Mbps, one request at a time, a low-priority thread, a small read buffer. With no game, no cap. |
+| Pace | The upload runs in the background while the game runs, at low resource use (Q8): a rate cap of 3 Mbps, one request at a time, a low-priority thread, a small read buffer. With no game, no cap. While a stream runs, no upload: the clip waits in the queue until the stream ends (section 3.6, F4). |
 | Order | The poster first (small), then the MP4. The card shows the poster as soon as the poster is up. |
-| Retry | A failed upload retries with backoff. It resumes after a client restart from the local file. |
+| Retry | A failed upload retries with backoff. A persisted upload queue (in the client's data folder) holds the clips not yet up, so the upload resumes after a client restart from the local file. |
 | Local file | Stays on disk as the clipper's copy (CLIPS.md 6.1). |
 
 ### 6.4 Backend and storage
@@ -473,8 +507,8 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 | Change | Detail |
 |---|---|
 | `post_clip` | Accept `clip_type` in `voice`, `game`. Reject others. A game clip carries `width`, `height`, `has_voice`. The waveform stays optional. The second iteration adds a `trigger` and a `tag` (section 12). |
-| `clip_upload_url` | For `game`: presign `crews/{crew_id}/{clip_id}.mp4` as `video/mp4` and `crews/{crew_id}/{clip_id}.jpg` as `image/jpeg`. Bind `Content-Length` with a cap of 64 MB for the MP4 and 1 MB for the JPEG, and sign the `Cache-Control` header of section 6.2. |
-| `clip_upload_complete` | Sets `media_url` and `poster_url` on `StoredClip`. |
+| `clip_upload_url` | For `game`: presign `crews/{crew_id}/{clip_id}.mp4` as `video/mp4` and `crews/{crew_id}/{clip_id}.jpg` as `image/jpeg`. Bind `Content-Length` with a cap of 64 MB for the MP4 and 1 MB for the JPEG, and sign the `Cache-Control` header of section 6.2. Today `GeneratePresignedPUT(key, contentType, expiry)` (`s3.go`) signs neither, so this needs a new helper with a Go test. Check that R2 enforces a signed `Content-Length`: MinIO and R2 can differ. The 64 MB cap follows the bitrates of section 3.4. |
+| `clip_upload_complete` | Checks each object with a HEAD request (it exists, its size, its type), then sets `media_url` and `poster_url` on `StoredClip`. A card never shows a poster with no video. |
 | Storage | The existing `mello-clips` bucket. Local dev: MinIO. |
 | Retention | Game clip media is kept forever, as voice clip media is (Q10). |
 | Limits | The existing per-user daily clip limit applies to game clips. |
@@ -490,6 +524,7 @@ A "Game clips" section in Settings:
 | Game clips (F8) | On, off | On (Q1) |
 | Clip quality | 1080p60, 720p60, 720p30 | 720p60 (Q2) |
 | Buffer folder | A folder | The OS temp folder (CLIPS.md 4.4) |
+| Game clips while streaming | On, off | On, if Q23 adds it (section 3.6) |
 
 A control that cannot work shows why, in the label register: "No hardware encoder".
 
@@ -505,14 +540,14 @@ The figures below are estimates. The perf gate (section 10.4) measures them on t
 | GPU encoder engine | One 720p60 encode. NVENC and AMF are separate engines from the 3D engine. | No encode queue drops at tier 0 |
 | VRAM | 3 NV12 slots, about 4 MB, plus the encoder session (driver dependent) | Measure, report |
 | CPU | Capture and encode threads wait on events. Disk writes 0.8 MB/s. Loopback PCM, no Opus encode. | Under 2 % of one core |
-| Process RAM | Ring index, a 2 MB write queue, encoder bitstream buffers | At most 10 MB more than without the buffer |
+| Process RAM | Ring index, a 2 MB write queue, encoder bitstream buffers; during a capture also the sink writer of the mux | Two numbers, measured before a promise: the steady state, and the peak during a capture. The steady state at most 10 MB more than without the buffer. |
 | Disk space | About 34 MB (video 25 MB, game audio 7.7 MB, voice 0.8 MB) | Fixed after start |
 | Disk writes | About 0.8 MB/s, 2.9 GB per hour of play | Report. SSD wear is a known cost of every replay buffer. |
 | Install size | No new binary. OS frameworks only. | No change |
 
 The voice ring is on disk now, so the voice clip buffer frees 5.76 MB of RAM in voice. The replay adds at most 10 MB. Process RAM in voice must stay under 80 MB with the buffer on.
 
-With a stream and the replay at the same time, the GPU does one capture, two converts and two encodes. NVIDIA GeForce drivers allow several encode sessions at once. The perf gate measures this case too.
+With a stream and the replay at the same time, the GPU does one capture, two converts and two encodes. NVIDIA GeForce drivers allow several encode sessions at once. The device has `SetMultithreadProtected(TRUE)` (`graphics_device.cpp`), so the capture thread and two encode threads on one device are safe but serialized. The perf gate measures this case too, with the convert time of each consumer and the stream's encode queue drops (section 3.6).
 
 ---
 
@@ -538,6 +573,8 @@ With a stream and the replay at the same time, the GPU does one capture, two con
 | CS2 in the background (run 1) | CS2 plays nothing when it is not the active window, unless its setting "Play Audio When Game In Background" is on. The loopback is then digital zero, and the session meter shows the same. A clip of an alt-tabbed CS2 has no game audio, which is what the user heard. |
 | Hearthstone, 10 min (`Hearthstone.exe`, started from Battle.net) | Signal for the whole run: 600 of 600 s with frames (45600 to 50880 a second), 0 digital-zero seconds, median −35.5 dBFS, 5 quiet seconds (not zero). The game has no child process. Its parent had exited and no Battle.net process ran, so there was no launcher tree to probe. Slider at 50 % for 82 s: −42.8 dBFS, against −36.9 dBFS before and −41.1 dBFS after, also no clear answer. |
 | A constant 1 kHz tone (ffplay through its Chocolatey shim), the slider set from the probe | The level follows the slider exactly: −36.1 dBFS at 100 %, −42.1 dBFS at 50 %, −36.1 dBFS at 100 % again. Process loopback captures **after** the Windows volume mixer slider. The session peak meter stays at −33.1 dBFS: it is before the slider, so it cannot show the slider. The probe targeted the shim's pid, and the tone came from its child `ffplay.exe`: the "include the process tree" scope works. |
+| CS2 in "Fullscreen" (exclusive) under WGC window capture | Not measured yet (Q21). One match start is enough: frames or not. The evidence of section 14 does not say which display mode CS2 was in. |
+| The QPC position of the process loopback device against the arrival time | Not measured yet (section 5.1). Until then the game audio time is the arrival time minus the packet duration. |
 
 Effect on the mix (section 5.3): the game audio is the level after the game's own volume and after the game's slider in the Windows volume mixer. The endpoint (master) volume is not measured. The voice ring taps m3llo's mix in the render path, before m3llo's own slider in the mixer. A user who turns m3llo down in the Windows volume mixer gets a clip with the crew louder than heard (Q20).
 
@@ -582,10 +619,12 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 |---|---|
 | `ReplayRing` | Segment rotation, a pinned segment is never overwritten, the queue drop counter, the crash cleanup. |
 | `ReplayMux` | Synthetic access units and PCM in, MP4 out, demux back: first sample is a keyframe, durations match the capture times, moov before mdat. |
-| `ReplayAvClock` | Three sources on synthetic clocks, one 300 ppm fast: after the mux, a marker in each source lands within 1 ms of its video frame. |
+| `ReplayAvClock` | Three sources on synthetic clocks, one 300 ppm fast: after the mux, a marker in each source lands within 1 ms of its video frame. This proves the mux, not the times that the sources give (section 10.3 has the real loopback row). |
+| `ReplayMuxTime` | A 30 s mux of the default quality finishes in under 3 s on the Windows PC (section 5.2, spare rule). |
 | `ReplayGaps` | A gap in video or audio keeps the samples after it at their own time. |
 | `ClipByteStream` | The `IMFByteStream` over a range reader: a read of a missing range waits and then returns the bytes, a timeout returns an error, a seek reads from the new offset. |
 | `CaptureManager` | Two consumers get every frame. Removing one does not stop the other. |
+| Encoder intent | NVENC and AMF: the recording intent sets the tuning, the VBV and the GOP of section 3.4, and keeps B-frames off and SPS and PPS at each IDR. |
 
 ### 10.3 Stream gate: a replay lane
 
@@ -596,10 +635,12 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | Source | `MELLO_CAPTURE_REFERENCE` through the capture manager to the replay consumer. Voice: marker tones through the test audio backend (`mello_voice_inject_capture` and the test output pull). |
 | Capture | `mello_replay_capture` at fixed clip times: 35 s, 47 s (across the scene cut), and twice inside 30 s (pinning). |
 | Read back | Demux and decode the MP4. Read the frame code of every frame. |
-| Gates | First frame index is T0 within one GOP. No missing frame index. VMAF, PSNR and SSIM against the clip frames, with floors per lane in `benchmarks/baselines/replay/`. Game audio burst to video frame offset within +-20 ms for every marker. Voice marker to video offset within +-20 ms. Length 30 to 31 s. |
+| Gates | First frame index is T0 within one GOP. No missing frame index. VMAF, PSNR and SSIM against the clip frames, with floors per lane in `benchmarks/baselines/replay/`. The VMAF floor is set first; the bitrate per clip quality is then the lowest that passes it (section 3.4). Game audio burst to video frame offset within +-20 ms for every marker. Voice marker to video offset within +-20 ms. Length 30 to 31 s. |
+| What the voice markers prove | `mello_voice_inject_capture` is the mic path. The remote voice path (SFU, playout, mix) is not in this lane, so the voice gate proves the mic path only. Q24 decides on a check of the remote path. |
+| Real loopback source (hw lane, Windows PC) | The reference source gives the game audio with exact capture times, so it does not test the loopback times. One row plays the probe's 1 kHz tone (`ffplay`) with on and off steps through a real process loopback, against the frame codes: offset within +-20 ms. The CPU lane cannot run this row. |
 | Lanes | `cpu` (any machine), `hw` (the machine's encoder: NVENC on Bob's PC, AMF on an AMD box). |
 | Streamed playback | Serve the captured MP4 from local MinIO through a delay and rate shim (20 Mbps, 50 ms). Play it through `ClipRangeReader` and the viewer pipeline. Gates: first frame under 1 s, no stall at 20 Mbps, every frame code in order, a seek to 20 s shows the frame of 20 s within 1 s. |
-| Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same manager. The stream gates must still pass. This lane also proves the capture manager refactor. |
+| Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same manager. The run adds an F8 press, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay (section 3.6, F8). The stream gates must pass inside the spread of the `main` runs in every case. This lane also proves the capture manager refactor. |
 
 The gate runs from the QA harness, not from `check.sh`.
 
@@ -609,7 +650,7 @@ A scenario in the perf harness (20-PERF-HARNESS.md), on the Windows PC:
 
 - A GPU-bound game load (Unigine Heaven, as in 12-STREAMING.md 3.1), at 1920x1080 and 3440x1440, borderless.
 - Runs of 60 s: buffer off, buffer on, buffer on plus a stream.
-- Reported: game fps (median, p99 frame time), client process RAM and CPU, VRAM, encode queue drops, disk write rate.
+- Reported: game fps (median, p99 frame time), client process RAM (steady and during a capture) and CPU, VRAM, encode queue drops, disk write rate. With a stream: the stream's encode queue drops and frame timing, and the convert time of each consumer.
 - Gates: the numbers of section 8.
 
 ### 10.5 QA harness and one journey
@@ -631,10 +672,12 @@ No test, script or journey points at production.
 |---|---|---|---|
 | 1 | `capture-manager` | none | Own PR. Stream gate unchanged. |
 | 2a | `loopback-check` | none | A measurement on the Windows PC, before the ring: process loopback on a running game (CS2 and one other) gives a signal for the whole session, and the level before or after the game's own volume. A report, no code. If it fails, the game audio source is decided again before 2b. |
-| 2b | `replay-ring`, `replay-session`, `mp4-mux` | 1, 2a | libmello, with the ctest tests and the replay gate lane |
+| 2b | `replay-ring`, `replay-session`, `mp4-mux` | 1, 2a | libmello, with the ctest tests and the replay gate lane. The game audio and voice times wait for Q24 and the open 2a measurements (sections 5.1, 9.1). |
 | 3 | `backend` | none | Can run beside step 2 |
 | 4 | `core-lifecycle`, `upload` | 2b, 3 | mello-core |
-| 5 | `client-key-settings`, `feed-card-playback` | 4 | Client. Renders approved by Bob before push. |
+| 4a | `f7-key-cause` | none | A finding, then a fix if the cause is in m3llo. Before step 5. |
+| 5 | `client-key-settings`, `feed-card` | 4, 4a | Client. Renders approved by Bob before push. |
+| 5a | `clip-streaming-playback` | 2b, 5 | mello-core and libmello. The card plays the local file until it lands. |
 | 6 | `gates` | 2 to 5 | Perf scenario, harness checks, journey |
 | 7 | `specs` | 6 | Spec updates. This plan is then deleted. |
 | 8 | `macos` | 7 | Later phase |
@@ -693,12 +736,16 @@ One feature branch (`feat/game-clips`), with the manager refactor as its own PR 
 | Q14 | Auto highlights in the first iteration? (2026-11-01) | No. Second iteration, after a design to ask users first (section 12). |
 | Q15 | Does the voice ring fix (`570e8ec`) get its own PR? (2026-11-01) | No. It stays on `feat/game-clips`. |
 | Q16 | The name of the shared capture object? (2026-11-01) | `CaptureManager`, in `capture_manager.{hpp,cpp}`. |
-| Q17 | Does macOS go behind the manager in step 1? | Open. Proposed: yes, with one consumer only until the macOS work (section 3.5, item 7). |
-| Q18 | A stream starts while the replay runs on WGC window, with the hook allowed: the stream shows WGC frames until the hook delivers. Accept? | Open. Proposed: yes. Today the stream waits for the hook at start. |
-| Q19 | The stream ends while the hook captures: the replay goes back to WGC window, and the hook stops. Accept? | Open. Proposed: yes. The hook permission comes with a stream start. |
-| Q20 | The game's mixer slider is in the loopback, m3llo's own slider is not in the voice ring. Does the mux apply m3llo's slider to the voice, so the clip balance is what the user heard? | Open. Proposed: yes. Record m3llo's session volume with the voice ring's time anchors and apply it in the mux. |
+| Q17 | Does macOS go behind the manager in step 1? | Open. Proposed (changed after the review): no. macOS keeps the direct capture and its `#ifdef` until the macOS work (section 3.5, item 7). |
+| Q18 | A stream starts while the replay runs on WGC window, with the hook allowed: does the stream show WGC frames until the hook delivers? | Open. Proposed (changed by the stream priority rule, section 3.6 F2): no. The stream runs its ladder exactly as today, and the replay follows or pauses. |
+| Q19 | The stream ends while the hook captures: the replay goes back to WGC window, and the hook stops. Accept? | Open. Proposed: yes. The hook permission comes with a stream start. This does not touch a running stream. |
+| Q20 | The game's mixer slider is in the loopback, m3llo's own slider is not in the voice ring. Does the mux apply m3llo's slider to the voice, so the clip balance is what the user heard? | Open. Proposed: yes. Record m3llo's session volume with the voice ring's time anchors and apply it in the mux. The review agrees: both sources are then at the same point, after their sliders and before the endpoint volume. |
+| Q21 | A game in exclusive fullscreen: WGC cannot see it, and the replay never injects the hook (Q4). What does the replay do? | Open. Choices: no clips in exclusive fullscreen, with the toast and the Settings label saying "set the game to borderless"; or the hook for the replay after a consent step; or another way. First measure CS2 in "Fullscreen" under WGC window (section 9.1). |
+| Q22 | WGC asks Windows for borderless access at the first WGC start in the process (`ensure_borderless_access`, `capture_wgc.cpp`), and Windows can show a consent dialog. With the replay on by default, the dialog can appear when the user joins voice with a game running, behind the game, with no act of the user. When does m3llo ask? | Open. Choices: ask at the first stream start or from Settings only, and the replay runs with the border until access is given; or accept the dialog at the replay start. |
+| Q23 | A Settings control "Game clips while streaming" (on, off)? | Open. Proposed by the review: yes, default on, with the rules of section 3.6. A streamer who sees any effect has a way out. |
+| Q24 | Voice times in the ring (section 5.1): the local mic sits in the mix at the render time, late by a varying queue depth, and the replay lane's voice markers prove only the mic path. | Open. Choices for the mic: keep it apart from the remote mix in the ring, each with its own anchor; or keep the mix and measure and bound the lag. For the remote path: a check in the QA journey, where a second client plays a tone burst at a known time, or no check. |
 
-Step 2a (section 9.1): CS2 and Hearthstone are measured. Process loopback gives a signal for the whole run on both, after the game's own volume and after the game's mixer slider. A game with a launcher tree that stays open is not measured: Battle.net had exited.
+Step 2a (section 9.1): CS2 and Hearthstone are measured. Process loopback gives a signal for the whole run on both, after the game's own volume and after the game's mixer slider. Not measured yet: a game with a launcher tree that stays open (Battle.net had exited), CS2 in exclusive fullscreen under WGC window (Q21), and the QPC position against the arrival time (section 5.1).
 
 ---
 
