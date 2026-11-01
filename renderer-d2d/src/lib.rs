@@ -74,6 +74,11 @@ pub struct D2DRenderer {
     /// drops its cached intermediates (layers, effects, glyph atlases). They come
     /// back on the next frame; idle memory is the point (memory rule 2).
     trim_timer: i_slint_core::timers::Timer,
+    /// `FX_D2D_FAKE_DEVICE_LOSS=N`: every N frames, take the lost-device path as if
+    /// `Present` returned `DXGI_ERROR_DEVICE_REMOVED`. For the recovery and leak runs:
+    /// Windows has no API that removes a D3D11 device on request.
+    fake_device_loss: Option<u64>,
+    frames: Cell<u64>,
 }
 
 const IDLE_TRIM_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -95,6 +100,11 @@ impl Default for D2DRenderer {
             stats: RefCell::new(stats::FrameStats::from_env()),
             last_frame: Rc::new(Cell::new(None)),
             trim_timer: Default::default(),
+            fake_device_loss: std::env::var("FX_D2D_FAKE_DEVICE_LOSS")
+                .ok()
+                .and_then(|v| v.parse().ok())
+                .filter(|n| *n > 0),
+            frames: Cell::new(0),
         }
     }
 }
@@ -170,6 +180,11 @@ impl D2DRenderer {
         self.clear_gpu_caches();
         *self.surface.borrow_mut() = None;
         SharedDevice::reset();
+        // The swapchain is gone, so the window shows nothing until the next
+        // frame. Ask for that frame now instead of waiting for a change.
+        if let Some(window_adapter) = self.window_adapter() {
+            window_adapter.request_redraw();
+        }
     }
 
     fn window_adapter_rc(&self) -> Result<Rc<dyn WindowAdapter>, PlatformError> {
@@ -198,7 +213,14 @@ impl D2DRenderer {
             else {
                 return Ok(DrawOutcome::Success);
             };
+            let started = std::time::Instant::now();
             *surface_ref = Some(Surface::new(handle.0, handle.1, handle.2)?);
+            if std::env::var_os("FX_D2D_DEBUG").is_some() {
+                eprintln!(
+                    "d2d renderer: surface recreated in {:.1} ms",
+                    started.elapsed().as_secs_f64() * 1000.0
+                );
+            }
         }
         let surface = surface_ref.as_mut().unwrap();
         surface.ensure_size(size.width, size.height)?;
@@ -290,6 +312,14 @@ impl D2DRenderer {
         if let Some(pixels) = read_back {
             *self.snapshot.borrow_mut() = Some(pixels);
         }
+        let frames = self.frames.get() + 1;
+        self.frames.set(frames);
+        let ended = match (ended, self.fake_device_loss) {
+            (Ok(_), Some(every)) if frames % every == 0 => Err(windows::core::Error::from(
+                windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED,
+            )),
+            (ended, _) => ended,
+        };
         match ended {
             Ok((flush, present)) => {
                 self.last_frame.set(Some(std::time::Instant::now()));
