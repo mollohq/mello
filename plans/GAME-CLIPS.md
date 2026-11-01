@@ -2,7 +2,7 @@
 name: Game clips (F8)
 overview: "F8 saves the last 30 seconds of the user's own game: video, game audio and the crew voice, in one MP4. A local replay buffer runs while the user is in voice and a game is detected, also when the user does not stream. On by default. Windows first (WGC window capture, NVENC/AMF), macOS after Windows."
 todos:
-  - id: capture-hub
+  - id: capture-manager
     content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate"
     status: pending
   - id: loopback-check
@@ -86,15 +86,15 @@ The CS2 recording got digital silence from a process loopback capture (section 1
 3. Record per game: is there a signal for the whole run (RMS per second, the share of silent seconds), does the level follow the in-game volume, the Windows volume mixer slider for the game, or neither.
 4. Write the result into this plan, section 9.1. If the signal is not reliable, stop and ask Bob before step 2b. Endpoint loopback is not a fallback (section 9.1).
 
-### 0.4 Step 1: write the capture hub design, then build it
+### 0.4 Step 1: write the capture manager design, then build it
 
 Section 3.2 gives the goal, not the design. Read `capture_process.cpp`, `video_pipeline.cpp`, `capture_screencapturekit.mm` and the stream host start in `mello.cpp` first. Then add a section 3.5 to this plan that answers:
 
 - Which thread hands a frame to each consumer, and what a slow consumer does to the others (it must not stall the capture or the other consumer).
 - How a consumer is added and removed while frames are in flight (the stream starts and stops while the replay runs).
 - How the per-capture events reach every consumer: a method change (a keyframe for each encoder), `state()` for the pause card, `target_exited`, the exclusive-fullscreen restart, a source size change.
-- Who owns the `GraphicsDevice` and the hub, and what happens when the device is poisoned (12-STREAMING.md 3.1).
-- Whether the macOS ScreenCaptureKit path moves into the hub now or in the macOS phase.
+- Who owns the `GraphicsDevice` and the manager, and what happens when the device is poisoned (12-STREAMING.md 3.1).
+- Whether the macOS ScreenCaptureKit path moves into the manager now or in the macOS phase.
 - What does not change: the stream C API (`mello_stream_*`) and the stream behavior.
 
 Get Bob's OK on section 3.5, then build it as its own PR.
@@ -169,10 +169,10 @@ ProcessCapture (one) ───┤
                         └─▶ replay consumer: preprocessor ─▶ encoder (recording) ─▶ disk ring
 ```
 
-- `CaptureHub` (name in Q16, design in section 3.5) owns one `ProcessCapture` for one game pid, on the shared `GraphicsDevice`.
-- Each consumer registers a frame callback. The hub hands each consumer the same BGRA texture and capture time. Each consumer has its own NV12 ring (3 slots), so the two encoders never alias.
+- `CaptureManager` (name in Q16, design in section 3.5) owns one `ProcessCapture` for one game pid, on the shared `GraphicsDevice`.
+- Each consumer registers a frame callback. The manager hands each consumer the same BGRA texture and capture time. Each consumer has its own NV12 ring (3 slots), so the two encoders never alias.
 - The stream host becomes a consumer. Its behavior does not change.
-- Step 1 is the hub refactor alone, in its own PR. The stream gate (CPU and hw lanes) must show no change. This follows the rule "do not refactor working code as part of a feature PR".
+- Step 1 is the manager refactor alone, in its own PR. The stream gate (CPU and hw lanes) must show no change. This follows the rule "do not refactor working code as part of a feature PR".
 
 ### 3.3 Replay capture ladder
 
@@ -180,7 +180,7 @@ The replay buffer records in the background for hours. It must not show the desk
 
 | Ladder step | Replay | Reason |
 |---|---|---|
-| Hook | Only when the hook is already the active capturer: a stream that uses the hook shares its capture through the hub. The replay never injects the hook itself. | Bob, Q4. |
+| Hook | Only when the hook is already the active capturer: a stream that uses the hook shares its capture through the manager. The replay never injects the hook itself. | Bob, Q4. |
 | WGC window | Yes | Captures only the game window. |
 | WGC monitor | **No** | Records the whole monitor: notifications, other windows, private messages. |
 | DXGI desktop duplication | **No** | The same reason. It also wedges on some NVIDIA drivers (12-STREAMING.md 3.1). |
@@ -204,7 +204,7 @@ The border: Windows 11 hides the WGC border with `IsBorderRequired(false)` when 
 
 The 1 s GOP sets the start error: a clip starts at the last keyframe at or before T minus 30 s, so a clip is 30 to 31 s long.
 
-### 3.5 The capture hub (step 1 design, for Bob's review)
+### 3.5 The capture manager (step 1 design, for Bob's review)
 
 **Today** (read on this branch):
 
@@ -220,15 +220,15 @@ The 1 s GOP sets the start error: a clip starts at the last keyframe at or befor
 
 | Object | Owns | Held by |
 |---|---|---|
-| `CaptureHub` (`src/video/capture_hub.{hpp,cpp}`) | The `GraphicsDevice`, one `CaptureSource` (a ladder, a window, a monitor, the reference clip or SCK), the present-delay histogram, the consumer list | Each consumer, by `shared_ptr` |
+| `CaptureManager` (`src/video/capture_manager.{hpp,cpp}`) | The `GraphicsDevice`, one `CaptureSource` (a ladder, a window, a monitor, the reference clip or SCK), the present-delay histogram, the consumer list | Each consumer, by `shared_ptr` |
 | Consumer (the stream's `VideoPipeline` host side; the replay session in step 2b) | Its preprocessor and NV12 ring, its encoder, its encode thread, its own decimation | Its owner (`MelloStreamHost`, later the replay session) |
-| Hub registry (step 2b) | A `weak_ptr` per capture key: process pid plus start time, or the reference clip | `mello::Context` |
+| Registry (step 2b) | A `weak_ptr` per capture key: process pid plus start time, or the reference clip | `mello::Context` |
 
-In step 1 each stream host makes a private hub with one consumer. The registry and a second consumer come in step 2b. The step 1 PR then cannot share anything by mistake.
+In step 1 each stream host makes a private manager with one consumer. The registry and a second consumer come in step 2b. The step 1 PR then cannot share anything by mistake.
 
 **1. The thread that hands a frame to each consumer**
 
-- The backend's capture thread, as today. The hub calls the consumers in order: the stream first, then the replay.
+- The backend's capture thread, as today. The manager calls the consumers in order: the stream first, then the replay.
 - Each call gets `{texture, capture_us, ladder step, swap generation}`.
 - The consumer callback may decimate, convert on the GPU into its own ring, and enqueue without a wait. It must not wait on the disk, the network or its encoder. `on_captured_frame` keeps this rule now.
 - A slow encoder drops from its own queue (newest wins, counted in its own `encode_queue_drops`). The capture and the other consumer do not wait for it.
@@ -237,50 +237,50 @@ In step 1 each stream host makes a private hub with one consumer. The registry a
 
 **2. Add and remove while frames are in flight**
 
-- Add: append under the hub's list mutex. The next frame reaches the new consumer. Its first encoded frame is an IDR, as at a stream start now.
+- Add: append under the manager's list mutex. The next frame reaches the new consumer. Its first encoded frame is an IDR, as at a stream start now.
 - Deliver: copy the list of consumer pointers under the mutex, release it, then call each one. Each consumer has an in-delivery counter and a removed flag.
-- Remove: set the removed flag (no new calls), then wait until the counter is 0, at most 5 s (the `kEncodeJoinDeadline` rule). After that the hub never calls the consumer again and the owner can free it. When the wait times out, the capture thread is stuck inside that consumer: the owner leaks the consumer, as `abandoned` does now.
+- Remove: set the removed flag (no new calls), then wait until the counter is 0, at most 5 s (the `kEncodeJoinDeadline` rule). After that the manager never calls the consumer again and the owner can free it. When the wait times out, the capture thread is stuck inside that consumer: the owner leaks the consumer, as `abandoned` does now.
 - A consumer must not remove itself from inside its callback (the rule of the voice packet sink).
-- The last remove stops the capture source and takes the hub out of the registry.
+- The last remove stops the capture source and takes the manager out of the registry.
 
 **3. The capture events**
 
-| Event | Today | With the hub |
+| Event | Today | With the manager |
 |---|---|---|
-| Method change (force a keyframe) | `consume_swap_event`, consumed by the pipeline | The hub consumes the source's flag once per frame, before the fan-out, and increments a swap generation. Each consumer forces its own keyframe when the generation of a frame is new to it. |
-| `state` (pause card), `failed`, `method_history` | Pulled from the source | Pulled from the hub, which asks the source. All consumers see one value. |
+| Method change (force a keyframe) | `consume_swap_event`, consumed by the pipeline | The manager consumes the source's flag once per frame, before the fan-out, and increments a swap generation. Each consumer forces its own keyframe when the generation of a frame is new to it. |
+| `state` (pause card), `failed`, `method_history` | Pulled from the source | Pulled from the manager, which asks the source. All consumers see one value. |
 | `target_exited` | Pulled at 1 Hz, ends the stream | The same for the stream. The replay manager stops the replay. |
 | Exclusive-fullscreen restart | A ladder move inside `ProcessCapture` | No change: it is a method change (row 1). |
 | Source size change | `ConvertResult::source_resized` per frame | No change: each consumer has its own preprocessor and counts its own changes. |
-| Pointer | `get_cursor`, `cursor_mode` from the active backend | Forwarded by the hub. |
-| Present-to-capture histogram | The pipeline owns it and gives it to the source | The hub owns it. The stream's telemetry reads it. |
-| Source audio (SCK audio, reference timed audio) | One callback on the source | One callback per consumer. The hub fans out on the source's audio thread. |
+| Pointer | `get_cursor`, `cursor_mode` from the active backend | Forwarded by the manager. |
+| Present-to-capture histogram | The pipeline owns it and gives it to the source | The manager owns it. The stream's telemetry reads it. |
+| Source audio (SCK audio, reference timed audio) | One callback on the source | One callback per consumer. The manager fans out on the source's audio thread. |
 
 **4. Frame rate**
 
-- Step 1: one consumer, so the hub rate is the stream rate. No change.
-- Step 2b: the hub rate is the highest consumer rate. Each consumer decimates to its own rate (`decimation_accepts` does this now). When the highest rate changes (a 60 fps replay with a 30 fps stream), the hub gives the active backend the new rate through a new `CaptureSource::set_target_fps`: an atomic in the WGC, DXGI and hook throttles, and the hook's shared block.
+- Step 1: one consumer, so the capture rate is the stream rate. No change.
+- Step 2b: the capture rate is the highest consumer rate. Each consumer decimates to its own rate (`decimation_accepts` does this now). When the highest rate changes (a 60 fps replay with a 30 fps stream), the manager gives the active backend the new rate through a new `CaptureSource::set_target_fps`: an atomic in the WGC, DXGI and hook throttles, and the hook's shared block.
 
 **5. Ladder policy per consumer (step 2b, named here so that step 1 leaves room for it)**
 
 - A consumer says which ladder steps it takes. The stream takes all of them. The replay takes `WgcWindow`, and `Hook` only while a stream consumer is attached (Q4).
-- With a stream consumer, the hub runs the stream's ladder (`allow_hook` from the `start_stream` policy). With the replay alone, the ladder is `[WgcWindow]`.
+- With a stream consumer, the manager runs the stream's ladder (`allow_hook` from the `start_stream` policy). With the replay alone, the ladder is `[WgcWindow]`.
 - The replay drops a frame of a step that it does not take. That is a gap in its ring.
-- A stream joins a replay on `WgcWindow`, with `allow_hook`: the hub walks up to the hook with `keep_old_until_first_frame`, as for exclusive fullscreen. The stream shows WGC frames until the hook delivers. Today a stream starts at the top of the ladder (Q18).
-- The stream leaves while the step is `Hook`, `WgcMonitor` or `Dxgi`: the hub goes back to `[WgcWindow]` with `keep_old_until_first_frame`. The replay does not keep the hook. The hook stops 5 s after the heartbeat stops (Q19).
+- A stream joins a replay on `WgcWindow`, with `allow_hook`: the manager walks up to the hook with `keep_old_until_first_frame`, as for exclusive fullscreen. The stream shows WGC frames until the hook delivers. Today a stream starts at the top of the ladder (Q18).
+- The stream leaves while the step is `Hook`, `WgcMonitor` or `Dxgi`: the manager goes back to `[WgcWindow]` with `keep_old_until_first_frame`. The replay does not keep the hook. The hook stops 5 s after the heartbeat stops (Q19).
 
 **6. The device and a poisoned device**
 
-- The hub makes the device (`create_d3d11_device`) and owns it. The capture, and every preprocessor and encoder of its consumers, use it (zero copy needs one device, 14-VIDEO-PIPELINE.md 2.2). A consumer holds the hub, so the device lives longer than its encoder.
-- This is not one more device than today: the device moves from the host pipeline to the hub. The replay of the same game uses the same device.
+- The manager makes the device (`create_d3d11_device`) and owns it. The capture, and every preprocessor and encoder of its consumers, use it (zero copy needs one device, 14-VIDEO-PIPELINE.md 2.2). A consumer holds the manager, so the device lives longer than its encoder.
+- This is not one more device than today: the device moves from the host pipeline to the manager. The replay of the same game uses the same device.
 - A poisoned device (`device_poisoned_`): no more ladder moves. `failed` reports it after the pass, the stream sends its `StreamError` as today, and the replay manager turns the replay off.
-- A hub whose stop times out leaks with its device. It leaves the registry first and is never used again. The next consumer makes a new hub on a new device. A leaked hub counts in `mello_stream_abandoned_pipelines`.
+- A manager whose stop times out leaks with its device. It leaves the registry first and is never used again. The next consumer makes a new manager on a new device. A leaked manager counts in `mello_stream_abandoned_pipelines`.
 
 **7. macOS (Q17)**
 
-- Recommended: the hub code is platform neutral, and step 1 puts `SCKCapture` behind it too, with one consumer. `VideoPipeline` then has one capture path and no `#ifdef` at each capture call.
-- The macOS pipeline encodes inside the capture callback (VideoToolbox on the SCK queue). That breaks the callback rule of item 1. So the hub refuses a second consumer on macOS until the macOS work adds an encode thread.
-- Risk: step 1 changes the macOS host path, and the Windows PC cannot run it. Check: the macOS CI lane builds it and runs the `CaptureHub` tests, and Bob streams one game on his Mac.
+- Recommended: the manager code is platform neutral, and step 1 puts `SCKCapture` behind it too, with one consumer. `VideoPipeline` then has one capture path and no `#ifdef` at each capture call.
+- The macOS pipeline encodes inside the capture callback (VideoToolbox on the SCK queue). That breaks the callback rule of item 1. So the manager refuses a second consumer on macOS until the macOS work adds an encode thread.
+- Risk: step 1 changes the macOS host path, and the Windows PC cannot run it. Check: the macOS CI lane builds it and runs the `CaptureManager` tests, and Bob streams one game on his Mac.
 - The other choice: macOS keeps the direct capture until the macOS work. That needs an `#ifdef` at each capture call in `VideoPipeline`.
 
 **8. What does not change**
@@ -293,9 +293,9 @@ In step 1 each stream host makes a private hub with one consumer. The registry a
 
 | Item | Content |
 |---|---|
-| New | `capture_hub.{hpp,cpp}` |
-| Changed | `video_pipeline.{hpp,cpp}`: `capture_` and `init_device` on the host side become the hub. `mello.cpp`: audio callbacks and `mello_stream_reference_info` through the hub. |
-| Tests (`CaptureHub`, fake source, no GPU) | Two consumers get every frame in order. A removed consumer gets no call after `remove` returns, and the other consumer keeps its frames. `remove` waits for a call in flight and returns "abandoned" after 5 s for a stuck one. A swap reaches each consumer once. The last remove stops the source. Audio reaches each consumer. |
+| New | `capture_manager.{hpp,cpp}` |
+| Changed | `video_pipeline.{hpp,cpp}`: `capture_` and `init_device` on the host side become the manager. `mello.cpp`: audio callbacks and `mello_stream_reference_info` through the manager. |
+| Tests (`CaptureManager`, fake source, no GPU) | Two consumers get every frame in order. A removed consumer gets no call after `remove` returns, and the other consumer keeps its frames. `remove` waits for a call in flight and returns "abandoned" after 5 s for a stuck one. A swap reaches each consumer once. The last remove stops the source. Audio reaches each consumer. |
 | Gate | Section 0.4: stream gate CPU and hw lanes, 3 runs each on `main` and on the branch, side by side in the PR. |
 
 ---
@@ -585,7 +585,7 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | `ReplayAvClock` | Three sources on synthetic clocks, one 300 ppm fast: after the mux, a marker in each source lands within 1 ms of its video frame. |
 | `ReplayGaps` | A gap in video or audio keeps the samples after it at their own time. |
 | `ClipByteStream` | The `IMFByteStream` over a range reader: a read of a missing range waits and then returns the bytes, a timeout returns an error, a seek reads from the new offset. |
-| `CaptureHub` | Two consumers get every frame. Removing one does not stop the other. |
+| `CaptureManager` | Two consumers get every frame. Removing one does not stop the other. |
 
 ### 10.3 Stream gate: a replay lane
 
@@ -593,13 +593,13 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 
 | Step | Detail |
 |---|---|
-| Source | `MELLO_CAPTURE_REFERENCE` through the capture hub to the replay consumer. Voice: marker tones through the test audio backend (`mello_voice_inject_capture` and the test output pull). |
+| Source | `MELLO_CAPTURE_REFERENCE` through the capture manager to the replay consumer. Voice: marker tones through the test audio backend (`mello_voice_inject_capture` and the test output pull). |
 | Capture | `mello_replay_capture` at fixed clip times: 35 s, 47 s (across the scene cut), and twice inside 30 s (pinning). |
 | Read back | Demux and decode the MP4. Read the frame code of every frame. |
 | Gates | First frame index is T0 within one GOP. No missing frame index. VMAF, PSNR and SSIM against the clip frames, with floors per lane in `benchmarks/baselines/replay/`. Game audio burst to video frame offset within +-20 ms for every marker. Voice marker to video offset within +-20 ms. Length 30 to 31 s. |
 | Lanes | `cpu` (any machine), `hw` (the machine's encoder: NVENC on Bob's PC, AMF on an AMD box). |
 | Streamed playback | Serve the captured MP4 from local MinIO through a delay and rate shim (20 Mbps, 50 ms). Play it through `ClipRangeReader` and the viewer pipeline. Gates: first frame under 1 s, no stall at 20 Mbps, every frame code in order, a seek to 20 s shows the frame of 20 s within 1 s. |
-| Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same hub. The stream gates must still pass. This lane also proves the capture hub refactor. |
+| Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same manager. The stream gates must still pass. This lane also proves the capture manager refactor. |
 
 The gate runs from the QA harness, not from `check.sh`.
 
@@ -629,7 +629,7 @@ No test, script or journey points at production.
 
 | Step | Todo id | Depends on | Lands as |
 |---|---|---|---|
-| 1 | `capture-hub` | none | Own PR. Stream gate unchanged. |
+| 1 | `capture-manager` | none | Own PR. Stream gate unchanged. |
 | 2a | `loopback-check` | none | A measurement on the Windows PC, before the ring: process loopback on a running game (CS2 and one other) gives a signal for the whole session, and the level before or after the game's own volume. A report, no code. If it fails, the game audio source is decided again before 2b. |
 | 2b | `replay-ring`, `replay-session`, `mp4-mux` | 1, 2a | libmello, with the ctest tests and the replay gate lane |
 | 3 | `backend` | none | Can run beside step 2 |
@@ -639,7 +639,7 @@ No test, script or journey points at production.
 | 7 | `specs` | 6 | Spec updates. This plan is then deleted. |
 | 8 | `macos` | 7 | Later phase |
 
-One feature branch (`feat/game-clips`), with the hub refactor as its own PR before it.
+One feature branch (`feat/game-clips`), with the manager refactor as its own PR before it.
 
 ---
 
@@ -692,8 +692,8 @@ One feature branch (`feat/game-clips`), with the hub refactor as its own PR befo
 | Q13 | Download a clip before playback? (2026-11-01) | No. Playback streams from R2 from the first bytes (section 6.2). |
 | Q14 | Auto highlights in the first iteration? (2026-11-01) | No. Second iteration, after a design to ask users first (section 12). |
 | Q15 | Does the voice ring fix (`570e8ec`) get its own PR? (2026-11-01) | No. It stays on `feat/game-clips`. |
-| Q16 | The hub's name? | Open. Proposed: `CaptureHub`, because it carries any source (a ladder, a window, a monitor, the reference clip). |
-| Q17 | Does macOS go behind the hub in step 1? | Open. Proposed: yes, with one consumer only until the macOS work (section 3.5, item 7). |
+| Q16 | The name of the shared capture object? (2026-11-01) | `CaptureManager`, in `capture_manager.{hpp,cpp}`. |
+| Q17 | Does macOS go behind the manager in step 1? | Open. Proposed: yes, with one consumer only until the macOS work (section 3.5, item 7). |
 | Q18 | A stream starts while the replay runs on WGC window, with the hook allowed: the stream shows WGC frames until the hook delivers. Accept? | Open. Proposed: yes. Today the stream waits for the hook at start. |
 | Q19 | The stream ends while the hook captures: the replay goes back to WGC window, and the hook stops. Accept? | Open. Proposed: yes. The hook permission comes with a stream start. |
 | Q20 | The game's mixer slider is in the loopback, m3llo's own slider is not in the voice ring. Does the mux apply m3llo's slider to the voice, so the clip balance is what the user heard? | Open. Proposed: yes. Record m3llo's session volume with the voice ring's time anchors and apply it in the mux. |
