@@ -42,8 +42,12 @@ fn main() {
     //
     // Debug builds only: the metadata inflates the generated code, and release
     // ships under the <100MB budget (CLAUDE.md § Scale & Performance).
-    // `cargo test` builds debug, so tests always get it.
-    let debug_info = std::env::var("PROFILE").as_deref() == Ok("debug");
+    // `cargo test` builds debug, so tests always get it. A release build gets it
+    // only when SLINT_EMIT_DEBUG_INFO=1 asks for it: the e2e driver on a release
+    // build, for the memory runs of scripts/perf/voice-idle-memory.ts.
+    println!("cargo:rerun-if-env-changed=SLINT_EMIT_DEBUG_INFO");
+    let debug_info = std::env::var("PROFILE").as_deref() == Ok("debug")
+        || std::env::var("SLINT_EMIT_DEBUG_INFO").as_deref() == Ok("1");
 
     // The StatValue probe window for src/stat_value_tests.rs. Compiled first,
     // because the last compile_with_config call wins the

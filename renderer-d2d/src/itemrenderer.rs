@@ -19,8 +19,8 @@ use i_slint_core::graphics::boxshadowcache::BoxShadowCache;
 use i_slint_core::graphics::euclid;
 use i_slint_core::graphics::{BorderRadius, IntRect, ResolvedBrush};
 use i_slint_core::item_rendering::{
-    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle,
-    RenderImage, RenderRectangle, RenderText,
+    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, ItemRendererFeatures,
+    RenderBorderRectangle, RenderImage, RenderRectangle, RenderText,
 };
 use i_slint_core::items::{self, ImageRendering, ImageTiling, ItemRc, Opacity, RenderingResult};
 use i_slint_core::lengths::{
@@ -50,6 +50,10 @@ type PixmapUpdate<'f> = &'f dyn Fn(&mut dyn FnMut(u32, u32, &[u8]));
 /// Per-item GPU objects: image bitmaps, cached pixmaps and shadow bitmaps.
 pub type ItemBitmapCache = ItemCache<Option<Rc<CachedBitmap>>>;
 pub type ShadowCache = BoxShadowCache<Rc<CachedBitmap>>;
+/// A path item's geometry in physical pixels and its offset, kept while the
+/// item's path, fit and fill rule do not change (Skia keeps the same cache).
+/// Building the geometry is the cost of a path: Slint's fitting plus the sink.
+pub type PathCache = ItemCache<Option<(Vector2, ID2D1PathGeometry1)>>;
 
 #[derive(Clone, Copy)]
 enum Push {
@@ -86,6 +90,7 @@ pub struct D2DItemRenderer<'a> {
     item_cache: &'a ItemBitmapCache,
     bitmap_cache: &'a RefCell<BitmapCache>,
     shadow_cache: &'a ShadowCache,
+    path_cache: &'a PathCache,
     brush_cache: &'a RefCell<BrushCache>,
     text_layout_cache: &'a sharedparley::TextLayoutCache,
     window: &'a i_slint_core::api::Window,
@@ -135,7 +140,7 @@ enum Shape {
 }
 
 /// `FX_D2D_DEBUG=1` logs failed Direct2D calls (brush creation) to stderr.
-fn debug() -> bool {
+pub(crate) fn debug() -> bool {
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DEBUG.get_or_init(|| std::env::var_os("FX_D2D_DEBUG").is_some())
 }
@@ -172,19 +177,120 @@ fn switches() -> &'static Switches {
 /// by their stops. Both bounded; cleared with the other GPU caches.
 #[derive(Default)]
 pub struct BrushCache {
-    solid: std::collections::HashMap<(u32, u32), ID2D1SolidColorBrush>,
-    stops: std::collections::HashMap<Vec<(u32, u32)>, ID2D1GradientStopCollection1>,
+    solid: RecentMap<(u32, u32), ID2D1SolidColorBrush>,
+    stops: RecentMap<Vec<(u32, u32)>, ID2D1GradientStopCollection1>,
+    frame: u64,
 }
 
 impl BrushCache {
     pub fn clear(&mut self) {
-        self.solid.clear();
-        self.stops.clear();
+        self.solid.map.clear();
+        self.stops.map.clear();
+    }
+
+    /// Call once per frame, before drawing: entries used in this frame and the
+    /// one before survive an eviction.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
+    }
+}
+
+/// A map that, when full, drops what the last two frames did not use. A
+/// clear-all at the bound drops the brushes that every frame uses whenever an
+/// animation makes new ones each frame (80 embers with changing tints in the
+/// sealed reveal). Twice the bound is a hard limit.
+struct RecentMap<K, V> {
+    map: std::collections::HashMap<K, (V, u64)>,
+}
+
+impl<K, V> Default for RecentMap<K, V> {
+    fn default() -> Self {
+        Self {
+            map: Default::default(),
+        }
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V: Clone> RecentMap<K, V> {
+    fn get(&mut self, key: &K, frame: u64) -> Option<V> {
+        let (value, used) = self.map.get_mut(key)?;
+        *used = frame;
+        Some(value.clone())
+    }
+
+    fn insert(&mut self, key: K, value: V, frame: u64, bound: usize) {
+        if self.map.len() >= bound {
+            self.map.retain(|_, (_, used)| *used + 1 >= frame);
+            if self.map.len() >= 2 * bound {
+                self.map.clear();
+            }
+        }
+        self.map.insert(key, (value, frame));
     }
 }
 
 fn is_translation(m: &Matrix3x2) -> bool {
     m.M11 == 1.0 && m.M12 == 0.0 && m.M21 == 0.0 && m.M22 == 1.0
+}
+
+/// An `ID2D1PathGeometry` from Slint's fitted path events, scaled to physical
+/// pixels. `None` when Direct2D refuses the geometry.
+fn path_geometry(
+    factory: &ID2D1Factory1,
+    fill_rule: items::FillRule,
+    events: i_slint_core::graphics::PathDataIterator,
+    sf: f32,
+) -> Option<ID2D1PathGeometry1> {
+    let geometry = unsafe { factory.CreatePathGeometry() }.ok()?;
+    let sink = unsafe { geometry.Open() }.ok()?;
+    let v = |p: lyon_path::math::Point| Vector2 {
+        X: p.x * sf,
+        Y: p.y * sf,
+    };
+    unsafe {
+        sink.SetFillMode(match fill_rule {
+            items::FillRule::Evenodd => D2D1_FILL_MODE_ALTERNATE,
+            _ => D2D1_FILL_MODE_WINDING,
+        });
+        let mut open = false;
+        for event in events.iter() {
+            match event {
+                lyon_path::Event::Begin { at } => {
+                    sink.BeginFigure(v(at), D2D1_FIGURE_BEGIN_FILLED);
+                    open = true;
+                }
+                lyon_path::Event::Line { to, .. } => sink.AddLine(v(to)),
+                lyon_path::Event::Quadratic { ctrl, to, .. } => {
+                    sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
+                        point1: v(ctrl),
+                        point2: v(to),
+                    })
+                }
+                lyon_path::Event::Cubic {
+                    ctrl1, ctrl2, to, ..
+                } => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
+                    point1: v(ctrl1),
+                    point2: v(ctrl2),
+                    point3: v(to),
+                }),
+                lyon_path::Event::End { close, .. } => {
+                    if open {
+                        sink.EndFigure(if close {
+                            D2D1_FIGURE_END_CLOSED
+                        } else {
+                            D2D1_FIGURE_END_OPEN
+                        });
+                        open = false;
+                    }
+                }
+            }
+        }
+        if open {
+            sink.EndFigure(D2D1_FIGURE_END_OPEN);
+        }
+        sink.Close().ok()?;
+    }
+    Some(geometry)
 }
 
 impl<'a> D2DItemRenderer<'a> {
@@ -197,6 +303,7 @@ impl<'a> D2DItemRenderer<'a> {
         item_cache: &'a ItemBitmapCache,
         bitmap_cache: &'a RefCell<BitmapCache>,
         shadow_cache: &'a ShadowCache,
+        path_cache: &'a PathCache,
         brush_cache: &'a RefCell<BrushCache>,
         text_layout_cache: &'a sharedparley::TextLayoutCache,
         window: &'a i_slint_core::api::Window,
@@ -212,6 +319,7 @@ impl<'a> D2DItemRenderer<'a> {
             item_cache,
             bitmap_cache,
             shadow_cache,
+            path_cache,
             brush_cache,
             text_layout_cache,
             window,
@@ -245,6 +353,24 @@ impl<'a> D2DItemRenderer<'a> {
     }
 
     /// Pops the clips and layers of the states Slint did not restore (the bottom state).
+    /// Clips the whole frame to the physical rectangle `x0, y0, x1, y1` (whole
+    /// pixels, no antialiasing: a soft edge would blend over the old buffer
+    /// content). Partial rendering: only the dirty area is cleared and drawn.
+    pub fn clip_frame(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let phys = PhysicalRect::new(
+            euclid::point2(x0, y0),
+            euclid::size2((x1 - x0).max(0.0), (y1 - y0).max(0.0)),
+        );
+        let logical = phys / self.scale_factor;
+        let state = self.state_mut();
+        state.clip = state.clip.intersection(&logical).unwrap_or_default();
+        unsafe {
+            self.dc
+                .PushAxisAlignedClip(&rect(&phys), D2D1_ANTIALIAS_MODE_ALIASED)
+        };
+        self.state_mut().pushes.push(Push::Clip);
+    }
+
     pub fn finish(&mut self) {
         while let Some(s) = self.state.pop() {
             Self::pop_all(&self.dc, &s);
@@ -384,11 +510,9 @@ impl<'a> D2DItemRenderer<'a> {
     fn solid(&self, c: &Color, alpha: f32) -> Option<ID2D1Brush> {
         let key = (c.as_argb_encoded(), alpha.to_bits());
         let mut cache = self.brush_cache.borrow_mut();
-        if let Some(b) = cache.solid.get(&key) {
+        let frame = cache.frame;
+        if let Some(b) = cache.solid.get(&key, frame) {
             return b.cast().ok();
-        }
-        if cache.solid.len() >= 256 {
-            cache.solid.clear();
         }
         let props = D2D1_BRUSH_PROPERTIES {
             opacity: alpha,
@@ -401,7 +525,7 @@ impl<'a> D2DItemRenderer<'a> {
             )?
         };
         let out = brush.cast().ok();
-        cache.solid.insert(key, brush);
+        cache.solid.insert(key, brush, frame, 256);
         out
     }
 
@@ -414,11 +538,9 @@ impl<'a> D2DItemRenderer<'a> {
             .map(|s| (s.position.to_bits(), s.color.as_argb_encoded()))
             .collect();
         let mut cache = self.brush_cache.borrow_mut();
-        if let Some(c) = cache.stops.get(&key) {
-            return Some(c.clone());
-        }
-        if cache.stops.len() >= 64 {
-            cache.stops.clear();
+        let frame = cache.frame;
+        if let Some(c) = cache.stops.get(&key, frame) {
+            return Some(c);
         }
         let d2d_stops: Vec<D2D1_GRADIENT_STOP> = stops
             .iter()
@@ -449,7 +571,7 @@ impl<'a> D2DItemRenderer<'a> {
                 ),
             )?
         };
-        cache.stops.insert(key, collection.clone());
+        cache.stops.insert(key, collection.clone(), frame, 128);
         Some(collection)
     }
 
@@ -1018,66 +1140,22 @@ impl<'a> D2DItemRenderer<'a> {
     }
 
     fn draw_path_impl(&mut self, path: Pin<&items::Path>, item_rc: &ItemRc, size: LogicalSize) {
-        // One geometry per draw; caps and joins take Direct2D's defaults.
-        let Some((offset, events)) = path.fitted_path_events(item_rc) else {
-            return;
-        };
+        // Caps and joins take Direct2D's defaults.
         let sf = self.scale_factor.get();
-        let Ok(geometry) = (unsafe { self.device.d2d_factory.CreatePathGeometry() }) else {
+        let factory = &self.device.d2d_factory;
+        let Some((offset, geometry)) = self.path_cache.get_or_update_cache_entry(item_rc, || {
+            let (offset, events) = path.fitted_path_events(item_rc)?;
+            let geometry = path_geometry(factory, path.fill_rule(), events, sf)?;
+            Some((
+                Vector2 {
+                    X: offset.x * sf,
+                    Y: offset.y * sf,
+                },
+                geometry,
+            ))
+        }) else {
             return;
         };
-        let Ok(sink) = (unsafe { geometry.Open() }) else {
-            return;
-        };
-        let v = |p: lyon_path::math::Point| Vector2 {
-            X: p.x * sf,
-            Y: p.y * sf,
-        };
-        unsafe {
-            sink.SetFillMode(match path.fill_rule() {
-                items::FillRule::Evenodd => D2D1_FILL_MODE_ALTERNATE,
-                _ => D2D1_FILL_MODE_WINDING,
-            });
-            let mut open = false;
-            for event in events.iter() {
-                match event {
-                    lyon_path::Event::Begin { at } => {
-                        sink.BeginFigure(v(at), D2D1_FIGURE_BEGIN_FILLED);
-                        open = true;
-                    }
-                    lyon_path::Event::Line { to, .. } => sink.AddLine(v(to)),
-                    lyon_path::Event::Quadratic { ctrl, to, .. } => {
-                        sink.AddQuadraticBezier(&D2D1_QUADRATIC_BEZIER_SEGMENT {
-                            point1: v(ctrl),
-                            point2: v(to),
-                        })
-                    }
-                    lyon_path::Event::Cubic {
-                        ctrl1, ctrl2, to, ..
-                    } => sink.AddBezier(&D2D1_BEZIER_SEGMENT {
-                        point1: v(ctrl1),
-                        point2: v(ctrl2),
-                        point3: v(to),
-                    }),
-                    lyon_path::Event::End { close, .. } => {
-                        if open {
-                            sink.EndFigure(if close {
-                                D2D1_FIGURE_END_CLOSED
-                            } else {
-                                D2D1_FIGURE_END_OPEN
-                            });
-                            open = false;
-                        }
-                    }
-                }
-            }
-            if open {
-                sink.EndFigure(D2D1_FIGURE_END_OPEN);
-            }
-            if sink.Close().is_err() {
-                return;
-            }
-        }
         let phys_size = size * self.scale_factor;
         let fill = self.brush(&path.fill(), phys_size);
         let stroke_width = (path.stroke_width() * self.scale_factor).get();
@@ -1089,9 +1167,8 @@ impl<'a> D2DItemRenderer<'a> {
         if fill.is_none() && stroke.is_none() {
             return;
         }
-        let offset = offset * self.scale_factor;
         let saved = self.state().transform;
-        let moved = Matrix3x2::translation(offset.x, offset.y) * saved;
+        let moved = Matrix3x2::translation(offset.X, offset.Y) * saved;
         unsafe {
             self.dc.SetTransform(&moved);
             if let Some(fill) = &fill {
@@ -1429,6 +1506,22 @@ impl<'a> ItemRenderer for D2DItemRenderer<'a> {
         self.state().clip
     }
 
+    /// The local-to-window transform in logical pixels, for the partial renderer.
+    /// The state keeps it in physical pixels: the linear part is the same, the
+    /// translation is divided by the scale factor.
+    fn current_transform(&self) -> i_slint_core::lengths::ItemTransform {
+        let m = self.state().transform;
+        let sf = self.scale_factor.get();
+        i_slint_core::lengths::ItemTransform::new(
+            m.M11,
+            m.M12,
+            m.M21,
+            m.M22,
+            m.M31 / sf,
+            m.M32 / sf,
+        )
+    }
+
     fn translate(&mut self, distance: LogicalVector) {
         let phys = distance * self.scale_factor;
         let state = self.state_mut();
@@ -1659,4 +1752,8 @@ impl<'a> GlyphRenderer for D2DItemRenderer<'a> {
             }
         }
     }
+}
+
+impl ItemRendererFeatures for D2DItemRenderer<'_> {
+    const SUPPORTS_TRANSFORMATIONS: bool = true;
 }
