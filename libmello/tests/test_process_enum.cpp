@@ -135,26 +135,70 @@ TEST(ProcessEnum, LinuxListsThisProcessWithItsStartTime) {
 #endif
 
 #if !defined(__APPLE__)
-// process_enum.cpp is not compiled on Apple (process_enum_macos.mm is), so
-// the helpers it defines are tested elsewhere only.
+// process_enum.cpp is not compiled on Apple (process_enum_macos.mm is).
 using mello::video::detail::path_basename;
-using mello::video::detail::wine_path_to_host;
-
-TEST(ProcessEnum, WineZDriveMapsToTheHostPath) {
-    EXPECT_EQ(wine_path_to_host(R"(Z:\home\bob\.local\share\Steam\steamapps\common\Game\game.exe)"),
-              "/home/bob/.local/share/Steam/steamapps/common/Game/game.exe");
-    EXPECT_EQ(wine_path_to_host(R"(z:\opt\g.exe)"), "/opt/g.exe");
-}
-
-TEST(ProcessEnum, OtherWineDrivesHaveNoHostPath) {
-    EXPECT_EQ(wine_path_to_host(R"(C:\windows\system32\steam.exe)"), "");
-    EXPECT_EQ(wine_path_to_host("Z:"), "");
-    EXPECT_EQ(wine_path_to_host("game.exe"), "");
-}
 
 TEST(ProcessEnum, BasenameSplitsOnBothSeparators) {
     EXPECT_EQ(path_basename(R"(Z:\a\b\cs2.exe)"), "cs2.exe");
     EXPECT_EQ(path_basename("/usr/bin/mello"), "mello");
     EXPECT_EQ(path_basename("plain"), "plain");
+}
+#endif
+
+#if defined(__linux__)
+#include <filesystem>
+
+using mello::video::detail::wine_path_to_host;
+
+namespace {
+// A Proton prefix like the one on a real install: c: -> ../drive_c,
+// s: -> the Steam library, z: -> /.
+struct FakePrefix {
+    std::filesystem::path root;
+    std::filesystem::path library;
+    FakePrefix() {
+        root = std::filesystem::temp_directory_path() /
+               ("mello-wine-" + std::to_string(::getpid()));
+        std::filesystem::remove_all(root);
+        library = root / "Steam";
+        std::filesystem::create_directories(root / "pfx/dosdevices");
+        std::filesystem::create_directories(root / "pfx/drive_c/Games");
+        std::filesystem::create_directories(library / "steamapps/common/Game");
+        std::filesystem::create_directory_symlink("../drive_c", root / "pfx/dosdevices/c:");
+        std::filesystem::create_directory_symlink(library, root / "pfx/dosdevices/s:");
+        std::filesystem::create_directory_symlink("/", root / "pfx/dosdevices/z:");
+    }
+    ~FakePrefix() { std::filesystem::remove_all(root); }
+    std::string prefix() const { return (root / "pfx").string(); }
+};
+} // namespace
+
+TEST(ProcessEnum, ProtonSteamDriveMapsThroughThePrefix) {
+    FakePrefix p;
+    const std::string want = (std::filesystem::canonical(p.library) /
+                              "steamapps/common/Game/game.exe").string();
+    EXPECT_EQ(wine_path_to_host(R"(S:\steamapps\common\Game\game.exe)", p.prefix()), want);
+    // The long form that Wine also uses.
+    EXPECT_EQ(wine_path_to_host(R"(\\?\S:\steamapps\common\Game\game.exe)", p.prefix()), want);
+}
+
+TEST(ProcessEnum, DriveCResolvesToDriveC) {
+    FakePrefix p;
+    EXPECT_EQ(wine_path_to_host(R"(C:\Games\g.exe)", p.prefix()),
+              (std::filesystem::canonical(p.root / "pfx/drive_c") / "Games/g.exe").string());
+}
+
+TEST(ProcessEnum, ZDriveMapsWithOrWithoutAPrefix) {
+    FakePrefix p;
+    EXPECT_EQ(wine_path_to_host(R"(Z:\opt\g.exe)", p.prefix()), "/opt/g.exe");
+    EXPECT_EQ(wine_path_to_host(R"(z:\opt\g.exe)", ""), "/opt/g.exe");
+}
+
+TEST(ProcessEnum, AnUnknownDriveHasNoHostPath) {
+    FakePrefix p;
+    EXPECT_EQ(wine_path_to_host(R"(D:\g.exe)", p.prefix()), "");
+    EXPECT_EQ(wine_path_to_host(R"(C:\windows\steam.exe)", ""), "");
+    EXPECT_EQ(wine_path_to_host("Z:", p.prefix()), "");
+    EXPECT_EQ(wine_path_to_host("game.exe", p.prefix()), "");
 }
 #endif

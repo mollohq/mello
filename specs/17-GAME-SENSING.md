@@ -214,7 +214,7 @@ processes only.
 
 | Field | Source on Linux |
 |---|---|
-| Executable and path | `/proc/<pid>/exe`. A Wine or Proton process names the Wine preloader there, so its `argv0` gives the Windows program. A `Z:` path maps to the host path: Wine maps `Z:` to `/` |
+| Executable and path | `/proc/<pid>/exe`. A Wine or Proton process names the Wine preloader there, so its `argv0` gives the Windows program. Its drive maps to the host path through the `dosdevices` links of the process's prefix (`WINEPREFIX`, else `STEAM_COMPAT_DATA_PATH/pfx`). Proton starts a Steam game from `S:`, which links to the Steam library |
 | Start time | Field 22 of `/proc/<pid>/stat` plus the boot time |
 | Window title, fullscreen, foreground | KWin on KDE Plasma (`mello-core/src/kwin_windows.rs`). Empty on other desktops |
 

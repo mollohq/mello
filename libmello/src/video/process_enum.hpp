@@ -35,17 +35,20 @@ struct GameProcess {
 ///
 /// Linux: from /proc, the user's own processes only (another user's exe link
 /// is not readable). A Wine or Proton process reports the Windows program of
-/// its argv0, not the Wine preloader that /proc/<pid>/exe names, with the
-/// `Z:` path mapped to the host path. No window information yet: title,
-/// fullscreen and foreground stay empty.
+/// its argv0, not the Wine preloader that /proc/<pid>/exe names, with its
+/// drive mapped to the host path through the process's Wine prefix. No window
+/// information: mello-core adds it from KWin (spec 17 section 2.9).
 std::vector<GameProcess> enumerate_game_processes();
 
 namespace detail {
 
-/// The host path of a Wine path on the `Z:` drive, which Wine and Proton map
-/// to `/`: `Z:\home\bob\Game\game.exe` becomes `/home/bob/Game/game.exe`.
-/// Empty for any other drive, whose host folder depends on the prefix.
-std::string wine_path_to_host(const std::string& windows_path);
+#if defined(__linux__)
+/// The host path of a Wine path. The drive letter resolves through the
+/// prefix's `dosdevices/<letter>:` link: Proton starts a Steam game from `S:`
+/// (the Steam library), `C:` is `drive_c`, `Z:` is `/`. Without a prefix only
+/// `Z:` maps. Accepts the `\\?\` form. Empty when the drive has no link.
+std::string wine_path_to_host(const std::string& windows_path, const std::string& wine_prefix);
+#endif
 
 /// The last component of a path, split on both `/` and `\`.
 std::string path_basename(const std::string& path);

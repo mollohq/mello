@@ -17,6 +17,7 @@ using Microsoft::WRL::ComPtr;
 #endif
 
 #if defined(__linux__)
+#include <climits>
 #include <dirent.h>
 #include <unistd.h>
 #include <cctype>
@@ -36,17 +37,33 @@ std::string path_basename(const std::string& path) {
     return pos == std::string::npos ? path : path.substr(pos + 1);
 }
 
-std::string wine_path_to_host(const std::string& windows_path) {
-    if (windows_path.size() < 3 || (windows_path[0] != 'Z' && windows_path[0] != 'z') ||
-        windows_path[1] != ':' || windows_path[2] != '\\') {
+#if defined(__linux__)
+std::string wine_path_to_host(const std::string& windows_path, const std::string& wine_prefix) {
+    std::string path = windows_path;
+    if (path.rfind("\\\\?\\", 0) == 0) path = path.substr(4);
+    if (path.size() < 3 || !std::isalpha(static_cast<unsigned char>(path[0])) ||
+        path[1] != ':' || path[2] != '\\') {
         return {};
     }
-    std::string host = windows_path.substr(2);
-    for (char& c : host) {
+    const char drive = static_cast<char>(std::tolower(static_cast<unsigned char>(path[0])));
+
+    std::string root;
+    if (!wine_prefix.empty()) {
+        const std::string link = wine_prefix + "/dosdevices/" + drive + ":";
+        char resolved[PATH_MAX];
+        if (realpath(link.c_str(), resolved)) root = resolved;
+    }
+    if (root.empty() && drive == 'z') root = "/";
+    if (root.empty()) return {};
+
+    std::string rest = path.substr(3);
+    for (char& c : rest) {
         if (c == '\\') c = '/';
     }
-    return host;
+    if (root.back() != '/') root += '/';
+    return root + rest;
 }
+#endif
 
 } // namespace detail
 
@@ -312,6 +329,24 @@ bool ends_with_exe(const std::string& name) {
     return tail == ".exe";
 }
 
+/// The Wine prefix of a process: WINEPREFIX, else Proton's
+/// STEAM_COMPAT_DATA_PATH/pfx. Empty when neither is set or the environment
+/// is not readable.
+std::string wine_prefix_of(const std::string& pid_dir) {
+    const std::string env = read_file(pid_dir + "/environ");
+    std::string compat;
+    size_t start = 0;
+    while (start < env.size()) {
+        size_t end = env.find('\0', start);
+        if (end == std::string::npos) end = env.size();
+        const std::string var = env.substr(start, end - start);
+        if (var.rfind("WINEPREFIX=", 0) == 0) return var.substr(11);
+        if (var.rfind("STEAM_COMPAT_DATA_PATH=", 0) == 0) compat = var.substr(23);
+        start = end + 1;
+    }
+    return compat.empty() ? std::string() : compat + "/pfx";
+}
+
 bool is_wine_loader(const std::string& exe) {
     return exe == "wine-preloader" || exe == "wine64-preloader" || exe == "wine" ||
            exe == "wine64";
@@ -360,7 +395,7 @@ std::vector<GameProcess> enumerate_game_processes() {
         while (!argv0.empty() && argv0.back() == ' ') argv0.pop_back();
         if (ends_with_exe(argv0) && (is_wine_loader(gp.exe) || argv0.find('\\') != std::string::npos)) {
             gp.exe = detail::path_basename(argv0);
-            gp.path = detail::wine_path_to_host(argv0);
+            gp.path = detail::wine_path_to_host(argv0, wine_prefix_of(dir));
         }
 
         gp.name = gp.exe;
