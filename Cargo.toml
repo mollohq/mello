@@ -49,7 +49,7 @@ reqwest = { version = "0.12", features = ["json"] }
 # Direct2D renderer (renderer-d2d, feature renderer-d2d): the backend's renderer
 # trait is private, so a new renderer needs this copy. The backport can go at
 # Slint 1.18.2 (mollohq/mello#159); the hook stays until Slint has a public
-# renderer hook (m3llo-fx-lab D2D-RENDERER.md, risk 2).
+# renderer hook (specs/features/D2D-RENDERER.md section 10).
 [patch.crates-io]
 i-slint-backend-winit = { path = "third_party/i-slint-backend-winit" }
 

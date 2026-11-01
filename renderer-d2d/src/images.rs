@@ -6,7 +6,7 @@
 //! `BitmapCache` shares one bitmap between every item that shows the same
 //! image at the same size (the same icon appears up to 24 times in mello), with
 //! a byte budget: over it, bitmaps no item holds any more are dropped, oldest
-//! first (memory rule 3 in D2D-RENDERER.md).
+//! first (memory rule 3 in specs/features/D2D-RENDERER.md).
 
 use std::collections::HashMap;
 use std::rc::Rc;

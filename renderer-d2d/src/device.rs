@@ -1,5 +1,6 @@
 //! One D3D11 device, one Direct2D device and one DirectWrite factory per thread,
-//! shared by every window's surface (D2D-RENDERER.md 3.1). Dropped as a whole
+//! shared by every window's surface (specs/features/D2D-RENDERER.md
+//! section 2). Dropped as a whole
 //! when the device is removed; the next surface recreates it.
 
 use std::cell::RefCell;

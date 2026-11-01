@@ -1,4 +1,4 @@
-//! A Slint renderer on Direct2D (Windows). See `D2D-RENDERER.md` in the lab.
+//! A Slint renderer on Direct2D (Windows). Spec: `specs/features/D2D-RENDERER.md`.
 //!
 //! Wiring: the vendored winit backend (`third_party/i-slint-backend-winit`,
 //! `renderer/d2d.rs`) creates the window, hands over the HWND with
