@@ -5,14 +5,14 @@
 // feed-stage-five).
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { CARRY_TAKER_PLAYTIME_MIN, generateRecap, profiles, reportLibrary } from "./lib/seed.ts";
-import { bobWithSeededCrew } from "./lib/stage.ts";
+import { generateRecap } from "./lib/seed.ts";
+import { bobWithSeededCrew, moveTheCarryBetweenOthers } from "./lib/stage.ts";
 
 export default journey({
   id: "feed.sealed-reveal",
   flows: ["FEED-10"],
   async run(ctx) {
-    const { step, expect, runId } = ctx;
+    const { step, expect } = ctx;
     const { bob, members } = await bobWithSeededCrew(ctx, 4);
 
     await step("nothing is sealed before a belt moves", async () => {
@@ -23,17 +23,10 @@ export default journey({
     });
 
     await step("a member re-reports a library that takes the_carry: one belt is sealed", async () => {
-      const s0 = await bob.state();
-      const holder = s0.head2head.titles.find((t) => t.title_id === "the_carry")?.holder_name;
-      const taker = members.find((m) => m.name !== holder);
-      expect(taker !== undefined, `a seeded member other than the holder ${holder} exists`);
-      const own = profiles(members.length, runId).find((p) => p.name === taker!.name)?.games ?? [];
-      const library = own.filter((g) => g.id !== "steam-730").map((g) => ({ id: g.id, name: g.name, playtimeMin: g.playtimeMin }));
-      library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin: CARRY_TAKER_PLAYTIME_MIN });
-      await reportLibrary(taker!.token, library);
+      const taker = await moveTheCarryBetweenOthers(ctx, bob, members);
       const s = await bob.waitFor(
         "the_carry held by the taker and one sealed belt",
-        (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker!.name) && st.sealed.belts >= 1,
+        (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker.name) && st.sealed.belts >= 1,
         60_000,
       );
       expect(s.sealed.belts === 1, `sealed.belts is 1, got ${s.sealed.belts}`);
