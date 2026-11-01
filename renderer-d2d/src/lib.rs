@@ -407,9 +407,11 @@ impl D2DRenderer {
         let frames = self.frames.get() + 1;
         self.frames.set(frames);
         let ended = match (ended, self.fake_device_loss) {
-            (Ok(_), Some(every)) if frames % every == 0 => Err(windows::core::Error::from(
-                windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED,
-            )),
+            (Ok(_), Some(every)) if frames.is_multiple_of(every) => {
+                Err(windows::core::Error::from(
+                    windows::Win32::Graphics::Dxgi::DXGI_ERROR_DEVICE_REMOVED,
+                ))
+            }
             (ended, _) => ended,
         };
         match ended {
