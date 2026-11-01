@@ -84,6 +84,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use updater::{UpdateEvent, Updater};
 
+#[cfg(not(target_os = "linux"))]
 use single_instance::SingleInstance;
 
 const HISTORY_LEN: usize = 30;
@@ -251,6 +252,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let instance_id = lock_name.clone();
     let ipc_endpoint = ipc::endpoint_name(&lock_name);
 
+    // Linux: our own lock with close-on-exec (platform/linux_single_instance.rs).
+    #[cfg(target_os = "linux")]
+    let _instance = platform::linux_single_instance::InstanceLock::acquire(&instance_id)?;
+    #[cfg(not(target_os = "linux"))]
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         if let Some(url) = std::env::args()

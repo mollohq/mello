@@ -11,6 +11,8 @@ pub mod linux_gpu;
 #[cfg(target_os = "linux")]
 pub mod linux_shortcuts;
 #[cfg(target_os = "linux")]
+pub mod linux_single_instance;
+#[cfg(target_os = "linux")]
 pub mod linux_tray;
 #[cfg(target_os = "macos")]
 pub mod macos;

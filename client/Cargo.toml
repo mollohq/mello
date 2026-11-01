@@ -61,7 +61,6 @@ rand = "0.8"
 open = "5"
 tray-icon = "0.21"
 rdev = "0.5"
-single-instance = "0.3"
 notify-rust = "4"
 auto-launch = "0.5"
 
@@ -105,6 +104,10 @@ muda = "0.17"
 # kAEGetURL handler for mello:// links (platform/macos_url_events.rs).
 objc2 = "0.6"
 i-slint-backend-winit = { version = "=1.18.1", features = ["renderer-skia"] }
+
+# The single-instance lock; Linux has its own (platform/linux_single_instance.rs).
+[target.'cfg(not(target_os = "linux"))'.dependencies]
+single-instance = "0.3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
 # Renderer selection (updater/startup_update.rs): Skia on wgpu, or Skia's CPU
