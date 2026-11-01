@@ -20,12 +20,14 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
         --default-toolchain "$RUST_VERSION" --component rustfmt,clippy \
     && rustc --version
 
-# Velopack packaging: vpk runs on .NET 8 and builds the AppImage with
-# squashfs-tools. The vpk version matches the velopack crate in Cargo.lock.
-# 0.0.1298 embeds the AppImageKit runtime, which loads libfuse.so.2 at start.
+# Velopack packaging: vpk runs on .NET 8, builds the AppImage with
+# squashfs-tools and the delta packages with zstd. The vpk version matches the
+# velopack crate in Cargo.lock. 0.0.1298 embeds the AppImageKit runtime, which
+# loads libfuse.so.2 at start; 1.1.1 and later have the static type-2 runtime
+# (feat/velopack-1.2), and their delta packages need zstd.
 ARG VPK_VERSION=0.0.1298
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        dotnet-sdk-8.0 squashfs-tools \
+        dotnet-sdk-8.0 squashfs-tools zstd \
     && rm -rf /var/lib/apt/lists/* \
     && dotnet tool install vpk --version "$VPK_VERSION" --tool-path /opt/vpk \
     && /opt/vpk/vpk --help >/dev/null

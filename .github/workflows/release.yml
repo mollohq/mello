@@ -357,8 +357,9 @@ jobs:
       - name: Install build dependencies
         run: |
           sudo scripts/linux/install-build-deps.sh
-          # The AppImage (squashfs) and the headless smoke test.
-          sudo apt-get install -y --no-install-recommends squashfs-tools xvfb xauth
+          # The AppImage (squashfs), Velopack's delta packages (zstd) and the
+          # headless smoke test.
+          sudo apt-get install -y --no-install-recommends squashfs-tools zstd xvfb xauth
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: |

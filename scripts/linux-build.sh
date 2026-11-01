@@ -25,8 +25,10 @@
 # (Settings, Resources). Six parallel jobs by default; CARGO_BUILD_JOBS
 # overrides it.
 #
-# Build output stays in the m3llo-linux-target volume. /dist in the container
-# is dist-linux/ in this checkout, for files that must leave the container.
+# Build output stays in the m3llo-linux-target volume. Incremental compilation
+# is off, as in CI: its cache grew to 66 GB there and filled Docker's disk.
+# /dist in the container is dist-linux/ in this checkout, for files that must
+# leave the container.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -75,6 +77,7 @@ exec docker run --rm ${TTY[@]+"${TTY[@]}"} --platform linux/amd64 \
     -w "$SRC" \
     -e CI=true \
     -e CARGO_BUILD_JOBS="${CARGO_BUILD_JOBS:-6}" \
+    -e CARGO_INCREMENTAL=0 \
     -e VCPKG_DEFAULT_BINARY_CACHE="$SRC/external/vcpkg-cache" \
     -e SRC="$SRC" \
     -e M3LLO_GIT_LINK="$GIT_LINK" \
