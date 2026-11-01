@@ -16,11 +16,6 @@ struct LinuxGpu {
     std::string render_node;
     /// Its primary node, `/dev/dri/card0`.
     std::string card_node;
-    /// amdgpu's `mem_info_vram_total`: dedicated video memory (an APU's is a
-    /// small carve-out). 0 when the driver does not tell (NVIDIA, Intel).
-    uint64_t vram_bytes = 0;
-    /// Its PCI address, `0000:01:00.0`.
-    std::string pci_address;
 };
 
 constexpr unsigned kVendorNvidia = 0x10de;
@@ -39,13 +34,13 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root = "/sys/class/
 std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
                                              const std::string& forced);
 
-/// The GPU for all video work, capture to encode and decode, as on Windows
-/// (graphics_device.cpp: the adapter with the most dedicated video memory,
-/// whatever the brand): on a laptop the discrete GPU. Dedicated memory is
-/// amdgpu's mem_info_vram_total (an APU shows its small carve-out); NVIDIA
-/// tells sysfs nothing and counts as 2 GiB, more than any carve-out, or its
-/// NVML total when another GPU has 2 GiB or more. Ties go to the primary
-/// GPU. Only the UI's Vulkan stays on the primary GPU. Null without GPUs.
+/// The GPU for all video work, capture to encode and decode: the GPU that
+/// draws the desktop (`boot_vga`), the GPU the UI's Vulkan renders on
+/// (client platform/linux_gpu.rs). KWin's captured frames live in that GPU's
+/// memory, and no other GPU can read them as DMA-BUF, so it is the only GPU
+/// where a stream stays on the GPU (Bob, 2026-11-01). Windows instead takes
+/// the adapter with the most video memory: its OS copies between adapters.
+/// The first GPU without a boot GPU; null without GPUs.
 const LinuxGpu* video_gpu(const std::vector<LinuxGpu>& gpus);
 
 /// The encoders to try, in order: "VA-API", "NVENC", or "OpenH264" alone.

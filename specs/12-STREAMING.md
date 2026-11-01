@@ -497,6 +497,64 @@ unit tested only: there is no AMD or Intel host in the lab.
 
 The encode thread's `packet_cb_` fires with the encoded NALU bytes. This callback was set up by `mello-core` via `mello_stream_start_host` — it sends the bytes over an mpsc channel (capacity 32) to the Rust `StreamManager`.
 
+### 3.6 Linux hosting
+
+Linux has no capture ladder and no game capture hook. Every source comes
+from the ScreenCast portal, and every picture stays on the GPU where the
+compositor allows it.
+
+**One GPU.** All video work runs on the GPU that draws the desktop
+(`boot_vga` in `/sys/class/drm`, `linux_gpu.cpp` `video_gpu`): capture,
+encode and decode, and the UI's Vulkan too. KWin's captured frames live in
+that GPU's memory, and another GPU reads such a DMA-BUF as an all-black
+picture (measured on a hybrid AMD and NVIDIA laptop, 2026-11-01). So that GPU
+is the only one where a stream stays on the GPU. Windows takes the adapter
+with the most video memory instead (`graphics_device.cpp`), because its OS
+copies between adapters.
+
+**Capture.** `mello-core` `stream/screencast.rs` asks the portal for a source
+on the stream start thread: the desktop's dialog picks a monitor or a window,
+the pointer is embedded, and `persist_mode` 2 keeps a restore token in
+`$XDG_STATE_HOME/m3llo/screencast-restore-token`, so the next stream starts
+without the dialog. A thread owns the portal session until the host's
+teardown has stopped the capture (`NativeTeardownGuard::then`). libmello reads
+the portal's PipeWire node (`MELLO_CAPTURE_PIPEWIRE`,
+`capture_pipewire_video.cpp`) on its own loop thread.
+
+The capture offers the DMA-BUF layouts the encoder imports first, and shared
+memory last. A DMA-BUF frame carries its buffer's fd, layout and window crop;
+the PipeWire buffer goes back when GStreamer frees the frame. The frame is
+encoded on the capture thread, as on macOS. One picture is in flight: encode
+returns the previous picture's access unit, and a 20 ms timer on the capture
+loop drains the last one while the screen is still.
+
+**Encode.** GStreamer, loaded with `dlopen` (`encoder_gst_linux.cpp`):
+
+| GPU | Pipeline | Notes |
+|---|---|---|
+| AMD, Intel | `appsrc ! vapostproc ! vah264enc ! appsink` | vapostproc imports the DMA-BUF, converts to NV12 (BT.709) and scales |
+| NVIDIA | `appsrc ! glupload ! glcolorconvert ! glcolorscale ! glcolorconvert ! nvh264enc ! appsink` | GL on the NVIDIA EGL device, surfaceless. RGBA for the scale, NV12 (BT.709) for NVENC. A new input size rebuilds the pipeline. `aud=false`: the macOS decoder fails on an access unit delimiter |
+
+The settings follow NVENC and AMF on Windows: High profile, VBR with peaks
+up to 1.25x the target, no B-frames, an IDR every `keyframe_interval` frames
+and on request (a force-key-unit event). The input caps carry the frame rate:
+VA rate control spends bitrate over frame rate per picture.
+NVENC as the fallback beside another desktop GPU (VA-API failed) gets
+shared memory and converts and scales on the CPU.
+`MELLO_LINUX_ENCODER` (`va`, `nvenc`, `openh264`) puts one first;
+`MELLO_SOFT_ENCODER=1` leaves OpenH264 (CPU) only, as on Windows.
+DMA-BUF needs GStreamer 1.24 (the `DMA_DRM` format); older GStreamer gets
+shared memory.
+
+Measured on the laptop (2026-11-01, a 120 Hz game window, 720p60, 5 Mbps):
+
+| Path | App CPU | Encoded fps |
+|---|---|---|
+| VA-API, DMA-BUF | 20% of a core | 59 |
+| VA-API, shared memory | 68% | 59 |
+| NVENC through GL, shared memory | 62% | 60 |
+| OpenH264, shared memory | 79% | 60 |
+
 ---
 
 ## 4. Stream Manager (Host-side Rust)
@@ -751,11 +809,11 @@ with `dlopen`, so a missing one only removes that decoder:
 | VA-API | `libgstreamer-1.0.so.0`, `libgstapp-1.0.so.0`, `libgstvideo-1.0.so.0` | GStreamer with `h264parse` and the `va` plugin. FFmpeg is not used |
 | OpenH264 | Cisco's `libopenh264-2.6.0-linux64.8.so` next to the executable, else `libopenh264.so.8` | The ABI of the vendored v2.6.0 headers |
 
-The order (`linux_gpu.cpp`) starts with the decoder of the primary GPU
-(`boot_vga` in `/sys/class/drm`): NVDEC, VA-API, OpenH264 when it is NVIDIA,
-else VA-API, NVDEC, OpenH264. On a laptop with two GPUs, the GPU that draws
-the desktop decodes the stream, and the NVIDIA GPU stays asleep. The first
-decoder that initializes wins. `MELLO_LINUX_DECODER` (`nvdec`, `va`, `openh264`) puts
+The order (`linux_gpu.cpp`) starts with the decoder of the GPU that draws
+the desktop (section 3.6): NVDEC, VA-API, OpenH264 when it is NVIDIA, else
+VA-API, NVDEC, OpenH264. On a hybrid laptop with the AMD GPU on the screen,
+the NVIDIA GPU stays asleep while someone watches. The first decoder that
+initializes wins. `MELLO_LINUX_DECODER` (`nvdec`, `va`, `openh264`) puts
 one first; `MELLO_SOFT_DECODER=1` leaves OpenH264 only.
 
 A decoder that stops working mid-stream gives way to the next one in the

@@ -5,7 +5,6 @@
 #include <climits>
 #include <cstdlib>
 #include <dirent.h>
-#include <dlfcn.h>
 #include <fstream>
 #include <map>
 #include <mutex>
@@ -26,31 +25,6 @@ static std::string read_line(const std::string& path) {
 static std::string real_path(const std::string& path) {
     char buf[PATH_MAX];
     return realpath(path.c_str(), buf) ? std::string(buf) : std::string{};
-}
-
-// NVIDIA has no integrated GPUs on PCs: with its memory unknown it counts
-// as this much, more than any integrated GPU's carve-out.
-static constexpr uint64_t kAssumedNvidiaVram = 2ull << 30;
-
-// Total memory of the NVIDIA GPU at `pci_address` from NVML, the NVIDIA
-// driver's management library; 0 when it does not answer.
-static uint64_t nvidia_vram(const std::string& pci_address) {
-    struct NvmlMemory { unsigned long long total, free, used; };
-    void* nvml = dlopen("libnvidia-ml.so.1", RTLD_NOW | RTLD_LOCAL);
-    if (!nvml) return 0;
-    auto init = reinterpret_cast<int (*)()>(dlsym(nvml, "nvmlInit_v2"));
-    auto by_pci = reinterpret_cast<int (*)(const char*, void**)>(dlsym(nvml, "nvmlDeviceGetHandleByPciBusId_v2"));
-    auto memory = reinterpret_cast<int (*)(void*, NvmlMemory*)>(dlsym(nvml, "nvmlDeviceGetMemoryInfo"));
-    auto shutdown = reinterpret_cast<int (*)()>(dlsym(nvml, "nvmlShutdown"));
-    uint64_t total = 0;
-    if (init && by_pci && memory && shutdown && init() == 0) {
-        void* device = nullptr;
-        NvmlMemory m{};
-        if (by_pci(pci_address.c_str(), &device) == 0 && memory(device, &m) == 0) total = m.total;
-        shutdown();
-    }
-    dlclose(nvml);
-    return total;
 }
 
 std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root) {
@@ -82,40 +56,18 @@ std::vector<LinuxGpu> list_linux_gpus(const std::string& drm_root) {
         gpu.vendor = static_cast<unsigned>(std::strtoul(vendor.c_str(), nullptr, 16));
         gpu.primary = read_line(base + "/boot_vga") == "1";
         gpu.card_node = "/dev/dri/" + c;
-        gpu.vram_bytes = std::strtoull(read_line(base + "/mem_info_vram_total").c_str(), nullptr, 10);
         const auto it = render_of.find(real_path(base));
         if (it != render_of.end()) gpu.render_node = it->second;
-        gpu.pci_address = real_path(base);
-        gpu.pci_address = gpu.pci_address.substr(gpu.pci_address.rfind('/') + 1);
         gpus.push_back(gpu);
-    }
-    // NVIDIA's memory only matters against a GPU with as much as NVIDIA is
-    // assumed to have (a discrete AMD GPU); NVML wakes the GPU, so only then.
-    const bool rival = std::any_of(gpus.begin(), gpus.end(), [](const LinuxGpu& g) {
-        return g.vendor != kVendorNvidia && g.vram_bytes >= kAssumedNvidiaVram;
-    });
-    if (rival) {
-        for (LinuxGpu& g : gpus) {
-            if (g.vendor == kVendorNvidia && g.vram_bytes == 0) g.vram_bytes = nvidia_vram(g.pci_address);
-        }
     }
     return gpus;
 }
 
-static uint64_t ranking_vram(const LinuxGpu& g) {
-    if (g.vendor == kVendorNvidia && g.vram_bytes == 0) return kAssumedNvidiaVram;
-    return g.vram_bytes;
-}
-
 const LinuxGpu* video_gpu(const std::vector<LinuxGpu>& gpus) {
-    const LinuxGpu* best = nullptr;
     for (const LinuxGpu& g : gpus) {
-        if (!best || ranking_vram(g) > ranking_vram(*best) ||
-            (ranking_vram(g) == ranking_vram(*best) && g.primary)) {
-            best = &g;
-        }
+        if (g.primary) return &g;
     }
-    return best;
+    return gpus.empty() ? nullptr : &gpus.front();
 }
 
 std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, bool soft,
