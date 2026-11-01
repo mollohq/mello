@@ -1,21 +1,28 @@
 #!/usr/bin/env bash
 # Build the Linux client and pack it as a Velopack AppImage.
-# Runs inside the build container: scripts/linux-package.sh calls it.
+# Runs inside the build container (scripts/linux-package.sh calls it) and in
+# the build-linux job of .github/workflows/release.yml.
 #
 # Usage: scripts/linux/package.sh VERSION [CHANNEL]
 #   FEATURES: cargo features for mello-client. Empty (the default) is the
 #   development build, which talks to Nakama on 127.0.0.1 unless NAKAMA_HOST
 #   is set at run time. The release workflow builds `production`.
+#   SKIP_BUILD=1: pack target/release/mello as it is (the release job built
+#   and tested it already).
+#   OUT_DIR: where vpk writes (default /dist, the container's dist-linux/).
+#   Earlier releases of the channel in OUT_DIR become delta packages.
 set -euo pipefail
 
 VERSION=${1:?usage: package.sh VERSION [CHANNEL]}
 CHANNEL=${2:-linux-x64-stable}
 FEATURES=${FEATURES:-}
+OUT_DIR=${OUT_DIR:-/dist}
 
-feature_args=()
-[ -n "$FEATURES" ] && feature_args=(--features "mello-client/$FEATURES")
-
-cargo build --release --locked -p mello-client ${feature_args[@]+"${feature_args[@]}"}
+if [ "${SKIP_BUILD:-0}" != "1" ]; then
+    feature_args=()
+    [ -n "$FEATURES" ] && feature_args=(--features "mello-client/$FEATURES")
+    cargo build --release --locked -p mello-client ${feature_args[@]+"${feature_args[@]}"}
+fi
 
 STAGE=/tmp/m3llo-pack
 rm -rf "$STAGE"
@@ -46,7 +53,7 @@ vpk pack \
     --packTitle m3llo \
     --channel "$CHANNEL" \
     --icon client/assets/icons/mello.png \
-    --outputDir /dist
+    --outputDir "$OUT_DIR"
 
 echo "--- output"
-ls -la /dist
+ls -la "$OUT_DIR"

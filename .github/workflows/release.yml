@@ -323,9 +323,147 @@ jobs:
         if: always()
         run: cargo clean
 
+  # Linux: a Velopack AppImage on GitHub's Ubuntu 22.04 runner, the glibc
+  # floor of the release (glibc 2.35, as scripts/linux/Dockerfile). Same
+  # steps as the Linux lane of PR Checks (linux-build-test.yml) plus the
+  # production build and the pack.
+  build-linux:
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    env:
+      RELEASE_CHANNEL: "linux-x64-stable"
+      CI: "true"
+      CARGO_INCREMENTAL: "0"
+      RUST_VERSION: "1.94.0"
+      VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          submodules: recursive
+          token: ${{ secrets.GH_PAT }}
+
+      # The hosted image has about 14 GB free; the release build, Skia and
+      # the vcpkg trees need more. .NET goes too and comes back below, at the
+      # version vpk needs.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
+            /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+          df -h /
+
+      - name: Install build dependencies
+        run: |
+          sudo scripts/linux/install-build-deps.sh
+          # The AppImage (squashfs) and the headless smoke test.
+          sudo apt-get install -y --no-install-recommends squashfs-tools xvfb xauth
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
+          rustup default "$RUST_VERSION"
+
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+
+      # vpk at the version of the velopack crate the client links.
+      - name: Install vpk
+        run: |
+          VPK_VERSION=$(grep -A1 '^name = "velopack"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          dotnet tool install -g vpk --version "$VPK_VERSION"
+          echo "$HOME/.dotnet/tools" >> "$GITHUB_PATH"
+
+      - name: vcpkg submodule commit
+        id: vcpkg
+        run: echo "commit=$(git rev-parse HEAD:external/vcpkg)" >> "$GITHUB_OUTPUT"
+
+      - name: Cache vcpkg packages
+        uses: actions/cache@v6
+        with:
+          path: .vcpkg-cache
+          key: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
+          restore-keys: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-
+
+      - name: Prepare the vcpkg cache folder
+        run: mkdir -p .vcpkg-cache
+
+      - name: Set version
+        run: |
+          if [ "${{ github.event_name }}" == "workflow_dispatch" ] && [ -n "${{ inputs.version }}" ]; then
+            version="${{ inputs.version }}"
+          elif [ "${{ github.ref_type }}" == "tag" ]; then
+            version="${{ github.ref_name }}"
+          else
+            version="0.0.${{ github.run_number }}"
+          fi
+          version="${version#v}"
+          echo "RELEASE_VERSION=$version" >> $GITHUB_ENV
+
+      # The offline lockfile refresh below needs every locked crate in the
+      # local registry cache. client/build_notices.rs also runs
+      # `cargo tree --offline` for every target.
+      - name: Fetch locked crates
+        run: cargo fetch --locked
+
+      - name: Stamp version in Cargo.toml
+        run: sed -i -e "s/^version = \"[^\"]*\"/version = \"$RELEASE_VERSION\"/" Cargo.toml
+
+      - name: Refresh lockfile for stamped workspace version
+        run: cargo update --workspace --offline
+
+      - name: Build client
+        run: cargo build --release --locked --workspace --features mello-client/production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          # A fresh install takes an invite from the clipboard only on this host.
+          LOUNGE_HOST: m3llo.app
+
+      - name: Run tests
+        run: cargo test --workspace --locked
+
+      - name: Clippy
+        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+
+      # The earlier Linux releases become delta packages. The first Linux
+      # release has none to download.
+      - name: Velopack Package
+        run: |
+          mkdir -p vpk-out
+          vpk download github --repoUrl https://github.com/mollohq/mello --outputDir vpk-out \
+            --channel "$RELEASE_CHANNEL" --token ${{ secrets.GH_PAT }} \
+            || echo "No earlier Linux release to make a delta from"
+          SKIP_BUILD=1 OUT_DIR=vpk-out scripts/linux/package.sh "$RELEASE_VERSION" "$RELEASE_CHANNEL"
+
+      # Starts the packed AppImage under Xvfb for 20 s and fails on an early
+      # exit or a panic. No network: this is a production build, and nothing
+      # here talks to production. `sudo unshare -n` makes an empty network
+      # namespace as root, and the inner sudo drops back to the runner user
+      # (no unprivileged user namespaces needed). The Windows and macOS jobs
+      # run a signup smoke test against production instead; that is an open
+      # question for Linux (mello-backlog plans/linux-client.md, question 8).
+      - name: Smoke test (headless, no network)
+        run: |
+          sudo unshare -n -- sudo -u "$USER" -H \
+            APPIMAGE_PATH="$PWD/vpk-out/m3llo-$RELEASE_CHANNEL.AppImage" \
+            scripts/linux/smoke.sh 20
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: mello-linux-x64
+          path: vpk-out/*
+
   publish-release:
     if: startsWith(github.ref, 'refs/tags/v')
-    needs: [build-windows, build-macos]
+    needs: [build-windows, build-macos, build-linux]
     runs-on: ubuntu-latest
 
     steps:
@@ -339,6 +477,12 @@ jobs:
         uses: actions/download-artifact@v8
         with:
           name: mello-macos-arm64
+          path: assets/
+
+      - name: Download Linux artifacts
+        uses: actions/download-artifact@v8
+        with:
+          name: mello-linux-x64
           path: assets/
 
       - name: Create release and upload assets
