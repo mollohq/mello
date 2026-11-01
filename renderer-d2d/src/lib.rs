@@ -18,12 +18,14 @@ use std::rc::{Rc, Weak};
 use i_slint_core::graphics::{Rgba8Pixel, SharedPixelBuffer};
 use i_slint_core::item_rendering::ItemRenderer;
 use i_slint_core::item_tree::ItemTreeWeak;
-use i_slint_core::lengths::ScaleFactor;
+use i_slint_core::lengths::{LogicalRect, ScaleFactor};
+use i_slint_core::partial_renderer::{DirtyRegion, PartialRenderingState};
 use i_slint_core::platform::PlatformError;
 use i_slint_core::renderer::{DrawOutcome, RendererSealed};
 use i_slint_core::textlayout::sharedparley;
 use i_slint_core::window::{WindowAdapter, WindowInner};
 use i_slint_core::Brush;
+use windows::Win32::Foundation::RECT;
 use windows::Win32::Graphics::Direct2D::Common::D2D1_COLOR_F;
 
 mod device;
@@ -80,6 +82,12 @@ pub struct D2DRenderer {
     /// Windows has no API that removes a D3D11 device on request.
     fake_device_loss: Option<u64>,
     frames: Cell<u64>,
+    /// Slint's partial renderer: only the items that changed, and what they
+    /// covered, are drawn. `None` with `FX_D2D_FULL_REDRAW=1`.
+    partial: Option<PartialRenderingState>,
+    /// The dirty region of each recent frame, newest first: the back buffer is
+    /// two presents old, so the previous frame's region is drawn again as well.
+    dirty_history: RefCell<[DirtyRegion; 3]>,
 }
 
 const IDLE_TRIM_AFTER: std::time::Duration = std::time::Duration::from_millis(1500);
@@ -107,6 +115,10 @@ impl Default for D2DRenderer {
                 .and_then(|v| v.parse().ok())
                 .filter(|n| *n > 0),
             frames: Cell::new(0),
+            partial: std::env::var_os("FX_D2D_FULL_REDRAW")
+                .is_none()
+                .then(PartialRenderingState::default),
+            dirty_history: Default::default(),
         }
     }
 }
@@ -231,6 +243,7 @@ impl D2DRenderer {
 
         let frame_start = std::time::Instant::now();
         let window_inner = WindowInner::from_pub(window);
+        self.brush_cache.borrow_mut().begin_frame();
         self.item_cache.clear_cache_if_scale_factor_changed(window);
         self.path_cache.clear_cache_if_scale_factor_changed(window);
         self.shadow_cache
@@ -238,6 +251,12 @@ impl D2DRenderer {
         let target = surface.begin_frame()?;
         let dc = surface.dc.clone();
         let device = surface.device.clone();
+
+        let logical_size = i_slint_core::lengths::logical_size_from_api(
+            window.size().to_logical(window_inner.scale_factor()),
+        );
+        let buffer_age = surface.buffer_age();
+        let mut present_rect: Option<RECT> = None;
 
         let categories = window_inner.draw_contents(|components, post_render| {
             let background = window_inner
@@ -257,9 +276,37 @@ impl D2DRenderer {
                     a: 0.0,
                 },
             };
-            unsafe { dc.Clear(Some(&clear)) };
+            // The clear respects the frame clip: only the dirty area is cleared.
+            let draw = |item_renderer: &mut dyn ItemRenderer| {
+                unsafe { dc.Clear(Some(&clear)) };
+                if let Some(window_item_rc) = window_inner.window_item_rc() {
+                    let window_item = window_item_rc
+                        .downcast::<i_slint_core::items::WindowItem>()
+                        .unwrap();
+                    if !matches!(window_item.as_pin_ref().background(), Brush::SolidColor(..)) {
+                        // A gradient background: drawn as a rectangle over the transparent clear.
+                        item_renderer.draw_rectangle(
+                            window_item.as_pin_ref(),
+                            &window_item_rc,
+                            logical_size,
+                            &window_item.as_pin_ref().cached_rendering_data,
+                        );
+                    }
+                }
+                for (component, origin) in components {
+                    if let Some(component) = ItemTreeWeak::upgrade(component) {
+                        i_slint_core::item_rendering::render_component_items(
+                            &component,
+                            item_renderer,
+                            *origin,
+                            &window_adapter,
+                        );
+                    }
+                }
+                post_render(item_renderer);
+            };
 
-            let mut item_renderer = D2DItemRenderer::new(
+            let item_renderer = D2DItemRenderer::new(
                 &dc,
                 &device,
                 &self.item_cache,
@@ -273,34 +320,66 @@ impl D2DRenderer {
                 size.height,
             );
 
-            if let Some(window_item_rc) = window_inner.window_item_rc() {
-                let window_item = window_item_rc
-                    .downcast::<i_slint_core::items::WindowItem>()
-                    .unwrap();
-                if !matches!(window_item.as_pin_ref().background(), Brush::SolidColor(..)) {
-                    // A gradient background: drawn as a rectangle over the transparent clear.
-                    item_renderer.draw_rectangle(
-                        window_item.as_pin_ref(),
-                        &window_item_rc,
-                        i_slint_core::lengths::logical_size_from_api(
-                            window.size().to_logical(window_inner.scale_factor()),
-                        ),
-                        &window_item.as_pin_ref().cached_rendering_data,
+            let mut item_renderer = match &self.partial {
+                Some(partial) => {
+                    let mut partial_renderer = partial.create_partial_renderer(item_renderer);
+                    let whole: DirtyRegion = LogicalRect::from_size(logical_size).into();
+                    let buffer_region = {
+                        let history = self.dirty_history.borrow();
+                        if buffer_age > 0 && (buffer_age as usize) <= history.len() {
+                            history[..buffer_age as usize - 1]
+                                .iter()
+                                .fold(DirtyRegion::default(), |acc, r| acc.union(r))
+                        } else {
+                            whole
+                        }
+                    };
+                    let this_frame = partial.apply_dirty_region(
+                        &mut partial_renderer,
+                        components,
+                        logical_size,
+                        Some(buffer_region),
                     );
+                    {
+                        let mut history = self.dirty_history.borrow_mut();
+                        history.rotate_right(1);
+                        history[0] = this_frame;
+                    }
+                    // The region to draw, rounded out to whole pixels.
+                    let sf = window_inner.scale_factor();
+                    let b = partial_renderer.dirty_region.bounding_rect();
+                    let (w, h) = (size.width as f32, size.height as f32);
+                    let x0 = (b.min_x() * sf).floor().clamp(0.0, w);
+                    let y0 = (b.min_y() * sf).floor().clamp(0.0, h);
+                    let x1 = (b.max_x() * sf).ceil().clamp(0.0, w);
+                    let y1 = (b.max_y() * sf).ceil().clamp(0.0, h);
+                    partial_renderer.actual_renderer.clip_frame(x0, y0, x1, y1);
+                    // The clip is one box, so every item in the box must be drawn:
+                    // the region can hold up to three rectangles, and an item
+                    // between them would be cleared and not drawn again.
+                    partial_renderer.dirty_region = LogicalRect::new(
+                        i_slint_core::lengths::LogicalPoint::new(x0 / sf, y0 / sf),
+                        i_slint_core::lengths::LogicalSize::new((x1 - x0) / sf, (y1 - y0) / sf),
+                    )
+                    .into();
+                    let all = x0 <= 0.0 && y0 <= 0.0 && x1 >= w && y1 >= h;
+                    if !all && x1 > x0 && y1 > y0 {
+                        present_rect = Some(RECT {
+                            left: x0 as i32,
+                            top: y0 as i32,
+                            right: x1 as i32,
+                            bottom: y1 as i32,
+                        });
+                    }
+                    draw(&mut partial_renderer);
+                    partial_renderer.into_inner()
                 }
-            }
-
-            for (component, origin) in components {
-                if let Some(component) = ItemTreeWeak::upgrade(component) {
-                    i_slint_core::item_rendering::render_component_items(
-                        &component,
-                        &mut item_renderer,
-                        *origin,
-                        &window_adapter,
-                    );
+                None => {
+                    let mut item_renderer = item_renderer;
+                    draw(&mut item_renderer);
+                    item_renderer
                 }
-            }
-            post_render(&mut item_renderer);
+            };
             item_renderer.finish();
             item_renderer.categories()
         });
@@ -314,6 +393,7 @@ impl D2DRenderer {
             target,
             &mut self.pre_present.borrow_mut(),
             read_back.as_mut(),
+            present_rect,
         );
         if let Some(pixels) = read_back {
             *self.snapshot.borrow_mut() = Some(pixels);
@@ -351,8 +431,11 @@ impl RendererSealed for D2DRenderer {
     fn free_graphics_resources(
         &self,
         component: i_slint_core::item_tree::ItemTreeRef,
-        _items: &mut dyn Iterator<Item = Pin<i_slint_core::items::ItemRef<'_>>>,
+        items: &mut dyn Iterator<Item = Pin<i_slint_core::items::ItemRef<'_>>>,
     ) -> Result<(), PlatformError> {
+        if let Some(partial) = &self.partial {
+            partial.free_graphics_resources(component, items);
+        }
         self.text_layout_cache.component_destroyed(component);
         // Shadow bitmaps live in the item cache; the shadow cache only maps options to them.
         self.item_cache.component_destroyed(component);
@@ -364,6 +447,15 @@ impl RendererSealed for D2DRenderer {
         *self.window_adapter.borrow_mut() = Some(Rc::downgrade(window_adapter));
         self.text_layout_cache.clear_all();
         self.clear_gpu_caches();
+        if let Some(partial) = &self.partial {
+            partial.clear_cache();
+        }
+    }
+
+    fn mark_dirty_region(&self, region: DirtyRegion) {
+        if let Some(partial) = &self.partial {
+            partial.mark_dirty_region(region);
+        }
     }
 
     fn window_adapter(&self) -> Option<Rc<dyn WindowAdapter>> {

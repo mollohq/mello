@@ -19,8 +19,8 @@ use i_slint_core::graphics::boxshadowcache::BoxShadowCache;
 use i_slint_core::graphics::euclid;
 use i_slint_core::graphics::{BorderRadius, IntRect, ResolvedBrush};
 use i_slint_core::item_rendering::{
-    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, RenderBorderRectangle,
-    RenderImage, RenderRectangle, RenderText,
+    BorderRectLayout, CachedRenderingData, ItemCache, ItemRenderer, ItemRendererFeatures,
+    RenderBorderRectangle, RenderImage, RenderRectangle, RenderText,
 };
 use i_slint_core::items::{self, ImageRendering, ImageTiling, ItemRc, Opacity, RenderingResult};
 use i_slint_core::lengths::{
@@ -177,14 +177,55 @@ fn switches() -> &'static Switches {
 /// by their stops. Both bounded; cleared with the other GPU caches.
 #[derive(Default)]
 pub struct BrushCache {
-    solid: std::collections::HashMap<(u32, u32), ID2D1SolidColorBrush>,
-    stops: std::collections::HashMap<Vec<(u32, u32)>, ID2D1GradientStopCollection1>,
+    solid: RecentMap<(u32, u32), ID2D1SolidColorBrush>,
+    stops: RecentMap<Vec<(u32, u32)>, ID2D1GradientStopCollection1>,
+    frame: u64,
 }
 
 impl BrushCache {
     pub fn clear(&mut self) {
-        self.solid.clear();
-        self.stops.clear();
+        self.solid.map.clear();
+        self.stops.map.clear();
+    }
+
+    /// Call once per frame, before drawing: entries used in this frame and the
+    /// one before survive an eviction.
+    pub fn begin_frame(&mut self) {
+        self.frame += 1;
+    }
+}
+
+/// A map that, when full, drops what the last two frames did not use. A
+/// clear-all at the bound drops the brushes that every frame uses whenever an
+/// animation makes new ones each frame (80 embers with changing tints in the
+/// sealed reveal). Twice the bound is a hard limit.
+struct RecentMap<K, V> {
+    map: std::collections::HashMap<K, (V, u64)>,
+}
+
+impl<K, V> Default for RecentMap<K, V> {
+    fn default() -> Self {
+        Self {
+            map: Default::default(),
+        }
+    }
+}
+
+impl<K: std::hash::Hash + Eq, V: Clone> RecentMap<K, V> {
+    fn get(&mut self, key: &K, frame: u64) -> Option<V> {
+        let (value, used) = self.map.get_mut(key)?;
+        *used = frame;
+        Some(value.clone())
+    }
+
+    fn insert(&mut self, key: K, value: V, frame: u64, bound: usize) {
+        if self.map.len() >= bound {
+            self.map.retain(|_, (_, used)| *used + 1 >= frame);
+            if self.map.len() >= 2 * bound {
+                self.map.clear();
+            }
+        }
+        self.map.insert(key, (value, frame));
     }
 }
 
@@ -312,6 +353,24 @@ impl<'a> D2DItemRenderer<'a> {
     }
 
     /// Pops the clips and layers of the states Slint did not restore (the bottom state).
+    /// Clips the whole frame to the physical rectangle `x0, y0, x1, y1` (whole
+    /// pixels, no antialiasing: a soft edge would blend over the old buffer
+    /// content). Partial rendering: only the dirty area is cleared and drawn.
+    pub fn clip_frame(&mut self, x0: f32, y0: f32, x1: f32, y1: f32) {
+        let phys = PhysicalRect::new(
+            euclid::point2(x0, y0),
+            euclid::size2((x1 - x0).max(0.0), (y1 - y0).max(0.0)),
+        );
+        let logical = phys / self.scale_factor;
+        let state = self.state_mut();
+        state.clip = state.clip.intersection(&logical).unwrap_or_default();
+        unsafe {
+            self.dc
+                .PushAxisAlignedClip(&rect(&phys), D2D1_ANTIALIAS_MODE_ALIASED)
+        };
+        self.state_mut().pushes.push(Push::Clip);
+    }
+
     pub fn finish(&mut self) {
         while let Some(s) = self.state.pop() {
             Self::pop_all(&self.dc, &s);
@@ -451,11 +510,9 @@ impl<'a> D2DItemRenderer<'a> {
     fn solid(&self, c: &Color, alpha: f32) -> Option<ID2D1Brush> {
         let key = (c.as_argb_encoded(), alpha.to_bits());
         let mut cache = self.brush_cache.borrow_mut();
-        if let Some(b) = cache.solid.get(&key) {
+        let frame = cache.frame;
+        if let Some(b) = cache.solid.get(&key, frame) {
             return b.cast().ok();
-        }
-        if cache.solid.len() >= 256 {
-            cache.solid.clear();
         }
         let props = D2D1_BRUSH_PROPERTIES {
             opacity: alpha,
@@ -468,7 +525,7 @@ impl<'a> D2DItemRenderer<'a> {
             )?
         };
         let out = brush.cast().ok();
-        cache.solid.insert(key, brush);
+        cache.solid.insert(key, brush, frame, 256);
         out
     }
 
@@ -481,11 +538,9 @@ impl<'a> D2DItemRenderer<'a> {
             .map(|s| (s.position.to_bits(), s.color.as_argb_encoded()))
             .collect();
         let mut cache = self.brush_cache.borrow_mut();
-        if let Some(c) = cache.stops.get(&key) {
-            return Some(c.clone());
-        }
-        if cache.stops.len() >= 64 {
-            cache.stops.clear();
+        let frame = cache.frame;
+        if let Some(c) = cache.stops.get(&key, frame) {
+            return Some(c);
         }
         let d2d_stops: Vec<D2D1_GRADIENT_STOP> = stops
             .iter()
@@ -516,7 +571,7 @@ impl<'a> D2DItemRenderer<'a> {
                 ),
             )?
         };
-        cache.stops.insert(key, collection.clone());
+        cache.stops.insert(key, collection.clone(), frame, 128);
         Some(collection)
     }
 
@@ -1451,6 +1506,22 @@ impl<'a> ItemRenderer for D2DItemRenderer<'a> {
         self.state().clip
     }
 
+    /// The local-to-window transform in logical pixels, for the partial renderer.
+    /// The state keeps it in physical pixels: the linear part is the same, the
+    /// translation is divided by the scale factor.
+    fn current_transform(&self) -> i_slint_core::lengths::ItemTransform {
+        let m = self.state().transform;
+        let sf = self.scale_factor.get();
+        i_slint_core::lengths::ItemTransform::new(
+            m.M11,
+            m.M12,
+            m.M21,
+            m.M22,
+            m.M31 / sf,
+            m.M32 / sf,
+        )
+    }
+
     fn translate(&mut self, distance: LogicalVector) {
         let phys = distance * self.scale_factor;
         let state = self.state_mut();
@@ -1681,4 +1752,8 @@ impl<'a> GlyphRenderer for D2DItemRenderer<'a> {
             }
         }
     }
+}
+
+impl ItemRendererFeatures for D2DItemRenderer<'_> {
+    const SUPPORTS_TRANSFORMATIONS: bool = true;
 }
