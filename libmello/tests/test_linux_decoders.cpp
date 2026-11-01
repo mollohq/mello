@@ -73,6 +73,36 @@ TEST(LinuxGpu, NoDrmTreeIsNoGpu) {
     EXPECT_TRUE(list_linux_gpus("/nonexistent/drm").empty());
 }
 
+TEST(LinuxVaDriver, AHybridAmdLaptopNamesRadeonsi) {
+    char tmpl[] = "/tmp/m3llo-va-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    std::ofstream(dir + "/radeonsi_drv_video.so") << "";
+    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, "/dev/dri/renderD129"},
+                                  {kVendorAmd, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {"/nonexistent", dir}), "radeonsi");
+    // One GPU: nothing to keep asleep, libva picks the driver itself.
+    EXPECT_EQ(va_driver_for_primary_gpu({gpus[1]}, {dir}), "");
+    // An NVIDIA primary GPU decodes with NVDEC first; VA is left alone.
+    gpus[0].primary = true;
+    gpus[1].primary = false;
+    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "");
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
+TEST(LinuxVaDriver, AnIntelPrimaryTakesTheDriverThatIsInstalled) {
+    char tmpl[] = "/tmp/m3llo-va-XXXXXX";
+    const std::string dir = mkdtemp(tmpl);
+    std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, ""}, {kVendorIntel, true, "/dev/dri/renderD128"}};
+    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "");  // none installed
+    std::ofstream(dir + "/i965_drv_video.so") << "";
+    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "i965");
+    std::ofstream(dir + "/iHD_drv_video.so") << "";
+    EXPECT_EQ(va_driver_for_primary_gpu(gpus, {dir}), "iHD");
+    std::error_code ec;
+    std::filesystem::remove_all(dir, ec);
+}
+
 TEST(LinuxDecoderOrder, AnAmdPrimaryKeepsTheNvidiaGpuAsleep) {
     std::vector<LinuxGpu> gpus = {{kVendorNvidia, false, "/dev/dri/renderD129"},
                                   {kVendorAmd, true, "/dev/dri/renderD128"}};

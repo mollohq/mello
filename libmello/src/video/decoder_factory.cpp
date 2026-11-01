@@ -43,6 +43,7 @@ void warm_linux_decoders() {
     // Only the first decoder: warming NVDEC would wake an NVIDIA GPU that
     // the order keeps asleep. Detached like the Windows hook offsets
     // (mello.cpp): nothing waits for it.
+    prepare_va_driver_env();
     const std::vector<std::string> order = linux_order();
     if (!order.empty() && order.front() == "VA-API") {
         std::thread([] { GstVaDecoder::warm_up(); }).detach();

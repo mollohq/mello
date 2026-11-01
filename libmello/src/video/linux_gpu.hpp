@@ -36,5 +36,25 @@ std::vector<std::string> linux_decoder_order(const std::vector<LinuxGpu>& gpus, 
 /// The render node of the primary GPU, or of the only GPU. Empty if unknown.
 std::string primary_render_node(const std::vector<LinuxGpu>& gpus);
 
+/// The VA driver of the primary GPU on a machine with two or more GPUs whose
+/// primary GPU is AMD or Intel: "radeonsi", "iHD" or "i965" (the first whose
+/// `<name>_drv_video.so` is in `driver_dirs`). Empty otherwise.
+///
+/// GStreamer's VA plugin opens a VA display on every render node when it
+/// loads. On an NVIDIA node with nvidia-vaapi-driver installed that starts
+/// CUDA and wakes the NVIDIA GPU, which the decoder order keeps asleep.
+/// LIBVA_DRIVER_NAME set to this driver makes the NVIDIA node fail at once.
+std::string va_driver_for_primary_gpu(const std::vector<LinuxGpu>& gpus,
+                                      const std::vector<std::string>& driver_dirs);
+
+/// The VA driver directories: LIBVA_DRIVERS_PATH, else the distribution
+/// defaults.
+std::vector<std::string> va_driver_dirs();
+
+/// Sets LIBVA_DRIVER_NAME to va_driver_for_primary_gpu() when it is unset.
+/// Once per process, before GStreamer loads. Call it on the thread that
+/// starts libmello: setenv must not race another thread's getenv.
+void prepare_va_driver_env();
+
 } // namespace mello::video
 #endif

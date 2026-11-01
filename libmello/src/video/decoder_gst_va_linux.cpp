@@ -74,6 +74,9 @@ bool sym(void* lib, const char* name, T& out) {
 // Loads GStreamer once per process and keeps it loaded: GStreamer is not
 // made to be unloaded.
 void load_gstreamer() {
+    // Normally done by mello_init already (warm_linux_decoders); tests and
+    // tools load GStreamer without it.
+    prepare_va_driver_env();
     void* gst = dlopen("libgstreamer-1.0.so.0", RTLD_NOW | RTLD_GLOBAL);
     void* app = dlopen("libgstapp-1.0.so.0", RTLD_NOW | RTLD_GLOBAL);
     void* video = dlopen("libgstvideo-1.0.so.0", RTLD_NOW | RTLD_GLOBAL);

@@ -7,6 +7,11 @@
 #include <dirent.h>
 #include <fstream>
 #include <map>
+#include <mutex>
+#include <sstream>
+#include <sys/stat.h>
+
+#include "../util/log.hpp"
 
 namespace mello::video {
 
@@ -88,6 +93,55 @@ std::string primary_render_node(const std::vector<LinuxGpu>& gpus) {
         if (g.primary) return g.render_node;
     }
     return gpus.size() == 1 ? gpus[0].render_node : std::string{};
+}
+
+static bool file_exists(const std::string& path) {
+    struct stat st{};
+    return stat(path.c_str(), &st) == 0;
+}
+
+std::string va_driver_for_primary_gpu(const std::vector<LinuxGpu>& gpus,
+                                      const std::vector<std::string>& driver_dirs) {
+    if (gpus.size() < 2) return {};
+    const LinuxGpu* primary = nullptr;
+    for (const LinuxGpu& g : gpus) {
+        if (g.primary) primary = &g;
+    }
+    if (!primary) return {};
+    std::vector<std::string> candidates;
+    if (primary->vendor == kVendorAmd) candidates = {"radeonsi"};
+    if (primary->vendor == kVendorIntel) candidates = {"iHD", "i965"};
+    for (const std::string& name : candidates) {
+        for (const std::string& dir : driver_dirs) {
+            if (file_exists(dir + "/" + name + "_drv_video.so")) return name;
+        }
+    }
+    return {};
+}
+
+std::vector<std::string> va_driver_dirs() {
+    if (const char* env = std::getenv("LIBVA_DRIVERS_PATH")) {
+        std::vector<std::string> dirs;
+        std::stringstream in(env);
+        std::string dir;
+        while (std::getline(in, dir, ':')) {
+            if (!dir.empty()) dirs.push_back(dir);
+        }
+        return dirs;
+    }
+    return {"/usr/lib/dri", "/usr/lib64/dri", "/usr/lib/x86_64-linux-gnu/dri"};
+}
+
+void prepare_va_driver_env() {
+    static std::once_flag once;
+    std::call_once(once, [] {
+        if (std::getenv("LIBVA_DRIVER_NAME")) return;
+        const std::string driver = va_driver_for_primary_gpu(list_linux_gpus(), va_driver_dirs());
+        if (driver.empty()) return;
+        setenv("LIBVA_DRIVER_NAME", driver.c_str(), 0);
+        MELLO_LOG_INFO("video/decoder", "VA-API: LIBVA_DRIVER_NAME=%s (the primary GPU's driver, so "
+                                        "GStreamer leaves the other GPU asleep)", driver.c_str());
+    });
 }
 
 } // namespace mello::video
