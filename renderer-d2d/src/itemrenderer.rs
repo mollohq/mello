@@ -140,7 +140,7 @@ enum Shape {
 }
 
 /// `FX_D2D_DEBUG=1` logs failed Direct2D calls (brush creation) to stderr.
-fn debug() -> bool {
+pub(crate) fn debug() -> bool {
     static DEBUG: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *DEBUG.get_or_init(|| std::env::var_os("FX_D2D_DEBUG").is_some())
 }

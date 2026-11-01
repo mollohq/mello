@@ -363,6 +363,12 @@ impl D2DRenderer {
                     )
                     .into();
                     let all = x0 <= 0.0 && y0 <= 0.0 && x1 >= w && y1 >= h;
+                    if itemrenderer::debug() {
+                        eprintln!(
+                            "d2d renderer: frame {} buffer age {buffer_age}, drawn {x0},{y0} to {x1},{y1}",
+                            self.frames.get() + 1
+                        );
+                    }
                     if !all && x1 > x0 && y1 > y0 {
                         present_rect = Some(RECT {
                             left: x0 as i32,
