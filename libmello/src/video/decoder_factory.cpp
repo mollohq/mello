@@ -14,11 +14,45 @@
 #include "decoder_videotoolbox.hpp"
 #elif defined(__linux__)
 #include "decoder_openh264.hpp"
+#include "decoder_nvdec.hpp"
+#include "decoder_gst_va.hpp"
+#include "linux_gpu.hpp"
+#include <algorithm>
+#include <string>
 #endif
 
 namespace mello::video {
 
 static constexpr const char* TAG = "video/decoder";
+
+#if defined(__linux__)
+static std::unique_ptr<Decoder> make_linux_decoder(const std::string& name) {
+    if (name == "NVDEC") return std::make_unique<NvdecDecoder>();
+    if (name == "VA-API") return std::make_unique<GstVaDecoder>();
+    if (name == "OpenH264") return std::make_unique<OpenH264Decoder>();
+    return nullptr;
+}
+
+static std::vector<std::string> linux_order() {
+    const char* forced = std::getenv("MELLO_LINUX_DECODER");
+    return linux_decoder_order(list_linux_gpus(), soft_decoder_requested(), forced ? forced : "");
+}
+
+std::unique_ptr<Decoder> create_next_decoder(const GraphicsDevice& device, const DecoderConfig& config,
+                                             const std::vector<std::string>& tried) {
+    if (config.codec != VideoCodec::H264) {
+        MELLO_LOG_ERROR(TAG, "No decoder available: Linux decodes H.264 only");
+        return nullptr;
+    }
+    for (const std::string& name : linux_order()) {
+        if (std::find(tried.begin(), tried.end(), name) != tried.end()) continue;
+        auto dec = make_linux_decoder(name);
+        if (dec && dec->initialize(device, config)) return dec;
+    }
+    MELLO_LOG_ERROR(TAG, "No decoder available: NVDEC, VA-API and OpenH264 all failed");
+    return nullptr;
+}
+#endif
 
 bool soft_decoder_requested() {
 #ifdef _WIN32
@@ -94,18 +128,8 @@ std::unique_ptr<Decoder> create_best_decoder(
     }
     MELLO_LOG_ERROR(TAG, "No decoder available on macOS");
 #elif defined(__linux__)
-    // Software OpenH264 only; VA-API and NVDEC come later (spec 12 §7.4).
-    if (config.codec != VideoCodec::H264) {
-        MELLO_LOG_ERROR(TAG, "No decoder available: Linux decodes H.264 only");
-    } else if (OpenH264Decoder::is_available()) {
-        auto dec = std::make_unique<OpenH264Decoder>();
-        if (dec->initialize(device, config)) {
-            return dec;
-        }
-        MELLO_LOG_WARN(TAG, "OpenH264: initialize() failed");
-    } else {
-        MELLO_LOG_ERROR(TAG, "No decoder available: OpenH264 (libopenh264.so.8) not found");
-    }
+    // The primary GPU's decoder first, OpenH264 last (linux_gpu.hpp).
+    return create_next_decoder(device, config, {});
 #else
     (void)device; (void)config;
     MELLO_LOG_ERROR(TAG, "No decoders available on this platform");
@@ -126,7 +150,11 @@ std::vector<const char*> enumerate_decoders(const GraphicsDevice& device) {
     if (VTDecoder::is_available()) result.push_back("VideoToolbox");
 #elif defined(__linux__)
     (void)device;
-    if (OpenH264Decoder::is_available()) result.push_back("OpenH264");
+    for (const std::string& name : linux_order()) {
+        if (name == "NVDEC" && NvdecDecoder::is_available()) result.push_back("NVDEC");
+        if (name == "VA-API" && GstVaDecoder::is_available()) result.push_back("VA-API");
+        if (name == "OpenH264" && OpenH264Decoder::is_available()) result.push_back("OpenH264");
+    }
 #else
     (void)device;
 #endif

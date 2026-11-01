@@ -17,7 +17,7 @@ struct Solid {
         y.assign(static_cast<size_t>(ys) * h, yv);
         u.assign(static_cast<size_t>(cs) * (h / 2), uv);
         v.assign(static_cast<size_t>(cs) * (h / 2), vv);
-        pic = CpuPicture{y.data(), u.data(), v.data(), ys, cs, w, h};
+        pic = CpuPicture{CpuPictureFormat::I420, y.data(), u.data(), v.data(), ys, cs, w, h};
     }
 };
 
@@ -61,6 +61,36 @@ TEST(YuvConvert, EachTwoByTwoBlockSharesOneChromaSample) {
     EXPECT_EQ(blue(3, 3), blue(2, 2));
     EXPECT_EQ(blue(2, 1), gray);
     EXPECT_EQ(blue(1, 2), gray);
+}
+
+// NV12 and I420 of the same picture convert to the same pixels.
+TEST(YuvConvert, Nv12MatchesI420) {
+    const uint32_t w = 4, h = 4, ys = 8, cs = 2, nv_stride = 6;
+    std::vector<uint8_t> y(ys * h), u(cs * 2), v(cs * 2), uv(nv_stride * 2);
+    for (size_t i = 0; i < y.size(); ++i) y[i] = static_cast<uint8_t>(20 + i * 7);
+    for (uint32_t r = 0; r < 2; ++r) {
+        for (uint32_t c = 0; c < 2; ++c) {
+            const uint8_t uu = static_cast<uint8_t>(60 + r * 50 + c * 30);
+            const uint8_t vv = static_cast<uint8_t>(200 - r * 40 - c * 25);
+            u[r * cs + c] = uu;
+            v[r * cs + c] = vv;
+            uv[r * nv_stride + c * 2] = uu;
+            uv[r * nv_stride + c * 2 + 1] = vv;
+        }
+    }
+    CpuPicture i420{CpuPictureFormat::I420, y.data(), u.data(), v.data(), ys, cs, w, h};
+    CpuPicture nv12{CpuPictureFormat::NV12, y.data(), uv.data(), nullptr, ys, nv_stride, w, h};
+    EXPECT_EQ(convert(i420), convert(nv12));
+}
+
+// The interleaved plane is read as U then V, not V then U.
+TEST(YuvConvert, Nv12ReadsUBeforeV) {
+    std::vector<uint8_t> y(4, 126), uv(2);
+    uv[0] = 240; // U high: blue
+    uv[1] = 128;
+    CpuPicture pic{CpuPictureFormat::NV12, y.data(), uv.data(), nullptr, 2, 2, 2, 2};
+    auto px = convert(pic);
+    EXPECT_GT(px[2], px[0]);
 }
 
 TEST(YuvConvert, TheStrideIsNotThePictureWidth) {

@@ -125,6 +125,7 @@ bool OpenH264Decoder::picture(int slot_index, CpuPicture& out) const {
     if (slot.i420.empty() || slot.width == 0 || slot.height == 0) return false;
     const size_t y_size = static_cast<size_t>(slot.width) * slot.height;
     const size_t uv_size = y_size / 4;
+    out.format = CpuPictureFormat::I420;
     out.y = slot.i420.data();
     out.u = out.y + y_size;
     out.v = out.u + uv_size;

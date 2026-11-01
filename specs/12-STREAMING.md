@@ -729,7 +729,9 @@ caller:
 | AMF | NV12 | The AMF surface (a texture array slice) is copied into the slot texture on the GPU, so the surface goes back to AMF's pool at once. |
 | OpenH264 | NV12 | I420 to NV12 on the CPU, then `UpdateSubresource` into the slot texture. |
 | VideoToolbox (macOS) | CVPixelBuffer | The ring retains the decoder's pixel buffer. |
-| OpenH264 (Linux) | I420 in CPU memory | The picture is copied out of the decoder's buffer into the slot. The present thread converts it to RGBA on the CPU and calls the frame callback. |
+| NVDEC (Linux) | NV12 in CPU memory | NVIDIA's parser, as on Windows. The surface goes from CUDA memory to the slot's host buffer with `cuMemcpy2D`. |
+| VA-API (Linux) | NV12 in CPU memory | GStreamer: `appsrc`, `h264parse`, the VA H.264 decoder of the primary GPU with `compliance=flexible`, `appsink` in system memory. The picture is copied into the slot. |
+| OpenH264 (Linux) | I420 in CPU memory | The picture is copied out of the decoder's buffer into the slot. |
 
 There is no D3D11VA decoder. It was a stub (the raw access unit as one
 bitstream buffer, no DXVA picture parameters) that decoded nothing and was
@@ -737,11 +739,30 @@ chosen on Intel before OpenH264; it was removed in stage 3, so an Intel viewer
 decodes with OpenH264. A full D3D11VA implementation needs an Intel box to test
 on. The order is NVDEC, AMF, OpenH264; `MELLO_SOFT_DECODER=1` forces OpenH264.
 
-Linux has no GPU device yet (`GraphicsBackend::Cpu`). The OpenH264 library
-loads at run time: Cisco's `libopenh264-2.6.0-linux64.8.so` next to the
-executable, else the system `libopenh264.so.8` (the ABI of the vendored v2.6.0
-headers). The I420 to RGBA conversion (`yuv_convert.cpp`) uses the BT.709
-studio-swing coefficients of the Windows shader. VA-API and NVDEC come later.
+Linux has no GPU device yet (`GraphicsBackend::Cpu`). Every Linux decoder
+writes its picture to CPU memory; the present thread converts it to RGBA
+(`yuv_convert.cpp`, the BT.709 studio-swing coefficients of the Windows
+shader) and calls the frame callback. Every decoder library loads at run time
+with `dlopen`, so a missing one only removes that decoder:
+
+| Decoder | Library | Needs |
+|---|---|---|
+| NVDEC | `libcuda.so.1`, `libnvcuvid.so.1` | The NVIDIA driver (not nouveau) |
+| VA-API | `libgstreamer-1.0.so.0`, `libgstapp-1.0.so.0`, `libgstvideo-1.0.so.0` | GStreamer with `h264parse` and the `va` plugin. FFmpeg is not used |
+| OpenH264 | Cisco's `libopenh264-2.6.0-linux64.8.so` next to the executable, else `libopenh264.so.8` | The ABI of the vendored v2.6.0 headers |
+
+The order (`linux_gpu.cpp`) starts with the decoder of the primary GPU
+(`boot_vga` in `/sys/class/drm`): NVDEC, VA-API, OpenH264 when it is NVIDIA,
+else VA-API, NVDEC, OpenH264. On a laptop with two GPUs, the GPU that draws
+the desktop decodes the stream, and the NVIDIA GPU stays asleep. The first
+decoder that initializes wins. `MELLO_LINUX_DECODER` (`nvdec`, `va`, `openh264`) puts
+one first; `MELLO_SOFT_DECODER=1` leaves OpenH264 only.
+
+A decoder that stops working mid-stream gives way to the next one in the
+order: two key frames it could not decode, ten errors in a row, or 60 access
+units without a picture, each counted from its first key frame. The viewer
+waits for the slot on screen, drops the ready slots, and swaps the decoder;
+the new decoder's first delta fails, and the timeline asks for a key frame.
 
 The picture size comes from the SPS. A new size makes new slot textures; the old
 ones live on while the present thread holds them (stage 4's resolution rungs

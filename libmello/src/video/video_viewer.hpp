@@ -149,11 +149,32 @@ private:
     int acquire_slot_for_decode();
     void release_slot_locked(RingSlot& slot);
     void present_slot(RingSlot& slot);
+#if defined(__linux__)
+    // Linux: a decoder that stops working mid-stream gives way to the next
+    // one in the order (decoder_factory.hpp). Decode thread.
+    void note_decode_result(DecodeFeedResult result, bool keyframe);
+    void switch_decoder();
+#endif
 
     GraphicsDevice device_{};
     ViewerConfig config_{};
     std::unique_ptr<Decoder> decoder_;
-    std::string decoder_name_;  // set at start; stats read it from any thread
+    mutable std::mutex decoder_name_mutex_;
+    std::string decoder_name_;  // stats read it from any thread
+#if defined(__linux__)
+    // The decoder health of the decode thread. Counted only after the
+    // decoder got its first key frame: deltas before it fail on any decoder.
+    struct DecoderHealth {
+        bool seen_keyframe = false;
+        int failed_keyframes = 0;
+        int consecutive_errors = 0;
+        int accepted_without_frame = 0;
+    };
+    DecoderHealth health_;
+    DecoderConfig decoder_config_{};
+    std::vector<std::string> tried_decoders_;
+    bool no_other_decoder_ = false;
+#endif
 #ifdef _WIN32
     StagingTexture converter_;
     bool converter_ready_ = false;

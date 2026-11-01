@@ -3,6 +3,8 @@
 // where no OpenH264 with soname 8 is installed (the CI image has soname 6).
 #if defined(__linux__)
 #include "video/decoder_openh264.hpp"
+#include "video/decoder_nvdec.hpp"
+#include "video/decoder_gst_va.hpp"
 #include "video/openh264_dynload.hpp"
 #include "video/graphics_device.hpp"
 #include <gtest/gtest.h>
@@ -121,6 +123,43 @@ TEST_F(OpenH264LinuxDecoder, ASlotOutsideTheRingIsAnError) {
     CpuPicture pic{};
     EXPECT_FALSE(dec.picture(-1, pic));
     dec.shutdown();
+}
+
+// The hardware decoders take the same stream: one IDR of a flat picture at
+// a size that is not a multiple of 16, so the crop must be right too.
+void expect_flat_decode(Decoder& dec) {
+    if (!openh264::load() || !openh264::encoder_api_loaded()) GTEST_SKIP() << "no OpenH264 encoder";
+    const uint32_t w = 128, h = 72;
+    const auto au = encode_flat(w, h, 150, 100, 170);
+    ASSERT_FALSE(au.empty());
+    if (!dec.initialize(create_cpu_device(), DecoderConfig{w, h})) GTEST_SKIP() << dec.name() << " not here";
+    DecodeFeedResult r = dec.decode(au.data(), au.size(), true, 1);
+    // A pipelined decoder may give the picture on the next call.
+    for (int i = 0; i < 5 && r == DecodeFeedResult::Accepted; ++i) r = dec.decode(au.data(), au.size(), true, 1);
+    ASSERT_EQ(r, DecodeFeedResult::FrameReady) << dec.name();
+    CpuPicture pic{};
+    ASSERT_TRUE(dec.picture(1, pic));
+    EXPECT_EQ(pic.format, CpuPictureFormat::NV12);
+    EXPECT_EQ(pic.width, w);
+    EXPECT_EQ(pic.height, h);
+    EXPECT_NEAR(pic.y[0], 150, 3);
+    EXPECT_NEAR(pic.y[(h - 1) * pic.y_stride + (w - 1)], 150, 3);
+    EXPECT_NEAR(pic.u[0], 100, 3);   // U
+    EXPECT_NEAR(pic.u[1], 170, 3);   // V
+    EXPECT_NEAR(pic.u[(h / 2 - 1) * pic.uv_stride + (w - 2)], 100, 3);
+    dec.shutdown();
+}
+
+TEST(LinuxHardwareDecoder, NvdecDecodesTheOpenH264Stream) {
+    if (!NvdecDecoder::is_available()) GTEST_SKIP() << "no NVIDIA driver";
+    NvdecDecoder dec;
+    expect_flat_decode(dec);
+}
+
+TEST(LinuxHardwareDecoder, VaApiDecodesTheOpenH264Stream) {
+    if (!GstVaDecoder::is_available()) GTEST_SKIP() << "no GStreamer VA decoder";
+    GstVaDecoder dec;
+    expect_flat_decode(dec);
 }
 
 } // namespace

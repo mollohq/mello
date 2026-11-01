@@ -6,8 +6,9 @@
 # vcpkg, libmello (CMake, C++20 island needs GCC 12), bindgen (libclang),
 # Skia and winit (fontconfig, freetype, X11, Wayland, EGL), the client crates
 # (OpenSSL for native-tls, D-Bus for the keyring and the portals, GTK and
-# appindicator for rfd, Xtst for rdev, PipeWire for audio). rsync copies the
-# source into the container.
+# appindicator for rfd, Xtst for rdev, PipeWire for audio), the GStreamer
+# headers for the VA-API stream decoder (headers only: libmello loads
+# GStreamer at run time). rsync copies the source into the container.
 set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
@@ -23,7 +24,8 @@ apt-get install -y --no-install-recommends \
     libwayland-dev libegl-dev libgl-dev \
     libssl-dev libdbus-1-dev \
     libgtk-3-dev libayatana-appindicator3-dev \
-    libpipewire-0.3-dev
+    libpipewire-0.3-dev \
+    libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 rm -rf /var/lib/apt/lists/*
 
 # GCC 12 as the default C and C++ compiler (Ubuntu 22.04 defaults to 11).

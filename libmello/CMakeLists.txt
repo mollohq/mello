@@ -383,6 +383,9 @@ else()
         list(APPEND MELLO_SOURCES
             src/video/decoder_openh264_linux.cpp
             src/video/openh264_dynload_linux.cpp
+            src/video/decoder_nvdec_linux.cpp
+            src/video/decoder_gst_va_linux.cpp
+            src/video/linux_gpu.cpp
             src/video/yuv_convert.cpp
         )
     endif()
@@ -472,6 +475,11 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
     target_link_libraries(mello PUBLIC PkgConfig::PIPEWIRE)
+    # The GStreamer headers for the VA-API stream decoder. Headers only:
+    # decoder_gst_va_linux.cpp loads GStreamer with dlopen, so a system
+    # without it still runs (OpenH264 decodes).
+    pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+    target_include_directories(mello PRIVATE ${GST_INCLUDE_DIRS})
 endif()
 
 if(WIN32)
