@@ -323,12 +323,12 @@ jobs:
         if: always()
         run: cargo clean
 
-  # Linux: a Velopack AppImage on GitHub's Ubuntu 22.04 runner, the glibc
-  # floor of the release (glibc 2.35, as scripts/linux/Dockerfile). Same
+  # Linux: a Velopack AppImage on GitHub's Ubuntu 24.04 runner, the glibc
+  # floor of the release (glibc 2.39, as scripts/linux/Dockerfile). Same
   # steps as the Linux lane of PR Checks (linux-build-test.yml) plus the
   # production build and the pack.
   build-linux:
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     timeout-minutes: 150
     env:
       RELEASE_CHANNEL: "linux-x64-stable"
@@ -386,8 +386,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .vcpkg-cache
-          key: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
-          restore-keys: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-
+          key: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
+          restore-keys: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-
 
       - name: Prepare the vcpkg cache folder
         run: mkdir -p .vcpkg-cache

@@ -1,13 +1,14 @@
 # Build environment for the Linux client.
 #
-# Ubuntu 22.04 on purpose: its glibc 2.35 is the oldest glibc the Linux
-# release supports. A binary built here runs on every newer distribution.
+# Ubuntu 24.04, as GitHub's runner for the release: its glibc 2.39 is the
+# oldest glibc the Linux release supports. A binary built here runs on every
+# distribution with glibc 2.39 or newer.
 # The same image builds on a Mac (Docker with Rosetta) and on a Linux host.
-FROM --platform=linux/amd64 ubuntu:22.04
+FROM --platform=linux/amd64 ubuntu:24.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
-# The system packages and GCC 12: the same list as the CI job.
+# The system packages: the same list as the CI job.
 COPY install-build-deps.sh /tmp/install-build-deps.sh
 RUN /tmp/install-build-deps.sh && rm /tmp/install-build-deps.sh
 

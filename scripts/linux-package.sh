@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Build a Linux AppImage for testing, in the Ubuntu 22.04 build container.
+# Build a Linux AppImage for testing, in the Ubuntu 24.04 build container.
 #
 # Usage: scripts/linux-package.sh [VERSION] [CHANNEL]
 #   VERSION defaults to 0.0.<yyDDDHHMM> in UTC (year, day of year, time), so

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run cargo for Linux x86_64 in the Ubuntu 22.04 build container.
+# Run cargo for Linux x86_64 in the Ubuntu 24.04 build container.
 #
 # The container builds from its own copy of the source, in a Docker volume.
 # A bind mount of this checkout would put a Linux vcpkg binary and Linux
@@ -32,7 +32,7 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-IMAGE=m3llo-linux-build:22.04
+IMAGE=m3llo-linux-build:24.04
 docker build --quiet --platform linux/amd64 -t "$IMAGE" -f scripts/linux/Dockerfile scripts/linux >/dev/null
 
 if [ $# -eq 0 ]; then

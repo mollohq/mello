@@ -19,9 +19,9 @@ env:
 jobs:
   test-linux:
     name: Test (Linux)
-    # Ubuntu 22.04: glibc 2.35, the floor of the Linux release (the AppImage
+    # Ubuntu 24.04: glibc 2.39, the floor of the Linux release (the AppImage
     # builds in the same base, scripts/linux/Dockerfile).
-    runs-on: ubuntu-22.04
+    runs-on: ubuntu-24.04
     # A cold run builds the vcpkg ports, Skia's bindings and the workspace on
     # 4 vCPU. The bound is for a wedged runner, not a slow one.
     timeout-minutes: 120
@@ -68,8 +68,8 @@ jobs:
         uses: actions/cache@v6
         with:
           path: .vcpkg-cache
-          key: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
-          restore-keys: vcpkg-x64-linux-${{ steps.vcpkg.outputs.commit }}-
+          key: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
+          restore-keys: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-
 
       - name: Cache cargo registry
         uses: actions/cache@v6

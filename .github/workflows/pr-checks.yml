@@ -275,7 +275,7 @@ jobs:
           cargo clean
           rm -rf libmello/build-ci
 
-  # GitHub-hosted Ubuntu 22.04, defined in linux-build-test.yml so the Linux
+  # GitHub-hosted Ubuntu 24.04, defined in linux-build-test.yml so the Linux
   # branch can run it before it has a PR.
   test-linux:
     name: Test (Linux)

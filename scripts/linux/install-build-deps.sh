@@ -1,9 +1,10 @@
 #!/usr/bin/env bash
-# System packages for building and testing the Linux client on Ubuntu 22.04.
+# System packages for building and testing the Linux client on Ubuntu 24.04.
 # One list for the build container (scripts/linux/Dockerfile) and the CI job
 # (.github/workflows/linux-build-test.yml). Run as root.
 #
-# vcpkg, libmello (CMake, C++20 island needs GCC 12), bindgen (libclang),
+# vcpkg, libmello (CMake, its C++20 island needs GCC 12 or newer: 24.04 has
+# GCC 13), bindgen (libclang),
 # Skia and winit (fontconfig, freetype, X11, Wayland, EGL), the client crates
 # (OpenSSL for native-tls, D-Bus for the keyring and the portals, GTK and
 # appindicator for rfd, Xtst for rdev, PipeWire for audio), the GStreamer
@@ -13,14 +14,17 @@ set -euo pipefail
 export DEBIAN_FRONTEND=noninteractive
 
 apt-get update
-# GitHub's ubuntu-22.04 image ships libunwind-14-dev (with its LLVM 14), which
-# conflicts with libunwind-dev, a dependency of libgstreamer1.0-dev. Nothing
-# here uses LLVM's libunwind; the build container never has it.
-if dpkg -s libunwind-14-dev >/dev/null 2>&1; then
-    apt-get remove -y libunwind-14-dev
+# GitHub's Ubuntu images ship LLVM's libunwind-NN-dev, which conflicts with
+# libunwind-dev, a dependency of libgstreamer1.0-dev. Nothing here uses LLVM's
+# libunwind; the build container never has it.
+llvm_unwind=$(dpkg-query -W -f '${db:Status-Abbrev} ${Package}\n' 'libunwind-[0-9]*-dev' 2>/dev/null \
+    | awk '$1 == "ii" { print $2 }' || true)
+if [ -n "$llvm_unwind" ]; then
+    # shellcheck disable=SC2086
+    apt-get remove -y $llvm_unwind
 fi
 apt-get install -y --no-install-recommends \
-    build-essential gcc-12 g++-12 cmake ninja-build pkg-config \
+    build-essential cmake ninja-build pkg-config \
     curl ca-certificates zip unzip tar git perl python3 \
     autoconf automake libtool rsync file \
     libclang-dev clang \
@@ -34,8 +38,3 @@ apt-get install -y --no-install-recommends \
     libgstreamer1.0-dev libgstreamer-plugins-base1.0-dev
 rm -rf /var/lib/apt/lists/*
 
-# GCC 12 as the default C and C++ compiler (Ubuntu 22.04 defaults to 11).
-update-alternatives --install /usr/bin/gcc gcc /usr/bin/gcc-12 120 \
-    --slave /usr/bin/g++ g++ /usr/bin/g++-12
-update-alternatives --install /usr/bin/cc cc /usr/bin/gcc-12 120
-update-alternatives --install /usr/bin/c++ c++ /usr/bin/g++-12 120
