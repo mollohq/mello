@@ -108,7 +108,7 @@ mod renderer {
 
     #[cfg(feature = "renderer-software")]
     pub(crate) mod sw;
-    // mello: the Direct2D renderer (renderer-d2d, m3llo-fx-lab D2D-RENDERER.md).
+    // mello: the Direct2D renderer (renderer-d2d, specs/features/D2D-RENDERER.md).
     #[cfg(all(feature = "renderer-d2d", target_os = "windows"))]
     pub(crate) mod d2d;
     #[cfg(feature = "renderer-vello")]
@@ -1294,7 +1294,7 @@ fn create_renderer(
         (Some("sw"), None) | (Some("software"), None) => {
             renderer::sw::WinitSoftwareRenderer::new_suspended(shared_data)
         }
-        // mello: the Direct2D renderer (renderer-d2d, m3llo-fx-lab D2D-RENDERER.md).
+        // mello: the Direct2D renderer (renderer-d2d, specs/features/D2D-RENDERER.md).
         #[cfg(all(feature = "renderer-d2d", target_os = "windows"))]
         (Some("d2d"), None) => renderer::d2d::WinitD2DRenderer::new_suspended(shared_data),
         #[cfg(feature = "renderer-vello")]

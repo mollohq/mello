@@ -127,14 +127,14 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
 ```
 
-- On Windows, the default is mello's own Direct2D renderer, name `d2d`, crate `renderer-d2d`: a D3D11 flip swapchain on the window, Direct2D for the drawing, DirectWrite for the glyph runs that Slint lays out in core. It is hooked into the vendored winit backend (`third_party/i-slint-backend-winit`, feature `renderer-d2d`, `renderer/d2d.rs`) because the backend's renderer trait is private.
+- On Windows, the default is mello's own Direct2D renderer, name `d2d`, crate `renderer-d2d`: a D3D11 flip swapchain on the window, Direct2D for the drawing, DirectWrite for the glyph runs that Slint lays out in core. It is hooked into the vendored winit backend (`third_party/i-slint-backend-winit`, feature `renderer-d2d`, `renderer/d2d.rs`) because the backend's renderer trait is private. Design, memory rules and Slint upgrade steps: `specs/features/D2D-RENDERER.md`.
 - The fallback is Skia's CPU rasterizer, name `skia-software`. `client/src/renderer_choice.rs` picks between the two, in this order:
   1. `MELLO_RENDERER=d2d|skia-software` overrides everything (debug).
   2. The "Hardware Acceleration" setting off means `skia-software`, with no GPU device created.
   3. The client creates the D3D11 device once (`i_slint_renderer_d2d::probe`). If that fails (no GPU driver, a remote desktop session, a driver being updated), `skia-software`.
   4. Otherwise `d2d`.
   The choice is logged at startup with its reason. `renderer_choice.rs` has the unit tests for all four rules; keep them passing.
-- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game. Measured (m3llo-fx-lab WINDOWS.md 3.6, release build, idle shown, no voice channel, 2026-10-31):
+- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game. Measured (release build, idle shown, no voice channel, 2026-10-31; all renderers in `specs/features/D2D-RENDERER.md` section 8):
 
   | Windows, idle | Working set | Private working set | GPU memory |
   |---|---|---|---|

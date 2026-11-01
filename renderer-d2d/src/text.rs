@@ -3,7 +3,7 @@
 //! DirectWrite applies the system's ClearType tuner gamma and an "enhanced
 //! contrast" that thickens small text, and it renders a fractional baseline
 //! as is where Skia snaps the baseline to a whole pixel. The lab's capture
-//! comparison (WINDOWS.md 3.6, "Text tuning") found the snap alone halves the
+//! comparison (specs/features/D2D-RENDERER.md section 4) found the snap alone halves the
 //! difference to Skia, and every custom gamma and contrast setting came out
 //! worse than the system's own ClearType tuner values. So the default is: snap
 //! the baseline, keep the system parameters. Environment overrides for A/B runs:

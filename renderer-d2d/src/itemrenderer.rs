@@ -1,6 +1,6 @@
 //! The Slint `ItemRenderer` and `GlyphRenderer` on an `ID2D1DeviceContext`.
 //!
-//! The drawing table of D2D-RENDERER.md 3.2: rectangles and border rectangles
+//! The drawing table of specs/features/D2D-RENDERER.md section 3: rectangles and border rectangles
 //! (solid and gradient brushes, per-corner radii through a path geometry),
 //! images (shared bitmaps, `colorize` through an opacity mask, nine-slice,
 //! tiling through a bitmap brush), text (parley glyph runs through
