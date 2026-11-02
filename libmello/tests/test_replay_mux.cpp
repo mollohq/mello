@@ -616,4 +616,65 @@ TEST(ReplaySession, FollowsAStreamOfTheSameGameAndComesBack) {
                 static_cast<unsigned>(v.times.size()), static_cast<double>(clip.duration_us) / 1e6,
                 static_cast<double>(longest_gap) / 1e4);
 }
+
+// Game clips plan 3.6, F3: the stream that the replay follows is overloaded
+// twice. The replay drops to 30 fps, then pauses, while the stream keeps its
+// frames. A third time the replay has nothing left, and the stream moves its
+// own cost tier. A clip over the pause shows the last frame for the gap.
+TEST(ReplaySession, UnderOverloadTheReplayShedsBeforeTheStream) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    TempDir dir;
+    const mello::video::CaptureSourceDesc desc = write_reference_clip(dir.path() / "reference.yuv");
+    ReplayConfig config;
+    config.source = desc;
+    config.height = 240;
+    config.fps = 60;
+    config.bitrate_kbps = 2000;
+    config.dir = dir.path();
+    std::string error;
+    auto session = ReplaySession::start(config, &error);
+    if (!session && error == "no hardware encoder") GTEST_SKIP() << "no encoder on this machine";
+    ASSERT_TRUE(session) << error;
+
+    mello::video::VideoPipeline stream;
+    mello::video::PipelineConfig pc{};
+    pc.fps = 60;
+    pc.bitrate_kbps = 2000;
+    std::atomic<int> packets{0};
+    ASSERT_TRUE(stream.start_host(desc, pc, [&](const uint8_t*, size_t, bool, uint64_t) { ++packets; }));
+    session->follow_stream(stream.shared_capture_manager(), ReplaySession::kReferenceKey, 60);
+    ASSERT_TRUE(session->follows(stream.capture_manager()));
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    EXPECT_TRUE(session->shed_for_stream());
+    EXPECT_EQ(session->load_level(), ReplayLoad::Level::Reduced);
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    const uint64_t r0 = session->stats().frames_encoded;
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const uint64_t reduced = session->stats().frames_encoded - r0;
+    EXPECT_GE(reduced, 25u) << "about 30 frames a second";
+    EXPECT_LE(reduced, 35u) << "about 30 frames a second";
+
+    EXPECT_TRUE(session->shed_for_stream());
+    EXPECT_EQ(session->state(), ReplayState::Paused);
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const uint64_t p0 = session->stats().frames_encoded;
+    const int s0 = packets.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(500));
+    EXPECT_EQ(session->stats().frames_encoded, p0) << "paused: no frame is encoded";
+    EXPECT_GT(packets.load(), s0 + 20) << "the stream keeps its frames";
+    EXPECT_FALSE(session->shed_for_stream()) << "nothing left: the stream moves its tier";
+
+    const fs::path mp4 = dir.path() / "clip.mp4";
+    ReplayClip clip;
+    ASSERT_TRUE(session->capture(2.0f, nullptr, mp4, dir.path() / "poster.jpg", &clip));
+    session->leave_stream();
+    stream.stop_host();
+    session->stop();
+    const auto v = read_video(mp4);
+    ASSERT_FALSE(v.times.empty());
+    LONGLONG longest = 0;
+    for (const LONGLONG d : v.durations) longest = (std::max)(longest, d);
+    EXPECT_GE(longest, 5'000'000) << "the last frame lasts over the pause (at least 0.5 s)";
+}
 #endif // _WIN32

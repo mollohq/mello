@@ -4,6 +4,7 @@
 #include "video/video_pipeline.hpp"
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <mutex>
@@ -12,6 +13,9 @@ namespace mello {
 
 namespace replay {
 class ReplaySession;
+}
+namespace audio {
+class SharedGameAudio;
 }
 
 class Context {
@@ -78,6 +82,12 @@ public:
         std::lock_guard<std::mutex> lock(replay_mutex_);
         return stream_capture_;
     }
+
+    /// The game audio of `pid`, shared by the stream host and the game clip
+    /// replay: one process loopback per game (GAME-CLIPS.md 3.6, F7). While
+    /// one holder lives, a second call returns the same capture. Null when
+    /// Windows has no process loopback. Any thread.
+    std::shared_ptr<audio::SharedGameAudio> game_audio(uint32_t pid);
 #endif
 
     void set_error(const std::string& error);
@@ -100,6 +110,8 @@ private:
     std::shared_ptr<replay::ReplaySession> replay_;
 #ifdef _WIN32
     StreamCapture stream_capture_;
+    std::map<uint32_t, std::weak_ptr<audio::SharedGameAudio>> game_audio_;  // game_audio_mutex_
+    std::mutex game_audio_mutex_;
 #endif
     mutable std::mutex replay_mutex_;  // replay_ and stream_capture_
 };

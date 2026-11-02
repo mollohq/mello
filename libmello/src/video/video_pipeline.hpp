@@ -210,6 +210,16 @@ public:
     /// The same, for a second consumer that holds it (the game clip replay,
     /// plans/GAME-CLIPS.md 3.2). Null when not hosting.
     std::shared_ptr<CaptureManager> shared_capture_manager() const { return manager_; }
+
+    /// Another consumer of this capture that gives up its own load before
+    /// this stream gives up quality: the game clip replay (GAME-CLIPS.md
+    /// 3.6, F3). The encode thread calls it when this host is overloaded;
+    /// true means the other consumer shed a step, and the cost tier stays
+    /// this time. It must return fast. Null: none, and the overload rule is
+    /// the stream's own, unchanged. Any thread; a clear waits for a call
+    /// that runs now.
+    using OverloadShedder = std::function<bool()>;
+    void set_overload_shedder(OverloadShedder shedder);
 #endif
 
     // VIEWER SIDE (streaming-quality stage 3). The work runs in
@@ -405,6 +415,8 @@ private:
     void maybe_reduce_encoder_cost();
     uint64_t cost_window_start_captured_ = 0;
     uint64_t cost_window_start_drops_    = 0;
+    OverloadShedder overload_shedder_;  // shedder_mutex_
+    std::mutex      shedder_mutex_;
 #endif
 
     // Stats

@@ -275,6 +275,7 @@ if(WIN32)
     list(APPEND MELLO_SOURCES
         src/audio/capture_wasapi.cpp
         src/audio/capture_wasapi_loopback.cpp
+        src/audio/shared_game_audio.cpp
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
         src/audio/audio_session_win.cpp

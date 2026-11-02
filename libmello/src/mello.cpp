@@ -714,6 +714,8 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
         if (config->buffer_dir && config->buffer_dir[0]) {
             rc.dir = std::filesystem::u8path(config->buffer_dir);
         }
+        // F7: the game's one audio capture, shared with a stream of the game.
+        if (config->pid != 0) rc.game_audio = c->game_audio(config->pid);
         std::string error;
         auto session = mello::replay::ReplaySession::start(rc, &error);
         if (!session) {
@@ -753,6 +755,7 @@ MelloReplayState mello_replay_state(MelloContext* ctx) {
         case mello::replay::ReplayState::Recording: return MELLO_REPLAY_RECORDING;
         case mello::replay::ReplayState::Waiting: return MELLO_REPLAY_WAITING;
         case mello::replay::ReplayState::Failed: return MELLO_REPLAY_FAILED;
+        case mello::replay::ReplayState::Paused: return MELLO_REPLAY_PAUSED;
     }
 #endif
     return MELLO_REPLAY_OFF;
@@ -1657,6 +1660,14 @@ MelloStreamHost* mello_stream_start_host(
         const uint32_t key = stream_game_key(desc);
         c->set_stream_capture({manager, key, pc.fps});
         if (auto replay = c->replay()) replay->follow_stream(manager, key, pc.fps);
+        // F3: under overload the replay that follows this stream sheds first.
+        // The replay is looked up at each overload, so a replay that starts
+        // later counts too.
+        const mello::video::CaptureManager* mine = manager.get();
+        host->video->set_overload_shedder([c, mine] {
+            auto replay = c->replay();
+            return replay && replay->follows(mine) && replay->shed_for_stream();
+        });
 #endif
         return host;
     } catch (...) { return nullptr; }
@@ -1670,6 +1681,7 @@ void mello_stream_stop_host(MelloStreamHost* host) {
 #ifdef _WIN32
         // A replay that follows this stream goes back to its own capture
         // first, so this stream's capture stops with the stream (Q19).
+        host->video->set_overload_shedder(nullptr);
         if (const auto mine = host->video->shared_capture_manager()) {
             if (host->ctx->stream_capture().manager.lock() == mine) host->ctx->set_stream_capture({});
             if (auto replay = host->ctx->replay()) {
@@ -1804,6 +1816,14 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         // the context's link to the host peer.
         pipeline->set_link(host->ctx->stream_audio_link());
         const bool timed_source = host->video->capture_provides_timed_audio();
+#ifdef _WIN32
+        // F7: one game audio capture per game, shared with a game clip replay
+        // of the same game. Null on a Windows without process loopback: the
+        // pipeline then opens its own capture, as before.
+        if (host->capture_pid != 0 && !timed_source) {
+            pipeline->set_shared_game_audio(host->ctx->game_audio(host->capture_pid));
+        }
+#endif
         if (!pipeline->start(
                 [cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
                     if (cb) cb(ud, data, size, ts_us);

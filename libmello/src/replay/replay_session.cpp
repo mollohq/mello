@@ -3,7 +3,7 @@
 #include "replay_audio_mix.hpp"
 #include "replay_mux.hpp"
 #include "../audio/audio_pipeline.hpp"
-#include "../audio/capture_wasapi_loopback.hpp"
+#include "../audio/shared_game_audio.hpp"
 #include "../util/log.hpp"
 #include "../video/encoder_factory.hpp"
 #include "../video/video_pipeline.hpp"
@@ -95,19 +95,20 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         return false;
     }
 
-    // The game audio: process loopback of the game's process tree. Never
-    // endpoint loopback: it records the crew voice and every other app twice
-    // (plan 9.1).
+    // The game audio: process loopback of the game's process tree, the one
+    // capture of the game that a stream shares (F7). Never endpoint loopback:
+    // it records the crew voice and every other app twice (plan 9.1).
     if (config_.pid != 0) {
-        loopback_ = std::make_unique<audio::WasapiLoopbackCapture>();
-        if (loopback_->initialize_scoped(audio::LoopbackScope::IncludeProcessTree, config_.pid) &&
-            loopback_->scope() == audio::LoopbackScope::IncludeProcessTree &&
-            loopback_->start([this](const int16_t* s, size_t n) { on_game_audio(s, n); })) {
-            has_game_audio_ = true;
+        game_audio_ = config_.game_audio && config_.game_audio->pid() == config_.pid
+                          ? config_.game_audio
+                          : audio::SharedGameAudio::open(config_.pid);
+        if (game_audio_) {
+            game_audio_consumer_ =
+                game_audio_->add([this](const int16_t* s, size_t n) { on_game_audio(s, n); });
+            has_game_audio_ = game_audio_consumer_ != 0;
         } else {
             MELLO_LOG_WARN(TAG, "no process loopback for pid %u: clips have no game audio",
                            config_.pid);
-            loopback_.reset();
         }
     }
 
@@ -166,6 +167,12 @@ bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager,
         return false;
     }
     encode_fps_ = fps;
+    // The encode thread's own state, before it starts.
+    applied_fps_ = fps;
+    frames_since_key_ = 0;
+    encode_ms_mean_ = 0.0;
+    window_offered_ = frames_offered_.load(std::memory_order_relaxed);
+    window_drops_ = queue_drops_.load(std::memory_order_relaxed);
 
     {
         std::lock_guard<std::mutex> lock(queue_mutex_);
@@ -275,9 +282,11 @@ ReplaySession::~ReplaySession() {
 void ReplaySession::stop() {
     std::lock_guard<std::mutex> control(control_mutex_);
     if (stopped_.exchange(true, std::memory_order_acq_rel)) return;
-    if (loopback_) {
-        loopback_->stop();
-        loopback_.reset();
+    if (game_audio_) {
+        // Waits for a call that runs now. A stream of the game keeps it.
+        if (game_audio_consumer_ != 0) game_audio_->remove(game_audio_consumer_);
+        game_audio_consumer_ = 0;
+        game_audio_.reset();
     }
     following_.store(false, std::memory_order_release);
     if (!close_capture()) return;  // abandoned: everything stays allocated
@@ -291,6 +300,7 @@ ReplayState ReplaySession::state() const {
     // copy here may be one switch old, which a state poll tolerates.
     const std::shared_ptr<video::CaptureManager> manager = std::atomic_load(&manager_);
     if (!manager) return ReplayState::Failed;
+    if (load_.level() == ReplayLoad::Level::Paused) return ReplayState::Paused;
     if (monitor_frames_.load(std::memory_order_relaxed)) return ReplayState::Waiting;
     switch (manager->state()) {
         case video::CaptureState::Failed:
@@ -317,7 +327,17 @@ void ReplaySession::on_frame(const video::CapturedFrame& frame) {
     // The poster takes the first frame after the press, whatever the rate.
     if (poster_wanted_.exchange(false, std::memory_order_acq_rel)) copy_poster_frame(frame.texture);
 
-    if (!video::VideoPipeline::decimation_accepts(frame.capture_us, next_deadline_us_, encode_fps_)) {
+    // F3: after 60 s with no overload, one level back up. Out of a pause the
+    // next frame starts a new segment.
+    const ReplayLoad::Level before = load_.level();
+    if (load_.recover(now_us())) {
+        MELLO_LOG_INFO(TAG, "load: 60 s with no overload, now %s",
+                       load_.level() == ReplayLoad::Level::Full ? "full rate" : "30 fps");
+        if (before == ReplayLoad::Level::Paused) keyframe_wanted_.store(true, std::memory_order_relaxed);
+    }
+    const uint32_t fps = load_.fps(encode_fps_);
+    if (fps == 0) return;  // paused: the clip shows the last frame for the gap
+    if (!video::VideoPipeline::decimation_accepts(frame.capture_us, next_deadline_us_, fps)) {
         return;
     }
     // A new capture method starts a new segment.
@@ -341,7 +361,17 @@ void ReplaySession::on_frame(const video::CapturedFrame& frame) {
         queue_[(queue_head_ + queue_count_) % kQueueCap] = Job{result.texture, frame.capture_us};
         ++queue_count_;
     }
+    frames_offered_.fetch_add(1, std::memory_order_relaxed);
     queue_cv_.notify_one();
+}
+
+bool ReplaySession::shed_for_stream() {
+    const bool shed = load_.shed(now_us(), encode_fps_);
+    if (shed) {
+        MELLO_LOG_WARN(TAG, "load: the stream is overloaded, the replay sheds first: now %s",
+                       load_.level() == ReplayLoad::Level::Paused ? "paused" : "30 fps");
+    }
+    return shed;
 }
 
 void ReplaySession::encode_loop() {
@@ -357,10 +387,19 @@ void ReplaySession::encode_loop() {
             queue_head_ = (queue_head_ + 1) % kQueueCap;
             --queue_count_;
         }
+        // F3: the rate of the load level. The rate control follows it.
+        const uint32_t wanted = load_.fps(encode_fps_);
+        if (wanted != 0 && wanted != applied_fps_) {
+            encoder_->set_framerate(wanted);
+            applied_fps_ = wanted;
+        }
+        // A 1 s GOP at any rate: the encoder's GOP is in frames of the full
+        // rate, so at 30 fps an IDR comes every 30 frames from here.
         if (keyframe_wanted_.exchange(false, std::memory_order_relaxed) ||
-            video_ring_.take_keyframe_request()) {
+            video_ring_.take_keyframe_request() || frames_since_key_ >= applied_fps_) {
             encoder_->request_keyframe();
         }
+        const auto t0 = std::chrono::steady_clock::now();
         video::EncodedPacket packet{};
         if (!encoder_->encode(job.texture, packet)) {
             // F5: a replay fault turns the replay off. It never touches the
@@ -369,9 +408,41 @@ void ReplaySession::encode_loop() {
             failed_.store(true, std::memory_order_relaxed);
             return;
         }
+        const double encode_ms =
+            std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t0).count();
+        // About 1 s of history, as the stream's mean (video_pipeline.cpp).
+        encode_ms_mean_ += (encode_ms - encode_ms_mean_) / 60.0;
         if (packet.data.empty()) continue;
-        frames_encoded_.fetch_add(1, std::memory_order_relaxed);
+        frames_since_key_ = packet.is_keyframe ? 1 : frames_since_key_ + 1;
+        const uint64_t encoded = frames_encoded_.fetch_add(1, std::memory_order_relaxed) + 1;
         video_ring_.push(std::move(packet.data), job.capture_us, packet.is_keyframe);
+        if (encoded % 60 == 0) check_own_load();
+    }
+}
+
+void ReplaySession::check_own_load() {
+    // The replay's own encoder cannot hold its rate: the same rule as the
+    // stream's (VideoPipeline::encoder_is_overloaded). The encoder gives up
+    // its quality features first, then the replay sheds a rate step (plan
+    // 3.4: without a stream, the same overload signal).
+    const uint64_t offered = frames_offered_.load(std::memory_order_relaxed);
+    const uint64_t drops = queue_drops_.load(std::memory_order_relaxed);
+    video::VideoPipeline::EncoderLoadSample sample{};
+    sample.frames_captured = offered - window_offered_;
+    sample.queue_drops = drops - window_drops_;
+    sample.mean_encode_ms = encode_ms_mean_;
+    sample.target_fps = applied_fps_;
+    window_offered_ = offered;
+    window_drops_ = drops;
+    if (!video::VideoPipeline::encoder_is_overloaded(sample)) return;
+    if (encoder_->cost_tier() < encoder_->max_cost_tier() && encoder_->reduce_cost_tier()) {
+        MELLO_LOG_WARN(TAG, "load: the replay encoder is overloaded, cost tier %d",
+                       encoder_->cost_tier());
+        return;
+    }
+    if (load_.shed(now_us(), encode_fps_)) {
+        MELLO_LOG_WARN(TAG, "load: the replay encoder is overloaded, now %s",
+                       load_.level() == ReplayLoad::Level::Paused ? "paused" : "30 fps");
     }
 }
 
@@ -554,6 +625,7 @@ bool ReplaySession::capture(float seconds, audio::AudioPipeline* voice,
 ReplaySession::Stats ReplaySession::stats() const {
     Stats s;
     s.frames_captured = frames_captured_.load(std::memory_order_relaxed);
+    s.frames_offered = frames_offered_.load(std::memory_order_relaxed);
     s.frames_encoded = frames_encoded_.load(std::memory_order_relaxed);
     s.encode_queue_drops = queue_drops_.load(std::memory_order_relaxed);
     s.video_ring = video_ring_.stats();

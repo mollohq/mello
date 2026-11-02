@@ -1,6 +1,7 @@
 #pragma once
 #ifdef _WIN32
 #include "replay_audio_ring.hpp"
+#include "replay_load.hpp"
 #include "replay_video_ring.hpp"
 #include "../video/capture_manager.hpp"
 #include "../video/capture_source.hpp"
@@ -20,7 +21,7 @@
 
 namespace mello::audio {
 class AudioPipeline;
-class WasapiLoopbackCapture;
+class SharedGameAudio;
 }  // namespace mello::audio
 
 namespace mello::video {
@@ -36,6 +37,9 @@ struct ReplayConfig {
     /// The game process: its audio, through WASAPI process loopback of its
     /// process tree. 0: no game audio.
     uint32_t pid = 0;
+    /// The game audio capture of `pid` that the stream host shares (F7, the
+    /// context's registry). Null: the replay opens one for itself.
+    std::shared_ptr<audio::SharedGameAudio> game_audio;
     /// The clip quality (plan section 7): the encode height and rate.
     uint32_t height = 720;
     uint32_t fps = 60;
@@ -51,6 +55,7 @@ enum class ReplayState {
     Recording,  ///< frames come in
     Waiting,    ///< the game draws nothing now (minimized, a loading screen)
     Failed,     ///< the capture, the encoder or a ring failed: the replay is off
+    Paused,     ///< overload: the replay gave up its frames first (F3)
 };
 
 struct ReplayClip {
@@ -133,6 +138,13 @@ public:
         return following_stream() && manager && std::atomic_load(&manager_).get() == manager;
     }
 
+    /// F3: the stream that the replay follows is overloaded. The replay gives
+    /// up one step (30 fps, then a pause) and returns true; false when it is
+    /// paused already, and the stream then gives up its own quality. Called
+    /// on the stream's encode thread; fast (a short lock, no wait).
+    bool shed_for_stream();
+    ReplayLoad::Level load_level() const { return load_.level(); }
+
     /// Writes the last `seconds` of the game as an MP4 at `mp4` and a JPEG
     /// poster at `poster`: the video from the last keyframe at or before the
     /// start, the game audio, and the voice of `voice` (the crew mix with
@@ -143,6 +155,7 @@ public:
 
     struct Stats {
         uint64_t frames_captured = 0;
+        uint64_t frames_offered = 0;
         uint64_t frames_encoded = 0;
         uint64_t encode_queue_drops = 0;
         ReplayVideoRing::Stats video_ring;
@@ -183,6 +196,8 @@ private:
     bool close_capture();
     void on_frame(const video::CapturedFrame& frame);
     void encode_loop();
+    /// Encode thread, every 60 frames: the replay's own overload (F3).
+    void check_own_load();
     void on_game_audio(const int16_t* samples, size_t count);
     /// The capture thread copies the frame for the poster (plan F6).
     void copy_poster_frame(ID3D11Texture2D* texture);
@@ -202,10 +217,22 @@ private:
     std::atomic<bool> stopped_{false};
     // The frames now come from a monitor method of the stream: dropped.
     std::atomic<bool> monitor_frames_{false};
+    // F3: 30 fps, then a pause, under overload. Kept over a switch.
+    ReplayLoad load_;
+
+    // Encode thread only: the rate the encoder runs at now, the frames since
+    // the last keyframe (a 1 s GOP at any rate), and the window of the
+    // replay's own overload check.
+    uint32_t applied_fps_ = 0;
+    uint32_t frames_since_key_ = 0;
+    double encode_ms_mean_ = 0.0;
+    uint64_t window_offered_ = 0;
+    uint64_t window_drops_ = 0;
 
     ReplayVideoRing video_ring_;
     ReplayAudioRing audio_ring_;
-    std::unique_ptr<audio::WasapiLoopbackCapture> loopback_;
+    std::shared_ptr<audio::SharedGameAudio> game_audio_;
+    uint32_t game_audio_consumer_ = 0;
     bool has_game_audio_ = false;
 
     // Capture thread only.
@@ -235,6 +262,7 @@ private:
     std::mutex control_mutex_;
 
     std::atomic<uint64_t> frames_captured_{0};
+    std::atomic<uint64_t> frames_offered_{0};  // after decimation, to the encode queue
     std::atomic<uint64_t> frames_encoded_{0};
     std::atomic<uint64_t> queue_drops_{0};
 };

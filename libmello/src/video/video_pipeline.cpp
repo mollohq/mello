@@ -933,10 +933,22 @@ bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t gen
     return true;
 }
 
+void VideoPipeline::set_overload_shedder(OverloadShedder shedder) {
+    std::lock_guard<std::mutex> lock(shedder_mutex_);
+    overload_shedder_ = std::move(shedder);
+}
+
 // Runs on the encode thread, immediately after a frame is encoded, so the
 // measurement and the reconfigure share one thread and no extra locking.
 void VideoPipeline::maybe_reduce_encoder_cost() {
-    if (!encoder_ || encoder_->cost_tier() >= encoder_->max_cost_tier()) {
+    if (!encoder_) return;
+    const bool can_reduce = encoder_->cost_tier() < encoder_->max_cost_tier();
+    bool has_shedder = false;
+    {
+        std::lock_guard<std::mutex> lock(shedder_mutex_);
+        has_shedder = static_cast<bool>(overload_shedder_);
+    }
+    if (!can_reduce && !has_shedder) {
         return;
     }
 
@@ -959,7 +971,14 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     }
 
     if (encoder_is_overloaded(sample)) {
-        encoder_control_.reduce_cost_tier();
+        // F3 (GAME-CLIPS.md 3.6): a game clip replay on this capture sheds
+        // first. The stream's tier moves only when it has nothing left.
+        bool shed = false;
+        {
+            std::lock_guard<std::mutex> lock(shedder_mutex_);
+            if (overload_shedder_) shed = overload_shedder_();
+        }
+        if (!shed && can_reduce) encoder_control_.reduce_cost_tier();
     }
     // Reset the window either way: after a downgrade so the next decision
     // measures the new configuration, and after a healthy window so old drops

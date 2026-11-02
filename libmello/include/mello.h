@@ -427,6 +427,7 @@ typedef enum MelloReplayState {
     MELLO_REPLAY_RECORDING = 1,  /**< frames come in */
     MELLO_REPLAY_WAITING = 2,    /**< the game draws nothing now (minimized) */
     MELLO_REPLAY_FAILED = 3,     /**< a fault turned the replay off */
+    MELLO_REPLAY_PAUSED = 4,     /**< overload: the replay gave up its frames first */
 } MelloReplayState;
 
 /** A captured game clip. */
