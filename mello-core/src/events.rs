@@ -104,6 +104,49 @@ pub enum GameClipState {
     Paused,
     /// The replay cannot run for this game (`reason` says why).
     Unavailable,
+    /// The buffer folder has under 2 GB free: no replay until the disk has
+    /// space again (plan 4.1).
+    DiskLow,
+}
+
+/// The clip quality of the Settings section (plans/GAME-CLIPS.md 7).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GameClipQuality {
+    #[serde(rename = "1080p60")]
+    P1080Fps60,
+    #[default]
+    #[serde(rename = "720p60")]
+    P720Fps60,
+    #[serde(rename = "720p30")]
+    P720Fps30,
+}
+
+impl GameClipQuality {
+    /// The name in the settings file and in Settings ("720p60").
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::P1080Fps60 => "1080p60",
+            Self::P720Fps60 => "720p60",
+            Self::P720Fps30 => "720p30",
+        }
+    }
+
+    /// The quality of a stored name. An unknown name is `None`.
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::P1080Fps60, Self::P720Fps60, Self::P720Fps30]
+            .into_iter()
+            .find(|q| q.as_str() == name)
+    }
+
+    /// Height, frame rate and bitrate (kbps). The bitrates are the estimates
+    /// of plan 6.3 until the replay lane sets them (plan 3.4).
+    pub fn encoding(self) -> (u32, u32, u32) {
+        match self {
+            Self::P1080Fps60 => (1080, 60, 8000),
+            Self::P720Fps60 => (720, 60, 5000),
+            Self::P720Fps30 => (720, 30, 3000),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -29,6 +29,64 @@ pub(crate) fn clip_key_label(settings: &Settings) -> String {
         .unwrap_or_default()
 }
 
+/// The game clip key of these settings, for the hotkey manager.
+pub(crate) fn game_clip_binding(settings: &Settings) -> Option<platform::hotkeys::PttBinding> {
+    settings
+        .game_clip_key
+        .as_deref()
+        .and_then(platform::hotkeys::parse_ptt_string)
+        .map(|(binding, _)| binding)
+}
+
+/// The game clip key as Keybinds and the Game clips section show it.
+pub(crate) fn game_clip_key_label(settings: &Settings) -> String {
+    settings
+        .game_clip_key
+        .as_deref()
+        .and_then(platform::hotkeys::parse_ptt_string)
+        .map(|(_, label)| label)
+        .unwrap_or_default()
+}
+
+/// The clip qualities of the Game clips section, in the dropdown's rows.
+fn game_clip_qualities() -> Vec<crate::AudioDeviceData> {
+    use mello_core::events::GameClipQuality;
+    [
+        GameClipQuality::P1080Fps60,
+        GameClipQuality::P720Fps60,
+        GameClipQuality::P720Fps30,
+    ]
+    .into_iter()
+    .map(|q| crate::AudioDeviceData {
+        id: q.as_str().into(),
+        name: game_clip_quality_name(q).into(),
+        is_default: q == GameClipQuality::default(),
+    })
+    .collect()
+}
+
+fn game_clip_quality_name(quality: mello_core::events::GameClipQuality) -> &'static str {
+    use mello_core::events::GameClipQuality;
+    match quality {
+        GameClipQuality::P1080Fps60 => "1080p, 60 fps",
+        GameClipQuality::P720Fps60 => "720p, 60 fps",
+        GameClipQuality::P720Fps30 => "720p, 30 fps",
+    }
+}
+
+/// Shows the Game clips section and its Keybinds row as these settings
+/// have them.
+fn show_game_clip_settings(app: &MainWindow, settings: &Settings) {
+    let quality =
+        mello_core::events::GameClipQuality::parse(&settings.game_clip_quality).unwrap_or_default();
+    app.set_settings_game_clips_enabled(settings.game_clips_enabled);
+    app.set_settings_game_clip_quality(quality.as_str().into());
+    app.set_settings_game_clip_quality_name(game_clip_quality_name(quality).into());
+    app.set_game_clip_key_label(game_clip_key_label(settings).into());
+    app.set_settings_game_clip_key_warning("".into());
+    app.set_settings_game_clip_binding(false);
+}
+
 fn stop_diagnostic_capture(app: &MainWindow, cmd: &UnboundedSender<Command>) {
     if !crate::diag_capture::is_active() {
         return;
@@ -54,6 +112,13 @@ pub fn wire(ctx: &AppContext) {
     // The clip button names the clip key from the first frame.
     ctx.app
         .set_clip_key_label(clip_key_label(&ctx.settings.borrow()).into());
+    // Game clips are Windows only until the macOS work (plan 9.2).
+    ctx.app.set_game_clips_available(cfg!(windows));
+    ctx.app
+        .set_settings_game_clip_qualities(slint::ModelRc::new(slint::VecModel::from(
+            game_clip_qualities(),
+        )));
+    show_game_clip_settings(&ctx.app, &ctx.settings.borrow());
 
     // --- About: the Third-party notices view fills its model on the first open ---
     {
@@ -126,6 +191,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_clip_key_label(clip_key_label(&settings).into());
                 app.set_settings_clip_key_warning("".into());
                 app.set_settings_clip_binding(false);
+                show_game_clip_settings(&app, &settings);
                 *prof_st.lock().unwrap() = avatar::AvatarGridState::new();
                 app.set_profile_selected_avatar(-1);
                 app.set_profile_grid_expanded(false);
@@ -473,6 +539,13 @@ pub fn wire(ctx: &AppContext) {
                     );
                     return;
                 }
+                if cfg!(windows) && settings.game_clip_key.as_deref() == Some(raw_str.as_str()) {
+                    log::info!("Clip key refused, the game clip key uses it: {}", raw_str);
+                    app.set_settings_clip_key_warning(
+                        format!("Game clip uses {label}. Pick another key.").into(),
+                    );
+                    return;
+                }
                 log::info!("Clip key registered: {} ({})", label, raw_str);
                 hk.borrow().register_clip(Some(binding));
                 settings.clip_key = Some(raw_str);
@@ -480,6 +553,82 @@ pub fn wire(ctx: &AppContext) {
                 app.set_clip_key_label(label.into());
                 app.set_settings_clip_key_warning("".into());
             });
+    }
+    // --- Game clips (plans/GAME-CLIPS.md 4.3 and 7) ---
+    {
+        let s = ctx.settings.clone();
+        let app_weak = ctx.app.as_weak();
+        let hk = ctx.hotkey_mgr.clone();
+        ctx.app
+            .on_settings_game_clip_key_captured(move |key_text, ctrl, alt, shift, meta| {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                let Some((binding, label, raw_str)) =
+                    platform::hotkeys::slint_key_to_ptt(key_text.as_str(), ctrl, alt, shift, meta)
+                else {
+                    log::debug!(
+                        "Unmappable key, staying in binding mode: {:?}",
+                        key_text.as_str()
+                    );
+                    return;
+                };
+                app.set_settings_game_clip_binding(false);
+                let mut settings = s.borrow_mut();
+                // A key that another binding uses stays with it. The field
+                // keeps the game clip key it had.
+                let taken_by = if settings.ptt_key.as_deref() == Some(raw_str.as_str()) {
+                    Some("Push-to-talk")
+                } else if settings.clip_key.as_deref() == Some(raw_str.as_str()) {
+                    Some("Voice clip")
+                } else {
+                    None
+                };
+                if let Some(other) = taken_by {
+                    log::info!("Game clip key refused, {other} uses it: {raw_str}");
+                    app.set_settings_game_clip_key_warning(
+                        format!("{other} uses {label}. Pick another key.").into(),
+                    );
+                    return;
+                }
+                log::info!("Game clip key registered: {} ({})", label, raw_str);
+                hk.borrow().register_game_clip(Some(binding));
+                settings.game_clip_key = Some(raw_str);
+                settings.save();
+                app.set_game_clip_key_label(label.into());
+                app.set_settings_game_clip_key_warning("".into());
+            });
+    }
+    {
+        let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_setting_changed_game_clips(move |v| {
+            let mut settings = s.borrow_mut();
+            settings.game_clips_enabled = v;
+            settings.save();
+            log::info!("[settings] game_clips_enabled = {}", v);
+            let _ = cmd.send(settings.game_clips_command());
+        });
+    }
+    {
+        let s = ctx.settings.clone();
+        let cmd = ctx.cmd_tx.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_setting_changed_game_clip_quality(move |id| {
+            let Some(quality) = mello_core::events::GameClipQuality::parse(id.as_str()) else {
+                log::warn!("[settings] unknown game clip quality {:?}", id.as_str());
+                return;
+            };
+            let mut settings = s.borrow_mut();
+            settings.game_clip_quality = quality.as_str().to_string();
+            settings.save();
+            log::info!("[settings] game_clip_quality = {}", quality.as_str());
+            let _ = cmd.send(settings.game_clips_command());
+            if let Some(app) = app_weak.upgrade() {
+                app.set_settings_game_clip_quality(quality.as_str().into());
+                app.set_settings_game_clip_quality_name(game_clip_quality_name(quality).into());
+            }
+        });
     }
     {
         let s = ctx.settings.clone();
@@ -499,8 +648,12 @@ pub fn wire(ctx: &AppContext) {
             s.borrow().save();
             hk.borrow().unregister_ptt();
             hk.borrow().register_clip(clip_binding(&defaults));
+            if cfg!(windows) {
+                hk.borrow().register_game_clip(game_clip_binding(&defaults));
+            }
             hk.borrow()
                 .set_active(defaults.input_mode == "push_to_talk");
+            let _ = cmd.send(defaults.game_clips_command());
 
             let _ = cmd.send(Command::SetInputVolume {
                 volume: defaults.input_volume,
@@ -556,6 +709,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_ptt_key_label("Unassigned".into());
                 app.set_clip_key_label(clip_key_label(&defaults).into());
                 app.set_settings_clip_key_warning("".into());
+                show_game_clip_settings(&app, &defaults);
                 app.set_settings_hud_enabled(defaults.hud_enabled);
                 app.set_settings_hud_overlay_opacity(defaults.hud_overlay_opacity);
                 app.set_settings_hud_clip_toasts(defaults.hud_show_clip_toasts);

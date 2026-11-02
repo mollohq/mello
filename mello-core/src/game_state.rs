@@ -211,6 +211,12 @@ impl GameStateManager {
             .map(|s| &s.game)
     }
 
+    /// A running game by id, focused or not. The game clip replay keeps the
+    /// game it records until another game holds the focus for 10 s.
+    pub fn running_game(&self, game_id: &str) -> Option<&ActiveGame> {
+        self.sessions.get(game_id).map(|s| &s.game)
+    }
+
     /// True while any game is running, regardless of which has focus.
     pub fn any_active(&self) -> bool {
         !self.sessions.is_empty()

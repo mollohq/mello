@@ -441,6 +441,14 @@ pub enum Command {
     /// F8: the last 30 s of the game, from the replay buffer, as an MP4 with
     /// a poster (plans/GAME-CLIPS.md 5.3). Runs on the replay worker thread.
     CaptureGameClip,
+    /// The Settings section "Game clips" (plans/GAME-CLIPS.md 7). Sent at
+    /// startup, on each change and on reset. Off stops the replay and
+    /// deletes its ring.
+    SetGameClips {
+        enabled: bool,
+        #[serde(default)]
+        quality: crate::events::GameClipQuality,
+    },
     PostClip {
         crew_id: String,
         clip_id: String,

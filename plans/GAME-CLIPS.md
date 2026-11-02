@@ -21,7 +21,7 @@ todos:
     content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s. Built 2026-11-02 (c45b73d0): a 30 s clip at 5 Mbps muxes in under 1 s"
     status: completed
   - id: core-lifecycle
-    content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game. Built 2026-11-02 for a first manual test (client/replay.rs): a worker thread runs the replay for the primary game while in voice, CaptureGameClip writes the MP4 and the poster to %TEMP%/mello_clips. Open: the setting, the 10 s foreground hold, the disk check, post_clip"
+    content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game. Built 2026-11-02 for a first manual test (client/replay.rs): a worker thread runs the replay for the primary game while in voice, CaptureGameClip writes the MP4 and the poster to %TEMP%/mello_clips. First manual F8 test passed on Hearthstone 2026-11-02 (video, game audio, mic voice, live poster; 30.2 s, 16.1 MB). Added 2026-11-02: SetGameClips (the setting and the clip quality, a quality change restarts the replay), the 10 s hold (GameHold: the replay keeps its game while it runs, a new game in focus takes it after 10 s, an exit takes effect at once), the disk check in the worker (2 GB free, the replay's own ring counts as free, checked every 10 s, state DiskLow and one HUD toast). Manual test passed 2026-11-02: the switch off and on, 1080p60 (1872x1080, 8000 kbps), the F7 refusal, F9, the reset to F8 and 720p60, and the hold (Hearthstone to League of Legends after 10.25 s). The disk rule had no manual test. Open: post_clip with clip_type game, which moves to the upload todo"
     status: in_progress
   - id: upload
     content: "mello-core: the poster at once, the MP4 as S3 multipart in 5 MB parts from disk (no full-file read into RAM), a token-bucket pace (G5), the stream budget and pause from the rung controller (G2 to G4, needs the host's GoogCC estimate and send rate in the stream telemetry), a persisted queue with the upload id and done parts for the resume after a restart"
@@ -30,7 +30,7 @@ todos:
     content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests"
     status: pending
   - id: client-key-settings
-    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Open: the Settings section and the KEYBINDS row"
+    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. Open: the Buffer folder control and the Q23 control (Game clips while streaming)"
     status: in_progress
   - id: feed-card
     content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file"
@@ -39,7 +39,7 @@ todos:
     content: "mello-core and libmello: ClipRangeReader, IMFByteStream over it, streaming AAC playback, the viewer pipeline with a clip source, the expanded view"
     status: pending
   - id: gates
-    content: "Replay lane in tools/stream-gate (VMAF floor first, then the bitrate per quality; a hw-lane row with a real loopback tone, which also measures A2), perf harness scenario, QA harness checks, one mello-driver journey with a crew voice tone burst (Q24)"
+    content: "Replay lane in tools/stream-gate (VMAF floor first, then the bitrate per quality; a hw-lane row with a real loopback tone, which also measures A2), perf harness scenario, QA harness checks, one mello-driver journey with a crew voice tone burst (Q24). Measure two findings of the manual test of 2026-11-02 (debug build, Hearthstone): at 1080p60 the replay's NVENC went from cost tier 0 to 1 after 13 s (the recording intent runs multipass full), and its clips had 45 to 50 fps against 51 to 55 fps at 720p60; one 1080p mux took 3.56 s against the 3 s budget (the next took 0.97 s)"
     status: pending
   - id: specs
     content: "Move the shipped parts into CLIPS.md, 03-LIBMELLO.md, 12-STREAMING.md and 14-VIDEO-PIPELINE.md"
@@ -389,6 +389,8 @@ Voice is a condition (Q5). A game clip always has the crew voice in it.
 | The user turns the setting off | Stop. Delete the ring. |
 | Disk free goes under 2 GB | Stop. Delete the ring. HUD toast once. |
 | The client starts | Nothing to delete: the ring files are delete on close, so a crash leaves none (section 5.2). |
+
+**As built (2026-11-02).** `client/replay.rs` in mello-core. The game in focus is the primary game of game sensing: the foreground game, else a fullscreen game, else the oldest game. `GameHold` keeps the replay on its game while that game runs; a different primary game takes it after 10 s. Known limit: with two games and a window that is not a game in focus, the primary falls to the fullscreen or the oldest game, and after 10 s the replay moves to it. The disk rule counts the replay's own ring files (128 MB, more than the 100 MB of 1080p60) as free, so a start at just over 2 GB does not stop itself. After a full disk, the replay starts again when the space is back.
 
 ### 4.3 F8 key
 

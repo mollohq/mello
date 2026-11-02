@@ -3773,6 +3773,14 @@ fn the_game_clip_key_clips_only_while_the_replay_runs() {
     });
     crate::game_clip::game_clip_key_pressed(h.ctx());
     assert_eq!(capture(&h.commands()), 0, "the replay stopped: no clip");
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::DiskLow,
+        game_name: "Counter-Strike 2".into(),
+        reason: "the disk is almost full".into(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "a full disk: no clip");
 }
 
 /// The clip button names the clip key, F7 on a new install.
@@ -3835,15 +3843,141 @@ fn keybinds_refuses_the_push_to_talk_key() {
 fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
     let mut h = Harness::new();
     logged_in_app(&mut h);
+    // F9 as Slint reports it. F8 is the game clip key on Windows.
     h.app()
-        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+        .invoke_settings_clip_key_captured("\u{F70C}".into(), false, false, false, false);
     h.pump();
-    assert_eq!(h.app().get_clip_key_label().as_str(), "F8");
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F9");
 
     h.app().invoke_settings_reset_defaults();
     h.pump();
     assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
     assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+}
+
+/// The game clip key is bound in Settings, Keybinds, below the voice clip
+/// key (GAME-CLIPS.md 4.3). The new key is saved and shown.
+#[cfg(windows)]
+#[test]
+fn keybinds_rebinds_the_game_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("KEYBINDS");
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F8");
+    h.click_label("Game clip key");
+    assert!(
+        h.app().get_settings_game_clip_binding(),
+        "the field listens"
+    );
+
+    // F9 as Slint reports it.
+    h.app()
+        .invoke_settings_game_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+    h.pump();
+
+    assert!(!h.app().get_settings_game_clip_binding());
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F9"));
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F9");
+    assert!(h.app().get_settings_game_clip_key_warning().is_empty());
+}
+
+/// One key, one binding: the game clip key refuses the voice clip key and
+/// the push-to-talk key, and the voice clip key refuses the game clip key.
+/// Each field keeps its key.
+#[cfg(windows)]
+#[test]
+fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.settings().borrow_mut().ptt_key = Some("KeyV".into());
+
+    // F7 as Slint reports it.
+    h.app()
+        .invoke_settings_game_clip_key_captured("\u{F70A}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F8"));
+    assert_eq!(
+        h.app().get_settings_game_clip_key_warning().as_str(),
+        "Voice clip uses F7. Pick another key."
+    );
+
+    h.app()
+        .invoke_settings_game_clip_key_captured("v".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(
+        h.app().get_settings_game_clip_key_warning().as_str(),
+        "Push-to-talk uses V. Pick another key."
+    );
+
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+    assert_eq!(
+        h.app().get_settings_clip_key_warning().as_str(),
+        "Game clip uses F8. Pick another key."
+    );
+}
+
+fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::GameClipQuality)> {
+    cmds.iter().rev().find_map(|c| match c {
+        Command::SetGameClips { enabled, quality } => Some((*enabled, *quality)),
+        _ => None,
+    })
+}
+
+/// The Game clips section in Settings, Games (GAME-CLIPS.md 7): the switch
+/// and the quality are saved and sent to core, which starts or stops the
+/// replay.
+#[cfg(windows)]
+#[test]
+fn the_game_clips_section_saves_and_tells_core() {
+    use mello_core::events::GameClipQuality;
+    let mut h = Harness::new();
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 3000));
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("GAMES");
+    assert!(h.app().get_settings_game_clips_enabled(), "on by default");
+    assert_eq!(
+        h.app().get_settings_game_clip_quality_name().as_str(),
+        "720p, 60 fps"
+    );
+    let _ = h.commands();
+
+    h.click_label("Game clips");
+    assert!(!h.settings().borrow().game_clips_enabled);
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((false, GameClipQuality::P720Fps60))
+    );
+
+    h.app()
+        .invoke_setting_changed_game_clip_quality("1080p60".into());
+    h.pump();
+    assert_eq!(h.settings().borrow().game_clip_quality, "1080p60");
+    assert_eq!(
+        h.app().get_settings_game_clip_quality_name().as_str(),
+        "1080p, 60 fps"
+    );
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((false, GameClipQuality::P1080Fps60))
+    );
+
+    h.app().invoke_settings_reset_defaults();
+    h.pump();
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((true, GameClipQuality::P720Fps60))
+    );
+    assert!(h.app().get_settings_game_clips_enabled());
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F8");
 }
 
 /// Hangup must change the screen on click, before the core answers.
@@ -7172,6 +7306,12 @@ fn games_tab_with_installed(h: &mut Harness) {
     h.click_label("GAMES");
 }
 
+/// The Games tab scrolled to HIDDEN FROM CREW, below the GAME CLIPS section.
+fn hidden_games_in_view(h: &mut Harness) {
+    games_tab_with_installed(h);
+    scroll_settings_to_the_end(h);
+}
+
 fn hidden_command(cmds: &[Command]) -> Option<Vec<String>> {
     cmds.iter().rev().find_map(|c| match c {
         Command::SetHiddenGames { hidden } => Some(hidden.clone()),
@@ -7221,7 +7361,7 @@ fn onboarding_toggle_and_subline_use_the_consent_copy() {
 #[test]
 fn hiding_a_game_sends_the_hidden_set_and_unhiding_clears_it() {
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     let _ = h.commands();
 
     h.click_label("Hidden from crew: Portal 2");
@@ -7248,7 +7388,7 @@ fn hiding_a_game_sends_the_hidden_set_and_unhiding_clears_it() {
 #[test]
 fn a_game_hidden_in_steam_has_no_switch() {
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     assert!(h
         .controls_labelled("Hidden from crew: Steam Hidden Game")
         .is_empty());
@@ -7281,7 +7421,7 @@ fn toggling_hide_removes_the_game_from_the_next_report() {
     assert_eq!(first.len(), 2);
 
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     let _ = h.commands();
     h.click_label("Hidden from crew: Portal 2");
     let hidden: std::collections::HashSet<String> = hidden_command(&h.commands())

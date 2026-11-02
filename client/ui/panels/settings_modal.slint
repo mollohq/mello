@@ -1910,6 +1910,16 @@ component GamesTab inherits VerticalLayout {
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
 
+    // Game clips (plans/GAME-CLIPS.md 7). Windows only until the macOS work.
+    in property <bool> game-clips-available: false;
+    in-out property <bool> game-clips-enabled: true;
+    in property <[AudioDeviceData]> game-clip-qualities: [];
+    in property <string> game-clip-quality: "720p60";
+    in-out property <string> game-clip-quality-name: "720p, 60 fps";
+    in property <string> game-clip-key-label: "F8";
+    callback game-clips-toggled(bool);
+    callback game-clip-quality-selected(string);
+
     // ACTIVITY SHARING
     VerticalLayout {
         spacing: 24px;
@@ -1921,6 +1931,75 @@ component GamesTab inherits VerticalLayout {
             description: "Let crewmates see your installed games, what game you're in, and your play sessions in the crew feed.";
             checked <=> root.share-game-activity;
             toggled(v) => { root.share-game-activity-toggled(v); }
+        }
+    }
+
+    // GAME CLIPS
+    if root.game-clips-available: VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "GAME CLIPS"; }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            ToggleRow {
+                title: "Game clips";
+                description: root.game-clip-key-label != ""
+                    ? "While you are in voice, m3llo keeps the last 30 seconds of the game you play. Press " + root.game-clip-key-label + " to save them as a clip."
+                    : "While you are in voice, m3llo keeps the last 30 seconds of the game you play. Set a key in Keybinds to save them as a clip.";
+                checked <=> root.game-clips-enabled;
+                toggled(v) => { root.game-clips-toggled(v); }
+            }
+
+            Rectangle {
+                opacity: root.game-clips-enabled ? 1.0 : 0.4;
+
+                HorizontalLayout {
+                    padding-top: 14px;
+                    padding-bottom: 14px;
+                    padding-left: 20px;
+                    padding-right: 20px;
+                    spacing: 32px;
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        spacing: 6px;
+                        alignment: center;
+
+                        Text {
+                            font-family: Theme.font-display;
+                            text: "Clip quality";
+                            font-size: 15px;
+                            font-weight: Theme.weight-display;
+                            color: Theme.text-primary;
+                            letter-spacing: 0.3px;
+                        }
+
+                        Text {
+                            font-weight: Theme.weight-display;
+                            font-family: Theme.font-display;
+                            text: "A higher quality makes a bigger clip. At 720p, 60 fps a clip is about 20 MB.";
+                            font-size: 13px;
+                            color: Theme.text-secondary;
+                            wrap: word-wrap;
+                        }
+                    }
+
+                    VerticalLayout {
+                        width: 200px;
+                        alignment: center;
+
+                        DeviceDropdown {
+                            label: "Clip quality";
+                            devices: root.game-clip-qualities;
+                            selected-id: root.game-clip-quality;
+                            selected-name <=> root.game-clip-quality-name;
+                            device-selected(id) => { root.game-clip-quality-selected(id); }
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -2759,6 +2838,11 @@ component KeybindsTab inherits VerticalLayout {
     in property <string> clip-key-warning: "";
     in-out property <bool> clip-binding: false;
     callback clip-key-captured(string, bool, bool, bool, bool);
+    in property <bool> game-clips-available: false;
+    in property <string> game-clip-key-label: "F8";
+    in property <string> game-clip-key-warning: "";
+    in-out property <bool> game-clip-binding: false;
+    callback game-clip-key-captured(string, bool, bool, bool, bool);
 
     VerticalLayout {
         spacing: 24px;
@@ -2772,6 +2856,15 @@ component KeybindsTab inherits VerticalLayout {
             warning: root.clip-key-warning;
             binding <=> root.clip-binding;
             key-captured(k, c, a, s, m) => { root.clip-key-captured(k, c, a, s, m); }
+        }
+
+        if root.game-clips-available: KeybindRow {
+            title: "Game clip";
+            description: "Saves the last 30 seconds of your game, with the voice. Works while you are in voice and play.";
+            key-label: root.game-clip-key-label;
+            warning: root.game-clip-key-warning;
+            binding <=> root.game-clip-binding;
+            key-captured(k, c, a, s, m) => { root.game-clip-key-captured(k, c, a, s, m); }
         }
     }
 }
@@ -2872,6 +2965,20 @@ export component SettingsModal inherits Rectangle {
     in property <string> clip-key-warning: "";
     in-out property <bool> clip-binding: false;
     callback clip-key-captured(string, bool, bool, bool, bool);
+
+    // Game clips (plans/GAME-CLIPS.md 7): the Games section and the Keybinds
+    // row. Windows only until the macOS work.
+    in property <bool> game-clips-available: false;
+    in-out property <bool> game-clips-enabled: true;
+    in property <[AudioDeviceData]> game-clip-qualities: [];
+    in property <string> game-clip-quality: "720p60";
+    in-out property <string> game-clip-quality-name: "720p, 60 fps";
+    in property <string> game-clip-key-label: "F8";
+    in property <string> game-clip-key-warning: "";
+    in-out property <bool> game-clip-binding: false;
+    callback game-clip-key-captured(string, bool, bool, bool, bool);
+    callback setting-changed-game-clips(bool);
+    callback setting-changed-game-clip-quality(string);
 
     // The scroll offset of the content area. Previews set it to show the lower sections.
     in-out property <length> content-scroll <=> settings-scroll.scroll-y;
@@ -3555,6 +3662,14 @@ export component SettingsModal inherits Rectangle {
                             share-game-activity-toggled(v) => { root.setting-changed-share-game-activity(v); }
                             riot-connect-clicked => { root.riot-connect-clicked(); }
                             riot-disconnect-clicked => { root.riot-disconnect-clicked(); }
+                            game-clips-available: root.game-clips-available;
+                            game-clips-enabled <=> root.game-clips-enabled;
+                            game-clip-qualities: root.game-clip-qualities;
+                            game-clip-quality: root.game-clip-quality;
+                            game-clip-quality-name <=> root.game-clip-quality-name;
+                            game-clip-key-label: root.game-clip-key-label;
+                            game-clips-toggled(v) => { root.setting-changed-game-clips(v); }
+                            game-clip-quality-selected(id) => { root.setting-changed-game-clip-quality(id); }
                         }
 
                         keybinds-tab := KeybindsTab {
@@ -3564,6 +3679,11 @@ export component SettingsModal inherits Rectangle {
                             clip-key-warning: root.clip-key-warning;
                             clip-binding <=> root.clip-binding;
                             clip-key-captured(k, c, a, s, m) => { root.clip-key-captured(k, c, a, s, m); }
+                            game-clips-available: root.game-clips-available;
+                            game-clip-key-label: root.game-clip-key-label;
+                            game-clip-key-warning: root.game-clip-key-warning;
+                            game-clip-binding <=> root.game-clip-binding;
+                            game-clip-key-captured(k, c, a, s, m) => { root.game-clip-key-captured(k, c, a, s, m); }
                         }
 
                         about-tab := AboutTab {
@@ -3700,6 +3820,7 @@ component SettingsPreview inherits Rectangle {
     in property <string> clip-key: "F7";
     in property <string> clip-warning: "";
     in property <bool> clip-listening: false;
+    in property <string> game-clip-warning: "";
 
     width: 1000px;
     height: 780px;
@@ -3714,6 +3835,14 @@ component SettingsPreview inherits Rectangle {
         clip-key-label: root.clip-key;
         clip-key-warning: root.clip-warning;
         clip-binding: root.clip-listening;
+        game-clips-available: true;
+        game-clip-key-label: "F8";
+        game-clip-key-warning: root.game-clip-warning;
+        game-clip-qualities: [
+            { id: "1080p60", name: "1080p, 60 fps", is-default: false },
+            { id: "720p60", name: "720p, 60 fps", is-default: true },
+            { id: "720p30", name: "720p, 30 fps", is-default: false },
+        ];
         notices: [
             { names: "serde 1.0.228\nserde_json 1.0.145", license: "MIT OR Apache-2.0", text: "Copyright (c) David Tolnay" },
             { names: "opus (vcpkg)", license: "BSD-3-Clause", text: "Licence: BSD-3-Clause. The full text is at https://spdx.org/licenses/BSD-3-Clause.html and in the opus source." },
@@ -3772,3 +3901,4 @@ export component PreviewAboutTesters inherits SettingsPreview { tab: 4; scroll: 
 export component PreviewKeybinds inherits SettingsPreview { tab: 5; }
 export component PreviewKeybindsListening inherits SettingsPreview { tab: 5; clip-listening: true; }
 export component PreviewKeybindsTaken inherits SettingsPreview { tab: 5; clip-key: "F7"; clip-warning: "Push-to-talk uses V. Pick another key."; }
+export component PreviewKeybindsGameClipTaken inherits SettingsPreview { tab: 5; game-clip-warning: "Voice clip uses F7. Pick another key."; }

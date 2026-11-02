@@ -305,6 +305,16 @@ export component MainWindow inherits Window {
     in property <string> clip-key-label: "";
     in property <string> settings-clip-key-warning: "";
     in-out property <bool> settings-clip-binding: false;
+    /// Game clips (plans/GAME-CLIPS.md 7): Windows only until the macOS work.
+    in property <bool> game-clips-available: false;
+    in-out property <bool> settings-game-clips-enabled: true;
+    in property <[AudioDeviceData]> settings-game-clip-qualities: [];
+    in property <string> settings-game-clip-quality: "720p60";
+    in-out property <string> settings-game-clip-quality-name: "";
+    /// The game clip key as Keybinds and the Game clips section show it ("F8").
+    in property <string> game-clip-key-label: "";
+    in property <string> settings-game-clip-key-warning: "";
+    in-out property <bool> settings-game-clip-binding: false;
     in-out property <float> settings-vad-threshold: -40.0;
     in-out property <bool> settings-vad-auto: true;
     in property <string> settings-build-version: "v0.1.0";
@@ -708,6 +718,9 @@ export component MainWindow inherits Window {
     callback setting-changed-vad-auto(bool);
     callback settings-ptt-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
     callback settings-clip-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+    callback settings-game-clip-key-captured(/* key_text */ string, /* ctrl */ bool, /* alt */ bool, /* shift */ bool, /* meta */ bool);
+    callback setting-changed-game-clips(bool);
+    callback setting-changed-game-clip-quality(/* quality id */ string);
     callback settings-reset-defaults();
     // HUD settings callbacks
     callback setting-changed-hud-enabled(bool);
@@ -1733,6 +1746,14 @@ export component MainWindow inherits Window {
         clip-key-label: root.clip-key-label;
         clip-key-warning: root.settings-clip-key-warning;
         clip-binding <=> root.settings-clip-binding;
+        game-clips-available: root.game-clips-available;
+        game-clips-enabled <=> root.settings-game-clips-enabled;
+        game-clip-qualities: root.settings-game-clip-qualities;
+        game-clip-quality: root.settings-game-clip-quality;
+        game-clip-quality-name <=> root.settings-game-clip-quality-name;
+        game-clip-key-label: root.game-clip-key-label;
+        game-clip-key-warning: root.settings-game-clip-key-warning;
+        game-clip-binding <=> root.settings-game-clip-binding;
         vad-threshold <=> root.settings-vad-threshold;
         vad-auto <=> root.settings-vad-auto;
         build-version: root.settings-build-version;
@@ -1865,6 +1886,18 @@ export component MainWindow inherits Window {
         clip-key-captured(key, ctrl, alt, shift, meta) => {
             root.settings-show-saved = true;
             root.settings-clip-key-captured(key, ctrl, alt, shift, meta);
+        }
+        game-clip-key-captured(key, ctrl, alt, shift, meta) => {
+            root.settings-show-saved = true;
+            root.settings-game-clip-key-captured(key, ctrl, alt, shift, meta);
+        }
+        setting-changed-game-clips(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-game-clips(v);
+        }
+        setting-changed-game-clip-quality(id) => {
+            root.settings-show-saved = true;
+            root.setting-changed-game-clip-quality(id);
         }
         reset-defaults => {
             root.settings-show-saved = true;

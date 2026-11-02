@@ -139,6 +139,11 @@ pub struct Client {
     replay_in_voice: bool,
     /// The game the replay records now.
     replay_target: Option<replay::ReplayTarget>,
+    /// The Settings section "Game clips" (`Command::SetGameClips`).
+    replay_enabled: bool,
+    replay_quality: crate::events::GameClipQuality,
+    /// The 10 s hold before a new game in focus takes the replay.
+    replay_hold: replay::GameHold,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -366,6 +371,9 @@ impl Client {
             replay: None,
             replay_in_voice: false,
             replay_target: None,
+            replay_enabled: true,
+            replay_quality: Default::default(),
+            replay_hold: Default::default(),
             voice,
             event_tx,
             frame_slot,
@@ -479,6 +487,10 @@ impl Client {
         // Runs the feed reload that the coalescing gate held back.
         let mut feed_reload_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
         feed_reload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
+        // Ends the 10 s hold of a game clip replay switch (replay.rs).
+        let mut replay_hold_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        replay_hold_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             for game_event in self.drain_game_events() {
@@ -622,6 +634,11 @@ impl Client {
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
+                }
+                // A new game in focus takes the replay after its 10 s hold.
+                _ = replay_hold_tick.tick(), if self.replay_hold.waiting() => {
+                    let _step = watchdog.step("replay_hold");
+                    self.sync_replay();
                 }
                 _ = feed_reload_tick.tick(), if self.feed_reload.has_pending() => {
                     let _step = watchdog.step("feed_reload");
@@ -1156,6 +1173,9 @@ impl Client {
             }
             Command::CaptureGameClip => {
                 self.handle_capture_game_clip();
+            }
+            Command::SetGameClips { enabled, quality } => {
+                self.handle_set_game_clips(enabled, quality);
             }
             Command::PostClip {
                 crew_id,

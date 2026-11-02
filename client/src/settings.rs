@@ -35,6 +35,13 @@ pub struct Settings {
     /// The voice clip key, as `ptt_key` stores a key ("F7", "Ctrl+F7").
     /// `None` turns the key off.
     pub clip_key: Option<String>,
+    /// Game clips (plans/GAME-CLIPS.md 7): the replay of the game while the
+    /// user is in voice. On by default (Q1).
+    pub game_clips_enabled: bool,
+    /// "1080p60", "720p60" or "720p30" (`GameClipQuality`).
+    pub game_clip_quality: String,
+    /// The game clip key, in the format of `clip_key` ("F8").
+    pub game_clip_key: Option<String>,
     // General tab
     pub start_minimized: bool,
     pub close_to_tray: bool,
@@ -119,6 +126,11 @@ impl Default for Settings {
             start_on_boot: true,
             ptt_key: None,
             clip_key: Some(crate::platform::hotkeys::DEFAULT_CLIP_KEY.to_string()),
+            game_clips_enabled: true,
+            game_clip_quality: mello_core::events::GameClipQuality::default()
+                .as_str()
+                .to_string(),
+            game_clip_key: Some(crate::platform::hotkeys::DEFAULT_GAME_CLIP_KEY.to_string()),
             start_minimized: false,
             close_to_tray: true,
             auto_connect: false,
@@ -206,6 +218,17 @@ impl Settings {
         }
     }
 
+    /// The command that applies the "Game clips" section to core. Sent at
+    /// startup, on every change and on reset. An unknown quality in the file
+    /// falls back to the default.
+    pub fn game_clips_command(&self) -> mello_core::Command {
+        mello_core::Command::SetGameClips {
+            enabled: self.game_clips_enabled,
+            quality: mello_core::events::GameClipQuality::parse(&self.game_clip_quality)
+                .unwrap_or_default(),
+        }
+    }
+
     pub fn save(&self) {
         let stored = match Self::configured_path() {
             Some(path) => confy::store_path(&path, self),
@@ -279,6 +302,35 @@ mod tests {
         .expect("old file parses");
         assert!(old.vad_auto);
         assert_eq!(old.vad_threshold, -25.0);
+    }
+
+    /// A settings file from before game clips loads with them on at 720p60,
+    /// on F8. A quality the client does not know falls back to the default.
+    #[test]
+    fn game_clips_default_on_at_720p60_also_for_old_settings_files() {
+        let old: Settings = toml::from_str("dark_theme = false\n").expect("old file parses");
+        assert!(old.game_clips_enabled);
+        assert_eq!(old.game_clip_key.as_deref(), Some("F8"));
+        assert!(matches!(
+            old.game_clips_command(),
+            mello_core::Command::SetGameClips {
+                enabled: true,
+                quality: mello_core::events::GameClipQuality::P720Fps60,
+            }
+        ));
+
+        let odd = Settings {
+            game_clips_enabled: false,
+            game_clip_quality: "8k".into(),
+            ..Default::default()
+        };
+        assert!(matches!(
+            odd.game_clips_command(),
+            mello_core::Command::SetGameClips {
+                enabled: false,
+                quality: mello_core::events::GameClipQuality::P720Fps60,
+            }
+        ));
     }
 
     #[test]

@@ -1,13 +1,15 @@
 //! The game clip key (F8) in the client (plans/GAME-CLIPS.md 4.3): the replay
-//! state that core reports, the key, and the HUD toast. The Settings row, the
-//! clip card and the upload come with the todos `client-key-settings`,
-//! `feed-card` and `upload`.
+//! state that core reports, the key, and the HUD toast. The Settings section
+//! and the Keybinds row are in `callbacks/settings.rs`. The clip card and the
+//! upload come with the todos `feed-card` and `upload`.
 
 use mello_core::events::GameClipState;
 use mello_core::{Command, Event};
 
 use crate::app_context::AppContext;
 use crate::hud_manager::HudClipToast;
+
+const DISK_LOW_TOAST: &str = "Game clips are off: the disk is almost full";
 
 /// The replay as core last reported it.
 #[derive(Debug, Clone, Default)]
@@ -27,13 +29,19 @@ pub(crate) fn game_clip_key_pressed(ctx: &AppContext) {
             let _ = ctx.cmd_tx.send(Command::CaptureGameClip);
         }
         GameClipState::Off => {
-            let why = if ctx.app.get_in_voice() {
+            let why = if !ctx.settings.borrow().game_clips_enabled {
+                "Game clips are off in Settings"
+            } else if ctx.app.get_in_voice() {
                 "No game to clip"
             } else {
                 "Join voice to clip your game"
             };
             log::info!("[game clip] key ignored: {why}");
             toast(ctx, why);
+        }
+        GameClipState::DiskLow => {
+            log::info!("[game clip] key ignored: the disk is almost full");
+            toast(ctx, DISK_LOW_TOAST);
         }
         GameClipState::Unavailable => {
             log::info!(
@@ -54,11 +62,16 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
             reason,
         } => {
             log::info!("[game clip] replay {:?} {} {}", state, game_name, reason);
+            let was = ctx.game_clip.borrow().state;
             *ctx.game_clip.borrow_mut() = GameClipUi {
                 state,
                 game_name,
                 reason,
             };
+            // Plan 4.2: the replay stops on a full disk, and says so once.
+            if state == GameClipState::DiskLow && was != GameClipState::DiskLow {
+                toast(ctx, DISK_LOW_TOAST);
+            }
         }
         Event::GameClipCaptured {
             path,

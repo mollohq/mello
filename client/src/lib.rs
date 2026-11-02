@@ -502,6 +502,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             volume: s.output_volume,
         });
         let _ = cmd_tx.send(s.input_sensitivity_command());
+        let _ = cmd_tx.send(s.game_clips_command());
     }
 
     // Restore saved PTT binding and activate listener if PTT mode is on
@@ -516,13 +517,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hotkey_mgr
             .borrow()
             .register_clip(callbacks::settings::clip_binding(&s));
-        // F8, the game clip key (plans/GAME-CLIPS.md 4.3). Windows only until
-        // the macOS work; its Settings row comes with the key settings.
+        // The game clip key (plans/GAME-CLIPS.md 4.3). Windows only until
+        // the macOS work.
         if cfg!(windows) {
-            hotkey_mgr.borrow().register_game_clip(
-                platform::hotkeys::parse_ptt_string(platform::hotkeys::DEFAULT_GAME_CLIP_KEY)
-                    .map(|(binding, _)| binding),
-            );
+            hotkey_mgr
+                .borrow()
+                .register_game_clip(callbacks::settings::game_clip_binding(&s));
         }
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
