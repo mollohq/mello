@@ -35,12 +35,27 @@ jobs:
       RELEASE_CHANNEL: "win-x64-stable"
 
     steps:
+      # The self-hosted runners check out into the same _work/mello/mello as
+      # PR Checks. A default checkout runs `git clean -ffdx` and deletes the
+      # ONNX Runtime (377 MB) and the models that CMake downloads into
+      # libmello/, which the PR lane keeps warm. clean: false and the next
+      # step clean everything else. Only the ORT of the version CMake asks for
+      # is kept, so a stale one is never packed. The models are kept only
+      # while their sources in libmello/CMakeLists.txt are the same as when
+      # they were last kept (a stamp file), because CMake downloads a model
+      # only when the file is missing. scripts/ci/clean-workspace.ps1 and
+      # clean-workspace.sh do this.
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
+          clean: false
+
+      - name: Clean the workspace, keep ORT and the models
+        shell: pwsh
+        run: ./scripts/ci/clean-workspace.ps1
 
       - name: Set version
         shell: pwsh
@@ -219,6 +234,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
+          clean: false
+
+      # See the Windows job.
+      - name: Clean the workspace, keep ORT and the models
+        run: ./scripts/ci/clean-workspace.sh
 
       - name: Set version
         run: |
