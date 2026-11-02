@@ -1,7 +1,6 @@
 import { Theme, MelloTextInput } from "../theme.slint";
 import { CutShape, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { ListView } from "std-widgets.slint";
 import { ChatFocus, ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
 component LinkPill inherits Rectangle {
@@ -668,25 +667,26 @@ export component ChatPanel inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
 
-        feed := ListView {
-            // `feed` id is referenced by the delegates + the scroll/history timers.
-            // ListView virtualizes: only rows near the viewport are instantiated and
-            // drawn, so Skia no longer records the entire feed into one giant glyph
-            // stream — that was the ~180 MB idle allocation this migration removes.
+        feed := Flickable {
+            // `feed` id is referenced by the rows + the scroll/history timers.
+            // A plain Flickable over the loaded window of messages (at most a
+            // few hundred rows, see ChatScrollState::WINDOW). Every row has its
+            // real height, so content-height is exact: scroll-to-bottom lands
+            // on the last message and a history prepend keeps the anchor row
+            // still. A virtualized ListView estimates content-height from the
+            // rows on screen, and that estimate sent the view to the same row
+            // every time.
             width: parent.width;
             height: parent.height;
-            // The pre-ListView Flickable drew no scrollbars; keep that look.
-            // Wheel/trackpad scrolling is unaffected by bar visibility.
-            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
             property <bool> at-bottom: self.content-height <= self.height
                 || (-self.content-y + self.height) >= (self.content-height - 32px);
+            // How far from the top the user is: content-y is 0 at the top and
+            // goes negative as they scroll down.
             property <bool> at-top: self.content-y >= -8px;
             property <bool> was-at-top: false;
             // Content height captured when older history is requested, so the prepend
-            // nudge below can keep the anchor message exactly in place (measured, not
-            // a fixed per-row estimate — correct for variable-height rows).
+            // nudge below can keep the anchor message exactly in place.
             property <length> saved-content-height;
 
             changed content-y => {
@@ -701,15 +701,13 @@ export component ChatPanel inherits Rectangle {
                 }
             }
 
+            // The only child of a Flickable: its preferred height is the
+            // content-height, which is why no estimate is involved.
+            rows := VerticalLayout {
+                width: feed.width;
+
             for msg[idx] in messages: VerticalLayout {
-                    // visible-width, NOT width: the cupertino ScrollView's inner
-                    // Flickable is `parent.width - 4px` regardless of scrollbar
-                    // policy, and ListView's content-width is derived from the
-                    // delegates' widths. Sizing rows by `feed.width` makes the
-                    // viewport 4px wider than the Flickable, which lets the whole
-                    // feed pan sideways by those 4px. `visible-width` is the
-                    // Flickable's real width in every style.
-                    width: feed.visible-width;
+                    width: feed.width;
                     padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
                     padding-bottom: idx == messages.length - 1 ? 24px : 0px;
 
@@ -832,7 +830,7 @@ export component ChatPanel inherits Rectangle {
                     if !msg.is-system && !msg.is-unread-divider
                         && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip): HorizontalLayout {
                         spacing: 8px;
-                        width: feed.visible-width;
+                        width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
                         alignment: start;
@@ -1034,12 +1032,12 @@ export component ChatPanel inherits Rectangle {
 
                     // Media row: full content width under avatar column (not double-guttered)
                     if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip): HorizontalLayout {
-                        width: feed.visible-width;
+                        width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
                         spacing: 8px;
                         alignment: start;
-                        property <length> media-col-w: feed.visible-width - 44px;
+                        property <length> media-col-w: feed.width - 44px;
 
                         Rectangle {
                             width: 28px;
@@ -1092,9 +1090,10 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
                 }
+            } // close rows
         }
 
-        // Loading-older-history indicator (overlay; ListView can't host non-delegate rows)
+        // Loading-older-history indicator (overlay)
         if root.loading-history: Rectangle {
             x: 0;
             y: 0;
@@ -1176,7 +1175,7 @@ export component ChatPanel inherits Rectangle {
             interval: 1ms;
             running: root.scroll-to-bottom-request;
             triggered => {
-                feed.content-y = -(feed.content-height - feed.height);
+                feed.content-y = -max(0px, feed.content-height - feed.height);
                 root.scroll-to-bottom-request = false;
                 root.has-new-messages = false;
                 root.scroll-to-bottom-done();
@@ -1187,9 +1186,10 @@ export component ChatPanel inherits Rectangle {
             interval: 1ms;
             running: root.history-prepended-rows > 0;
             triggered => {
-                // Keep the anchor message in place: shift the viewport by the exact
-                // height of the newly-prepended content (measured), not a per-row guess.
-                feed.content-y += feed.content-height - feed.saved-content-height;
+                // Keep the anchor message in place. content-y is 0 at the top
+                // and negative further down, so new content above the anchor
+                // moves it down by the exact growth, and the viewport follows.
+                feed.content-y -= feed.content-height - feed.saved-content-height;
                 root.history-prepended-done();
             }
         }

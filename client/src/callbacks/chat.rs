@@ -131,7 +131,18 @@ pub fn wire(ctx: &AppContext) {
     {
         let cmd = ctx.cmd_tx.clone();
         let app_weak = ctx.app.as_weak();
+        let refresh = crate::handlers::chat::ChatRefresh::new(ctx);
         ctx.app.on_request_history(move || {
+            // Messages trimmed from the bottom of the window are still loaded.
+            // Show those first; ask the server only past the oldest loaded one.
+            if refresh
+                .scroll()
+                .reveal_local_history(refresh.loaded_count())
+                > 0
+            {
+                refresh.run();
+                return;
+            }
             if let Some(a) = app_weak.upgrade() {
                 a.set_loading_history(true);
             }

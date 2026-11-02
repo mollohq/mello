@@ -232,6 +232,64 @@ pub fn chat_messages_to_slint(
     out
 }
 
+/// Make the chat rows equal to `rows`, in place, keyed by `message_id`.
+///
+/// A new model makes Slint drop and rebuild every row, StyledText layout and
+/// all, on every event. Keeping the `VecModel` changes only the rows that
+/// differ: a new message is one insert, an edit is one `set_row_data`, and
+/// the rows trimmed from the window are removals. Only a model of another
+/// type replaces the whole thing.
+pub fn sync_chat_rows(app: &MainWindow, rows: Vec<ChatMessageData>) {
+    let model = app.get_messages();
+    let Some(current) = model
+        .as_any()
+        .downcast_ref::<slint::VecModel<ChatMessageData>>()
+    else {
+        app.set_messages(Rc::new(slint::VecModel::from(rows)).into());
+        return;
+    };
+
+    // From the end, so the indices of the rows still to check hold.
+    for i in (0..current.row_count()).rev() {
+        let gone = current
+            .row_data(i)
+            .is_none_or(|row| !rows.iter().any(|r| r.message_id == row.message_id));
+        if gone {
+            current.remove(i);
+        }
+    }
+
+    for (i, row) in rows.into_iter().enumerate() {
+        match current.row_data(i) {
+            Some(cur) if cur.message_id == row.message_id => {
+                if !chat_row_same(&cur, &row) {
+                    current.set_row_data(i, row);
+                }
+            }
+            _ => current.insert(i, row),
+        }
+    }
+}
+
+/// The fields a rebuild can change. `gif_image` and `has_gif_image` are
+/// owned by the animator and compared on purpose: a rebuild carries an empty
+/// image, so comparing it would wipe the frame; `sync_gif_images` puts it back.
+fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
+    a.text == b.text
+        && a.display_text == b.display_text
+        && a.timestamp == b.timestamp
+        && a.display_time == b.display_time
+        && a.is_group_start == b.is_group_start
+        && a.is_continuation == b.is_continuation
+        && a.is_edited == b.is_edited
+        && a.is_deleted == b.is_deleted
+        && a.mentions_self == b.mentions_self
+        && a.has_sender_avatar == b.has_sender_avatar
+        && a.reply_to_name == b.reply_to_name
+        && a.reply_preview_text == b.reply_preview_text
+        && a.sender_name == b.sender_name
+}
+
 /// Make the crew list equal to `crews`, in place.
 ///
 /// A new model makes Slint rebuild every crew card, and a popup open on the
@@ -297,7 +355,7 @@ pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::Unrea
 /// load on hover (`gif-hovered`). Called after every row rebuild, so a rebuild
 /// never sends a decoded GIF back to "Loading".
 pub fn sync_gif_images(
-    model: &Rc<slint::VecModel<ChatMessageData>>,
+    model: &slint::ModelRc<ChatMessageData>,
     rt: &tokio::runtime::Handle,
     chat_anim: &crate::gif_animator::GifAnimator,
 ) {
@@ -312,12 +370,16 @@ pub fn sync_gif_images(
         }
         let url = item.gif_url.to_string();
         if let Some(img) = chat_anim.current_frame(&url) {
-            item.gif_image = img;
-            item.has_gif_image = true;
-            model.set_row_data(i, item);
+            if !item.has_gif_image {
+                item.gif_image = img;
+                item.has_gif_image = true;
+                model.set_row_data(i, item);
+            }
         } else if chat_anim.has_failed(&url) {
-            item.gif_failed = true;
-            model.set_row_data(i, item);
+            if !item.gif_failed {
+                item.gif_failed = true;
+                model.set_row_data(i, item);
+            }
         } else if fetch_budget > 0 {
             chat_anim.fetch(&url, rt);
         }

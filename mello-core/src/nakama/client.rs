@@ -2025,20 +2025,7 @@ impl NakamaClient {
             }
         }
 
-        let mut chronological: Vec<ChatMessage> = pages_newest_first
-            .into_iter()
-            .rev()
-            .flat_map(|mut page| {
-                page.reverse();
-                page
-            })
-            .collect();
-
-        if chronological.len() > target_count {
-            chronological = chronological.split_off(chronological.len() - target_count);
-        }
-
-        Ok((chronological, cur))
+        Ok((history_oldest_first(pages_newest_first), cur))
     }
 
     async fn fetch_channel_messages_page(
@@ -2173,6 +2160,21 @@ pub(crate) fn mentioned_user_ids(list: &ApiChannelMessageList) -> Vec<String> {
         .filter_map(|m| m.content.as_deref())
         .filter_map(crate::chat::parse_content)
         .flat_map(|e| crate::chat::extract_mentions(&e.body))
+        .collect()
+}
+
+/// Join newest-first pages into one oldest-first list. Every parsed message
+/// is kept: the cursor already points past the oldest page, so trimming to
+/// the requested count would lose the messages between that page and the
+/// trimmed rest, and no later page would bring them back.
+fn history_oldest_first(pages_newest_first: Vec<Vec<ChatMessage>>) -> Vec<ChatMessage> {
+    pages_newest_first
+        .into_iter()
+        .rev()
+        .flat_map(|mut page| {
+            page.reverse();
+            page
+        })
         .collect()
 }
 
@@ -3267,5 +3269,46 @@ mod push_tests {
             "{head}"
         );
         assert_eq!(payload, serde_json::json!({"token": "ab12"}));
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn msg(id: &str) -> ChatMessage {
+        ChatMessage {
+            message_id: id.into(),
+            sender_id: "u".into(),
+            sender_name: "u".into(),
+            content: id.into(),
+            display_body: id.into(),
+            mentions: Vec::new(),
+            timestamp: String::new(),
+            create_time: String::new(),
+            update_time: String::new(),
+            gif: None,
+            reply_to: None,
+            is_system: false,
+            is_edited: false,
+            is_deleted: false,
+        }
+    }
+
+    /// ★ Regression: the joined history was cut to the requested count after
+    /// the cursor had moved past every fetched page, so the oldest messages of
+    /// a multi-page fetch were gone for good and scroll-up never showed them.
+    #[test]
+    fn every_fetched_page_reaches_the_caller() {
+        let pages = vec![
+            vec![msg("9"), msg("8"), msg("7")],
+            vec![msg("6"), msg("5")],
+            vec![msg("4"), msg("3"), msg("2"), msg("1")],
+        ];
+        let ids: Vec<_> = history_oldest_first(pages)
+            .into_iter()
+            .map(|m| m.message_id)
+            .collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     }
 }

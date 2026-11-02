@@ -5,33 +5,77 @@ use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    apply_unread_to_crews, chat_messages_to_slint, color_hex, sync_gif_images, ChatConvertOptions,
+    apply_unread_to_crews, chat_messages_to_slint, color_hex, sync_chat_rows, sync_gif_images,
+    ChatConvertOptions,
 };
 use crate::gif_animator::GifFrame;
 use crate::{notifications, CrewData, GifItemData};
 
-fn refresh_chat_ui(ctx: &AppContext) {
-    let uid = ctx.app.get_user_id().to_string();
-    let uav = ctx.app.get_user_avatar();
-    let huav = ctx.app.get_has_user_avatar();
-    let mention_color = color_hex(ctx.app.global::<crate::Theme>().get_mention());
-    let first_unread = ctx.chat_scroll.first_unread_id();
-    let opts = ChatConvertOptions {
-        user_id: &uid,
-        user_avatar: &uav,
-        has_user_avatar: huav,
-        avatar_cache: &ctx.avatar_cache.borrow(),
-        mention_color: &mention_color,
-        first_unread_id: first_unread.as_deref(),
-    };
-    let raw = ctx.chat_messages.borrow();
-    let display = chat_messages_to_slint(&raw, &opts);
-    let rc = Rc::new(slint::VecModel::from(display));
-    ctx.app.set_messages(rc.clone().into());
-    ctx.app
-        .set_chat_messages_this_week(mello_core::chat::count_messages_this_week(&raw));
-    sync_gif_images(&rc, &ctx.rt, &ctx.gif_chat_anim);
-    ctx.chat_scroll.apply_to_window(&ctx.app);
+/// Rebuild the shown rows from the loaded messages and the scroll state.
+/// Shows the window `ChatScrollState` describes, and changes the existing
+/// row model in place so Slint keeps the rows that did not change.
+pub(crate) fn refresh_chat_ui(ctx: &AppContext) {
+    ChatRefresh::new(ctx).run();
+}
+
+/// What a row rebuild needs, with the window held weakly. A Slint callback
+/// that captured a strong `AppContext` would own the window that owns the
+/// callback, and the window would never drop (see `Harness::drop`).
+pub(crate) struct ChatRefresh {
+    app: slint::Weak<crate::MainWindow>,
+    chat_messages: Rc<std::cell::RefCell<Vec<mello_core::events::ChatMessage>>>,
+    chat_scroll: Rc<crate::chat_ui::ChatScrollState>,
+    avatar_cache: Rc<std::cell::RefCell<std::collections::HashMap<String, slint::Image>>>,
+    rt: tokio::runtime::Handle,
+    gif_chat_anim: crate::gif_animator::GifAnimator,
+}
+
+impl ChatRefresh {
+    pub(crate) fn new(ctx: &AppContext) -> Self {
+        Self {
+            app: ctx.app.as_weak(),
+            chat_messages: ctx.chat_messages.clone(),
+            chat_scroll: ctx.chat_scroll.clone(),
+            avatar_cache: ctx.avatar_cache.clone(),
+            rt: ctx.rt.clone(),
+            gif_chat_anim: ctx.gif_chat_anim.clone(),
+        }
+    }
+
+    /// The loaded messages, for a caller that decides before it refreshes.
+    pub(crate) fn loaded_count(&self) -> usize {
+        self.chat_messages.borrow().len()
+    }
+
+    pub(crate) fn scroll(&self) -> &crate::chat_ui::ChatScrollState {
+        &self.chat_scroll
+    }
+
+    pub(crate) fn run(&self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let uid = app.get_user_id().to_string();
+        let uav = app.get_user_avatar();
+        let huav = app.get_has_user_avatar();
+        let mention_color = color_hex(app.global::<crate::Theme>().get_mention());
+        let first_unread = self.chat_scroll.first_unread_id();
+        let opts = ChatConvertOptions {
+            user_id: &uid,
+            user_avatar: &uav,
+            has_user_avatar: huav,
+            avatar_cache: &self.avatar_cache.borrow(),
+            mention_color: &mention_color,
+            first_unread_id: first_unread.as_deref(),
+        };
+        let raw = self.chat_messages.borrow();
+        let start = self.chat_scroll.window_start(raw.len());
+        let display = chat_messages_to_slint(&raw[start..], &opts);
+        sync_chat_rows(&app, display);
+        app.set_chat_messages_this_week(mello_core::chat::count_messages_this_week(&raw));
+        sync_gif_images(&app.get_messages(), &self.rt, &self.gif_chat_anim);
+        self.chat_scroll.apply_to_window(&app, raw.len());
+    }
 }
 
 fn upsert_message(ctx: &AppContext, message: mello_core::events::ChatMessage) {
@@ -65,11 +109,8 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .cmd_tx
                     .send(Command::FetchUserAvatars { user_ids: uncached });
             }
-            // TEMP diagnostic: dump every loaded message so we can spot the one
-            // whose content makes Slint's StyledText render allocate ~180 MB.
             *ctx.chat_messages.borrow_mut() = messages;
-            ctx.app.set_has_more_history(has_more_history);
-            ctx.chat_scroll.reset_on_messages_loaded();
+            ctx.chat_scroll.reset_on_messages_loaded(has_more_history);
             let active = ctx.app.get_active_crew_id().to_string();
             if !active.is_empty() {
                 ctx.unread_tracker.borrow_mut().reset(&active);
@@ -116,12 +157,22 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
         }
         Event::HistoryLoaded { messages, cursor } => {
-            let prepended = messages.len();
-            let mut all = messages;
-            all.append(&mut ctx.chat_messages.borrow().clone());
-            *ctx.chat_messages.borrow_mut() = all;
-            ctx.app.set_has_more_history(cursor.is_some());
-            ctx.chat_scroll.on_history_prepended(prepended);
+            // A page can overlap what is loaded (a message that arrived while
+            // the page was in flight). Keep one copy per id.
+            let (prepended, has_more) = {
+                let mut all = ctx.chat_messages.borrow_mut();
+                let known: std::collections::HashSet<String> =
+                    all.iter().map(|m| m.message_id.clone()).collect();
+                let mut fresh: Vec<_> = messages
+                    .into_iter()
+                    .filter(|m| !known.contains(&m.message_id))
+                    .collect();
+                let prepended = fresh.len();
+                fresh.append(&mut all);
+                *all = fresh;
+                (prepended, cursor.is_some())
+            };
+            ctx.chat_scroll.on_server_history(prepended, has_more);
             ctx.app.set_loading_history(false);
             refresh_chat_ui(ctx);
         }

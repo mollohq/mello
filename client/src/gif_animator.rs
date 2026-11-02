@@ -32,6 +32,25 @@ type FrameHandler = Rc<dyn Fn(&str, GifFrame<'_>)>;
 /// thread by the timer. `None` means the fetch or the decode failed.
 type FetchResult = (String, Option<GifFrameData>);
 
+/// One fetch the animator waits for. Dropping it without `deliver` would
+/// leave the timer running, so every path delivers, with `None` on failure.
+pub struct FetchTicket {
+    url: String,
+    inbox: Arc<Mutex<Vec<FetchResult>>>,
+    in_flight: Arc<AtomicUsize>,
+}
+
+impl FetchTicket {
+    /// Hand the result to the UI thread. Safe from any thread.
+    pub fn deliver(self, data: Option<GifFrameData>) {
+        self.inbox
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push((self.url, data));
+        self.in_flight.fetch_sub(1, Ordering::SeqCst);
+    }
+}
+
 /// Drives GIF frame animation via a single shared Slint Timer.
 /// Keyed by URL so the same GIF isn't decoded twice.
 ///
@@ -83,26 +102,32 @@ impl GifAnimator {
     /// decoded, or failed) is ignored. Keeps the timer alive until the result
     /// lands in the inbox and is drained.
     pub fn fetch(&self, url: &str, rt: &tokio::runtime::Handle) {
-        if !self.requested.borrow_mut().insert(url.to_string()) {
+        let Some(ticket) = self.begin_fetch(url) else {
             return;
-        }
-        self.in_flight.fetch_add(1, Ordering::SeqCst);
-        self.ensure_timer_running();
-
-        let inbox = self.inbox.clone();
-        let in_flight = self.in_flight.clone();
+        };
         let url = url.to_string();
         rt.spawn(async move {
             let data = crate::image_cache::fetch_gif_frames(&url).await;
             if data.is_none() {
                 log::debug!("[gif] failed to fetch frames from {}", url);
             }
-            inbox
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .push((url, data));
-            in_flight.fetch_sub(1, Ordering::SeqCst);
+            ticket.deliver(data);
         });
+    }
+
+    /// Count a fetch for `url` as in flight and keep the timer running until
+    /// its [`FetchTicket`] delivers. `None` when the URL was already requested.
+    fn begin_fetch(&self, url: &str) -> Option<FetchTicket> {
+        if !self.requested.borrow_mut().insert(url.to_string()) {
+            return None;
+        }
+        self.in_flight.fetch_add(1, Ordering::SeqCst);
+        self.ensure_timer_running();
+        Some(FetchTicket {
+            url: url.to_string(),
+            inbox: self.inbox.clone(),
+            in_flight: self.in_flight.clone(),
+        })
     }
 
     fn ensure_timer_running(&self) {
@@ -269,5 +294,90 @@ impl GifAnimator {
         self.requested.borrow_mut().clear();
         self.failed.borrow_mut().clear();
         self.inbox.lock().unwrap_or_else(|e| e.into_inner()).clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// ★ Regression: the timer used to stop itself on its first tick when the
+    /// inbox was empty, 50 ms after a load and before any fetch had returned.
+    /// Decoded frames then sat in the inbox with nothing to drain them, so
+    /// every picker tile stayed blank and every chat GIF stayed on "Loading".
+    #[test]
+    fn the_timer_waits_for_a_fetch_in_flight() {
+        crate::testkit::init_test_backend();
+        let anim = GifAnimator::new(50, None, 8);
+        let seen: Rc<RefCell<Vec<(String, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        anim.start(move |url, frame| {
+            log.borrow_mut()
+                .push((url.to_string(), matches!(frame, GifFrame::Image(_))));
+        });
+
+        let ticket = anim.begin_fetch("http://gif/a").expect("first request");
+        assert!(
+            anim.begin_fetch("http://gif/a").is_none(),
+            "one fetch per URL"
+        );
+
+        // Three ticks with nothing to show. The timer must stay alive.
+        for _ in 0..3 {
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        }
+        assert!(seen.borrow().is_empty());
+
+        ticket.deliver(Some(GifFrameData {
+            frames: vec![(vec![0, 0, 0, 255], 1, 1)],
+            delays: vec![100],
+        }));
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+
+        assert_eq!(
+            *seen.borrow(),
+            vec![("http://gif/a".to_string(), true)],
+            "the frame reaches the handler on the tick after delivery"
+        );
+        assert!(anim.current_frame("http://gif/a").is_some());
+        assert!(anim.is_requested("http://gif/a"));
+    }
+
+    #[test]
+    fn a_failed_fetch_is_reported_once_and_remembered() {
+        crate::testkit::init_test_backend();
+        let anim = GifAnimator::new(50, None, 8);
+        let seen: Rc<RefCell<Vec<(String, bool)>>> = Rc::new(RefCell::new(Vec::new()));
+        let log = seen.clone();
+        anim.start(move |url, frame| {
+            log.borrow_mut()
+                .push((url.to_string(), matches!(frame, GifFrame::Image(_))));
+        });
+        let ticket = anim.begin_fetch("http://gif/b").expect("request");
+        ticket.deliver(None);
+        i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        assert_eq!(*seen.borrow(), vec![("http://gif/b".to_string(), false)]);
+        assert!(anim.has_failed("http://gif/b"));
+        assert!(anim.current_frame("http://gif/b").is_none());
+    }
+
+    /// The cache holds `max_entries` GIFs. Past that the oldest goes, and it
+    /// can be asked for again (a hover fetches it).
+    #[test]
+    fn the_cache_evicts_the_oldest_gif() {
+        crate::testkit::init_test_backend();
+        let anim = GifAnimator::new(50, None, 2);
+        anim.start(|_, _| {});
+        for url in ["http://gif/1", "http://gif/2", "http://gif/3"] {
+            let ticket = anim.begin_fetch(url).expect("request");
+            ticket.deliver(Some(GifFrameData {
+                frames: vec![(vec![0, 0, 0, 255], 1, 1)],
+                delays: vec![100],
+            }));
+            i_slint_backend_testing::mock_elapsed_time(Duration::from_millis(50));
+        }
+        assert!(anim.current_frame("http://gif/1").is_none(), "evicted");
+        assert!(anim.current_frame("http://gif/2").is_some());
+        assert!(anim.current_frame("http://gif/3").is_some());
     }
 }

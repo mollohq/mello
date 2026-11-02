@@ -1342,6 +1342,271 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat feed: scroll position
+// ---------------------------------------------------------------------------
+
+fn chat_message_fixture(id: &str, sender: &str, minute: usize) -> mello_core::events::ChatMessage {
+    let stamp = format!("2026-03-08T{:02}:{:02}:00Z", 10 + minute / 60, minute % 60);
+    mello_core::events::ChatMessage {
+        message_id: id.into(),
+        sender_id: format!("u-{sender}"),
+        sender_name: sender.into(),
+        content: format!("message {id} from {sender}"),
+        display_body: format!("message {id} from {sender}"),
+        mentions: Vec::new(),
+        timestamp: stamp.clone(),
+        create_time: stamp.clone(),
+        update_time: stamp,
+        gif: None,
+        reply_to: None,
+        is_system: false,
+        is_edited: false,
+        is_deleted: false,
+    }
+}
+
+/// `count` messages from two senders taking turns, ten minutes apart, so
+/// every row is a group start with a header: tall rows, many of them.
+fn chat_messages_fixture(prefix: &str, count: usize) -> Vec<mello_core::events::ChatMessage> {
+    (0..count)
+        .map(|i| {
+            let sender = if i % 2 == 0 { "alice" } else { "bob" };
+            chat_message_fixture(&format!("{prefix}{i}"), sender, i * 10)
+        })
+        .collect()
+}
+
+/// The crew view with the chat panel on screen, in a window tall enough to
+/// show a few dozen rows and short enough that 120 do not fit.
+fn open_chat(h: &mut Harness) {
+    h.app().set_logged_in(true);
+    h.app().set_onboarding_step(0);
+    h.app().set_show_discover(false);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    h.pump();
+    next_frame();
+}
+
+/// Let the 1 ms scroll and history timers fire, then settle the frame.
+fn let_feed_settle() {
+    i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(2));
+    next_frame();
+}
+
+fn feed_frame(h: &Harness) -> (f32, f32) {
+    let feed = h.find("ChatPanel::feed");
+    assert_eq!(feed.len(), 1, "one chat feed on screen");
+    let y = feed[0].absolute_position().y;
+    (y, y + feed[0].size().height)
+}
+
+/// The on-screen body of a message, by its text. The element tree holds only
+/// what is drawn, so a body that scrolled out of the feed is absent.
+fn visible_body(h: &Harness, text: &str) -> Option<ElementHandle> {
+    let mut found: Vec<_> = ElementHandle::find_by_accessible_label(h.app(), text).collect();
+    assert!(found.len() <= 1, "one body per message: {text:?}");
+    found.pop()
+}
+
+/// ★ Regression: the feed was a virtualized ListView whose content height is
+/// an estimate, so "scroll to bottom" landed on an estimated row, the same one
+/// every time. A plain Flickable over the loaded window has exact heights.
+#[test]
+fn the_feed_opens_at_the_last_message() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 120),
+        has_more_history: true,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let (top, bottom) = feed_frame(&h);
+    let last = visible_body(&h, "message m119 from bob").expect("the last message is on screen");
+    let last_bottom = last.absolute_position().y + last.size().height;
+    assert!(
+        last.absolute_position().y >= top && last_bottom <= bottom + 0.5,
+        "the last message is inside the feed: body {}..{last_bottom}, feed {top}..{bottom}",
+        last.absolute_position().y
+    );
+    assert!(
+        visible_body(&h, "message m0 from alice").is_none(),
+        "120 rows do not fit, so the first one is scrolled out"
+    );
+    assert!(
+        !h.app().get_scroll_to_bottom_request(),
+        "the scroll request was consumed"
+    );
+}
+
+/// ★ Regression: the prepend nudge used the same estimate, so loading older
+/// history jumped the view. The row the user was reading must not move.
+#[test]
+fn older_history_keeps_the_anchor_row_still() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 60),
+        has_more_history: true,
+    });
+    next_frame();
+    let_feed_settle();
+    let _ = h.commands();
+
+    // Scroll to the very top. That asks for older history and records the
+    // content height the nudge works from.
+    let (top, _) = feed_frame(&h);
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: 50_000.0,
+        });
+    h.pump();
+    next_frame();
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::LoadHistory { .. })),
+        "the top of the feed asks the server for older messages"
+    );
+    let anchor =
+        visible_body(&h, "message m0 from alice").expect("the first message is at the top");
+    let anchor_y = anchor.absolute_position().y;
+    assert!(
+        anchor_y >= top && anchor_y < top + 80.0,
+        "the first row sits at the top of the feed"
+    );
+
+    h.emit(Event::HistoryLoaded {
+        messages: chat_messages_fixture("old", 50),
+        cursor: None,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let same = visible_body(&h, "message m0 from alice").expect("the anchor is still on screen");
+    let same_y = same.absolute_position().y;
+    assert!(
+        (same_y - anchor_y).abs() < 0.5,
+        "the row the user was reading stays put: was {anchor_y}, now {same_y}"
+    );
+    assert!(
+        visible_body(&h, "message old0 from alice").is_none(),
+        "the older messages sit above the feed, to scroll up into"
+    );
+}
+
+/// The feed shows at most `WINDOW` rows. Messages trimmed from the top are
+/// still loaded, so the top of the feed reveals those before it asks the
+/// server for a page.
+#[test]
+fn the_feed_reveals_loaded_messages_before_asking_the_server() {
+    use crate::chat_ui::ChatScrollState;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 260),
+        has_more_history: true,
+    });
+    assert_eq!(h.app().get_messages().row_count(), ChatScrollState::WINDOW);
+    assert!(h.app().get_has_more_history());
+    let _ = h.commands();
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 250);
+    assert!(
+        h.commands().is_empty(),
+        "no server page while local rows remain"
+    );
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 260);
+    assert!(h.commands().is_empty());
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::LoadHistory { .. })),
+        "past the oldest loaded message the server is asked"
+    );
+}
+
+/// A new message while the user reads older rows keeps every shown row. Back
+/// at the bottom the window shrinks to `WINDOW` again.
+#[test]
+fn the_window_shrinks_again_at_the_bottom() {
+    use crate::chat_ui::ChatScrollState;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 260),
+        has_more_history: false,
+    });
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 250);
+
+    h.app().invoke_chat_viewport_changed(false);
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("new1", "bob", 9000),
+    });
+    assert_eq!(
+        h.app().get_messages().row_count(),
+        251 + 1,
+        "251 rows and the unread divider"
+    );
+
+    h.app().invoke_chat_viewport_changed(true);
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("new2", "alice", 9001),
+    });
+    assert_eq!(h.app().get_messages().row_count(), ChatScrollState::WINDOW);
+}
+
+/// ★ Regression: every event replaced the row model, so Slint rebuilt all
+/// rows. A new message is one insert into the model that was already there.
+#[test]
+fn a_new_message_is_one_insert_into_the_same_model() {
+    use slint::Model;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    let before = h.app().get_messages();
+    let ids_before: Vec<_> = (0..before.row_count())
+        .filter_map(|i| before.row_data(i))
+        .map(|r| r.message_id.to_string())
+        .collect();
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m3", "bob", 40),
+    });
+    let after = h.app().get_messages();
+    assert!(
+        std::ptr::eq(
+            before.as_any() as *const _ as *const u8,
+            after.as_any() as *const _ as *const u8
+        ),
+        "the model is the same object"
+    );
+    assert_eq!(before.row_count(), 4);
+    let ids_after: Vec<_> = (0..after.row_count())
+        .filter_map(|i| after.row_data(i))
+        .map(|r| r.message_id.to_string())
+        .collect();
+    assert_eq!(&ids_after[..3], &ids_before[..]);
+    assert_eq!(ids_after[3], "m3");
+}
+
+// ---------------------------------------------------------------------------
 // Crew selection and joining
 // ---------------------------------------------------------------------------
 
