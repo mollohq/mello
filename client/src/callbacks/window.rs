@@ -7,8 +7,12 @@ pub fn wire(ctx: &AppContext) {
     let app_weak = ctx.app.as_weak();
     let settings = ctx.settings.clone();
     let tray_notice = ctx.tray_notice.clone();
+    let tray = ctx.status_item.clone();
     ctx.app.window().on_close_requested(move || {
-        if settings.borrow().close_to_tray {
+        // Hide to the tray only when a tray exists to bring the window back.
+        // Without one (a Linux desktop with no StatusNotifierItem host, or
+        // tray creation failed) a hidden window is lost, so close quits.
+        if settings.borrow().close_to_tray && tray.borrow().is_present() {
             if let Some(app) = app_weak.upgrade() {
                 // A user who closes the window thinks they left the call.
                 // A call that stays up in the tray lets the channel hear
@@ -33,7 +37,7 @@ pub fn wire(ctx: &AppContext) {
             }
             slint::CloseRequestResponse::KeepWindowShown
         } else {
-            log::info!("[quit] close requested (close_to_tray=false)");
+            log::info!("[quit] close requested (close_to_tray=false or no tray)");
             slint::quit_event_loop().ok();
             slint::CloseRequestResponse::KeepWindowShown
         }

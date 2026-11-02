@@ -3940,6 +3940,21 @@ fn the_first_close_to_tray_shows_the_notice_once() {
     assert_eq!(attempts.get(), 1, "a later close posts no notice");
 }
 
+/// With no tray to bring it back (a Linux desktop without a
+/// StatusNotifierItem host), close does not hide the window to the tray: it
+/// quits. So no hang-up of its own and no tray notice.
+#[test]
+fn without_a_tray_close_quits_and_posts_no_tray_notice() {
+    let h = Harness::new();
+    *h.ctx().status_item.borrow_mut() = crate::platform::StatusItem::disabled();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 0, "no tray, no tray notice");
+    assert!(!h.settings().borrow().tray_notice_shown);
+}
+
 /// A notice the OS refused did not reach the user, so the next close tries
 /// again.
 #[test]
@@ -6867,6 +6882,34 @@ fn preferences_menu_item_shows_the_display_name_like_the_settings_button() {
     h.pump();
     assert!(h.app().get_settings_open(), "Preferences opens settings");
     assert_eq!(h.field_text("DISPLAY NAME"), "b0bben");
+}
+
+/// Cisco's licence for its OpenH264 binary asks for a switch (spec 12
+/// section 7.4). Settings shows it on Linux only, the one platform that
+/// downloads the binary, with the saved value.
+#[test]
+fn the_software_video_decoder_switch_shows_on_linux_with_the_saved_value() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().openh264_enabled = false;
+    h.app().invoke_settings_requested();
+    h.pump();
+    assert_eq!(
+        h.app().get_settings_show_openh264(),
+        cfg!(target_os = "linux")
+    );
+    assert!(!h.app().get_settings_openh264_enabled());
+}
+
+/// The switch saves the setting; it applies at the next start.
+#[test]
+fn the_software_video_decoder_switch_saves_the_setting() {
+    let mut h = Harness::new();
+    h.app().invoke_setting_changed_openh264_enabled(false);
+    h.pump();
+    assert!(!h.settings().borrow().openh264_enabled);
+    h.app().invoke_setting_changed_openh264_enabled(true);
+    h.pump();
+    assert!(h.settings().borrow().openh264_enabled);
 }
 
 /// Spec 10 section 8: every voice control reaches libmello. The

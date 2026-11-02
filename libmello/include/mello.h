@@ -822,6 +822,12 @@ typedef enum MelloCaptureMode {
      * (mello_test_set_reference_clip) instead of capturing. For the
      * streaming quality gate (tools/stream-gate); Windows only. */
     MELLO_CAPTURE_REFERENCE = 4,
+    /* Linux: the PipeWire stream of a ScreenCast portal session that the
+     * caller opened. `pipewire_fd` is the portal's PipeWire socket (libmello
+     * keeps a duplicate; the caller may close its own after start) and
+     * `pipewire_node` the stream's node id. `pid`, when not 0, is the game
+     * on the screen, for its audio. */
+    MELLO_CAPTURE_PIPEWIRE = 5,
 } MelloCaptureMode;
 
 typedef struct MelloCaptureSource {
@@ -835,6 +841,10 @@ typedef struct MelloCaptureSource {
      * libmello still runs its own run-time checks before it injects.
      * Appended field: existing offsets unchanged. */
     bool             allow_hook;
+    /* MELLO_CAPTURE_PIPEWIRE only; -1 and 0 otherwise. Appended fields:
+     * existing offsets unchanged. */
+    int32_t          pipewire_fd;
+    uint32_t         pipewire_node;
 } MelloCaptureSource;
 
 typedef struct MelloMonitorInfo {

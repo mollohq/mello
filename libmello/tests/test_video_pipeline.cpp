@@ -699,6 +699,8 @@ public:
     bool encode(ID3D11Texture2D*, EncodedPacket& out) override { return run_encode(out); }
 #elif defined(__APPLE__)
     bool encode(void*, uint64_t, EncodedPacket& out) override { return run_encode(out); }
+#elif defined(__linux__)
+    bool encode(const CaptureFrame&, uint64_t, EncodedPacket& out) override { return run_encode(out); }
 #endif
     void request_keyframe() override {
         enter();
@@ -748,6 +750,13 @@ private:
     }
 };
 
+// True where Encoder has an encode entry point: every hosting platform.
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
+constexpr bool kHasEncodeEntry = true;
+#else
+constexpr bool kHasEncodeEntry = false;
+#endif
+
 // One encode through the control with the platform's arguments: a texture on
 // Windows, a pixel buffer and its capture time on Apple (encoder_control.hpp).
 bool encode_once(EncoderControl& control, EncodedPacket& packet) {
@@ -755,6 +764,8 @@ bool encode_once(EncoderControl& control, EncodedPacket& packet) {
     return control.encode(nullptr, packet);
 #elif defined(__APPLE__)
     return control.encode(nullptr, 0, packet);
+#elif defined(__linux__)
+    return control.encode(CaptureFrame{}, 0, packet);
 #else
     (void)control;
     (void)packet;
@@ -765,6 +776,7 @@ bool encode_once(EncoderControl& control, EncodedPacket& packet) {
 } // namespace
 
 TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
+    if (!kHasEncodeEntry) GTEST_SKIP() << "no encoder entry point on this platform yet";
     TornStateEncoder encoder;
     EncoderControl control;
     control.attach(&encoder);
@@ -801,6 +813,7 @@ TEST(EncoderControl, SettersNeverRunBesideAnEncode) {
 // A setter must never wait for an encode: an encode can be stuck in the display
 // driver for minutes (2026-09-16), and the caller is a Rust stream thread.
 TEST(EncoderControl, ASetterDoesNotWaitForAnEncode) {
+    if (!kHasEncodeEntry) GTEST_SKIP() << "no encoder entry point on this platform yet";
     TornStateEncoder encoder;
     EncoderControl control;
     control.attach(&encoder);

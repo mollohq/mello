@@ -95,3 +95,8 @@ benchmarks/clips/
 # Renders live in /tmp or target/, never in the tree
 /preview-*.png
 /*.png
+
+# Linux build output (scripts/linux-build.sh)
+dist-linux/
+# vcpkg binary cache of the Linux build container
+external/vcpkg-cache/

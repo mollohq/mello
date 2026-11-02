@@ -66,6 +66,14 @@ mod voice_state;
 
 pub const APP_NAME: &str = "m3llo";
 
+/// The app ID on Linux: the Wayland app_id and X11 WM_CLASS of every window,
+/// and the file name of the desktop entry (`platform::linux_desktop`). The
+/// desktop matches the window to its entry, name and icon by this string.
+/// Windows and macOS keep `app.mello.desktop`. Flathub rejects an ID that ends
+/// in `.desktop`, so Linux has its own.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+pub const LINUX_APP_ID: &str = "app.m3llo.M3llo";
+
 slint::include_modules!();
 
 use mello_core::{Client, Command, Config, Event, FrameLifecycleSlot, FRAME_STATE_PRESENTED};
@@ -76,6 +84,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use updater::{UpdateEvent, Updater};
 
+#[cfg(not(target_os = "linux"))]
 use single_instance::SingleInstance;
 
 const HISTORY_LEN: usize = 30;
@@ -243,6 +252,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     let instance_id = lock_name.clone();
     let ipc_endpoint = ipc::endpoint_name(&lock_name);
 
+    // Linux: our own lock with close-on-exec (platform/linux_single_instance.rs).
+    #[cfg(target_os = "linux")]
+    let _instance = platform::linux_single_instance::InstanceLock::acquire(&instance_id)?;
+    #[cfg(not(target_os = "linux"))]
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
         // The running instance shows its window for each message. Windows
@@ -266,6 +279,11 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             None
         }
     };
+
+    // The menu entry, icon and mello:// handler of the AppImage. First
+    // instance only: a relaying second instance exits above.
+    #[cfg(target_os = "linux")]
+    platform::linux_desktop::register();
 
     // macOS sends a mello:// link as an Apple Event, not in argv. Before any
     // Slint code: the event of a cold start arrives while the app finishes
@@ -292,6 +310,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Must run before ANY Slint window (including the force-update dialog):
     // Slint reads SLINT_FONT_PATH once when the font collection is first used.
     emoji_font::setup();
+
+    // Linux: Cisco's OpenH264 for the stream viewer. Before the runtime and
+    // libmello start: it sets the variables libmello reads when it loads
+    // OpenH264, and may start the background download.
+    #[cfg(target_os = "linux")]
+    platform::linux_openh264::setup();
 
     let perf_mode = perf_mode::enabled();
 

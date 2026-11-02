@@ -201,7 +201,9 @@ impl AppContext {
             hotkey_mgr: Rc::new(RefCell::new(
                 crate::platform::hotkeys::HotkeyManager::disabled(),
             )),
-            status_item: Rc::new(RefCell::new(crate::platform::StatusItem::disabled())),
+            // Close hides to the tray as on a desktop with one; a test of
+            // the no-tray case puts `StatusItem::disabled()` here.
+            status_item: Rc::new(RefCell::new(crate::platform::StatusItem::stand_in())),
             gif_popover_anim: GifAnimator::new(50, None),
             gif_chat_anim: GifAnimator::new(50, Some(2)),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),

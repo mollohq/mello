@@ -738,7 +738,7 @@ component GeneralTab inherits VerticalLayout {
 
             ToggleRow {
                 title: "Hardware Acceleration";
-                description: "Draw the window on the GPU (Direct2D). Turn it off if you see visual glitches; the CPU renderer is used instead. Takes effect at the next start.";
+                description: "Use GPU for rendering UI elements. Disabling this may resolve visual glitches.";
                 checked <=> root.hw-acceleration;
                 toggled(v) => { setting-changed-hw-acceleration(v); }
             }
@@ -807,6 +807,11 @@ component AudioTab inherits VerticalLayout {
     padding: 40px;
     padding-bottom: 80px;
     spacing: 48px;
+
+    // Linux only: Cisco's OpenH264 (platform/linux_openh264.rs)
+    in property <bool> show-openh264: false;
+    in-out property <bool> openh264-enabled: true;
+    callback setting-changed-openh264-enabled(bool);
 
     // Device properties
     in property <[AudioDeviceData]> capture-devices: [];
@@ -1306,6 +1311,25 @@ component AudioTab inherits VerticalLayout {
             text: "Playing back your beautiful voice";
             font-size: 11px;
             color: Theme.text-secondary;
+        }
+    }
+
+    // VIDEO (Linux): Cisco's licence for its OpenH264 binary asks for a
+    // switch, and for its text where the switch is.
+    if root.show-openh264: VerticalLayout {
+        spacing: 24px;
+
+        SectionHeader { title: "VIDEO"; }
+
+        VerticalLayout {
+            spacing: 8px;
+
+            ToggleRow {
+                title: "Software Video Decoder";
+                description: "Plays streams when the GPU cannot decode them. Applies at the next start. OpenH264 Video Codec provided by Cisco Systems, Inc.";
+                checked <=> root.openh264-enabled;
+                toggled(v) => { setting-changed-openh264-enabled(v); }
+            }
         }
     }
 }
@@ -2794,6 +2818,8 @@ export component SettingsModal inherits Rectangle {
     in-out property <bool> auto-connect: false;
     in-out property <bool> minimize-on-join: false;
     in-out property <bool> hw-acceleration: true;
+    in property <bool> show-openh264: false;
+    in-out property <bool> openh264-enabled: true;
 
     // Audio settings
     in-out property <float> input-volume: 1.0;
@@ -2924,6 +2950,7 @@ export component SettingsModal inherits Rectangle {
     callback setting-changed-auto-connect(bool);
     callback setting-changed-minimize-on-join(bool);
     callback setting-changed-hw-acceleration(bool);
+    callback setting-changed-openh264-enabled(bool);
     // HUD callbacks
     callback setting-changed-hud-enabled(bool);
     callback setting-changed-hud-overlay-opacity(float);
@@ -3507,6 +3534,9 @@ export component SettingsModal inherits Rectangle {
                         audio-tab := AudioTab {
                             visible: active-tab == 2;
                             width: parent.width;
+                            show-openh264: root.show-openh264;
+                            openh264-enabled <=> root.openh264-enabled;
+                            setting-changed-openh264-enabled(v) => { root.setting-changed-openh264-enabled(v); }
                             capture-devices: root.capture-devices;
                             playback-devices: root.playback-devices;
                             selected-capture-id: root.selected-capture-id;
@@ -3711,6 +3741,7 @@ component SettingsPreview inherits Rectangle {
         active-tab: root.tab;
         content-scroll: root.scroll;
         notices-open: root.notices-open;
+        show-openh264: true;
         clip-key-label: root.clip-key;
         clip-key-warning: root.clip-warning;
         clip-binding: root.clip-listening;
@@ -3764,6 +3795,7 @@ component SettingsPreview inherits Rectangle {
 export component Preview inherits SettingsPreview { tab: 0; }
 export component PreviewGeneral inherits SettingsPreview { tab: 1; }
 export component PreviewAudio inherits SettingsPreview { tab: 2; }
+export component PreviewAudioVideo inherits SettingsPreview { tab: 2; scroll: 1400px; }
 export component PreviewGames inherits SettingsPreview { tab: 3; }
 export component PreviewAbout inherits SettingsPreview { tab: 4; }
 export component PreviewNotices inherits SettingsPreview { tab: 4; notices-open: true; }

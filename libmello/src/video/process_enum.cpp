@@ -16,9 +16,56 @@
 using Microsoft::WRL::ComPtr;
 #endif
 
+#if defined(__linux__)
+#include <climits>
+#include <dirent.h>
+#include <unistd.h>
+#include <cctype>
+#include <cstdlib>
+#include <fstream>
+#include <sstream>
+#endif
+
 namespace mello::video {
 
 static constexpr const char* TAG = "video/process";
+
+namespace detail {
+
+std::string path_basename(const std::string& path) {
+    const size_t pos = path.find_last_of("/\\");
+    return pos == std::string::npos ? path : path.substr(pos + 1);
+}
+
+#if defined(__linux__)
+std::string wine_path_to_host(const std::string& windows_path, const std::string& wine_prefix) {
+    std::string path = windows_path;
+    if (path.rfind("\\\\?\\", 0) == 0) path = path.substr(4);
+    if (path.size() < 3 || !std::isalpha(static_cast<unsigned char>(path[0])) ||
+        path[1] != ':' || path[2] != '\\') {
+        return {};
+    }
+    const char drive = static_cast<char>(std::tolower(static_cast<unsigned char>(path[0])));
+
+    std::string root;
+    if (!wine_prefix.empty()) {
+        const std::string link = wine_prefix + "/dosdevices/" + drive + ":";
+        char resolved[PATH_MAX];
+        if (realpath(link.c_str(), resolved)) root = resolved;
+    }
+    if (root.empty() && drive == 'z') root = "/";
+    if (root.empty()) return {};
+
+    std::string rest = path.substr(3);
+    for (char& c : rest) {
+        if (c == '\\') c = '/';
+    }
+    if (root.back() != '/') root += '/';
+    return root + rest;
+}
+#endif
+
+} // namespace detail
 
 #ifdef _WIN32
 
@@ -224,15 +271,157 @@ std::vector<VisibleWindow> enumerate_visible_windows() {
 
 #else
 
+#if defined(__linux__)
+// Linux: the ScreenCast portal's dialog picks the monitor or the window, so
+// the picker offers one entry that starts it (mello-core stream/screencast.rs).
+std::vector<MonitorInfo> enumerate_monitors() {
+    return {MonitorInfo{0, "Screen", 0, 0, true}};
+}
+#else
 std::vector<MonitorInfo> enumerate_monitors() {
     MELLO_LOG_WARN(TAG, "Monitor enumeration not supported on this platform");
     return {};
 }
+#endif
+
+#if defined(__linux__)
+
+namespace {
+
+std::string read_file(const std::string& path) {
+    std::ifstream f(path, std::ios::binary);
+    if (!f) return {};
+    std::ostringstream ss;
+    ss << f.rdbuf();
+    return ss.str();
+}
+
+/// Boot time, Unix seconds (/proc/stat "btime"). 0 when unreadable.
+int64_t boot_time_s() {
+    std::istringstream in(read_file("/proc/stat"));
+    std::string key;
+    while (in >> key) {
+        if (key == "btime") {
+            int64_t t = 0;
+            in >> t;
+            return t;
+        }
+        in.ignore(4096, '\n');
+    }
+    return 0;
+}
+
+/// Start time of a process in Unix ms, from field 22 of /proc/<pid>/stat
+/// (clock ticks after boot). 0 when unavailable.
+int64_t start_time_ms(const std::string& pid_dir, int64_t boot_s, long ticks_per_s) {
+    const std::string stat = read_file(pid_dir + "/stat");
+    // The command name (field 2) may hold spaces and parentheses: the fields
+    // after it start after its last ')'.
+    const size_t close = stat.rfind(')');
+    if (close == std::string::npos || boot_s == 0 || ticks_per_s <= 0) return 0;
+    std::istringstream in(stat.substr(close + 1));
+    std::string field;
+    // Fields 3..21 come before starttime (22).
+    for (int i = 3; i <= 21; ++i) {
+        if (!(in >> field)) return 0;
+    }
+    unsigned long long ticks = 0;
+    if (!(in >> ticks)) return 0;
+    return boot_s * 1000 + static_cast<int64_t>(ticks * 1000ULL / static_cast<unsigned long long>(ticks_per_s));
+}
+
+bool ends_with_exe(const std::string& name) {
+    if (name.size() < 4) return false;
+    std::string tail = name.substr(name.size() - 4);
+    for (char& c : tail) c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return tail == ".exe";
+}
+
+/// The Wine prefix of a process: WINEPREFIX, else Proton's
+/// STEAM_COMPAT_DATA_PATH/pfx. Empty when neither is set or the environment
+/// is not readable.
+std::string wine_prefix_of(const std::string& pid_dir) {
+    const std::string env = read_file(pid_dir + "/environ");
+    std::string compat;
+    size_t start = 0;
+    while (start < env.size()) {
+        size_t end = env.find('\0', start);
+        if (end == std::string::npos) end = env.size();
+        const std::string var = env.substr(start, end - start);
+        if (var.rfind("WINEPREFIX=", 0) == 0) return var.substr(11);
+        if (var.rfind("STEAM_COMPAT_DATA_PATH=", 0) == 0) compat = var.substr(23);
+        start = end + 1;
+    }
+    return compat.empty() ? std::string() : compat + "/pfx";
+}
+
+bool is_wine_loader(const std::string& exe) {
+    return exe == "wine-preloader" || exe == "wine64-preloader" || exe == "wine" ||
+           exe == "wine64";
+}
+
+} // namespace
+
+std::vector<GameProcess> enumerate_game_processes() {
+    std::vector<GameProcess> result;
+    DIR* proc = opendir("/proc");
+    if (!proc) {
+        MELLO_LOG_ERROR(TAG, "cannot open /proc");
+        return result;
+    }
+    const int64_t boot_s = boot_time_s();
+    const long ticks_per_s = sysconf(_SC_CLK_TCK);
+
+    while (dirent* entry = readdir(proc)) {
+        const char* name = entry->d_name;
+        if (!std::isdigit(static_cast<unsigned char>(name[0]))) continue;
+        char* end = nullptr;
+        const unsigned long pid = std::strtoul(name, &end, 10);
+        if (!end || *end != '\0') continue;
+        const std::string dir = std::string("/proc/") + name;
+
+        // The exe link is readable for the user's own processes only.
+        char exe_buf[4096];
+        const ssize_t n = readlink((dir + "/exe").c_str(), exe_buf, sizeof(exe_buf) - 1);
+        if (n <= 0) continue;
+        std::string exe_path(exe_buf, static_cast<size_t>(n));
+        const std::string deleted = " (deleted)";
+        if (exe_path.size() > deleted.size() &&
+            exe_path.compare(exe_path.size() - deleted.size(), deleted.size(), deleted) == 0) {
+            exe_path.resize(exe_path.size() - deleted.size());
+        }
+
+        GameProcess gp{};
+        gp.pid = static_cast<uint32_t>(pid);
+        gp.exe = detail::path_basename(exe_path);
+        gp.path = exe_path;
+
+        // Wine and Proton: /proc/<pid>/exe is the preloader; argv0 is the
+        // Windows program, often padded with spaces.
+        const std::string cmdline = read_file(dir + "/cmdline");
+        std::string argv0 = cmdline.substr(0, cmdline.find('\0'));
+        while (!argv0.empty() && argv0.back() == ' ') argv0.pop_back();
+        if (ends_with_exe(argv0) && (is_wine_loader(gp.exe) || argv0.find('\\') != std::string::npos)) {
+            gp.exe = detail::path_basename(argv0);
+            gp.path = detail::wine_path_to_host(argv0, wine_prefix_of(dir));
+        }
+
+        gp.name = gp.exe;
+        gp.started_at_ms = start_time_ms(dir, boot_s, ticks_per_s);
+        result.push_back(std::move(gp));
+    }
+    closedir(proc);
+    return result;
+}
+
+#else
 
 std::vector<GameProcess> enumerate_game_processes() {
     MELLO_LOG_WARN(TAG, "Game process enumeration not supported on this platform");
     return {};
 }
+
+#endif
 
 std::vector<VisibleWindow> enumerate_visible_windows() {
     MELLO_LOG_WARN(TAG, "Window enumeration not supported on this platform");

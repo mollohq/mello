@@ -310,12 +310,42 @@ pub(super) fn start_host_blocking(params: NativeStartParams) -> Result<NativeSta
                     (NVIDIA, AMD, or Intel). None was found on this machine."
             .to_string());
     }
+    #[cfg(not(target_os = "linux"))]
     let source = mello_sys::MelloCaptureSource {
         mode: params.mode,
         monitor_index: params.monitor_index,
         hwnd: params.hwnd as *mut std::ffi::c_void,
         pid: params.pid,
         allow_hook: params.allow_hook,
+        pipewire_fd: -1,
+        pipewire_node: 0,
+    };
+    // Linux: the ScreenCast portal picks the source, whatever the picker
+    // chose (stream/screencast.rs). Blocks while the desktop's dialog is
+    // open. The game's pid travels along for its audio.
+    #[cfg(target_os = "linux")]
+    log::info!(
+        "[screencast] the picker chose mode {} monitor {} window 0x{:x} pid {} hook {}; the portal picks the source",
+        params.mode,
+        params.monitor_index,
+        params.hwnd,
+        params.pid,
+        params.allow_hook
+    );
+    #[cfg(target_os = "linux")]
+    let screencast = crate::stream::screencast::open()?;
+    #[cfg(target_os = "linux")]
+    let source = {
+        use std::os::fd::AsRawFd;
+        mello_sys::MelloCaptureSource {
+            mode: mello_sys::MelloCaptureMode_MELLO_CAPTURE_PIPEWIRE,
+            monitor_index: 0,
+            hwnd: std::ptr::null_mut(),
+            pid: params.pid,
+            allow_hook: false,
+            pipewire_fd: screencast.fd.as_raw_fd(),
+            pipewire_node: screencast.node,
+        }
     };
     let mello_config = mello_sys::MelloStreamConfig {
         width: params.width,
@@ -326,6 +356,9 @@ pub(super) fn start_host_blocking(params: NativeStartParams) -> Result<NativeSta
     let (host, video_rx, audio_rx, teardown) =
         unsafe { crate::stream::host::start_host(ctx, &source, &mello_config) }
             .map_err(|e| e.to_string())?;
+    // The portal session closes after the capture that reads from it.
+    #[cfg(target_os = "linux")]
+    let teardown = teardown.then("screencast portal close", move |_| drop(screencast));
     let (mut actual_w, mut actual_h) = (mello_config.width, mello_config.height);
     unsafe {
         mello_sys::mello_stream_get_host_resolution(host, &mut actual_w, &mut actual_h);

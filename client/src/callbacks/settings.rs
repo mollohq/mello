@@ -101,6 +101,8 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_auto_connect(settings.auto_connect);
                 app.set_settings_minimize_on_join(settings.minimize_on_join);
                 app.set_settings_hw_acceleration(settings.hardware_acceleration);
+                app.set_settings_show_openh264(cfg!(target_os = "linux"));
+                app.set_settings_openh264_enabled(settings.openh264_enabled);
                 app.set_settings_input_volume(settings.input_volume);
                 app.set_settings_output_volume(settings.output_volume);
                 app.set_settings_noise_suppression(settings.noise_suppression);
@@ -262,6 +264,14 @@ pub fn wire(ctx: &AppContext) {
         ctx.app.on_setting_changed_hw_acceleration(move |v| {
             let mut settings = s.borrow_mut();
             settings.hardware_acceleration = v;
+            settings.save();
+        });
+    }
+    {
+        let s = ctx.settings.clone();
+        ctx.app.on_setting_changed_openh264_enabled(move |v| {
+            let mut settings = s.borrow_mut();
+            settings.openh264_enabled = v;
             settings.save();
         });
     }
@@ -544,6 +554,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_auto_connect(defaults.auto_connect);
                 app.set_settings_minimize_on_join(defaults.minimize_on_join);
                 app.set_settings_hw_acceleration(defaults.hardware_acceleration);
+                app.set_settings_openh264_enabled(defaults.openh264_enabled);
                 app.set_settings_input_volume(defaults.input_volume);
                 app.set_settings_output_volume(defaults.output_volume);
                 app.set_settings_noise_suppression(defaults.noise_suppression);

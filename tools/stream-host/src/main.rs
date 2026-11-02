@@ -295,6 +295,8 @@ fn enumerate_sources(
                 hwnd: std::ptr::null_mut(),
                 pid: 0,
                 allow_hook: false,
+                pipewire_fd: -1,
+                pipewire_node: 0,
             },
         ));
     }
@@ -332,6 +334,8 @@ fn enumerate_sources(
                     hwnd: std::ptr::null_mut(),
                     pid,
                     allow_hook: false,
+                    pipewire_fd: -1,
+                    pipewire_node: 0,
                 },
             ));
         }
@@ -361,6 +365,8 @@ fn enumerate_sources(
                     hwnd: std::ptr::null_mut(),
                     pid,
                     allow_hook: false,
+                    pipewire_fd: -1,
+                    pipewire_node: 0,
                 },
             ));
         }

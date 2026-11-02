@@ -1,6 +1,7 @@
 #pragma once
 #include "graphics_device.hpp"
 #include "encoder.hpp" // for VideoCodec
+#include <cstddef>
 #include <cstdint>
 
 #ifdef _WIN32
@@ -37,6 +38,31 @@ struct DecodedPicture {
     /// R8 layout: the row where the chroma starts. 0 for NV12.
     uint32_t uv_row = 0;
 };
+#elif defined(__linux__)
+/// The layout of a CpuPicture.
+enum class CpuPictureFormat {
+    /// Three planes: luma, then U and V at half size (OpenH264).
+    I420,
+    /// Two planes: luma, then interleaved U and V at half size (NVDEC, VA).
+    /// `u` points at the interleaved plane, `v` is null.
+    NV12,
+};
+
+/// One decoded picture in CPU memory, in the decoder's output slot. The
+/// planes stay valid until the decoder writes that slot again; the viewer's
+/// ring never decodes into a slot the present thread reads.
+struct CpuPicture {
+    CpuPictureFormat format = CpuPictureFormat::I420;
+    const uint8_t* y = nullptr;
+    const uint8_t* u = nullptr;
+    const uint8_t* v = nullptr;
+    uint32_t y_stride = 0;
+    /// Bytes per row of the chroma plane (NV12: of the interleaved plane).
+    uint32_t uv_stride = 0;
+    /// Visible size of the picture (even).
+    uint32_t width = 0;
+    uint32_t height = 0;
+};
 #endif
 
 /// A hardware or software H.264 decoder that writes each picture into one of
@@ -66,6 +92,9 @@ public:
     /// The latest decoded frame as a CVPixelBufferRef (BGRA). The caller
     /// retains it if it keeps it. Valid until the next call to decode().
     virtual void* get_frame_buffer() = 0;
+#elif defined(__linux__)
+    /// The picture of output slot `slot` after a FrameReady.
+    virtual bool picture(int slot, CpuPicture& out) const = 0;
 #endif
 
     virtual bool        supports_codec(VideoCodec codec) const = 0;

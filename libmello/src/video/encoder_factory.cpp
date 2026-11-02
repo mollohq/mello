@@ -13,11 +13,23 @@
 #include "encoder_openh264.hpp"
 #elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
 #include "encoder_videotoolbox.hpp"
+#elif defined(__linux__)
+#include "encoder_openh264.hpp"
+#include "encoder_gst.hpp"
+#include "linux_gpu.hpp"
+#include <string>
 #endif
 
 namespace mello::video {
 
 static constexpr const char* TAG = "video/encoder";
+
+#if defined(__linux__)
+static std::vector<std::string> linux_encoders() {
+    const char* forced = std::getenv("MELLO_LINUX_ENCODER");
+    return linux_encoder_order(list_linux_gpus(), soft_encoder_requested(), forced ? forced : "");
+}
+#endif
 
 bool soft_encoder_requested() {
 #ifdef _WIN32
@@ -91,6 +103,28 @@ std::unique_ptr<Encoder> create_best_encoder(
         MELLO_LOG_WARN(TAG, "VideoToolbox: initialize() failed");
     }
     MELLO_LOG_ERROR(TAG, "No encoder available on macOS");
+#elif defined(__linux__)
+    // The primary GPU's hardware encoder first (linux_gpu.hpp). Software
+    // OpenH264 only with MELLO_SOFT_ENCODER=1, as on Windows.
+    for (const std::string& name : linux_encoders()) {
+        if (name == "OpenH264") {
+            MELLO_LOG_INFO(TAG, "Software OpenH264 encoder only (MELLO_SOFT_ENCODER or MELLO_LINUX_ENCODER)");
+            if (!OpenH264Encoder::is_available()) {
+                MELLO_LOG_ERROR(TAG, "OpenH264: library with encoder entry points not found");
+                continue;
+            }
+            auto enc = std::make_unique<OpenH264Encoder>();
+            if (enc->initialize(device, config)) return enc;
+            MELLO_LOG_ERROR(TAG, "OpenH264: initialize() failed");
+        } else if (name == "VA-API") {
+            auto enc = std::make_unique<GstEncoder>(GstEncoderKind::VaApi);
+            if (enc->initialize(device, config)) return enc;
+        } else if (name == "NVENC") {
+            auto enc = std::make_unique<GstEncoder>(GstEncoderKind::Nvenc);
+            if (enc->initialize(device, config)) return enc;
+        }
+    }
+    MELLO_LOG_ERROR(TAG, "No encoder available on Linux");
 #else
     (void)device; (void)config;
     MELLO_LOG_ERROR(TAG, "No encoders available on this platform");
@@ -98,6 +132,20 @@ std::unique_ptr<Encoder> create_best_encoder(
 
     return nullptr;
 }
+
+#if defined(__linux__)
+std::vector<DmaBufFormat> linux_encoder_dmabuf_formats() {
+    const std::vector<std::string> order = linux_encoders();
+    if (order.empty()) return {};
+    if (order.front() == "VA-API" && GstEncoder::is_available(GstEncoderKind::VaApi)) {
+        return GstEncoder::dmabuf_formats(GstEncoderKind::VaApi);
+    }
+    if (order.front() == "NVENC" && GstEncoder::is_available(GstEncoderKind::Nvenc)) {
+        return GstEncoder::dmabuf_formats(GstEncoderKind::Nvenc);
+    }
+    return {};
+}
+#endif
 
 std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
     std::vector<const char*> result;
@@ -113,6 +161,12 @@ std::vector<const char*> enumerate_encoders(const GraphicsDevice& device) {
     if (QsvEncoder::is_available())   result.push_back("QSV-oneVPL");
 #elif defined(__APPLE__) && !defined(MELLO_IOS_NO_HOSTING)
     if (VTEncoder::is_available()) result.push_back("VideoToolbox");
+#elif defined(__linux__)
+    for (const std::string& name : linux_encoders()) {
+        if (name == "OpenH264" && OpenH264Encoder::is_available()) result.push_back("OpenH264");
+        if (name == "VA-API" && GstEncoder::is_available(GstEncoderKind::VaApi)) result.push_back("VA-API");
+        if (name == "NVENC" && GstEncoder::is_available(GstEncoderKind::Nvenc)) result.push_back("NVENC");
+    }
 #endif
 
     return result;

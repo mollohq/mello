@@ -11,6 +11,10 @@
 #include <algorithm>
 #include <cmath>
 
+#if defined(__linux__)
+#include "capture_pipewire_video.hpp"
+#include "capture_frame.hpp"
+#endif
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
 #include <Accelerate/Accelerate.h>
@@ -25,7 +29,13 @@ static constexpr std::chrono::seconds kEncodeJoinDeadline{5};
 
 // iOS has no hosting/capture in v1 (and the macOS impl lives in the excluded
 // capture_screencapturekit.mm), so provide the nullptr stub here too.
-#if (!defined(_WIN32) && !defined(__APPLE__)) || defined(MELLO_IOS_NO_HOSTING)
+#if defined(__linux__)
+// Linux: the portal's PipeWire stream is the only capture.
+std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc& desc) {
+    if (desc.mode != CaptureMode::PipeWire) return nullptr;
+    return std::make_unique<PipeWireVideoCapture>();
+}
+#elif (!defined(_WIN32) && !defined(__APPLE__)) || defined(MELLO_IOS_NO_HOSTING)
 std::unique_ptr<CaptureSource> create_capture_source(const CaptureSourceDesc&) { return nullptr; }
 #endif
 
@@ -89,6 +99,8 @@ bool VideoPipeline::init_device() {
     device_ = create_d3d11_device();
 #elif defined(__APPLE__)
     device_ = create_metal_device();
+#elif defined(__linux__)
+    device_ = create_cpu_device();
 #endif
     return device_.handle != nullptr;
 }
@@ -114,6 +126,11 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     // cannot carry a stream on its own becomes its process here.
 #ifdef _WIN32
     const CaptureSourceDesc resolved = resolve_capture_target(source);
+#elif defined(__linux__)
+    // The encoder's DMA-BUF layouts, so the capture keeps the picture on the
+    // GPU when the compositor shares one of them.
+    CaptureSourceDesc resolved = source;
+    resolved.dmabuf_formats = linux_encoder_dmabuf_formats();
 #else
     const CaptureSourceDesc resolved = source;
 #endif
@@ -227,8 +244,10 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         if (encode_thread_.joinable()) encode_thread_.join();
         return false;
     }
-#elif defined(__APPLE__)
-    // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly
+#elif defined(__APPLE__) || defined(__linux__)
+    // macOS: No preprocessor needed — VT accepts BGRA CVPixelBuffer directly.
+    // Linux: the encoder takes the capture's CPU picture and converts and
+    // scales it itself (encoder.hpp).
     uint32_t cap_w = capture_->width()  & ~1u;
     uint32_t cap_h = capture_->height() & ~1u;
     const EncodeSize target = encode_size_for(cap_w, cap_h, config.height, config.fps);
@@ -260,6 +279,11 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     next_emit_deadline_us_ = 0;
 
     auto self = this;
+#if defined(__linux__)
+    // A still screen sends no picture: the encoder's last access unit goes
+    // out from here.
+    capture_->set_idle_callback([self] { self->on_capture_idle(); });
+#endif
     if (!capture_->start(config.fps, [self](void* pixel_buffer, uint64_t ts) {
         self->on_captured_frame(pixel_buffer, ts);
     })) {
@@ -363,7 +387,7 @@ void VideoPipeline::stop_host() {
 #endif
 }
 
-#ifdef __APPLE__
+#if defined(__APPLE__) || defined(__linux__)
 void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us) {
     if (!host_running_.load()) return;
 
@@ -375,7 +399,13 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
     }
 
     EncodedPacket packet{};
-    if (encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet)) {
+#if defined(__linux__)
+    // The capture's CaptureFrame (capture_source.hpp), not a pixel buffer.
+    const bool encoded = encoder_control_.encode(*static_cast<const CaptureFrame*>(cv_pixel_buffer), timestamp_us, packet);
+#else
+    const bool encoded = encoder_control_.encode(cv_pixel_buffer, timestamp_us, packet);
+#endif
+    if (encoded) {
         frames_encoded_++;
 
         if (frames_encoded_ <= 3) {
@@ -393,8 +423,28 @@ void VideoPipeline::on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_
         }
 
         if (packet_cb_) {
+#if defined(__linux__)
+            // An encoder with a picture in flight gives an earlier picture's
+            // access unit: its own capture time goes with it.
+            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, packet.timestamp_us);
+#else
             packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, timestamp_us);
+#endif
         }
+    }
+}
+#endif
+
+#if defined(__linux__)
+void VideoPipeline::on_capture_idle() {
+    if (!host_running_.load()) return;
+    EncodedPacket packet{};
+    while (encoder_control_.drain(packet)) {
+        frames_encoded_++;
+        if (packet_cb_) {
+            packet_cb_(packet.data.data(), packet.data.size(), packet.is_keyframe, packet.timestamp_us);
+        }
+        packet = EncodedPacket{};
     }
 }
 #endif
@@ -595,7 +645,7 @@ bool VideoPipeline::encoder_available() const {
         auto* self = const_cast<VideoPipeline*>(this);
         if (!self->init_device()) return false;
     }
-#if defined(_WIN32) || defined(__APPLE__)
+#if defined(_WIN32) || defined(__APPLE__) || defined(__linux__)
     auto encoders = enumerate_encoders(device_);
     return !encoders.empty();
 #else
