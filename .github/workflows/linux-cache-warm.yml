@@ -3,9 +3,9 @@ name: Linux cache warm
 # A cache that a pull_request run saves is visible only to that PR (its
 # merge ref scope). PR Checks runs only on pull_request, so the cargo
 # registry cache never hit: no run ever saved it in the scope of main. This
-# run saves the caches of linux-build-test.yml (the vcpkg packages and the
-# cargo registry) from a push to main, in the default branch scope, where
-# every PR can restore them. actions/cache saves at the end of a
+# run saves the caches of linux-build-test.yml (the vcpkg packages, the cargo
+# registry and the sccache entries) from a push to main, in the default
+# branch scope, where every PR can restore them. actions/cache saves at the end of a
 # job when its primary key missed, so each new Cargo.lock or vcpkg key is
 # saved by the first main run that sees it. Hosted Linux only: it costs no
 # self-hosted runner time.

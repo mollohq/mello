@@ -23,6 +23,12 @@ runs:
       shell: bash
       run: sudo scripts/linux/install-build-deps.sh
 
+    # Before any cargo command: RUSTC_WRAPPER (linux-build-test.yml) names
+    # sccache. The action exports the cache service variables that the GHA
+    # backend of sccache needs.
+    - name: Set up sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+
     # RUST_VERSION comes from the env of linux-build-test.yml.
     - name: Install Rust
       if: ${{ inputs.rust != 'false' }}

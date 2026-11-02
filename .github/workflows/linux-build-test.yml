@@ -27,6 +27,17 @@ env:
   # The toolchain of the developer Mac and the build container.
   RUST_VERSION: "1.94.0"
   VCPKG_DEFAULT_BINARY_CACHE: ${{ github.workspace }}/.vcpkg-cache
+  # sccache caches the Rust and the C++ compiles in the GitHub Actions cache
+  # (the setup action installs it). sccache needs CARGO_INCREMENTAL=0, set
+  # above. CMake reads the *_COMPILER_LAUNCHER env vars, so the cmake build
+  # of the mello-sys build script and the C++ job both go through sccache.
+  # linux-cache-warm.yml fills the cache from main, where every PR reads it.
+  # The repository cache limit is 10 GB, shared with the vcpkg and cargo
+  # registry caches; GitHub evicts the least recently used entries.
+  SCCACHE_GHA_ENABLED: "true"
+  RUSTC_WRAPPER: sccache
+  CMAKE_C_COMPILER_LAUNCHER: sccache
+  CMAKE_CXX_COMPILER_LAUNCHER: sccache
 
 # Ubuntu 24.04 in every job: glibc 2.39, the floor of the Linux release (the
 # AppImage builds in the same base, scripts/linux/Dockerfile). The hosted
@@ -67,6 +78,10 @@ jobs:
           MELLO_SYS_BINDINGS_ONLY: "1"
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats
+
   test:
     name: Test (Linux)
     runs-on: ubuntu-24.04
@@ -85,6 +100,10 @@ jobs:
       - name: Run tests
         # --tests and no doc-tests: see the Windows job in pr-checks.yml.
         run: cargo test --workspace --tests
+
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats
 
   cpp:
     name: C++ tests (Linux)
@@ -124,3 +143,7 @@ jobs:
       # See the Windows job in pr-checks.yml for -j.
       - name: Run C++ tests
         run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300 -j "$(nproc)"
+
+      - name: sccache statistics
+        if: always()
+        run: sccache --show-stats
