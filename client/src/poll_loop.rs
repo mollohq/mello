@@ -256,6 +256,8 @@ impl PollState {
                     let state = crate::hud_state_builder::build_hud_state(poll_ctx, new_mode);
                     poll_ctx.hud_manager.push_state(state);
                 }
+                // A HUD hidden for a while gives its window and GPU device back.
+                poll_ctx.hud_manager.tick(std::time::Instant::now());
             }
 
             // --- HUD actions ---

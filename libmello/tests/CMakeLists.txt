@@ -125,7 +125,7 @@ gtest_discover_tests(mello_procenum_tests)
 # which scripts/stream-gate.sh fetches into third_party/openh264; it is
 # copied next to the tests when present, else the loopback skips.
 if(WIN32 AND NOT IOS)
-    target_sources(mello_tests PRIVATE test_capture_reference.cpp)
+    target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp)
     set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
     if(EXISTS "${_oh264_dll}")
         add_custom_command(TARGET mello_tests POST_BUILD

@@ -127,14 +127,14 @@ slint = { version = "1.18", default-features = false, features = ["std", "compat
 slint-build = { version = "1.18", default-features = false, features = ["compat-1-18"] }
 ```
 
-- On Windows, the default is mello's own Direct2D renderer, name `d2d`, crate `renderer-d2d`: a D3D11 flip swapchain on the window, Direct2D for the drawing, DirectWrite for the glyph runs that Slint lays out in core. It is hooked into the vendored winit backend (`third_party/i-slint-backend-winit`, feature `renderer-d2d`, `renderer/d2d.rs`) because the backend's renderer trait is private.
+- On Windows, the default is mello's own Direct2D renderer, name `d2d`, crate `renderer-d2d`: a D3D11 flip swapchain on the window, Direct2D for the drawing, DirectWrite for the glyph runs that Slint lays out in core. It is hooked into the vendored winit backend (`third_party/i-slint-backend-winit`, feature `renderer-d2d`, `renderer/d2d.rs`) because the backend's renderer trait is private. Design, memory rules and Slint upgrade steps: `specs/features/D2D-RENDERER.md`.
 - The fallback is Skia's CPU rasterizer, name `skia-software`. `client/src/renderer_choice.rs` picks between the two, in this order:
   1. `MELLO_RENDERER=d2d|skia-software` overrides everything (debug).
   2. The "Hardware Acceleration" setting off means `skia-software`, with no GPU device created.
   3. The client creates the D3D11 device once (`i_slint_renderer_d2d::probe`). If that fails (no GPU driver, a remote desktop session, a driver being updated), `skia-software`.
   4. Otherwise `d2d`.
   The choice is logged at startup with its reason. `renderer_choice.rs` has the unit tests for all four rules; keep them passing.
-- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game. Measured (m3llo-fx-lab WINDOWS.md 3.6, release build, idle shown, no voice channel, 2026-10-31):
+- Do not use Skia on wgpu (D3D12) on Windows. At idle it adds ~250 MB of RAM and ~190 MB of GPU memory, and it takes GPU time from the game. Measured (release build, idle shown, no voice channel, 2026-10-31; all renderers in `specs/features/D2D-RENDERER.md` section 8):
 
   | Windows, idle | Working set | Private working set | GPU memory |
   |---|---|---|---|
@@ -152,6 +152,14 @@ slint-build = { version = "1.18", default-features = false, features = ["compat-
 ### 3.2 Opaque windows on macOS
 
 A window with a frame must have an opaque `background`. Slint 1.18 makes an `NSWindow` transparent only when the background is translucent or the window has no frame. On macOS 27, a transparent window has no title bar background.
+
+### 3.3 Process memory on Windows
+
+The client target is under 80 MB private working set (Task Manager "Memory") idle in a voice call. The HUD overlay is off (spec features/HUD-OVERLAY.md section 0) and the client uses the segment heap. Measurements: `specs/features/D2D-RENDERER.md` section 8.4.
+
+- **Segment heap.** The client manifest (`client/build.rs`, `res.set_manifest`) selects the segment heap for the process heap. It holds the same allocations in about 6 MB less memory than the NT heap. Windows 10 2004 and later; older builds ignore it. The manifest has nothing else, so every other default stays as without a manifest.
+- **No forced working-set trim.** The client does not call `SetProcessWorkingSetSize(-1, -1)` or `EmptyWorkingSet`. A trim brings a call to 24 - 26 MB (D2D-RENDERER section 8.4), but it adds page faults at times the client does not control and can send pages to the pagefile under memory pressure. Windows trims the working set itself when the window is minimized and when free memory is low.
+- Private bytes (committed memory) do not change with the segment heap. Report both numbers when you measure.
 
 ---
 

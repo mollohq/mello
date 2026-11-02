@@ -47,6 +47,7 @@ libmello/
 │   ├── video/
 │   │   ├── video_pipeline.hpp/cpp
 │   │   ├── capture_source.hpp      # CaptureSource interface, CaptureState
+│   │   ├── capture_manager.hpp/cpp # CaptureManager: one capture and its device, given to each consumer (Windows host)
 │   │   ├── capture_process.hpp/cpp # ProcessCapture: the capture ladder
 │   │   ├── capture_hook.hpp/cpp    # Game capture hook backend (client side)
 │   │   ├── hook_launcher.hpp/cpp   # Offsets helper and injection helper

@@ -133,10 +133,8 @@ static std::atomic<uint32_t> g_abandoned_pipelines{0};
 /// pipeline first would leave that queue calling into freed memory.
 static void stream_audio_teardown(MelloStreamHost* host) {
     if (host->video) {
-        if (auto* capture = host->video->capture()) {
-            capture->set_audio_callback(nullptr);
-            capture->set_timed_audio_callback(nullptr);
-        }
+        host->video->set_capture_audio_callback(nullptr);
+        host->video->set_capture_timed_audio_callback(nullptr);
     }
     if (host->audio_pipeline) {
         host->audio_pipeline->stop();
@@ -1577,7 +1575,8 @@ MelloResult mello_test_set_reference_clip(MelloContext* ctx,
 bool mello_stream_reference_info(MelloStreamHost* host, MelloReferenceInfo* out) {
     if (!host || !out || !host->video) return false;
 #ifdef _WIN32
-    auto* ref = dynamic_cast<mello::video::ReferenceCapture*>(host->video->capture());
+    auto* manager = host->video->capture_manager();
+    auto* ref = manager ? dynamic_cast<mello::video::ReferenceCapture*>(manager->source()) : nullptr;
     if (!ref) return false;
     const mello::video::ReferenceInfo info = ref->info();
     out->start_us = info.start_us;
@@ -1663,8 +1662,7 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         // Stage 7: the capture times and the receiver reports go through
         // the context's link to the host peer.
         pipeline->set_link(host->ctx->stream_audio_link());
-        auto* source = host->video->capture();
-        const bool timed_source = source && source->provides_timed_audio();
+        const bool timed_source = host->video->capture_provides_timed_audio();
         if (!pipeline->start(
                 [cb, ud](const uint8_t* data, int size, uint64_t ts_us) {
                     if (cb) cb(ud, data, size, ts_us);
@@ -1677,7 +1675,7 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
             // The reference source makes the audio of its own clip, with
             // exact capture times.
             auto* raw = pipeline.get();
-            source->set_timed_audio_callback(
+            host->video->set_capture_timed_audio_callback(
                 [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate, int64_t at) {
                     raw->feed_float_pcm_at(s, frames, ch, rate, at);
                 });
@@ -1687,9 +1685,9 @@ MelloResult mello_stream_start_audio(MelloStreamHost* host) {
         // the capture stream that is already running for video, so the pipeline
         // is fed from there instead of opening its own source. On Windows the
         // capture backend ignores this and the WASAPI loopback drives it.
-        if (auto* capture = host->video->capture()) {
+        {
             auto* raw = pipeline.get();
-            capture->set_audio_callback(
+            host->video->set_capture_audio_callback(
                 [raw](const float* s, uint32_t frames, uint32_t ch, uint32_t rate) {
                     raw->feed_float_pcm(s, frames, ch, rate);
                 });

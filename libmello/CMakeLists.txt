@@ -316,6 +316,7 @@ if(WIN32)
         src/video/video_viewer.cpp
         src/video/capture_dxgi.cpp
         src/video/capture_wgc.cpp
+        src/video/capture_manager.cpp
         src/video/capture_process.cpp
         src/video/capture_hook.cpp
         src/video/hook_launcher.cpp
