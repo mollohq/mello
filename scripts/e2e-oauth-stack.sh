@@ -6,7 +6,7 @@
 #   scripts/e2e-oauth-stack.sh down   # the normal stack again
 #
 # While the profile runs, the local Nakama cannot reach the real Discord,
-# Twitch, Steam or Google. Postgres and MinIO keep their data: they use the
+# Twitch, Steam or Google. Postgres and RustFS keep their data: they use the
 # named volumes of the "backend" project in both modes.
 #
 # The stack belongs to one checkout: the one that last started Postgres (its
