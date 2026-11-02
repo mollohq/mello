@@ -206,6 +206,8 @@ pub struct Client {
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
     telemetry_registry: Arc<AdapterRegistry>,
+    /// Roblox experience names by place id (spec 18 §3.11).
+    roblox_names: Arc<crate::roblox_names::RobloxNames>,
     /// Game integrations the user switched off (Games settings page). Disabled
     /// ids skip config installs and active transports.
     disabled_integrations: std::collections::HashSet<String>,
@@ -400,6 +402,7 @@ impl Client {
             game_sensor: None,
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
+            roblox_names: crate::roblox_names::global(),
             disabled_integrations: std::collections::HashSet::new(),
             share_game_activity: true,
             hidden_games: std::collections::HashSet::new(),
@@ -1211,6 +1214,7 @@ impl Client {
                         draws,
                         start_ms,
                         end_ms,
+                        None,
                     )
                     .await;
                 }

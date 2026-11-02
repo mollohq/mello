@@ -41,6 +41,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // Clear any stale summary/hint/CTA from a previous session.
             ctx.app.set_game_summary("".into());
             ctx.app.set_telemetry_hint("".into());
+            ctx.app.set_game_activity("".into());
             ctx.app.set_riot_cta_visible(false);
             ctx.app.set_can_stream(true);
             ctx.app.set_bar_state(1);
@@ -53,6 +54,13 @@ pub fn handle(ctx: &AppContext, event: Event) {
             // A first-ever launch has nothing yet, and extract_and_cache
             // pushes it in when extraction finishes a moment later.
             crate::game_icons::push_bar_art(ctx, &game_id_for_icon, &game_name_for_icon);
+        }
+        Event::GameActivity { game_id, activity } => {
+            // The bar shows one game; a name for another one is not its.
+            if ctx.app.get_game_id().as_str() == game_id {
+                log::info!("[ui] game activity: {activity:?}");
+                ctx.app.set_game_activity(activity.into());
+            }
         }
         Event::GameEnded {
             game_id,
@@ -68,6 +76,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.live_games.borrow_mut().end_own(&game_id);
             ctx.app.set_can_stream(false);
             ctx.app.set_telemetry_hint("".into());
+            ctx.app.set_game_activity("".into());
             if duration_min >= POST_GAME_MIN_DURATION {
                 ctx.app.set_bar_state(2);
                 start_post_game_timeout(ctx);

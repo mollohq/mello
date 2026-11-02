@@ -424,6 +424,8 @@ the tray launcher, the home screen and the experience. The sensor still owns
 process detection and coalescing; the adapter only says when play starts and
 ends. The sensor's `Foreground` event keeps the parked game's foreground
 total current so a session closed by the adapter reports honest active time.
+The client names the activity after the open (spec 18 §3.11); the name goes
+to the bar, to presence and to the ledger.
 
 ### 4.3 Minimum Session Thresholds
 
@@ -442,7 +444,7 @@ Add `playing` to the activity types table in spec 11, section 2.1:
 
 | Type | Fields | Description |
 |------|--------|-------------|
-| `playing` | `game_name`, `game_id`, `started_at` | Playing a detected game |
+| `playing` | `game_name`, `game_id`, `started_at`, `activity` | Playing a detected game. `activity` is the named activity inside it (the Roblox experience, spec 18 §3.11); absent for every other game |
 
 Example presence payload:
 
@@ -482,6 +484,11 @@ A user can be in voice AND playing a game simultaneously. This is the most commo
     "updated_at": "2026-04-03T14:00:05Z"
 }
 ```
+
+A Roblox session adds the experience: `"game": {"game_name": "Roblox",
+"game_id": "roblox", "started_at": "...", "activity": "Grow a Garden"}`. The
+client publishes again when the activity changes, as it does when the game
+changes.
 
 The `game` field is a separate top-level field on presence, not nested inside `activity`. This way, `activity` still represents the primary social action (voice, streaming, watching), and `game` is an orthogonal signal that can coexist with any activity type.
 

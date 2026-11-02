@@ -112,6 +112,7 @@ impl super::Client {
         draws: u32,
         start_ms: i64,
         end_ms: i64,
+        activity: Option<&str>,
     ) {
         let req = crate::crew_events::GameSessionEndRequest {
             crew_id: crew_id.unwrap_or_default().to_string(),
@@ -124,6 +125,7 @@ impl super::Client {
             losses,
             draws,
             session_id: generate_session_id(),
+            activity: activity.unwrap_or_default().to_string(),
             start_ms,
             end_ms,
             tz_offset_min: crate::crew_events::local_tz_offset_min(end_ms),

@@ -14,6 +14,9 @@ struct GameSession {
     matches: Vec<MatchResult>,
     /// The adapter's activity id for a gated session (a Roblox place id).
     activity_id: Option<String>,
+    /// The activity's name once the client's lookup answered (spec 18
+    /// §3.11): the Roblox experience. Presence and the ledger carry it.
+    activity_name: Option<String>,
     /// The process's foreground total when this session opened. The sensor
     /// counts foreground time per process; a gated session that is the
     /// second experience of one process starts from the first one's total.
@@ -118,6 +121,7 @@ impl GameStateManager {
                         game,
                         matches: Vec::new(),
                         activity_id: None,
+                        activity_name: None,
                         foreground_base: 0,
                     },
                 );
@@ -224,6 +228,7 @@ impl GameStateManager {
                 matches: std::mem::take(&mut session.matches),
                 start_ms: session.game.started_at,
                 end_ms: ended_at,
+                activity: session.activity_name.take(),
             });
         }
 
@@ -256,7 +261,16 @@ impl GameStateManager {
                         open.game.game_name
                     );
                     open.activity_id = Some(activity_id);
-                    return (Vec::new(), None);
+                    // The old name is wrong now; the bar shows none until
+                    // the lookup names the new activity.
+                    let events = match open.activity_name.take() {
+                        Some(_) => vec![Event::GameActivity {
+                            game_id,
+                            activity: String::new(),
+                        }],
+                        None => Vec::new(),
+                    };
+                    return (events, None);
                 }
                 let Some(mut game) = self.pending.remove(&game_id) else {
                     log::debug!("[game-state] activity for {game_id} with no process up; ignoring");
@@ -285,6 +299,7 @@ impl GameStateManager {
                         game,
                         matches: Vec::new(),
                         activity_id: Some(activity_id),
+                        activity_name: None,
                         foreground_base,
                     },
                 );
@@ -292,6 +307,31 @@ impl GameStateManager {
                     self.primary = Some(game_id);
                 }
                 (vec![detected], None)
+            }
+            TelemetryEvent::ActivityNamed {
+                game_id,
+                activity_id,
+                name,
+            } => {
+                let Some(open) = self.sessions.get_mut(&game_id) else {
+                    log::debug!("[game-state] a name for {game_id} with no session; ignoring");
+                    return (Vec::new(), None);
+                };
+                if open.activity_id.as_deref() != Some(activity_id.as_str()) {
+                    log::debug!(
+                        "[game-state] a name for activity {activity_id} of {game_id}, which moved on; ignoring"
+                    );
+                    return (Vec::new(), None);
+                }
+                log::info!("[game-state] {} is in {name:?}", open.game.game_name);
+                open.activity_name = Some(name.clone());
+                (
+                    vec![Event::GameActivity {
+                        game_id,
+                        activity: name,
+                    }],
+                    None,
+                )
             }
             TelemetryEvent::ActivityEnded { game_id, ts } => {
                 let Some(open) = self.sessions.get(&game_id) else {
@@ -358,6 +398,23 @@ impl GameStateManager {
             .map(|s| &s.game)
     }
 
+    /// The named activity of the primary game (spec 18 §3.11), for presence.
+    /// `None` when the session has no activity or its name is not known.
+    pub fn current_activity(&self) -> Option<&str> {
+        self.primary
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
+            .and_then(|s| s.activity_name.as_deref())
+    }
+
+    /// True while the open session of `game_id` is in `activity_id`. The
+    /// client asks before it starts a lookup for the activity's name.
+    pub fn is_in_activity(&self, game_id: &str, activity_id: &str) -> bool {
+        self.sessions
+            .get(game_id)
+            .is_some_and(|s| s.activity_id.as_deref() == Some(activity_id))
+    }
+
     /// True while any game is running, regardless of which has focus.
     pub fn any_active(&self) -> bool {
         !self.sessions.is_empty()
@@ -383,6 +440,9 @@ pub struct SessionSummary {
     pub start_ms: i64,
     /// When the game was last seen alive (Unix ms).
     pub end_ms: i64,
+    /// The named activity of a gated session (spec 18 §3.11): the Roblox
+    /// experience. `None` for every other game, or when the lookup failed.
+    pub activity: Option<String>,
 }
 
 /// Count streak-eligible wins/losses/draws. Wins/losses move the record;
@@ -924,6 +984,85 @@ mod gated_tests {
         m.handle_event(foreground(15 * 60_000));
         let (_, end) = m.handle_telemetry(left(LEAVE + 10 * 60_000));
         assert_eq!(end.expect("recorded").active_min, 4);
+    }
+
+    fn named(place: &str, name: &str) -> TelemetryEvent {
+        TelemetryEvent::ActivityNamed {
+            game_id: "roblox".into(),
+            activity_id: place.into(),
+            name: name.into(),
+        }
+    }
+
+    /// The lookup answers after the join. The name goes to the bar, to
+    /// presence and, at the leave, to the ledger.
+    #[test]
+    fn the_lookup_names_the_activity_for_the_bar_presence_and_the_ledger() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        assert!(m.is_in_activity("roblox", "p"));
+        assert!(!m.is_in_activity("roblox", "q"));
+        assert_eq!(m.current_activity(), None, "not known before the answer");
+
+        let (events, end) = m.handle_telemetry(named("p", "Grow a Garden"));
+        assert!(end.is_none());
+        assert!(matches!(
+            &events[..],
+            [Event::GameActivity { game_id, activity }]
+                if game_id == "roblox" && activity == "Grow a Garden"
+        ));
+        assert_eq!(m.current_activity(), Some("Grow a Garden"));
+
+        let (_, end) = m.handle_telemetry(left(LEAVE));
+        assert_eq!(
+            end.expect("recorded").activity.as_deref(),
+            Some("Grow a Garden")
+        );
+    }
+
+    /// An answer for an activity the session has left is wrong by now.
+    #[test]
+    fn a_late_name_for_a_past_activity_is_dropped() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        m.handle_telemetry(joined("q", JOIN + 60_000));
+        let (events, _) = m.handle_telemetry(named("p", "Old Place"));
+        assert!(events.is_empty());
+        assert_eq!(m.current_activity(), None);
+
+        let (events, _) = m.handle_telemetry(named("q", "New Place"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(m.current_activity(), Some("New Place"));
+    }
+
+    /// A name without a session changes nothing.
+    #[test]
+    fn a_name_without_a_session_is_ignored() {
+        let mut m = gated();
+        let (events, end) = m.handle_telemetry(named("p", "Nowhere"));
+        assert!(events.is_empty());
+        assert!(end.is_none());
+        assert_eq!(m.current_activity(), None);
+    }
+
+    /// A teleport clears the bar's name until the lookup names the new
+    /// activity; a teleport before any name says nothing.
+    #[test]
+    fn a_teleport_clears_the_old_name() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        let (events, _) = m.handle_telemetry(joined("q", JOIN + 60_000));
+        assert!(events.is_empty(), "nothing to clear");
+        m.handle_telemetry(named("q", "Place Q"));
+        let (events, _) = m.handle_telemetry(joined("r", JOIN + 120_000));
+        assert!(matches!(
+            &events[..],
+            [Event::GameActivity { activity, .. }] if activity.is_empty()
+        ));
+        assert_eq!(m.current_activity(), None);
     }
 
     #[test]

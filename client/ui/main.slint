@@ -261,6 +261,8 @@ export component MainWindow inherits Window {
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
+    // The activity inside the game (spec 18 §3.11): the Roblox experience.
+    in property <string> game-activity: "";
     in property <bool> can-stream: false;
     in-out property <int> bar-state: 0;
 
@@ -1184,6 +1186,7 @@ export component MainWindow inherits Window {
                         game-hue-index: root.game-hue-index;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
+                        game-activity: root.game-activity;
                         can-stream: root.can-stream;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;

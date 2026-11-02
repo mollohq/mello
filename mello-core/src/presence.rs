@@ -70,6 +70,10 @@ pub struct GamePresence {
     pub game_id: String,
     #[serde(default)]
     pub started_at: String,
+    /// The activity inside the game (spec 17 §5.1): the Roblox experience's
+    /// name. Empty for a game without one, and absent from the payload then.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub activity: String,
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]

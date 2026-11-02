@@ -129,6 +129,8 @@ pub enum TelemetryEvent {
     ActivityStarted { game_id: String, activity_id: String, ts: i64 },
     /// Gated sessions only (§2.4): play ended; the process is still up.
     ActivityEnded { game_id: String, ts: i64 },
+    /// The client's own lookup named the activity (§3.11). Not from an adapter.
+    ActivityNamed { game_id: String, activity_id: String, name: String },
 }
 ```
 
@@ -221,7 +223,8 @@ game:
 | `ActivityStarted { ts }` | Not sent | Session opens at `ts`; `GameDetected` carries `ts` |
 | `ActivityEnded { ts }` | Not sent | Session closes at `ts`; summary and `GameEnded`; game parks again |
 | Sensor `Stopped` | Session closes | Open session closes; a parked game is dropped quietly |
-| `ActivityStarted` while open | Not sent | Teleport: the session stays open, the activity id moves |
+| `ActivityStarted` while open | Not sent | Teleport: the session stays open, the activity id moves; a known name clears (`GameActivity` with an empty name) |
+| `ActivityNamed { activity_id, name }` | Not sent | The name sticks to the session when `activity_id` is still its activity; `GameActivity` carries it to the bar, presence re-publishes, the ledger gets it at the close |
 
 The sensor's `Foreground` event carries the process's running foreground
 total. A gated session records the foreground time between its open and its
@@ -362,10 +365,41 @@ beginning.
 
 Each line starts with an RFC 3339 timestamp; it is the event's `ts`, so a
 session opened from history starts at the real join. The log does not name
-the experience. The place id and the universe id (`[FLog::GameJoinLoadTime]
-... placeid:..., universeid:...`) identify it; a name needs a lookup against
-Roblox's public games API, which is not part of this adapter. No outcome is
-derived: Roblox experiences have no common result model.
+the experience. The place id identifies it; the name comes from the lookup
+below, which is not part of this adapter. No outcome is derived: Roblox
+experiences have no common result model.
+
+**The name lookup** (`mello-core/src/roblox_names.rs`). The client, not the
+adapter, asks Roblox's public games API when a session opens or moves to a
+new activity (`apply_telemetry` → `name_activity`). The answer comes back on
+the telemetry channel as `ActivityNamed`, so the state manager applies it in
+order with the adapter's own events and drops an answer for an activity the
+session has left.
+
+| Request | Answer |
+|---|---|
+| `GET https://apis.roblox.com/universes/v1/places/<placeId>/universe` | `{"universeId": N}` |
+| `GET https://games.roblox.com/v1/games?universeIds=N` | `{"data": [{"id": N, "name": "..."}]}` |
+
+The requests carry the place id and nothing else: no account, no cookie, no
+user data. A place id that is not digits never reaches the network.
+`MELLO_ROBLOX_API_BASE` points both requests at one host (dev and e2e).
+
+Cache rules:
+- A name lives in `roblox-names.json` in the store dir beside
+  `active_sessions.json`, keyed by place id, with its fetch time. A name
+  younger than 30 days is used as it is. An older name is still used, and the
+  next lookup asks again; a failed refresh keeps the old name.
+- A miss or an error is remembered in memory for an hour, so an unknown
+  place costs one request per hour and not one per join.
+
+Where the name goes:
+
+| Surface | Field |
+|---|---|
+| The NOW PLAYING bar | `Event::GameActivity { game_id, activity }`; a line under the game's name |
+| Presence (spec 17 §5.1) | `game.activity`; a crewmate's line reads `Roblox · <experience> · 12m` |
+| The ledger | `game_session_end.activity`, kept on the session event as `activity` |
 
 Observed on 2026-11-02: the experience runs in the same player process and
 the same window as the tray-resident launcher and the home screen. Joining
@@ -551,6 +585,9 @@ mello-core/src/telemetry/
 ├── poe_log.rs          # Path of Exile Client.txt tailer
 ├── roblox_log.rs       # Roblox player log tailer; gates the session (§2.4)
 └── sc2_client.rs       # StarCraft II client API poller
+
+mello-core/src/
+└── roblox_names.rs     # Roblox experience names by place id, disk cache (§3.11)
 
 backend/nakama/data/modules/
 └── user_game_stats.go   # UserGameStats store + update helper (mirrors clips/recaps)

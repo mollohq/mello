@@ -85,6 +85,10 @@ pub struct GameSessionEndRequest {
     /// streaks or duplicate the ledger event server-side.
     #[serde(default)]
     pub session_id: String,
+    /// The activity inside the game (spec 18 §3.11): the Roblox experience's
+    /// name. Empty for a game without one, and absent from the payload then.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub activity: String,
     /// Session start, Unix ms. 0 when unknown. Additive: the backend ignores
     /// unknown JSON fields today (plain `json.Unmarshal`).
     #[serde(default)]

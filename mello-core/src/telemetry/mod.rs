@@ -163,6 +163,14 @@ pub enum TelemetryEvent {
     /// The player left the activity. The session closes at `ts` although the
     /// game's process and window are still up.
     ActivityEnded { game_id: String, ts: i64 },
+    /// The client's own lookup named the activity (spec 18 §3.11): a Roblox
+    /// place id resolved to the experience's name. Not sent by an adapter.
+    /// Ignored when the session has moved to another activity meanwhile.
+    ActivityNamed {
+        game_id: String,
+        activity_id: String,
+        name: String,
+    },
 }
 
 /// A per-game integration that turns local game state into outcome events.
