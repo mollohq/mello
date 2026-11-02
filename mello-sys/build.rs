@@ -253,6 +253,31 @@ fn main() {
         }
     }
 
+    // The ONNX models, into models/ next to the test binaries (deps/) and the
+    // other binaries (its parent). find_model_file() in audio_pipeline.cpp
+    // looks in <exe dir>/models/ before it walks up to libmello/models/, and
+    // the walk finds nothing when CARGO_TARGET_DIR is outside the repo. CMake
+    // downloads the models into libmello/models/ above, so they exist here.
+    let models_src = Path::new(&manifest_dir).join("../libmello/models");
+    let mut model_dirs = vec![target_dir.join("models")];
+    if let Some(parent) = target_dir.parent() {
+        model_dirs.push(parent.join("models"));
+    }
+    for model in &["silero_vad.onnx", "echo_suppressor.onnx"] {
+        let src = models_src.join(model);
+        if !src.exists() {
+            println!(
+                "cargo:warning=libmello model {} not found, not copied next to the binaries",
+                src.display()
+            );
+            continue;
+        }
+        for dir in &model_dirs {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::copy(&src, dir.join(model));
+        }
+    }
+
     // Platform-specific system libraries
     match target_os.as_str() {
         "windows" => {

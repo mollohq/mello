@@ -205,6 +205,23 @@ if(WIN32 AND NOT IOS)
     endforeach()
 endif()
 
+# The ONNX models, into models/ next to mello_tests: mello_init loads them
+# through find_model_file() (audio_pipeline.cpp), which looks in
+# <exe dir>/models/ before it walks up to libmello/models/. The walk finds
+# nothing when the build dir is outside the repo. Only mello_tests runs the
+# audio pipeline; the other test executables do not load the models.
+# Desktop-only: iOS stubs VAD and the suppressor, and CMake does not
+# download the models there.
+if(NOT IOS)
+    add_custom_command(TARGET mello_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:mello_tests>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SILERO_VAD_MODEL}" "${ECHO_SUPPRESSOR_MODEL}"
+            "$<TARGET_FILE_DIR:mello_tests>/models/"
+        COMMENT "Copying the ONNX models next to mello_tests")
+endif()
+
 # Stage 3 spike: vendored NetEQ + AudioMixerImpl (option MELLO_WEBRTC_NETEQ,
 # cmake/webrtc-audio-processing). Own executable: it replaces the global
 # operator new to count heap per NetEQ instance, and it does not link the
