@@ -442,6 +442,17 @@ The current release workflow is `.github/workflows/release.yml`. It has separate
 
 Both platform jobs stamp the workspace version, refresh the lockfile offline, build with production features, run tests and clippy, assemble `dist/`, download the previous release artifacts for delta generation, and run `vpk pack`.
 
+Two `vpk pack` arguments name the app:
+
+| Argument | Value | What it names |
+|---|---|---|
+| `--packId` | `m3llo` | The install folder (`%LOCALAPPDATA%\m3llo`), the package files, and the AppUserModelID of the shortcuts (`velopack.m3llo`). |
+| `--packTitle` | `m3llo` | The Start menu and desktop shortcuts, the entry in the Windows Apps list, and the installer. |
+
+Do not change `--packId`. An installed app takes updates only for its own packId.
+
+A new `--packTitle` reaches existing installs on the next update. Velopack renames the shortcuts and writes the Apps entry again. It does not rename a shortcut that the user pinned.
+
 ### 6.1 Windows Workflow
 
 ```yaml
@@ -542,7 +553,7 @@ jobs:
             --packVersion %RELEASE_VERSION% ^
             --packDir dist ^
             --mainExe mello.exe ^
-            --packTitle Mello ^
+            --packTitle m3llo ^
             --channel %RELEASE_CHANNEL% ^
             --outputDir vpk-out ^
             --icon client/assets/icons/mello.ico ^
@@ -679,7 +690,7 @@ jobs:
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
-            --packTitle Mello \
+            --packTitle m3llo \
             --channel $RELEASE_CHANNEL \
             --outputDir vpk-out \
             --icon client/assets/icons/mello.icns \

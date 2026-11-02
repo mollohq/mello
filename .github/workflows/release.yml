@@ -141,7 +141,7 @@ jobs:
             --packVersion %RELEASE_VERSION% ^
             --packDir dist ^
             --mainExe mello.exe ^
-            --packTitle Mello ^
+            --packTitle m3llo ^
             --channel %RELEASE_CHANNEL% ^
             --outputDir vpk-out ^
             --icon client/assets/icons/mello.ico ^
@@ -282,7 +282,7 @@ jobs:
             --packVersion $RELEASE_VERSION \
             --packDir dist \
             --mainExe mello \
-            --packTitle Mello \
+            --packTitle m3llo \
             --channel $RELEASE_CHANNEL \
             --outputDir vpk-out \
             --icon client/assets/icons/mello.icns \
