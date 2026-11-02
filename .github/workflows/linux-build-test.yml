@@ -1,13 +1,8 @@
 name: Linux build and test
 
-# The Linux lane of PR Checks (pr-checks.yml calls this file), in its own file
-# so it can also run on the Linux branch before that branch has a PR.
+# The Linux lane of PR Checks (pr-checks.yml calls this file).
 on:
   workflow_call:
-  # Temporary: the Linux branch has no PR yet. Remove before merging
-  # feat/linux-client; pr-checks.yml then runs this lane for every PR.
-  push:
-    branches: [feat/linux-client]
 
 permissions:
   contents: read
