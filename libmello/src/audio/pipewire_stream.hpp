@@ -11,6 +11,9 @@
 #include <cstdint>
 #include <functional>
 #include <string>
+#include <vector>
+
+#include "device_enumerator.hpp"
 
 namespace mello::audio::pw {
 
@@ -29,6 +32,11 @@ constexpr uint32_t kRequestedFrames = 480;
 /// example `{"name":"alsa_output.pci-0000_00_1f.3.analog-stereo"}`. Empty when
 /// the value has no "name" string.
 std::string parse_default_node_name(const char* json);
+
+/// Whether a device id (a node.name) names one of `devices`. True for an empty
+/// id (the default device) and for an empty list: a scan that found nothing
+/// cannot say that a device is gone.
+bool device_is_known(const std::vector<AudioDeviceInfo>& devices, const std::string& id);
 
 /// One pw_stream on its own pw_thread_loop.
 ///

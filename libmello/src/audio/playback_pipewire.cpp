@@ -13,6 +13,12 @@ PipeWirePlayback::~PipeWirePlayback() {
 
 bool PipeWirePlayback::initialize(const char* device_id) {
     target_ = device_id ? device_id : "";
+    // An unknown sink would go to the default sink without a word: refuse it,
+    // so the pipeline falls back and reports MELLO_DEVICE_FALLBACK.
+    if (!pw::device_is_known(create_device_enumerator()->list_playback_devices(), target_)) {
+        MELLO_LOG_WARN("playback", "PipeWire: no sink named %s", target_.c_str());
+        return false;
+    }
     return stream_.open("m3llo-voice-playback", /*capture=*/false,
                         [this](pw_stream* s) { on_process(s); });
 }
