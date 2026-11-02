@@ -26,6 +26,7 @@ mod flow_catalogue;
 mod flow_tests;
 mod foreground_monitor;
 mod game_clip;
+mod game_clip_player;
 mod game_icons;
 mod gif_animator;
 mod handlers;

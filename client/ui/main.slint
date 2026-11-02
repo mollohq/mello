@@ -64,6 +64,8 @@ import { StatsProfileModal } from "panels/stats_profile_modal.slint";
 import { StreamCardUi, StreamStatsData, ChatFocus } from "types.slint";
 import { StreamVolumePopover, StreamSettingsPopover, ExpandedStreamCard } from "panels/active_streams_panel.slint";
 export { StreamCardUi, StreamStatsData }
+import { ClipPlayerUi, ExpandedClipPlayer } from "panels/clip_player_view.slint";
+export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
@@ -1164,6 +1166,13 @@ export component MainWindow inherits Window {
                             }
                         }
                         // --- end stage 9 ---
+
+                        // A game clip plays over the feed area
+                        // (plans/GAME-CLIPS.md 6.2).
+                        if ClipPlayerUi.open: ExpandedClipPlayer {
+                            width: parent.width;
+                            height: parent.height;
+                        }
                     }
 
                     ControlBar {

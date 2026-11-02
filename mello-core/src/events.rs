@@ -697,6 +697,23 @@ pub enum Event {
         clip_id: String,
         reason: String,
     },
+    /// The game clip player's state (plans/GAME-CLIPS.md 6.2): when a flag
+    /// changes, and as the position moves.
+    GameClipPlayback {
+        position_ms: u64,
+        duration_ms: u64,
+        width: u32,
+        height: u32,
+        buffering: bool,
+        paused: bool,
+        ended: bool,
+    },
+    /// The player closed. `reason` says why a clip did not play; empty for a
+    /// close the user asked for.
+    GameClipPlaybackClosed {
+        #[serde(default)]
+        reason: String,
+    },
     /// Clip metadata posted to backend.
     ClipPosted {
         clip_id: String,

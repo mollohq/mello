@@ -195,6 +195,9 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::GameClipCaptured { .. }
         | Event::GameClipFailed { .. }
         | Event::GameClipUploadFailed { .. } => crate::game_clip::handle(ctx, event),
+        Event::GameClipPlayback { .. } | Event::GameClipPlaybackClosed { .. } => {
+            crate::game_clip_player::handle(ctx, event)
+        }
 
         // About tab
         Event::TesterAvatarLoaded { .. } => crate::about::on_avatar_loaded(ctx),

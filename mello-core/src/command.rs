@@ -449,6 +449,18 @@ pub enum Command {
         #[serde(default)]
         quality: crate::events::GameClipQuality,
     },
+    /// Play a game clip in the player (plans/GAME-CLIPS.md 6.2): its URL, or
+    /// the clipper's own file. Not while a stream is watched.
+    PlayGameClip {
+        source: String,
+    },
+    SetGameClipPaused {
+        paused: bool,
+    },
+    SeekGameClip {
+        position_ms: u64,
+    },
+    CloseGameClip,
     /// Post a captured game clip to the crew and upload it in the background
     /// (plans/GAME-CLIPS.md 6.3). The fields are those of `GameClipCaptured`.
     ShareGameClip {

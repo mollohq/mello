@@ -3921,13 +3921,53 @@ fn a_game_clip_in_the_feed_is_a_footage_card() {
         card.clip_path.as_str(),
         "http://127.0.0.1:9/game_clip_9.mp4"
     );
-    assert!(crate::handlers::clip::is_game_clip_path(
-        h.app(),
-        "http://127.0.0.1:9/game_clip_9.mp4"
-    ));
+    assert!(
+        crate::handlers::clip::game_clip_card(h.app(), "http://127.0.0.1:9/game_clip_9.mp4")
+            .is_some()
+    );
     assert!(!h
         .controls_labelled("Play the game clip of alice")
         .is_empty());
+
+    // The play button opens the clip player, which plays the uploaded MP4.
+    let _ = h.commands();
+    h.click_label("Play the game clip of alice");
+    fn ui(h: &Harness) -> crate::ClipPlayerUi<'_> {
+        h.app().global::<crate::ClipPlayerUi>()
+    }
+    assert!(ui(&h).get_open(), "the clip player opens over the feed");
+    assert_eq!(ui(&h).get_clipper_name().as_str(), "alice");
+    let played: Vec<String> = h
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::PlayGameClip { source } => Some(source),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        played,
+        vec!["http://127.0.0.1:9/game_clip_9.mp4".to_string()]
+    );
+
+    // The state from core shows; the close button closes the player.
+    h.emit(Event::GameClipPlayback {
+        position_ms: 12_000,
+        duration_ms: 30_200,
+        width: 1280,
+        height: 720,
+        buffering: false,
+        paused: false,
+        ended: false,
+    });
+    assert_eq!(ui(&h).get_position_ms(), 12_000);
+    assert!(!ui(&h).get_buffering());
+    h.click_label("Close the clip");
+    assert!(!ui(&h).get_open());
+    assert!(h
+        .commands()
+        .iter()
+        .any(|c| matches!(c, Command::CloseGameClip)));
 }
 
 /// The clip button names the clip key, F7 on a new install.

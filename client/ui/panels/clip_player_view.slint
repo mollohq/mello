@@ -1,0 +1,242 @@
+import { Theme } from "../theme.slint";
+import { CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { VideoRect } from "../types.slint";
+
+// ============================================================
+//  The game clip player (plans/GAME-CLIPS.md 6.2): the clip over the whole
+//  feed area, as the expanded stream view. The video is the DComp layer over
+//  the black media rectangle, so every control sits outside it. Escape
+//  closes the player, Space pauses and plays.
+// ============================================================
+
+export global ClipPlayerUi {
+    in-out property <bool> open: false;
+    in-out property <string> clipper-name;
+    in-out property <string> clipper-initials;
+    in-out property <int> clipper-hue-index;
+    in-out property <string> game-name;
+    in-out property <int> position-ms;
+    in-out property <int> duration-ms;
+    in-out property <bool> buffering;
+    in-out property <bool> paused;
+    in-out property <bool> ended;
+    /// Why the clip cannot play, or "".
+    in-out property <string> error;
+    callback toggle-pause();
+    callback seek-ms(int);
+    callback close();
+
+    /// "0:07"
+    public pure function clock-text(ms: int) -> string {
+        return Math.floor(ms / 60000) + ":" + (Math.mod(Math.floor(ms / 1000), 60) < 10 ? "0" : "")
+            + Math.mod(Math.floor(ms / 1000), 60);
+    }
+}
+
+/// A small action over the graphite: the button shape, white is action.
+component PlayerButton inherits Rectangle {
+    in property <image> icon;
+    in property <string> label;
+    callback clicked();
+    width: 36px;
+    height: 36px;
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 6px;
+        fill: touch.has-hover ? Theme.graphic-med : Theme.card-bg;
+    }
+    Image {
+        source: root.icon;
+        colorize: Theme.text-primary;
+        width: 14px;
+        height: 14px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+    }
+    touch := TouchArea {
+        accessible-role: button;
+        accessible-label: root.label;
+        mouse-cursor: pointer;
+        clicked => { root.clicked(); }
+    }
+}
+
+export component ExpandedClipPlayer inherits Rectangle {
+    background: Theme.bg-app;
+
+    init => {
+        keys.focus();
+    }
+
+    // The feed under it is hidden: no click reaches it.
+    TouchArea {
+        // a11y: none (input blocker: the feed under the clip player)
+        clicked => { keys.focus(); }
+    }
+
+    keys := FocusScope {
+        x: 0px;
+        y: 0px;
+        width: parent.width;
+        height: parent.height;
+        key-pressed(e) => {
+            if (e.text == Key.Escape) {
+                ClipPlayerUi.close();
+                return accept;
+            }
+            if (e.text == " ") {
+                ClipPlayerUi.toggle-pause();
+                return accept;
+            }
+            reject
+        }
+
+        VerticalLayout {
+            padding-left: 20px;
+            padding-right: 20px;
+            padding-top: 16px;
+            padding-bottom: 16px;
+            spacing: 12px;
+
+            // The clipper and the game; close on the right.
+            HorizontalLayout {
+                height: 36px;
+                spacing: 10px;
+                cross-axis-alignment: center;
+                UserAvatar {
+                    bg-color: #000000;
+                    initials: ClipPlayerUi.clipper-initials;
+                    color-index: ClipPlayerUi.clipper-hue-index;
+                    size: 28px;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 1;
+                    Text {
+                        text: ClipPlayerUi.clipper-name;
+                        font-family: Theme.font-display;
+                        font-weight: Theme.weight-display;
+                        font-size: 15px;
+                        color: Theme.text-primary;
+                        overflow: elide;
+                    }
+                    if ClipPlayerUi.game-name != "": Text {
+                        text: ClipPlayerUi.game-name;
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        font-size: 12px;
+                        color: Theme.text-sub;
+                        overflow: elide;
+                    }
+                }
+                PlayerButton {
+                    icon: @image-url("../icons/x.svg");
+                    label: "Close the clip";
+                    clicked => { ClipPlayerUi.close(); }
+                }
+            }
+
+            // The video: the DComp layer covers this rectangle.
+            media := Rectangle {
+                vertical-stretch: 1;
+                background: #000000;
+
+                if ClipPlayerUi.error != "": Text {
+                    text: ClipPlayerUi.error;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: 14px;
+                    color: Theme.text-sub;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+
+                geo := Rectangle {
+                    width: 0;
+                    height: 0;
+                    property <float> track-x: media.absolute-position.x / 1px;
+                    property <float> track-y: media.absolute-position.y / 1px;
+                    property <float> track-w: media.width / 1px;
+                    property <float> track-h: media.height / 1px;
+                    function notify() {
+                        VideoRect.geometry-changed(
+                            self.track-x, self.track-y, self.track-w, self.track-h,
+                            self.track-y, self.track-h);
+                    }
+                    init => { self.notify(); }
+                    changed track-x => { self.notify(); }
+                    changed track-y => { self.notify(); }
+                    changed track-w => { self.notify(); }
+                    changed track-h => { self.notify(); }
+                }
+            }
+
+            // Play, the time, the scrubber, and the state.
+            HorizontalLayout {
+                height: 36px;
+                spacing: 12px;
+                cross-axis-alignment: center;
+
+                PlayerButton {
+                    icon: ClipPlayerUi.paused || ClipPlayerUi.ended
+                        ? @image-url("../icons/play-cut.svg")
+                        : @image-url("../icons/pause.svg");
+                    label: ClipPlayerUi.ended ? "Play again" : ClipPlayerUi.paused ? "Play" : "Pause";
+                    clicked => { ClipPlayerUi.toggle-pause(); }
+                }
+                Text {
+                    text: ClipPlayerUi.clock-text(ClipPlayerUi.position-ms) + " / "
+                        + ClipPlayerUi.clock-text(ClipPlayerUi.duration-ms);
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display-bold;
+                    font-size: 14px;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+                track := Rectangle {
+                    horizontal-stretch: 1;
+                    height: 20px;
+                    Rectangle {
+                        x: 0;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width;
+                        height: 3px;
+                        background: Theme.graphic-med;
+                        clip: true;
+                        Rectangle {
+                            x: 0;
+                            width: ClipPlayerUi.duration-ms > 0
+                                ? parent.width * min(1.0, ClipPlayerUi.position-ms / ClipPlayerUi.duration-ms)
+                                : 0;
+                            height: parent.height;
+                            background: Theme.text-primary;
+                        }
+                    }
+                    TouchArea {
+                        accessible-role: slider;
+                        accessible-label: "Clip position";
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if ClipPlayerUi.duration-ms > 0 {
+                                ClipPlayerUi.seek-ms(ClipPlayerUi.duration-ms * clamp(self.mouse-x / self.width, 0, 1));
+                            }
+                        }
+                    }
+                }
+                if ClipPlayerUi.buffering: Text {
+                    text: "BUFFERING";
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    font-size: 10px;
+                    letter-spacing: Theme.track-label;
+                    color: Theme.text-sub;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+}

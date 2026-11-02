@@ -7,6 +7,7 @@ mod connection;
 mod connection_tests;
 mod crew;
 mod diagnostics;
+mod game_clip_play;
 mod game_clip_upload;
 mod game_services;
 pub mod log_bundle;
@@ -64,6 +65,7 @@ use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_rtp;
 // Stage 7: the per-stream game-audio volume.
+pub(crate) use stream_ffi::present_native_frame;
 pub use stream_ffi::set_viewer_audio_volume;
 use stream_ffi::ViewerState;
 pub use stream_ffi::{set_native_presenter, NativePresentFn};
@@ -147,6 +149,9 @@ pub struct Client {
     replay_hold: replay::GameHold,
     /// The game clip upload thread (clip_upload), made at the first sign-in.
     clip_uploads: Option<crate::clip_upload::UploadWorker>,
+    /// The game clip that plays (clip_play.rs). Declared before `voice`: a
+    /// drop at shutdown stops it before the libmello context goes.
+    clip_playback: Option<crate::clip_play::ClipPlayback>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -378,6 +383,7 @@ impl Client {
             replay_quality: Default::default(),
             replay_hold: Default::default(),
             clip_uploads: None,
+            clip_playback: None,
             voice,
             event_tx,
             frame_slot,
@@ -495,6 +501,9 @@ impl Client {
         // Ends the 10 s hold of a game clip replay switch (replay.rs).
         let mut replay_hold_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
         replay_hold_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The game clip player's state for the UI (clip_play.rs).
+        let mut clip_play_tick = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        clip_play_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
         loop {
             for game_event in self.drain_game_events() {
@@ -643,6 +652,10 @@ impl Client {
                 _ = replay_hold_tick.tick(), if self.replay_hold.waiting() => {
                     let _step = watchdog.step("replay_hold");
                     self.sync_replay();
+                }
+                _ = clip_play_tick.tick(), if self.clip_playback.is_some() => {
+                    let _step = watchdog.step("clip_play");
+                    self.clip_play_tick();
                 }
                 _ = feed_reload_tick.tick(), if self.feed_reload.has_pending() => {
                     let _step = watchdog.step("feed_reload");
@@ -1180,6 +1193,18 @@ impl Client {
             }
             Command::SetGameClips { enabled, quality } => {
                 self.handle_set_game_clips(enabled, quality);
+            }
+            Command::PlayGameClip { source } => {
+                self.handle_play_game_clip(source).await;
+            }
+            Command::SetGameClipPaused { paused } => {
+                self.handle_set_game_clip_paused(paused);
+            }
+            Command::SeekGameClip { position_ms } => {
+                self.handle_seek_game_clip(position_ms);
+            }
+            Command::CloseGameClip => {
+                self.close_game_clip("");
             }
             Command::ShareGameClip {
                 crew_id,

@@ -2116,18 +2116,20 @@ fn game_clip_fields(
     })
 }
 
-/// A card in the feed or the memory band plays this game clip.
-pub(crate) fn is_game_clip_path(app: &MainWindow, path: &str) -> bool {
-    !path.is_empty()
-        && [app.get_feed_cards(), app.get_memory_cards()]
-            .iter()
-            .any(|cards| {
-                cards.iter().any(|c| {
-                    c.card_type.as_str() == "clip"
-                        && c.clip_kind.as_str() == "game"
-                        && c.clip_path.as_str() == path
-                })
+/// The game clip card in the feed or the memory band that plays `path`.
+pub(crate) fn game_clip_card(app: &MainWindow, path: &str) -> Option<FeedCardData> {
+    if path.is_empty() {
+        return None;
+    }
+    [app.get_feed_cards(), app.get_memory_cards()]
+        .iter()
+        .find_map(|cards| {
+            cards.iter().find(|c| {
+                c.card_type.as_str() == "clip"
+                    && c.clip_kind.as_str() == "game"
+                    && c.clip_path.as_str() == path
             })
+        })
 }
 
 // Build a feed card from a server feed entry. card_type is the server-provided
