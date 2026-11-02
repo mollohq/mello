@@ -11,13 +11,20 @@ namespace mello::video {
 
 enum class VideoCodec { H264, AV1 };
 
+/// What the encoded video is for (plans/GAME-CLIPS.md 3.4). A stream follows
+/// the network at the lowest latency. A recording goes to the replay ring and
+/// is read back later: it takes a quality tuning and a longer VBV. Its caller
+/// sets a 1 s GOP and does not ask for IDRs.
+enum class EncoderIntent { Stream, Recording };
+
 struct EncoderConfig {
-    uint32_t   width;
-    uint32_t   height;
-    uint32_t   fps;
-    uint32_t   bitrate_kbps;
-    uint32_t   keyframe_interval = 120;
-    VideoCodec codec = VideoCodec::H264;
+    uint32_t      width;
+    uint32_t      height;
+    uint32_t      fps;
+    uint32_t      bitrate_kbps;
+    uint32_t      keyframe_interval = 120;
+    VideoCodec    codec = VideoCodec::H264;
+    EncoderIntent intent = EncoderIntent::Stream;
 };
 
 struct EncodedPacket {
@@ -50,15 +57,18 @@ struct EncodePhaseTiming {
 // to report (PLI), as in libwebrtc.
 
 /// The VBV of every backend, in bits: half a second of the peak rate (1.25 x
-/// the bitrate), at least four frames of the bitrate. A one-frame VBV starves
-/// IDRs and pumps the quality (AMF and QSV had one frame before
-/// streaming-quality stage 4; NVENC's compute_vbv_bits is this rule).
-inline uint64_t vbv_bits_for(uint32_t bitrate_kbps, uint32_t fps) {
+/// the bitrate) for a stream, one second for a recording, at least four
+/// frames of the bitrate. A one-frame VBV starves IDRs and pumps the quality
+/// (AMF and QSV had one frame before streaming-quality stage 4; NVENC's
+/// compute_vbv_bits is this rule).
+inline uint64_t vbv_bits_for(uint32_t bitrate_kbps, uint32_t fps,
+                             EncoderIntent intent = EncoderIntent::Stream) {
     const uint64_t avg = static_cast<uint64_t>(bitrate_kbps) * 1000;
     const uint64_t peak = avg + avg / 4;
     const uint64_t frames = fps > 0 ? fps : 60;
     const uint64_t four_frames = avg * 4 / frames;
-    return peak / 2 > four_frames ? peak / 2 : four_frames;
+    const uint64_t span = intent == EncoderIntent::Recording ? peak : peak / 2;
+    return span > four_frames ? span : four_frames;
 }
 
 struct EncoderStats {

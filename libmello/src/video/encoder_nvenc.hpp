@@ -28,6 +28,25 @@ public:
 
     static bool is_available();
 
+    /// One preset and tuning to ask the driver for. `initialize` takes the
+    /// first one that the driver accepts.
+    struct TuningAttempt {
+        GUID               preset;
+        NV_ENC_TUNING_INFO tuning;
+        const char*        label;
+    };
+    /// A stream takes ultra-low latency. A recording takes the high quality
+    /// tuning (game clips plan 3.4), and low latency on a driver without it.
+    /// Pure, testable without NVIDIA hardware.
+    static std::vector<TuningAttempt> tuning_attempts(EncoderIntent intent);
+
+    /// The rate control, GOP and H.264 settings of `config` on top of the
+    /// preset's config: VBR at 1.25 x, the VBV of the intent, a GOP and IDR
+    /// period of `keyframe_interval`, SPS and PPS at each IDR, and no
+    /// B-frames or lookahead, which a high quality preset turns on. Pure,
+    /// testable without NVIDIA hardware.
+    static void apply_rate_and_gop(NV_ENC_CONFIG& enc_config, const EncoderConfig& config);
+
 private:
     NV_ENC_REGISTERED_PTR get_or_register(ID3D11Texture2D* tex);
 

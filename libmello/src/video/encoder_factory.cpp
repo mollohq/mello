@@ -70,7 +70,11 @@ std::unique_ptr<Encoder> create_best_encoder(
         MELLO_LOG_INFO(TAG, "AMF: amfrt64.dll not found — skipping");
     }
 
-    if (QsvEncoder::is_available()) {
+    // QSV has no recording intent and has not run on an Intel GPU yet, so an
+    // Intel-only PC has no game clips (game clips plan 9.1).
+    if (config.intent == EncoderIntent::Recording) {
+        MELLO_LOG_INFO(TAG, "QSV: no recording intent — skipping");
+    } else if (QsvEncoder::is_available()) {
         MELLO_LOG_INFO(TAG, "QSV DLL found, attempting init...");
         auto enc = std::make_unique<QsvEncoder>();
         if (enc->initialize(device, config)) return enc;

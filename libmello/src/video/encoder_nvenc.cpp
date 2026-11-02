@@ -11,13 +11,80 @@ static constexpr const char* TAG = "video/encoder";
 // VBV spans ~0.5s of the max rate, floored at 4 frames of bits. A one-frame
 // VBV (~17 KB at 8 Mbps/60 fps) starves IDRs and high-motion frames into
 // visible quality pumping; 0.5s keeps rate control tight for interactive
-// latency while giving keyframes room.
-static uint32_t compute_vbv_bits(uint32_t avg_bps, uint32_t max_bps, uint32_t fps) {
+// latency while giving keyframes room. A recording has no latency to keep and
+// takes 1 s (vbv_bits_for).
+static uint32_t compute_vbv_bits(uint32_t avg_bps, uint32_t max_bps, uint32_t fps,
+                                 EncoderIntent intent) {
     uint32_t frame_bits = fps > 0 ? avg_bps / fps : 1u;
     if (frame_bits == 0) frame_bits = 1;
-    uint32_t vbv = max_bps / 2;
+    uint32_t vbv = intent == EncoderIntent::Recording ? max_bps : max_bps / 2;
     if (vbv < frame_bits * 4) vbv = frame_bits * 4;
     return vbv;
+}
+
+std::vector<NvencEncoder::TuningAttempt> NvencEncoder::tuning_attempts(EncoderIntent intent) {
+    if (intent == EncoderIntent::Recording) {
+        return {
+            {NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_HIGH_QUALITY, "P4+HQ"},
+            {NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_HIGH_QUALITY, "P1+HQ"},
+            {NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY, "P1+LL"},
+        };
+    }
+    return {
+        {NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL"},
+        {NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P1+ULL"},
+        {NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY, "P1+LL"},
+    };
+}
+
+void NvencEncoder::apply_rate_and_gop(NV_ENC_CONFIG& enc_config, const EncoderConfig& config) {
+    // VBR with moderate headroom: 1.25x max lets keyframes get extra bits
+    // without large bandwidth spikes. VBV spans ~0.5s of the max rate (see
+    // compute_vbv_bits) so IDRs are not rate-starved.
+    const uint32_t fps = config.fps > 0 ? config.fps : 60;
+    const uint32_t avg = config.bitrate_kbps * 1000;
+    const uint32_t max = avg + avg / 4;
+    const uint32_t vbv = compute_vbv_bits(avg, max, fps, config.intent);
+    enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
+    enc_config.rcParams.averageBitRate  = avg;
+    enc_config.rcParams.maxBitRate      = max;
+    enc_config.rcParams.vbvBufferSize   = vbv;
+    enc_config.rcParams.vbvInitialDelay = vbv / 2;
+    // No lookahead and no B-frames for either intent. The encode loop is one
+    // frame in, one packet out, and the high quality tuning of a recording
+    // turns both on. The replay ring and the MP4 passthrough also need every
+    // frame in decode order (game clips plan 3.4).
+    enc_config.rcParams.enableLookahead   = 0;
+    enc_config.rcParams.enableExtLookahead = 0;
+    enc_config.rcParams.lookaheadDepth  = 0;
+    enc_config.rcParams.enableTemporalAQ = 1;
+    enc_config.rcParams.enableAQ        = 1;
+    enc_config.rcParams.aqStrength      = 8;
+    enc_config.rcParams.zeroReorderDelay = 1;
+    enc_config.frameIntervalP = 1;
+    enc_config.gopLength      = config.keyframe_interval;
+
+    if (config.codec == VideoCodec::H264) {
+        enc_config.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
+        enc_config.encodeCodecConfig.h264Config.idrPeriod         = config.keyframe_interval;
+        enc_config.encodeCodecConfig.h264Config.level             = NV_ENC_LEVEL_H264_51;
+        enc_config.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
+        enc_config.encodeCodecConfig.h264Config.repeatSPSPPS      = 1;
+        // Signal BT.709 limited-range in the VUI: the conversion pipeline is
+        // BT.709 studio-range, and signaling it makes external decoders and
+        // recordings interpret colors correctly.
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoSignalTypePresentFlag = 1;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFullRangeFlag = 0; // limited (studio) range
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourDescriptionPresentFlag = 1;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
+        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
+        // Full two-pass (multiPass lives in rcParams in this SDK; the full-res
+        // variant is NV_ENC_TWO_PASS_FULL_RESOLUTION — NV_ENC_MULTI_PASS_FULL
+        // does not exist). Improves quality at the same bitrate.
+        enc_config.rcParams.multiPass = NV_ENC_TWO_PASS_FULL_RESOLUTION;
+    }
 }
 
 typedef NVENCSTATUS(NVENCAPI* PFN_NvEncodeAPIGetMaxSupportedVersion)(uint32_t*);
@@ -124,17 +191,13 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     preset_config.version = NV_ENC_PRESET_CONFIG_VER;
     preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
 
-    struct { GUID preset; NV_ENC_TUNING_INFO tuning; const char* label; } attempts[] = {
-        { NV_ENC_PRESET_P4_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P4+ULL" },
-        { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY, "P1+ULL" },
-        { NV_ENC_PRESET_P1_GUID, NV_ENC_TUNING_INFO_LOW_LATENCY,       "P1+LL"  },
-    };
+    const std::vector<TuningAttempt> attempts = tuning_attempts(config.intent);
 
     bool have_preset = false;
-    GUID used_preset = NV_ENC_PRESET_P4_GUID;
-    NV_ENC_TUNING_INFO used_tuning = NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY;
-    const char* used_preset_label = "P4+ULL";
-    for (auto& a : attempts) {
+    GUID used_preset = attempts.front().preset;
+    NV_ENC_TUNING_INFO used_tuning = attempts.front().tuning;
+    const char* used_preset_label = attempts.front().label;
+    for (const auto& a : attempts) {
         memset(&preset_config, 0, sizeof(preset_config));
         preset_config.version = NV_ENC_PRESET_CONFIG_VER;
         preset_config.presetCfg.version = NV_ENC_CONFIG_VER;
@@ -158,50 +221,10 @@ bool NvencEncoder::initialize(const GraphicsDevice& device, const EncoderConfig&
     }
     enc_config.version = NV_ENC_CONFIG_VER;
     enc_config.rcParams.version = NV_ENC_RC_PARAMS_VER;
-
-    // VBR with moderate headroom: 1.25x max lets keyframes get extra bits
-    // without large bandwidth spikes. VBV spans ~0.5s of the max rate (see
-    // compute_vbv_bits) so IDRs are not rate-starved.
-    const uint32_t fps = config.fps > 0 ? config.fps : 60;
-    const uint32_t avg = config.bitrate_kbps * 1000;
-    const uint32_t max = avg + avg / 4;
-    const uint32_t vbv = compute_vbv_bits(avg, max, fps);
-    enc_config.rcParams.rateControlMode = NV_ENC_PARAMS_RC_VBR;
-    enc_config.rcParams.averageBitRate  = avg;
-    enc_config.rcParams.maxBitRate      = max;
-    enc_config.rcParams.vbvBufferSize   = vbv;
-    enc_config.rcParams.vbvInitialDelay = vbv / 2;
-    enc_config.rcParams.enableLookahead   = 0;
-    enc_config.rcParams.enableExtLookahead = 0;
-    enc_config.rcParams.lookaheadDepth  = 0;
-    enc_config.rcParams.enableTemporalAQ = 1;
-    enc_config.rcParams.enableAQ        = 1;
-    enc_config.rcParams.aqStrength      = 8;
-    enc_config.rcParams.zeroReorderDelay = 1;
-    enc_config.frameIntervalP = 1;
-    enc_config.gopLength      = config.keyframe_interval;
-
-    if (config.codec == VideoCodec::H264) {
-        enc_config.profileGUID = NV_ENC_H264_PROFILE_HIGH_GUID;
-        enc_config.encodeCodecConfig.h264Config.idrPeriod         = config.keyframe_interval;
-        enc_config.encodeCodecConfig.h264Config.level             = NV_ENC_LEVEL_H264_51;
-        enc_config.encodeCodecConfig.h264Config.enableIntraRefresh = 0;
-        enc_config.encodeCodecConfig.h264Config.repeatSPSPPS      = 1;
-        // Signal BT.709 limited-range in the VUI: the conversion pipeline is
-        // BT.709 studio-range, and signaling it makes external decoders and
-        // recordings interpret colors correctly.
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoSignalTypePresentFlag = 1;
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFormat = NV_ENC_VUI_VIDEO_FORMAT_UNSPECIFIED;
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.videoFullRangeFlag = 0; // limited (studio) range
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourDescriptionPresentFlag = 1;
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourPrimaries = NV_ENC_VUI_COLOR_PRIMARIES_BT709;
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.transferCharacteristics = NV_ENC_VUI_TRANSFER_CHARACTERISTIC_BT709;
-        enc_config.encodeCodecConfig.h264Config.h264VUIParameters.colourMatrix = NV_ENC_VUI_MATRIX_COEFFS_BT709;
-        // Full two-pass (multiPass lives in rcParams in this SDK; the full-res
-        // variant is NV_ENC_TWO_PASS_FULL_RESOLUTION — NV_ENC_MULTI_PASS_FULL
-        // does not exist). Improves quality at the same bitrate.
-        enc_config.rcParams.multiPass = NV_ENC_TWO_PASS_FULL_RESOLUTION;
-    }
+    apply_rate_and_gop(enc_config, config);
+    const uint32_t avg = enc_config.rcParams.averageBitRate;
+    const uint32_t max = enc_config.rcParams.maxBitRate;
+    const uint32_t vbv = enc_config.rcParams.vbvBufferSize;
 
     NV_ENC_INITIALIZE_PARAMS init_params;
     memset(&init_params, 0, sizeof(init_params));
@@ -472,7 +495,7 @@ void NvencEncoder::set_bitrate(uint32_t kbps) {
         const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
         const uint32_t avg = kbps * 1000;
         const uint32_t max = avg + avg / 4;
-        const uint32_t vbv = compute_vbv_bits(avg, max, fps);
+        const uint32_t vbv = compute_vbv_bits(avg, max, fps, config_.intent);
 
         // Reconfigure from the full init-time config: NVENC re-init does not
         // merge with the live session config, so the previous sparse config
@@ -588,7 +611,7 @@ void NvencEncoder::set_framerate(uint32_t fps) {
     // leaving it would hand a 30fps stream a 60fps buffer.
     const uint32_t avg = config_.bitrate_kbps * 1000;
     const uint32_t max = avg + avg / 4;
-    const uint32_t vbv = compute_vbv_bits(avg, max, fps);
+    const uint32_t vbv = compute_vbv_bits(avg, max, fps, config_.intent);
 
     NV_ENC_CONFIG enc_config = base_config_;
     enc_config.version = NV_ENC_CONFIG_VER;
