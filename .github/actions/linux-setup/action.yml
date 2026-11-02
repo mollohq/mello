@@ -9,6 +9,12 @@ inputs:
   rust:
     description: "'false' skips Rust, the cargo registry cache and the crate fetch (the C++ job)."
     default: 'true'
+  vcpkg:
+    description: >
+      'false' skips the vcpkg cache (the Clippy job, which builds no vcpkg
+      port). A job that restores the cache but builds nothing would save an
+      incomplete cache under a new primary key.
+    default: 'true'
 
 runs:
   using: composite
@@ -27,12 +33,14 @@ runs:
         rustc --version
 
     - name: vcpkg submodule commit
+      if: ${{ inputs.vcpkg != 'false' }}
       id: vcpkg
       shell: bash
       run: echo "commit=$(git rev-parse HEAD:external/vcpkg)" >> "$GITHUB_OUTPUT"
 
     # vcpkg's binary cache (the x-gha provider is gone since vcpkg 2025.06).
     - name: Cache vcpkg packages
+      if: ${{ inputs.vcpkg != 'false' }}
       uses: actions/cache@v6
       with:
         path: .vcpkg-cache
@@ -50,6 +58,7 @@ runs:
         key: cargo-registry-linux-${{ hashFiles('Cargo.lock') }}
         restore-keys: cargo-registry-linux-
 
+    # Always: vcpkg rejects a VCPKG_DEFAULT_BINARY_CACHE that does not exist.
     - name: Prepare the vcpkg cache folder
       shell: bash
       run: mkdir -p .vcpkg-cache

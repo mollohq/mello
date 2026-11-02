@@ -47,14 +47,24 @@ jobs:
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
 
+      # No vcpkg cache: with MELLO_SYS_BINDINGS_ONLY this job builds no
+      # vcpkg port.
       - name: Set up the build
         uses: ./.github/actions/linux-setup
+        with:
+          vcpkg: 'false'
 
       - name: Check formatting
         run: cargo fmt --all -- --check
 
       - name: Clippy
         # --workspace so crates under tools/ are linted too.
+        # Check mode never links, so the mello-sys build script needs only
+        # bindgen. MELLO_SYS_BINDINGS_ONLY skips its cmake and libmello build
+        # (mello-sys/build.rs). This job runs on its own runner, so that is
+        # one full cmake, vcpkg and libmello build less per lane.
+        env:
+          MELLO_SYS_BINDINGS_ONLY: "1"
         run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:

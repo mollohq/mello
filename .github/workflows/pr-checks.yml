@@ -209,6 +209,12 @@ jobs:
       - name: Clippy
         # --workspace so crates under tools/ are linted too; they are not in
         # default-members, so plain clippy silently skips them.
+        # Check mode never links, so the mello-sys build script needs only
+        # bindgen (mello-sys/build.rs). The value is the same on every run, so
+        # the kept target dir does not run the script again. The test step
+        # builds libmello in its own OUT_DIR, as before.
+        env:
+          MELLO_SYS_BINDINGS_ONLY: "1"
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
@@ -332,6 +338,9 @@ jobs:
       - name: Clippy
         # --workspace so crates under tools/ are linted too; they are not in
         # default-members, so plain clippy silently skips them.
+        # See the Windows job for MELLO_SYS_BINDINGS_ONLY.
+        env:
+          MELLO_SYS_BINDINGS_ONLY: "1"
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
