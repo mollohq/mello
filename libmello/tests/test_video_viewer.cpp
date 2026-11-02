@@ -231,10 +231,23 @@ TEST_F(ViewerPipelineTest, ASizeChangeGivesANewSharedTexture) {
         std::lock_guard<std::mutex> lock(m);
         handles.emplace_back(handle, w, h);
     });
+    // Wait for the presenter, not a fixed time: a loaded CI machine takes
+    // more than 100 ms to decode and present a frame. The first frame must be
+    // on screen before the second is fed, or the second replaces it as the
+    // newest due frame.
+    const auto wait_for_handles = [&](size_t count) {
+        for (int i = 0; i < 400; ++i) {
+            {
+                std::lock_guard<std::mutex> lock(m);
+                if (handles.size() >= count) return;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(5));
+        }
+    };
     ASSERT_TRUE(viewer.feed_packet(unit(50, 4, 2).data(), 3, true));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    wait_for_handles(1);
     ASSERT_TRUE(viewer.feed_packet(unit(60, 6, 3).data(), 3, true));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    wait_for_handles(2);
     viewer.stop();
     std::lock_guard<std::mutex> lock(m);
     ASSERT_EQ(handles.size(), 2u);
