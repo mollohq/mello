@@ -231,6 +231,8 @@ fn player_log_path() -> Option<std::path::PathBuf> {
     None
 }
 
+// The scan runs on Windows; the test exercises it on every platform.
+#[cfg_attr(not(windows), allow(dead_code))]
 fn newest_player_log(logs: &std::path::Path) -> Option<std::path::PathBuf> {
     let mut newest: Option<(std::time::SystemTime, std::path::PathBuf)> = None;
     for entry in std::fs::read_dir(logs).ok()?.flatten() {

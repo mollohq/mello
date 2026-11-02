@@ -204,6 +204,7 @@ mod tests {
             path: "/home/u/cs2.exe".into(),
             window_title: String::new(),
             is_foreground: false,
+            is_minimized: false,
             started_at_ms: 0,
         }
     }
