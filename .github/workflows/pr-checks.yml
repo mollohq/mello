@@ -199,8 +199,10 @@ jobs:
             -DVCPKG_TARGET_TRIPLET=x64-windows-static-md
           cmake --build libmello/build-ci --config Release --parallel $env:NUMBER_OF_PROCESSORS
 
+      # --timeout: a stalled gtest process otherwise holds the lane until
+      # the 45 min job timeout. The Linux lane has the same bound.
       - name: Run C++ tests
-        run: ctest --test-dir libmello/build-ci -C Release --output-on-failure
+        run: ctest --test-dir libmello/build-ci -C Release --output-on-failure --timeout 300
 
       - name: Cleanup build artifacts
         if: always()
@@ -286,8 +288,9 @@ jobs:
           # A bare --parallel passes a bare -j to make: unlimited jobs.
           cmake --build libmello/build-ci --parallel "$(sysctl -n hw.ncpu)"
 
+      # See the Windows job for --timeout.
       - name: Run C++ tests
-        run: ctest --test-dir libmello/build-ci --output-on-failure
+        run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300
 
       - name: Cleanup build artifacts
         if: always()
