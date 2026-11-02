@@ -258,17 +258,16 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     #[cfg(not(target_os = "linux"))]
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
-        if let Some(url) = std::env::args()
-            .nth(1)
-            .filter(|a| a.starts_with("mello://"))
-        {
-            if ipc::send_to_running(&ipc_endpoint, &url) {
-                eprintln!("Relayed deep link to running instance: {url}");
-            } else {
-                eprintln!("Mello is already running. Could not relay deep link: {url}");
-            }
+        // The running instance shows its window for each message. Windows
+        // lets only the process the user started take the foreground, so
+        // this one gives that right to the running instance first.
+        #[cfg(target_os = "windows")]
+        platform::allow_running_instance_to_foreground();
+        let message = ipc::relay_message(std::env::args().nth(1));
+        if ipc::send_to_running(&ipc_endpoint, &message) {
+            eprintln!("{APP_NAME} is already running. Relayed: {message}");
         } else {
-            eprintln!("Mello is already running.");
+            eprintln!("{APP_NAME} is already running. Could not relay: {message}");
         }
         std::process::exit(0);
     }
@@ -427,6 +426,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     about::show_build(&app);
+    #[cfg(target_os = "windows")]
+    platform::set_exe_icon(&app);
 
     // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
     // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the
@@ -474,28 +475,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             platform::hotkeys::HotkeyManager::disabled()
         }),
     ));
-
-    // --- Close ÔåÆ tray ---
-    {
-        let window_ref = app.as_weak();
-        let s = settings.clone();
-        let tray = status_item.clone();
-        app.window().on_close_requested(move || {
-            // Hide to the tray only when a tray exists to bring the window
-            // back. Without one (no tray on Linux yet, or tray creation
-            // failed) a hidden window is lost, so close quits instead.
-            if s.borrow().close_to_tray && tray.borrow().is_present() {
-                if let Some(w) = window_ref.upgrade() {
-                    w.hide().ok();
-                }
-                slint::CloseRequestResponse::KeepWindowShown
-            } else {
-                log::info!("[quit] close requested (close_to_tray=false)");
-                slint::quit_event_loop().ok();
-                slint::CloseRequestResponse::KeepWindowShown
-            }
-        });
-    }
 
     // Graphite is dark only. `dark` stays a constant so the remaining
     // `Theme.dark ? a : b` call sites keep resolving to the dark arm.
@@ -655,6 +634,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         startup_clipboard: Rc::new(RefCell::new(Some(
             onboarding_invite::StartupClipboard::system(lounge_host),
         ))),
+        tray_notice: Rc::new(RefCell::new(Some(Box::new(
+            notifications::notify_closed_to_tray,
+        )))),
         stream_frame_timer: stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: native_frame_slot.clone(),

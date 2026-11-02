@@ -1,7 +1,7 @@
 //! The watched stream in its own window (streaming-quality stage 9).
 //!
 //! The card's Pop out button opens a normal top-level window: a title bar
-//! ("<host> - Mello"), resizable, movable to another monitor, with the
+//! ("<host> - m3llo"), resizable, movable to another monitor, with the
 //! system's maximize. On Windows the DComp video visual moves to a second
 //! target on that window (`DCompPresenter::show_in_window`) and fits its
 //! client area with black bars; the swap chain, libmello's present thread and
@@ -67,7 +67,11 @@ pub fn open(ctx: &AppContext) {
     if ui.get_expanded() {
         crate::handlers::streaming::set_expanded(ctx, false);
     }
-    let title = format!("{} - Mello", ctx.app.get_active_streamer_name());
+    let title = format!(
+        "{} - {}",
+        ctx.app.get_active_streamer_name(),
+        crate::APP_NAME
+    );
     let result = {
         let mut popout = ctx.stream_popout.borrow_mut();
         let result = popout.surface.open(ctx, &title);

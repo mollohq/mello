@@ -10,6 +10,7 @@ mod sealed;
 pub(crate) mod settings;
 mod streaming;
 mod voice;
+mod window;
 
 use crate::app_context::AppContext;
 
@@ -28,4 +29,5 @@ pub fn wire_all(ctx: &AppContext) {
     onboarding::wire(ctx);
     game::wire(ctx);
     games::wire(ctx);
+    window::wire(ctx);
 }

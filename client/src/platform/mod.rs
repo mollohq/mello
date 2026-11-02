@@ -56,6 +56,9 @@ pub struct StatusItem {
     linux: Option<linux_tray::LinuxTray>,
     current_state: VoiceState,
     muted: bool,
+    /// Tests: a headless item that reports a tray, as on a desktop with one.
+    #[cfg(any(test, feature = "testkit"))]
+    stand_in: bool,
 }
 
 impl StatusItem {
@@ -71,6 +74,8 @@ impl StatusItem {
             linux: None,
             current_state: VoiceState::Inactive,
             muted: false,
+            #[cfg(any(test, feature = "testkit"))]
+            stand_in: false,
         }
     }
 
@@ -130,12 +135,29 @@ impl StatusItem {
             }),
             current_state: VoiceState::Inactive,
             muted: false,
+            #[cfg(any(test, feature = "testkit"))]
+            stand_in: false,
         })
+    }
+
+    /// Tests: no native tray, every method a no-op like [`Self::disabled`],
+    /// but [`Self::is_present`] is true, so close hides to the tray as on a
+    /// desktop that has one.
+    #[cfg(any(test, feature = "testkit"))]
+    pub fn stand_in() -> Self {
+        Self {
+            stand_in: true,
+            ..Self::disabled()
+        }
     }
 
     /// True when a native tray icon exists. Without one, hiding the window
     /// would leave the user no way to bring it back.
     pub fn is_present(&self) -> bool {
+        #[cfg(any(test, feature = "testkit"))]
+        if self.stand_in {
+            return true;
+        }
         #[cfg(target_os = "linux")]
         if let Some(linux) = self.linux.as_ref() {
             // A StatusNotifierItem without a host (GNOME without the
@@ -236,21 +258,106 @@ fn state_icon_rgba(state: VoiceState) -> (Vec<u8>, u32) {
     (rgba, size as u32)
 }
 
-/// Bring the main Mello window to the foreground on Windows.
+/// The main window's handle. `None` until the event loop creates the window.
+///
+/// Use this, not `FindWindowW` by title: a title lookup also matches any
+/// other top-level window with the same title, such as an Explorer folder.
+#[cfg(target_os = "windows")]
+pub fn main_window_hwnd(app: &crate::MainWindow) -> Option<windows::Win32::Foundation::HWND> {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use slint::ComponentHandle as _;
+    use windows::Win32::Foundation::HWND;
+    app.window()
+        .with_winit_window(|w: &i_slint_backend_winit::winit::window::Window| {
+            match w.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(h)) => Some(HWND(h.hwnd.get() as *mut _)),
+                _ => None,
+            }
+        })
+        .flatten()
+}
+
+/// Put the exe's icon on a window's title bar, taskbar button and Alt+Tab
+/// entry. Winit registers its window class without an icon, so Windows draws
+/// its default icon. Runs when winit creates the window, at its scale.
+#[cfg(target_os = "windows")]
+pub fn set_exe_icon<T: slint::ComponentHandle + 'static>(component: &T) {
+    use i_slint_backend_winit::winit::dpi::PhysicalSize;
+    use i_slint_backend_winit::winit::platform::windows::{IconExtWindows, WindowExtWindows};
+    use i_slint_backend_winit::winit::window::Icon;
+    use i_slint_backend_winit::WinitWindowAccessor;
+
+    // build.rs embeds assets/icons/mello.ico with winresource's default
+    // application icon ID.
+    const EXE_ICON_ID: u16 = 1;
+
+    let weak = component.as_weak();
+    let spawned = slint::spawn_local(async move {
+        let Some(component) = weak.upgrade() else {
+            return;
+        };
+        let window = match component.window().winit_window().await {
+            Ok(w) => w,
+            Err(e) => {
+                log::warn!("[window] no native window for the icon: {e}");
+                return;
+            }
+        };
+        // The small icon (title bar) is 16 px and the large icon (taskbar,
+        // Alt+Tab) 32 px at 100 %. Windows picks the nearest frame of the .ico.
+        let scale = window.scale_factor();
+        let size = |logical: f64| {
+            let px = (logical * scale).round() as u32;
+            Some(PhysicalSize::new(px, px))
+        };
+        match (
+            Icon::from_resource(EXE_ICON_ID, size(16.0)),
+            Icon::from_resource(EXE_ICON_ID, size(32.0)),
+        ) {
+            (Ok(small), Ok(big)) => {
+                window.set_window_icon(Some(small));
+                window.set_taskbar_icon(Some(big));
+                log::info!("[window] exe icon set, scale {scale}");
+            }
+            (small, big) => log::warn!(
+                "[window] exe icon not loaded: small {:?}, big {:?}",
+                small.err(),
+                big.err()
+            ),
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("[window] could not schedule the window icon: {e}");
+    }
+}
+
+/// Let the running instance take the foreground. Call from a second
+/// instance before it relays its message: the user started this process, so
+/// Windows lets it pass the right on. Without it, Windows can refuse the
+/// window of the running instance and flash its taskbar button.
+#[cfg(target_os = "windows")]
+pub fn allow_running_instance_to_foreground() {
+    use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+    if let Err(e) = unsafe { AllowSetForegroundWindow(ASFW_ANY) } {
+        log::warn!("[ipc] AllowSetForegroundWindow failed: {e}");
+    }
+}
+
+/// Bring the main window to the foreground on Windows.
 /// On other platforms, this is a no-op (Slint's show() is sufficient).
-pub fn bring_main_window_to_front() {
+pub fn bring_main_window_to_front(app: &crate::MainWindow) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
     #[cfg(target_os = "windows")]
     {
-        use windows::core::w;
         use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
         use windows::Win32::UI::WindowsAndMessaging::*;
 
+        let Some(hwnd) = main_window_hwnd(app) else {
+            return;
+        };
         unsafe {
-            let hwnd = match FindWindowW(None, w!("Mello")) {
-                Ok(h) => h,
-                Err(_) => return,
-            };
-
             let fg = GetForegroundWindow();
             let fg_thread = GetWindowThreadProcessId(fg, None);
             let our_thread = GetCurrentThreadId();

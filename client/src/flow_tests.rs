@@ -2135,6 +2135,45 @@ fn a_relayed_join_link_on_step_one_opens_the_welcome_screen() {
     );
 }
 
+/// The user starts m3llo again (the desktop icon) while it runs hidden in
+/// the tray. The second instance relays over the real IPC endpoint, and the
+/// running app must show its window. Before, the second instance left with
+/// no sign, and the user saw nothing.
+#[test]
+fn a_second_launch_shows_the_window_hidden_in_the_tray() {
+    let mut h = Harness::new();
+    let endpoint = crate::ipc::endpoint_name(&format!("mello-relay-show.{}", std::process::id()));
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind the IPC endpoint");
+    *h.ctx().ipc_listener.borrow_mut() = Some(listener);
+    h.app().show().expect("show the window");
+    h.app().hide().expect("hide the window to the tray");
+    assert!(!h.app().window().is_visible());
+
+    // What the second instance does in `lib.rs`, started with no link.
+    assert!(crate::ipc::send_to_running(
+        &endpoint,
+        &crate::ipc::relay_message(None)
+    ));
+
+    // The listener hands the line over on its own thread (Windows). Wait for
+    // the window that the test asserts on, with a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !h.app().window().is_visible() && std::time::Instant::now() < deadline {
+        h.pump();
+        if !h.app().window().is_visible() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    assert!(
+        h.app().window().is_visible(),
+        "the running app shows its window"
+    );
+    assert!(
+        resolved_codes(&h.commands()).is_empty(),
+        "a plain launch is not a link"
+    );
+}
+
 /// INV-05: an invalid invite code on a fresh install shows step 1 with a
 /// message. Step 1 offers a way forward. No join modal opens.
 #[test]
@@ -3815,6 +3854,124 @@ fn hangup_click_updates_ui_before_core_confirms() {
         cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
         "hangup must still send LeaveVoice, got {cmds:?}"
     );
+}
+
+/// The window's close button with "close to tray" on hangs up. A user who
+/// closes the window thinks they left, and the channel kept hearing them.
+#[test]
+fn closing_the_window_to_tray_leaves_voice() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    h.app().set_in_voice(true);
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    assert!(
+        !h.app().get_in_voice(),
+        "closing to tray must leave the in-voice state"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing to tray must send LeaveVoice, got {cmds:?}"
+    );
+}
+
+/// Outside a call the close button only hides the window: no LeaveVoice,
+/// which would tell the server about a call that does not exist.
+#[test]
+fn closing_the_window_to_tray_outside_a_call_sends_no_leave() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    let cmds = h.commands();
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing outside a call must not send LeaveVoice, got {cmds:?}"
+    );
+}
+
+/// Counts the tray notices the close handler posts. The OS accepts a notice
+/// when `accepted` returns true for that attempt (0 is the first).
+fn count_tray_notices(
+    h: &Harness,
+    accepted: impl Fn(u32) -> bool + 'static,
+) -> std::rc::Rc<std::cell::Cell<u32>> {
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = attempts.clone();
+    *h.ctx().tray_notice.borrow_mut() = Some(Box::new(move || {
+        let n = seen.get();
+        seen.set(n + 1);
+        accepted(n)
+    }));
+    attempts
+}
+
+fn close_the_window(h: &Harness) {
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+}
+
+/// The first close to the tray tells the user that m3llo still runs. Users
+/// thought the app quit. Later closes say nothing.
+#[test]
+fn the_first_close_to_tray_shows_the_notice_once() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "the first close posts the notice");
+    assert!(
+        h.settings().borrow().tray_notice_shown,
+        "the notice is stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "a later close posts no notice");
+}
+
+/// With no tray to bring it back (a Linux desktop without a
+/// StatusNotifierItem host), close does not hide the window to the tray: it
+/// quits. So no hang-up of its own and no tray notice.
+#[test]
+fn without_a_tray_close_quits_and_posts_no_tray_notice() {
+    let h = Harness::new();
+    *h.ctx().status_item.borrow_mut() = crate::platform::StatusItem::disabled();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 0, "no tray, no tray notice");
+    assert!(!h.settings().borrow().tray_notice_shown);
+}
+
+/// A notice the OS refused did not reach the user, so the next close tries
+/// again.
+#[test]
+fn a_refused_tray_notice_shows_on_the_next_close() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |n| n > 0);
+
+    close_the_window(&h);
+    assert!(
+        !h.settings().borrow().tray_notice_shown,
+        "a refused notice is not stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 2, "the next close tries again");
+    assert!(h.settings().borrow().tray_notice_shown);
 }
 
 fn listed_audio_devices(cmds: &[Command]) -> bool {
@@ -9671,7 +9828,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     let _ = h.commands();
 
     h.click_label("Pop out");
-    assert_eq!(*calls.borrow(), ["open alice - Mello"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo"]);
     assert!(card_ui(&h).get_popped_out());
     assert!(
         !h.controls_labelled("Show it here").is_empty(),
@@ -9685,7 +9842,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     no_restart(&mut h);
 
     h.click_label("Show it here");
-    assert_eq!(*calls.borrow(), ["open alice - Mello", "close"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo", "close"]);
     assert!(!card_ui(&h).get_popped_out());
 
     // The window's close button: the native window procedure calls this.
