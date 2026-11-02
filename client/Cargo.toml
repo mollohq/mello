@@ -45,7 +45,7 @@ i-slint-backend-testing = { version = "=1.18.1", optional = true, features = ["m
 tempfile = { version = "3", optional = true }
 
 # Auto-updater
-velopack = "0.0.1298"
+velopack = "1.2.161"
 semver = "1"
 
 # Avatar upload, image loading & SVG rasterization

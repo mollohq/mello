@@ -163,6 +163,12 @@ jobs:
             Remove-Item -Recurse -Force libmello/build-ci -ErrorAction SilentlyContinue
           }
 
+      # client/build_notices.rs runs `cargo tree --offline` for every target,
+      # so the crates of every target must be in the cache, not only this
+      # host's. Same step as the Linux lane and release.yml.
+      - name: Fetch crates
+        run: cargo fetch --locked
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -236,6 +242,12 @@ jobs:
             cargo clean || true
             rm -rf libmello/build-ci
           fi
+
+      # client/build_notices.rs runs `cargo tree --offline` for every target,
+      # so the crates of every target must be in the cache, not only this
+      # host's. Same step as the Linux lane and release.yml.
+      - name: Fetch crates
+        run: cargo fetch --locked
 
       - name: Check formatting
         run: cargo fmt --all -- --check
