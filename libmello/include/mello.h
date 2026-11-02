@@ -404,6 +404,61 @@ MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_sampl
 MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
 
 /* ============================================================================
+ * Game Clip Replay (F8, plans/GAME-CLIPS.md)
+ * ============================================================================ */
+
+/** What the replay buffer records. */
+typedef struct MelloReplayConfig {
+    /** The game window. The replay captures it with WGC window capture and
+     *  nothing else: no monitor or desktop capture. */
+    void*       hwnd;
+    /** The game process: its audio through process loopback. 0: none. */
+    uint32_t    pid;
+    /** The clip quality: the encode height (1080 or 720) and rate (60, 30). */
+    uint32_t    height;
+    uint32_t    fps;
+    uint32_t    bitrate_kbps;
+    /** The folder of the ring files. NULL or "": the OS temp folder. */
+    const char* buffer_dir;
+} MelloReplayConfig;
+
+typedef enum MelloReplayState {
+    MELLO_REPLAY_OFF = 0,        /**< not started, or stopped */
+    MELLO_REPLAY_RECORDING = 1,  /**< frames come in */
+    MELLO_REPLAY_WAITING = 2,    /**< the game draws nothing now (minimized) */
+    MELLO_REPLAY_FAILED = 3,     /**< a fault turned the replay off */
+} MelloReplayState;
+
+/** A captured game clip. */
+typedef struct MelloReplayClip {
+    uint64_t duration_us;
+    uint32_t width;
+    uint32_t height;
+    uint64_t bytes;
+    bool     has_game_audio;
+    /** The poster is a frame after the press; false: the clip's last IDR. */
+    bool     poster_live;
+} MelloReplayClip;
+
+/** Start the replay buffer for one game (one at a time: a running replay
+ *  stops first). Windows only. MELLO_ERROR_FAILED on failure, and
+ *  mello_get_error says why ("no hardware encoder", "the game window cannot
+ *  be captured", ...). */
+MELLO_API MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* config);
+
+/** Stop the replay buffer and delete its ring files. */
+MELLO_API void mello_replay_stop(MelloContext* ctx);
+
+MELLO_API MelloReplayState mello_replay_state(MelloContext* ctx);
+
+/** Write the last `seconds` of the game as an MP4 (H.264, AAC with the game
+ *  audio and the voice of the clip buffer) at `mp4_path` and a JPEG poster at
+ *  `poster_path`. Blocks for about a second: call it on a worker thread, not
+ *  on the command loop. `out` may be NULL. */
+MELLO_API MelloResult mello_replay_capture(MelloContext* ctx, float seconds, const char* mp4_path,
+                                           const char* poster_path, MelloReplayClip* out);
+
+/* ============================================================================
  * Peer Transport (the client side of an SFU connection)
  * ============================================================================ */
 

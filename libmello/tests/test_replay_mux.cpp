@@ -11,6 +11,7 @@
 #include "replay/h264_nal.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
+#include "replay/replay_session.hpp"
 #include "replay/replay_video_ring.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -29,10 +30,12 @@
 #include <chrono>
 #include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <thread>
 #include <vector>
 
 using namespace mello::replay;
@@ -387,5 +390,76 @@ TEST(ReplayMuxTime, ThirtySecondsAtTheDefaultQualityMuxInUnderThreeSeconds) {
     EXPECT_LT(seconds, 3.0) << "mux of 30 s took " << seconds << " s";
     std::printf("[ ReplayMuxTime ] 30 s clip, %.1f MB, muxed in %.2f s\n",
                 static_cast<double>(result.bytes) / 1e6, seconds);
+}
+
+// The whole replay on this PC's encoder: a reference clip through the
+// capture manager, the recording encoder and the rings, then a capture.
+// Needs a D3D11 device with a video processor and an encoder, so it skips
+// under CI like the other pipeline tests.
+TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    TempDir dir;
+    // 120 frames of 320x240: a luma ramp that moves one pixel a frame.
+    const uint32_t w = 320, h = 240, frames = 120;
+    const fs::path yuv = dir.path() / "reference.yuv";
+    {
+        std::vector<uint8_t> frame(static_cast<size_t>(w) * h * 3 / 2, 128);
+        std::ofstream f(yuv, std::ios::binary);
+        for (uint32_t n = 0; n < frames; ++n) {
+            for (uint32_t y = 0; y < h; ++y)
+                for (uint32_t x = 0; x < w; ++x)
+                    frame[y * w + x] = static_cast<uint8_t>(16 + ((x + n) * 219 / (w + frames)));
+            f.write(reinterpret_cast<const char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
+        }
+    }
+    mello::video::CaptureSourceDesc desc{};
+    desc.mode = mello::video::CaptureMode::Reference;
+    desc.reference.path = yuv.string();
+    desc.reference.width = w;
+    desc.reference.height = h;
+    desc.reference.fps = 60;
+
+    ReplayConfig config;
+    config.source = desc;
+    config.height = h;
+    config.fps = 60;
+    config.bitrate_kbps = 2000;
+    config.dir = dir.path();
+    std::string error;
+    auto session = ReplaySession::start(config, &error);
+    if (!session && error == "no hardware encoder") GTEST_SKIP() << "no encoder on this machine";
+    ASSERT_TRUE(session) << error;
+
+    std::this_thread::sleep_for(std::chrono::seconds(3));
+    EXPECT_EQ(session->state(), ReplayState::Recording);
+    const fs::path mp4 = dir.path() / "clip.mp4";
+    const fs::path poster = dir.path() / "poster.jpg";
+    ReplayClip clip;
+    ASSERT_TRUE(session->capture(2.0f, nullptr, mp4, poster, &clip));
+    const auto stats = session->stats();
+    session->stop();
+
+    // 2 s, plus up to one GOP (1 s) back to the keyframe before the start.
+    EXPECT_GE(clip.duration_us, 1'950'000u);
+    EXPECT_LE(clip.duration_us, 3'100'000u);
+    EXPECT_EQ(clip.width, w);
+    EXPECT_EQ(clip.height, h);
+    EXPECT_TRUE(clip.poster_live) << "the reference source delivers a frame after the press";
+    const auto v = read_video(mp4);
+    ASSERT_FALSE(v.times.empty());
+    EXPECT_TRUE(v.clean_points.front());
+    EXPECT_GE(v.times.size(), 110u) << "about 60 frames a second";
+    EXPECT_EQ(stats.video_ring.queue_drops, 0u);
+    EXPECT_EQ(stats.video_ring.overflow_drops, 0u);
+    std::ifstream f(poster, std::ios::binary);
+    uint8_t soi[2] = {};
+    f.read(reinterpret_cast<char*>(soi), 2);
+    EXPECT_EQ(soi[0], 0xFF);
+    EXPECT_EQ(soi[1], 0xD8);
+    std::printf("[ ReplaySession ] %.2f s, %u frames, %llu bytes, %llu captured, %llu encoded\n",
+                static_cast<double>(clip.duration_us) / 1e6, static_cast<unsigned>(v.times.size()),
+                static_cast<unsigned long long>(clip.bytes),
+                static_cast<unsigned long long>(stats.frames_captured),
+                static_cast<unsigned long long>(stats.frames_encoded));
 }
 #endif // _WIN32

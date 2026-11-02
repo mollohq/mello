@@ -11,6 +11,8 @@
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
+#include "replay/replay_session.hpp"
+#include <filesystem>
 #endif
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
@@ -670,6 +672,103 @@ MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bi
     } catch (...) {
         return MELLO_ERROR_FAILED;
     }
+}
+
+/* ============================================================================
+ * Game Clip Replay
+ * ============================================================================ */
+
+MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* config) {
+    if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
+#ifdef _WIN32
+    try {
+        auto* c = ctx_cast(ctx);
+        // One replay at a time (plans/GAME-CLIPS.md 4.2).
+        if (auto old = c->exchange_replay(nullptr)) old->stop();
+        mello::replay::ReplayConfig rc;
+        rc.hwnd = config->hwnd;
+        rc.pid = config->pid;
+        if (config->height) rc.height = config->height;
+        if (config->fps) rc.fps = config->fps;
+        if (config->bitrate_kbps) rc.bitrate_kbps = config->bitrate_kbps;
+        if (config->buffer_dir && config->buffer_dir[0]) {
+            rc.dir = std::filesystem::u8path(config->buffer_dir);
+        }
+        std::string error;
+        auto session = mello::replay::ReplaySession::start(rc, &error);
+        if (!session) {
+            c->set_error(error.empty() ? "the replay did not start" : error);
+            return MELLO_ERROR_FAILED;
+        }
+        c->exchange_replay(std::move(session));
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+#else
+    ctx_cast(ctx)->set_error("game clips are not on this platform yet");
+    return MELLO_ERROR_FAILED;
+#endif
+}
+
+void mello_replay_stop(MelloContext* ctx) {
+    if (!ctx) return;
+#ifdef _WIN32
+    try {
+        if (auto old = ctx_cast(ctx)->exchange_replay(nullptr)) old->stop();
+    } catch (...) {
+    }
+#endif
+}
+
+MelloReplayState mello_replay_state(MelloContext* ctx) {
+    if (!ctx) return MELLO_REPLAY_OFF;
+#ifdef _WIN32
+    const auto session = ctx_cast(ctx)->replay();
+    if (!session) return MELLO_REPLAY_OFF;
+    switch (session->state()) {
+        case mello::replay::ReplayState::Recording: return MELLO_REPLAY_RECORDING;
+        case mello::replay::ReplayState::Waiting: return MELLO_REPLAY_WAITING;
+        case mello::replay::ReplayState::Failed: return MELLO_REPLAY_FAILED;
+    }
+#endif
+    return MELLO_REPLAY_OFF;
+}
+
+MelloResult mello_replay_capture(MelloContext* ctx, float seconds, const char* mp4_path,
+                                 const char* poster_path, MelloReplayClip* out) {
+    if (!ctx || seconds <= 0.0f || !mp4_path || !poster_path) return MELLO_ERROR_INVALID_PARAM;
+#ifdef _WIN32
+    try {
+        auto* c = ctx_cast(ctx);
+        const auto session = c->replay();
+        if (!session) {
+            c->set_error("the replay is not running");
+            return MELLO_ERROR_NOT_INITIALIZED;
+        }
+        mello::replay::ReplayClip clip;
+        if (!session->capture(seconds, &c->audio(), std::filesystem::u8path(mp4_path),
+                              std::filesystem::u8path(poster_path), &clip)) {
+            c->set_error("the clip capture failed");
+            return MELLO_ERROR_FAILED;
+        }
+        if (out) {
+            out->duration_us = clip.duration_us;
+            out->width = clip.width;
+            out->height = clip.height;
+            out->bytes = clip.bytes;
+            out->has_game_audio = clip.has_game_audio;
+            out->poster_live = clip.poster_live;
+        }
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+#else
+    (void)out;
+    ctx_cast(ctx)->set_error("game clips are not on this platform yet");
+    return MELLO_ERROR_FAILED;
+#endif
 }
 
 /* ============================================================================

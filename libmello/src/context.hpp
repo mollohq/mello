@@ -10,6 +10,10 @@
 
 namespace mello {
 
+namespace replay {
+class ReplaySession;
+}
+
 class Context {
 public:
     Context() = default;
@@ -43,6 +47,20 @@ public:
     /// host audio pipeline and its stream host peer (stream_audio_link.hpp).
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link() const { return stream_audio_link_; }
 
+    /// The game clip replay (F8), one at a time (plans/GAME-CLIPS.md 4.2).
+    /// A capture holds its own reference, so a stop during a capture lets
+    /// the capture finish. Any thread.
+    std::shared_ptr<replay::ReplaySession> replay() const {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        return replay_;
+    }
+    /// Sets the replay and returns the one before it, for the caller to stop.
+    std::shared_ptr<replay::ReplaySession> exchange_replay(std::shared_ptr<replay::ReplaySession> next) {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        replay_.swap(next);
+        return next;
+    }
+
     void set_error(const std::string& error);
     const char* get_error() const;
 
@@ -60,6 +78,8 @@ private:
         std::make_shared<std::atomic<uint64_t>>(0);
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link_ =
         std::make_shared<audio::StreamAudioLink>();
+    std::shared_ptr<replay::ReplaySession> replay_;
+    mutable std::mutex replay_mutex_;
 };
 
 } // namespace mello

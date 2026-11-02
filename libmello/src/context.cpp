@@ -2,6 +2,7 @@
 #include "util/log.hpp"
 
 #ifdef _WIN32
+#include "replay/replay_session.hpp"
 #include <Windows.h>
 
 static bool s_seh_init_ok = false;
@@ -43,6 +44,10 @@ bool Context::initialize_inner() {
 }
 
 void Context::shutdown() {
+#ifdef _WIN32
+    // Before the audio: the replay reads the clip buffer of the voice.
+    if (auto replay = exchange_replay(nullptr)) replay->stop();
+#endif
     audio_.shutdown();
 }
 

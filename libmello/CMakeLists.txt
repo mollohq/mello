@@ -282,6 +282,7 @@ if(WIN32)
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
         src/replay/replay_mux_wmf.cpp
+        src/replay/replay_session.cpp
     )
 elseif(IOS)
     # RemoteIO capture/playback + AVAudioSession + mic permission (Step 3). Device
