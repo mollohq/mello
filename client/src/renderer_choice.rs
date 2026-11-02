@@ -20,6 +20,7 @@
 #[cfg_attr(not(target_os = "windows"), allow(dead_code))]
 pub const GPU_RENDERER: &str = "d2d";
 /// Linux: Skia on wgpu, Vulkan on the boot GPU.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub const LINUX_GPU_RENDERER: &str = "skia-wgpu";
 /// Skia's CPU rasterizer, the fallback.
 pub const CPU_RENDERER: &str = "skia-software";
@@ -57,6 +58,7 @@ pub fn choose(
 
 /// Linux: `choose` with Skia on wgpu as the GPU renderer. The probe checks
 /// for a hardware Vulkan adapter; `skia-wgpu` makes its own device after it.
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
 pub fn choose_linux(
     override_name: Option<&str>,
     hardware_acceleration: bool,
