@@ -117,6 +117,11 @@ enum Lead {
     /// Two stacked cells, the head2head cell tall and a recap tall (frame F).
     /// Four cards.
     TallTrio,
+    /// The weekly recap stands top right, one column and two rows, beside a
+    /// lead block that is two columns wide for those two rows: the lead (a
+    /// wide card alone, or a cell with the next card), then one wide card or
+    /// two cells. The rows after the block are three columns (2026-11-02).
+    RecapSide,
 }
 
 struct Layout {
@@ -130,6 +135,81 @@ struct Layout {
     /// column beside a hero, a live stream or head2head and its two cells. The
     /// row after the lead then has two columns, not three.
     tall3: bool,
+    /// `Lead::RecapSide`: the card index of the recap (the first or second
+    /// card from `start`), the lead takes both rows (a live session with
+    /// poster art), the lead is wide, the first card of the block's second
+    /// row (its k among the cards that are not the recap) and whether it is wide.
+    rs: Option<RecapSide>,
+}
+
+/// The facts of the recap side block. `idx(k)` is the index of the k-th card
+/// from `start` that is not the recap.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct RecapSide {
+    recap: usize,
+    start: usize,
+    lead_tall: bool,
+    lead_wide: bool,
+    r2_first: usize,
+    r2_wide: bool,
+}
+
+impl RecapSide {
+    fn idx(&self, k: usize) -> usize {
+        if self.recap == self.start {
+            self.start + 1 + k
+        } else if k == 0 {
+            self.start
+        } else {
+            self.start + 1 + k
+        }
+    }
+    /// The cards the block holds, the recap included.
+    fn consumed(&self) -> usize {
+        1 + if self.lead_tall {
+            1
+        } else {
+            (if self.lead_wide { 1 } else { 2 }) + (if self.r2_wide { 1 } else { 2 })
+        }
+    }
+    /// The index of the block's second-row wide slot, when it holds a wide card.
+    fn r2_slot(&self) -> Option<usize> {
+        (!self.lead_tall && self.r2_wide).then(|| self.idx(self.r2_first))
+    }
+}
+
+/// A card that takes both columns of the recap side block.
+fn rs_wide(c: &CardInfo) -> bool {
+    (c.card_type == "head2head" && c.variant != "invite")
+        || (c.card_type == "clip" && c.is_hero)
+        || c.recent_grid
+        || c.day_wide
+        || c.is_hero
+}
+
+fn recap_side(cards: &[CardInfo], start: usize) -> Option<RecapSide> {
+    let at = |i: usize| cards.get(i);
+    let recap = if at(start).is_some_and(CardInfo::is_recap) {
+        start
+    } else if at(start + 1).is_some_and(CardInfo::is_recap) {
+        start + 1
+    } else {
+        return None;
+    };
+    let mut rs = RecapSide {
+        recap,
+        start,
+        lead_tall: false,
+        lead_wide: false,
+        r2_first: 2,
+        r2_wide: false,
+    };
+    let lead = at(rs.idx(0));
+    rs.lead_tall = lead.is_some_and(|c| c.card_type == "live-session" && c.has_poster);
+    rs.lead_wide = !rs.lead_tall && lead.is_some_and(rs_wide);
+    rs.r2_first = if rs.lead_wide { 1 } else { 2 };
+    rs.r2_wide = !rs.lead_tall && at(rs.idx(rs.r2_first)).is_some_and(rs_wide);
+    Some(rs)
 }
 
 impl Layout {
@@ -170,8 +250,10 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
     let first_wide = first.is_some_and(CardInfo::is_h2h_wide);
     let session_then_wide = first.is_some_and(|c| c.card_type == "game-session")
         && at(start + 1).is_some_and(|c| c.card_type == "head2head" && c.variant == "wide");
+    let rs = recap_side(cards, start);
     let lead = match first {
         None => Lead::Hero,
+        Some(_) if rs.is_some() => Lead::RecapSide,
         Some(_) if session_then_wide => Lead::CellWide,
         Some(_) if variant == "belt" => Lead::Belt,
         Some(c) if !c.is_hero && tall_trio(cards, start) => Lead::TallTrio,
@@ -207,6 +289,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         0
     } else {
         match lead {
+            Lead::RecapSide => rs.map_or(0, |r| r.consumed().min(left)),
             Lead::Plain => 0,
             Lead::Wide if wide_follows || tall3 => 1,
             Lead::Wide | Lead::CellWide => left.min(2),
@@ -224,7 +307,9 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         start,
         row2_base,
         r2_wide: at(row2_base).is_some_and(CardInfo::is_wide_card),
-        tall3,
+        // The recap is two rows, never three.
+        tall3: tall3 && rs.is_none() && false,
+        rs,
     }
 }
 
@@ -232,7 +317,9 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
 /// first row of the lead (row 2), else after the first three cells of a plain
 /// grid, which has no hero.
 fn joins_at(l: &Layout, len: usize) -> usize {
-    let at = if l.lead == Lead::Plain {
+    let at = if l.lead == Lead::RecapSide {
+        l.row2_base + usize::from(l.r2_wide)
+    } else if l.lead == Lead::Plain {
         // A wide card leads the first row: the join is the cell beside it.
         if l.r2_wide {
             l.start + 1
@@ -265,6 +352,16 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
         w.push(l.start); // the belt hero
         w.push(l.start + 1); // the head2head card in row 2
     }
+    if let (Lead::RecapSide, Some(rs)) = (l.lead, l.rs) {
+        if (rs.lead_tall || rs.lead_wide) && rs.idx(0) < len {
+            w.push(rs.idx(0));
+        }
+        if let Some(i) = rs.r2_slot() {
+            if i < len {
+                w.push(i);
+            }
+        }
+    }
     if l.r2_wide {
         w.push(l.row2_base); // row 2: the poster grid and one card
     }
@@ -287,8 +384,9 @@ const MEMORY_COLS: usize = 3;
 pub(crate) fn place_memory(mut cards: Vec<FeedCardData>) -> (Vec<FeedCardData>, i32) {
     let mut taken: Vec<[bool; MEMORY_COLS]> = Vec::new();
     for card in &mut cards {
-        let span = if card.card_type == "recap" {
-            card.recap_rows.clamp(2, 3) as usize
+        // A recap is two rows, with or without belts.
+        let span = if card.card_type == "recap" && card.recap_rows > 0 {
+            2
         } else {
             1
         };
@@ -503,19 +601,21 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         Lead::Belt => o.get(start + 1).is_some_and(|&i| cards[i].is_h2h_wide()),
         _ => false,
     };
-    let h2h = order
-        .iter()
-        .copied()
-        .find(|&i| cards[i].is_h2h_wide())
-        .filter(|_| !h2h_home(order, &l0));
-    // The tall trio already holds its recap, tall. So does the side column of
-    // one live stream, when the recap leads the feed (`grid_start`).
+    // The side column of one live stream already holds its recap, when the
+    // recap leads the feed (`grid_start`).
     let side_tall = start == 1 && order.first().is_some_and(|&i| cards[i].is_recap());
-    let recap = if l0.lead == Lead::TallTrio || side_tall {
+    let recap = if side_tall {
         None
     } else {
         order.iter().copied().find(|&i| cards[i].is_recap())
     };
+    // With a recap the block beside it is laid out from scratch: head2head
+    // leaves its home too.
+    let h2h = order
+        .iter()
+        .copied()
+        .find(|&i| cards[i].is_h2h_wide())
+        .filter(|_| recap.is_some() || !h2h_home(order, &l0));
     // The day card takes the wide slot after the recap, before the games.
     let day = order.iter().copied().find(|&i| cards[i].day_wide);
     let games = order
@@ -536,13 +636,35 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         }
     };
 
-    // Beside a hero the recap is the tall card of the side column. It goes in
-    // first: it moves the wide slot of row 2 one card up.
+    // The recap is the tall card of the side column, top right, whatever
+    // leads. Head2head leads the block beside it unless a hero does; the
+    // recap goes in second (first with no other card), and the block fills
+    // from the cards that follow.
     let mut recap = recap;
+    let mut h2h = h2h;
     if let Some(id) = recap {
-        if layout(&infos_of(cards, order), start).lead == Lead::Hero {
-            order.insert((start + 1).min(order.len()), id);
-            recap = None;
+        let hero_leads = order.get(start).is_some_and(|&i| {
+            cards[i].is_hero
+                || cards[i].variant == "versus"
+                || (cards[i].card_type == "live-session" && cards[i].has_poster)
+        });
+        if let (Some(h), false) = (h2h, hero_leads) {
+            order.insert(start.min(order.len()), h);
+            h2h = None;
+        }
+        let at = if order.len() > start {
+            start + 1
+        } else {
+            start
+        };
+        order.insert(at.min(order.len()), id);
+        recap = None;
+        if let Some(h) = h2h {
+            // A hero leads: head2head takes the block's second row.
+            let l = layout(&infos_of(cards, order), start);
+            let at = l.rs.map_or(l.row2_base, |rs| rs.idx(1));
+            order.insert(at.min(order.len()), h);
+            h2h = None;
         }
     }
 
@@ -560,7 +682,11 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
 
     if let Some(id) = day {
         let l = layout(&infos_of(cards, order), start);
-        let at = next_slot(order, &l);
+        let at = match (l.lead, l.rs) {
+            // The block's second row when it is free, else the next wide slot.
+            (Lead::RecapSide, Some(rs)) if !rs.lead_tall && !rs.r2_wide => rs.idx(rs.r2_first),
+            _ => next_slot(order, &l),
+        };
         order.insert(at.min(order.len()), id);
     }
 
@@ -572,7 +698,17 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
         let r3_taken = order.get(r3).is_some_and(|&i| cards[i].is_wide_card());
         let side_recap =
             l.lead == Lead::Hero && infos.get(start + 1).is_some_and(CardInfo::is_recap);
-        let target = if l.r2_wide && !matches!(l.lead, Lead::TallTrio | Lead::Belt) {
+        let target = if let (Lead::RecapSide, Some(rs)) = (l.lead, l.rs) {
+            // The grid takes the block's second row when it is free, else the
+            // wide slot of row 3. The list is the first cell after the block.
+            if grid && !rs.lead_tall && !rs.r2_wide {
+                rs.idx(rs.r2_first)
+            } else if grid && !r3_taken {
+                r3
+            } else {
+                l.row2_base + usize::from(l.r2_wide)
+            }
+        } else if l.r2_wide && !matches!(l.lead, Lead::TallTrio | Lead::Belt) {
             // A wide card leads row 2: the grid takes the wide slot of row 3,
             // the list is the cell beside the wide card.
             if grid && !r3_taken {
@@ -597,6 +733,8 @@ fn place_wide_cards(cards: &[CardInfo], order: &mut Vec<usize>, start: usize) {
                 Lead::CellWide => start + 2,
                 // The third cell of row 2, beside the two sessions (frame E).
                 Lead::Belt | Lead::TallTrio => l.row2_base + 2,
+                // Handled above: the block's free row, else the first cell after it.
+                Lead::RecapSide => l.row2_base,
                 // The poster grid needs two columns. Under a hero it takes the
                 // wide slot of row 3 (frames C and D). The list stays in the side
                 // column, behind a tall recap.
@@ -1119,16 +1257,78 @@ mod tests {
         assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
     }
 
+    fn belts_recap() -> CardInfo {
+        CardInfo {
+            recap_belts: true,
+            ..recap()
+        }
+    }
+
     #[test]
-    fn a_dormant_feed_stacks_two_cells_beside_two_tall_cards() {
-        // Frame F: head2head leads a feed with no hero. The recap is the tall
-        // card beside it, and two cells sit under head2head.
-        let mut recap = card("recap");
-        recap.recap_has_content = true;
+    fn the_recap_is_top_right_two_rows_whatever_leads() {
+        // The recap is the second card from the start, the side column of
+        // the block, for every lead. The block beside it is two columns: a
+        // wide lead alone, or two cells, then a wide card or two cells.
+        let mut hero = card("session-preview");
+        hero.is_hero = true;
+        let leads: Vec<(Vec<CardInfo>, bool, bool)> = vec![
+            (vec![h2h("versus")], true, false),
+            (vec![h2h("wide")], true, false),
+            (vec![h2h("pairs"), card("invite")], true, false),
+            (vec![hero.clone()], true, false),
+            (vec![live()], false, true),
+            (vec![card("clip")], false, false),
+        ];
+        for (lead, wide, tall) in leads {
+            for pos in 0..4 {
+                let mut cards = lead.clone();
+                for _ in 0..4 {
+                    cards.push(card("game-session"));
+                }
+                cards.insert((lead.len() + pos).min(cards.len()), recap());
+                let order = arrange(&cards, 0);
+                let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
+                let l = layout(&infos, 0);
+                assert_eq!(l.lead, Lead::RecapSide, "{:?}", types(&cards, &order));
+                let rs = l.rs.expect("the side block");
+                assert_eq!(
+                    rs.recap,
+                    1,
+                    "the recap is second: {:?}",
+                    types(&cards, &order)
+                );
+                assert_eq!(
+                    (rs.lead_wide, rs.lead_tall),
+                    (wide, tall),
+                    "{:?}",
+                    types(&cards, &order)
+                );
+                assert_eq!(l.row2_base, rs.consumed().min(infos.len()));
+                let w = wide_slots(&l, infos.len());
+                if wide || tall {
+                    assert!(w.contains(&0), "the lead takes both columns: {w:?}");
+                }
+                assert!(
+                    !w.contains(&1),
+                    "the recap slot is a column, not a wide slot: {w:?}"
+                );
+                assert_eq!(
+                    arrange(&infos, 0),
+                    (0..infos.len()).collect::<Vec<_>>(),
+                    "stable"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_dormant_feed_has_head2head_and_the_recap_then_two_cells() {
+        // Frame F: head2head leads a feed with no hero, the recap stands
+        // beside it, two cells sit under head2head.
         let cards = vec![
             h2h("pairs"),
             card("game-session"),
-            recap,
+            recap(),
             card("game-session"),
         ];
         let order = arrange(&cards, 0);
@@ -1140,102 +1340,54 @@ mod tests {
         );
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 0);
-        assert_eq!(l.lead, Lead::TallTrio);
+        assert_eq!(l.lead, Lead::RecapSide);
         assert_eq!(l.row2_base, 4);
         assert_eq!(wide_slots(&l, infos.len()), [0], "head2head is two columns");
-        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
-    }
-
-    fn belts_recap() -> CardInfo {
-        CardInfo {
-            recap_belts: true,
-            ..recap()
-        }
     }
 
     #[test]
-    fn a_recap_with_belts_is_three_rows_beside_a_hero_and_the_row_under_it_has_two_columns() {
+    fn a_hero_leads_the_block_and_head2head_takes_its_second_row() {
         let mut hero = card("session-preview");
         hero.is_hero = true;
         let cards = vec![
             hero,
-            belts_recap(),
-            card("session"),
-            card("session"),
-            card("session"),
-            card("session"),
-        ];
-        let order = arrange(&cards, 0);
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        let l = layout(&infos, 0);
-        assert_eq!(l.lead, Lead::Hero);
-        assert!(l.tall3, "belts make the recap three rows");
-        assert_eq!(l.row2_base, 2);
-        assert_eq!(
-            l.row2_len(),
-            2,
-            "two cells under the hero, the recap holds the third column"
-        );
-        assert_eq!(l.row3_base(), 4);
-        // Without belts the recap is two rows and the row under the hero has three.
-        let mut plain = cards.clone();
-        plain[1] = recap();
-        let order = arrange(&plain, 0);
-        let infos: Vec<CardInfo> = order.iter().map(|&i| plain[i].clone()).collect();
-        let l = layout(&infos, 0);
-        assert!(!l.tall3);
-        assert_eq!(l.row2_len(), 3);
-    }
-
-    #[test]
-    fn a_wide_card_under_a_three_row_recap_is_the_only_card_of_its_row() {
-        let mut hero = card("session-preview");
-        hero.is_hero = true;
-        let cards = vec![
-            hero,
-            belts_recap(),
             h2h("pairs"),
             card("session"),
-            card("session"),
+            recap(),
             card("session"),
         ];
         let order = arrange(&cards, 0);
+        let t = types(&cards, &order);
+        assert_eq!(t[..3], ["session-preview", "recap", "head2head"], "{t:?}");
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 0);
-        assert!(l.tall3 && l.r2_wide);
-        assert_eq!(infos[2].card_type, "head2head");
+        let rs = l.rs.expect("the side block");
+        assert!(rs.lead_wide && rs.r2_wide);
         assert_eq!(
-            l.row2_len(),
-            1,
-            "head2head fills the two columns beside the recap"
+            l.row2_base, 3,
+            "the block holds the hero, the recap and head2head"
         );
-        assert_eq!(l.row3_base(), 3);
         assert_eq!(wide_slots(&l, infos.len())[..2], [0, 2]);
     }
 
     #[test]
-    fn the_tall_trio_recap_with_belts_is_three_rows() {
-        let cards = vec![
-            h2h("pairs"),
-            card("game-session"),
-            belts_recap(),
-            card("game-session"),
-            card("session"),
-            card("session"),
-        ];
+    fn a_live_session_fills_the_block_beside_the_recap() {
+        let cards = vec![live(), card("session"), recap(), card("session")];
         let order = arrange(&cards, 0);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 0);
-        assert_eq!(l.lead, Lead::TallTrio);
-        assert!(l.tall3);
-        assert_eq!(l.row2_base, 4);
-        assert_eq!(l.row2_len(), 2);
+        let rs = l.rs.expect("the side block");
+        assert!(rs.lead_tall);
+        assert_eq!(
+            l.row2_base, 2,
+            "two cards in the block: the live session and the recap"
+        );
     }
 
     #[test]
-    fn beside_a_stream_the_recap_is_three_rows_only_under_a_wide_or_plain_lead() {
-        // The stream takes the recap alone (start 1). Head2head leads the grid:
-        // its own row is the recap's third row, so the row after is full.
+    fn the_recap_is_never_three_rows() {
+        // A stream takes the recap alone (start 1): head2head leads the grid
+        // under it and the row after is full, the recap stays two rows.
         let cards = vec![
             belts_recap(),
             h2h("pairs"),
@@ -1246,45 +1398,8 @@ mod tests {
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 1);
         assert_eq!(l.lead, Lead::Wide);
-        assert!(l.tall3);
-        assert_eq!(
-            l.row2_base, 2,
-            "head2head alone in its row, no cell beside it"
-        );
-        assert_eq!(l.row2_len(), 3);
-        // Plain rows under the stream: the first row has two columns.
-        let cards = vec![
-            belts_recap(),
-            card("session"),
-            card("session"),
-            card("session"),
-        ];
-        let order = arrange(&cards, 1);
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        let l = layout(&infos, 1);
-        assert_eq!(l.lead, Lead::Plain);
-        assert!(l.tall3);
-        assert_eq!(l.row2_len(), 2);
-        // A hero under the stream cannot leave the third column: two rows.
-        let mut hero = card("clip");
-        hero.is_hero = true;
-        let cards = vec![belts_recap(), hero, card("session"), card("session")];
-        let order = arrange(&cards, 1);
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        let l = layout(&infos, 1);
         assert!(!l.tall3);
-    }
-
-    #[test]
-    fn a_hero_keeps_the_feed_when_a_recap_and_a_cell_follow() {
-        let mut hero = card("session-preview");
-        hero.is_hero = true;
-        let mut recap = card("recap");
-        recap.recap_has_content = true;
-        let cards = vec![hero, h2h("pairs"), card("session"), recap];
-        let order = arrange(&cards, 0);
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        assert_eq!(layout(&infos, 0).lead, Lead::Hero);
+        assert_eq!(l.row2_len(), 3);
     }
 
     #[test]
@@ -1574,6 +1689,9 @@ mod tests {
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let at = infos.iter().position(CardInfo::is_recap)?;
         let l = layout(&infos, start);
+        if l.lead == Lead::RecapSide && l.rs.is_some_and(|rs| rs.recap == at) {
+            return Some("tall");
+        }
         if l.lead == Lead::Hero && at == start + 1 {
             return Some("tall");
         }
@@ -1621,47 +1739,6 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_goes_to_the_side_column_beside_a_hero() {
-        let mut hero = card("session-preview");
-        hero.is_hero = true;
-        let cards = vec![
-            hero,
-            card("game-session"),
-            card("game-session"),
-            card("game-session"),
-            recap(),
-        ];
-        let order = arrange(&cards, 0);
-        let t = types(&cards, &order);
-        assert_eq!(t[1], "recap", "{t:?}");
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        assert_eq!(layout(&infos, 0).row2_base, 2, "the recap holds the column");
-        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
-    }
-
-    #[test]
-    fn a_recap_takes_the_first_wide_slot_of_the_next_row_when_the_column_is_taken() {
-        // A versus hero is one full row: row 2 leads with the recap, two
-        // columns, and the poster grid takes the wide slot of row 3.
-        let cards = vec![
-            h2h("versus"),
-            card("game-session"),
-            card("game-session"),
-            grid(),
-            recap(),
-        ];
-        let order = arrange(&cards, 0);
-        let t = types(&cards, &order);
-        assert_eq!(t[1], "recap", "{t:?}");
-        let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
-        let l = layout(&infos, 0);
-        assert!(l.r2_wide);
-        let wide = wide_slots(&l, infos.len());
-        assert_eq!(wide[0], 1, "row 2 leads with the recap");
-        assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
-    }
-
-    #[test]
     fn one_live_stream_gives_the_recap_the_whole_side_column() {
         let cards = vec![card("game-session"), card("clip"), recap(), card("session")];
         let infos = cards.clone();
@@ -1698,7 +1775,10 @@ mod tests {
                             cards.push(card("game-session"));
                         }
                         cards.insert((lead.len() + pos).min(cards.len()), h2h(variant));
-                        cards.push(recap());
+                        // One recap per feed: a lead that holds it gets no second.
+                        if !lead.iter().any(CardInfo::is_recap) {
+                            cards.push(recap());
+                        }
                         cards.push(grid());
                         let order = arrange(&cards, *start);
                         let infos: Vec<CardInfo> =
@@ -1779,7 +1859,9 @@ mod tests {
     }
 
     #[test]
-    fn a_recap_in_crew_history_is_one_column_and_two_or_three_rows() {
+    fn a_recap_in_crew_history_is_one_column_and_two_rows() {
+        // A recap with belts (rows 3 from the server) is two rows like any
+        // other: the clips fill the cells beside the tall recaps.
         let (at, rows) = cells(vec![
             history_card("recap", 3),
             history_card("clip", 0),
@@ -1787,12 +1869,11 @@ mod tests {
             history_card("recap", 2),
             history_card("clip", 0),
         ]);
-        // The clips fill the cells beside the tall recap, then the next recap.
         assert_eq!(
             at,
-            vec![(0, 0, 3), (1, 0, 1), (2, 0, 1), (1, 1, 2), (2, 1, 1)]
+            vec![(0, 0, 2), (1, 0, 1), (2, 0, 1), (1, 1, 2), (2, 1, 1)]
         );
-        assert_eq!(rows, 3);
+        assert_eq!(rows, 3, "the second recap reaches the third row");
     }
 
     #[test]

@@ -7337,10 +7337,9 @@ fn recap_with_two_moved_belts_shows_two_rows_and_the_held_section() {
     assert_eq!(card.game_name.as_str(), "Rocket League");
 }
 
-/// The tall card shows two moved belts and "+N more". The full-screen recap
-/// shows all of them.
+/// The tall card shows two moved belts and "+N more" in the section header.
 #[test]
-fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
+fn recap_card_caps_moved_belts_at_two() {
     let mut h = Harness::new();
     emit_recap(
         &mut h,
@@ -7354,7 +7353,6 @@ fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
             "belts_held": belts_held(),
         }),
     );
-    assert_eq!(count_of(&h, "RecapOpened"), 0);
     assert_eq!(
         count_of(&h, "TitleChip"),
         2,
@@ -7364,22 +7362,11 @@ fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
         drawn_texts(&h).iter().any(|t| t == "+2 MORE"),
         "the rest is a count"
     );
-    h.click_label("See the week");
-    let w = h.app().window().size().width;
-    h.app().window().set_size(slint::PhysicalSize::new(w, 3600));
     assert_eq!(
-        count_of(&h, "RecapOpened"),
-        1,
-        "the card opens the full-screen recap"
+        h.controls_labelled("See the week").len(),
+        0,
+        "no full-screen view"
     );
-    assert_eq!(count_of(&h, "TitleChip"), 2, "the card keeps its two rows");
-    assert_eq!(
-        count_of(&h, "BeltName"),
-        4,
-        "all four rows in the full-screen recap"
-    );
-    h.click_label("Close weekly recap");
-    assert_eq!(count_of(&h, "RecapOpened"), 0);
 }
 
 /// A recap with no belts shows neither section.
@@ -7392,12 +7379,6 @@ fn recap_without_belts_shows_neither_section() {
     assert_eq!(card.belts_moved.row_count(), 0);
     assert_eq!(card.belts_held.row_count(), 0);
     assert_eq!(count_of(&h, "TitleChip"), 0);
-    h.click_label("See the week");
-    assert_eq!(
-        count_of(&h, "TitleChip"),
-        0,
-        "no belts, no chips in the full-screen recap"
-    );
 }
 
 // ---- the tall recap card (mockup weekly-recap-card, frame 1) ----
@@ -7500,23 +7481,24 @@ fn rect_of(e: &ElementHandle) -> (f32, f32, f32, f32) {
     (p.x, p.y, p.x + s.width, p.y + s.height)
 }
 
-fn overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
-    a.0 < b.2 - 0.5 && b.0 < a.2 - 0.5 && a.1 < b.3 - 0.5 && b.1 < a.3 - 0.5
-}
-
-/// With belts the card has every section and three grid rows.
+/// With belts the card has every section and still two grid rows: the recap
+/// is two rows, never three.
 #[test]
-fn the_tall_recap_has_every_section_and_three_rows_with_belts() {
+fn the_tall_recap_has_every_section_and_two_rows_with_belts() {
     let h = tall_recap_crew(week_with_everything());
     for name in TALL_SECTIONS {
         assert_eq!(count_of(&h, name), 1, "{name} is on the card");
     }
-    assert_eq!(count_of(&h, "RecapFoot"), 1);
+    assert_eq!(
+        h.controls_labelled("See the week").len(),
+        0,
+        "no control on the card"
+    );
     let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
         .next()
         .expect("the recap");
     let rows = (card.size().height + 12.0) / (232.0 + 12.0);
-    assert!((rows - 3.0).abs() < 0.01, "three rows, got {rows}");
+    assert!((rows - 2.0).abs() < 0.01, "two rows, got {rows}");
     let texts = drawn_texts(&h);
     for want in [
         "WEEKLY RECAP",
@@ -7541,12 +7523,9 @@ fn the_tall_recap_has_every_section_and_three_rows_with_belts() {
         2,
         "two belts and the rest a count"
     );
-    // Four tiles with the hours of each game, the fifth game is for the opened
-    // recap.
-    assert!(texts.iter().any(|t| t == "12 H 20"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "9 H 10"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "3 H 40"), "{texts:?}");
-    assert!(!texts.iter().any(|t| t == "2 H 00"), "{texts:?}");
+    // The games strip is tiles only: the hours of the week stand in its
+    // header, Recent games names the games.
+    assert!(!texts.iter().any(|t| t == "12 H 20"), "{texts:?}");
     // No note of the mockup stays on the card: no day, no source.
     for note in ["Monday", "Head2head", "Now", "NOW", "31 h 40 together"] {
         assert!(!texts.iter().any(|t| t == note), "{note:?} in {texts:?}");
@@ -7559,7 +7538,7 @@ fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
     let h = tall_recap_crew(week_without_belts());
     assert_eq!(count_of(&h, "RecapMoved"), 0);
     assert_eq!(count_of(&h, "RecapHeld"), 0);
-    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip", "RecapFoot"] {
+    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip"] {
         assert_eq!(count_of(&h, name), 1, "{name} is on the card");
     }
     let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
@@ -7610,34 +7589,6 @@ fn first_recap(h: &Harness) -> FeedCardData {
         .expect("a recap card")
 }
 
-/// "See the week" stands in a row of its own: it touches no section.
-#[test]
-fn see_the_week_intersects_no_sibling() {
-    for week in [week_with_everything(), week_without_belts()] {
-        let h = tall_recap_crew(week);
-        let controls = h.controls_labelled("See the week");
-        assert_eq!(controls.len(), 1);
-        let button = rect_of(&controls[0]);
-        let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
-            .next()
-            .expect("the recap");
-        let card = rect_of(&card);
-        assert!(
-            button.2 <= card.2 && button.3 <= card.3 && button.0 >= card.0,
-            "the button {button:?} is inside the card {card:?}"
-        );
-        for name in TALL_SECTIONS {
-            for e in ElementHandle::find_by_element_type_name(h.app(), name) {
-                assert!(
-                    !overlap(button, rect_of(&e)),
-                    "the button {button:?} sits on {name} {:?}",
-                    rect_of(&e)
-                );
-            }
-        }
-    }
-}
-
 /// The server's new fields reach the card: the most clipped member with the
 /// count, the hours of every game and the week.
 #[test]
@@ -7666,138 +7617,6 @@ fn an_older_recap_draws_without_the_new_fields() {
     assert_eq!(card.recap_games.row_count(), 0);
     assert_eq!(count_of(&h, "RecapGamesStrip"), 0);
     assert_eq!(count_of(&h, "RecapHead"), 1);
-}
-
-// ---- the opened recap (mockup weekly-recap-card, frame 2) ----
-
-fn open_the_week(h: &mut Harness) {
-    h.click_label("See the week");
-    // A window tall enough for every section: what is below the scroll area
-    // is absent from queries.
-    let w = h.app().window().size().width;
-    h.app().window().set_size(slint::PhysicalSize::new(w, 3600));
-    assert_eq!(count_of(h, "RecapOpened"), 1);
-}
-
-/// Every section of frame 2 is there, with every game and its hours.
-#[test]
-fn the_opened_recap_shows_every_section() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    let texts = drawn_texts(&h);
-    for want in [
-        "THIS WEEK",
-        "HANGOUT TIME",
-        "TOP GAME",
-        "LONGEST SESSION",
-        "CLIPS CAPTURED",
-        "MOST ACTIVE",
-        "MOST CLIPPED",
-        "BELTS MOVED THIS WEEK",
-        "WAS HELD BY",
-        "NOW HELD BY",
-        "BELTS HELD",
-        "RANK 1",
-        "CLIP OF THE WEEK",
-        "Leo clipped that",
-        "0:29",
-        "GAMES PLAYED",
-        "31 h 40",
-        "Rocket League",
-        "Counter-Strike 2",
-        "Fall Guys",
-        "Dota 2",
-        "Night Stones",
-        "12 H 20",
-        "9 H 10",
-        "4 H 30",
-        "3 H 40",
-        "2 H 00",
-    ] {
-        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
-    }
-    assert_eq!(count_of(&h, "BeltName"), 3, "every moved belt");
-    // The held section lists each member once with a rank.
-    assert!(texts.iter().any(|t| t == "RANK 2"), "{texts:?}");
-    // No source note stays.
-    for note in ["HEAD2HEAD · NOW", "31 h 40 together"] {
-        assert!(!texts.iter().any(|t| t == note), "{note:?} in {texts:?}");
-    }
-}
-
-/// A week with no belts, no clip and no games has only the numbers.
-#[test]
-fn the_opened_recap_leaves_out_what_the_week_did_not_have() {
-    let mut h = tall_recap_crew(serde_json::json!({
-        "total_min": 90, "clip_count": 0,
-        "top_members": [{"user_id": "u4", "display_name": "Max", "hangout_min": 90}],
-    }));
-    open_the_week(&mut h);
-    let texts = drawn_texts(&h);
-    assert!(texts.iter().any(|t| t == "THIS WEEK"), "{texts:?}");
-    for gone in [
-        "BELTS MOVED THIS WEEK",
-        "BELTS HELD",
-        "CLIP OF THE WEEK",
-        "GAMES PLAYED",
-    ] {
-        assert!(!texts.iter().any(|t| t == gone), "{gone:?} in {texts:?}");
-    }
-}
-
-/// The play ring plays the clip of the week through the clip player.
-#[test]
-fn the_play_ring_of_the_clip_of_the_week_plays_the_clip() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    h.click_label("Play");
-    assert!(
-        h.commands().iter().any(|c| matches!(
-            c,
-            Command::PlayClip { path } if path == "https://example.invalid/c1.opus"
-        )),
-        "the ring sends the clip to the player: {:?}",
-        h.commands()
-    );
-}
-
-/// The recap is min(880, panel less 48) wide, centred in the feed panel.
-#[test]
-fn the_opened_recap_is_880_wide_or_the_panel_less_48_and_centred() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    for panel_w in [1100.0_f32, 700.0] {
-        let win = h.app().window().size();
-        let (_, _, w0, _) = {
-            let c = ElementHandle::find_by_element_type_name(h.app(), "CrewFeed")
-                .next()
-                .expect("feed");
-            let r = rect_of(&c);
-            (r.0, r.1, r.2 - r.0, r.3 - r.1)
-        };
-        h.app().window().set_size(slint::PhysicalSize::new(
-            (win.width as f32 + panel_w - w0) as u32,
-            win.height,
-        ));
-        let feed = ElementHandle::find_by_element_type_name(h.app(), "CrewFeed")
-            .next()
-            .map(|e| rect_of(&e))
-            .expect("feed");
-        let section = ElementHandle::find_by_element_type_name(h.app(), "Section")
-            .next()
-            .map(|e| rect_of(&e))
-            .expect("a section");
-        let feed_w = feed.2 - feed.0;
-        let want = 880.0_f32.min(feed_w - 48.0);
-        assert!(
-            ((section.2 - section.0) - want).abs() < 1.5,
-            "panel {feed_w}: section {} wide, want {want}",
-            section.2 - section.0
-        );
-        let left = section.0 - feed.0;
-        let right = feed.2 - section.2;
-        assert!((left - right).abs() < 1.5, "centred: {left} and {right}");
-    }
 }
 
 /// A crew of one has no weekly recap: with nobody to be in voice with and no
@@ -10122,14 +9941,17 @@ fn crew_history_of_two_recaps(width: u32, top_game: &str) -> Harness {
 }
 
 /// A recap in Crew history is the tall card as in the week: one column, two
-/// rows (three with belts). "Most active" and "See the week" stand inside it.
+/// rows, with or without belts. "Most active" stands inside it.
 #[test]
-fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+fn a_recap_in_crew_history_is_the_tall_card() {
     let h = crew_history_of_two_recaps(1280, "Rocket League");
     let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
     assert_eq!(slots.len(), 2, "both recaps are drawn");
-    let see = h.controls_labelled("See the week");
-    assert_eq!(see.len(), 2);
+    assert_eq!(
+        h.controls_labelled("See the week").len(),
+        0,
+        "no control on the card"
+    );
     let kickers: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
         .filter(|e| e.accessible_label().is_some_and(|l| l == "MOST ACTIVE"))
         .collect();
@@ -10143,7 +9965,7 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
             slot.size().width < slot.size().height,
             "one column, not a wide card: {card:?}"
         );
-        for inner in see.iter().map(rect_of).chain(kickers.iter().map(rect_of)) {
+        for inner in kickers.iter().map(rect_of) {
             let centre = ((inner.0 + inner.2) / 2.0, (inner.1 + inner.3) / 2.0);
             let inside = centre.0 >= card.0
                 && centre.0 <= card.2
@@ -10161,9 +9983,9 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
         }
     }
     rows.sort();
-    assert_eq!(rows, vec![2, 3], "two rows without belts, three with");
-    // Each card holds its own control and its own label.
-    for kind in [&see, &kickers] {
+    assert_eq!(rows, vec![2, 2], "two rows, with or without belts");
+    // Each card holds its own label.
+    for kind in [&kickers] {
         for slot in &slots {
             let card = rect_of(slot);
             let n = kind
