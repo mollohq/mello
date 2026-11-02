@@ -70,7 +70,7 @@ try {
     # Run under a private single-instance identity.
     #
     # The client is single-instance: without this it sees the developer's own
-    # Mello on the build machine, prints "Mello is already running.", and exits
+    # Mello on the build machine, prints "m3llo is already running.", and exits
     # 0 before the scenario runs — which the release then reports as a signup
     # failure. The release runners double as development machines, so that is
     # not rare.
@@ -118,7 +118,7 @@ try {
     if (-not (Test-Path -LiteralPath $done)) {
         Write-Host "X signup smoke FAILED: the client exited without reporting a result."
         Write-Host "  It likely crashed or quit before the scenario finished."
-        Write-Host "  If the log says 'Mello is already running.', another client holds the"
+        Write-Host "  If the log says 'm3llo is already running.', another client holds the"
         Write-Host "  --instance $smokeInstance lock; this run should have reaped it."
         exit 1
     }

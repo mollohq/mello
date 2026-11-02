@@ -234,6 +234,18 @@ pub fn set_exe_icon<T: slint::ComponentHandle + 'static>(component: &T) {
     }
 }
 
+/// Let the running instance take the foreground. Call from a second
+/// instance before it relays its message: the user started this process, so
+/// Windows lets it pass the right on. Without it, Windows can refuse the
+/// window of the running instance and flash its taskbar button.
+#[cfg(target_os = "windows")]
+pub fn allow_running_instance_to_foreground() {
+    use windows::Win32::UI::WindowsAndMessaging::{AllowSetForegroundWindow, ASFW_ANY};
+    if let Err(e) = unsafe { AllowSetForegroundWindow(ASFW_ANY) } {
+        log::warn!("[ipc] AllowSetForegroundWindow failed: {e}");
+    }
+}
+
 /// Bring the main window to the foreground on Windows.
 /// On other platforms, this is a no-op (Slint's show() is sufficient).
 pub fn bring_main_window_to_front(app: &crate::MainWindow) {

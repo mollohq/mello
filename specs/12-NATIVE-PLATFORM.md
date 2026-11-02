@@ -566,7 +566,7 @@ In `app.rs`, poll on each tick and check `event.id == ptt_id` plus `event.state`
 
 ## 7. Single Instance Enforcement
 
-A second launch of Mello should focus the existing window and immediately exit.
+A second launch of m3llo shows the window of the running instance, then exits. A user who starts m3llo again (the desktop icon, the Start menu) wants the window, and it can be hidden in the tray.
 
 ### 7.1 Dependency
 
@@ -578,23 +578,24 @@ single-instance = "0.3"
 ### 7.2 Implementation
 
 ```rust
-// src/main.rs
+// client/src/lib.rs, run_app()
 
-use single_instance::SingleInstance;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let instance = SingleInstance::new("app.mello.desktop")?;
-
-    if !instance.is_single() {
-        // Another instance is running — signal it to raise its window, then exit.
-        // For now just exit cleanly; IPC focus signal is a future improvement.
-        eprintln!("Mello is already running.");
-        std::process::exit(0);
-    }
-
-    // ... rest of startup
+let instance = SingleInstance::new(&instance_id)?;
+if !instance.is_single() {
+    #[cfg(target_os = "windows")]
+    platform::allow_running_instance_to_foreground(); // AllowSetForegroundWindow(ASFW_ANY)
+    // The mello:// link of argv[1], or ipc::SHOW_WINDOW ("show").
+    let message = ipc::relay_message(std::env::args().nth(1));
+    ipc::send_to_running(&ipc_endpoint, &message);
+    std::process::exit(0);
 }
 ```
+
+The second instance sends one line over the IPC endpoint of §9.3: a `mello://` link, or `show`. The running instance shows its window and brings it to the front for each line (`poll_loop.rs`). It then dispatches a link. A link also needs the window: the join modal opens in it.
+
+Windows lets only the process that the user started take the foreground. The second instance is that process, so it calls `AllowSetForegroundWindow` before it sends. Without the call, Windows can refuse the window and flash its taskbar button.
+
+On macOS, LaunchServices does not start a second instance. A second launch from Finder or the Dock sends a reopen event to the running app, which the app does not handle yet.
 
 The `SingleInstance` handle must be kept alive for the duration of the process (do not drop it). On Windows this is a named mutex; on macOS/Linux it is a lock file under the platform temp directory.
 
@@ -884,12 +885,13 @@ slint-build = "1.5"
 - [ ] Mute toggle works from context menu
 - [ ] PTT hotkey fires when Mello is in background
 - [ ] PTT hotkey fires when a game is fullscreen
-- [ ] Launching a second instance focuses existing window and exits
+- [ ] Launching a second instance shows the existing window, also from the tray, and exits
 - [ ] `mello://invite/{code}` opens Mello or routes to running instance
 - [ ] OS notification shown when member joins and window is hidden
 - [ ] Notifications suppressed when window is focused
 - [ ] Start on boot toggle persists across restarts
 - [ ] Close button hides to tray (does not quit)
+- [ ] The first close to tray shows the "m3llo is still running" notification, later closes do not
 - [ ] Quit from tray exits cleanly
 
 ---

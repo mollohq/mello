@@ -2135,6 +2135,45 @@ fn a_relayed_join_link_on_step_one_opens_the_welcome_screen() {
     );
 }
 
+/// The user starts m3llo again (the desktop icon) while it runs hidden in
+/// the tray. The second instance relays over the real IPC endpoint, and the
+/// running app must show its window. Before, the second instance left with
+/// no sign, and the user saw nothing.
+#[test]
+fn a_second_launch_shows_the_window_hidden_in_the_tray() {
+    let mut h = Harness::new();
+    let endpoint = crate::ipc::endpoint_name(&format!("mello-relay-show.{}", std::process::id()));
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind the IPC endpoint");
+    *h.ctx().ipc_listener.borrow_mut() = Some(listener);
+    h.app().show().expect("show the window");
+    h.app().hide().expect("hide the window to the tray");
+    assert!(!h.app().window().is_visible());
+
+    // What the second instance does in `lib.rs`, started with no link.
+    assert!(crate::ipc::send_to_running(
+        &endpoint,
+        &crate::ipc::relay_message(None)
+    ));
+
+    // The listener hands the line over on its own thread (Windows). Wait for
+    // the window that the test asserts on, with a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !h.app().window().is_visible() && std::time::Instant::now() < deadline {
+        h.pump();
+        if !h.app().window().is_visible() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    assert!(
+        h.app().window().is_visible(),
+        "the running app shows its window"
+    );
+    assert!(
+        resolved_codes(&h.commands()).is_empty(),
+        "a plain launch is not a link"
+    );
+}
+
 /// INV-05: an invalid invite code on a fresh install shows step 1 with a
 /// message. Step 1 offers a way forward. No join modal opens.
 #[test]

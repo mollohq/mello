@@ -245,17 +245,16 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let _instance = SingleInstance::new(&instance_id)?;
     if !_instance.is_single() {
-        if let Some(url) = std::env::args()
-            .nth(1)
-            .filter(|a| a.starts_with("mello://"))
-        {
-            if ipc::send_to_running(&ipc_endpoint, &url) {
-                eprintln!("Relayed deep link to running instance: {url}");
-            } else {
-                eprintln!("Mello is already running. Could not relay deep link: {url}");
-            }
+        // The running instance shows its window for each message. Windows
+        // lets only the process the user started take the foreground, so
+        // this one gives that right to the running instance first.
+        #[cfg(target_os = "windows")]
+        platform::allow_running_instance_to_foreground();
+        let message = ipc::relay_message(std::env::args().nth(1));
+        if ipc::send_to_running(&ipc_endpoint, &message) {
+            eprintln!("{APP_NAME} is already running. Relayed: {message}");
         } else {
-            eprintln!("Mello is already running.");
+            eprintln!("{APP_NAME} is already running. Could not relay: {message}");
         }
         std::process::exit(0);
     }

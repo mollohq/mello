@@ -44,6 +44,19 @@ impl IpcListener {
     }
 }
 
+/// The message of a second instance that has no link to relay. A user who
+/// starts m3llo again (the desktop icon, the Start menu) wants the window,
+/// and it can be hidden in the tray.
+pub const SHOW_WINDOW: &str = "show";
+
+/// The message a second instance sends to the running one: the `mello://`
+/// link it was started with, or [`SHOW_WINDOW`].
+pub fn relay_message(first_arg: Option<String>) -> String {
+    first_arg
+        .filter(|a| a.starts_with("mello://"))
+        .unwrap_or_else(|| SHOW_WINDOW.to_string())
+}
+
 /// Send a message to the running instance and return true on success.
 pub fn send_to_running(endpoint: &str, message: &str) -> bool {
     platform_send(endpoint, message)
@@ -339,6 +352,16 @@ mod tests {
 
         // No pending messages after drain
         assert!(listener.try_recv().is_empty());
+    }
+
+    #[test]
+    fn a_second_instance_relays_its_link_or_asks_for_the_window() {
+        assert_eq!(
+            relay_message(Some("mello://join/NITE-0001".into())),
+            "mello://join/NITE-0001"
+        );
+        assert_eq!(relay_message(None), SHOW_WINDOW);
+        assert_eq!(relay_message(Some("--instance".into())), SHOW_WINDOW);
     }
 
     #[test]

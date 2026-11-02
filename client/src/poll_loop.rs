@@ -115,9 +115,15 @@ impl PollState {
                 }
             }
 
-            // --- Deep links that reach the running app (CREW-INVITES §6) ---
-            for url in received_links(poll_ctx) {
-                dispatch_running_link(poll_ctx, &url);
+            // --- Messages that reach the running app: a second launch, or a
+            // deep link (CREW-INVITES §6). Both want the window, and it can
+            // be hidden in the tray. ---
+            for message in received_messages(poll_ctx) {
+                poll_ctx.app.show().ok();
+                platform::bring_main_window_to_front(&poll_ctx.app);
+                if message != crate::ipc::SHOW_WINDOW {
+                    dispatch_running_link(poll_ctx, &message);
+                }
             }
 
             // --- Core events ---
@@ -398,19 +404,20 @@ pub(crate) fn handle_menu_item(poll_ctx: &AppContext, id: &str) {
     }
 }
 
-/// `mello://` links that reached the app since the last tick: relayed by a
-/// second instance, or sent by macOS as an Apple Event.
-fn received_links(ctx: &AppContext) -> Vec<String> {
+/// Messages that reached the app since the last tick: relayed by a second
+/// instance (a `mello://` link or [`crate::ipc::SHOW_WINDOW`]), or `mello://`
+/// links that macOS sent as an Apple Event.
+fn received_messages(ctx: &AppContext) -> Vec<String> {
     #[allow(unused_mut)]
-    let mut links = ctx
+    let mut messages = ctx
         .ipc_listener
         .borrow()
         .as_ref()
         .map(|listener| listener.try_recv())
         .unwrap_or_default();
     #[cfg(target_os = "macos")]
-    links.extend(crate::platform::macos_url_events::take());
-    links
+    messages.extend(crate::platform::macos_url_events::take());
+    messages
 }
 
 /// Dispatch a link that reached the running app.
