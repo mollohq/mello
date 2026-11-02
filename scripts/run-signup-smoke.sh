@@ -59,7 +59,7 @@ TIMEOUT_SECONDS="${MELLO_SMOKE_TIMEOUT:-180}"
 # Run under a private single-instance identity.
 #
 # The client is single-instance: without this it sees the developer's own Mello
-# on the build machine, prints "Mello is already running.", and exits 0 before
+# on the build machine, prints "m3llo is already running.", and exits 0 before
 # the scenario runs — which the release then reports as a signup failure. The
 # release runners double as development machines, so that is not rare.
 #
@@ -109,7 +109,7 @@ DONE="$SIGNAL_DIR/done.json"
 if [ ! -f "$DONE" ]; then
     echo "✗ signup smoke FAILED: the client exited without reporting a result." >&2
     echo "  It likely crashed or quit before the scenario finished." >&2
-    echo "  If the log says \"Mello is already running.\", another client holds the" >&2
+    echo "  If the log says \"m3llo is already running.\", another client holds the" >&2
     echo "  --instance $SMOKE_INSTANCE lock; this run should have reaped it." >&2
     exit 1
 fi

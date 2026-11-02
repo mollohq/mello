@@ -41,6 +41,11 @@ fn main() {
 </assembly>
 "#,
         );
+        // Task Manager, the volume mixer and firewall prompts show these.
+        // winresource fills both with the package name ("mello-client")
+        // otherwise. Keep them equal to APP_NAME in src/lib.rs.
+        res.set("FileDescription", "m3llo");
+        res.set("ProductName", "m3llo");
         res.compile().expect("failed to compile windows resources");
     }
 

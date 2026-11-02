@@ -88,6 +88,21 @@ sips -z 1024 1024 app_icon_master.png --out Mello.iconset/icon_512x512@2x.png
 iconutil -c icns Mello.iconset
 ```
 
+### 2.5 Window icon on Windows
+
+`build.rs` embeds `assets/icons/mello.ico` in the exe as icon resource 1. Explorer reads it from there. A window does not: winit registers its window class without an icon, so Windows draws its default icon on the title bar.
+
+`platform::set_exe_icon` loads resource 1 when winit creates the window, at the window's scale:
+
+| Icon | Size at 100 % | Shows on |
+|---|---|---|
+| Small (`set_window_icon`) | 16 px | Title bar |
+| Large (`set_taskbar_icon`) | 32 px | Taskbar button, Alt+Tab |
+
+The main window and the startup update window call it. The stream pop-out copies the main window's icons.
+
+The window's `title` is `APP_NAME` ("m3llo"). Windows code finds the main window by its handle (`platform::main_window_hwnd`), not by `FindWindowW` on the title. A title lookup also matches a foreign window with the same title, such as an Explorer folder.
+
 ---
 
 ## 3. Window Chrome (Slint style)
@@ -178,13 +193,13 @@ muda = "0.15"
 ### 4.2 macOS menu bar structure
 
 ```
-Mello     Edit     View     Help
+m3llo     Edit     View     Help
 ```
 
 ```
-Mello
+m3llo
 │
-├── About Mello
+├── About m3llo
 ├── ─────────────
 ├── Check for Updates…
 ├── ─────────────
@@ -192,11 +207,11 @@ Mello
 ├── ─────────────
 ├── Services        ►
 ├── ─────────────
-├── Hide Mello      Cmd+H
+├── Hide m3llo      Cmd+H
 ├── Hide Others     Cmd+Opt+H
 ├── Show All
 ├── ─────────────
-└── Quit Mello      Cmd+Q
+└── Quit m3llo      Cmd+Q
 ```
 
 ```
@@ -223,7 +238,7 @@ View
 ```
 Help
 │
-└── Mello on GitHub
+└── m3llo on GitHub
 ```
 
 ### 4.3 Notes on the Edit menu
@@ -260,7 +275,7 @@ pub fn build_menu_bar() -> Menu {
     let menu = Menu::new();
 
     // ── Mello ──────────────────────────────────────────────────────────────
-    let app_menu = Submenu::with_title("Mello", true);
+    let app_menu = Submenu::with_title("m3llo", true);
     app_menu.append(&PredefinedMenuItem::about(Some("About Mello"), None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu.append(&MenuItem::with_id(
@@ -270,7 +285,7 @@ pub fn build_menu_bar() -> Menu {
         Some("cmd+,".parse().unwrap()),
     )).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
-    app_menu.append(&PredefinedMenuItem::quit(Some("Quit Mello"))).ok();
+    app_menu.append(&PredefinedMenuItem::quit(Some("Quit m3llo"))).ok();
     menu.append(&app_menu).ok();
 
     // ── Edit ───────────────────────────────────────────────────────────────
@@ -362,12 +377,12 @@ Template images (`is_template: true`) are pure white/black PNGs. macOS automatic
 Right-click on the status item shows:
 
 ```
-Open Mello                ← or "Hide Mello" when window is focused
+Open m3llo                ← or "Hide m3llo" when window is focused
 ─────────────────────
 🎤 Mute                   ← toggle; checkmark when muted; greyed if not in voice
 Leave Voice               ← greyed if not in voice
 ─────────────────────
-Quit Mello
+Quit m3llo
 ```
 
 ### 5.4 Click behaviour
@@ -402,7 +417,7 @@ pub enum VoiceState {
 
 impl StatusItem {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let menu_open  = MenuItem::new("Open Mello", true, None);
+        let menu_open  = MenuItem::new("Open m3llo", true, None);
         let menu_mute  = MenuItem::new("Mute", false, None);   // greyed initially
         let menu_leave = MenuItem::new("Leave Voice", false, None);
 
@@ -412,14 +427,14 @@ impl StatusItem {
         tray_menu.append(&menu_mute)?;
         tray_menu.append(&menu_leave)?;
         tray_menu.append(&PredefinedMenuItem::separator())?;
-        tray_menu.append(&PredefinedMenuItem::quit(Some("Quit Mello")))?;
+        tray_menu.append(&PredefinedMenuItem::quit(Some("Quit m3llo")))?;
 
         let icon = Self::render_icon(VoiceState::Inactive);
 
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
             .with_icon(icon)
-            .with_tooltip("Mello")
+            .with_tooltip("m3llo")
             .build()?;
 
         Ok(Self {
@@ -551,7 +566,7 @@ In `app.rs`, poll on each tick and check `event.id == ptt_id` plus `event.state`
 
 ## 7. Single Instance Enforcement
 
-A second launch of Mello should focus the existing window and immediately exit.
+A second launch of m3llo shows the window of the running instance, then exits. A user who starts m3llo again (the desktop icon, the Start menu) wants the window, and it can be hidden in the tray.
 
 ### 7.1 Dependency
 
@@ -563,23 +578,24 @@ single-instance = "0.3"
 ### 7.2 Implementation
 
 ```rust
-// src/main.rs
+// client/src/lib.rs, run_app()
 
-use single_instance::SingleInstance;
-
-fn main() -> Result<(), Box<dyn std::error::Error>> {
-    let instance = SingleInstance::new("app.mello.desktop")?;
-
-    if !instance.is_single() {
-        // Another instance is running — signal it to raise its window, then exit.
-        // For now just exit cleanly; IPC focus signal is a future improvement.
-        eprintln!("Mello is already running.");
-        std::process::exit(0);
-    }
-
-    // ... rest of startup
+let instance = SingleInstance::new(&instance_id)?;
+if !instance.is_single() {
+    #[cfg(target_os = "windows")]
+    platform::allow_running_instance_to_foreground(); // AllowSetForegroundWindow(ASFW_ANY)
+    // The mello:// link of argv[1], or ipc::SHOW_WINDOW ("show").
+    let message = ipc::relay_message(std::env::args().nth(1));
+    ipc::send_to_running(&ipc_endpoint, &message);
+    std::process::exit(0);
 }
 ```
+
+The second instance sends one line over the IPC endpoint of §9.3: a `mello://` link, or `show`. The running instance shows its window and brings it to the front for each line (`poll_loop.rs`). It then dispatches a link. A link also needs the window: the join modal opens in it.
+
+Windows lets only the process that the user started take the foreground. The second instance is that process, so it calls `AllowSetForegroundWindow` before it sends. Without the call, Windows can refuse the window and flash its taskbar button.
+
+On macOS, LaunchServices does not start a second instance. A second launch from Finder or the Dock sends a reopen event to the running app, which the app does not handle yet.
 
 The `SingleInstance` handle must be kept alive for the duration of the process (do not drop it). On Windows this is a named mutex; on macOS/Linux it is a lock file under the platform temp directory.
 
@@ -602,9 +618,12 @@ notify-rust = "4"
 |---|---|---|---|
 | Crew member joins voice | "Crew" | "{name} jumped in" | Window hidden |
 | New chat message | "{crew name}" | "{name}: {preview}" | Window hidden |
-| Crew invite received | "Mello invite" | "{name} invited you to {crew}" | Always |
+| Crew invite received | "m3llo invite" | "{name} invited you to {crew}" | Always |
+| First close to the tray | "m3llo is still running" | "It stays in the tray to keep collecting your gaming stats. Right-click the tray icon to quit." (macOS: "menu bar") | Once (§11) |
 
 Notifications are suppressed when the window is visible and focused. Do not notify for own actions.
+
+On Windows a toast needs an AppUserModelID with a Start menu shortcut. Velopack puts `velopack.<packId>` (`velopack.m3llo`) on its shortcuts, and every notification sets that id. Windows then shows the name and icon of the shortcut. Without an id, notify-rust sends the toast as Windows PowerShell.
 
 ### 8.3 Implementation
 
@@ -734,7 +753,7 @@ auto-launch = "0.5"
 use auto_launch::AutoLaunch;
 
 pub fn set_start_on_boot(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let app_name = "Mello";
+    let app_name = "m3llo";
     let app_path = std::env::current_exe()?;
 
     let auto = AutoLaunch::new(app_name, app_path.to_str().unwrap(), &[] as &[&str]);
@@ -749,7 +768,7 @@ pub fn set_start_on_boot(enabled: bool) -> Result<(), Box<dyn std::error::Error>
 }
 
 pub fn is_start_on_boot_enabled() -> bool {
-    let app_name = "Mello";
+    let app_name = "m3llo";
     let app_path = std::env::current_exe().unwrap_or_default();
     AutoLaunch::new(app_name, app_path.to_str().unwrap_or(""), &[] as &[&str])
         .is_enabled()
@@ -765,12 +784,17 @@ This is surfaced as a toggle in Settings. Default: off.
 
 Clicking the window close button hides to tray rather than quitting. This is the expected behaviour for a persistent communication app.
 
+The close also ends the voice call. A user who closes the window thinks they left the call. A call that stays up in the tray lets the channel hear them.
+
 ```rust
-// client/src/lib.rs
+// client/src/callbacks/window.rs
 
 app.window().on_close_requested(move || {
     if settings.borrow().close_to_tray {
-        window_ref.hide().ok();
+        if app.get_in_voice() {
+            app.invoke_voice_toggle(); // the hangup button's path
+        }
+        app.hide().ok();
         slint::CloseRequestResponse::KeepWindowShown
     } else {
         slint::quit_event_loop().ok();
@@ -781,7 +805,11 @@ app.window().on_close_requested(move || {
 
 Slint 1.18 has two `CloseRequestResponse` values: `HideWindow` and `KeepWindowShown`. There is no `KeepWindowHidden`. The handler hides the window itself and returns `KeepWindowShown`, so Slint does not run its own hide. The `close_to_tray` setting (default on) selects hide or quit.
 
-A "Quit Mello" option in the tray context menu performs a real exit.
+Minimize does not end the call. Only the close button does.
+
+The first close to the tray posts an OS notification (§8.2): m3llo still runs, collects the gaming stats, and quits from the tray icon. A user who closes the window thinks the app quit. `Settings::tray_notice_shown` stores that the OS accepted the notice, so later closes post none. A notice that the OS refused shows on the next close. The notice goes through `AppContext::tray_notice`, which is `None` in the test harness.
+
+A "Quit m3llo" option in the tray context menu performs a real exit.
 
 ---
 
@@ -857,12 +885,13 @@ slint-build = "1.5"
 - [ ] Mute toggle works from context menu
 - [ ] PTT hotkey fires when Mello is in background
 - [ ] PTT hotkey fires when a game is fullscreen
-- [ ] Launching a second instance focuses existing window and exits
+- [ ] Launching a second instance shows the existing window, also from the tray, and exits
 - [ ] `mello://invite/{code}` opens Mello or routes to running instance
 - [ ] OS notification shown when member joins and window is hidden
 - [ ] Notifications suppressed when window is focused
 - [ ] Start on boot toggle persists across restarts
 - [ ] Close button hides to tray (does not quit)
+- [ ] The first close to tray shows the "m3llo is still running" notification, later closes do not
 - [ ] Quit from tray exits cleanly
 
 ---

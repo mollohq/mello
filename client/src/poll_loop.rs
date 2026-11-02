@@ -115,9 +115,15 @@ impl PollState {
                 }
             }
 
-            // --- Deep links that reach the running app (CREW-INVITES §6) ---
-            for url in received_links(poll_ctx) {
-                dispatch_running_link(poll_ctx, &url);
+            // --- Messages that reach the running app: a second launch, or a
+            // deep link (CREW-INVITES §6). Both want the window, and it can
+            // be hidden in the tray. ---
+            for message in received_messages(poll_ctx) {
+                poll_ctx.app.show().ok();
+                platform::bring_main_window_to_front(&poll_ctx.app);
+                if message != crate::ipc::SHOW_WINDOW {
+                    dispatch_running_link(poll_ctx, &message);
+                }
             }
 
             // --- Core events ---
@@ -250,8 +256,7 @@ impl PollState {
                     fg.set_in_voice(poll_ctx.app.get_in_voice());
                 }
 
-                let main_visible = poll_ctx.app.window().is_visible();
-                let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(main_visible);
+                let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(&poll_ctx.app);
                 if let Some(new_mode) = mode_changed {
                     let state = crate::hud_state_builder::build_hud_state(poll_ctx, new_mode);
                     poll_ctx.hud_manager.push_state(state);
@@ -272,18 +277,18 @@ impl PollState {
                         }
                         crate::hud_manager::HudActionKind::OpenCrew => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                         crate::hud_manager::HudActionKind::OpenStream => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                         crate::hud_manager::HudActionKind::DeafenToggle => {
                             crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
                         }
                         crate::hud_manager::HudActionKind::OpenSettings => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                     },
                 }
@@ -294,7 +299,7 @@ impl PollState {
             {
                 let mut tb = poll_ctx.taskbar_toolbar.borrow_mut();
                 if let Some(ref mut toolbar) = *tb {
-                    toolbar.try_init();
+                    toolbar.try_init(&poll_ctx.app);
 
                     while let Some(action) = toolbar.poll_action() {
                         use crate::platform::taskbar_toolbar::ThumbAction;
@@ -399,19 +404,20 @@ pub(crate) fn handle_menu_item(poll_ctx: &AppContext, id: &str) {
     }
 }
 
-/// `mello://` links that reached the app since the last tick: relayed by a
-/// second instance, or sent by macOS as an Apple Event.
-fn received_links(ctx: &AppContext) -> Vec<String> {
+/// Messages that reached the app since the last tick: relayed by a second
+/// instance (a `mello://` link or [`crate::ipc::SHOW_WINDOW`]), or `mello://`
+/// links that macOS sent as an Apple Event.
+fn received_messages(ctx: &AppContext) -> Vec<String> {
     #[allow(unused_mut)]
-    let mut links = ctx
+    let mut messages = ctx
         .ipc_listener
         .borrow()
         .as_ref()
         .map(|listener| listener.try_recv())
         .unwrap_or_default();
     #[cfg(target_os = "macos")]
-    links.extend(crate::platform::macos_url_events::take());
-    links
+    messages.extend(crate::platform::macos_url_events::take());
+    messages
 }
 
 /// Dispatch a link that reached the running app.
