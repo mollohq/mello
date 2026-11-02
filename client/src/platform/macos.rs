@@ -109,7 +109,7 @@ pub fn build_menu_bar() -> Menu {
     help_menu
         .append(&MenuItem::with_id(
             MenuId::new("github"),
-            &format!("{APP_NAME} on GitHub"),
+            format!("{APP_NAME} on GitHub"),
             true,
             None,
         ))
