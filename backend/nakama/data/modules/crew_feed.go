@@ -923,8 +923,9 @@ func fillerRole(c feedCard) string {
 //     this list starts at the next item.
 //  2. a belt that moved in the last 24 h (the head2head card, see beltMovedHeroIndex)
 //  3. a stream preview (session-preview) from the last 24 h
-//  4. a real recap, on Monday
-//  5. the best session
+//  4. a game clip with a poster from the last 24 h (plans/GAME-CLIPS.md 6.1, Q7)
+//  5. a real recap, on Monday
+//  6. the best session
 //
 // A voice clip is never the hero.
 
@@ -937,6 +938,26 @@ func freshPreviewHeroIndex(cards []feedCard, nowMs int64) int {
 			continue
 		}
 		if best == -1 || sessionPreviewQuality(c) >= sessionPreviewQuality(cards[best]) {
+			best = i
+		}
+	}
+	return best
+}
+
+// freshGameClipHeroIndex returns the newest game clip with a poster younger
+// than feedHeroFreshMs, or -1. A voice clip never qualifies, and a game clip
+// with no poster has nothing to show yet.
+func freshGameClipHeroIndex(cards []feedCard, nowMs int64) int {
+	best := -1
+	for i, c := range cards {
+		if c.feedType != "clip" || nowMs-c.ts > feedHeroFreshMs {
+			continue
+		}
+		clip, ok := decodeCardData[StoredClip](c.data)
+		if !ok || clip.ClipType != clipTypeGame || clip.PosterURL == "" {
+			continue
+		}
+		if best == -1 || c.ts > cards[best].ts {
 			best = i
 		}
 	}
@@ -991,6 +1012,9 @@ func heroIndex(cards []feedCard, nowMs int64) int {
 	if i := freshPreviewHeroIndex(cards, nowMs); i >= 0 {
 		return i
 	}
+	if i := freshGameClipHeroIndex(cards, nowMs); i >= 0 {
+		return i
+	}
 	if i := mondayRecapHeroIndex(cards, nowMs); i >= 0 {
 		return i
 	}
@@ -999,7 +1023,8 @@ func heroIndex(cards []feedCard, nowMs int64) int {
 
 // buildThisWeek curates the recent feed: the hero (see heroIndex), the latest
 // recap, then diversity+priority fillers capped at feedFillerSlots with the
-// wide-slot promotion. Clips are standard cards: never the hero, never wide.
+// wide-slot promotion. A clip filler is a standard card, never wide. Only a
+// fresh game clip with a poster can be the hero; a voice clip never is.
 // Pure given its inputs.
 //
 // Live streams are not surfaced here. They are client state (crew_state), so

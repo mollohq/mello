@@ -6,6 +6,7 @@ import (
 	"database/sql"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math/big"
 	"sort"
@@ -31,6 +32,11 @@ const (
 	// case). Older clips are trimmed; unbounded history is future m3llo+ work.
 	CrewClipsMaxRetained = 250
 	clipWaveformBytes    = 64
+
+	// An empty clip_type is a voice clip. A game clip is F8 footage
+	// (plans/GAME-CLIPS.md section 6.5).
+	clipTypeVoice = "voice"
+	clipTypeGame  = "game"
 )
 
 // ---------------------------------------------------------------------------
@@ -68,6 +74,12 @@ type StoredClip struct {
 	LocalPath        string   `json:"local_path,omitempty"`
 	MediaURL         string   `json:"media_url,omitempty"`
 	Waveform         string   `json:"waveform,omitempty"`
+	// Game clips only. PosterURL is set when the poster is up, MediaURL when
+	// the MP4 is up.
+	Width     int    `json:"width,omitempty"`
+	Height    int    `json:"height,omitempty"`
+	HasVoice  bool   `json:"has_voice,omitempty"`
+	PosterURL string `json:"poster_url,omitempty"`
 }
 
 type CrewClipsDoc struct {
@@ -120,20 +132,51 @@ func capClips(clips []StoredClip) []StoredClip {
 	return clips[len(clips)-CrewClipsMaxRetained:]
 }
 
+// errClipIDTaken means another actor already posted a clip with this clip_id.
+var errClipIDTaken = errors.New("clip_id taken by another actor")
+
+// existingClip finds clipID in a crew's clips. A clip of the same actor is
+// returned: the client retries post_clip when an answer is lost. taken is
+// true when only another actor holds the clip_id. The pointer is into clips.
+// Pure, so the retry rule is testable.
+func existingClip(clips []StoredClip, clipID, actorID string) (found *StoredClip, taken bool) {
+	for i := range clips {
+		if clips[i].ClipID != clipID {
+			continue
+		}
+		if clips[i].ActorID == actorID {
+			return &clips[i], false
+		}
+		taken = true
+	}
+	return nil, taken
+}
+
 // AppendClip appends a clip to the durable clips doc, trims to the most-recent
-// cap, and retries on version conflict.
-func AppendClip(ctx context.Context, nk runtime.NakamaModule, crewID string, clip StoredClip) error {
+// cap, and retries on version conflict. When the doc already holds the
+// clip_id of the same actor, it appends nothing and returns that clip, so a
+// retried post_clip stores one clip. Another actor's clip_id returns
+// errClipIDTaken. The check runs on each attempt, so two concurrent retries
+// also store one clip.
+func AppendClip(ctx context.Context, nk runtime.NakamaModule, crewID string, clip StoredClip) (*StoredClip, error) {
 	for attempt := 0; attempt < 3; attempt++ {
 		doc, version := readClipsDoc(ctx, nk, crewID)
+		prev, taken := existingClip(doc.Clips, clip.ClipID, clip.ActorID)
+		if prev != nil {
+			return prev, nil
+		}
+		if taken {
+			return nil, errClipIDTaken
+		}
 		doc.Clips = capClips(append(doc.Clips, clip))
 		doc.UpdatedAt = time.Now().UnixMilli()
 		if err := writeClipsDoc(ctx, nk, crewID, doc, version); err == nil {
-			return nil
+			return nil, nil
 		}
 		jitter, _ := rand.Int(rand.Reader, big.NewInt(50))
 		time.Sleep(time.Duration(50*(attempt+1)+int(jitter.Int64())) * time.Millisecond)
 	}
-	return fmt.Errorf("crew_clips write failed after 3 retries for crew %s", crewID)
+	return nil, fmt.Errorf("crew_clips write failed after 3 retries for crew %s", crewID)
 }
 
 // validateClipWaveform checks an optional base64-encoded peak waveform.
@@ -166,6 +209,21 @@ type PostClipRequest struct {
 	Game            string   `json:"game,omitempty"`
 	LocalPath       string   `json:"local_path,omitempty"`
 	Waveform        string   `json:"waveform,omitempty"`
+	// Game clips only (validatePostClipType).
+	Width    int  `json:"width,omitempty"`
+	Height   int  `json:"height,omitempty"`
+	HasVoice bool `json:"has_voice,omitempty"`
+}
+
+// postClipResponse is the post_clip answer, the same for a new clip and a
+// retry.
+func postClipResponse(eventID, clipID string) string {
+	resp, _ := json.Marshal(map[string]interface{}{
+		"success":  true,
+		"event_id": eventID,
+		"clip_id":  clipID,
+	})
+	return string(resp)
 }
 
 func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -182,7 +240,10 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		return "", runtime.NewError("crew_id and clip_id required", 3)
 	}
 	if req.ClipType == "" {
-		req.ClipType = "voice"
+		req.ClipType = clipTypeVoice
+	}
+	if errStr := validatePostClipType(req); errStr != "" {
+		return "", runtime.NewError(errStr, 3)
 	}
 	if req.DurationSeconds <= 0 || req.DurationSeconds > ClipMaxDurationSec {
 		return "", runtime.NewError(fmt.Sprintf("duration must be 0-%d seconds", ClipMaxDurationSec), 3)
@@ -194,8 +255,19 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		return "", runtime.NewError("not a crew member", 7)
 	}
 
-	// Rate limit: max clips per user per day, counted from the durable clips doc
+	// A retry of a stored clip answers as the first call did. It runs before
+	// the rate limit, so a retry never counts against it.
 	clipsDoc, _ := readClipsDoc(ctx, nk, req.CrewID)
+	prev, taken := existingClip(clipsDoc.Clips, req.ClipID, userID)
+	if prev != nil {
+		logger.Info("post_clip retry: crew=%s clip_id=%s, returning the stored clip", req.CrewID, req.ClipID)
+		return postClipResponse(prev.EventID, prev.ClipID), nil
+	}
+	if taken {
+		return "", runtime.NewError("clip_id already exists", 6)
+	}
+
+	// Rate limit: max clips per user per day, counted from the durable clips doc
 	dayStart := time.Now().Truncate(24 * time.Hour).UnixMilli()
 	clipCount := 0
 	for _, c := range clipsDoc.Clips {
@@ -231,10 +303,24 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 		LocalPath:        req.LocalPath,
 		Waveform:         req.Waveform,
 	}
+	if req.ClipType == clipTypeGame {
+		clip.Width = req.Width
+		clip.Height = req.Height
+		clip.HasVoice = req.HasVoice
+	}
 
-	if err := AppendClip(ctx, nk, req.CrewID, clip); err != nil {
+	stored, err := AppendClip(ctx, nk, req.CrewID, clip)
+	if errors.Is(err, errClipIDTaken) {
+		return "", runtime.NewError("clip_id already exists", 6)
+	}
+	if err != nil {
 		logger.Error("Failed to append clip: %v", err)
 		return "", runtime.NewError("failed to save clip", 13)
+	}
+	if stored != nil {
+		// A concurrent retry stored the clip first.
+		logger.Info("post_clip retry: crew=%s clip_id=%s, returning the stored clip", req.CrewID, req.ClipID)
+		return postClipResponse(stored.EventID, stored.ClipID), nil
 	}
 
 	logger.Info("User %s (%s) clipped in crew %s: clip_id=%s type=%s",
@@ -243,12 +329,7 @@ func PostClipRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runt
 	recomputeHead2headForUser(ctx, logger, nk, userID, head2headTriggerSession)
 	PushFeedChanged(ctx, logger, nk, req.CrewID, "clip")
 
-	resp, _ := json.Marshal(map[string]interface{}{
-		"success":  true,
-		"event_id": eventID,
-		"clip_id":  req.ClipID,
-	})
-	return string(resp), nil
+	return postClipResponse(eventID, req.ClipID), nil
 }
 
 // ---------------------------------------------------------------------------
@@ -406,6 +487,11 @@ func CrewTimelineRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk 
 type ClipUploadURLRequest struct {
 	ClipID string `json:"clip_id"`
 	CrewID string `json:"crew_id"`
+	// Game clips only (gameClipUploadURL). An empty clip_type is voice.
+	ClipType    string `json:"clip_type,omitempty"`
+	PosterBytes int64  `json:"poster_bytes,omitempty"`
+	VideoBytes  int64  `json:"video_bytes,omitempty"`
+	UploadID    string `json:"upload_id,omitempty"`
 }
 
 type ClipUploadURLResponse struct {
@@ -414,7 +500,7 @@ type ClipUploadURLResponse struct {
 }
 
 func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
-	_, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
+	userID, ok := ctx.Value(runtime.RUNTIME_CTX_USER_ID).(string)
 	if !ok {
 		return "", runtime.NewError("authentication required", 16)
 	}
@@ -425,6 +511,13 @@ func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 	}
 	if req.ClipID == "" || req.CrewID == "" {
 		return "", runtime.NewError("clip_id and crew_id required", 3)
+	}
+	switch req.ClipType {
+	case "", clipTypeVoice:
+	case clipTypeGame:
+		return gameClipUploadURL(ctx, logger, nk, userID, req)
+	default:
+		return "", runtime.NewError("clip_type must be voice or game", 3)
 	}
 
 	if !S3IsConfigured() {
@@ -458,6 +551,12 @@ func ClipUploadURLRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk
 type ClipUploadCompleteRequest struct {
 	ClipID string `json:"clip_id"`
 	CrewID string `json:"crew_id"`
+	// Game clips only (gameClipUploadComplete). An empty clip_type is voice.
+	// part is poster or video; upload_id and parts are for the video.
+	ClipType string              `json:"clip_type,omitempty"`
+	Part     string              `json:"part,omitempty"`
+	UploadID string              `json:"upload_id,omitempty"`
+	Parts    []CompletedClipPart `json:"parts,omitempty"`
 }
 
 func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runtime.NakamaModule, payload string) (string, error) {
@@ -472,6 +571,13 @@ func ClipUploadCompleteRPC(ctx context.Context, logger runtime.Logger, db *sql.D
 	}
 	if req.ClipID == "" || req.CrewID == "" {
 		return "", runtime.NewError("clip_id and crew_id required", 3)
+	}
+	switch req.ClipType {
+	case "", clipTypeVoice:
+	case clipTypeGame:
+		return gameClipUploadComplete(ctx, logger, nk, userID, req)
+	default:
+		return "", runtime.NewError("clip_type must be voice or game", 3)
 	}
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
