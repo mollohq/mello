@@ -106,6 +106,9 @@ pub struct AppContext {
     pub ipc_listener: Rc<RefCell<Option<crate::ipc::IpcListener>>>,
     /// Read once at startup for an invite on a fresh install. `None` after.
     pub startup_clipboard: Rc<RefCell<Option<crate::onboarding_invite::StartupClipboard>>>,
+    /// Posts the notice that the closed window went to the tray. `None`
+    /// posts nothing.
+    pub tray_notice: Rc<RefCell<Option<crate::notifications::ShowNotice>>>,
     pub snapshot_loader: Rc<SnapshotLoader>,
     pub stream_frame_timer: Rc<crate::stream_frame_timer::StreamFrameTimer>,
     #[cfg(target_os = "windows")]
@@ -214,6 +217,8 @@ impl AppContext {
             ipc_listener: Rc::new(RefCell::new(None)),
             // Never the system clipboard in a test.
             startup_clipboard: Rc::new(RefCell::new(None)),
+            // Never a real OS notification in a test.
+            tray_notice: Rc::new(RefCell::new(None)),
             snapshot_loader: Rc::new(SnapshotLoader::new(rt)),
             stream_frame_timer,
             #[cfg(target_os = "windows")]
@@ -279,6 +284,7 @@ impl Clone for AppContext {
             pending_deep_link: self.pending_deep_link.clone(),
             ipc_listener: self.ipc_listener.clone(),
             startup_clipboard: self.startup_clipboard.clone(),
+            tray_notice: self.tray_notice.clone(),
             snapshot_loader: self.snapshot_loader.clone(),
             stream_frame_timer: self.stream_frame_timer.clone(),
             #[cfg(target_os = "windows")]

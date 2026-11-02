@@ -617,9 +617,12 @@ notify-rust = "4"
 |---|---|---|---|
 | Crew member joins voice | "Crew" | "{name} jumped in" | Window hidden |
 | New chat message | "{crew name}" | "{name}: {preview}" | Window hidden |
-| Crew invite received | "Mello invite" | "{name} invited you to {crew}" | Always |
+| Crew invite received | "m3llo invite" | "{name} invited you to {crew}" | Always |
+| First close to the tray | "m3llo is still running" | "It stays in the tray to keep collecting your gaming stats. Right-click the tray icon to quit." (macOS: "menu bar") | Once (§11) |
 
 Notifications are suppressed when the window is visible and focused. Do not notify for own actions.
+
+On Windows a toast needs an AppUserModelID with a Start menu shortcut. Velopack puts `velopack.<packId>` (`velopack.m3llo`) on its shortcuts, and every notification sets that id. Windows then shows the name and icon of the shortcut. Without an id, notify-rust sends the toast as Windows PowerShell.
 
 ### 8.3 Implementation
 
@@ -801,7 +804,11 @@ app.window().on_close_requested(move || {
 
 Slint 1.18 has two `CloseRequestResponse` values: `HideWindow` and `KeepWindowShown`. There is no `KeepWindowHidden`. The handler hides the window itself and returns `KeepWindowShown`, so Slint does not run its own hide. The `close_to_tray` setting (default on) selects hide or quit.
 
-A "Quit Mello" option in the tray context menu performs a real exit.
+Minimize does not end the call. Only the close button does.
+
+The first close to the tray posts an OS notification (§8.2): m3llo still runs, collects the gaming stats, and quits from the tray icon. A user who closes the window thinks the app quit. `Settings::tray_notice_shown` stores that the OS accepted the notice, so later closes post none. A notice that the OS refused shows on the next close. The notice goes through `AppContext::tray_notice`, which is `None` in the test harness.
+
+A "Quit m3llo" option in the tray context menu performs a real exit.
 
 ---
 

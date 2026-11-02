@@ -6,6 +6,7 @@ pub fn wire(ctx: &AppContext) {
     // --- Close → tray ---
     let app_weak = ctx.app.as_weak();
     let settings = ctx.settings.clone();
+    let tray_notice = ctx.tray_notice.clone();
     ctx.app.window().on_close_requested(move || {
         if settings.borrow().close_to_tray {
             if let Some(app) = app_weak.upgrade() {
@@ -17,6 +18,18 @@ pub fn wire(ctx: &AppContext) {
                     app.invoke_voice_toggle();
                 }
                 app.hide().ok();
+            }
+            // A user who closes the window also thinks m3llo quit. Tell them
+            // once that it runs on in the tray. A notice the OS refused
+            // shows on the next close.
+            if !settings.borrow().tray_notice_shown {
+                let shown = tray_notice.borrow().as_ref().is_some_and(|show| show());
+                if shown {
+                    log::info!("[close] tray notice shown");
+                    let mut s = settings.borrow_mut();
+                    s.tray_notice_shown = true;
+                    s.save();
+                }
             }
             slint::CloseRequestResponse::KeepWindowShown
         } else {

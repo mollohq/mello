@@ -611,6 +611,9 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         startup_clipboard: Rc::new(RefCell::new(Some(
             onboarding_invite::StartupClipboard::system(lounge_host),
         ))),
+        tray_notice: Rc::new(RefCell::new(Some(Box::new(
+            notifications::notify_closed_to_tray,
+        )))),
         stream_frame_timer: stream_frame_timer.clone(),
         #[cfg(target_os = "windows")]
         native_frame_slot: native_frame_slot.clone(),

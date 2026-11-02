@@ -38,6 +38,9 @@ pub struct Settings {
     // General tab
     pub start_minimized: bool,
     pub close_to_tray: bool,
+    /// The OS showed the notice that a closed window went to the tray and
+    /// m3llo still runs. The notice shows on the first close only.
+    pub tray_notice_shown: bool,
     pub auto_connect: bool,
     pub minimize_on_join: bool,
     pub hardware_acceleration: bool,
@@ -121,6 +124,7 @@ impl Default for Settings {
             clip_key: Some(crate::platform::hotkeys::DEFAULT_CLIP_KEY.to_string()),
             start_minimized: false,
             close_to_tray: true,
+            tray_notice_shown: false,
             auto_connect: false,
             minimize_on_join: false,
             hardware_acceleration: true,

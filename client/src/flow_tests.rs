@@ -3860,6 +3860,66 @@ fn closing_the_window_to_tray_outside_a_call_sends_no_leave() {
     );
 }
 
+/// Counts the tray notices the close handler posts. The OS accepts a notice
+/// when `accepted` returns true for that attempt (0 is the first).
+fn count_tray_notices(
+    h: &Harness,
+    accepted: impl Fn(u32) -> bool + 'static,
+) -> std::rc::Rc<std::cell::Cell<u32>> {
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = attempts.clone();
+    *h.ctx().tray_notice.borrow_mut() = Some(Box::new(move || {
+        let n = seen.get();
+        seen.set(n + 1);
+        accepted(n)
+    }));
+    attempts
+}
+
+fn close_the_window(h: &Harness) {
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+}
+
+/// The first close to the tray tells the user that m3llo still runs. Users
+/// thought the app quit. Later closes say nothing.
+#[test]
+fn the_first_close_to_tray_shows_the_notice_once() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "the first close posts the notice");
+    assert!(
+        h.settings().borrow().tray_notice_shown,
+        "the notice is stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "a later close posts no notice");
+}
+
+/// A notice the OS refused did not reach the user, so the next close tries
+/// again.
+#[test]
+fn a_refused_tray_notice_shows_on_the_next_close() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |n| n > 0);
+
+    close_the_window(&h);
+    assert!(
+        !h.settings().borrow().tray_notice_shown,
+        "a refused notice is not stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 2, "the next close tries again");
+    assert!(h.settings().borrow().tray_notice_shown);
+}
+
 fn listed_audio_devices(cmds: &[Command]) -> bool {
     cmds.iter().any(|c| matches!(c, Command::ListAudioDevices))
 }
