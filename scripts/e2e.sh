@@ -77,7 +77,9 @@ trap cleanup EXIT
 # The first run builds the Nakama Go plugin inside an amd64 container, which is
 # emulated on Apple Silicon and slow. Later runs reuse the cached image.
 echo "▸ starting stack (first run builds the Nakama plugin; can take minutes)"
-$COMPOSE up -d --wait
+# --remove-orphans: a container of a service this compose no longer has (the
+# old mello-minio) would keep port 9000 and block the stack.
+$COMPOSE up -d --wait --remove-orphans
 
 echo "▸ waiting for Nakama"
 i=0

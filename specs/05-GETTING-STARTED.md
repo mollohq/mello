@@ -56,6 +56,11 @@ cp .env.example .env
 # Start Nakama + PostgreSQL + RustFS (local S3)
 docker compose up -d
 
+# A stack from before RustFS: the old mello-minio container keeps port 9000
+# until this removes it. Then the old volume can go.
+docker compose up -d --remove-orphans
+docker volume rm backend_minio_data
+
 # Verify: open http://localhost:7351 (admin / mello_admin_dev)
 # RustFS console: http://localhost:9001 (minioadmin / minioadmin)
 ```

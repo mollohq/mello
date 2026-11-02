@@ -42,8 +42,12 @@ services:
     environment:
       RUSTFS_ACCESS_KEY: minioadmin
       RUSTFS_SECRET_KEY: minioadmin
+      # Explicit IPv4. The default ":9000" is an IPv6-only listener on a
+      # Linux engine, so a neighbour container cannot connect over IPv4
+      # while the container's own health check on 127.0.0.1 passes.
+      RUSTFS_ADDRESS: "0.0.0.0:9000"
       RUSTFS_CONSOLE_ENABLE: "true"
-      RUSTFS_CONSOLE_ADDRESS: ":9001"
+      RUSTFS_CONSOLE_ADDRESS: "0.0.0.0:9001"
     ports:
       - "9000:9000" # S3 API
       - "9001:9001" # console (minioadmin / minioadmin)

@@ -56,8 +56,10 @@ wait_for() {
 case "${1:-}" in
     up)
         cd "$here"
+        # --remove-orphans: a container of a service the compose no longer
+        # has (the old mello-minio) would keep port 9000.
         docker compose -p backend --env-file "$env_file" \
-            -f backend/docker-compose.yml -f backend/docker-compose.e2e.yml up -d --build
+            -f backend/docker-compose.yml -f backend/docker-compose.e2e.yml up -d --build --remove-orphans
         wait_for http://127.0.0.1:18080/healthz
         wait_for http://127.0.0.1:7350/healthcheck
         echo "✓ e2e OAuth profile up: fake provider on http://127.0.0.1:18080"
