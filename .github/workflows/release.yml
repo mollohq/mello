@@ -61,8 +61,12 @@ jobs:
         shell: pwsh
         run: cargo update --workspace --offline
 
+      # Only the client: dist/ packs mello.exe, the ORT DLLs, the models and
+      # the hook (CMake, below). The tools/* crates and m3llo-hud are never
+      # shipped. Building -p also keeps tool-only features (voice-test-client
+      # turns on mello-core/test-faults) out of the shipped binary.
       - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+        run: cargo build --release --locked -p mello-client --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -256,7 +260,7 @@ jobs:
             "${{ env.NOTARY_PROFILE_NAME }}"
 
       - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+        run: cargo build --release --locked -p mello-client --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
@@ -460,7 +464,7 @@ jobs:
         run: cargo update --workspace --offline
 
       - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+        run: cargo build --release --locked -p mello-client --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
