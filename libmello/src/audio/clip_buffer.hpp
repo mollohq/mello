@@ -1,5 +1,6 @@
 #pragma once
 #include "../util/ring_buffer.hpp"
+#include "../util/ring_file.hpp"
 #include <atomic>
 #include <condition_variable>
 #include <cstdint>
@@ -12,7 +13,7 @@
 namespace mello::audio {
 
 class OpusEnc;
-class RingFile;
+using util::RingFile;
 
 // Rolling disk buffer for voice clip capture (CLIPS.md section 4).
 //

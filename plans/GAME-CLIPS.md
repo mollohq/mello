@@ -365,14 +365,14 @@ Voice is a condition (Q5). A game clip always has the crew voice in it.
 
 | Event | Action |
 |---|---|
-| A game starts and the rules hold, or the user joins voice while a game runs | Start the replay consumer. Make the ring folder. |
+| A game starts and the rules hold, or the user joins voice while a game runs | Start the replay consumer and its ring files. |
 | The user leaves voice | Stop. Delete the ring. |
 | The foreground game changes, and the new game stays in the foreground for 10 s | Stop the old consumer, delete its ring, start one for the new game. One replay at a time. The 10 s hold keeps an alt-tab between two games from a restart each time. |
 | The game is minimized | The capture holds (no frames). The ring keeps its content. A clip shows the last frame for the gap. |
 | The game exits | Stop. Delete the ring. |
 | The user turns the setting off | Stop. Delete the ring. |
 | Disk free goes under 2 GB | Stop. Delete the ring. HUD toast once. |
-| The client starts | Delete leftover ring folders of a crash. A folder has the pid in its name, as the voice ring file does, and only folders of pids that do not run are deleted: two clients can run on one PC (`MELLO_SESSION_KEY`). |
+| The client starts | Nothing to delete: the ring files are delete on close, so a crash leaves none (section 5.2). |
 
 ### 4.3 F8 key
 
@@ -414,15 +414,16 @@ The time anchors of the voice ring are taken on the thread that hands the sample
 
 | Ring | Where | Content | Size at the default quality |
 |---|---|---|---|
-| Video | Disk, in the buffer folder | Annex-B access units in one preallocated ring file. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. An index per segment: byte offset, size, capture time of each access unit, keyframe flag. | 40 segments, about 25 MB on average at 5 Mbps (720p60). The file is sized for the peak, not the average (below). |
+| Video | Disk, in the buffer folder | Annex-B access units in one preallocated ring file. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. An index per segment: byte offset, size, capture time of each access unit, keyframe flag. | 40 slots of 2 s of the peak rate: 62.5 MB at 5 Mbps (720p60). About 25 MB of it holds data on average (below). |
 | Game audio | Disk, same folder | 48 kHz stereo int16 PCM in a ring file, with a time anchor every 10 ms chunk | 40 s, 7.7 MB |
 | Voice | Disk, the existing `ClipBuffer` ring file | Two streams of 48 kHz mono Opus frames, 60 s each: the crew mix and the local mic (Q24). A time anchor per frame, and m3llo's session volume with the anchors (Q20). The mux decodes the window. | 1.6 MB (one stream of 0.8 MB exists on this branch) |
 
-- One ring file, preallocated, with a byte offset per segment in the index. No file is created or deleted while the game runs. One file is simpler than a file per segment for the crash cleanup and for pinning. With VBR at 1.25x a segment's size varies, so the file holds 40 segments at the peak size: an IDR plus 1 s at 1.25x the bitrate.
+- One ring file, preallocated, with a byte offset per segment in the index. No file is created or deleted while the game runs. One file is simpler than a file per segment for the crash cleanup and for pinning. With VBR at 1.25x a segment's size varies, so each slot holds the largest GOP that the encoder can make: with a VBV of 1 s of the peak rate, a 1 s GOP carries at most 2 s of the peak rate. A GOP that is still larger ends its segment early, and the ring asks the encoder for an IDR (built 2026-11-02, `replay_video_ring.cpp`).
+- The ring files are `replay_video_<pid>_<n>.bin` and `replay_audio_<pid>_<n>.bin` in the buffer folder, opened delete on close as the voice ring is. Windows deletes them when the ring stops and when the process dies, so there is no ring folder and no crash cleanup (section 4.2).
 - 40 segments: the 30 s window, one GOP for the keyframe before it, and spare segments for pinning. The segment count is one constant. The second iteration raises it to 45 (a marker at round end needs 35 s back, section 14).
 - A capture pins the segments it reads. The writer skips a pinned segment and takes the next free one.
 - Spare rule: two captures inside 30 s pin up to 32 of the 40 segments, and the writer then has 8 s of free segments. A third capture while two muxes run waits for the first to unpin. The mux time is a gate: under 3 s for a 30 s clip on the Windows PC (section 10.2).
-- The writer thread is not the encode thread. The encode thread hands each access unit to a bounded queue. A full queue drops the oldest unit and counts it. Disk stalls never block the encoder.
+- The writer thread is not the encode thread. The encode thread hands each access unit to a bounded queue (2 MB). A full queue drops the new unit and every unit after it up to the next keyframe, counts them, and asks the encoder for an IDR: a P-frame without its reference cannot be decoded. Disk stalls never block the encoder.
 - The game audio is PCM, not Opus. PCM needs no encode while the game runs, and the mux needs no decode. The cost is disk space, not CPU.
 
 ### 5.3 Capture and mux
@@ -558,7 +559,7 @@ The figures below are estimates. The perf gate (section 10.4) measures them on t
 | VRAM | 3 NV12 slots, about 4 MB, plus the encoder session (driver dependent) | Measure, report |
 | CPU | Capture and encode threads wait on events. Disk writes 0.8 MB/s. Loopback PCM, no Opus encode. | Under 2 % of one core |
 | Process RAM | Ring index, a 2 MB write queue, encoder bitstream buffers; during a capture also the sink writer of the mux | Two numbers, measured before a promise: the steady state, and the peak during a capture. The steady state at most 10 MB more than without the buffer. |
-| Disk space | About 34 MB (video 25 MB, game audio 7.7 MB, voice 0.8 MB) | Fixed after start |
+| Disk space | About 72 MB of files (video 62.5 MB sized for the peak, game audio 7.8 MB, voice 1.6 MB) | Fixed after start |
 | Disk writes | About 0.8 MB/s, 2.9 GB per hour of play | Report. SSD wear is a known cost of every replay buffer. |
 | Install size | No new binary. OS frameworks only. | No change |
 

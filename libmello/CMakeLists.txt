@@ -251,6 +251,8 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
+    src/replay/replay_audio_ring.cpp
+    src/replay/replay_video_ring.cpp
     src/transport/peer_connection.cpp
     src/transport/rtp_h264_receiver.cpp
     src/transport/rtp_video_receiver_session.cpp
@@ -260,6 +262,7 @@ set(MELLO_SOURCES
     src/transport/ulpfec.cpp
     src/transport/ulpfec.cpp
     src/transport/voice_send_feedback.cpp
+    src/util/ring_file.cpp
     src/video/cursor.cpp
     src/video/encoder_factory.cpp
     src/video/decoder_factory.cpp

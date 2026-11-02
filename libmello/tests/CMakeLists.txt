@@ -3,6 +3,7 @@ find_package(GTest CONFIG REQUIRED)
 add_executable(mello_tests
     test_opus_codec.cpp
     test_clip_buffer.cpp
+    test_replay_ring.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
     test_echo_suppressor.cpp
