@@ -230,4 +230,11 @@ if(WIN32)
     )
     target_compile_definitions(mello_loopback_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
     target_link_libraries(mello_loopback_probe PRIVATE mello ole32)
+
+    # The real loopback row of the stream gate's replay lane: a 1 kHz tone in
+    # bursts, with each onset on the steady clock (plans/GAME-CLIPS.md 10.3).
+    # Not a test; ctest does not run it.
+    add_executable(mello_tone_player tone_player.cpp)
+    target_compile_definitions(mello_tone_player PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(mello_tone_player PRIVATE ole32)
 endif()

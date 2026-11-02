@@ -1186,6 +1186,39 @@ MELLO_API void mello_clip_player_get_state(MelloClipPlayer* player, MelloClipPla
  *  stay responsive. The read callback is not called after it returns. */
 MELLO_API void mello_clip_player_stop(MelloClipPlayer* player);
 
+/* ---- Game clip tests (the stream gate's replay lane, plans/GAME-CLIPS.md 10.3).
+ *      Test only: no product code calls these. ---- */
+
+/** Start the replay on the reference clip (mello_test_set_reference_clip) in
+ *  place of a game window. `config->pid` 0: the clip's game audio
+ *  (mello_test_set_reference_audio); else that process's sound through
+ *  process loopback (the real loopback row). `config->hwnd` is not used. */
+MELLO_API MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloReplayConfig* config);
+/** The clock of the replay's reference source. False when the replay runs on
+ *  something else. */
+MELLO_API bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out);
+
+/** One video unit of an MP4 in Annex B, with its time from the start of the
+ *  clip. Return false to stop the read. */
+typedef bool (*MelloTestMp4UnitCallback)(void* user_data, const uint8_t* annex_b, size_t size,
+                                         int64_t time_us, bool keyframe);
+/** PCM of an MP4: 48 kHz stereo int16, the time of its first frame. Return
+ *  false to stop the read. */
+typedef bool (*MelloTestMp4PcmCallback)(void* user_data, const int16_t* stereo, size_t frames,
+                                        int64_t time_us);
+/** Read every video unit of a game clip MP4 in decode order, the track's
+ *  parameter sets before the first key frame. `width` and `height` may be NULL. */
+MELLO_API MelloResult mello_test_mp4_read_video(const char* path_utf8, MelloTestMp4UnitCallback callback,
+                                                void* user_data, uint32_t* width, uint32_t* height);
+/** Decode the sound of a game clip MP4. */
+MELLO_API MelloResult mello_test_mp4_read_audio(const char* path_utf8, MelloTestMp4PcmCallback callback,
+                                                void* user_data);
+
+/** mello_clip_player_start with the CPU frame callback: each frame as RGBA,
+ *  on the player's present thread, at its render time. */
+MELLO_API MelloClipPlayer* mello_test_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config,
+                                                        MelloFrameCallback on_frame, void* user_data);
+
 /** Feed an encoded game-audio packet (the Opus payload, no RTP header)
  *  received from the host for playback. The game audio plays in the voice
  *  mix on the voice output device (mello_set_audio_output). A view attached

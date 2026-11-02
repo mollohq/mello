@@ -10,6 +10,7 @@
 #include "../video/video_preprocessor.hpp"
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -189,6 +190,18 @@ bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager,
     std::atomic_store(&manager_, std::move(manager));
     handled_swap_generation_ = manager_->swap_generation();
     consumer_id_ = manager_->add_consumer([this](const video::CapturedFrame& f) { on_frame(f); });
+    // The replay lane of the stream gate: the reference source gives the game
+    // audio of its own picture, at its capture times. The ring takes it in
+    // place of a process loopback.
+    if (consumer_id_ != 0 && own && config_.source && config_.pid == 0 &&
+        manager_->provides_timed_audio()) {
+        manager_->set_timed_audio_callback(
+            consumer_id_, [this](const float* samples, uint32_t frames, uint32_t channels,
+                                 uint32_t rate, int64_t capture_us) {
+                on_timed_audio(samples, frames, channels, rate, capture_us);
+            });
+        has_game_audio_ = true;
+    }
     if (consumer_id_ == 0 || (own && !manager_->start(fps))) {
         set_error(error, "the capture did not start");
         close_capture();
@@ -453,6 +466,28 @@ void ReplaySession::on_game_audio(const int16_t* samples, size_t count) {
     if (frames == 0) return;
     const uint64_t capture_us = now_us() - frames * 1'000'000 / ReplayAudioRing::kRate;
     audio_ring_.push(samples, frames, capture_us);
+}
+
+void ReplaySession::on_timed_audio(const float* samples, uint32_t frames, uint32_t channels,
+                                   uint32_t rate, int64_t capture_us) {
+    // The reference clip's audio is 48 kHz stereo, as the ring keeps it.
+    if (rate != ReplayAudioRing::kRate || channels != ReplayAudioRing::kChannels || frames == 0) {
+        return;
+    }
+    timed_pcm_.resize(static_cast<size_t>(frames) * channels);
+    for (size_t i = 0; i < timed_pcm_.size(); ++i) {
+        const float v = std::clamp(samples[i], -1.0f, 1.0f);
+        timed_pcm_[i] = static_cast<int16_t>(std::lround(v * 32767.0f));
+    }
+    audio_ring_.push(timed_pcm_.data(), frames, static_cast<uint64_t>(capture_us));
+}
+
+bool ReplaySession::reference_info(video::ReferenceInfo& out) const {
+    const auto manager = std::atomic_load(&manager_);
+    auto* ref = manager ? dynamic_cast<video::ReferenceCapture*>(manager->source()) : nullptr;
+    if (!ref) return false;
+    out = ref->info();
+    return true;
 }
 
 void ReplaySession::copy_poster_frame(ID3D11Texture2D* texture) {

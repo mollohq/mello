@@ -254,6 +254,7 @@ set(MELLO_SOURCES
     src/audio/vad.cpp
     src/clip/clip_player_stub.cpp
     src/replay/mp4_faststart.cpp
+    src/replay/mp4_read.cpp
     src/replay/replay_audio_mix.cpp
     src/replay/replay_audio_ring.cpp
     src/replay/replay_video_ring.cpp

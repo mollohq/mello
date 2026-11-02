@@ -9,6 +9,7 @@
 #ifdef _WIN32
 #include <gtest/gtest.h>
 #include "replay/h264_nal.hpp"
+#include "replay/mp4_read.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
 #include "replay/replay_session.hpp"
@@ -547,6 +548,81 @@ TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
                 static_cast<unsigned long long>(clip.bytes),
                 static_cast<unsigned long long>(stats.frames_captured),
                 static_cast<unsigned long long>(stats.frames_encoded));
+}
+
+// The stream gate's replay lane (plan 10.3): the reference source's game
+// audio goes into the clip in place of a process loopback, and the read-back
+// gives the clip's video units and its sound. The reference audio loops with
+// the 2 s clip and clicks once a loop, so the decoded clicks are 2 s apart.
+TEST(ReplaySession, TheReferenceGameAudioIsInTheClipAndReadsBack) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    TempDir dir;
+    mello::video::CaptureSourceDesc desc = write_reference_clip(dir.path() / "reference.yuv");
+    const fs::path pcm = dir.path() / "reference.s16";
+    {
+        std::vector<int16_t> loop(96000 * 2, 0);  // 2 s of 48 kHz stereo
+        for (size_t i = 24000; i < 24000 + 240; ++i) {  // 5 ms at 0.5 s
+            loop[2 * i] = 20000;
+            loop[2 * i + 1] = 20000;
+        }
+        std::ofstream f(pcm, std::ios::binary);
+        f.write(reinterpret_cast<const char*>(loop.data()), static_cast<std::streamsize>(loop.size() * 2));
+    }
+    desc.reference.audio_path = pcm.string();
+
+    ReplayConfig config;
+    config.source = desc;
+    config.height = 240;
+    config.fps = 60;
+    config.bitrate_kbps = 2000;
+    config.dir = dir.path();
+    std::string error;
+    auto session = ReplaySession::start(config, &error);
+    if (!session && error == "no hardware encoder") GTEST_SKIP() << "no encoder on this machine";
+    ASSERT_TRUE(session) << error;
+    std::this_thread::sleep_for(std::chrono::seconds(6));
+    mello::video::ReferenceInfo info;
+    EXPECT_TRUE(session->reference_info(info));
+    EXPECT_GT(info.start_us, 0u) << "the clock of the source once it delivers";
+    const fs::path mp4 = dir.path() / "clip.mp4";
+    ReplayClip clip;
+    ASSERT_TRUE(session->capture(4.0f, nullptr, mp4, dir.path() / "poster.jpg", &clip));
+    session->stop();
+    EXPECT_TRUE(clip.has_game_audio);
+
+    size_t units = 0;
+    bool first_key = false;
+    uint32_t w = 0, h = 0;
+    ASSERT_TRUE(read_mp4_video(
+        mp4,
+        [&](const Mp4VideoUnit& u) {
+            if (units == 0) first_key = u.keyframe && h264::has_idr(u.annex_b.data(), u.annex_b.size());
+            ++units;
+            return true;
+        },
+        &w, &h));
+    EXPECT_TRUE(first_key) << "the read-back starts at a key frame with its parameter sets";
+    EXPECT_EQ(w, 320u);
+    EXPECT_EQ(h, 240u);
+    EXPECT_GE(units, 230u) << "4 s at 60 fps";
+
+    std::vector<int64_t> clicks;  // clip time of each click, µs
+    int64_t last = -1'000'000;
+    ASSERT_TRUE(read_mp4_audio(mp4, [&](const int16_t* s, size_t frames, int64_t time_us) {
+        for (size_t i = 0; i < frames; ++i) {
+            const int64_t t = time_us + static_cast<int64_t>(i) * 1'000'000 / 48000;
+            if (std::abs(s[2 * i]) > 8000 && t - last > 500'000) {
+                clicks.push_back(t);
+                last = t;
+            }
+        }
+        return true;
+    }));
+    ASSERT_GE(clicks.size(), 2u) << "a click every 2 s of the reference audio";
+    for (size_t i = 1; i < clicks.size(); ++i) {
+        EXPECT_NEAR(static_cast<double>(clicks[i] - clicks[i - 1]) / 1000.0, 2000.0, 2.0)
+            << "the reference audio is at its capture times";
+    }
 }
 
 // Game clips plan 3.2 and 3.5: a stream of the same game starts, and the

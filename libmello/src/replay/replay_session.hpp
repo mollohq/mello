@@ -4,6 +4,7 @@
 #include "replay_load.hpp"
 #include "replay_video_ring.hpp"
 #include "../video/capture_manager.hpp"
+#include "../video/capture_reference.hpp"
 #include "../video/capture_source.hpp"
 #include "../video/encoder.hpp"
 #include <d3d11.h>
@@ -18,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <thread>
+#include <vector>
 
 namespace mello::audio {
 class AudioPipeline;
@@ -166,6 +168,10 @@ public:
     uint32_t encode_width() const { return enc_w_; }
     uint32_t encode_height() const { return enc_h_; }
 
+    /// The reference source's clock (the replay lane of the stream gate).
+    /// False when the replay captures something else.
+    bool reference_info(video::ReferenceInfo& out) const;
+
 private:
     struct Key {
         explicit Key() = default;
@@ -199,6 +205,11 @@ private:
     /// Encode thread, every 60 frames: the replay's own overload (F3).
     void check_own_load();
     void on_game_audio(const int16_t* samples, size_t count);
+    /// The reference source's audio, at its capture times. The source's
+    /// audio thread only.
+    void on_timed_audio(const float* samples, uint32_t frames, uint32_t channels, uint32_t rate,
+                        int64_t capture_us);
+    std::vector<int16_t> timed_pcm_;  // on_timed_audio's thread
     /// The capture thread copies the frame for the poster (plan F6).
     void copy_poster_frame(ID3D11Texture2D* texture);
     bool write_live_poster(const std::filesystem::path& poster, std::chrono::milliseconds wait);

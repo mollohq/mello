@@ -11,6 +11,7 @@
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
+#include "replay/mp4_read.hpp"
 #include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
 #include <filesystem>
@@ -756,6 +757,67 @@ void mello_replay_stop(MelloContext* ctx) {
         if (auto old = ctx_cast(ctx)->exchange_replay(nullptr)) old->stop();
     } catch (...) {
     }
+#endif
+}
+
+MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloReplayConfig* config) {
+    if (!ctx || !config) return MELLO_ERROR_INVALID_PARAM;
+#ifdef _WIN32
+    try {
+        auto* c = ctx_cast(ctx);
+        if (auto old = c->exchange_replay(nullptr)) old->stop();
+        mello::replay::ReplayConfig rc;
+        mello::video::CaptureSourceDesc desc{};
+        desc.mode = mello::video::CaptureMode::Reference;
+        desc.reference = c->reference_clip();
+        if (desc.reference.path.empty()) {
+            c->set_error("no reference clip (mello_test_set_reference_clip)");
+            return MELLO_ERROR_INVALID_PARAM;
+        }
+        rc.source = desc;
+        // A pid: that process's sound through process loopback (the real
+        // loopback row), in place of the reference clip's audio.
+        rc.pid = config->pid;
+        if (config->pid != 0) rc.game_audio = c->game_audio(config->pid);
+        if (config->height) rc.height = config->height;
+        if (config->fps) rc.fps = config->fps;
+        if (config->bitrate_kbps) rc.bitrate_kbps = config->bitrate_kbps;
+        if (config->buffer_dir && config->buffer_dir[0]) {
+            rc.dir = std::filesystem::u8path(config->buffer_dir);
+        }
+        std::string error;
+        auto session = mello::replay::ReplaySession::start(rc, &error);
+        if (!session) {
+            c->set_error(error.empty() ? "the replay did not start" : error);
+            return MELLO_ERROR_FAILED;
+        }
+        c->exchange_replay(std::move(session));
+        return MELLO_OK;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+#else
+    ctx_cast(ctx)->set_error("game clips are not on this platform yet");
+    return MELLO_ERROR_FAILED;
+#endif
+}
+
+bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out) {
+    if (!ctx || !out) return false;
+#ifdef _WIN32
+    const auto session = ctx_cast(ctx)->replay();
+    mello::video::ReferenceInfo info;
+    if (!session || !session->reference_info(info)) return false;
+    out->start_us = info.start_us;
+    out->frames_delivered = info.frames_delivered;
+    out->late_frames = info.late_frames;
+    out->max_late_us = info.max_late_us;
+    out->clip_frames = info.clip_frames;
+    out->fps = info.fps;
+    out->loops = info.loops;
+    return true;
+#else
+    return false;
 #endif
 }
 
@@ -2023,7 +2085,8 @@ struct MelloClipPlayer {
     std::unique_ptr<mello::clip::ClipPlayer> player;
 };
 
-MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config) {
+static MelloClipPlayer* start_clip_player(MelloContext* ctx, const MelloClipPlayerConfig* config,
+                                          mello::video::ViewerPipeline::FrameCallback on_cpu_frame) {
     if (!ctx || !config || !config->read || config->length == 0) return nullptr;
     try {
         auto* context = ctx_cast(ctx);
@@ -2040,6 +2103,7 @@ MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlaye
         options.output_latency_us = [context] {
             return static_cast<int64_t>(context->audio().output_latency_ms() * 1000.0f);
         };
+        options.on_cpu_frame = std::move(on_cpu_frame);
         auto player = mello::clip::ClipPlayer::start(std::move(options));
         if (!player) return nullptr;
         auto* out = new MelloClipPlayer();
@@ -2047,6 +2111,52 @@ MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlaye
         return out;
     } catch (...) {
         return nullptr;
+    }
+}
+
+MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config) {
+    return start_clip_player(ctx, config, {});
+}
+
+MelloClipPlayer* mello_test_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config,
+                                              MelloFrameCallback on_frame, void* user_data) {
+    mello::video::ViewerPipeline::FrameCallback cb;
+    if (on_frame) {
+        cb = [on_frame, user_data](const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts) {
+            on_frame(user_data, rgba, w, h, ts);
+        };
+    }
+    return start_clip_player(ctx, config, std::move(cb));
+}
+
+MelloResult mello_test_mp4_read_video(const char* path_utf8, MelloTestMp4UnitCallback callback,
+                                      void* user_data, uint32_t* width, uint32_t* height) {
+    if (!path_utf8 || !callback) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        const bool ok = mello::replay::read_mp4_video(
+            std::filesystem::u8path(path_utf8),
+            [callback, user_data](const mello::replay::Mp4VideoUnit& u) {
+                return callback(user_data, u.annex_b.data(), u.annex_b.size(), u.time_us, u.keyframe);
+            },
+            width, height);
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
+    }
+}
+
+MelloResult mello_test_mp4_read_audio(const char* path_utf8, MelloTestMp4PcmCallback callback,
+                                      void* user_data) {
+    if (!path_utf8 || !callback) return MELLO_ERROR_INVALID_PARAM;
+    try {
+        const bool ok = mello::replay::read_mp4_audio(
+            std::filesystem::u8path(path_utf8),
+            [callback, user_data](const int16_t* stereo, size_t frames, int64_t time_us) {
+                return callback(user_data, stereo, frames, time_us);
+            });
+        return ok ? MELLO_OK : MELLO_ERROR_FAILED;
+    } catch (...) {
+        return MELLO_ERROR_FAILED;
     }
 }
 
