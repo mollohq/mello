@@ -191,125 +191,18 @@ Behavior:
 - macOS uses the winit Slint backend with the default menu bar disabled for the pre-main window.
 - Windows and macOS center the dialog on the primary screen before showing it.
 
-### 5.2 Historical Banner UI
+### 5.2 Update Toast
 
-Earlier revisions planned an in-app update banner. That design is superseded by the startup gate, but the settings-panel updater may still reuse the same `Updater` events for manual update affordances.
+The main window shows `UpdateToast` (`client/ui/panels/update_banner.slint`) at the top center. It shows after sign-in, and not during onboarding. The startup gate (§5.1) applies an update that it finds at startup. The toast shows the result of an update check after startup (`poll_loop.rs`).
 
-```slint
-// client/ui/components/update_banner.slint
+| State | Source | First line | Second line | Control |
+|---|---|---|---|---|
+| Update available | `UpdateEvent::CheckComplete` with an update | "New version available" | "v{version}" | UPDATE button (`update-now-clicked`) |
+| Download | `UpdateEvent::DownloadStarted`, `DownloadProgress` | "Updating…" | "Downloading v{version}" | Progress bar |
+| Connection | `Event::ConnectionStateChanged` | "Reconnecting…" or "Connection lost" | None | None |
+| Protocol mismatch | `Event::ProtocolMismatch` (§12) | The message of the event | None | None |
 
-import { Theme } from "../theme.slint";
-
-export component UpdateBanner inherits Rectangle {
-    in property <bool> visible: false;
-    in property <string> version: "";
-    in property <string> release-notes: "";
-    in property <float> download-progress: -1.0;  // -1 = not downloading
-    in property <bool> ready-to-install: false;
-    
-    callback update-clicked();
-    callback restart-clicked();
-    callback dismiss-clicked();
-    
-    height: visible ? 56px : 0px;
-    background: #2563eb;
-    clip: true;
-    
-    animate height { duration: 200ms; easing: ease-out; }
-    
-    if visible: HorizontalLayout {
-        padding-left: Theme.spacing-lg;
-        padding-right: Theme.spacing-lg;
-        spacing: Theme.spacing-md;
-        alignment: center;
-        
-        // Icon
-        Text {
-            text: "🎉";
-            font-size: 20px;
-            vertical-alignment: center;
-        }
-        
-        // Message
-        Text {
-            text: ready-to-install 
-                ? "Update ready! Restart to complete."
-                : download-progress >= 0 
-                    ? "Downloading v" + version + "..."
-                    : "Mello v" + version + " is available!";
-            color: white;
-            font-size: Theme.font-md;
-            vertical-alignment: center;
-        }
-        
-        // Progress bar (when downloading)
-        if download-progress >= 0 && !ready-to-install: Rectangle {
-            width: 150px;
-            height: 8px;
-            background: #ffffff44;
-            border-radius: 4px;
-            
-            Rectangle {
-                width: parent.width * clamp(download-progress, 0, 1);
-                height: parent.height;
-                background: white;
-                border-radius: 4px;
-                
-                animate width { duration: 100ms; }
-            }
-        }
-        
-        Rectangle { horizontal-stretch: 1; }
-        
-        // Action button
-        Rectangle {
-            width: ready-to-install ? 100px : 120px;
-            height: 36px;
-            background: white;
-            border-radius: 6px;
-            
-            Text {
-                text: ready-to-install ? "Restart" : "Update Now";
-                color: #2563eb;
-                font-size: Theme.font-md;
-                font-weight: 600;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            
-            TouchArea {
-                clicked => {
-                    if ready-to-install {
-                        restart-clicked();
-                    } else {
-                        update-clicked();
-                    }
-                }
-            }
-        }
-        
-        // Dismiss button
-        Rectangle {
-            width: 36px;
-            height: 36px;
-            border-radius: 18px;
-            background: transparent;
-            
-            Text {
-                text: "✕";
-                color: white;
-                font-size: Theme.font-lg;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
-            
-            TouchArea {
-                clicked => { dismiss-clicked(); }
-            }
-        }
-    }
-}
-```
+A connection or a protocol warning replaces the update text, the progress bar and the button. When both are set, the toast shows the connection warning. `UpdateEvent::Error` removes the update state.
 
 ### 5.2 Update Dialog (Optional, for release notes)
 
@@ -940,7 +833,7 @@ func HealthCheckRPC(...) (string, error) {
 After successful auth the client calls the `health` RPC and compares versions:
 
 ```
-client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update Mello"
+client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update m3llo"
 server.protocol_version < client.MIN_SERVER_PROTOCOL   →  "Server needs updating"
 ```
 
