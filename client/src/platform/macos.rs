@@ -38,7 +38,7 @@ pub fn build_menu_bar() -> Menu {
     app_menu.append(&PredefinedMenuItem::services(None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu
-        .append(&PredefinedMenuItem::hide(Some("Hide Mello")))
+        .append(&PredefinedMenuItem::hide(Some(&format!("Hide {APP_NAME}"))))
         .ok();
     app_menu.append(&PredefinedMenuItem::hide_others(None)).ok();
     app_menu.append(&PredefinedMenuItem::show_all(None)).ok();
@@ -109,7 +109,7 @@ pub fn build_menu_bar() -> Menu {
     help_menu
         .append(&MenuItem::with_id(
             MenuId::new("github"),
-            "Mello on GitHub",
+            &format!("{APP_NAME} on GitHub"),
             true,
             None,
         ))

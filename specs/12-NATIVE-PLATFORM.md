@@ -178,13 +178,13 @@ muda = "0.15"
 ### 4.2 macOS menu bar structure
 
 ```
-Mello     Edit     View     Help
+m3llo     Edit     View     Help
 ```
 
 ```
-Mello
+m3llo
 │
-├── About Mello
+├── About m3llo
 ├── ─────────────
 ├── Check for Updates…
 ├── ─────────────
@@ -192,11 +192,11 @@ Mello
 ├── ─────────────
 ├── Services        ►
 ├── ─────────────
-├── Hide Mello      Cmd+H
+├── Hide m3llo      Cmd+H
 ├── Hide Others     Cmd+Opt+H
 ├── Show All
 ├── ─────────────
-└── Quit Mello      Cmd+Q
+└── Quit m3llo      Cmd+Q
 ```
 
 ```
@@ -223,7 +223,7 @@ View
 ```
 Help
 │
-└── Mello on GitHub
+└── m3llo on GitHub
 ```
 
 ### 4.3 Notes on the Edit menu
@@ -260,7 +260,7 @@ pub fn build_menu_bar() -> Menu {
     let menu = Menu::new();
 
     // ── Mello ──────────────────────────────────────────────────────────────
-    let app_menu = Submenu::with_title("Mello", true);
+    let app_menu = Submenu::with_title("m3llo", true);
     app_menu.append(&PredefinedMenuItem::about(Some("About Mello"), None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu.append(&MenuItem::with_id(
@@ -270,7 +270,7 @@ pub fn build_menu_bar() -> Menu {
         Some("cmd+,".parse().unwrap()),
     )).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
-    app_menu.append(&PredefinedMenuItem::quit(Some("Quit Mello"))).ok();
+    app_menu.append(&PredefinedMenuItem::quit(Some("Quit m3llo"))).ok();
     menu.append(&app_menu).ok();
 
     // ── Edit ───────────────────────────────────────────────────────────────
@@ -362,12 +362,12 @@ Template images (`is_template: true`) are pure white/black PNGs. macOS automatic
 Right-click on the status item shows:
 
 ```
-Open Mello                ← or "Hide Mello" when window is focused
+Open m3llo                ← or "Hide m3llo" when window is focused
 ─────────────────────
 🎤 Mute                   ← toggle; checkmark when muted; greyed if not in voice
 Leave Voice               ← greyed if not in voice
 ─────────────────────
-Quit Mello
+Quit m3llo
 ```
 
 ### 5.4 Click behaviour
@@ -402,7 +402,7 @@ pub enum VoiceState {
 
 impl StatusItem {
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let menu_open  = MenuItem::new("Open Mello", true, None);
+        let menu_open  = MenuItem::new("Open m3llo", true, None);
         let menu_mute  = MenuItem::new("Mute", false, None);   // greyed initially
         let menu_leave = MenuItem::new("Leave Voice", false, None);
 
@@ -412,14 +412,14 @@ impl StatusItem {
         tray_menu.append(&menu_mute)?;
         tray_menu.append(&menu_leave)?;
         tray_menu.append(&PredefinedMenuItem::separator())?;
-        tray_menu.append(&PredefinedMenuItem::quit(Some("Quit Mello")))?;
+        tray_menu.append(&PredefinedMenuItem::quit(Some("Quit m3llo")))?;
 
         let icon = Self::render_icon(VoiceState::Inactive);
 
         let tray = TrayIconBuilder::new()
             .with_menu(Box::new(tray_menu))
             .with_icon(icon)
-            .with_tooltip("Mello")
+            .with_tooltip("m3llo")
             .build()?;
 
         Ok(Self {
@@ -734,7 +734,7 @@ auto-launch = "0.5"
 use auto_launch::AutoLaunch;
 
 pub fn set_start_on_boot(enabled: bool) -> Result<(), Box<dyn std::error::Error>> {
-    let app_name = "Mello";
+    let app_name = "m3llo";
     let app_path = std::env::current_exe()?;
 
     let auto = AutoLaunch::new(app_name, app_path.to_str().unwrap(), &[] as &[&str]);
@@ -749,7 +749,7 @@ pub fn set_start_on_boot(enabled: bool) -> Result<(), Box<dyn std::error::Error>
 }
 
 pub fn is_start_on_boot_enabled() -> bool {
-    let app_name = "Mello";
+    let app_name = "m3llo";
     let app_path = std::env::current_exe().unwrap_or_default();
     AutoLaunch::new(app_name, app_path.to_str().unwrap_or(""), &[] as &[&str])
         .is_enabled()

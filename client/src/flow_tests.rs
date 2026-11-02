@@ -9686,7 +9686,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     let _ = h.commands();
 
     h.click_label("Pop out");
-    assert_eq!(*calls.borrow(), ["open alice - Mello"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo"]);
     assert!(card_ui(&h).get_popped_out());
     assert!(
         !h.controls_labelled("Show it here").is_empty(),
@@ -9700,7 +9700,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     no_restart(&mut h);
 
     h.click_label("Show it here");
-    assert_eq!(*calls.borrow(), ["open alice - Mello", "close"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo", "close"]);
     assert!(!card_ui(&h).get_popped_out());
 
     // The window's close button: the native window procedure calls this.
