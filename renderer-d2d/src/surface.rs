@@ -3,14 +3,20 @@
 //!
 //! Frame: `begin_frame` wraps the back buffer in a target bitmap and opens a
 //! draw, `end_frame` closes it, drops the target and presents with vsync.
-//! Resize: `ensure_size` drops the target and resizes the buffers. The shape
+//! Resize: `ensure_size` drops the target and resizes the buffers.
+//!
+//! Partial rendering: the flip-sequential swapchain keeps its two buffers, so
+//! the back buffer holds the frame from two presents ago (`buffer_age` 2). After
+//! a create or a resize its content is undefined (`buffer_age` 0). `end_frame`
+//! tells DXGI which rectangle changed (`Present1`). The shape
 //! is `win\driver-cost\src\d3d11.rs` (`d2d` mode), which measured at 14 MB
 //! private working set.
 
+use std::cell::Cell;
 use std::rc::Rc;
 
 use i_slint_core::platform::PlatformError;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Direct2D::Common::*;
 use windows::Win32::Graphics::Direct2D::*;
 use windows::Win32::Graphics::Dxgi::Common::*;
@@ -24,6 +30,8 @@ pub struct Surface {
     pub dc: ID2D1DeviceContext,
     width: u32,
     height: u32,
+    /// Presents since the buffers were made, for `buffer_age`.
+    presents: Cell<u32>,
 }
 
 fn target_properties(options: D2D1_BITMAP_OPTIONS) -> D2D1_BITMAP_PROPERTIES1 {
@@ -80,7 +88,18 @@ impl Surface {
                 dc,
                 width,
                 height,
+                presents: Cell::new(0),
             })
+        }
+    }
+
+    /// How many presents ago the back buffer was drawn: 2 once both buffers
+    /// hold a frame, 0 (unknown) before.
+    pub fn buffer_age(&self) -> u8 {
+        if self.presents.get() >= 2 {
+            2
+        } else {
+            0
         }
     }
 
@@ -104,6 +123,7 @@ impl Surface {
         }
         self.width = width;
         self.height = height;
+        self.presents.set(0);
         Ok(())
     }
 
@@ -136,6 +156,7 @@ impl Surface {
         target: ID2D1Bitmap1,
         pre_present: &mut Option<Box<dyn FnMut()>>,
         read_back: Option<&mut Vec<u8>>,
+        dirty: Option<RECT>,
     ) -> Result<(std::time::Duration, std::time::Duration), windows::core::Error> {
         unsafe {
             let t = std::time::Instant::now();
@@ -153,7 +174,18 @@ impl Surface {
                 cb();
             }
             let t = std::time::Instant::now();
-            self.swapchain.Present(1, DXGI_PRESENT(0)).ok()?;
+            // No rectangle: the whole buffer changed.
+            let mut rects = dirty.map(|r| [r]);
+            let params = DXGI_PRESENT_PARAMETERS {
+                DirtyRectsCount: rects.as_ref().map_or(0, |r| r.len() as u32),
+                pDirtyRects: rects
+                    .as_mut()
+                    .map_or(std::ptr::null_mut(), |r| r.as_mut_ptr()),
+                pScrollRect: std::ptr::null_mut(),
+                pScrollOffset: std::ptr::null_mut(),
+            };
+            self.swapchain.Present1(1, DXGI_PRESENT(0), &params).ok()?;
+            self.presents.set(self.presents.get().saturating_add(1));
             Ok((flush, t.elapsed()))
         }
     }

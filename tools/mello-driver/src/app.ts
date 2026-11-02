@@ -442,6 +442,11 @@ export class App {
     return `e2e-${this.opts.mcpPort}-${this.name}`;
   }
 
+  /** The process id of the running app, for an external sampler (memory, CPU). */
+  get pid(): number | undefined {
+    return this.proc?.pid ?? undefined;
+  }
+
   /** Where the app writes an OAuth URL instead of opening the system browser. */
   get browserFile(): string {
     return join(this.dir, "browser-url.txt");

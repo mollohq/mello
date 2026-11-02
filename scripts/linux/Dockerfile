@@ -23,10 +23,10 @@ RUN curl -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal \
 
 # Velopack packaging: vpk runs on .NET 8, builds the AppImage with
 # squashfs-tools and the delta packages with zstd. The vpk version matches the
-# velopack crate in Cargo.lock. 0.0.1298 embeds the AppImageKit runtime, which
-# loads libfuse.so.2 at start; 1.1.1 and later have the static type-2 runtime
-# (feat/velopack-1.2), and their delta packages need zstd.
-ARG VPK_VERSION=0.0.1298
+# velopack crate in Cargo.lock. Since 1.1.1 vpk packs the static type-2
+# AppImage runtime, which needs no libfuse on the host; its delta packages
+# need zstd.
+ARG VPK_VERSION=1.2.161
 RUN apt-get update && apt-get install -y --no-install-recommends \
         dotnet-sdk-8.0 squashfs-tools zstd \
     && rm -rf /var/lib/apt/lists/* \

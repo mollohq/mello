@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-only OR LicenseRef-Slint-Royalty-free-2.0 OR LicenseRef-Slint-Software-3.0
 
 //! Delegate the rendering to mello's Direct2D renderer (`renderer-d2d`;
-//! m3llo-fx-lab D2D-RENDERER.md). Windows only. Selected with the renderer
+//! specs/features/D2D-RENDERER.md). Windows only. Selected with the renderer
 //! name `d2d` (`MELLO_RENDERER=d2d`).
 
 use std::rc::Rc;
