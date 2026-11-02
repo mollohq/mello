@@ -13,6 +13,9 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# A CI job on this machine (the runners are dev machines): yield to it.
+. scripts/ci-yield.sh
+
 export CI=true
 
 step() {
