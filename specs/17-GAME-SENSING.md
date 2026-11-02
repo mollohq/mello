@@ -58,6 +58,14 @@ libmello supplies the process list through `mello_enumerate_games`. It fills
 full path, the window title, the fullscreen flag, the foreground flag and the
 process creation time.
 
+Each record also says whether the main window is minimized (`is_minimized`,
+from `IsIconic`). A process whose window is minimized cannot open a session
+and cannot inherit one from an exited sibling. It keeps a session that is
+already open. Roblox's tray-resident player keeps a visible, titled "Roblox"
+window parked at the minimized position from the moment it starts, with no
+game opened; without this gate it counted as play, and the session moved
+from player pid to player pid each time Roblox restarted.
+
 The list is the whole process table, not only games. The call writes at most
 `max_count` records and returns the total number of processes. A total above
 `max_count` means the list was cut. `enumerate_game_processes` then grows its

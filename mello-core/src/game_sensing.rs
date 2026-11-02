@@ -255,6 +255,13 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         } else {
             detected
         };
+        // The window opens a session only where it ends one. Without window
+        // state every process would wait for a window forever.
+        let startable: HashSet<u32> = if WINDOW_ENDS_SESSION {
+            startable_pids(&detected, &processes)
+        } else {
+            detected.iter().map(|g| g.pid).collect()
+        };
 
         // Restart recovery, first scan only. A session whose process is still
         // alive resumes with its original start time; one whose process is
@@ -317,7 +324,8 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         // --- diff the live set against what we were tracking ---
         let live: HashMap<u32, ActiveGame> = detected.into_iter().map(|g| (g.pid, g)).collect();
         let mut changed = false;
-        let (start_events, starts_changed) = coalesce_starts(&mut active, &mut shadow, &live);
+        let (start_events, starts_changed) =
+            coalesce_starts(&mut active, &mut shadow, &live, &startable);
         for ev in start_events {
             if let GameEvent::Started(ref game) = ev {
                 log::info!(
@@ -332,8 +340,14 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
             }
         }
 
-        let (stop_events, stops_changed) =
-            coalesce_stops(&mut active, &mut shadow, &live, now, &mut primary);
+        let (stop_events, stops_changed) = coalesce_stops(
+            &mut active,
+            &mut shadow,
+            &live,
+            &startable,
+            now,
+            &mut primary,
+        );
         for ev in stop_events {
             if let GameEvent::Stopped { ref game, .. } = ev {
                 log::info!(
@@ -463,13 +477,18 @@ fn coalesce_starts(
     active: &mut HashMap<u32, ActiveGame>,
     shadow: &mut HashMap<u32, String>,
     live: &HashMap<u32, ActiveGame>,
+    startable: &HashSet<u32>,
 ) -> (Vec<GameEvent>, bool) {
     let mut events = Vec::new();
     let mut changed = false;
 
+    // A pid whose window is minimized is neither opened nor shadowed: left
+    // alone, it is reconsidered on the scan where its window comes up.
     let mut newcomers: Vec<(u32, ActiveGame)> = live
         .iter()
-        .filter(|(pid, _)| !active.contains_key(pid) && !shadow.contains_key(pid))
+        .filter(|(pid, _)| {
+            !active.contains_key(pid) && !shadow.contains_key(pid) && startable.contains(pid)
+        })
         .map(|(pid, game)| (*pid, game.clone()))
         .collect();
     newcomers.sort_by_key(|(_, g)| representative_rank(g));
@@ -500,10 +519,16 @@ fn coalesce_starts(
 
 /// Close sessions only when every pid for a `game_id` has exited. A surviving
 /// sibling promotes in place without a stop/start pair.
+///
+/// Only a `startable` sibling may inherit the session. Roblox restarts its
+/// player between a tray-resident launcher and a game, and the fresh process
+/// shows up with a minimized window; promoting onto it carried one "session"
+/// across three player pids and an afternoon of nobody playing.
 fn coalesce_stops(
     active: &mut HashMap<u32, ActiveGame>,
     shadow: &mut HashMap<u32, String>,
     live: &HashMap<u32, ActiveGame>,
+    startable: &HashSet<u32>,
     now: i64,
     primary: &mut Option<u32>,
 ) -> (Vec<GameEvent>, bool) {
@@ -525,7 +550,7 @@ fn coalesce_stops(
 
         if let Some((new_pid, new_game)) = live
             .iter()
-            .filter(|(_, g)| g.game_id == game_id)
+            .filter(|(pid, g)| g.game_id == game_id && startable.contains(pid))
             .min_by_key(|(_, g)| representative_rank(g))
         {
             let mut promoted = new_game.clone();
@@ -612,6 +637,8 @@ pub(crate) struct RawGameProcess {
     pub(crate) is_foreground: bool,
     /// Process creation time in Unix ms; 0 when libmello could not read it.
     pub(crate) started_at_ms: i64,
+    /// Main window is minimized; false for windowless processes.
+    pub(crate) is_minimized: bool,
 }
 
 /// Buffer size for the next attempt after libmello reported `total` processes
@@ -636,6 +663,7 @@ pub(crate) fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec
         title: [0i8; 256],
         is_foreground: false,
         started_at_ms: 0,
+        is_minimized: false,
     };
 
     let mut capacity = PROCESS_CAPACITY.load(Ordering::Relaxed);
@@ -681,6 +709,7 @@ pub(crate) fn enumerate_game_processes(ctx: *mut mello_sys::MelloContext) -> Vec
             window_title: cstr(&gp.title),
             is_foreground: gp.is_foreground,
             started_at_ms: gp.started_at_ms,
+            is_minimized: gp.is_minimized,
         });
     }
     out
@@ -1112,6 +1141,30 @@ fn drop_windowless(
     kept
 }
 
+/// Pids whose main window is up on screen: the only ones that may open a
+/// session, or inherit one from an exited sibling.
+///
+/// Roblox's tray-resident player keeps a visible, titled "Roblox" window
+/// parked at the minimized position from the moment it starts, with no game
+/// opened. It passes [`drop_windowless`], which only asks for a window, so the
+/// sensor counted an afternoon of the player idling in the tray as play.
+///
+/// This is a start gate, not a keep gate. A game the user minimizes mid-session
+/// keeps its window and keeps its session; ending it would split one night
+/// into two and lose the alt-tab time that `foreground_ms` already separates.
+fn startable_pids(detected: &[ActiveGame], processes: &[RawGameProcess]) -> HashSet<u32> {
+    detected
+        .iter()
+        .filter(|g| {
+            processes
+                .iter()
+                .find(|p| p.pid == g.pid)
+                .is_some_and(|p| !p.window_title.trim().is_empty() && !p.is_minimized)
+        })
+        .map(|g| g.pid)
+        .collect()
+}
+
 /// Every running process the database recognises as a game.
 ///
 /// v1 returned only one, so a second game running alongside was invisible and
@@ -1174,6 +1227,7 @@ mod tests {
             window_title: exe.trim_end_matches(".exe").to_string(),
             is_foreground: false,
             started_at_ms: 0,
+            is_minimized: false,
         }
     }
 
@@ -1503,6 +1557,7 @@ mod tests {
                     window_title: name.clone(),
                     is_foreground: false,
                     started_at_ms: 0,
+                    is_minimized: false,
                 };
                 if let Some(m) = resolve_process(Some(head), &library, &p) {
                     probed += 1;
@@ -1788,6 +1843,132 @@ mod tests {
         // The game exits entirely; nothing is detected for that pid any more.
         drop_windowless(Vec::new(), &[], &mut seen);
         assert!(seen.is_empty(), "counts must be pruned with the process");
+    }
+
+    // --- Minimized windows ------------------------------------------------
+
+    fn minimized(exe: &str, pid: u32, title: &str) -> RawGameProcess {
+        let mut p = windowed(exe, pid, title);
+        p.is_minimized = true;
+        p
+    }
+
+    fn live_map(games: Vec<ActiveGame>) -> HashMap<u32, ActiveGame> {
+        games.into_iter().map(|g| (g.pid, g)).collect()
+    }
+
+    /// Roblox's tray-resident player: a visible "Roblox" window parked at the
+    /// minimized position from the moment the process starts, no game opened.
+    /// It must neither open a session nor be shadowed, so the session opens
+    /// on the scan where the window comes up.
+    #[test]
+    fn a_minimized_window_does_not_open_a_session() {
+        let parked = minimized("robloxplayerbeta.exe", 10, "Roblox");
+        let detected = vec![game_named(10, "roblox")];
+        let startable = startable_pids(&detected, std::slice::from_ref(&parked));
+        assert!(startable.is_empty(), "a parked window is not startable");
+
+        let mut active = HashMap::new();
+        let mut shadow = HashMap::new();
+        let live = live_map(detected.clone());
+        let (events, changed) = coalesce_starts(&mut active, &mut shadow, &live, &startable);
+        assert!(events.is_empty(), "no session for a parked player");
+        assert!(!changed);
+        assert!(active.is_empty());
+        assert!(shadow.is_empty(), "left alone, not shadowed");
+
+        // The window comes up: now it is a game being played.
+        let up = windowed("robloxplayerbeta.exe", 10, "Roblox");
+        let startable = startable_pids(&detected, std::slice::from_ref(&up));
+        let (events, changed) = coalesce_starts(&mut active, &mut shadow, &live, &startable);
+        assert_eq!(events.len(), 1, "the session opens once the window is up");
+        assert!(changed);
+        assert!(active.contains_key(&10));
+    }
+
+    /// A game the user minimizes mid-session keeps its session: the start
+    /// gate is not a keep gate.
+    #[test]
+    fn a_minimized_window_keeps_an_open_session() {
+        let mut active = active_map(vec![game_named(10, "roblox")]);
+        let mut shadow = HashMap::new();
+        let tabbed_out = minimized("robloxplayerbeta.exe", 10, "Roblox");
+        let detected = vec![game_named(10, "roblox")];
+
+        let mut seen = HashMap::new();
+        let kept = drop_windowless(
+            detected.clone(),
+            std::slice::from_ref(&tabbed_out),
+            &mut seen,
+        );
+        assert_eq!(kept.len(), 1, "a minimized window is still a window");
+
+        let startable = startable_pids(&detected, std::slice::from_ref(&tabbed_out));
+        let live = live_map(detected);
+        let mut primary = Some(10);
+        let (events, changed) = coalesce_stops(
+            &mut active,
+            &mut shadow,
+            &live,
+            &startable,
+            NOW,
+            &mut primary,
+        );
+        assert!(events.is_empty(), "no stop for a minimized game");
+        assert!(!changed);
+        assert!(active.contains_key(&10));
+    }
+
+    /// Roblox restarts its player: the old pid exits and the new one arrives
+    /// with a parked window. The session ends instead of moving onto it.
+    #[test]
+    fn a_session_is_not_promoted_onto_a_minimized_sibling() {
+        let mut active = active_map(vec![game_named(10, "roblox")]);
+        let mut shadow = HashMap::new();
+        let parked = minimized("robloxplayerbeta.exe", 11, "Roblox");
+        let detected = vec![game_named(11, "roblox")];
+        let startable = startable_pids(&detected, std::slice::from_ref(&parked));
+        let live = live_map(detected);
+        let mut primary = Some(10);
+
+        let (events, changed) = coalesce_stops(
+            &mut active,
+            &mut shadow,
+            &live,
+            &startable,
+            NOW,
+            &mut primary,
+        );
+        assert_eq!(events.len(), 1, "the session stops");
+        assert!(matches!(&events[0], GameEvent::Stopped { game, .. } if game.pid == 10));
+        assert!(changed);
+        assert!(active.is_empty(), "nothing inherited the session");
+        assert_eq!(primary, None);
+    }
+
+    /// The same restart with the new player's window up is still one session.
+    #[test]
+    fn a_session_is_promoted_onto_a_sibling_whose_window_is_up() {
+        let mut active = active_map(vec![game_named(10, "roblox")]);
+        let mut shadow = HashMap::new();
+        let up = windowed("robloxplayerbeta.exe", 11, "Roblox");
+        let detected = vec![game_named(11, "roblox")];
+        let startable = startable_pids(&detected, std::slice::from_ref(&up));
+        let live = live_map(detected);
+        let mut primary = Some(10);
+
+        let (events, changed) = coalesce_stops(
+            &mut active,
+            &mut shadow,
+            &live,
+            &startable,
+            NOW,
+            &mut primary,
+        );
+        assert!(events.is_empty(), "no stop/start pair across a restart");
+        assert!(!changed);
+        assert!(active.contains_key(&11));
+        assert_eq!(primary, Some(11));
     }
 
     #[test]

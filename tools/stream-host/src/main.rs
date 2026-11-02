@@ -311,6 +311,7 @@ fn enumerate_sources(
             title: [0i8; 256],
             is_foreground: false,
             started_at_ms: 0,
+            is_minimized: false,
         };
         16
     ];

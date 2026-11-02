@@ -875,6 +875,12 @@ typedef struct MelloGameProcess {
      * must be dated from here so a game already running at client launch
      * reports an honest duration. Appended field: existing offsets unchanged. */
     int64_t  started_at_ms;
+    /* Main window is minimized (IsIconic). False when the process has no
+     * visible window. A tray-resident launcher can keep a visible, titled
+     * window parked at the minimized position from the moment it starts, so
+     * the game sensor needs this to tell "parked" from "played". Appended
+     * field: existing offsets unchanged. */
+    bool     is_minimized;
 } MelloGameProcess;
 
 /** List every running process; the caller's game database decides what is a
