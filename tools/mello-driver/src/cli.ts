@@ -59,7 +59,11 @@ import { EventWriter } from "./events.ts";
 import { runJourney, type Journey } from "./journey.ts";
 import { defaultJourneyFiles, formatTable, listJourneys } from "./list.ts";
 import { serveMcp } from "./mcp.ts";
+import { guardSetTypeOfService } from "./node_quirks.ts";
 import { seedCrewCommand } from "./seedcrew.ts";
+
+// Before any request leaves: the Node 24 undici quirk (node_quirks.ts).
+guardSetTypeOfService();
 
 const RUN_USAGE = "usage: cli.ts run <journey.ts> [...] [--repeat N] [--events <file>] [--live-screenshot-ms N]";
 
