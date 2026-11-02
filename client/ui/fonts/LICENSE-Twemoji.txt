@@ -6,6 +6,9 @@ Source: https://github.com/twitter/twemoji
 
 Font build: twemoji-colr by Mozilla, release v0.7.0 (COLR/CPAL v0).
 Source: https://github.com/mozilla/twemoji-colr
+Then tools/fonts/twemoji_base_outlines.py: each base glyph is a composite of
+its colour layers, so CoreText reports real bounds and Skia draws the glyph.
+The shipped file is that output, not the release asset as downloaded.
 
 Attribution shown in the app: Settings, ABOUT, Credits:
 "Emoji by Twemoji (https://twemoji.twitter.com), CC BY 4.0".

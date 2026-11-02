@@ -9,22 +9,14 @@ use crate::app_context::AppContext;
 use crate::converters::apply_unread_to_crews;
 use crate::{EmojiItemData, MentionMemberData};
 
-const EMOJIS: &[&str] = &[
-    "😀", "😃", "😄", "😁", "😅", "😂", "🤣", "😊", "😇", "🙂", "😉", "😌", "😍", "🥰", "😘", "😋",
-    "😛", "😜", "🤪", "😝", "🤑", "🤗", "🤭", "🤫", "🤔", "🤐", "🤨", "😐", "😑", "😶", "😏", "😒",
-    "🙄", "😬", "🤥", "😌", "😔", "😪", "🤤", "😴", "😷", "🤒", "🤕", "🤢", "🤮", "👍", "👎", "👊",
-    "✊", "🤛", "🤜", "🤞", "✌️", "🤟", "🤘", "👌", "🤌", "🤏", "👈", "👉", "❤️", "🧡", "💛", "💚",
-    "💙", "💜", "🖤", "🤍", "🤎", "💔", "❣️", "💕", "💞", "💓", "💗", "🔥", "⭐", "🌟", "✨", "💫",
-    "🎉", "🎊", "🎈", "🎁", "🏆", "🥇", "🥈", "🥉", "⚽", "🏀", "🎮", "🕹️", "🎯", "🎲", "🧩", "♟️",
-    "🎭", "🎨", "🎬", "🎤", "🎧", "🎼", "🎹", "🥁", "🎷",
-];
-
+/// The picker's emoji with their names. The name is the cell's accessible
+/// label, so a screen reader and the e2e driver can pick "fire".
 pub fn default_emoji_list() -> Vec<EmojiItemData> {
-    EMOJIS
-        .iter()
+    mello_core::emoji::all_emoji()
+        .into_iter()
         .map(|e| EmojiItemData {
-            emoji: (*e).into(),
-            name: slint::SharedString::default(),
+            emoji: e.emoji.into(),
+            name: e.name.into(),
         })
         .collect()
 }

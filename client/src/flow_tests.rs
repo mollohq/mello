@@ -1405,6 +1405,11 @@ fn the_emoji_picker_stays_open_after_a_pick() {
         ])));
     h.app().set_emoji_popover_open(true);
     next_frame();
+    assert_eq!(
+        h.controls_labelled("Message crewmates").len(),
+        1,
+        "the field stays a control while the picker is open"
+    );
     h.click_label("fire");
     next_frame();
     h.click_label("skull");

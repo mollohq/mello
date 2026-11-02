@@ -7,7 +7,10 @@
 //! permanent 188 MB of phys_footprint, with transient peaks of 2-3x that from
 //! the TTC re-extraction workaround in the same file. Still true in 1.18.
 //!
-//! Workaround: ship Twemoji (Mozilla's COLRv0 build, 1.4 MB) and put it on
+//! Workaround: ship Twemoji (Mozilla's COLRv0 build, 1.7 MB after
+//! `tools/fonts/twemoji_base_outlines.py`, which gives every base glyph an
+//! outline: without one CoreText reports zero bounds and Skia draws nothing;
+//! `client/examples/emoji_probe.rs` shows the result) and put it on
 //! `SLINT_FONT_PATH` before Slint initializes. Slint registers fonts from that
 //! variable into the generic-family fallback chain
 //! (`i-slint-common/sharedfontique.rs`), which Parley consults before the

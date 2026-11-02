@@ -36,8 +36,11 @@ Each phase is one branch and one PR. Order is fixed. Phase 0 ships alone first.
 
 ### Phase 0: make what exists work
 
-Built. Each row below is a commit on `feat/chat-v2`. Not yet verified in the running app: the
-Twemoji glyphs and the jumbo size, because the headless viewer draws no colour fonts.
+Built. Each row below is a commit on `feat/chat-v2`. The chat journey passes on the branch.
+Twemoji glyphs are verified through the real renderer with `client/examples/emoji_probe.rs`
+(the headless viewer draws no colour fonts). Open: `qa/journeys/chat-emoji.ts` found the
+message field missing from the driver's control list while the picker is open; the harness
+sees the control, so this needs a run of the journey once the local stack is free.
 
 | # | Change | Notes |
 |---|---|---|
@@ -49,7 +52,7 @@ Twemoji glyphs and the jumbo size, because the headless viewer draws no colour f
 | 0.6 | Model updates in place: push, insert, set_row_data. No `VecModel` rebuild per event. | Keeps Slint's layout cache valid and makes 0.5 cheap. |
 | 0.7 | Pagination: fix the trim so page two and later load. Dedupe by message id on prepend. | |
 | 0.8 | Emoji: picker 24px glyph in a 36px cell, nine across. Picker stays open on a pick. Emoji-only body (at most three emoji, no text) renders at `Theme.font-xxl` (32px), the Discord rule. | `is-emoji-only` on `ChatMessageData`, detection in converters. |
-| 0.9 | Emoji font: swap OpenMoji for Twemoji (Mozilla build, `Twemoji.Mozilla.ttf`, 1.4 MB, COLRv0). Same `SLINT_FONT_PATH` path, same memory profile. Attribution in credits: "Twemoji graphics, Twitter and contributors, CC BY 4.0". Remove the OpenMoji credit. | Repertoire is Unicode 14. Newer emoji render as tofu until we build our own font from the maintained fork's SVGs with the twemoji-colr pipeline (later, not blocking). Candidates compared in `designs/emoji-candidates.html`: Fluent flat is prettier but has no country flags and no font. |
+| 0.9 | Emoji font: swap OpenMoji for Twemoji (Mozilla build, `Twemoji.Mozilla.ttf`, 1.7 MB, COLRv0, after `tools/fonts/twemoji_base_outlines.py`: the release asset has empty base glyphs, CoreText reports zero bounds for those and Skia draws nothing, so each base glyph becomes a composite of its colour layers). Same `SLINT_FONT_PATH` path, same memory profile. Attribution in credits: "Twemoji graphics, Twitter and contributors, CC BY 4.0". Remove the OpenMoji credit. | Repertoire is Unicode 14. Newer emoji render as tofu until we build our own font from the maintained fork's SVGs with the twemoji-colr pipeline (later, not blocking). Candidates compared in `designs/emoji-candidates.html`: Fluent flat is prettier but has no country flags and no font. |
 | 0.10 | Tests: a flow test for scroll-to-bottom after `MessagesLoaded` and after a prepend, a test for the animator timer with an in-flight fetch, a test for the emoji-only flag. | Each must fail without its fix. |
 
 Done when: a release build shows trending GIFs, a feed with 120 messages opens at the last message, scroll up loads page two and the view does not jump, 🔥🔥 is big and drawn by Twemoji on macOS and Windows.
