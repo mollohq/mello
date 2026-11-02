@@ -241,6 +241,7 @@ set(MELLO_SOURCES
     src/context.cpp
     src/audio/audio_pipeline.cpp
     src/audio/audio_backend_test.cpp
+    src/audio/clip_audio_stream.cpp
     src/audio/clip_buffer.cpp
     src/audio/clip_encoder.cpp
     src/audio/opus_codec.cpp
@@ -251,6 +252,7 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
+    src/clip/clip_player_stub.cpp
     src/replay/mp4_faststart.cpp
     src/replay/replay_audio_mix.cpp
     src/replay/replay_audio_ring.cpp
@@ -282,6 +284,7 @@ if(WIN32)
         src/audio/device_enumerator_wasapi.cpp
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
+        src/clip/clip_player_win.cpp
         src/replay/replay_mux_wmf.cpp
         src/replay/replay_session.cpp
     )

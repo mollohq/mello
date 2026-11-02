@@ -2,7 +2,9 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(mello_tests
     test_opus_codec.cpp
+    test_clip_audio_stream.cpp
     test_clip_buffer.cpp
+    test_clip_player.cpp
     test_replay_load.cpp
     test_replay_mix.cpp
     test_replay_mux.cpp

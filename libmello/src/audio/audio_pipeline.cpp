@@ -1118,6 +1118,14 @@ void AudioPipeline::render_frame() {
         }
     }
 
+    // A game clip that plays: stereo, at its own clock (clip_audio_stream.hpp).
+    if (const auto stream = std::atomic_load_explicit(&clip_stream_, std::memory_order_acquire)) {
+        if (stream->mix_into(stereo, mono_.data(), kFrames,
+                             static_cast<int64_t>(steady_now_us()))) {
+            has_clip_audio = true;
+        }
+    }
+
     // Far-end reference: the mixer output that plays, after NetEQ, so a
     // silent peer feeds silence (comfort noise at most), not PLC noise.
     if (remote || has_clip_audio) {
@@ -1448,6 +1456,10 @@ void AudioPipeline::clip_seek(uint64_t position_samples) {
     clip_playback_pos_.store(static_cast<size_t>(position_samples), std::memory_order_release);
     MELLO_LOG_INFO("pipeline", "clip playback seek to sample %llu / %zu",
                    (unsigned long long)position_samples, clip_playback_total_);
+}
+
+void AudioPipeline::set_clip_stream(std::shared_ptr<ClipAudioStream> stream) {
+    std::atomic_store_explicit(&clip_stream_, std::move(stream), std::memory_order_release);
 }
 
 #ifdef _WIN32

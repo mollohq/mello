@@ -11,6 +11,7 @@
 #include "speech_expander.hpp"
 #include "voice_playout.hpp"
 #include "device_enumerator.hpp"
+#include "clip_audio_stream.hpp"
 #include "clip_buffer.hpp"
 #include "clip_encoder.hpp"
 #include "vad.hpp"
@@ -262,6 +263,11 @@ public:
     void clip_resume();
     void clip_seek(uint64_t position_samples);
 
+    /// The sound of the game clip that plays, or null (clip_audio_stream.hpp).
+    /// The render thread mixes it into the speaker output and the echo
+    /// reference. Any thread.
+    void set_clip_stream(std::shared_ptr<ClipAudioStream> stream);
+
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
     void process_and_encode_frame(int16_t* frame, uint32_t timestamp);
@@ -459,6 +465,10 @@ private:
     size_t clip_playback_total_{0};
     std::atomic<bool> clip_playing_{false};
     std::atomic<bool> clip_paused_{false};
+
+    // The game clip that plays. Read with std::atomic_load on the render
+    // thread, which then holds it for one frame.
+    std::shared_ptr<ClipAudioStream> clip_stream_;
 };
 
 } // namespace mello::audio

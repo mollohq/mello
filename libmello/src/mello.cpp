@@ -17,6 +17,7 @@
 #endif
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
+#include "clip/clip_player.hpp"
 #include "audio/stream_audio_link.hpp"
 #include "transport/av_sync.hpp"
 #include "util/log.hpp"
@@ -2014,6 +2015,84 @@ void mello_stream_set_native_frame_callback(
         };
         view->video->set_native_frame_callback(native_cb);
     } catch (...) {}
+}
+
+// ---- Game clip player (plans/GAME-CLIPS.md 6.2) ------------------------------
+
+struct MelloClipPlayer {
+    std::unique_ptr<mello::clip::ClipPlayer> player;
+};
+
+MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config) {
+    if (!ctx || !config || !config->read || config->length == 0) return nullptr;
+    try {
+        auto* context = ctx_cast(ctx);
+        mello::clip::ClipPlayerOptions options;
+        options.length = config->length;
+        const MelloClipReadCallback read = config->read;
+        void* user = config->user_data;
+        options.read = [read, user](uint64_t offset, uint8_t* buf, uint32_t len) {
+            return read(user, offset, buf, len);
+        };
+        options.attach_audio = [context](std::shared_ptr<mello::audio::ClipAudioStream> stream) {
+            context->audio().set_clip_stream(std::move(stream));
+        };
+        options.output_latency_us = [context] {
+            return static_cast<int64_t>(context->audio().output_latency_ms() * 1000.0f);
+        };
+        auto player = mello::clip::ClipPlayer::start(std::move(options));
+        if (!player) return nullptr;
+        auto* out = new MelloClipPlayer();
+        out->player = std::move(player);
+        return out;
+    } catch (...) {
+        return nullptr;
+    }
+}
+
+void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player, MelloNativeFrameCallback callback,
+                                                 void* user_data) {
+    if (!player) return;
+    try {
+        if (!callback) {
+            player->player->set_native_frame_callback({});
+            return;
+        }
+        player->player->set_native_frame_callback(
+            [callback, user_data](void* handle, uint32_t w, uint32_t h, uint32_t format, uint32_t uv_y_offset,
+                                  uint64_t ts) {
+                callback(user_data, handle, w, h, static_cast<MelloNativeFrameFormat>(format), uv_y_offset, ts);
+            });
+    } catch (...) {}
+}
+
+void mello_clip_player_set_paused(MelloClipPlayer* player, bool paused) {
+    if (player) player->player->set_paused(paused);
+}
+
+void mello_clip_player_seek(MelloClipPlayer* player, uint64_t position_ms) {
+    if (player) player->player->seek(static_cast<int64_t>(position_ms) * 1000);
+}
+
+void mello_clip_player_get_state(MelloClipPlayer* player, MelloClipPlayerState* out) {
+    if (!player || !out) return;
+    const mello::clip::ClipPlayerState s = player->player->state();
+    out->position_ms = static_cast<uint64_t>(std::max<int64_t>(0, s.position_us) / 1000);
+    out->duration_ms = static_cast<uint64_t>(std::max<int64_t>(0, s.duration_us) / 1000);
+    out->width = s.width;
+    out->height = s.height;
+    out->buffering = s.buffering;
+    out->paused = s.paused;
+    out->ended = s.ended;
+    out->failed = s.failed;
+}
+
+void mello_clip_player_stop(MelloClipPlayer* player) {
+    if (!player) return;
+    try {
+        player->player->stop();
+    } catch (...) {}
+    delete player;
 }
 
 MelloResult mello_stream_feed_audio_packet(MelloStreamView* view, const uint8_t* data, int size) {

@@ -1138,6 +1138,54 @@ MELLO_API void mello_stream_set_native_frame_callback(
     void*                     user_data
 );
 
+/* ============================================================================
+ * Game clip player (plans/GAME-CLIPS.md 6.2)
+ * ============================================================================
+ * An MP4 that plays from its first bytes: the video through the stream
+ * viewer's decoder and the native frame callback, the sound in the voice
+ * output, on the sound's clock. Windows only for now. */
+
+typedef struct MelloClipPlayer MelloClipPlayer;
+
+/** The bytes are not there yet: the player asks again. */
+#define MELLO_CLIP_READ_WAIT (-2)
+
+/** Read up to `len` bytes of the clip at `offset` into `buf`. Returns the
+ *  bytes read (0 at the end of the clip), MELLO_CLIP_READ_WAIT, or -1 on an
+ *  error. Called on Media Foundation threads, never on the caller's: it must
+ *  not block for long. */
+typedef int64_t (*MelloClipReadCallback)(void* user_data, uint64_t offset, uint8_t* buf, uint32_t len);
+
+typedef struct MelloClipPlayerConfig {
+    uint64_t              length;  /**< the size of the MP4 in bytes */
+    MelloClipReadCallback read;
+    void*                 user_data;  /**< for `read`, until mello_clip_player_stop returns */
+} MelloClipPlayerConfig;
+
+typedef struct MelloClipPlayerState {
+    uint64_t position_ms;
+    uint64_t duration_ms;
+    uint32_t width;
+    uint32_t height;
+    bool     buffering;  /**< a read waits, or the sound ran out: the picture holds */
+    bool     paused;
+    bool     ended;      /**< the last frame was shown */
+    bool     failed;     /**< the clip cannot play */
+} MelloClipPlayerState;
+
+/** Start playing. Returns NULL when there is no player on this platform. */
+MELLO_API MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config);
+MELLO_API void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player,
+                                                           MelloNativeFrameCallback callback,
+                                                           void* user_data);
+MELLO_API void mello_clip_player_set_paused(MelloClipPlayer* player, bool paused);
+/** Play from `position_ms` (from the key frame before it). */
+MELLO_API void mello_clip_player_seek(MelloClipPlayer* player, uint64_t position_ms);
+MELLO_API void mello_clip_player_get_state(MelloClipPlayer* player, MelloClipPlayerState* out);
+/** Stop and free the player. It joins threads: call it off any loop that must
+ *  stay responsive. The read callback is not called after it returns. */
+MELLO_API void mello_clip_player_stop(MelloClipPlayer* player);
+
 /** Feed an encoded game-audio packet (the Opus payload, no RTP header)
  *  received from the host for playback. The game audio plays in the voice
  *  mix on the voice output device (mello_set_audio_output). A view attached
