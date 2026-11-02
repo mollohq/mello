@@ -129,8 +129,10 @@ pub fn chat_messages_to_slint(
         }
 
         let is_gif = d.gif.is_some();
-        let (gif_preview_url, gif_width, gif_height) = match &d.gif {
-            Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
+        // The chat shows the display rendition (`url`, 200px wide). The
+        // smaller `preview` is for picker tiles only.
+        let (gif_url, gif_width, gif_height) = match &d.gif {
+            Some(g) => (g.url.clone(), g.width as i32, g.height as i32),
             None => (String::new(), 0, 0),
         };
         let is_self = d.sender_id == opts.user_id;
@@ -211,7 +213,8 @@ pub fn chat_messages_to_slint(
             is_gif,
             gif_image: slint::Image::default(),
             has_gif_image: false,
-            gif_preview_url: gif_preview_url.into(),
+            gif_failed: false,
+            gif_url: gif_url.into(),
             gif_width,
             gif_height,
             is_clip: false,
@@ -289,23 +292,36 @@ pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::Unrea
     sync_crews(app, updated);
 }
 
-/// Scan recent messages for GIFs and kick off animated frame fetches.
-pub fn fetch_gif_images_for_messages(
+/// Give every GIF row the frame the animator already holds, and fetch the
+/// newest `MAX_GIF_PREFETCH` GIFs that are not in the cache yet. Older GIFs
+/// load on hover (`gif-hovered`). Called after every row rebuild, so a rebuild
+/// never sends a decoded GIF back to "Loading".
+pub fn sync_gif_images(
     model: &Rc<slint::VecModel<ChatMessageData>>,
     rt: &tokio::runtime::Handle,
     chat_anim: &crate::gif_animator::GifAnimator,
 ) {
     const MAX_GIF_PREFETCH: usize = 8;
-    let inbox = chat_anim.inbox();
-    let start = model.row_count().saturating_sub(MAX_GIF_PREFETCH);
-    for i in start..model.row_count() {
-        if let Some(item) = model.row_data(i) {
-            let url = item.gif_preview_url.to_string();
-            if item.is_gif && !url.is_empty() && !chat_anim.has_url(&url) {
-                chat_anim.note_activity();
-                crate::image_cache::spawn_gif_fetch(url, rt, &inbox);
-            }
+    let mut fetch_budget = MAX_GIF_PREFETCH;
+    for i in (0..model.row_count()).rev() {
+        let Some(mut item) = model.row_data(i) else {
+            continue;
+        };
+        if !item.is_gif || item.gif_url.is_empty() {
+            continue;
         }
+        let url = item.gif_url.to_string();
+        if let Some(img) = chat_anim.current_frame(&url) {
+            item.gif_image = img;
+            item.has_gif_image = true;
+            model.set_row_data(i, item);
+        } else if chat_anim.has_failed(&url) {
+            item.gif_failed = true;
+            model.set_row_data(i, item);
+        } else if fetch_budget > 0 {
+            chat_anim.fetch(&url, rt);
+        }
+        fetch_budget = fetch_budget.saturating_sub(1);
     }
 }
 

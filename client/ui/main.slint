@@ -207,6 +207,8 @@ export component MainWindow inherits Window {
     in property <[ChatMessageData]> messages: [];
     in property <int> chat-messages-this-week: 0;
     in property <[GifItemData]> gif-results: [];
+    /// Why the GIF picker is empty. Empty string when the last request worked.
+    in property <string> gif-error: "";
     in property <bool> loading-history: false;
     in property <bool> has-more-history: false;
     in-out property <bool> has-new-messages: false;
@@ -663,7 +665,7 @@ export component MainWindow inherits Window {
     callback gif-pill-clicked();
     callback gif-search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
-    callback gif-hovered(/* preview_url */ string);
+    callback gif-hovered(/* url */ string);
     callback emoji-pill-clicked();
     callback chat-viewport-changed(/* at_bottom */ bool);
     callback scroll-to-bottom-done();
@@ -1263,6 +1265,7 @@ export component MainWindow inherits Window {
                     messages: root.messages;
                     messages-this-week: root.chat-messages-this-week;
                     gif-results: root.gif-results;
+                    gif-error: root.gif-error;
                     user-name: root.user-name;
                     user-id: root.user-id;
                     loading-history: root.loading-history;

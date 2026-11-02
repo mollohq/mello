@@ -311,6 +311,11 @@ pub enum Event {
     GifsLoaded {
         gifs: Vec<crate::chat::GifData>,
     },
+    /// A GIF search or trending request produced no page. The picker shows
+    /// the reason; nothing fails silently.
+    GifsFailed {
+        error: crate::giphy::GifError,
+    },
 
     VoiceStateChanged {
         in_call: bool,

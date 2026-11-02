@@ -5,10 +5,10 @@ use slint::{ComponentHandle, Model};
 
 use crate::app_context::AppContext;
 use crate::converters::{
-    apply_unread_to_crews, chat_messages_to_slint, color_hex, fetch_gif_images_for_messages,
-    ChatConvertOptions,
+    apply_unread_to_crews, chat_messages_to_slint, color_hex, sync_gif_images, ChatConvertOptions,
 };
-use crate::{image_cache, notifications, CrewData, GifItemData};
+use crate::gif_animator::GifFrame;
+use crate::{notifications, CrewData, GifItemData};
 
 fn refresh_chat_ui(ctx: &AppContext) {
     let uid = ctx.app.get_user_id().to_string();
@@ -30,7 +30,7 @@ fn refresh_chat_ui(ctx: &AppContext) {
     ctx.app.set_messages(rc.clone().into());
     ctx.app
         .set_chat_messages_this_week(mello_core::chat::count_messages_this_week(&raw));
-    fetch_gif_images_for_messages(&rc, &ctx.rt, &ctx.gif_chat_anim);
+    sync_gif_images(&rc, &ctx.rt, &ctx.gif_chat_anim);
     ctx.chat_scroll.apply_to_window(&ctx.app);
 }
 
@@ -166,6 +166,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
         Event::GifsLoaded { gifs } => {
             log::info!("[gif] loaded {} results", gifs.len());
             ctx.gif_popover_anim.stop_and_clear();
+            ctx.app.set_gif_error(slint::SharedString::default());
 
             let model: Vec<GifItemData> = gifs
                 .iter()
@@ -183,7 +184,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_gif_results(vec_model.clone().into());
 
             let app_weak = ctx.app.as_weak();
-            ctx.gif_popover_anim.start(move |url, img| {
+            ctx.gif_popover_anim.start(move |url, frame| {
+                let GifFrame::Image(img) = frame else {
+                    // A tile that never loads stays a blank cell; the rest
+                    // of the page is still usable.
+                    return;
+                };
                 let Some(app) = app_weak.upgrade() else {
                     return;
                 };
@@ -200,11 +206,25 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             });
 
-            let inbox = ctx.gif_popover_anim.inbox();
-            ctx.gif_popover_anim.note_activity();
             for g in &gifs {
-                image_cache::spawn_gif_fetch(g.preview.clone(), &ctx.rt, &inbox);
+                ctx.gif_popover_anim.fetch(&g.preview, &ctx.rt);
             }
+        }
+        Event::GifsFailed { error } => {
+            use mello_core::giphy::GifError;
+            log::warn!("[gif] request failed: {}", error);
+            ctx.gif_popover_anim.stop_and_clear();
+            ctx.app
+                .set_gif_results(Rc::new(slint::VecModel::<GifItemData>::default()).into());
+            let text = match error {
+                GifError::NoKey => "GIFs are off in this build.",
+                GifError::Unauthorized => "The GIF service refused this build's key.",
+                GifError::RateLimited => "Too many GIF searches right now. Try again in a minute.",
+                GifError::Status(_) | GifError::Network(_) | GifError::Parse(_) => {
+                    "The GIF service did not answer. Your messages still send."
+                }
+            };
+            ctx.app.set_gif_error(text.into());
         }
         Event::MessagePreviewUpdated { crew_id, messages } => {
             log::debug!(

@@ -352,6 +352,8 @@ component ChatClipCard inherits Rectangle {
 
 component GifPopover inherits Rectangle {
     in property <[GifItemData]> gifs: [];
+    /// One sentence on why there are no tiles. Empty when the request worked.
+    in property <string> error: "";
     in property <bool> show: false;
     callback search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
@@ -410,7 +412,64 @@ component GifPopover inherits Rectangle {
             }
         }
 
-        Flickable {
+        if root.error != "": VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 12px;
+            padding-left: 24px;
+            padding-right: 24px;
+
+            Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
+                text: root.error;
+                font-size: Theme.font-md;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+
+                // Retry is an action, so the button is graphite, not white:
+                // one white button per surface, and the search field has focus.
+                Rectangle {
+                    width: 110px;
+                    height: 32px;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 8px;
+                        fill: gif-retry.has-hover ? Theme.graphic-med : Theme.surface-hover;
+                    }
+
+                    gif-retry := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Try again";
+                        mouse-cursor: pointer;
+                        clicked => { root.search(gif-search.text); }
+                    }
+
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: "TRY AGAIN";
+                        font-size: Theme.font-xs;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+            }
+        }
+
+        if root.error == "": Flickable {
             vertical-stretch: 1;
 
             VerticalLayout {
@@ -481,6 +540,7 @@ export component ChatPanel inherits Rectangle {
 
     // GIF popover
     in property <[GifItemData]> gif-results: [];
+    in property <string> gif-error: "";
     in-out property <bool> gif-popover-open: false;
 
     // Reply mode state
@@ -521,7 +581,7 @@ export component ChatPanel inherits Rectangle {
     callback gif-pill-clicked();
     callback gif-search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
-    callback gif-hovered(/* preview_url */ string);
+    callback gif-hovered(/* url */ string);
     callback emoji-pill-clicked();
     callback edit-message(/* message_id */ string, /* new_body */ string);
     callback delete-message(/* message_id */ string);
@@ -997,7 +1057,7 @@ export component ChatPanel inherits Rectangle {
 
                             if msg.is-gif: Rectangle {
                                 property <float> aspect: msg.gif-height > 0 ? msg.gif-width / msg.gif-height : 1.33;
-                                property <length> media-w: min(400px, media-col-w);
+                                property <length> media-w: min(300px, media-col-w);
                                 width: media-w;
                                 height: media-w / aspect;
                                 border-radius: Theme.radius-sm;
@@ -1014,7 +1074,7 @@ export component ChatPanel inherits Rectangle {
                                 if !msg.has-gif-image: Text {
                                     font-weight: Theme.weight-sentence;
                                     font-family: Theme.font-body;
-                                    text: "Loading GIF…";
+                                    text: msg.gif-failed ? "GIF not available" : "Loading GIF…";
                                     font-size: Theme.font-xs;
                                     color: Theme.text-tertiary;
                                     horizontal-alignment: center;
@@ -1025,7 +1085,7 @@ export component ChatPanel inherits Rectangle {
                                     // a11y: none (hover detector: previews the GIF)
                                     mouse-cursor: pointer;
                                     moved => {
-                                        root.gif-hovered(msg.gif-preview-url);
+                                        root.gif-hovered(msg.gif-url);
                                     }
                                 }
                             }
@@ -1439,6 +1499,7 @@ export component ChatPanel inherits Rectangle {
         if root.gif-popover-open: GifPopover {
             show: root.gif-popover-open;
             gifs: root.gif-results;
+            error: root.gif-error;
             search(query) => { root.gif-search(query); }
             gif-selected(gif-id, url, preview-url, w, h) => {
                 root.gif-selected(gif-id, url, preview-url, w, h);
@@ -1662,7 +1723,7 @@ export component Preview inherits ChatPanel {
             display-text: "", display-styled: @markdown(""),
             timestamp: "May 19, 8:10 PM", display-time: "8:10 PM",
             is-group-start: true, is-gif: true,
-            gif-preview-url: "https://media.giphy.com/media/example.gif",
+            gif-url: "https://media.giphy.com/media/example.gif",
             gif-width: 320, gif-height: 240,
         },
         // Clip card
@@ -1722,6 +1783,16 @@ export component PreviewEmoji inherits ChatPanel {
         { emoji: "👀", name: "eyes" },
         { emoji: "🤝", name: "handshake" },
     ];
+}
+
+/// The GIF picker with a failed request: a sentence and a retry button.
+export component PreviewGifError inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    gif-popover-open: true;
+    gif-error: "The GIF service did not answer. Your messages still send.";
 }
 
 /// The GIF picker, open. The cells have no preview image, so they show

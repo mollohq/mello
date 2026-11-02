@@ -9,23 +9,9 @@ pub struct GifFrameData {
     pub delays: Vec<u32>,                 // ms per frame
 }
 
-/// Fetch a GIF and decode ALL frames. Pushes result to `inbox` (drained by GifAnimator timer).
-pub fn spawn_gif_fetch(
-    url: String,
-    rt: &tokio::runtime::Handle,
-    inbox: &std::sync::Arc<std::sync::Mutex<Vec<(String, GifFrameData)>>>,
-) {
-    let inbox = inbox.clone();
-    rt.spawn(async move {
-        let Some(data) = fetch_gif_frames(&url).await else {
-            log::debug!("[gif] failed to fetch frames from {}", url);
-            return;
-        };
-        inbox.lock().unwrap().push((url, data));
-    });
-}
-
-async fn fetch_gif_frames(url: &str) -> Option<GifFrameData> {
+/// Fetch a GIF and decode every frame, capped at `MAX_GIF_FRAMES` and
+/// `MAX_GIF_DIMENSION`. `None` on any network or decode failure.
+pub async fn fetch_gif_frames(url: &str) -> Option<GifFrameData> {
     let http = crate::http::shared();
     let bytes = http.get(url).send().await.ok()?.bytes().await.ok()?;
 

@@ -204,8 +204,8 @@ impl AppContext {
             // Close hides to the tray as on a desktop with one; a test of
             // the no-tray case puts `StatusItem::disabled()` here.
             status_item: Rc::new(RefCell::new(crate::platform::StatusItem::stand_in())),
-            gif_popover_anim: GifAnimator::new(50, None),
-            gif_chat_anim: GifAnimator::new(50, Some(2)),
+            gif_popover_anim: GifAnimator::new(50, None, 24),
+            gif_chat_anim: GifAnimator::new(50, Some(2), 16),
             dbg_hist: Rc::new(RefCell::new(crate::DebugHistory::new())),
             avatar_cache: Rc::new(RefCell::new(HashMap::new())),
             last_feed: Rc::new(RefCell::new(None)),

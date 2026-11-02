@@ -273,8 +273,15 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let anim = ctx.gif_chat_anim.clone();
-        ctx.app.on_gif_hovered(move |preview_url| {
-            anim.resume(preview_url.as_str());
+        let rt = ctx.rt.clone();
+        ctx.app.on_gif_hovered(move |url| {
+            // A GIF past the prefetch window, or one evicted from the cache,
+            // loads on hover. A paused one plays again.
+            if anim.is_requested(url.as_str()) {
+                anim.resume(url.as_str());
+            } else {
+                anim.fetch(url.as_str(), &rt);
+            }
         });
     }
     {

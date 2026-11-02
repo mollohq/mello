@@ -135,6 +135,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::ChatMessageEdited { .. }
         | Event::ChatMessageDeleted { .. }
         | Event::GifsLoaded { .. }
+        | Event::GifsFailed { .. }
         | Event::MessagePreviewUpdated { .. } => chat::handle(ctx, event),
 
         // Streaming

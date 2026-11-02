@@ -68,7 +68,10 @@ impl super::Client {
                 let gifs: Vec<_> = results.iter().filter_map(|r| r.to_gif_data()).collect();
                 let _ = self.event_tx.send(Event::GifsLoaded { gifs });
             }
-            Err(e) => log::error!("GIF search failed: {}", e),
+            Err(e) => {
+                log::error!("GIF search failed: {}", e);
+                let _ = self.event_tx.send(Event::GifsFailed { error: e });
+            }
         }
     }
 
@@ -78,7 +81,10 @@ impl super::Client {
                 let gifs: Vec<_> = results.iter().filter_map(|r| r.to_gif_data()).collect();
                 let _ = self.event_tx.send(Event::GifsLoaded { gifs });
             }
-            Err(e) => log::error!("Trending GIFs failed: {}", e),
+            Err(e) => {
+                log::error!("Trending GIFs failed: {}", e);
+                let _ = self.event_tx.send(Event::GifsFailed { error: e });
+            }
         }
     }
 
