@@ -833,7 +833,7 @@ func HealthCheckRPC(...) (string, error) {
 After successful auth the client calls the `health` RPC and compares versions:
 
 ```
-client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update Mello"
+client.PROTOCOL_VERSION < server.min_client_protocol  →  "Please update m3llo"
 server.protocol_version < client.MIN_SERVER_PROTOCOL   →  "Server needs updating"
 ```
 
