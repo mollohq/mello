@@ -26,11 +26,16 @@ env:
 
 jobs:
   # A PR that only touches specs/, plans/, the journeys or the driver skips the
-  # build: the Windows build alone takes about 20 min. The journeys and the
-  # driver get the `journeys` job instead. This is a job, not
+  # build: the Windows build alone takes 16 min on a quiet runner. The journeys
+  # and the driver get the `journeys` job instead. This is a job, not
   # `paths-ignore`: the three test jobs are required checks in the main ruleset,
   # and a workflow that never starts leaves them "Expected" forever. A job
   # skipped by its `if:` reports success, so the PR stays mergeable.
+  #
+  # `native` is false when no input of the C++ build changed. Then the test
+  # jobs skip the libmello gtest build and ctest steps. 64 of the last 100
+  # merges touched none of these paths. A skipped step does not fail a
+  # required job.
   changes:
     name: Detect changes
     runs-on: ubuntu-latest
@@ -40,6 +45,7 @@ jobs:
     outputs:
       code: ${{ steps.filter.outputs.code }}
       journeys: ${{ steps.filter.outputs.journeys }}
+      native: ${{ steps.filter.outputs.native }}
 
     steps:
       - name: Check which parts changed
@@ -65,6 +71,14 @@ jobs:
             echo "journeys=true" >> "$GITHUB_OUTPUT"
           else
             echo "journeys=false" >> "$GITHUB_OUTPUT"
+          fi
+          # native: a file that the libmello gtest build reads, or the CI
+          # definition itself. On any doubt (no file list) it is true.
+          if [ -z "$files" ] || grep -qE '^(libmello/|mello-sys/|external/|hook/|\.gitmodules$|\.github/workflows/|\.github/actions/)' <<<"$files"; then
+            echo "native=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::No native input changed. The C++ build and ctest are skipped."
+            echo "native=false" >> "$GITHUB_OUTPUT"
           fi
 
   # What check.sh does for the journeys and the driver, in about a minute: the
@@ -188,7 +202,10 @@ jobs:
       # the vcpkg binary cache is warm. MELLO_BUILD_TESTS stays OFF by default
       # (mello-sys/build.rs configures libmello on every cargo build, and we do
       # not want 96 gtest cases compiled into every dev build) so CI must opt in.
+      # The C++ steps run only when a native input changed (see `changes`).
+      # If detection fails, they run.
       - name: Build C++ tests
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
         shell: pwsh
         run: |
           cmake -B libmello/build-ci -S libmello `
@@ -202,6 +219,7 @@ jobs:
       # --timeout: a stalled gtest process otherwise holds the lane until
       # the 45 min job timeout. The Linux lane has the same bound.
       - name: Run C++ tests
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
         run: ctest --test-dir libmello/build-ci -C Release --output-on-failure --timeout 300
 
       - name: Cleanup build artifacts
@@ -273,7 +291,9 @@ jobs:
       # See the Windows job for why MELLO_BUILD_TESTS is opt-in. The arch and
       # deployment-target flags mirror mello-sys/build.rs so the test binaries
       # link against the same libmello configuration the Rust build produces.
+      # See the Windows job for the `native` condition.
       - name: Build C++ tests
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
         run: |
           cmake -B libmello/build-ci -S libmello \
             -DMELLO_BUILD_TESTS=ON \
@@ -290,6 +310,7 @@ jobs:
 
       # See the Windows job for --timeout.
       - name: Run C++ tests
+        if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
         run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300
 
       - name: Cleanup build artifacts
@@ -307,6 +328,9 @@ jobs:
     if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
     uses: ./.github/workflows/linux-build-test.yml
     secrets: inherit
+    with:
+      # See test-windows for the `native` condition.
+      native: ${{ (needs.changes.result != 'success' || needs.changes.outputs.native == 'true') && 'true' || 'false' }}
 
   # Pure Go unit tests over the Nakama modules — no native deps, no Docker, no
   # backend. Runs on GitHub-hosted Linux (already used by release.yml) rather

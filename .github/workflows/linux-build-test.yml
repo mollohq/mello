@@ -3,6 +3,12 @@ name: Linux build and test
 # The Linux lane of PR Checks (pr-checks.yml calls this file).
 on:
   workflow_call:
+    inputs:
+      # 'false' skips the libmello gtest build and ctest: no native input
+      # changed (see the `changes` job in pr-checks.yml).
+      native:
+        type: string
+        default: 'true'
 
 permissions:
   contents: read
@@ -96,6 +102,7 @@ jobs:
 
       # See the Windows job in pr-checks.yml for why MELLO_BUILD_TESTS is opt-in.
       - name: Build C++ tests
+        if: ${{ inputs.native != 'false' }}
         run: |
           cmake -B libmello/build-ci -S libmello -G Ninja \
             -DMELLO_BUILD_TESTS=ON \
@@ -107,4 +114,5 @@ jobs:
           cmake --build libmello/build-ci --parallel "$(nproc)"
 
       - name: Run C++ tests
+        if: ${{ inputs.native != 'false' }}
         run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300
