@@ -117,7 +117,7 @@ impl super::Client {
                 if let Some(min_client) = health.min_client_protocol {
                     if crate::PROTOCOL_VERSION < min_client {
                         let msg = format!(
-                            "Server requires protocol {} but client speaks {}. Please update Mello.",
+                            "Server requires protocol {} but client speaks {}. Please update m3llo.",
                             min_client,
                             crate::PROTOCOL_VERSION,
                         );
