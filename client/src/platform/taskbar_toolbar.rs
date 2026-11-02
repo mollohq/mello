@@ -2,7 +2,6 @@
 
 use std::sync::{mpsc, OnceLock};
 
-use windows::core::*;
 use windows::Win32::Foundation::*;
 use windows::Win32::Graphics::Gdi::*;
 use windows::Win32::System::Com::*;
@@ -67,15 +66,12 @@ impl TaskbarToolbar {
 
     /// Find the main window and install buttons + subclass.
     /// No-ops if already initialized. Returns true on first success.
-    pub fn try_init(&mut self) -> bool {
+    pub fn try_init(&mut self, app: &crate::MainWindow) -> bool {
         if self.initialized {
             return false;
         }
-        let hwnd = unsafe {
-            match FindWindowW(None, w!("Mello")) {
-                Ok(h) => h,
-                Err(_) => return false,
-            }
+        let Some(hwnd) = crate::platform::main_window_hwnd(app) else {
+            return false;
         };
         self.hwnd = hwnd;
 

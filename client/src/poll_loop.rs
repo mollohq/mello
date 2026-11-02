@@ -250,8 +250,7 @@ impl PollState {
                     fg.set_in_voice(poll_ctx.app.get_in_voice());
                 }
 
-                let main_visible = poll_ctx.app.window().is_visible();
-                let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(main_visible);
+                let mode_changed = poll_ctx.fg_monitor.borrow_mut().evaluate(&poll_ctx.app);
                 if let Some(new_mode) = mode_changed {
                     let state = crate::hud_state_builder::build_hud_state(poll_ctx, new_mode);
                     poll_ctx.hud_manager.push_state(state);
@@ -272,18 +271,18 @@ impl PollState {
                         }
                         crate::hud_manager::HudActionKind::OpenCrew => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                         crate::hud_manager::HudActionKind::OpenStream => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                         crate::hud_manager::HudActionKind::DeafenToggle => {
                             crate::voice_state::dispatch(poll_ctx, MuteAction::ToggleDeafen);
                         }
                         crate::hud_manager::HudActionKind::OpenSettings => {
                             poll_ctx.app.show().ok();
-                            platform::bring_main_window_to_front();
+                            platform::bring_main_window_to_front(&poll_ctx.app);
                         }
                     },
                 }
@@ -294,7 +293,7 @@ impl PollState {
             {
                 let mut tb = poll_ctx.taskbar_toolbar.borrow_mut();
                 if let Some(ref mut toolbar) = *tb {
-                    toolbar.try_init();
+                    toolbar.try_init(&poll_ctx.app);
 
                     while let Some(action) = toolbar.poll_action() {
                         use crate::platform::taskbar_toolbar::ThumbAction;

@@ -160,21 +160,40 @@ impl StatusItem {
     }
 }
 
-/// Bring the main Mello window to the foreground on Windows.
+/// The main window's handle. `None` until the event loop creates the window.
+///
+/// Use this, not `FindWindowW` by title: a title lookup also matches any
+/// other top-level window with the same title, such as an Explorer folder.
+#[cfg(target_os = "windows")]
+pub fn main_window_hwnd(app: &crate::MainWindow) -> Option<windows::Win32::Foundation::HWND> {
+    use i_slint_backend_winit::WinitWindowAccessor;
+    use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+    use slint::ComponentHandle as _;
+    use windows::Win32::Foundation::HWND;
+    app.window()
+        .with_winit_window(|w: &i_slint_backend_winit::winit::window::Window| {
+            match w.window_handle().map(|h| h.as_raw()) {
+                Ok(RawWindowHandle::Win32(h)) => Some(HWND(h.hwnd.get() as *mut _)),
+                _ => None,
+            }
+        })
+        .flatten()
+}
+
+/// Bring the main window to the foreground on Windows.
 /// On other platforms, this is a no-op (Slint's show() is sufficient).
-pub fn bring_main_window_to_front() {
+pub fn bring_main_window_to_front(app: &crate::MainWindow) {
+    #[cfg(not(target_os = "windows"))]
+    let _ = app;
     #[cfg(target_os = "windows")]
     {
-        use windows::core::w;
         use windows::Win32::System::Threading::{AttachThreadInput, GetCurrentThreadId};
         use windows::Win32::UI::WindowsAndMessaging::*;
 
+        let Some(hwnd) = main_window_hwnd(app) else {
+            return;
+        };
         unsafe {
-            let hwnd = match FindWindowW(None, w!("Mello")) {
-                Ok(h) => h,
-                Err(_) => return,
-            };
-
             let fg = GetForegroundWindow();
             let fg_thread = GetWindowThreadProcessId(fg, None);
             let our_thread = GetCurrentThreadId();

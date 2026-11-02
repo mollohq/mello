@@ -42,8 +42,8 @@ impl ForegroundMonitor {
 
     /// Evaluate and return the current HUD mode based on all signals.
     /// Returns Some(mode) if the mode changed, None if unchanged.
-    pub fn evaluate(&mut self, main_window_visible: bool) -> Option<HudMode> {
-        let fg = query_foreground(main_window_visible);
+    pub fn evaluate(&mut self, app: &crate::MainWindow) -> Option<HudMode> {
+        let fg = query_foreground(app);
         self.evaluate_with(fg.is_main_window)
     }
 
@@ -76,34 +76,27 @@ impl ForegroundMonitor {
     }
 }
 
-fn query_foreground(_main_window_visible: bool) -> ForegroundInfo {
+fn query_foreground(app: &crate::MainWindow) -> ForegroundInfo {
     #[cfg(target_os = "windows")]
     {
-        use windows::core::w;
-        use windows::Win32::UI::WindowsAndMessaging::{FindWindowW, GetForegroundWindow};
-        unsafe {
-            let fg = GetForegroundWindow();
-            if fg.0.is_null() {
-                return ForegroundInfo {
-                    is_main_window: false,
-                };
-            }
-
-            let is_main = match FindWindowW(None, w!("Mello")) {
-                Ok(main_hwnd) => fg == main_hwnd,
-                Err(_) => false,
+        use windows::Win32::UI::WindowsAndMessaging::GetForegroundWindow;
+        let fg = unsafe { GetForegroundWindow() };
+        if fg.0.is_null() {
+            return ForegroundInfo {
+                is_main_window: false,
             };
+        }
 
-            ForegroundInfo {
-                is_main_window: is_main,
-            }
+        ForegroundInfo {
+            is_main_window: crate::platform::main_window_hwnd(app).is_some_and(|main| fg == main),
         }
     }
 
     #[cfg(not(target_os = "windows"))]
     {
+        use slint::ComponentHandle as _;
         ForegroundInfo {
-            is_main_window: _main_window_visible,
+            is_main_window: app.window().is_visible(),
         }
     }
 }
