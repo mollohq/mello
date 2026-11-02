@@ -1,11 +1,11 @@
 // The game clip MP4 (plans/GAME-CLIPS.md 5.3, 5.4, 10.2): H.264 passthrough
 // from the replay ring, AAC from the clip mix, the moov box first, the poster.
-// The video is a fixture made once with ffmpeg (libx264, 160x96, 30 fps, an
-// IDR every 30 frames with SPS and PPS, no B-frames, an AUD before each
-// access unit):
-//   ffmpeg -f lavfi -i testsrc=size=160x96:rate=30 -t 2 -pix_fmt yuv420p
-//     -c:v libx264 -profile:v high -bf 0 -g 30 -keyint_min 30 -sc_threshold 0
-//     -x264-params repeat-headers=1:aud=1 -f h264 gop30_160x96.h264
+// The video is a fixture that libmello's own recording encoder made once
+// (160x96, 30 fps, an IDR every 30 frames with SPS and PPS, no B-frames, an
+// AUD before each access unit). No GPL encoder: m3llo is Apache 2.0
+// (14-VIDEO-PIPELINE.md 6.7). ReplayFixture.DISABLED_MakeTheH264Fixture
+// makes it again:
+//   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplayFixture.*
 #ifdef _WIN32
 #include <gtest/gtest.h>
 #include "replay/h264_nal.hpp"
@@ -13,6 +13,9 @@
 #include "replay/replay_mux.hpp"
 #include "replay/replay_session.hpp"
 #include "replay/replay_video_ring.hpp"
+#include "video/encoder_factory.hpp"
+#include "video/graphics_device.hpp"
+#include "video/video_preprocessor.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
 #define WIN32_LEAN_AND_MEAN
@@ -390,6 +393,79 @@ TEST(ReplayMuxTime, ThirtySecondsAtTheDefaultQualityMuxInUnderThreeSeconds) {
     EXPECT_LT(seconds, 3.0) << "mux of 30 s took " << seconds << " s";
     std::printf("[ ReplayMuxTime ] 30 s clip, %.1f MB, muxed in %.2f s\n",
                 static_cast<double>(result.bytes) / 1e6, seconds);
+}
+
+// Makes the fixture of the tests above with the recording encoder of this
+// machine: 60 frames of a moving pattern, an IDR every 30 frames, each access
+// unit after an AUD. Run on request only (see the top of this file).
+TEST(ReplayFixture, DISABLED_MakeTheH264Fixture) {
+    using namespace mello::video;
+    constexpr uint32_t w = 160, h = 96, frames = 60;
+    GraphicsDevice device = create_d3d11_device();
+    ASSERT_TRUE(device.d3d11()) << "no D3D11 device";
+    ComPtr<ID3D11DeviceContext> context;
+    device.d3d11()->GetImmediateContext(&context);
+
+    EncoderConfig enc{w, h, 30, 150};
+    enc.keyframe_interval = 30;
+    enc.intent = EncoderIntent::Recording;
+    auto encoder = create_best_encoder(device, enc);
+    ASSERT_TRUE(encoder) << "no encoder";
+    VideoPreprocessor pre;
+    ASSERT_TRUE(pre.initialize(device, w, h, w, h));
+
+    D3D11_TEXTURE2D_DESC desc{};
+    desc.Width = w;
+    desc.Height = h;
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.Usage = D3D11_USAGE_DEFAULT;
+    desc.BindFlags = D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE;
+    ComPtr<ID3D11Texture2D> source;
+    ASSERT_TRUE(SUCCEEDED(device.d3d11()->CreateTexture2D(&desc, nullptr, &source)));
+
+    std::vector<uint8_t> bgra(static_cast<size_t>(w) * h * 4);
+    std::vector<uint8_t> out;
+    static const uint8_t kAud[] = {0, 0, 0, 1, h264::kNalAud, 0xF0};
+    for (uint32_t n = 0; n < frames; ++n) {
+        // A diagonal gradient that moves, and a white square that crosses it.
+        for (uint32_t y = 0; y < h; ++y) {
+            for (uint32_t x = 0; x < w; ++x) {
+                uint8_t* p = &bgra[(static_cast<size_t>(y) * w + x) * 4];
+                const bool square = x >= n * 2 && x < n * 2 + 24 && y >= 36 && y < 60;
+                p[0] = square ? 255 : static_cast<uint8_t>((x + n * 3) & 0xFF);
+                p[1] = square ? 255 : static_cast<uint8_t>((y * 2 + n) & 0xFF);
+                p[2] = square ? 255 : static_cast<uint8_t>((x + y) & 0xFF);
+                p[3] = 255;
+            }
+        }
+        context->UpdateSubresource(source.Get(), 0, nullptr, bgra.data(), w * 4, 0);
+        const ConvertResult nv12 = pre.convert(source.Get());
+        ASSERT_TRUE(nv12.texture);
+        EncodedPacket packet;
+        ASSERT_TRUE(encoder->encode(nv12.texture, packet));
+        ASSERT_FALSE(packet.data.empty());
+        EXPECT_EQ(packet.is_keyframe, n % 30 == 0) << "frame " << n;
+        bool has_aud = false;
+        h264::for_each_nal(packet.data.data(), packet.data.size(),
+                           [&](uint8_t type, const uint8_t*, size_t) { has_aud |= type == h264::kNalAud; });
+        if (!has_aud) out.insert(out.end(), kAud, kAud + sizeof(kAud));
+        out.insert(out.end(), packet.data.begin(), packet.data.end());
+    }
+    encoder->shutdown();
+    encoder.reset();
+    pre.shutdown();
+    source.Reset();
+    context.Reset();
+    device.d3d11()->Release();
+
+    const fs::path file = fs::path(MELLO_REPLAY_FIXTURE_DIR) / "gop30_160x96.h264";
+    std::ofstream f(file, std::ios::binary | std::ios::trunc);
+    f.write(reinterpret_cast<const char*>(out.data()), static_cast<std::streamsize>(out.size()));
+    ASSERT_TRUE(f.good());
+    std::printf("[ ReplayFixture ] %s: %zu bytes\n", file.string().c_str(), out.size());
 }
 
 // The whole replay on this PC's encoder: a reference clip through the
