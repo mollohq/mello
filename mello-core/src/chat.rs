@@ -621,6 +621,75 @@ pub fn format_display_time(ts: &str) -> String {
 }
 
 /// Count non-system, non-deleted messages from the current local week (Mon–Sun) in the loaded set.
+/// The most emoji a message may hold and still render big.
+pub const JUMBO_EMOJI_MAX: usize = 3;
+
+/// True when `body` is nothing but emoji, at most `JUMBO_EMOJI_MAX` of them,
+/// so the client renders it large (the Discord rule). A ZWJ sequence, a flag
+/// pair, a keycap, or a skin-toned emoji each count as one. Any letter,
+/// digit or punctuation makes it text.
+pub fn is_emoji_only(body: &str) -> bool {
+    let chars: Vec<char> = body.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut count = 0usize;
+    let mut joined = false; // the previous scalar was a ZWJ
+    let mut pending_flag_half = false;
+    for (i, &c) in chars.iter().enumerate() {
+        let cp = c as u32;
+        let is_modifier = matches!(cp,
+            0xFE0E | 0xFE0F            // variation selectors
+            | 0x20E3                   // combining keycap
+            | 0x1F3FB..=0x1F3FF        // skin tones
+            | 0xE0020..=0xE007F        // tag characters (subdivision flags)
+        );
+        if is_modifier {
+            continue;
+        }
+        if cp == 0x200D {
+            joined = true;
+            continue;
+        }
+        let is_regional = (0x1F1E6..=0x1F1FF).contains(&cp);
+        let is_emoji = is_regional
+            || matches!(cp,
+                0x1F000..=0x1FAFF      // pictographs, emoticons, symbols
+                | 0x2600..=0x27BF      // misc symbols, dingbats
+                | 0x2300..=0x23FF      // misc technical (⌚ ⏰ ⏳)
+                | 0x2B00..=0x2BFF      // arrows and shapes (⭐ ⬆)
+                | 0x2190..=0x21FF      // arrows (↔ ↩)
+                | 0x3030 | 0x303D | 0x3297 | 0x3299
+                | 0x00A9 | 0x00AE | 0x2122 | 0x2139 | 0x24C2
+                | 0x25AA..=0x25FE
+                | 0x2934 | 0x2935
+            );
+        // '#', '*' and a digit are emoji only as a keycap: followed by U+20E3,
+        // with or without a variation selector in between.
+        let is_keycap = matches!(c, '#' | '*' | '0'..='9')
+            && chars[i + 1..]
+                .iter()
+                .find(|x| **x as u32 != 0xFE0F)
+                .is_some_and(|x| *x as u32 == 0x20E3);
+        if !is_emoji && !is_keycap {
+            return false;
+        }
+        if is_regional {
+            if pending_flag_half {
+                pending_flag_half = false;
+                continue; // second half of a flag
+            }
+            pending_flag_half = true;
+        }
+        if joined {
+            joined = false;
+            continue; // part of the previous emoji
+        }
+        count += 1;
+        if count > JUMBO_EMOJI_MAX {
+            return false;
+        }
+    }
+    count > 0
+}
+
 pub fn count_messages_this_week(messages: &[ChatMessage]) -> i32 {
     let now = Local::now();
     let today = now.date_naive();
@@ -751,6 +820,28 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn emoji_only_counts_sequences_as_one_and_stops_at_three() {
+        use super::is_emoji_only;
+        assert!(is_emoji_only("🔥🔥"));
+        assert!(is_emoji_only("🔥 🔥 🔥"));
+        assert!(is_emoji_only("❤️"));
+        assert!(is_emoji_only("👍🏽"));
+        assert!(is_emoji_only("👨‍👩‍👧"), "a ZWJ family is one emoji");
+        assert!(is_emoji_only("🇸🇪"), "a flag pair is one emoji");
+        assert!(is_emoji_only("🇸🇪🇳🇴🇩🇰"), "three flags");
+        assert!(is_emoji_only("1️⃣"), "a keycap is one emoji");
+        assert!(is_emoji_only("⭐⏰↔️"));
+        assert!(!is_emoji_only("🔥🔥🔥🔥"), "four is text size");
+        assert!(!is_emoji_only("🔥 nice"));
+        assert!(!is_emoji_only("gg"));
+        assert!(!is_emoji_only("123"));
+        assert!(!is_emoji_only("1#"));
+        assert!(is_emoji_only("1️⃣2️⃣3️⃣"));
+        assert!(!is_emoji_only(""));
+        assert!(!is_emoji_only("   "));
+    }
+
     use super::*;
 
     fn msg(id: &str, sender: &str, name: &str, ts: &str, text: &str) -> ChatMessage {

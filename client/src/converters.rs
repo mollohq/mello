@@ -145,6 +145,8 @@ pub fn chat_messages_to_slint(
         };
 
         let mentions_self = d.mentions.iter().any(|m| m.user_id == opts.user_id);
+        let is_emoji_only =
+            !d.is_system && !d.is_deleted && mello_core::chat::is_emoji_only(&d.display_body);
         let (display_text, links) = if d.is_system || d.is_deleted {
             (d.display_body.clone(), Vec::new())
         } else {
@@ -215,6 +217,7 @@ pub fn chat_messages_to_slint(
             has_gif_image: false,
             gif_failed: false,
             gif_url: gif_url.into(),
+            is_emoji_only,
             gif_width,
             gif_height,
             is_clip: false,
@@ -288,6 +291,7 @@ fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
         && a.reply_to_name == b.reply_to_name
         && a.reply_preview_text == b.reply_preview_text
         && a.sender_name == b.sender_name
+        && a.is_emoji_only == b.is_emoji_only
 }
 
 /// Make the crew list equal to `crews`, in place.

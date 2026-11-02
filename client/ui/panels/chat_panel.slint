@@ -991,7 +991,9 @@ export component ChatPanel inherits Rectangle {
                                         accessible-label: msg.text;
                                         text: msg.display-styled;
                                         default-color: Theme.text-secondary;
-                                        default-font-size: Theme.font-md;
+                                        // Three emoji or fewer and nothing else: big, as in
+                                        // every chat app. A 13px emoji is a smudge.
+                                        default-font-size: msg.is-emoji-only ? Theme.font-xxl : Theme.font-md;
                                         horizontal-stretch: 1;
                                     }
 
@@ -1427,7 +1429,7 @@ export component ChatPanel inherits Rectangle {
 
         // --- Emoji popover ---
         if root.emoji-popover-open: Rectangle {
-            height: 200px;
+            height: 240px;
             background: transparent;
 
             CutShape {
@@ -1452,15 +1454,17 @@ export component ChatPanel inherits Rectangle {
                     padding: 8px;
                     spacing: 4px;
 
-                    for row-start[row-idx] in [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152]: HorizontalLayout {
+                    // Nine 36px cells with a 24px glyph. The 18px glyph in a
+                    // 32px cell was the size of body text and hard to pick.
+                    for row-start[row-idx] in [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153]: HorizontalLayout {
                         spacing: 2px;
 
-                        for col in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
+                        for col in [0, 1, 2, 3, 4, 5, 6, 7, 8]: Rectangle {
                             property <int> emoji-index: row-start + col;
                             property <bool> in-range: emoji-index < emoji-list.length;
                             visible: in-range;
-                            width: 32px;
-                            height: 32px;
+                            width: 36px;
+                            height: 36px;
                             clip: true;
 
                             if in-range: Rectangle {
@@ -1474,7 +1478,7 @@ export component ChatPanel inherits Rectangle {
                                 // the platform emoji font resolves them.
                                 Text {
                                     text: emoji-list[emoji-index].emoji;
-                                    font-size: 18px;
+                                    font-size: 24px;
                                     horizontal-alignment: center;
                                     vertical-alignment: center;
                                 }
@@ -1482,10 +1486,12 @@ export component ChatPanel inherits Rectangle {
                                 emoji-cell-touch := TouchArea {
                                     accessible-role: button;
                                     accessible-label: emoji-list[emoji-index].name;
+                                    // The picker stays open: people pick more than one.
+                                    // The pill or Escape closes it.
                                     clicked => {
                                         chat-input.text += emoji-list[emoji-index].emoji;
+                                        root.chat-input-changed(chat-input.text);
                                         chat-input.focus();
-                                        root.emoji-popover-open = false;
                                     }
                                 }
                             }
@@ -1579,6 +1585,11 @@ export component ChatPanel inherits Rectangle {
                 edited => { root.chat-input-changed(self.text); }
 
                 key-pressed(event) => {
+                    if event.text == Key.Escape && (root.emoji-popover-open || root.gif-popover-open) {
+                        root.emoji-popover-open = false;
+                        root.gif-popover-open = false;
+                        return accept;
+                    }
                     if event.text == Key.Return {
                         if event.modifiers.shift {
                             if !root.composer-multiline {
@@ -1715,6 +1726,14 @@ export component Preview inherits ChatPanel {
         // Unread divider
         {
             message-id: "__unread__", is-unread-divider: true,
+        },
+        {
+            message-id: "j1", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "🔥🔥",
+            display-text: "🔥🔥",
+            display-styled: @markdown("🔥🔥"),
+            timestamp: "May 20, 8:09 PM", display-time: "8:09 PM",
+            is-group-start: true, is-emoji-only: true,
         },
         // GIF placeholder
         {

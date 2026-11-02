@@ -627,6 +627,8 @@ export struct ChatMessageData {
     has-gif-image: bool,
     gif-failed: bool,
     gif-url: string,
+    /// Only emoji, at most three: the body renders at Theme.font-xxl.
+    is-emoji-only: bool,
     gif-width: int,
     gif-height: int,
     is-clip: bool,

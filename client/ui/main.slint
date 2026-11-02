@@ -216,6 +216,7 @@ export component MainWindow inherits Window {
     in-out property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     in property <[EmojiItemData]> emoji-list: [];
+    in-out property <bool> emoji-popover-open: false;
     in property <[MentionMemberData]> mention-suggestions: [];
     in-out property <string> chat-input-text: "";
     in-out property <int> composer-line-count: 1;
@@ -1276,6 +1277,7 @@ export component MainWindow inherits Window {
                     mention-members: root.mention-members;
                     mention-suggestions: root.mention-suggestions;
                     emoji-list: root.emoji-list;
+                    emoji-popover-open <=> root.emoji-popover-open;
                     chat-input-text <=> root.chat-input-text;
                     composer-line-count <=> root.composer-line-count;
                     composer-multiline <=> root.composer-multiline;
