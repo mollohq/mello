@@ -765,12 +765,17 @@ This is surfaced as a toggle in Settings. Default: off.
 
 Clicking the window close button hides to tray rather than quitting. This is the expected behaviour for a persistent communication app.
 
+The close also ends the voice call. A user who closes the window thinks they left the call. A call that stays up in the tray lets the channel hear them.
+
 ```rust
-// client/src/lib.rs
+// client/src/callbacks/window.rs
 
 app.window().on_close_requested(move || {
     if settings.borrow().close_to_tray {
-        window_ref.hide().ok();
+        if app.get_in_voice() {
+            app.invoke_voice_toggle(); // the hangup button's path
+        }
+        app.hide().ok();
         slint::CloseRequestResponse::KeepWindowShown
     } else {
         slint::quit_event_loop().ok();

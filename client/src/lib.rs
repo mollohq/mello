@@ -451,24 +451,6 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         }),
     ));
 
-    // --- Close ÔåÆ tray ---
-    {
-        let window_ref = app.as_weak();
-        let s = settings.clone();
-        app.window().on_close_requested(move || {
-            if s.borrow().close_to_tray {
-                if let Some(w) = window_ref.upgrade() {
-                    w.hide().ok();
-                }
-                slint::CloseRequestResponse::KeepWindowShown
-            } else {
-                log::info!("[quit] close requested (close_to_tray=false)");
-                slint::quit_event_loop().ok();
-                slint::CloseRequestResponse::KeepWindowShown
-            }
-        });
-    }
-
     // Graphite is dark only. `dark` stays a constant so the remaining
     // `Theme.dark ? a : b` call sites keep resolving to the dark arm.
     app.global::<Theme>().set_dark(true);

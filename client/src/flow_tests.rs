@@ -3817,6 +3817,49 @@ fn hangup_click_updates_ui_before_core_confirms() {
     );
 }
 
+/// The window's close button with "close to tray" on hangs up. A user who
+/// closes the window thinks they left, and the channel kept hearing them.
+#[test]
+fn closing_the_window_to_tray_leaves_voice() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    h.app().set_in_voice(true);
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    assert!(
+        !h.app().get_in_voice(),
+        "closing to tray must leave the in-voice state"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing to tray must send LeaveVoice, got {cmds:?}"
+    );
+}
+
+/// Outside a call the close button only hides the window: no LeaveVoice,
+/// which would tell the server about a call that does not exist.
+#[test]
+fn closing_the_window_to_tray_outside_a_call_sends_no_leave() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    let cmds = h.commands();
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing outside a call must not send LeaveVoice, got {cmds:?}"
+    );
+}
+
 fn listed_audio_devices(cmds: &[Command]) -> bool {
     cmds.iter().any(|c| matches!(c, Command::ListAudioDevices))
 }
