@@ -46,11 +46,12 @@ Skia renderer copy the entire `Apple Color Emoji.ttc` (188,589,668 bytes) into t
 cache it forever (`i-slint-renderer-skia/font_cache.rs` `FontMgr::new_from_data`; peaks of
 2-3x from its TTC re-extraction workaround). One 😀 = permanent +188 MB.
 
-**Fix shipped:** bundle OpenMoji COLRv0 (~10 MB) and register it via `SLINT_FONT_PATH`
+**Fix shipped:** bundle a small COLRv0 emoji font and register it via `SLINT_FONT_PATH`
 before Slint init (`client/src/emoji_font.rs`) — Slint puts it in the generic-family
-fallback chain, so emoji resolve to OpenMoji and the system emoji font never loads.
-Measured: idle with emoji ~400 MB → **~216 MB**. Bonus: identical emoji cross-platform.
-CC BY-SA 4.0 — attribution line required in credits. Upstream Slint issue to be filed.
+fallback chain, so emoji resolve to it and the system emoji font never loads.
+Measured with OpenMoji (2.6 MB): idle with emoji ~400 MB → **~216 MB**. The font is now
+Twemoji, Mozilla's build (1.4 MB), same path. Bonus: identical emoji cross-platform.
+CC BY 4.0 — attribution line required in credits. Upstream Slint issue to be filed.
 
 Also shipped as robustness guards: 8000-char display cap in `converters.rs` (huge pastes),
 and the chat feed was migrated to `ListView` (virtualization) — the latter is *hygiene*,

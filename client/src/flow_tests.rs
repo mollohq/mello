@@ -1342,6 +1342,92 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat: emoji
+// ---------------------------------------------------------------------------
+
+/// Three emoji or fewer with no text render big. The flag is on the row, and
+/// an edit that turns text into emoji updates it in place.
+#[test]
+fn an_emoji_only_message_is_flagged_for_the_jumbo_size() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let mut fire = chat_message_fixture("e1", "alice", 0);
+    fire.content = "🔥🔥".into();
+    fire.display_body = "🔥🔥".into();
+    let mut words = chat_message_fixture("e2", "bob", 1);
+    words.content = "🔥 nice".into();
+    words.display_body = "🔥 nice".into();
+    h.emit(Event::MessagesLoaded {
+        messages: vec![fire, words],
+        has_more_history: false,
+    });
+    let rows = h.app().get_messages();
+    let row = |id: &str| {
+        (0..rows.row_count())
+            .filter_map(|i| rows.row_data(i))
+            .find(|r| r.message_id == id)
+            .expect("row")
+    };
+    assert!(row("e1").is_emoji_only);
+    assert!(!row("e2").is_emoji_only);
+
+    h.emit(Event::ChatMessageEdited {
+        message_id: "e2".into(),
+        new_content: "💀".into(),
+        new_display_body: "💀".into(),
+        mentions: Vec::new(),
+        update_time: "2026-03-08T10:02:00Z".into(),
+    });
+    let rows = h.app().get_messages();
+    let edited = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "e2")
+        .expect("row");
+    assert!(edited.is_emoji_only, "the edit changed the row in place");
+}
+
+/// A pick adds the emoji to the field and leaves the picker open, because
+/// people pick more than one. Escape in the field closes it.
+#[test]
+fn the_emoji_picker_stays_open_after_a_pick() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app()
+        .set_emoji_list(slint::ModelRc::new(slint::VecModel::from(vec![
+            crate::EmojiItemData {
+                emoji: "🔥".into(),
+                name: "fire".into(),
+            },
+            crate::EmojiItemData {
+                emoji: "💀".into(),
+                name: "skull".into(),
+            },
+        ])));
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    h.click_label("fire");
+    next_frame();
+    h.click_label("skull");
+    next_frame();
+    assert!(
+        h.app().get_emoji_popover_open(),
+        "still open after two picks"
+    );
+    assert_eq!(h.app().get_chat_input_text(), "🔥💀");
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+    next_frame();
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "Escape closes the picker"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Chat feed: scroll position
 // ---------------------------------------------------------------------------
 
@@ -10606,7 +10692,7 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
     for (name, url) in [
         ("IGDB", "https://www.igdb.com"),
         ("Slint", "https://slint.dev"),
-        ("OpenMoji", "https://openmoji.org"),
+        ("Twemoji", "https://twemoji.twitter.com"),
     ] {
         let links = h.controls_labelled(&format!("{name} website"));
         assert_eq!(links.len(), 2, "{name}: the list and the credits");
@@ -10624,9 +10710,9 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
         assert_eq!(labelled_count(&h, text), 1, "{text}");
     }
     assert_eq!(
-        labelled_count(&h, "(https://openmoji.org), CC BY-SA 4.0"),
+        labelled_count(&h, "(https://twemoji.twitter.com), CC BY 4.0"),
         1,
-        "the OpenMoji licence line stays"
+        "the Twemoji licence line stays"
     );
 }
 
@@ -10748,7 +10834,7 @@ fn the_notices_view_opens_lists_crates_libraries_and_fonts_and_goes_back() {
     assert!(listed("opus (vcpkg)"), "a libmello library");
     assert!(listed("Oxanium"), "the Oxanium font");
     assert!(listed("Barlow"), "the Barlow font");
-    assert!(listed("OpenMoji"), "the OpenMoji line");
+    assert!(listed("Twemoji"), "the Twemoji line");
     for e in h.app().get_settings_notices().iter() {
         assert!(!e.license.is_empty() && !e.text.is_empty(), "{}", e.names);
     }

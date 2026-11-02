@@ -1,0 +1,11 @@
+Twemoji.Mozilla.ttf
+
+Emoji graphics: Twemoji, copyright Twitter, Inc and other contributors.
+Licensed under CC BY 4.0: https://creativecommons.org/licenses/by/4.0/
+Source: https://github.com/twitter/twemoji
+
+Font build: twemoji-colr by Mozilla, release v0.7.0 (COLR/CPAL v0).
+Source: https://github.com/mozilla/twemoji-colr
+
+Attribution shown in the app: Settings, ABOUT, Credits:
+"Emoji by Twemoji (https://twemoji.twitter.com), CC BY 4.0".

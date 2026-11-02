@@ -13,7 +13,7 @@
 //!   only, and the LICENSE / COPYING files in the crate source.
 //! - libmello: `libmello/vcpkg.json` and `libmello/third_party/*`.
 //! - The OFL texts of Oxanium and Barlow, in `ui/fonts`.
-//! - OpenMoji and Slint, by name.
+//! - Twemoji and Slint, by name.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -461,10 +461,10 @@ fn bundled_assets(manifest_dir: &Path) -> Vec<Dep> {
         });
     }
     deps.push(Dep {
-        name: "OpenMoji".into(),
+        name: "Twemoji".into(),
         version: "".into(),
-        license: "CC-BY-SA-4.0".into(),
-        text: "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0.\nLicence: https://creativecommons.org/licenses/by-sa/4.0/".into(),
+        license: "CC-BY-4.0".into(),
+        text: "Emoji by Twemoji (https://twemoji.twitter.com), copyright Twitter, Inc and other contributors, CC BY 4.0.\nFont build: twemoji-colr by Mozilla (https://github.com/mozilla/twemoji-colr).\nLicence: https://creativecommons.org/licenses/by/4.0/".into(),
     });
     deps.push(Dep {
         name: "Slint".into(),
