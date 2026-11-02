@@ -4,9 +4,10 @@
 //! with a Vulkan probe (platform/linux_gpu.rs).
 //!
 //! The GPU renderer is mello's own Direct2D renderer (`renderer-d2d`, name
-//! `d2d`). It needs a D3D11 device; where one cannot be made (no GPU driver, a
-//! remote desktop session, a driver that is being updated) the client falls
-//! back to Skia's CPU rasterizer (`skia-software`), the renderer every Windows
+//! `d2d`). It needs a D3D11 device and the desktop compositor; where it cannot
+//! have them (no GPU driver, a remote desktop session, a driver that is being
+//! updated, a Windows service in session 0) the client falls back to Skia's
+//! CPU rasterizer (`skia-software`), the renderer every Windows
 //! build before it used. The "Hardware Acceleration" setting turns the GPU
 //! renderer off; `MELLO_RENDERER` overrides both for debugging.
 //!
