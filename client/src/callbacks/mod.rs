@@ -1,5 +1,5 @@
 pub(crate) mod auth;
-mod chat;
+pub(crate) mod chat;
 mod clip;
 pub(crate) mod crew;
 mod crew_settings;

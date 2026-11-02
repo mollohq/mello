@@ -36,8 +36,7 @@ import {
     NoticeEntryData,
     TesterData,
     InvitePersonData,
-    VideoRect,
-} from "types.slint";
+    VideoRect, AttachmentData} from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { StreamSourceMenu } from "panels/stream_source_menu.slint";
@@ -216,6 +215,14 @@ export component MainWindow inherits Window {
     in-out property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     in property <[EmojiItemData]> emoji-list: [];
+    /// The composer's pending image chips.
+    in property <[AttachmentData]> chat-attachments: [];
+    /// The image open in the viewer over the chat panel. Empty when closed.
+    in-out property <string> chat-image-open: "";
+    in-out property <string> chat-image-open-sender: "";
+    in property <image> chat-image-open-image;
+    in property <bool> chat-has-image-open-image: false;
+    in property <string> chat-image-open-label: "";
     in-out property <bool> emoji-popover-open: false;
     in property <[MentionMemberData]> mention-suggestions: [];
     in-out property <string> chat-input-text: "";
@@ -667,6 +674,15 @@ export component MainWindow inherits Window {
     callback gif-search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
     callback gif-hovered(/* url */ string);
+    /// The Attach pill: open a file dialog for up to four images.
+    callback attach-clicked();
+    callback attachment-removed(/* id */ string);
+    /// Cmd/Ctrl+V in the field. True when the clipboard held an image and it
+    /// became a chip, so the field does not paste text.
+    callback paste-image() -> bool;
+    callback chat-image-clicked(/* url */ string, /* sender */ string);
+    callback chat-image-save(/* url */ string);
+    callback chat-image-copy(/* url */ string);
     callback emoji-pill-clicked();
     callback chat-viewport-changed(/* at_bottom */ bool);
     callback scroll-to-bottom-done();
@@ -1278,6 +1294,18 @@ export component MainWindow inherits Window {
                     mention-suggestions: root.mention-suggestions;
                     emoji-list: root.emoji-list;
                     emoji-popover-open <=> root.emoji-popover-open;
+                    attachments: root.chat-attachments;
+                    image-open <=> root.chat-image-open;
+                    image-open-sender <=> root.chat-image-open-sender;
+                    image-open-image: root.chat-image-open-image;
+                    has-image-open-image: root.chat-has-image-open-image;
+                    image-open-label: root.chat-image-open-label;
+                    attach-clicked() => { root.attach-clicked(); }
+                    attachment-removed(id) => { root.attachment-removed(id); }
+                    paste-image() => { return root.paste-image(); }
+                    image-clicked(url, sender) => { root.chat-image-clicked(url, sender); }
+                    image-save(url) => { root.chat-image-save(url); }
+                    image-copy(url) => { root.chat-image-copy(url); }
                     chat-input-text <=> root.chat-input-text;
                     composer-line-count <=> root.composer-line-count;
                     composer-multiline <=> root.composer-multiline;

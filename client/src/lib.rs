@@ -7,6 +7,7 @@ mod autolaunch;
 mod avatar;
 mod build_info;
 pub(crate) mod callbacks;
+mod chat_images;
 mod chat_ui;
 mod converters;
 mod day_card;
@@ -602,6 +603,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         discover_loading: Rc::new(RefCell::new(false)),
         chat_messages: Rc::new(RefCell::new(Vec::new())),
         chat_scroll: Rc::new(chat_ui::ChatScrollState::new()),
+        chat_attachments: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         unread_tracker: Rc::new(RefCell::new(mello_core::chat::UnreadTracker::new())),
         active_crew_id: Rc::new(RefCell::new(String::new())),
         avatar_state: std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new())),
@@ -715,6 +717,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             let msgs = app.get_messages();
             for i in 0..msgs.row_count() {
                 if let Some(mut m) = msgs.row_data(i) {
+                    if m.is_image {
+                        converters::fill_row_image(&msgs, i, &m, url, &frame);
+                        continue;
+                    }
                     if m.is_gif && m.gif_url.as_str() == url {
                         match &frame {
                             gif_animator::GifFrame::Image(img) => {

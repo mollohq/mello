@@ -59,6 +59,11 @@ Done when: a release build shows trending GIFs, a feed with 120 messages opens a
 
 ### Phase 1: images
 
+Built on `feat/chat-v2`, the one branch for all of chat v2. Not run
+against the local stack yet: the compose file creates the `mello-chat` bucket, so `docker compose
+up` recreates `minio-init` on next start. Drop from another app is out: the winit backend delivers
+no file drops; paste and the dialog cover it.
+
 | # | Change |
 |---|---|
 | 1.1 | Envelope `type: "image"` with `images: [{url, width, height, bytes, mime}]`, max 4. Server validates type, count and that each URL is on our public bucket host. |

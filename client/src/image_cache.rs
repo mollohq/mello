@@ -2,6 +2,8 @@ use image::AnimationDecoder;
 
 const MAX_GIF_FRAMES: usize = 32;
 const MAX_GIF_DIMENSION: u32 = 320;
+/// A still image shows at up to 300 logical px; 640 keeps it sharp on a 2x screen.
+const MAX_IMAGE_DIMENSION: u32 = 640;
 
 /// Raw decoded GIF frame data (Send-safe, created on async runtime).
 pub struct GifFrameData {
@@ -9,13 +11,37 @@ pub struct GifFrameData {
     pub delays: Vec<u32>,                 // ms per frame
 }
 
-/// Fetch a GIF and decode every frame, capped at `MAX_GIF_FRAMES` and
-/// `MAX_GIF_DIMENSION`. `None` on any network or decode failure.
+/// Fetch an image and decode it to frames: every frame of a GIF, capped at
+/// `MAX_GIF_FRAMES` and `MAX_GIF_DIMENSION`; one frame of anything else,
+/// capped at `MAX_IMAGE_DIMENSION`. `None` on any network or decode failure.
 pub async fn fetch_gif_frames(url: &str) -> Option<GifFrameData> {
     let http = crate::http::shared();
     let bytes = http.get(url).send().await.ok()?.bytes().await.ok()?;
+    decode_media(&bytes)
+}
 
-    let cursor = std::io::Cursor::new(bytes.as_ref());
+/// The decode half of [`fetch_gif_frames`], for bytes already in hand.
+pub fn decode_media(bytes: &[u8]) -> Option<GifFrameData> {
+    if image::guess_format(bytes).ok()? != image::ImageFormat::Gif {
+        let img = image::load_from_memory(bytes).ok()?;
+        let img = if img.width().max(img.height()) > MAX_IMAGE_DIMENSION {
+            img.resize(
+                MAX_IMAGE_DIMENSION,
+                MAX_IMAGE_DIMENSION,
+                image::imageops::FilterType::Triangle,
+            )
+        } else {
+            img
+        };
+        let rgba = img.to_rgba8();
+        let (w, h) = (rgba.width(), rgba.height());
+        return Some(GifFrameData {
+            frames: vec![(rgba.into_raw(), w, h)],
+            delays: vec![0],
+        });
+    }
+
+    let cursor = std::io::Cursor::new(bytes);
     let decoder = image::codecs::gif::GifDecoder::new(cursor).ok()?;
     let raw_frames = decoder.into_frames().collect_frames().ok()?;
 

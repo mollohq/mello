@@ -95,7 +95,42 @@ Every message sent via `channel_message_send` uses this JSON structure as the
 | `height` | `integer` | Native height in pixels. |
 | `alt` | `string` | Search query that produced this result. Used as accessible description. |
 
-### 2.3 System Message
+### 2.3 Image Message
+
+`type: "image"` carries up to four uploaded images and an optional caption
+in `body`. Each entry:
+
+```json
+{ "url": "https://chat.m3llo.app/{crew_id}/{user_id}/{id}.jpg",
+  "width": 1600, "height": 900, "bytes": 118000, "mime": "image/jpeg" }
+```
+
+| Rule | Value |
+|---|---|
+| Images per message | 1 to 4 |
+| Long side | 1600px. The client resizes before upload. |
+| Size | 8 MB after encode. The server refuses more. |
+| Types | `image/jpeg`, `image/png` (kept when the source PNG has transparency), `image/gif` (bytes kept as they are) |
+| EXIF | Dropped by the re-encode. Orientation is applied first. |
+| Host | The chat bucket's public base (`CHAT_S3_PUBLIC_URL`). The server refuses any other host. |
+
+Upload: the client calls `chat_upload_url` (crew, mime, bytes) for a presigned
+PUT under `{crew_id}/{user_id}/{id}.{ext}`, PUTs the bytes, then sends the
+message. The uploader's id is in the key, so `chat_delete_images` accepts only
+the caller's own keys; the client calls it when the sender deletes the message.
+The bucket is `mello-chat`, apart from clips (see 04-BACKEND.md).
+
+Composer: the Attach pill opens a file dialog (up to four), Cmd/Ctrl+V with an
+image on the clipboard adds a chip, and a chip shows preparing, uploading, the
+size when ready, or the reason it failed. Enter or the send button sends when
+every upload has landed. Drop from another app is not supported: the winit
+backend delivers no file drops.
+
+Feed: images render under the body, each at most 300px wide with one cut
+corner and the size tag. A click opens the viewer over the panel with Save,
+Copy and Close; Escape closes.
+
+### 2.4 System Message
 
 System messages are sent by the server (not users) for crew events.
 

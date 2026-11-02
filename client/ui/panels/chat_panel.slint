@@ -1,7 +1,7 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { ChatFocus, ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
+import { ChatFocus, ChatMessageData, ChatLinkData, ChatImageData, AttachmentData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
 component LinkPill inherits Rectangle {
     in property <string> url;
@@ -540,6 +540,45 @@ export component ChatPanel inherits Rectangle {
     // GIF popover
     in property <[GifItemData]> gif-results: [];
     in property <string> gif-error: "";
+
+    // Image attachments and the viewer
+    in property <[AttachmentData]> attachments: [];
+    in-out property <string> image-open: "";
+    in-out property <string> image-open-sender: "";
+    in property <image> image-open-image;
+    in property <bool> has-image-open-image: false;
+    in property <string> image-open-label: "";
+    callback attach-clicked();
+    callback attachment-removed(/* id */ string);
+    callback paste-image() -> bool;
+    callback image-clicked(/* url */ string, /* sender */ string);
+    callback image-save(/* url */ string);
+    callback image-copy(/* url */ string);
+
+    /// Enter and the send button. Text, or ready chips, or both.
+    function submit-message() {
+        if root.chat-input-text == "" && root.attachments.length == 0 {
+            return;
+        }
+        if root.edit-mode {
+            if root.chat-input-text == "" {
+                return;
+            }
+            root.edit-message(root.edit-message-id, root.chat-input-text);
+            root.edit-mode = false;
+            root.edit-message-id = "";
+        } else if root.reply-mode {
+            root.message-submitted-with-reply(root.chat-input-text, root.reply-to-id);
+            root.reply-mode = false;
+            root.reply-to-id = "";
+            root.reply-to-name = "";
+        } else {
+            root.message-submitted(root.chat-input-text);
+        }
+        root.chat-input-text = "";
+        root.composer-multiline = false;
+        root.composer-line-count = 1;
+    }
     in-out property <bool> gif-popover-open: false;
 
     // Reply mode state
@@ -1038,7 +1077,7 @@ export component ChatPanel inherits Rectangle {
                     }
 
                     // Media row: full content width under avatar column (not double-guttered)
-                    if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip): HorizontalLayout {
+                    if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip || msg.is-image): HorizontalLayout {
                         width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
@@ -1053,6 +1092,78 @@ export component ChatPanel inherits Rectangle {
                         VerticalLayout {
                             width: media-col-w;
                             spacing: 4px;
+
+                            // Images: one under the other, each at most 300px wide,
+                            // one cut corner like every card. Click opens the viewer.
+                            if msg.is-image: VerticalLayout {
+                                spacing: 4px;
+                                for img[img-idx] in msg.images: Rectangle {
+                                    property <float> aspect: img.height > 0 ? img.width / img.height : 1.33;
+                                    property <length> media-w: min(300px, media-col-w);
+                                    width: media-w;
+                                    height: max(60px, media-w / aspect);
+                                    clip: true;
+                                    background: img.has-image ? transparent : Theme.bg-app;
+
+                                    if img.has-image: Image {
+                                        source: img.image;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+
+                                    if !img.has-image: Text {
+                                        font-weight: Theme.weight-sentence;
+                                        font-family: Theme.font-body;
+                                        text: img.failed ? "Image not available" : "Loading image…";
+                                        font-size: Theme.font-xs;
+                                        color: Theme.text-tertiary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: parent.width;
+                                        height: parent.height;
+                                    }
+
+                                    // The size tag, bottom right, in a black wash over content.
+                                    if img.has-image && img.bytes-label != "": Rectangle {
+                                        x: parent.width - self.width - 8px;
+                                        y: parent.height - self.height - 8px;
+                                        width: size-tag.preferred-width + 14px;
+                                        height: 20px;
+                                        background: #000000B8;
+                                        size-tag := Text {
+                                            font-family: Theme.font-body;
+                                            font-weight: Theme.weight-sentence;
+                                            text: img.bytes-label;
+                                            font-size: Theme.font-xs;
+                                            color: Theme.text-secondary;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            width: parent.width;
+                                            height: parent.height;
+                                        }
+                                    }
+
+                                    CutMask {
+                                        x: parent.width - self.width;
+                                        y: 0;
+                                        width: 12px;
+                                        height: 12px;
+                                        n: 12px;
+                                        corner: "tr";
+                                        fill: Theme.surface;
+                                    }
+
+                                    image-touch := TouchArea {
+                                        accessible-role: button;
+                                        accessible-label: "Open image";
+                                        enabled: img.has-image;
+                                        accessible-enabled: img.has-image;
+                                        mouse-cursor: img.has-image ? pointer : default;
+                                        clicked => { root.image-clicked(img.url, msg.sender-name); }
+                                    }
+                                }
+                            }
 
                             if msg.is-clip: ChatClipCard {
                                 sender-name: msg.sender-name;
@@ -1522,11 +1633,96 @@ export component ChatPanel inherits Rectangle {
             close => { root.gif-popover-open = false; }
         }
 
+        // --- Pending image chips ---
+        if root.attachments.length > 0: HorizontalLayout {
+            height: 72px;
+            spacing: 8px;
+            padding-left: 4px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            alignment: start;
+
+            for a[a-idx] in root.attachments: Rectangle {
+                width: 64px;
+                height: 64px;
+                clip: true;
+                background: Theme.bg-app;
+
+                if a.has-thumb: Image {
+                    source: a.thumb;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: cover;
+                    opacity: a.state == "ready" ? 1 : 0.45;
+                }
+
+                // The word under the thumbnail: size, step, or the reason.
+                Rectangle {
+                    x: 0;
+                    y: parent.height - self.height;
+                    width: parent.width;
+                    height: 16px;
+                    background: #000000B8;
+                    Text {
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        text: a.label;
+                        font-size: 9px;
+                        color: a.state == "failed" ? Theme.live : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width - 4px;
+                        height: parent.height;
+                        overflow: elide;
+                    }
+                }
+
+                CutMask {
+                    x: parent.width - self.width;
+                    y: 0;
+                    width: 8px;
+                    height: 8px;
+                    n: 8px;
+                    corner: "tr";
+                    fill: Theme.surface;
+                }
+
+                // Remove, top right.
+                Rectangle {
+                    x: parent.width - self.width - 3px;
+                    y: 3px;
+                    width: 16px;
+                    height: 16px;
+                    background: #000000CC;
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 9px;
+                        height: 9px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Theme.text-primary;
+                    }
+                    TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Remove image";
+                        mouse-cursor: pointer;
+                        clicked => { root.attachment-removed(a.id); }
+                    }
+                }
+            }
+        }
+
         // --- Action pills row ---
         HorizontalLayout {
             height: 28px;
             spacing: 4px;
             padding-left: 0px;
+
+            PillButton {
+                icon: @image-url("../icons/paperclip.svg");
+                label: "Attach";
+                clicked => { root.attach-clicked(); }
+            }
 
             PillButton {
                 icon: @image-url("../icons/gif.svg");
@@ -1583,7 +1779,7 @@ export component ChatPanel inherits Rectangle {
                 text <=> root.chat-input-text;
                 x: 18px;
                 y: 0;
-                width: parent.width - 36px;
+                width: parent.width - 36px - 34px;
                 height: parent.height;
                 font-size: Theme.font-md;
                 color: Theme.text-primary;
@@ -1598,6 +1794,13 @@ export component ChatPanel inherits Rectangle {
                         root.gif-popover-open = false;
                         return accept;
                     }
+                    // Cmd/Ctrl+V with an image on the clipboard: a chip, not text.
+                    if (event.modifiers.meta || event.modifiers.control) && event.text == "v" {
+                        if root.paste-image() {
+                            return accept;
+                        }
+                        return reject;
+                    }
                     if event.text == Key.Return {
                         if event.modifiers.shift {
                             if !root.composer-multiline {
@@ -1606,23 +1809,7 @@ export component ChatPanel inherits Rectangle {
                             root.pending-newline = true;
                             accept
                         } else {
-                            if root.chat-input-text != "" {
-                                if root.edit-mode {
-                                    root.edit-message(root.edit-message-id, root.chat-input-text);
-                                    root.edit-mode = false;
-                                    root.edit-message-id = "";
-                                } else if root.reply-mode {
-                                    root.message-submitted-with-reply(root.chat-input-text, root.reply-to-id);
-                                    root.reply-mode = false;
-                                    root.reply-to-id = "";
-                                    root.reply-to-name = "";
-                                } else {
-                                    root.message-submitted(root.chat-input-text);
-                                }
-                                root.chat-input-text = "";
-                                root.composer-multiline = false;
-                                root.composer-line-count = 1;
-                            }
+                            root.submit-message();
                             accept
                         }
                     } else {
@@ -1640,10 +1827,190 @@ export component ChatPanel inherits Rectangle {
                 font-size: Theme.font-md;
                 text: "Message crewmates...";
             }
+
+            // Send: red when there is something to send (it commits), graphite
+            // when the field is empty. Bottom right, so it stays put as the
+            // field grows.
+            send-btn := Rectangle {
+                property <bool> armed: root.chat-input-text != "" || root.attachments.length > 0;
+                x: parent.width - self.width - 6px;
+                y: parent.height - self.height - 6px;
+                width: 28px;
+                height: 28px;
+                background: transparent;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 6px;
+                    fill: send-btn.armed ? Theme.live : Theme.surface-hover;
+                }
+                Image {
+                    source: @image-url("../icons/arrow-up.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: send-btn.armed ? Theme.on-live : Theme.text-tertiary;
+                }
+                TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Send";
+                    enabled: send-btn.armed;
+                    accessible-enabled: send-btn.armed;
+                    mouse-cursor: send-btn.armed ? pointer : default;
+                    clicked => { root.submit-message(); }
+                }
+            }
         }
         } // composer block
             } // chat-body VerticalLayout
         } // chat-body Rectangle
+    }
+
+    // --- Image viewer: over the panel, not a new window ---
+    if root.image-open != "": Rectangle {
+        width: parent.width;
+        height: parent.height;
+        background: #000000DC;
+
+        TouchArea {
+            // a11y: none (backdrop: a click outside the image closes the viewer)
+            clicked => { root.image-open = ""; }
+        }
+
+        viewer-keys := FocusScope {
+            key-pressed(event) => {
+                if event.text == Key.Escape {
+                    root.image-open = "";
+                    return accept;
+                }
+                reject
+            }
+        }
+
+        VerticalLayout {
+            padding: 20px;
+            spacing: 12px;
+            alignment: center;
+
+            Rectangle {
+                vertical-stretch: 1;
+                if root.has-image-open-image: Image {
+                    source: root.image-open-image;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: contain;
+                }
+                if !root.has-image-open-image: Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: "Loading image…";
+                    font-size: Theme.font-md;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    width: parent.width;
+                    height: parent.height;
+                }
+                TouchArea {
+                    // a11y: none (keeps a click on the image from closing the viewer)
+                }
+            }
+
+            HorizontalLayout {
+                height: 20px;
+                spacing: 12px;
+                Text {
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    text: root.image-open-sender;
+                    font-size: Theme.font-md;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                Text {
+                    font-family: Theme.font-label;
+                    font-weight: Theme.weight-label;
+                    letter-spacing: Theme.track-label;
+                    text: root.image-open-label;
+                    font-size: Theme.font-xs;
+                    color: Theme.text-secondary;
+                    vertical-alignment: center;
+                    horizontal-stretch: 0;
+                }
+            }
+
+            HorizontalLayout {
+                height: 32px;
+                spacing: 8px;
+
+                for action[i] in ["Save", "Copy"]: Rectangle {
+                    width: 84px;
+                    background: transparent;
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 8px;
+                        fill: action-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
+                    }
+                    action-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: action + " image";
+                        mouse-cursor: pointer;
+                        clicked => {
+                            if action == "Save" { root.image-save(root.image-open); }
+                            else { root.image-copy(root.image-open); }
+                        }
+                    }
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: action == "Save" ? "SAVE" : "COPY";
+                        font-size: Theme.font-xs;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+
+                Rectangle { horizontal-stretch: 1; }
+
+                // The one white button on this surface.
+                Rectangle {
+                    width: 90px;
+                    background: transparent;
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 8px;
+                        fill: close-touch.has-hover ? Theme.action-press : Theme.action;
+                    }
+                    close-touch := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Close image";
+                        mouse-cursor: pointer;
+                        clicked => { root.image-open = ""; }
+                    }
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: "CLOSE";
+                        font-size: Theme.font-xs;
+                        color: Theme.bg-app;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+            }
+        }
     }
 
     // Full-height left edge (crew panel style); on top so bg-app header does not cover it.
@@ -1810,6 +2177,44 @@ export component PreviewEmoji inherits ChatPanel {
         { emoji: "👀", name: "eyes" },
         { emoji: "🤝", name: "handshake" },
     ];
+}
+
+/// An image message in the feed and two pending chips in the composer.
+export component PreviewImages inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    chat-input-text: "that round was insane, clip it";
+    attachments: [
+        { id: "a1", state: "ready", label: "860 KB" },
+        { id: "a2", state: "uploading", label: "uploading" },
+    ];
+    messages: [
+        {
+            message-id: "i1", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "look at this one",
+            display-text: "look at this one",
+            display-styled: @markdown("look at this one"),
+            timestamp: "just now", display-time: "19:41",
+            is-group-start: true, is-image: true,
+            images: [
+                { url: "https://chat.example/c/u/a.jpg", width: 1600, height: 1000, bytes-label: "1.2 MB" },
+                { url: "https://chat.example/c/u/b.jpg", width: 800, height: 1200, bytes-label: "", failed: true },
+            ],
+        },
+    ];
+}
+
+/// The viewer over the panel, before the pixels arrive.
+export component PreviewImageViewer inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    image-open: "https://chat.example/c/u/a.jpg";
+    image-open-sender: "k0ji";
+    image-open-label: "1600×1000 · 1.2 MB";
 }
 
 /// Two messages: the rows sit together at the bottom at their own height.

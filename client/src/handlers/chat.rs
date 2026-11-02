@@ -78,6 +78,28 @@ impl ChatRefresh {
     }
 }
 
+/// Move one pending chip to `state` and redraw the chips. A chip the user
+/// removed while its upload ran is gone, and its result is dropped.
+fn set_attachment_state(
+    ctx: &AppContext,
+    attachment_id: &str,
+    state: crate::chat_images::AttachmentState,
+) {
+    {
+        let mut composer = crate::chat_images::lock(&ctx.chat_attachments);
+        let Some(a) = composer
+            .attachments
+            .iter_mut()
+            .find(|a| a.id == attachment_id)
+        else {
+            return;
+        };
+        a.state = state;
+    }
+    crate::callbacks::chat::sync_attachments(ctx);
+    crate::callbacks::chat::flush_pending_send(ctx);
+}
+
 fn upsert_message(ctx: &AppContext, message: mello_core::events::ChatMessage) {
     let mut msgs = ctx.chat_messages.borrow_mut();
     if let Some(existing) = msgs.iter_mut().find(|m| m.message_id == message.message_id) {
@@ -276,6 +298,27 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             };
             ctx.app.set_gif_error(text.into());
+        }
+        Event::ChatImageUploaded {
+            attachment_id,
+            image,
+        } => {
+            log::info!("[chat] attachment {} ready: {}", attachment_id, image.url);
+            set_attachment_state(
+                ctx,
+                &attachment_id,
+                crate::chat_images::AttachmentState::Ready(image),
+            );
+        }
+        Event::ChatImageUploadFailed {
+            attachment_id,
+            reason,
+        } => {
+            set_attachment_state(
+                ctx,
+                &attachment_id,
+                crate::chat_images::AttachmentState::Failed(reason),
+            );
         }
         Event::MessagePreviewUpdated { crew_id, messages } => {
             log::debug!(

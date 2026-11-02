@@ -1343,6 +1343,240 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat: images
+// ---------------------------------------------------------------------------
+
+fn image_data(n: u32) -> mello_core::chat::ImageData {
+    mello_core::chat::ImageData {
+        url: format!("http://localhost:9000/mello-chat/crew-1/u-bob/{n}.jpg"),
+        width: 1600,
+        height: 900,
+        bytes: 120_000,
+        mime: "image/jpeg".into(),
+    }
+}
+
+fn test_png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, 40, 255])
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("png");
+    out.into_inner()
+}
+
+/// An image message is a row with its images, and every image is asked
+/// from the cache so the pixels arrive without a hover.
+#[test]
+fn an_image_message_renders_its_images_and_asks_the_cache() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img1", "bob", 0);
+    m.images = vec![image_data(1), image_data(2)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m],
+        has_more_history: false,
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "img1")
+        .expect("row");
+    assert!(row.is_image);
+    assert_eq!(row.images.row_count(), 2);
+    let first = row.images.row_data(0).expect("image");
+    assert_eq!(first.bytes_label, "118 KB");
+    assert!(!first.has_image, "no pixels yet");
+    for n in [1, 2] {
+        assert!(
+            h.ctx().gif_chat_anim.is_requested(&image_data(n).url),
+            "image {n} was asked from the cache"
+        );
+    }
+}
+
+/// A picked image is a chip at once, uploads when prepared, and the send
+/// the user asked for in between goes out as one image message when the
+/// upload lands. The chips go with it.
+#[test]
+fn a_send_waits_for_the_upload_then_goes_as_one_image_message() {
+    use crate::chat_images::{lock, AttachmentState};
+    use slint::Model;
+    let mut h = Harness::new();
+    let id =
+        crate::callbacks::chat::begin_attachment(&h.ctx().chat_attachments, &h.app().as_weak())
+            .expect("a slot");
+    assert_eq!(h.app().get_chat_attachments().row_count(), 1);
+    assert_eq!(
+        h.app()
+            .get_chat_attachments()
+            .row_data(0)
+            .expect("chip")
+            .state,
+        "preparing"
+    );
+
+    h.app().invoke_send_message("with a caption".into());
+    h.pump();
+    assert!(
+        h.commands().is_empty(),
+        "nothing sends while the image prepares"
+    );
+
+    let prepared = crate::chat_images::prepare_image(&test_png(2400, 1200));
+    crate::callbacks::chat::attachment_prepared(h.ctx(), &id, prepared);
+    let chip = h.app().get_chat_attachments().row_data(0).expect("chip");
+    assert_eq!(chip.state, "uploading");
+    assert!(chip.has_thumb);
+    let cmds = h.commands();
+    let upload = cmds
+        .iter()
+        .find_map(|c| match c {
+            Command::UploadChatImage {
+                attachment_id,
+                mime,
+                width,
+                height,
+                bytes,
+            } => Some((
+                attachment_id.clone(),
+                mime.clone(),
+                *width,
+                *height,
+                bytes.len(),
+            )),
+            _ => None,
+        })
+        .expect("the prepared bytes go to the core");
+    assert_eq!(upload.0, id);
+    assert_eq!(upload.1, "image/jpeg");
+    assert_eq!(
+        (upload.2, upload.3),
+        (1600, 800),
+        "resized to 1600 on the long side"
+    );
+    assert!(upload.4 > 0);
+
+    h.emit(Event::ChatImageUploaded {
+        attachment_id: id.clone(),
+        image: image_data(7),
+    });
+    let cmds = h.commands();
+    match cmds
+        .iter()
+        .find(|c| matches!(c, Command::SendImages { .. }))
+    {
+        Some(Command::SendImages {
+            images, content, ..
+        }) => {
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].url, image_data(7).url);
+            assert_eq!(content, "with a caption");
+        }
+        _ => panic!("the message goes out as images, got {cmds:?}"),
+    }
+    assert_eq!(
+        h.app().get_chat_attachments().row_count(),
+        0,
+        "the chips went with it"
+    );
+    assert!(lock(&h.ctx().chat_attachments).pending_send.is_none());
+    let _ = AttachmentState::Preparing;
+}
+
+/// A failed upload keeps its chip with the reason, and a send with text goes
+/// out as text; a failed chip never blocks the composer.
+#[test]
+fn a_failed_upload_keeps_its_reason_and_text_still_sends() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let id =
+        crate::callbacks::chat::begin_attachment(&h.ctx().chat_attachments, &h.app().as_weak())
+            .expect("a slot");
+    crate::callbacks::chat::attachment_prepared(
+        h.ctx(),
+        &id,
+        crate::chat_images::prepare_image(&test_png(10, 10)),
+    );
+    let _ = h.commands();
+    h.emit(Event::ChatImageUploadFailed {
+        attachment_id: id,
+        reason: "The upload was refused.".into(),
+    });
+    let chip = h.app().get_chat_attachments().row_data(0).expect("chip");
+    assert_eq!(chip.state, "failed");
+    assert_eq!(chip.label, "The upload was refused.");
+
+    h.app().invoke_send_message("still here".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SendMessage { content, .. } if content == "still here")),
+        "text goes as text, got {cmds:?}"
+    );
+}
+
+/// Deleting an image message also asks the core to remove its objects.
+#[test]
+fn deleting_an_image_message_removes_its_objects() {
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img9", "bob", 0);
+    m.images = vec![image_data(1)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m, chat_message_fixture("t1", "alice", 1)],
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.app().invoke_delete_message("t1".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(cmds
+        .iter()
+        .any(|c| matches!(c, Command::DeleteMessage { message_id } if message_id == "t1")));
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::DeleteChatImages { .. })),
+        "a text message has no objects"
+    );
+
+    h.app().invoke_delete_message("img9".into());
+    h.pump();
+    let cmds = h.commands();
+    match cmds
+        .iter()
+        .find(|c| matches!(c, Command::DeleteChatImages { .. }))
+    {
+        Some(Command::DeleteChatImages { urls }) => assert_eq!(urls, &vec![image_data(1).url]),
+        _ => panic!("the objects go with the message, got {cmds:?}"),
+    }
+}
+
+/// Clicking an image opens the viewer with the sender and the size line.
+#[test]
+fn clicking_an_image_opens_the_viewer() {
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img1", "bob", 0);
+    m.images = vec![image_data(3)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m],
+        has_more_history: false,
+    });
+    h.app()
+        .invoke_chat_image_clicked(image_data(3).url.into(), "bob".into());
+    assert_eq!(h.app().get_chat_image_open(), image_data(3).url);
+    assert_eq!(h.app().get_chat_image_open_sender(), "bob");
+    assert_eq!(h.app().get_chat_image_open_label(), "1600×900 · 118 KB");
+    assert!(
+        !h.app().get_chat_has_image_open_image(),
+        "pixels not fetched in the harness"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Chat: emoji
 // ---------------------------------------------------------------------------
 

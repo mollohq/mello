@@ -605,6 +605,29 @@ export struct ChatLinkData {
     label: string,
 }
 
+/// One image of an image message. `image` is filled by the client's image
+/// cache once the bytes are decoded; until then the frame shows "Loading".
+export struct ChatImageData {
+    url: string,
+    width: int,
+    height: int,
+    bytes-label: string,
+    image: image,
+    has-image: bool,
+    failed: bool,
+}
+
+/// A pending image chip in the composer.
+export struct AttachmentData {
+    id: string,
+    /// "preparing", "uploading", "ready" or "failed".
+    state: string,
+    /// The size when ready, the step while it runs, the reason when failed.
+    label: string,
+    thumb: image,
+    has-thumb: bool,
+}
+
 export struct ChatMessageData {
     message-id: string,
     sender-id: string,
@@ -629,6 +652,8 @@ export struct ChatMessageData {
     gif-url: string,
     /// Only emoji, at most three: the body renders at Theme.font-xxl.
     is-emoji-only: bool,
+    is-image: bool,
+    images: [ChatImageData],
     gif-width: int,
     gif-height: int,
     is-clip: bool,

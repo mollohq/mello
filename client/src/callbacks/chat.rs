@@ -93,12 +93,11 @@ pub fn wire(ctx: &AppContext) {
             let cmd = cmd.clone();
             let s = scroll_ctx.clone();
             let picks = picks.clone();
+            let composer = ctx.chat_attachments.clone();
+            let app_weak = ctx.app.as_weak();
             move |text| {
-                let _ = cmd.send(Command::SendMessage {
-                    mentions: take_picks(&picks, &text),
-                    content: text.to_string(),
-                    reply_to: None,
-                });
+                let mentions = take_picks(&picks, &text);
+                submit_composer(&cmd, &composer, &app_weak, text.to_string(), None, mentions);
                 s.fire();
             }
         });
@@ -111,12 +110,18 @@ pub fn wire(ctx: &AppContext) {
             app: ctx.app.as_weak(),
         });
         let picks = picks.clone();
+        let composer = ctx.chat_attachments.clone();
+        let app_weak = ctx.app.as_weak();
         ctx.app.on_send_message_with_reply(move |text, reply_to| {
-            let _ = cmd.send(Command::SendMessage {
-                mentions: take_picks(&picks, &text),
-                content: text.to_string(),
-                reply_to: Some(reply_to.to_string()),
-            });
+            let mentions = take_picks(&picks, &text);
+            submit_composer(
+                &cmd,
+                &composer,
+                &app_weak,
+                text.to_string(),
+                Some(reply_to.to_string()),
+                mentions,
+            );
             scroll_ctx.fire();
         });
     }
@@ -225,12 +230,25 @@ pub fn wire(ctx: &AppContext) {
     }
     {
         let cmd = ctx.cmd_tx.clone();
+        let messages = ctx.chat_messages.clone();
         ctx.app.on_delete_message(move |message_id| {
+            // The objects of an image message go with it. The server accepts
+            // only the caller's own keys, and only the sender can delete.
+            let urls: Vec<String> = messages
+                .borrow()
+                .iter()
+                .find(|m| m.message_id == message_id.as_str())
+                .map(|m| m.images.iter().map(|i| i.url.clone()).collect())
+                .unwrap_or_default();
             let _ = cmd.send(Command::DeleteMessage {
                 message_id: message_id.to_string(),
             });
+            if !urls.is_empty() {
+                let _ = cmd.send(Command::DeleteChatImages { urls });
+            }
         });
     }
+    wire_attachments(ctx);
     {
         let cmd = ctx.cmd_tx.clone();
         ctx.app.on_gif_pill_clicked(move || {
@@ -415,4 +433,403 @@ impl ChatSendScroll {
             app.set_has_new_messages(false);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Image attachments: chips, upload, paste, the viewer
+// ---------------------------------------------------------------------------
+
+use crate::chat_images::{
+    lock, prepare_image, ready_images, Attachment, AttachmentState, Attachments, PendingSend,
+    PreparedImage, MAX_ATTACHMENTS,
+};
+
+/// The chip rows for the window, from the composer state.
+fn attachment_rows(composer: &Attachments) -> Vec<crate::AttachmentData> {
+    lock(composer)
+        .attachments
+        .iter()
+        .map(|a| crate::AttachmentData {
+            id: a.id.clone().into(),
+            state: a.state_name().into(),
+            label: a.label().into(),
+            thumb: a
+                .thumb
+                .as_ref()
+                .map(|(rgba, w, h)| {
+                    slint::Image::from_rgba8(
+                        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
+                            rgba, *w, *h,
+                        ),
+                    )
+                })
+                .unwrap_or_default(),
+            has_thumb: a.thumb.is_some(),
+        })
+        .collect()
+}
+
+fn push_attachment_rows(app_weak: &slint::Weak<crate::MainWindow>, composer: &Attachments) {
+    if let Some(app) = app_weak.upgrade() {
+        app.set_chat_attachments(Rc::new(slint::VecModel::from(attachment_rows(composer))).into());
+    }
+}
+
+/// Redraw the chips from the composer state.
+pub(crate) fn sync_attachments(ctx: &AppContext) {
+    push_attachment_rows(&ctx.app.as_weak(), &ctx.chat_attachments);
+}
+
+/// Send now, or when every upload has settled. Text alone goes as a text
+/// message. Ready images go with the text as one image message.
+fn submit_composer(
+    cmd: &tokio::sync::mpsc::UnboundedSender<Command>,
+    composer: &Attachments,
+    app_weak: &slint::Weak<crate::MainWindow>,
+    text: String,
+    reply_to: Option<String>,
+    mentions: Vec<MentionRef>,
+) {
+    let has_chips = !lock(composer).attachments.is_empty();
+    if !has_chips {
+        if text.is_empty() {
+            return;
+        }
+        let _ = cmd.send(Command::SendMessage {
+            mentions,
+            content: text,
+            reply_to,
+        });
+        return;
+    }
+    lock(composer).pending_send = Some(PendingSend {
+        text,
+        reply_to,
+        mentions,
+    });
+    flush_pending_send_with(cmd, composer, app_weak);
+}
+
+/// The send that waits on uploads, once nothing is uploading. Failed chips
+/// stay, so the user sees why, unless the message went out without them.
+pub(crate) fn flush_pending_send(ctx: &AppContext) {
+    flush_pending_send_with(&ctx.cmd_tx, &ctx.chat_attachments, &ctx.app.as_weak());
+}
+
+fn flush_pending_send_with(
+    cmd: &tokio::sync::mpsc::UnboundedSender<Command>,
+    composer: &Attachments,
+    app_weak: &slint::Weak<crate::MainWindow>,
+) {
+    let (pending, images) = {
+        let state = lock(composer);
+        let Some(pending) = state.pending_send.clone() else {
+            return;
+        };
+        let Some(images) = ready_images(&state.attachments) else {
+            return; // still uploading; ChatImageUploaded calls again
+        };
+        (pending, images)
+    };
+    lock(composer).pending_send = None;
+    if images.is_empty() {
+        // Every chip failed. Text alone still goes; the chips stay with
+        // their reasons.
+        if !pending.text.is_empty() {
+            let _ = cmd.send(Command::SendMessage {
+                mentions: pending.mentions,
+                content: pending.text,
+                reply_to: pending.reply_to,
+            });
+        }
+        return;
+    }
+    let _ = cmd.send(Command::SendImages {
+        images,
+        content: pending.text,
+        reply_to: pending.reply_to,
+        mentions: pending.mentions,
+    });
+    lock(composer).attachments.clear();
+    if let Some(app) = app_weak.upgrade() {
+        app.set_chat_attachments(
+            Rc::new(slint::VecModel::<crate::AttachmentData>::default()).into(),
+        );
+    }
+}
+
+/// What the prepare task needs back on the UI thread, with the window weak.
+struct AttachmentRefresh {
+    app: slint::Weak<crate::MainWindow>,
+    composer: Attachments,
+    cmd: tokio::sync::mpsc::UnboundedSender<Command>,
+}
+
+impl AttachmentRefresh {
+    fn prepared(&self, id: &str, result: Result<PreparedImage, crate::chat_images::PrepareError>) {
+        {
+            let mut state = lock(&self.composer);
+            let Some(a) = state.attachments.iter_mut().find(|a| a.id == id) else {
+                return; // removed while preparing
+            };
+            match &result {
+                Ok(p) => {
+                    a.thumb = Some(p.thumb.clone());
+                    a.bytes = p.bytes.len() as u64;
+                    a.state = AttachmentState::Uploading;
+                }
+                Err(e) => a.state = AttachmentState::Failed(e.0.clone()),
+            }
+        }
+        if let Ok(p) = result {
+            let _ = self.cmd.send(Command::UploadChatImage {
+                attachment_id: id.to_string(),
+                mime: p.mime.to_string(),
+                width: p.width,
+                height: p.height,
+                bytes: p.bytes,
+            });
+        }
+        push_attachment_rows(&self.app, &self.composer);
+        flush_pending_send_with(&self.cmd, &self.composer, &self.app);
+    }
+}
+
+fn wire_attachments(ctx: &AppContext) {
+    {
+        let rt = ctx.rt.clone();
+        let composer = ctx.chat_attachments.clone();
+        let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
+        ctx.app.on_attach_clicked(move || {
+            let room = MAX_ATTACHMENTS.saturating_sub(lock(&composer).attachments.len());
+            if room == 0 {
+                return;
+            }
+            let composer = composer.clone();
+            let app_weak = app_weak.clone();
+            let cmd = cmd.clone();
+            let rt2 = rt.clone();
+            rt.spawn(async move {
+                let files = rfd::AsyncFileDialog::new()
+                    .add_filter("Images", &["jpg", "jpeg", "png", "gif"])
+                    .pick_files()
+                    .await
+                    .unwrap_or_default();
+                for file in files.into_iter().take(room) {
+                    let bytes = file.read().await;
+                    let composer = composer.clone();
+                    let app_weak = app_weak.clone();
+                    let cmd = cmd.clone();
+                    let rt3 = rt2.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        add_attachment_with(&composer, &app_weak, &cmd, &rt3, bytes);
+                    });
+                }
+            });
+        });
+    }
+    {
+        let composer = ctx.chat_attachments.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_attachment_removed(move |id| {
+            lock(&composer).attachments.retain(|a| a.id != id.as_str());
+            push_attachment_rows(&app_weak, &composer);
+        });
+    }
+    {
+        let composer = ctx.chat_attachments.clone();
+        let app_weak = ctx.app.as_weak();
+        let cmd = ctx.cmd_tx.clone();
+        let rt = ctx.rt.clone();
+        ctx.app.on_paste_image(move || {
+            let Some(png) = clipboard_image_png() else {
+                return false;
+            };
+            add_attachment_with(&composer, &app_weak, &cmd, &rt, png);
+            true
+        });
+    }
+    {
+        let messages = ctx.chat_messages.clone();
+        let anim = ctx.gif_chat_anim.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_chat_image_clicked(move |url, sender| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let label = messages
+                .borrow()
+                .iter()
+                .flat_map(|m| m.images.iter())
+                .find(|i| i.url == url.as_str())
+                .map(|i| {
+                    let size = if i.bytes > 0 {
+                        format!(" · {}", crate::chat_images::size_label(i.bytes))
+                    } else {
+                        String::new()
+                    };
+                    format!("{}×{}{}", i.width, i.height, size)
+                })
+                .unwrap_or_default();
+            match anim.current_frame(url.as_str()) {
+                Some(px) => {
+                    app.set_chat_image_open_image(px);
+                    app.set_chat_has_image_open_image(true);
+                }
+                None => app.set_chat_has_image_open_image(false),
+            }
+            app.set_chat_image_open_label(label.into());
+            app.set_chat_image_open_sender(sender);
+            app.set_chat_image_open(url);
+        });
+    }
+    {
+        let rt = ctx.rt.clone();
+        ctx.app.on_chat_image_save(move |url| {
+            let url = url.to_string();
+            rt.spawn(async move {
+                let name = url.rsplit('/').next().unwrap_or("image").to_string();
+                let Some(target) = rfd::AsyncFileDialog::new()
+                    .set_file_name(&name)
+                    .save_file()
+                    .await
+                else {
+                    return;
+                };
+                match crate::http::shared().get(&url).send().await {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(bytes) => match std::fs::write(target.path(), &bytes) {
+                            Ok(()) => {
+                                log::info!("[chat] image saved to {}", target.path().display())
+                            }
+                            Err(e) => log::warn!("[chat] image save failed: {}", e),
+                        },
+                        Err(e) => log::warn!("[chat] image download failed: {}", e),
+                    },
+                    Err(e) => log::warn!("[chat] image download failed: {}", e),
+                }
+            });
+        });
+    }
+    {
+        let rt = ctx.rt.clone();
+        ctx.app.on_chat_image_copy(move |url| {
+            let url = url.to_string();
+            rt.spawn(async move {
+                let bytes = match crate::http::shared().get(&url).send().await {
+                    Ok(resp) => match resp.bytes().await {
+                        Ok(b) => b,
+                        Err(e) => {
+                            log::warn!("[chat] image download failed: {}", e);
+                            return;
+                        }
+                    },
+                    Err(e) => {
+                        log::warn!("[chat] image download failed: {}", e);
+                        return;
+                    }
+                };
+                let Ok(img) = image::load_from_memory(&bytes) else {
+                    log::warn!("[chat] image copy: cannot decode");
+                    return;
+                };
+                let rgba = img.to_rgba8();
+                let (w, h) = (rgba.width() as usize, rgba.height() as usize);
+                let raw = rgba.into_raw();
+                // The clipboard belongs to the UI thread.
+                let _ = slint::invoke_from_event_loop(move || {
+                    let data = arboard::ImageData {
+                        width: w,
+                        height: h,
+                        bytes: std::borrow::Cow::Owned(raw),
+                    };
+                    match arboard::Clipboard::new().and_then(|mut c| c.set_image(data)) {
+                        Ok(()) => log::info!("[chat] image copied"),
+                        Err(e) => log::warn!("[chat] image copy failed: {}", e),
+                    }
+                });
+            });
+        });
+    }
+}
+
+/// Add a chip for `source` and prepare it off the UI thread. When prepared,
+/// the chip gets its thumbnail and the bytes go to the core for upload.
+fn add_attachment_with(
+    composer: &Attachments,
+    app_weak: &slint::Weak<crate::MainWindow>,
+    cmd: &tokio::sync::mpsc::UnboundedSender<Command>,
+    rt: &tokio::runtime::Handle,
+    source: Vec<u8>,
+) {
+    let Some(id) = begin_attachment(composer, app_weak) else {
+        return;
+    };
+    let refresh = AttachmentRefresh {
+        app: app_weak.clone(),
+        composer: composer.clone(),
+        cmd: cmd.clone(),
+    };
+    rt.spawn(async move {
+        let prepared = prepare_image(&source);
+        let _ = slint::invoke_from_event_loop(move || refresh.prepared(&id, prepared));
+    });
+}
+
+/// Push a "preparing" chip and draw it. `None` when the four slots are full.
+pub(crate) fn begin_attachment(
+    composer: &Attachments,
+    app_weak: &slint::Weak<crate::MainWindow>,
+) -> Option<String> {
+    let id = uuid::Uuid::new_v4().to_string();
+    {
+        let mut state = lock(composer);
+        if state.attachments.len() >= MAX_ATTACHMENTS {
+            log::info!(
+                "[chat] attachment ignored: {} chips already",
+                MAX_ATTACHMENTS
+            );
+            return None;
+        }
+        state.attachments.push(Attachment {
+            id: id.clone(),
+            state: AttachmentState::Preparing,
+            thumb: None,
+            bytes: 0,
+        });
+    }
+    push_attachment_rows(app_weak, composer);
+    Some(id)
+}
+
+/// The UI-thread half of a prepare: what the task hands back. Tests call it
+/// with the result of `prepare_image` instead of running the task.
+#[cfg(test)]
+pub(crate) fn attachment_prepared(
+    ctx: &AppContext,
+    id: &str,
+    result: Result<PreparedImage, crate::chat_images::PrepareError>,
+) {
+    AttachmentRefresh {
+        app: ctx.app.as_weak(),
+        composer: ctx.chat_attachments.clone(),
+        cmd: ctx.cmd_tx.clone(),
+    }
+    .prepared(id, result);
+}
+
+/// The clipboard's image as PNG bytes, if it holds one.
+fn clipboard_image_png() -> Option<Vec<u8>> {
+    let data = arboard::Clipboard::new().ok()?.get_image().ok()?;
+    let img = image::RgbaImage::from_raw(
+        data.width as u32,
+        data.height as u32,
+        data.bytes.into_owned(),
+    )?;
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .ok()?;
+    Some(out.into_inner())
 }
