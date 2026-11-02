@@ -194,6 +194,7 @@ std::vector<GameProcess> enumerate_game_processes() {
                 gp.window_title  = w->title;
                 gp.path          = w->path;
                 gp.is_fullscreen = window_is_fullscreen(static_cast<HWND>(w->hwnd));
+                gp.is_minimized  = w->minimized;
             }
             result.push_back(std::move(gp));
         } while (Process32NextW(snap, &pe));
@@ -257,6 +258,7 @@ static BOOL CALLBACK enum_windows_cb(HWND hwnd, LPARAM lparam) {
     vw.exe   = std::move(exe_name);
     vw.path  = std::move(full_path);
     vw.pid   = pid;
+    vw.minimized = IsIconic(hwnd) != FALSE;
     result->push_back(std::move(vw));
 
     return TRUE;

@@ -13,6 +13,7 @@ mod lol_live;
 mod lor_local;
 mod minecraft_stats;
 mod poe_log;
+mod roblox_log;
 mod rocket_league;
 mod sc2_client;
 #[cfg(windows)]
@@ -28,6 +29,7 @@ pub use lol_live::LolLiveAdapter;
 pub use lor_local::LorAdapter;
 pub use minecraft_stats::MinecraftStatsAdapter;
 pub use poe_log::PoeLogAdapter;
+pub use roblox_log::RobloxLogAdapter;
 pub use rocket_league::RocketLeagueAdapter;
 pub use sc2_client::Sc2ClientAdapter;
 
@@ -149,6 +151,26 @@ pub enum TelemetryEvent {
     /// (e.g. Dota 2's `-gamestateintegration` launch option). Surfaced as a
     /// hint in the "now playing" card; telemetry silently stays off until done.
     SetupRequired { game_id: String, hint: String },
+    /// The player entered an activity in a game whose adapter gates its
+    /// sessions (spec 18 §2.4): a Roblox experience. The session opens here,
+    /// at `ts`, not when the game's window came up. `activity_id` is the
+    /// adapter's own identifier for the activity (a Roblox place id).
+    ActivityStarted {
+        game_id: String,
+        activity_id: String,
+        ts: i64,
+    },
+    /// The player left the activity. The session closes at `ts` although the
+    /// game's process and window are still up.
+    ActivityEnded { game_id: String, ts: i64 },
+    /// The client's own lookup named the activity (spec 18 §3.11): a Roblox
+    /// place id resolved to the experience's name. Not sent by an adapter.
+    /// Ignored when the session has moved to another activity meanwhile.
+    ActivityNamed {
+        game_id: String,
+        activity_id: String,
+        name: String,
+    },
 }
 
 /// A per-game integration that turns local game state into outcome events.
@@ -208,6 +230,17 @@ pub trait GameTelemetryAdapter: Send + Sync {
     /// Static description for the Games settings page.
     fn info(&self) -> AdapterInfo;
 
+    /// Whether this adapter opens and closes the game's session itself, with
+    /// [`TelemetryEvent::ActivityStarted`] and [`TelemetryEvent::ActivityEnded`]
+    /// (spec 18 §2.4). The sensor still reports the process; the session
+    /// waits for the adapter. Only for a game whose process and window are
+    /// up without play, such as Roblox's player on its home screen.
+    ///
+    /// Default: the window decides, as spec 17 §2.4 says.
+    fn gates_session(&self) -> bool {
+        false
+    }
+
     /// Whether the game looks installed on this machine (cheap filesystem or
     /// registry probe; called off the UI thread). `None` = can't tell on this
     /// platform / for this game.
@@ -249,6 +282,7 @@ impl AdapterRegistry {
                 Arc::new(MinecraftStatsAdapter::new()),
                 Arc::new(PoeLogAdapter::new()),
                 Arc::new(Sc2ClientAdapter::new()),
+                Arc::new(RobloxLogAdapter::new()),
             ],
         }
     }
@@ -357,8 +391,21 @@ mod tests {
         assert!(reg.get("minecraft").is_some());
         assert!(reg.get("path-of-exile").is_some());
         assert!(reg.get("starcraft-2").is_some());
+        assert!(reg.get("roblox").is_some());
         assert!(reg.get("unknown-game").is_none());
-        assert_eq!(reg.all().len(), 9);
+        assert_eq!(reg.all().len(), 10);
+    }
+
+    #[test]
+    fn only_roblox_gates_its_session() {
+        let reg = AdapterRegistry::with_defaults();
+        let gated: Vec<&str> = reg
+            .all()
+            .iter()
+            .filter(|a| a.gates_session())
+            .map(|a| a.game_id())
+            .collect();
+        assert_eq!(gated, vec!["roblox"]);
     }
 
     #[test]

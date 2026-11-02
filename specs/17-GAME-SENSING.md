@@ -58,6 +58,14 @@ libmello supplies the process list through `mello_enumerate_games`. It fills
 full path, the window title, the fullscreen flag, the foreground flag and the
 process creation time.
 
+Each record also says whether the main window is minimized (`is_minimized`,
+from `IsIconic`). A process whose window is minimized cannot open a session
+and cannot inherit one from an exited sibling. It keeps a session that is
+already open. Roblox's tray-resident player keeps a visible, titled "Roblox"
+window parked at the minimized position from the moment it starts, with no
+game opened; without this gate it counted as play, and the session moved
+from player pid to player pid each time Roblox restarted.
+
 The list is the whole process table, not only games. The call writes at most
 `max_count` records and returns the total number of processes. A total above
 `max_count` means the list was cut. `enumerate_game_processes` then grows its
@@ -65,6 +73,12 @@ buffer to the total plus headroom and calls again, and keeps the learned size
 for the next scan. The stream picker uses the same function. A fixed buffer
 cut the table in boot order: at 512 entries it never reached `cs2.exe`, which
 was entry 961 on a machine with hundreds of leaked helper processes.
+
+The loop sends `Started`, `Stopped`, `PrimaryChanged` and `LibraryScanned`,
+and `Foreground { game_id, foreground_ms }` on each scan where an open
+session's foreground total grew. `Started` carries a snapshot and `Stopped`
+the final total; `Foreground` is for a session closed by an adapter while the
+process is still up (§4.2).
 
 The loop runs at two rates.
 
@@ -400,7 +414,20 @@ Do not re-implement process coalescing here. The sensor owns it. An earlier
 attempt held a set of live pids in this struct, which duplicated
 `coalesce_stops` and disagreed with it.
 
-### 4.2 Minimum Session Thresholds
+### 4.2 Adapter-gated sessions (spec 18 §2.4)
+
+A game whose telemetry adapter gates its session does not open on the
+sensor's `Started`. The manager parks it in `pending` until the adapter sends
+`ActivityStarted`, and closes it on `ActivityEnded` with the process still up.
+Roblox is the first such game: its player is one process and one window for
+the tray launcher, the home screen and the experience. The sensor still owns
+process detection and coalescing; the adapter only says when play starts and
+ends. The sensor's `Foreground` event keeps the parked game's foreground
+total current so a session closed by the adapter reports honest active time.
+The client names the activity after the open (spec 18 §3.11); the name goes
+to the bar, to presence and to the ledger.
+
+### 4.3 Minimum Session Thresholds
 
 | Threshold | Value | Purpose |
 |-----------|-------|---------|
@@ -417,7 +444,7 @@ Add `playing` to the activity types table in spec 11, section 2.1:
 
 | Type | Fields | Description |
 |------|--------|-------------|
-| `playing` | `game_name`, `game_id`, `started_at` | Playing a detected game |
+| `playing` | `game_name`, `game_id`, `started_at`, `activity` | Playing a detected game. `activity` is the named activity inside it (the Roblox experience, spec 18 §3.11); absent for every other game |
 
 Example presence payload:
 
@@ -457,6 +484,11 @@ A user can be in voice AND playing a game simultaneously. This is the most commo
     "updated_at": "2026-04-03T14:00:05Z"
 }
 ```
+
+A Roblox session adds the experience: `"game": {"game_name": "Roblox",
+"game_id": "roblox", "started_at": "...", "activity": "Grow a Garden"}`. The
+client publishes again when the activity changes, as it does when the game
+changes.
 
 The `game` field is a separate top-level field on presence, not nested inside `activity`. This way, `activity` still represents the primary social action (voice, streaming, watching), and `game` is an orthogonal signal that can coexist with any activity type.
 
