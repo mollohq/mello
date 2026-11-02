@@ -100,7 +100,27 @@ struct TimelineStats {
     bool keyframe_required = true;
 };
 
-class VideoReceiveTimeline {
+/// What the viewer's decode thread asks of a source of access units: the
+/// receive timeline of a stream, or a game clip (clip/clip_frame_source.hpp).
+/// The decode thread calls every function but `wake` and `stats`.
+class FrameSource {
+public:
+    virtual ~FrameSource() = default;
+    virtual TimelineDecision poll() = 0;
+    /// The decoder took `decode_us` for the frame just released.
+    virtual void on_decoded(int64_t decode_us) = 0;
+    /// The decoder refused the frame just released.
+    virtual void on_decode_error() = 0;
+    /// Block until there is something to do, `wake_us` passes, or the source
+    /// stops. False once the source stopped. `wake_us` 0: no deadline.
+    virtual bool wait(int64_t wake_us) = 0;
+    /// Wake a waiter once. Any thread.
+    virtual void wake() = 0;
+    /// Any thread.
+    virtual TimelineStats stats() const = 0;
+};
+
+class VideoReceiveTimeline : public FrameSource {
 public:
     /// Microseconds on one monotonic clock. The default is the steady clock
     /// of `mello_clock_now_us`.
@@ -156,23 +176,23 @@ public:
 
     // ---- Decode thread ------------------------------------------------------
 
-    TimelineDecision poll();
+    TimelineDecision poll() override;
 
     /// The decoder took `decode_us` for the frame just released.
-    void on_decoded(int64_t decode_us);
+    void on_decoded(int64_t decode_us) override;
 
     /// The decoder refused a frame: the picture is broken until a key frame.
-    void on_decode_error();
+    void on_decode_error() override;
 
     /// Block until a frame arrives, `wake_us` passes, or `stop()`. Returns
     /// false after `stop()`. `wake_us` 0 waits for a frame only.
-    bool wait(int64_t wake_us);
+    bool wait(int64_t wake_us) override;
 
     /// Wake every waiter; `wait` returns false from now on.
     void stop();
 
     /// Wake a waiter once (its owner stops or changes source).
-    void wake();
+    void wake() override;
 
     // ---- Any thread ---------------------------------------------------------
 
@@ -192,7 +212,7 @@ public:
     /// the PLI.
     void set_keyframe_request_handler(std::function<void()> handler);
 
-    TimelineStats stats() const;
+    TimelineStats stats() const override;
     bool keyframe_required() const;
 
     int64_t now_us() const;

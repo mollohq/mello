@@ -21,6 +21,7 @@
 namespace mello::video {
 
 using mello::transport::TimelineDecision;
+using mello::transport::FrameSource;
 using mello::transport::VideoReceiveTimeline;
 
 static constexpr const char* TAG = "video/viewer";
@@ -200,6 +201,21 @@ bool ViewerPipeline::feed_packet(const uint8_t* data, size_t size, bool is_keyfr
     return true;
 }
 
+void ViewerPipeline::flush() {
+    {
+        std::lock_guard<std::mutex> lock(jobs_mutex_);
+        jobs_.clear();
+    }
+    {
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        ++flush_gen_;
+        for (RingSlot& slot : ring_) {
+            if (slot.state == RingSlot::State::Ready) release_slot_locked(slot);
+        }
+    }
+    ring_cv_.notify_all();
+}
+
 size_t ViewerPipeline::decode_queue_depth() const {
     std::lock_guard<std::mutex> lock(jobs_mutex_);
     return jobs_.size();
@@ -241,7 +257,7 @@ void ViewerPipeline::stats(ViewerStats& out) const {
 
 // ---- decode thread ----------------------------------------------------------
 
-std::shared_ptr<VideoReceiveTimeline> ViewerPipeline::current_timeline() {
+std::shared_ptr<FrameSource> ViewerPipeline::current_timeline() {
     const int64_t now = now_us();
     if (timeline_ && now - provider_checked_us_ < kProviderRetryUs) return timeline_;
     provider_checked_us_ = now;
@@ -372,6 +388,11 @@ void ViewerPipeline::release_slot_locked(RingSlot& slot) {
 bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us,
                                       std::optional<uint32_t> rtp_timestamp) {
     if (!decoder_ || bytes.empty()) return false;
+    uint64_t gen = 0;
+    {
+        std::lock_guard<std::mutex> lock(ring_mutex_);
+        gen = flush_gen_;
+    }
     const int slot_index = acquire_slot_for_decode();
     if (slot_index < 0) return false;
 
@@ -424,6 +445,12 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     CVPixelBufferRetain(static_cast<CVPixelBufferRef>(buffer));
     slot.pixel_buffer = buffer;
 #endif
+    if (gen != flush_gen_) {
+        // The source jumped while this frame decoded: it is not due any more.
+        release_slot_locked(slot);
+        frames_dropped_present_.fetch_add(1, std::memory_order_relaxed);
+        return true;
+    }
     slot.render_us = render_us;
     slot.has_rtp = rtp_timestamp.has_value();
     slot.rtp_timestamp = rtp_timestamp.value_or(0);
