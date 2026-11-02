@@ -106,7 +106,24 @@ private:
     Slot slots_[kOutputSlots];
 };
 
+// A frame that goes in more than half a frame interval late (60 fps).
+constexpr int64_t kFeedLateUs = 8'000;
+
 std::vector<uint8_t> unit(uint8_t luma, uint8_t w16 = 4, uint8_t h16 = 2) { return {luma, w16, h16}; }
+
+// Waits for `done`, up to `limit`. The pipeline threads can start late: on a
+// loaded machine (the self-hosted runner while other builds run) a new thread
+// waited seconds for its first time slice, and a fixed sleep then saw nothing
+// decoded or shown.
+template <typename Done>
+bool wait_for(Done done, std::chrono::milliseconds limit = std::chrono::seconds(10)) {
+    const auto end = std::chrono::steady_clock::now() + limit;
+    while (!done()) {
+        if (std::chrono::steady_clock::now() >= end) return false;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    return true;
+}
 
 // Luma back from an RGBA pixel of a grey picture (U = V = 128).
 int luma_of(const uint8_t* rgba) { return static_cast<int>(rgba[1] * 219.0 / 255.0 + 16.0 + 0.5); }
@@ -145,6 +162,22 @@ protected:
         return presents;
     }
 
+    // One frame through decode and present, so both pipeline threads run
+    // before a case times anything. The frame is then forgotten.
+    bool warm_up() {
+        if (!viewer.feed_packet(unit(16).data(), 3, true)) return false;
+        const bool shown = wait_for([this] { return !snapshot().empty(); });
+        std::lock_guard<std::mutex> lock(mutex);
+        presents.clear();
+        return shown;
+    }
+
+    uint64_t presented_or_dropped() {
+        ViewerStats stats;
+        viewer.stats(stats);
+        return stats.frames_presented + stats.frames_dropped_present;
+    }
+
     TestDevice test;
     ViewerPipeline viewer;
     FakeDecoder* fake = nullptr;
@@ -158,13 +191,24 @@ protected:
 // interval p95 32.8 ms on clean).
 TEST_F(ViewerPipelineTest, FramesFromTheTimelineAreShownAtTheirRenderTime) {
     ASSERT_TRUE(start());
+    ASSERT_TRUE(warm_up());
     auto timeline = std::make_shared<VideoReceiveTimeline>();
     viewer.attach_timeline([timeline] { return timeline; });
 
     constexpr int kFrames = 90;
+    // A cadence needs a machine that runs this thread on time. One late frame
+    // is a hiccup; more than 1 in 20 and the case measures the machine, not
+    // the pipeline.
+    int late_frames = 0;
+    int64_t max_feed_late_us = 0;
     const auto t0 = std::chrono::steady_clock::now();
     for (int i = 0; i < kFrames; ++i) {
-        std::this_thread::sleep_until(t0 + std::chrono::microseconds(16'667 * i));
+        const auto due = t0 + std::chrono::microseconds(16'667 * i);
+        std::this_thread::sleep_until(due);
+        const int64_t late_us =
+            std::chrono::duration_cast<std::chrono::microseconds>(std::chrono::steady_clock::now() - due).count();
+        if (late_us > kFeedLateUs) ++late_frames;
+        max_feed_late_us = std::max<int64_t>(max_feed_late_us, late_us);
         TimelineInput in;
         in.id = i;
         in.reference = i - 1;
@@ -177,6 +221,10 @@ TEST_F(ViewerPipelineTest, FramesFromTheTimelineAreShownAtTheirRenderTime) {
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
     viewer.stop();
 
+    if (late_frames > kFrames / 20) {
+        GTEST_SKIP() << "the machine is too loaded to measure a cadence: " << late_frames << " of " << kFrames
+                     << " frames went in late, up to " << max_feed_late_us / 1000 << " ms";
+    }
     const auto shown = snapshot();
     ASSERT_GE(shown.size(), static_cast<size_t>(kFrames - 6));
     std::vector<double> intervals;
@@ -207,11 +255,11 @@ TEST_F(ViewerPipelineTest, OnlyTheNewestDueFrameIsShown) {
     for (uint8_t v : {40, 60, 80, 100, 120}) {
         ASSERT_TRUE(viewer.feed_packet(unit(v).data(), 3, v == 40));
     }
-    for (int i = 0; i < 100 && fake->decoded.load() < 5; ++i) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(5));
-    }
-    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    const bool decoded = wait_for([this] { return fake->decoded.load() >= 5; });
+    const bool settled = wait_for([this] { return presented_or_dropped() >= 5; });
     viewer.stop();
+    ASSERT_TRUE(decoded);
+    ASSERT_TRUE(settled);
     const auto shown = snapshot();
     ASSERT_FALSE(shown.empty());
     EXPECT_NEAR(shown.back().luma, 120, 2) << "the newest frame is on screen";
@@ -221,7 +269,7 @@ TEST_F(ViewerPipelineTest, OnlyTheNewestDueFrameIsShown) {
 }
 
 // A new picture size (a new SPS) gets new slot textures and a new shared
-// texture: the presenter sees a new handle with the new size.
+// texture: the presenter sees it with the new size.
 TEST_F(ViewerPipelineTest, ASizeChangeGivesANewSharedTexture) {
     ASSERT_TRUE(start(false));
     std::mutex m;
@@ -231,17 +279,26 @@ TEST_F(ViewerPipelineTest, ASizeChangeGivesANewSharedTexture) {
         std::lock_guard<std::mutex> lock(m);
         handles.emplace_back(handle, w, h);
     });
-    ASSERT_TRUE(viewer.feed_packet(unit(50, 4, 2).data(), 3, true));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    ASSERT_TRUE(viewer.feed_packet(unit(60, 6, 3).data(), 3, true));
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    auto handle_count = [&] {
+        std::lock_guard<std::mutex> lock(m);
+        return handles.size();
+    };
+    // Each size is on screen before the next comes in.
+    const bool fed = viewer.feed_packet(unit(50, 4, 2).data(), 3, true) &&
+                     wait_for([&] { return handle_count() >= 1; }) &&
+                     viewer.feed_packet(unit(60, 6, 3).data(), 3, true) &&
+                     wait_for([&] { return handle_count() >= 2; });
     viewer.stop();
+    ASSERT_TRUE(fed);
     std::lock_guard<std::mutex> lock(m);
     ASSERT_EQ(handles.size(), 2u);
     EXPECT_EQ(std::get<1>(handles[0]), 64u);
     EXPECT_EQ(std::get<1>(handles[1]), 96u);
     EXPECT_EQ(std::get<2>(handles[1]), 48u);
-    EXPECT_NE(std::get<0>(handles[0]), std::get<0>(handles[1]));
+    // The presenter opens the texture again when the handle or the size
+    // changes (dcomp_presenter.rs). The handle value alone can come back: the
+    // old NT handle is closed before the new one is made.
+    EXPECT_NE(handles[0], handles[1]);
 }
 
 // The presenter's side of the contract: the shared texture opens on another
