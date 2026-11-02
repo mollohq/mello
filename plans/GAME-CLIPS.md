@@ -12,14 +12,14 @@ todos:
     content: "Windows PC: find why the physical F7 key does not reach the rdev hook on Bob's PC while a synthetic F7 does (Logitech G HUB runs there). F8 uses the same path. Before client-key-settings"
     status: pending
   - id: replay-ring
-    content: "libmello: one preallocated ring file of encoded video with a byte index per GOP, game audio PCM, the voice ring with the crew mix and the mic as two Opus streams, each with its own time anchors (Q24), and m3llo's session volume (Q20), pinning during a capture with a spare rule"
-    status: pending
+    content: "libmello: one preallocated ring file of encoded video with a byte index per GOP, game audio PCM, the voice ring with the crew mix and the mic as two Opus streams, each with its own time anchors (Q24), and m3llo's session volume (Q20), pinning during a capture with a spare rule. Built 2026-11-02 (abaee4f6, 63e036ca)"
+    status: completed
   - id: replay-session
-    content: "libmello: mello_replay_* C API, an encoder intent (stream or recording) through EncoderFactory into NVENC and AMF with a test per encoder, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture), the stream priority rules of section 3.6, one shared game audio loopback per game (F7)"
-    status: pending
+    content: "libmello: mello_replay_* C API, an encoder intent (stream or recording) through EncoderFactory into NVENC and AMF with a test per encoder, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture), the stream priority rules of section 3.6, one shared game audio loopback per game (F7). Built 2026-11-02: the encoder intent (b817ecbf), the session with its own CaptureManager on the game window and the C API (747435b7). Open: the shared capture with a stream of the same game (registry, ladder policy per consumer, set_target_fps, F1 to F3) and the shared game audio loopback (F7). Until then the replay must not run while the user streams the same game"
+    status: in_progress
   - id: mp4-mux
-    content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s"
-    status: pending
+    content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s. Built 2026-11-02 (c45b73d0): a 30 s clip at 5 Mbps muxes in under 1 s"
+    status: completed
   - id: core-lifecycle
     content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game"
     status: pending
@@ -52,7 +52,7 @@ isProject: false
 
 # Game Clips (F8)
 
-> **Status:** One branch and one PR for the whole feature (Bob, 2026-11-02). Step 1 (`capture-manager`, commit `d724c21a`) is merged into `feat/game-clips`; the stream gate A/B shows no change (CPU and hw lanes, 2026-11-02). Step 2a is done. Step 2b is next. Nothing is pushed. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
+> **Status:** One branch and one PR for the whole feature (Bob, 2026-11-02). Step 1 (`capture-manager`, commit `d724c21a`) is merged into `feat/game-clips`; the stream gate A/B shows no change (CPU and hw lanes, 2026-11-02). Step 2a is done. Step 2b is built except the shared capture with a running stream and the shared game audio loopback (`replay-session`). Nothing is pushed. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
 > **Specs:** [CLIPS.md](../specs/features/CLIPS.md) sections 3 to 6, [03-LIBMELLO.md](../specs/03-LIBMELLO.md), [12-STREAMING.md](../specs/12-STREAMING.md), [14-VIDEO-PIPELINE.md](../specs/14-VIDEO-PIPELINE.md), [00-ARCHITECTURE.md](../specs/00-ARCHITECTURE.md) section 2.
 > **Builds on:** F7 voice clips (CLIPS.md 3.1, branch `fix/playtest-fixes`).
 
