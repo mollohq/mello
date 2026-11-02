@@ -13,6 +13,7 @@
 #include "replay/replay_mux.hpp"
 #include "replay/replay_session.hpp"
 #include "replay/replay_video_ring.hpp"
+#include "video/capture_process.hpp"
 #include "video/encoder_factory.hpp"
 #include "video/graphics_device.hpp"
 #include "video/video_pipeline.hpp"
@@ -615,6 +616,45 @@ TEST(ReplaySession, FollowsAStreamOfTheSameGameAndComesBack) {
     std::printf("[ ReplaySession ] follow and back: %u frames in %.2f s, longest frame %.0f ms\n",
                 static_cast<unsigned>(v.times.size()), static_cast<double>(clip.duration_us) / 1e6,
                 static_cast<double>(longest_gap) / 1e4);
+}
+
+// On request only: the replay on a running game, as the client starts it.
+//   set MELLO_REPLAY_PID=<pid>
+//   mello_tests --gtest_also_run_disabled_tests --gtest_filter=ReplaySession.DISABLED_*
+TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
+    const char* pid_text = std::getenv("MELLO_REPLAY_PID");
+    ASSERT_TRUE(pid_text) << "set MELLO_REPLAY_PID";
+    const uint32_t pid = static_cast<uint32_t>(std::strtoul(pid_text, nullptr, 10));
+    HWND hwnd = mello::video::find_main_window(pid);
+    char cls[128] = {};
+    RECT rc{};
+    if (hwnd) {
+        GetClassNameA(hwnd, cls, sizeof(cls));
+        GetClientRect(hwnd, &rc);
+    }
+    std::printf("[ ReplayPid ] pid %u: window %p class \"%s\" client %ldx%ld visible %d iconic %d\n",
+                pid, static_cast<void*>(hwnd), cls, rc.right - rc.left, rc.bottom - rc.top,
+                hwnd ? IsWindowVisible(hwnd) : 0, hwnd ? IsIconic(hwnd) : 0);
+    ASSERT_TRUE(hwnd);
+
+    TempDir dir;
+    ReplayConfig config;
+    config.hwnd = hwnd;
+    config.pid = pid;
+    config.dir = dir.path();
+    std::string error;
+    auto session = ReplaySession::start(config, &error);
+    ASSERT_TRUE(session) << error;
+    std::this_thread::sleep_for(std::chrono::seconds(4));
+    ReplayClip clip;
+    const bool ok = session->capture(3.0f, nullptr, dir.path() / "clip.mp4", dir.path() / "poster.jpg", &clip);
+    const auto stats = session->stats();
+    session->stop();
+    std::printf("[ ReplayPid ] clip %d: %.2f s %ux%u, %llu captured, %llu encoded, game audio %d\n", ok,
+                static_cast<double>(clip.duration_us) / 1e6, clip.width, clip.height,
+                static_cast<unsigned long long>(stats.frames_captured),
+                static_cast<unsigned long long>(stats.frames_encoded), clip.has_game_audio);
+    EXPECT_TRUE(ok);
 }
 
 // Game clips plan 3.6, F3: the stream that the replay follows is overloaded

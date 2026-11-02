@@ -13,7 +13,7 @@ use std::ffi::{CStr, CString};
 use std::path::PathBuf;
 use std::sync::mpsc;
 use std::thread::JoinHandle;
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 /// The seconds of game that F8 saves (plan section 1).
 pub(crate) const GAME_CLIP_SECONDS: f32 = 30.0;
@@ -165,100 +165,165 @@ fn last_error(ctx: *mut mello_sys::MelloContext) -> String {
         .into_owned()
 }
 
-fn run(ctx: SendCtx, rx: mpsc::Receiver<Op>, events: mpsc::Sender<Event>) {
-    let ctx = ctx.0;
-    let mut current: Option<ReplayTarget> = None;
-    let mut last_state = GameClipState::Off;
-    let emit_state =
-        |state: GameClipState, game: &str, reason: String, last: &mut GameClipState| {
-            if state != *last || state == GameClipState::Unavailable {
-                *last = state;
-                let _ = events.send(Event::GameClipStateChanged {
-                    state,
-                    game_name: game.to_string(),
-                    reason,
-                });
-            }
-        };
+/// The wait before the next start after `failures` failed starts in a row.
+/// A new game shows its window seconds after its process starts, and a game
+/// makes its window again on a mode change: 3 s, then double, at most 30 s.
+pub(crate) fn retry_delay(failures: u32) -> Duration {
+    let doubling = failures.saturating_sub(1).min(4);
+    Duration::from_secs((3u64 << doubling).min(30))
+}
 
+/// The worker thread's state.
+struct Worker {
+    ctx: *mut mello_sys::MelloContext,
+    events: mpsc::Sender<Event>,
+    /// The game to record while the user is in voice.
+    wanted: Option<ReplayTarget>,
+    /// libmello records `wanted` now.
+    running: bool,
+    /// Failed starts in a row, and when to try again.
+    failures: u32,
+    retry_at: Option<Instant>,
+    /// The last state sent, so a poll sends only changes.
+    sent: (GameClipState, String),
+}
+
+impl Worker {
+    fn emit(&mut self, state: GameClipState, reason: String) {
+        if self.sent == (state, reason.clone()) {
+            return;
+        }
+        self.sent = (state, reason.clone());
+        let game_name = self
+            .wanted
+            .as_ref()
+            .map(|t| t.game_name.clone())
+            .unwrap_or_default();
+        let _ = self.events.send(Event::GameClipStateChanged {
+            state,
+            game_name,
+            reason,
+        });
+    }
+
+    fn stop_running(&mut self) {
+        if self.running {
+            unsafe { mello_sys::mello_replay_stop(self.ctx) };
+            self.running = false;
+        }
+    }
+
+    fn try_start(&mut self) {
+        let Some(target) = self.wanted.clone() else {
+            return;
+        };
+        // The clip quality of plan section 7, default 720p60. The bitrate is
+        // the estimate of 3.4 until the replay lane sets it.
+        let config = mello_sys::MelloReplayConfig {
+            hwnd: std::ptr::null_mut(),
+            pid: target.pid,
+            height: 720,
+            fps: 60,
+            bitrate_kbps: 5000,
+            buffer_dir: std::ptr::null(),
+        };
+        let result = unsafe { mello_sys::mello_replay_start(self.ctx, &config) };
+        if result == mello_sys::MelloResult_MELLO_OK {
+            log::info!(
+                "[replay] recording {} (pid {}) after {} failed starts",
+                target.game_name,
+                target.pid,
+                self.failures
+            );
+            self.running = true;
+            self.failures = 0;
+            self.retry_at = None;
+            let state = game_clip_state(unsafe { mello_sys::mello_replay_state(self.ctx) });
+            self.emit(state, String::new());
+            return;
+        }
+        let reason = last_error(self.ctx);
+        self.failures += 1;
+        let delay = retry_delay(self.failures);
+        self.retry_at = Some(Instant::now() + delay);
+        if self.failures == 1 || self.sent.1 != reason {
+            log::warn!(
+                "[replay] not available for {} (pid {}): {}; trying again in {} s",
+                target.game_name,
+                target.pid,
+                reason,
+                delay.as_secs()
+            );
+        }
+        self.emit(GameClipState::Unavailable, reason);
+    }
+
+    fn tick(&mut self) {
+        if self.wanted.is_none() {
+            return;
+        }
+        if self.running {
+            let state = game_clip_state(unsafe { mello_sys::mello_replay_state(self.ctx) });
+            if state == GameClipState::Unavailable {
+                // The capture or the encoder failed (the game made its window
+                // again, a device was lost): start again later.
+                log::warn!("[replay] the replay failed; starting again");
+                self.stop_running();
+                self.failures = 1;
+                self.retry_at = Some(Instant::now() + retry_delay(1));
+                self.emit(state, "the capture stopped".into());
+            } else {
+                self.emit(state, String::new());
+            }
+        } else if self.retry_at.is_some_and(|at| Instant::now() >= at) {
+            self.try_start();
+        }
+    }
+}
+
+fn run(ctx: SendCtx, rx: mpsc::Receiver<Op>, events: mpsc::Sender<Event>) {
+    let mut w = Worker {
+        ctx: ctx.0,
+        events,
+        wanted: None,
+        running: false,
+        failures: 0,
+        retry_at: None,
+        sent: (GameClipState::Off, String::new()),
+    };
     loop {
         match rx.recv_timeout(Duration::from_secs(1)) {
             Ok(Op::Start(target)) => {
-                if current.as_ref() == Some(&target) {
+                if w.wanted.as_ref() == Some(&target) {
                     continue;
                 }
-                if current.take().is_some() {
-                    unsafe { mello_sys::mello_replay_stop(ctx) };
-                }
-                // The clip quality of plan section 7, default 720p60. The
-                // bitrate is the estimate of 3.4 until the replay lane sets it.
-                let config = mello_sys::MelloReplayConfig {
-                    hwnd: std::ptr::null_mut(),
-                    pid: target.pid,
-                    height: 720,
-                    fps: 60,
-                    bitrate_kbps: 5000,
-                    buffer_dir: std::ptr::null(),
-                };
-                let result = unsafe { mello_sys::mello_replay_start(ctx, &config) };
-                if result == mello_sys::MelloResult_MELLO_OK {
-                    log::info!(
-                        "[replay] recording {} (pid {})",
-                        target.game_name,
-                        target.pid
-                    );
-                    let state = game_clip_state(unsafe { mello_sys::mello_replay_state(ctx) });
-                    emit_state(state, &target.game_name, String::new(), &mut last_state);
-                    current = Some(target);
-                } else {
-                    let reason = last_error(ctx);
-                    log::warn!(
-                        "[replay] not available for {} (pid {}): {}",
-                        target.game_name,
-                        target.pid,
-                        reason
-                    );
-                    emit_state(
-                        GameClipState::Unavailable,
-                        &target.game_name,
-                        reason,
-                        &mut last_state,
-                    );
-                }
+                w.stop_running();
+                w.wanted = Some(target);
+                w.failures = 0;
+                w.retry_at = None;
+                w.try_start();
             }
             Ok(Op::Stop) => {
-                if current.take().is_some() {
-                    unsafe { mello_sys::mello_replay_stop(ctx) };
+                if w.running {
                     log::info!("[replay] stopped");
                 }
-                emit_state(GameClipState::Off, "", String::new(), &mut last_state);
+                w.stop_running();
+                w.wanted = None;
+                w.retry_at = None;
+                w.emit(GameClipState::Off, String::new());
             }
             Ok(Op::Capture { seconds }) => {
-                let event = match &current {
-                    Some(target) => capture(ctx, seconds, target),
-                    None => Event::GameClipFailed {
+                let event = match (&w.wanted, w.running) {
+                    (Some(target), true) => capture(w.ctx, seconds, target),
+                    _ => Event::GameClipFailed {
                         reason: "Clips are not available now".into(),
                     },
                 };
-                let _ = events.send(event);
+                let _ = w.events.send(event);
             }
-            Err(mpsc::RecvTimeoutError::Timeout) => {
-                if let Some(target) = &current {
-                    let state = game_clip_state(unsafe { mello_sys::mello_replay_state(ctx) });
-                    if state != last_state {
-                        let reason = if state == GameClipState::Unavailable {
-                            last_error(ctx)
-                        } else {
-                            String::new()
-                        };
-                        emit_state(state, &target.game_name, reason, &mut last_state);
-                    }
-                }
-            }
+            Err(mpsc::RecvTimeoutError::Timeout) => w.tick(),
             Err(mpsc::RecvTimeoutError::Disconnected) => {
-                if current.take().is_some() {
-                    unsafe { mello_sys::mello_replay_stop(ctx) };
-                }
+                w.stop_running();
                 return;
             }
         }
@@ -357,6 +422,12 @@ mod tests {
         let target = replay_target(true, Some(&cs2)).expect("in voice with a game");
         assert_eq!(target.pid, 4242);
         assert_eq!(target.game_id, "counter-strike-2");
+    }
+
+    #[test]
+    fn a_failed_start_tries_again_sooner_first_then_every_30_s() {
+        let secs: Vec<u64> = (1..=7).map(|n| retry_delay(n).as_secs()).collect();
+        assert_eq!(secs, vec![3, 6, 12, 24, 30, 30, 30]);
     }
 
     #[test]
