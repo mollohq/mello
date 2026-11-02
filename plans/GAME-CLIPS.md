@@ -3,7 +3,7 @@ name: Game clips (F8)
 overview: "F8 saves the last 30 seconds of the user's own game: video, game audio and the crew voice, in one MP4. A local replay buffer runs while the user is in voice and a game is detected, also when the user does not stream. On by default. Windows first (WGC window capture, NVENC/AMF), macOS after Windows."
 todos:
   - id: capture-manager
-    content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate. Built on refactor/capture-manager (d724c21a, from main), check-full green; the stream gate A/B is open"
+    content: "libmello: one game capture, many consumers. Refactor PR with no behavior change, proven by the stream gate. Built on refactor/capture-manager (d724c21a, from main), check-full green. Stream gate A/B against main 690c2857, CPU and hw lanes: no change (2026-11-02). Waits for Bob's 'open it'"
     status: in_progress
   - id: loopback-check
     content: "Windows PC: measure WASAPI process loopback on a game process (signal present, before or after the game volume) before the ring is built on it. CS2, Hearthstone and the tone test done. Open: CS2 in exclusive Fullscreen under WGC window (A1), the QPC position of the process loopback device against the arrival time (A2)"
@@ -52,7 +52,7 @@ isProject: false
 
 # Game Clips (F8)
 
-> **Status:** Step 1 (`capture-manager`) is built on its own branch `refactor/capture-manager` (local, not pushed); its stream gate A/B is open. Nothing else is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
+> **Status:** Step 1 (`capture-manager`) is built on its own branch `refactor/capture-manager` (local, not pushed); the stream gate A/B shows no change (CPU and hw lanes, 2026-11-02); the PR waits for Bob. Nothing else is built. Bob answered the open questions on 2026-10-31 (section 13). The review of 2026-11-01 ([GAME-CLIPS-REVIEW.md](GAME-CLIPS-REVIEW.md)) is folded in: section 3.6 (with the upload rules G1 to G8), Q17 to Q25, and the todos.
 > **Specs:** [CLIPS.md](../specs/features/CLIPS.md) sections 3 to 6, [03-LIBMELLO.md](../specs/03-LIBMELLO.md), [12-STREAMING.md](../specs/12-STREAMING.md), [14-VIDEO-PIPELINE.md](../specs/14-VIDEO-PIPELINE.md), [00-ARCHITECTURE.md](../specs/00-ARCHITECTURE.md) section 2.
 > **Builds on:** F7 voice clips (CLIPS.md 3.1, branch `fix/playtest-fixes`).
 
