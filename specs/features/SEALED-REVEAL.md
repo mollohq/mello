@@ -101,9 +101,9 @@ Sizes in the centre:
   (Oxanium 700 120 px, unit in Barlow 300 34 px), the stat sentence (Barlow 300 18 px),
   and on the right the holder (avatar 112 px, name Oxanium 600 34 px) and
   "took it from" with the previous holder (avatar 22 px).
-- **Recap:** the recap card at the size of its slot, scaled by `min(1, (panel height - 2 * 40 px) / h, (panel width - 2 * 40 px) / w)`. The panel is the clipped stage, the feed panel. The card stands in the centre of the panel and keeps 40 px on every side.
-  The back clears with radius `clear * 470 px`, 80 px soft edge. The numbers count up.
-  The revealed card has a control "See the week". It opens `recap_opened.slint`.
+- **Recap:** the recap card at the size of its slot (the tall card, one column and two rows), scaled by `min(1.1, (panel height - 2 * 40 px) / h, (panel width - 2 * 40 px) / w)`: it grows to 1.1 as in the fx lab and never past the panel. The panel is the clipped stage, the feed panel. The card stands in the centre of the panel and keeps 40 px on every side.
+  The back clears with radius `clear * 470 px`, 80 px soft edge. The numbers count up, the top game fades in with them.
+  The revealed card has no control. The card in the slot is the opened view.
 
 The count-up has three kinds: a count with thousands (one decimal below 100 hours),
 hours and minutes (`4 h 05`), and a clock (`03:22`). `sealed.rs` sends the number and
@@ -128,8 +128,8 @@ The stat sentences are the Stat column of HEAD2HEAD.md section 2, in `sealed.rs`
 - Opening a belt clears the unread dot on its pair rows. A pair row has the dot only
   for a recent move that is not opened.
 - The versus hero keeps its tally. Its moved chip is sealed like any chip.
-- The recap opens in the centre. The full-screen recap (`recap_opened.slint`) is
-  reached from the revealed recap card by "See the week".
+- The recap opens in the centre and returns to its slot open. There is no
+  full-screen recap.
 - A belt that the viewer does not see sealed (a chip of a title that has not moved)
   has an empty key and is never sealed.
 
@@ -179,7 +179,6 @@ Every `TouchArea` has `accessible-role` and `accessible-label`.
 | Sealed chip | button | `Sealed belt, open it` |
 | Sealed recap | button | `Sealed recap, open it` |
 | Scrim of the centre view | button | `Close` |
-| Recap control | button | `See the week` |
 
 The centre view has no other control. The a11y lint (`a11y_lint.rs`) must pass.
 
