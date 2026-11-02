@@ -91,7 +91,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        # --tests and no doc-tests: see the Windows job in pr-checks.yml.
+        run: cargo test --workspace --tests
 
       # See the Windows job in pr-checks.yml for why MELLO_BUILD_TESTS is opt-in.
       - name: Build C++ tests

@@ -178,7 +178,11 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        # --tests: every target with test = true (each lib and bin as unit
+        # tests, the integration tests), and no doc-tests: all 10 doc-test
+        # runs have 0 tests and cost 28 s here. Not --bins: an explicit
+        # --bins also selects the bins with test = false.
+        run: cargo test --workspace --tests
 
       # Runs after the Rust build so external/vcpkg is already bootstrapped and
       # the vcpkg binary cache is warm. MELLO_BUILD_TESTS stays OFF by default
@@ -258,7 +262,8 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Run tests
-        run: cargo test --workspace
+        # --tests and no doc-tests: see the Windows job.
+        run: cargo test --workspace --tests
 
       # See the Windows job for why MELLO_BUILD_TESTS is opt-in. The arch and
       # deployment-target flags mirror mello-sys/build.rs so the test binaries
