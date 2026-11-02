@@ -121,5 +121,6 @@ jobs:
             -DCMAKE_BUILD_TYPE=Release
           cmake --build libmello/build-ci --parallel "$(nproc)"
 
+      # See the Windows job in pr-checks.yml for -j.
       - name: Run C++ tests
-        run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300
+        run: ctest --test-dir libmello/build-ci --output-on-failure --timeout 300 -j "$(nproc)"

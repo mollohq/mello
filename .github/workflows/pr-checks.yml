@@ -244,10 +244,13 @@ jobs:
 
       # --timeout: a stalled gtest process otherwise holds the lane until
       # the 45 min job timeout. The Linux lane has the same bound.
+      # --parallel: 390 of the 421 cases take under 1 s, and run serially
+      # their process starts cost 90 s. The device and port suites are
+      # RUN_SERIAL in libmello/tests/CMakeLists.txt.
       - name: Run C++ tests
         if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
         shell: pwsh
-        run: ctest --test-dir $env:MELLO_CI_BUILD_DIR -C Release --output-on-failure --timeout 300
+        run: ctest --test-dir $env:MELLO_CI_BUILD_DIR -C Release --output-on-failure --timeout 300 --parallel $env:NUMBER_OF_PROCESSORS
 
       # The build dirs stay for the next run. Purge them only when the target
       # dir is over 60 GB or D: has less than 30 GB free.
@@ -367,10 +370,10 @@ jobs:
           # A bare --parallel passes a bare -j to make: unlimited jobs.
           cmake --build "$MELLO_CI_BUILD_DIR" --parallel "$(sysctl -n hw.ncpu)"
 
-      # See the Windows job for --timeout.
+      # See the Windows job for --timeout and -j.
       - name: Run C++ tests
         if: ${{ needs.changes.result != 'success' || needs.changes.outputs.native == 'true' }}
-        run: ctest --test-dir "$MELLO_CI_BUILD_DIR" --output-on-failure --timeout 300
+        run: ctest --test-dir "$MELLO_CI_BUILD_DIR" --output-on-failure --timeout 300 -j "$(sysctl -n hw.ncpu)"
 
       # The build dirs stay for the next run. Purge them only when the target
       # dir is over 25 GB or less than 40 GB is free: the Mac has about 88 GB
