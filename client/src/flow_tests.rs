@@ -1410,6 +1410,15 @@ fn the_emoji_picker_stays_open_after_a_pick() {
         1,
         "the field stays a control while the picker is open"
     );
+    // ★ Regression: fixed 36px cells made the grid wider than the popover,
+    // and the picker scrolled sideways. The cells share the panel width.
+    let fire = h.controls_labelled("fire");
+    let skull = h.controls_labelled("skull");
+    assert!(
+        (fire[0].size().width - skull[0].size().width).abs() < 0.5 && fire[0].size().width > 30.0,
+        "equal cells of a useful size, got {}",
+        fire[0].size().width
+    );
     h.click_label("fire");
     next_frame();
     h.click_label("skull");

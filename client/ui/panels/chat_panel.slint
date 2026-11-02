@@ -1455,11 +1455,15 @@ export component ChatPanel inherits Rectangle {
                 width: parent.width;
                 height: parent.height;
 
+                // The layout takes the Flickable's width, so the content is
+                // never wider than the viewport and nothing scrolls sideways.
                 VerticalLayout {
+                    width: parent.width;
                     padding: 8px;
                     spacing: 4px;
 
-                    // Nine 36px cells with a 24px glyph. The 18px glyph in a
+                    // Nine square cells that share the width (about 36px in
+                    // the 400px panel) with a 24px glyph. The 18px glyph in a
                     // 32px cell was the size of body text and hard to pick.
                     for row-start[row-idx] in [0, 9, 18, 27, 36, 45, 54, 63, 72, 81, 90, 99, 108, 117, 126, 135, 144, 153]: HorizontalLayout {
                         spacing: 2px;
@@ -1467,9 +1471,8 @@ export component ChatPanel inherits Rectangle {
                         for col in [0, 1, 2, 3, 4, 5, 6, 7, 8]: Rectangle {
                             property <int> emoji-index: row-start + col;
                             property <bool> in-range: emoji-index < emoji-list.length;
-                            visible: in-range;
-                            width: 36px;
-                            height: 36px;
+                            horizontal-stretch: 1;
+                            height: self.width;
                             clip: true;
 
                             if in-range: Rectangle {
