@@ -691,3 +691,133 @@ fn mention_pushes_follow_the_delivery_rules() {
         }
     });
 }
+
+/// A clip never passes through Nakama. `clip_upload_url` presigns a PUT on
+/// the stack's S3 server, the client PUTs the MP4 there, and
+/// `clip_upload_complete` publishes the `media_url` that every crew member
+/// plays without credentials. This runs that chain against the real local
+/// storage service, so a server that rejects path-style SigV4, a bucket
+/// without anonymous download, or a lost Range request fails here and not
+/// in a crew feed.
+#[test]
+fn a_clip_uploads_to_local_storage_and_plays_back_without_credentials() {
+    if !e2e_enabled("a_clip_uploads_to_local_storage_and_plays_back_without_credentials") {
+        return;
+    }
+
+    rt().block_on(async {
+        let mut client = NakamaClient::new(e2e_config());
+        client
+            .authenticate_device(&random_device_id())
+            .await
+            .expect("device auth");
+
+        let raw = client
+            .rpc(
+                "create_crew",
+                &serde_json::json!({
+                    "name": format!("E2E Clip Crew {:x}", rand::random::<u32>()),
+                    "description": "created by the e2e suite",
+                    "open": false,
+                }),
+            )
+            .await
+            .expect("create_crew");
+        let body: serde_json::Value = serde_json::from_str(&raw).expect("create_crew returns JSON");
+        let crew_id = body["crew_id"]
+            .as_str()
+            .unwrap_or_else(|| panic!("create_crew response has no crew_id. Got: {body}"))
+            .to_string();
+
+        let clip_id = format!("e2e-clip-{:x}", rand::random::<u64>());
+        let posted = client
+            .post_clip(&mello_core::crew_events::PostClipRequest {
+                crew_id: crew_id.clone(),
+                clip_id: clip_id.clone(),
+                clip_type: "voice".into(),
+                duration_seconds: 3.0,
+                participants: Vec::new(),
+                game: String::new(),
+                local_path: String::new(),
+                waveform: String::new(),
+            })
+            .await
+            .expect("post_clip");
+        assert_eq!(posted.clip_id, clip_id, "post_clip must echo the clip id");
+
+        let urls = client
+            .clip_upload_url(&mello_core::crew_events::ClipUploadURLRequest {
+                clip_id: clip_id.clone(),
+                crew_id: crew_id.clone(),
+            })
+            .await
+            .expect("clip_upload_url");
+        assert!(
+            !urls.upload_url.is_empty(),
+            "clip_upload_url returned no URL: the stack has no S3 configured \
+             (S3_ENDPOINT / S3_BUCKET / S3_ACCESS_KEY / S3_SECRET_KEY)"
+        );
+        assert!(
+            urls.media_url
+                .ends_with(&format!("/crews/{crew_id}/{clip_id}.mp4")),
+            "media_url must be the public path of the object. Got: {}",
+            urls.media_url
+        );
+
+        // Not a real MP4: the storage server stores bytes, it does not decode.
+        let payload: Vec<u8> = (0..64 * 1024).map(|i| (i % 251) as u8).collect();
+        let http = reqwest::Client::new();
+        let put = http
+            .put(&urls.upload_url)
+            .header("Content-Type", "audio/mp4")
+            .body(payload.clone())
+            .send()
+            .await
+            .expect("PUT to the presigned URL");
+        let status = put.status();
+        if !status.is_success() {
+            let text = put.text().await.unwrap_or_default();
+            panic!("presigned PUT to local storage returned {status}: {text}");
+        }
+
+        let done = client
+            .clip_upload_complete(&mello_core::crew_events::ClipUploadCompleteRequest {
+                clip_id: clip_id.clone(),
+                crew_id: crew_id.clone(),
+            })
+            .await
+            .expect("clip_upload_complete");
+        assert!(done.success, "clip_upload_complete must report success");
+        assert_eq!(done.media_url, urls.media_url);
+
+        // Playback: no credentials, the bytes that went up, and a Range
+        // request for a seek.
+        let get = http
+            .get(&urls.media_url)
+            .send()
+            .await
+            .expect("GET media_url");
+        assert_eq!(
+            get.status(),
+            200,
+            "the clip must be public at its media_url (anonymous download on the bucket)"
+        );
+        let got = get.bytes().await.expect("media body");
+        assert_eq!(
+            got.as_ref(),
+            payload.as_slice(),
+            "the public object must hold the uploaded bytes"
+        );
+
+        let range = http
+            .get(&urls.media_url)
+            .header("Range", "bytes=0-1023")
+            .send()
+            .await
+            .expect("ranged GET media_url");
+        assert_eq!(range.status(), 206, "a player seeks with Range requests");
+        assert_eq!(range.bytes().await.expect("range body").len(), 1024);
+
+        let _ = client.delete_account().await;
+    });
+}

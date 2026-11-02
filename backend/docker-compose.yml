@@ -31,40 +31,48 @@ services:
       - |
         go mod tidy && go build -buildmode=plugin -trimpath -o ./backend.so .
 
-  minio:
-    image: minio/minio
-    container_name: mello-minio
+  # S3 storage for clips, snapshots and diagnostics. RustFS stands in for
+  # MinIO: MinIO archived its Community Edition in 2026 and removed every
+  # minio/minio and minio/mc image from Docker Hub and quay.io. RustFS keeps
+  # port 9000, path-style addressing and the minioadmin credentials, so the
+  # S3_* env below and the SFU_R2_* env of mello-sfu do not change.
+  s3:
+    image: rustfs/rustfs:1.0.4
+    container_name: mello-s3
     environment:
-      MINIO_ROOT_USER: minioadmin
-      MINIO_ROOT_PASSWORD: minioadmin
-    command: server /data --console-address ":9001"
+      RUSTFS_ACCESS_KEY: minioadmin
+      RUSTFS_SECRET_KEY: minioadmin
+      RUSTFS_CONSOLE_ENABLE: "true"
+      RUSTFS_CONSOLE_ADDRESS: ":9001"
     ports:
-      - "9000:9000"
-      - "9001:9001"
+      - "9000:9000" # S3 API
+      - "9001:9001" # console (minioadmin / minioadmin)
     volumes:
-      - minio_data:/data
+      - s3_data:/data
     healthcheck:
-      test: ["CMD", "mc", "ready", "local"]
+      test: ["CMD", "curl", "-f", "http://localhost:9000/health"]
       interval: 5s
       timeout: 5s
       retries: 5
 
-  minio-init:
-    image: minio/mc
-    container_name: mello-minio-init
+  # Makes the buckets and opens anonymous download on the two public ones.
+  # rc is the RustFS client; its commands are the ones mc had.
+  s3-init:
+    image: rustfs/rc:v0.1.36
+    container_name: mello-s3-init
     depends_on:
-      minio:
+      s3:
         condition: service_healthy
     entrypoint:
       - /bin/sh
       - -c
       - |
-        mc alias set local http://minio:9000 minioadmin minioadmin &&
-        mc mb --ignore-existing local/mello-clips &&
-        mc anonymous set download local/mello-clips &&
-        mc mb --ignore-existing local/mello-snapshots &&
-        mc anonymous set download local/mello-snapshots &&
-        mc mb --ignore-existing local/mello-diagnostics &&
+        rc alias set local http://s3:9000 minioadmin minioadmin &&
+        rc bucket create --ignore-existing local/mello-clips &&
+        rc bucket anonymous set download local/mello-clips &&
+        rc bucket create --ignore-existing local/mello-snapshots &&
+        rc bucket anonymous set download local/mello-snapshots &&
+        rc bucket create --ignore-existing local/mello-diagnostics &&
         echo "Buckets mello-clips, mello-snapshots and mello-diagnostics ready"
 
   nakama:
@@ -76,7 +84,7 @@ services:
         condition: service_healthy
       nakama-build:
         condition: service_completed_successfully
-      minio-init:
+      s3-init:
         condition: service_completed_successfully
     environment:
       - STEAM_PUBLISHER_KEY=${STEAM_PUBLISHER_KEY:-}
@@ -92,7 +100,7 @@ services:
       - TURN_HOST=${TURN_HOST:-}
       - SFU_JWT_PRIVATE_KEY=${SFU_JWT_PRIVATE_KEY:-}
       - SFU_ENDPOINT_EU=${SFU_ENDPOINT_EU:-wss://sfu-eu.m3llo.app/ws}
-      - S3_ENDPOINT=http://minio:9000
+      - S3_ENDPOINT=http://s3:9000
       - S3_PRESIGN_ENDPOINT=http://localhost:9000
       - S3_BUCKET=mello-clips
       - S3_ACCESS_KEY=minioadmin
@@ -136,4 +144,4 @@ services:
 
 volumes:
   postgres_data:
-  minio_data:
+  s3_data:
