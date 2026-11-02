@@ -45,7 +45,7 @@ Add to `client/Cargo.toml`:
 
 ```toml
 [package.metadata.bundle]
-name = "Mello"
+name = "m3llo"
 identifier = "app.mello.desktop"
 icon = ["assets/icons/app_icon.icns"]
 short_description = "Hang out with your crew."
@@ -57,7 +57,7 @@ Run with:
 ```bash
 cargo install cargo-bundle
 cargo bundle --release
-# → target/release/bundle/osx/Mello.app
+# → target/release/bundle/osx/m3llo.app
 ```
 
 ### 2.3 Icon assets required

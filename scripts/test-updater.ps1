@@ -138,7 +138,7 @@ function Do-Pack([string]$PackVersion) {
             --packVersion $PackVersion `
             --packDir $DistDir `
             --mainExe mello.exe `
-            --packTitle Mello `
+            --packTitle m3llo `
             --channel $Channel `
             --outputDir $VpkOut `
             --icon (Join-Path $RepoRoot "client\assets\icons\mello.ico")
