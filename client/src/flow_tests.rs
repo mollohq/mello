@@ -1534,6 +1534,39 @@ fn the_feed_opens_at_the_last_message() {
     );
 }
 
+/// ★ Regression: the rows' layout is the only child of the Flickable, so it
+/// is sized to the feed when the rows are shorter than it, and it stretched
+/// two messages across the whole panel. Rows keep their height and sit at
+/// the bottom.
+#[test]
+fn a_short_feed_keeps_its_rows_together_at_the_bottom() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let (_, bottom) = feed_frame(&h);
+    let first = visible_body(&h, "message m0 from alice").expect("first body");
+    let second = visible_body(&h, "message m1 from bob").expect("second body");
+    // Stretched rows stretch their bodies: a one-line body was 386px tall.
+    for (name, body) in [("first", &first), ("second", &second)] {
+        assert!(
+            body.size().height < 40.0,
+            "the {name} body keeps its one-line height, got {}",
+            body.size().height
+        );
+    }
+    let second_bottom = second.absolute_position().y + second.size().height;
+    assert!(
+        bottom - second_bottom < 80.0,
+        "the last message sits at the bottom of the feed: {second_bottom} vs {bottom}"
+    );
+}
+
 /// ★ Regression: the prepend nudge used the same estimate, so loading older
 /// history jumped the view. The row the user was reading must not move.
 #[test]

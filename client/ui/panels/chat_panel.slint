@@ -705,6 +705,11 @@ export component ChatPanel inherits Rectangle {
             // content-height, which is why no estimate is involved.
             rows := VerticalLayout {
                 width: feed.width;
+                // The layout is sized to the feed when the rows are shorter
+                // than it. `end` keeps every row at its own height and
+                // gathers them at the bottom (spec §4.3, message gravity);
+                // without it the rows stretch to fill the empty space.
+                alignment: end;
 
             for msg[idx] in messages: VerticalLayout {
                     width: feed.width;
@@ -1801,6 +1806,33 @@ export component PreviewEmoji inherits ChatPanel {
         { emoji: "🙏", name: "pray" },
         { emoji: "👀", name: "eyes" },
         { emoji: "🤝", name: "handshake" },
+    ];
+}
+
+/// Two messages: the rows sit together at the bottom at their own height.
+export component PreviewTwo inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    messages-this-week: 2;
+    messages: [
+        {
+            message-id: "t1", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "hello from alice",
+            display-text: "hello from alice",
+            display-styled: @markdown("hello from alice"),
+            timestamp: "just now", display-time: "just now",
+            is-group-start: true,
+        },
+        {
+            message-id: "t2", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "hi alice, bob here",
+            display-text: "hi alice, bob here",
+            display-styled: @markdown("hi alice, bob here"),
+            timestamp: "just now", display-time: "just now",
+            is-group-start: true,
+        },
     ];
 }
 
