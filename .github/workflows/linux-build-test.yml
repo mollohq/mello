@@ -1,9 +1,10 @@
 name: Linux build and test
 
-# The Linux lane of PR Checks (pr-checks.yml calls this file). Three jobs run
-# in parallel on separate runners: Clippy, the Rust tests and the libmello
-# C++ tests. Run as one serial job, the lane took 25m38s. The shared setup is
-# the local action .github/actions/linux-setup.
+# The Linux lane of PR Checks (pr-checks.yml calls this file).
+# linux-cache-warm.yml calls it on a push to main to save the caches in the
+# scope of main. Three jobs run in parallel on separate runners: Clippy, the
+# Rust tests and the libmello C++ tests. Run as one serial job, the lane took
+# 25m38s. The shared setup is the local action .github/actions/linux-setup.
 on:
   workflow_call:
     inputs:
