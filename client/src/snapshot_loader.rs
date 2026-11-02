@@ -163,30 +163,74 @@ impl SnapshotLoader {
         });
     }
 
+    /// Load a poster that is on this PC (a game clip's own poster) and
+    /// update the feed card row.
+    pub fn request_local_poster(
+        &self,
+        app_weak: Weak<MainWindow>,
+        card_id: String,
+        path: String,
+        gen: u32,
+    ) {
+        let generation = self.generation.clone();
+        self.rt.spawn(async move {
+            let decode_path = path.clone();
+            let rgba = tokio::task::spawn_blocking(move || {
+                snapshot_cache::decode_thumb_rgba(std::path::Path::new(&decode_path), &decode_path)
+            })
+            .await;
+            if generation.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                match rgba {
+                    Ok(Some((bytes, w, h))) => apply_poster(
+                        &app,
+                        &card_id,
+                        snapshot_cache::rgba_bytes_to_image(bytes, w, h),
+                    ),
+                    _ => set_card_error(&app, &card_id),
+                }
+            });
+        });
+    }
+
     /// After the feed is set: disk-prefetch frame 0 + decode posters for
-    /// session-preview cards in both the this_week grid and the memory band.
-    pub fn load_session_preview_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
+    /// session-preview and game clip cards in both the this_week grid and the
+    /// memory band. A game clip with its poster on this PC loads that file.
+    pub fn load_poster_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
         if let Some(app) = app_weak.upgrade() {
             for cards in card_models(&app) {
                 for i in 0..cards.row_count() {
                     let Some(mut card) = cards.row_data(i) else {
                         continue;
                     };
-                    if card.card_type.as_str() != "session-preview" {
+                    let game_clip =
+                        card.card_type.as_str() == "clip" && card.clip_kind.as_str() == "game";
+                    if card.card_type.as_str() != "session-preview" && !game_clip {
                         continue;
                     }
+                    let local = card.clip_poster_path.to_string();
                     let url = first_snapshot_url(&card);
-                    let Some(url) = url else {
+                    if local.is_empty() && url.is_none() {
                         continue;
-                    };
+                    }
 
                     card.snapshot_loading = true;
                     card.snapshot_poster_ready = false;
                     card.snapshot_error = false;
                     cards.set_row_data(i, card.clone());
 
-                    self.prefetch_disk(url.clone(), gen);
-                    self.request_poster(app_weak.clone(), card.id.to_string(), url, gen);
+                    let card_id = card.id.to_string();
+                    if !local.is_empty() {
+                        self.request_local_poster(app_weak.clone(), card_id, local, gen);
+                    } else if let Some(url) = url {
+                        self.prefetch_disk(url.clone(), gen);
+                        self.request_poster(app_weak.clone(), card_id, url, gen);
+                    }
                 }
             }
         }

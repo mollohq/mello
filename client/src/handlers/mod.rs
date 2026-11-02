@@ -1,6 +1,6 @@
 mod auth;
 mod chat;
-mod clip;
+pub(crate) mod clip;
 mod crew;
 mod game;
 pub(crate) mod games;

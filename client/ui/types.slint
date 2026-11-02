@@ -397,6 +397,14 @@ export struct FeedCardData {
     participant-count: int,
     clip-count: int,
     clip-path: string,
+    // A game clip (plans/GAME-CLIPS.md 6.1): "game", else a voice clip. Its
+    // poster is the snapshot; this PC's own poster file loads first.
+    clip-kind: string,
+    clip-poster-path: string,
+    // The poster is up and the video is not.
+    clip-uploading: bool,
+    // The video is up, or this PC has the clip file.
+    clip-can-play: bool,
   // Normalized 0.0–1.0 peak buckets (64 entries); empty when unknown.
     waveform: [float],
     duration-ms: int,

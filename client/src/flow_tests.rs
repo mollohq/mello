@@ -3822,6 +3822,114 @@ fn the_game_clip_key_clips_only_while_the_replay_runs() {
     assert_eq!(capture(&h.commands()), 0, "a full disk: no clip");
 }
 
+/// A saved game clip goes to the active crew for the upload, and stays
+/// local with no active crew (plans/GAME-CLIPS.md 4.4, 6.3).
+#[test]
+fn a_saved_game_clip_is_shared_with_the_active_crew() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let captured = || Event::GameClipCaptured {
+        clip_id: "game_clip_1".into(),
+        path: "C:/clips/game_clip_1.mp4".into(),
+        poster_path: "C:/clips/game_clip_1.jpg".into(),
+        duration_seconds: 30.2,
+        width: 1280,
+        height: 720,
+        game_name: "Hearthstone".into(),
+    };
+    let shared = |cmds: Vec<Command>| -> Vec<(String, String)> {
+        cmds.into_iter()
+            .filter_map(|c| match c {
+                Command::ShareGameClip {
+                    crew_id, clip_id, ..
+                } => Some((crew_id, clip_id)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    h.app().set_active_crew_id("".into());
+    let _ = h.commands();
+    h.emit(captured());
+    assert!(
+        shared(h.commands()).is_empty(),
+        "no crew: the clip stays local"
+    );
+
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(captured());
+    assert_eq!(
+        shared(h.commands()),
+        vec![("crew-1".to_string(), "game_clip_1".to_string())]
+    );
+}
+
+/// A game clip in the feed is footage with a play ring, not the waveform
+/// card. Before its video is up, the crew sees "Uploading" and cannot play.
+#[test]
+fn a_game_clip_in_the_feed_is_a_footage_card() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let feed = |media_url: &str| FeedResponse {
+        crew_id: "crew-1".into(),
+        sections: vec![FeedSection {
+            id: "this_week".into(),
+            entries: vec![FeedEntry {
+                id: "evt-game".into(),
+                entry_type: "clip".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                ts: now_ms,
+                data: serde_json::json!({
+                    "clip_id": "game_clip_9",
+                    "clip_type": "game",
+                    "clipper_name": "alice",
+                    "game": "Hearthstone",
+                    "duration_seconds": 30.2,
+                    "width": 1280,
+                    "height": 720,
+                    "local_path": "Z:/not/on/this/pc.mp4",
+                    "poster_url": "http://127.0.0.1:9/game_clip_9.jpg",
+                    "media_url": media_url,
+                }),
+            }],
+        }],
+        joined: vec![],
+    };
+
+    h.emit(Event::FeedLoaded { response: feed("") });
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    assert_eq!(card.clip_kind.as_str(), "game");
+    assert!(card.clip_uploading && !card.clip_can_play);
+    assert!(
+        h.controls_labelled("Play the game clip of alice")
+            .iter()
+            .all(|c| !c.accessible_enabled().unwrap_or(false)),
+        "nothing to play before the upload"
+    );
+
+    h.emit(Event::FeedLoaded {
+        response: feed("http://127.0.0.1:9/game_clip_9.mp4"),
+    });
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    assert!(!card.clip_uploading && card.clip_can_play);
+    assert_eq!(
+        card.clip_path.as_str(),
+        "http://127.0.0.1:9/game_clip_9.mp4"
+    );
+    assert!(crate::handlers::clip::is_game_clip_path(
+        h.app(),
+        "http://127.0.0.1:9/game_clip_9.mp4"
+    ));
+    assert!(!h
+        .controls_labelled("Play the game clip of alice")
+        .is_empty());
+}
+
 /// The clip button names the clip key, F7 on a new install.
 #[test]
 fn the_clip_button_names_the_clip_key() {

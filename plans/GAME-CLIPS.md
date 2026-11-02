@@ -24,17 +24,17 @@ todos:
     content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game. Built 2026-11-02 for a first manual test (client/replay.rs): a worker thread runs the replay for the primary game while in voice, CaptureGameClip writes the MP4 and the poster to %TEMP%/mello_clips. First manual F8 test passed on Hearthstone 2026-11-02 (video, game audio, mic voice, live poster; 30.2 s, 16.1 MB). Added 2026-11-02: SetGameClips (the setting and the clip quality, a quality change restarts the replay), the 10 s hold (GameHold: the replay keeps its game while it runs, a new game in focus takes it after 10 s, an exit takes effect at once), the disk check in the worker (2 GB free, the replay's own ring counts as free, checked every 10 s, state DiskLow and one HUD toast). Manual test passed 2026-11-02: the switch off and on, 1080p60 (1872x1080, 8000 kbps), the F7 refusal, F9, the reset to F8 and 720p60, and the hold (Hearthstone to League of Legends after 10.25 s). The disk rule had no manual test. Open: post_clip with clip_type game, which moves to the upload todo"
     status: in_progress
   - id: upload
-    content: "mello-core: the poster at once, the MP4 as S3 multipart in 5 MB parts from disk (no full-file read into RAM), a token-bucket pace (G5), the stream budget and pause from the rung controller (G2 to G4, needs the host's GoogCC estimate and send rate in the stream telemetry), a persisted queue with the upload id and done parts for the resume after a restart"
-    status: pending
+    content: "mello-core: the poster at once, the MP4 as S3 multipart in 5 MB parts from disk (no full-file read into RAM), a token-bucket pace (G5), the stream budget and pause from the rung controller (G2 to G4, needs the host's GoogCC estimate and send rate in the stream telemetry), a persisted queue with the upload id and done parts for the resume after a restart. Built 2026-11-02, not committed: mello-core/src/clip_upload (one worker thread at the lowest priority, blocking reqwest; the queue file game_clip_uploads.json, one per MELLO_SESSION_KEY, entries per user; the paced reader of 16 KB writes; a 403 renews the URLs once, a 404 starts a new upload once) and stream/upload_budget.rs (G2 to G4 from the quality controller; goog_cc's target is capped at the preset, so a stream at its preset gets the G4 rate of 500 kbps). The client sends ShareGameClip on GameClipCaptured. Unit tests pass. Open: a live run against the local stack with this branch's backend; the socket send buffer of G5 is not set (reqwest has no option; the pace keeps the buffer near empty)"
+    status: in_progress
   - id: backend
-    content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests"
-    status: pending
+    content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests. Built 2026-11-02, not committed (game_clips.go, section 6.5): post_clip is idempotent on clip_id (voice too), the game hero after a fresh stream preview, the hourly abort job. Go tests pass; a live test against local MinIO (MELLO_S3_LIVE=1) passes: MinIO refuses a part one byte short or long, and a poster without its Cache-Control. Open: does R2 enforce the signed Content-Length; the voice clip_upload_url checks no membership and no clipper, so a signed-in user can overwrite any clip's MP4, a game clip's too"
+    status: in_progress
   - id: client-key-settings
     content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. Open: the Buffer folder control and the Q23 control (Game clips while streaming)"
     status: in_progress
   - id: feed-card
-    content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file"
-    status: pending
+    content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file. Built 2026-11-02, not committed: GameClipCard (client/ui/panels/game_clip_card.slint, a Preview for slint-viewer), the clip_kind, clip_uploading and clip_can_play fields of FeedCardData, the poster through the snapshot loader (the clipper's own poster file first), flow tests. Until clip-streaming-playback lands, a click opens the clip with the OS: the clipper's own file, else the uploaded MP4. Open: Bob's approval of the render; the chat card (no chat message carries a clip today, voice clips neither)"
+    status: in_progress
   - id: clip-streaming-playback
     content: "mello-core and libmello: ClipRangeReader, IMFByteStream over it, streaming AAC playback, the viewer pipeline with a clip source, the expanded view"
     status: pending
@@ -484,9 +484,9 @@ A game clip is a `clip` entry with `clip_type: "game"`. The card is footage, lik
 
 - The poster edge to edge, one corner cut. Black washes under the text, no graphite ramp over the footage.
 - Top left: the CLIP tag. An unread clip wears red, as every clip card does.
-- A play ring (white outline, black disc) at the center.
+- The play button at the center: a cut tile (top left and bottom right), a black wash, a white keyline, the play triangle with its back corners cut. Hover fills it white. It replaced the play ring everywhere over footage (Bob, 2026-11-02).
 - Bottom left: the clipper octagon, the clipper name, the game. Bottom right: the length on a black chip ("0:31").
-- No filled white button. The play ring is the action.
+- No filled white button at rest. The play button is the action.
 - Size: a standard cell, or the hero. A game clip can be the hero. Its place in the hero priority is after a stream preview from the last 24 hours (Q7). A voice clip stays never the hero.
 - The skeleton trio cell "Voice clips land here" also hides when a game clip exists.
 - Chat: the clip message card shows the poster in place of the waveform.
@@ -525,6 +525,19 @@ A viewer never waits for a whole file. Playback starts from the first bytes and 
 
 Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` does. Escape closes it. Inline playback in the card is not in scope: the DComp visual is an overlay (12-STREAMING.md 14), so cards that scroll over it need the geometry sync for each card.
 
+**Design of the player (2026-11-02, from a map of the viewer code).**
+
+| Part | Where | Design |
+|---|---|---|
+| Frame source seam | `video_viewer.hpp/.cpp` | The decode thread knows only `VideoReceiveTimeline`. A `ViewerFrameSource` interface (`poll`, `on_decoded`, `on_decode_error`, `wait`, `wake`, `stop`) takes its place; the timeline gets an adapter, and the WebRTC island stays as it is. `TimelineFrame` and `TimelineDecision` carry no WebRTC type, so the clip source returns them too. A new `flush` call frees the Ready slots, for a seek and a pause. |
+| Clip source | `libmello/src/clip/` (new) | A demux thread with its own Media Foundation session for its whole life. `MFCreateSourceReaderFromByteStream` over `ClipByteStream`, an `IMFByteStream` that reads through a C callback into mello-core. The video stays compressed (no D3D manager, no video processing): H.264 samples to Annex B, with the SPS and PPS of `MF_MT_MPEG_SEQUENCE_HEADER` before the first IDR and after each seek. The audio decodes to 48 kHz stereo PCM. |
+| Release time | the clip source | A frame leaves the source about one decode time before its render time. Its render time is the steady clock now plus its PTS minus the audio position. Earlier release fills the 3-slot ring and evicts frames. |
+| Audio and clock | `AudioPipeline` | A new stereo clip stream: an SPSC ring that the demux thread fills and the render thread reads, mixed as the voice clip is (also into the echo canceller's reference). The played samples less `output_latency_ms` are the master clock. The voice clip path (mono, a whole file in a vector, swapped on the owner thread) is not reused. |
+| Byte stream reads | the C callback | `read(user, offset, buf, len, timeout_ms)`: called on Media Foundation work queue threads, never on the fetch thread. A timeout is a stall: the audio pauses, the picture holds, "buffering" shows, and play goes on when 1 s is ahead again. Stop cancels a read that waits. The stream reports `MFBYTESTREAM_IS_SEEKABLE`, its length and `MF_BYTESTREAM_CONTENT_TYPE = video/mp4`. |
+| Range reader | `mello-core/src/clip_play/` (new) | Range requests of 1 MB on one HTTP connection, 3 s ahead of the play position, into a cache file at their offsets with a map of the ranges it has. A read waits on a condition variable for its range. The clipper's local file needs no fetch. |
+| C API | `mello.h` | `mello_clip_player_start` (length, read callback), the native frame callback, pause, resume, seek, stop, and a state read (position, length, buffering, ended). Stop joins threads, so it runs on the teardown thread. It balances the timer resolution calls as the viewer does. |
+| Client | the feed area | Its own expanded player component and flag, not `ExpandedStreamCard`, which is tied to a watched stream. The native presenter and the geometry route are one per client, so a clip plays only while no stream is watched, and watching a stream closes the clip. |
+
 ### 6.3 Upload
 
 | Item | Rule |
@@ -548,6 +561,48 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 | Storage | The existing `mello-clips` bucket. Local dev: MinIO. |
 | Retention | Game clip media is kept forever, as voice clip media is (Q10). |
 | Limits | The existing per-user daily clip limit applies to game clips. |
+
+### 6.5 The RPC contract for a game clip (2026-11-02)
+
+The voice clip calls do not change. An empty `clip_type` is `voice`. A game clip uses three calls in this order: `post_clip`, `clip_upload_url`, `clip_upload_complete` (once for the poster, once for the video).
+
+**`post_clip`.** New fields for `clip_type: "game"`: `width` (1 to 7680), `height` (1 to 4320), `has_voice`. `game` is the game name. `clip_id` matches `[A-Za-z0-9_-]{1,64}`, because it is part of the object keys. `StoredClip` gets `width`, `height`, `has_voice` and `poster_url`.
+
+**`clip_upload_url`** with `clip_type: "game"`:
+
+| Request field | Rule |
+|---|---|
+| `clip_id`, `crew_id` | The clip exists in the crew's clips document, it is a game clip, and the caller is its clipper. |
+| `poster_bytes` | 1 to 1 MiB |
+| `video_bytes` | 1 to 64 MiB |
+| `upload_id` | Optional. Set: the backend presigns new part URLs for this multipart upload and makes no new one (a resume, or URLs that expired). |
+
+| Response field | Content |
+|---|---|
+| `poster_upload_url` | A presigned PUT for `crews/{crew_id}/{clip_id}.jpg`. Signed headers: `Content-Type: image/jpeg`, `Content-Length` = `poster_bytes`, the `Cache-Control` below. |
+| `poster_url` | The public URL of the poster |
+| `upload_id` | The multipart upload of `crews/{crew_id}/{clip_id}.mp4`, made with `Content-Type: video/mp4` and the `Cache-Control` below |
+| `part_size` | 5 MiB (5,242,880 bytes). Every part has this size, except the last. R2 needs equal parts. |
+| `parts` | One `{part_number, url, bytes}` per part. Each `url` is a presigned `UploadPart` with a signed `Content-Length` = `bytes`. |
+| `media_url` | The public URL of the MP4 |
+| `cache_control` | `public, max-age=31536000, immutable` |
+
+The URLs expire after 1 hour. A part PUT that gets 403 asks again with `upload_id`. S3 not configured: every field is empty, as for a voice clip.
+
+**`clip_upload_complete`** with `clip_type: "game"` and `part`:
+
+| `part` | Backend |
+|---|---|
+| `poster` | HEAD the poster: it exists, at most 1 MiB, `image/jpeg`. Then set `poster_url` and push `feed_changed`. The card shows the poster and "uploading" (G1). |
+| `video` | `CompleteMultipartUpload` with `upload_id` and `parts` (`{part_number, etag}`). HEAD the MP4: it exists, at most 64 MiB, `video/mp4`. Then set `media_url` and push `feed_changed`. An object over the cap is deleted. |
+
+The caller must be the clipper. Only a clip with `media_url` shows a play ring. A clip with `poster_url` and no `media_url` shows "uploading".
+
+**Cleanup.** A backend job runs at start and each hour. It aborts each multipart upload under `crews/` started more than 24 h ago. It lists with no prefix and keeps the `crews/` keys, because MinIO lists the uploads of one exact key only.
+
+**Retries.** `post_clip` is idempotent on `clip_id` and the clipper: a retry after a lost answer gets the first `event_id` and adds nothing. The same `clip_id` from another user is code 6. A video complete whose upload is gone (`NoSuchUpload`) goes on to the HEAD, so a retry after a lost answer succeeds.
+
+**Feed.** A game clip with a `poster_url` from the last 24 h can be the hero, after a stream preview from the last 24 h (Q7). A voice clip is never the hero.
 
 ---
 

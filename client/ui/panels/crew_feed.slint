@@ -4,6 +4,7 @@ import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
 import { BeltReveal, ChatFocus, DaySession, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
+import { GameClipCard } from "./game_clip_card.slint";
 import { TwoStreamHero } from "../components/stream_hero.slint";
 import { SkeletonTrio, SkeletonCell } from "../components/skeleton_trio.slint";
 import { Head2headCardWide, Head2headCardPairs, VersusHero, BeltHero, InviteCard, TitleChip, H2hHue, ChipTipPreview } from "../components/head2head.slint";
@@ -2726,7 +2727,25 @@ component FeedSlot inherits Rectangle {
     callback start-voice-clicked(string);
 
     // Real cards
-    if card.card-type == "clip" && card.is-hero: HeroClipCard {
+    if card.card-type == "clip" && card.clip-kind == "game": GameClipCard {
+        width: parent.width; height: parent.height;
+        is-hero: card.is-hero;
+        is-new: card.is-new;
+        poster: card.snapshot-poster;
+        poster-ready: card.snapshot-poster-ready;
+        poster-loading: card.snapshot-loading;
+        uploading: card.clip-uploading;
+        can-play: card.clip-can-play;
+        clipper-name: card.actor-name;
+        clipper-initials: card.actor-initials;
+        clipper-hue-index: card.actor-hue-index;
+        clipper-avatar: card.actor-avatar;
+        clipper-has-avatar: card.actor-has-avatar;
+        game-name: card.game-name;
+        duration: card.duration;
+        play-clicked => { root.play-clicked(card.clip-path); }
+    }
+    if card.card-type == "clip" && card.clip-kind != "game" && card.is-hero: HeroClipCard {
         width: parent.width; height: parent.height; card: root.card;
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
         is-paused: root.clip-paused && root.card.clip-path != ""
@@ -2738,7 +2757,7 @@ component FeedSlot inherits Rectangle {
         play-clicked(id) => { root.play-clicked(id); }
         seek-ms(m) => { root.seek-clip-ms(m); }
     }
-    if card.card-type == "clip" && !card.is-hero: ClipCard {
+    if card.card-type == "clip" && card.clip-kind != "game" && !card.is-hero: ClipCard {
         width: parent.width; height: parent.height; card: root.card;
         is-playing: root.card.clip-path != "" && root.card.clip-path == root.playing-path;
         is-paused: root.clip-paused && root.card.clip-path != ""

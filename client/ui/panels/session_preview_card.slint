@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
-import { StreamTag, PlayRing, FootageWash } from "../components/stream_hero.slint";
+import { StreamTag, PlayButton, FootageWash } from "../components/stream_hero.slint";
 import { CutMask, CutButtonShape } from "../components/cut.slint";
 
 
@@ -205,30 +205,13 @@ export component SessionPreviewCard inherits Rectangle {
                     background: Theme.over-media-soft;
                 }
 
-                // The hero plays from a ring at 46% of its height (frame C).
-                if root.is-hero && snapshot-poster-ready && (!root.playing || root.finished): PlayRing {
+                // The hero plays from the play button at 46% of its height
+                // (frame C); a standard card from its middle.
+                if snapshot-poster-ready && (!root.playing || root.finished): PlayButton {
                     x: (parent.width - self.width) / 2;
-                    y: parent.height * 0.46 - self.height / 2;
-                    size: 56px;
-                }
-
-                if !root.is-hero && snapshot-poster-ready && (!root.playing || root.finished): Rectangle {
-                    property <int> btn-size: is-hero ? 52 : 32;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    width: 1px * btn-size;
-                    height: 1px * btn-size;
-                    border-radius: 1px * btn-size / 2;
-                    background: Theme.over-media;
-
-                    Image {
-                        source: @image-url("../icons/play.svg");
-                        width: is-hero ? 18px : 12px;
-                        height: is-hero ? 18px : 12px;
-                        colorize: Theme.on-media;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
+                    y: root.is-hero ? parent.height * 0.46 - self.height / 2 : (parent.height - self.height) / 2;
+                    size: root.is-hero ? 56px : 40px;
+                    hover: card-hover.has-hover;
                 }
 
                 if (!root.playing || root.finished || root.paused) && !root.is-hero: Rectangle {

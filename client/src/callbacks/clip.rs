@@ -49,8 +49,22 @@ pub fn wire(ctx: &AppContext) {
     });
 
     let cmd = ctx.cmd_tx.clone();
+    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
     ctx.app.on_play_clip(move |path| {
         let path = path.to_string();
+        let game_clip = app_weak
+            .upgrade()
+            .is_some_and(|app| crate::handlers::clip::is_game_clip_path(&app, &path));
+        if game_clip {
+            // Until the clip player lands (plans/GAME-CLIPS.md 6.2, todo
+            // clip-streaming-playback), the OS plays the clip: the clipper's
+            // own file, else the uploaded MP4.
+            log::info!("UI: open game clip {}", path);
+            if let Err(e) = open::that(&path) {
+                log::warn!("UI: could not open game clip {}: {}", path, e);
+            }
+            return;
+        }
         if !path.is_empty() {
             log::info!("UI: play clip {}", path);
             let _ = cmd.send(Command::PlayClip { path });
