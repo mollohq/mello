@@ -1540,6 +1540,25 @@ impl NakamaClient {
         Ok(parsed)
     }
 
+    pub async fn chat_upload_url(
+        &self,
+        req: &crate::crew_events::ChatUploadURLRequest,
+    ) -> Result<crate::crew_events::ChatUploadURLResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("chat_upload_url", &payload).await?;
+        let parsed: crate::crew_events::ChatUploadURLResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn chat_delete_images(
+        &self,
+        req: &crate::crew_events::ChatDeleteImagesRequest,
+    ) -> Result<()> {
+        let payload = serde_json::to_value(req)?;
+        self.rpc("chat_delete_images", &payload).await?;
+        Ok(())
+    }
+
     pub async fn clip_upload_complete(
         &self,
         req: &crate::crew_events::ClipUploadCompleteRequest,
@@ -3288,6 +3307,7 @@ mod history_tests {
             create_time: String::new(),
             update_time: String::new(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,

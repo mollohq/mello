@@ -13,8 +13,27 @@ pub enum MessageType {
     #[default]
     Text,
     Gif,
+    Image,
     System,
 }
+
+/// One uploaded image of an `image` message. `url` is on the chat bucket's
+/// public host; the server refuses any other host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageData {
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+    /// Size of the uploaded file in bytes, shown on the bubble.
+    #[serde(default)]
+    pub bytes: u64,
+    /// `image/jpeg`, `image/png` or `image/gif`.
+    #[serde(default)]
+    pub mime: String,
+}
+
+/// The most images one message carries.
+pub const MAX_IMAGES_PER_MESSAGE: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GifData {
@@ -41,6 +60,8 @@ pub struct MessageEnvelope {
     pub mentions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gif: Option<GifData>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageData>,
     // System message fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
@@ -58,6 +79,7 @@ impl MessageEnvelope {
             reply_to,
             mentions,
             gif: None,
+            images: Vec::new(),
             event: None,
             data: None,
         }
@@ -71,6 +93,24 @@ impl MessageEnvelope {
             reply_to: None,
             mentions: Vec::new(),
             gif: Some(gif),
+            images: Vec::new(),
+            event: None,
+            data: None,
+        }
+    }
+
+    /// An image message: up to `MAX_IMAGES_PER_MESSAGE` uploaded images with
+    /// an optional caption. Extra images are dropped, not sent.
+    pub fn image(images: Vec<ImageData>, body: &str, reply_to: Option<String>) -> Self {
+        let mentions = extract_mentions(body);
+        Self {
+            v: 1,
+            msg_type: MessageType::Image,
+            body: body.to_string(),
+            reply_to,
+            mentions,
+            gif: None,
+            images: images.into_iter().take(MAX_IMAGES_PER_MESSAGE).collect(),
             event: None,
             data: None,
         }
@@ -348,6 +388,13 @@ fn json_object_has_displayable_chat(obj: &serde_json::Map<String, serde_json::Va
     if obj.get("gif").is_some() {
         return true;
     }
+    if obj
+        .get("images")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        return true;
+    }
     if obj.get("event").is_some() {
         return true;
     }
@@ -370,7 +417,7 @@ fn envelope_is_displayable(envelope: &MessageEnvelope) -> bool {
     if envelope.msg_type == MessageType::System {
         return true;
     }
-    if envelope.gif.is_some() {
+    if envelope.gif.is_some() || !envelope.images.is_empty() {
         return true;
     }
     !envelope.body.trim().is_empty()
@@ -394,6 +441,7 @@ pub fn chat_message_from_envelope(
     let is_deleted = !is_system
         && content_str.trim().is_empty()
         && envelope.gif.is_none()
+        && envelope.images.is_empty()
         && envelope.body.is_empty();
     if is_deleted {
         return Some(ChatMessage {
@@ -407,6 +455,7 @@ pub fn chat_message_from_envelope(
             create_time,
             update_time,
             gif: None,
+            images: Vec::new(),
             reply_to: envelope.reply_to,
             is_system: false,
             is_edited: false,
@@ -435,6 +484,7 @@ pub fn chat_message_from_envelope(
         create_time,
         update_time,
         gif: envelope.gif,
+        images: envelope.images,
         reply_to: envelope.reply_to,
         is_system,
         is_edited,
@@ -465,6 +515,7 @@ pub fn parse_content(content_str: &str) -> Option<MessageEnvelope> {
                 reply_to: None,
                 mentions: Vec::new(),
                 gif: None,
+                images: Vec::new(),
                 event: None,
                 data: None,
             });
@@ -551,6 +602,7 @@ pub struct DisplayMessage {
     pub is_edited: bool,
     pub is_deleted: bool,
     pub gif: Option<GifData>,
+    pub images: Vec<ImageData>,
     pub reply_to: Option<String>,
     pub reply_to_name: Option<String>,
     pub reply_preview: Option<String>,
@@ -621,6 +673,21 @@ pub fn format_display_time(ts: &str) -> String {
 }
 
 /// Count non-system, non-deleted messages from the current local week (Mon–Sun) in the loaded set.
+/// The bucket key of a chat image URL: the last three path segments,
+/// `{crew}/{user}/{file}`. `None` for any other shape.
+pub fn image_key_from_url(url: &str) -> Option<String> {
+    let path = url.split('?').next()?.trim_end_matches('/');
+    let segments: Vec<&str> = path.rsplitn(4, '/').collect();
+    if segments.len() < 4 {
+        return None;
+    }
+    let (file, user, crew) = (segments[0], segments[1], segments[2]);
+    if file.is_empty() || user.is_empty() || crew.is_empty() {
+        return None;
+    }
+    Some(format!("{crew}/{user}/{file}"))
+}
+
 /// The most emoji a message may hold and still render big.
 pub const JUMBO_EMOJI_MAX: usize = 3;
 
@@ -760,6 +827,7 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
                 is_edited: false,
                 is_deleted: false,
                 gif: None,
+                images: Vec::new(),
                 reply_to: None,
                 reply_to_name: None,
                 reply_preview: None,
@@ -809,6 +877,7 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
             is_edited: msg.is_edited && !msg.is_deleted,
             is_deleted: msg.is_deleted,
             gif: msg.gif.clone(),
+            images: msg.images.clone(),
             reply_to: msg.reply_to.clone(),
             reply_to_name,
             reply_preview,
@@ -820,6 +889,47 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn an_image_envelope_round_trips_and_caps_at_four() {
+        let img = |n: u32| ImageData {
+            url: format!("http://localhost:9000/mello-chat/c1/u1/{n}.jpg"),
+            width: 1600,
+            height: 900,
+            bytes: 120_000,
+            mime: "image/jpeg".into(),
+        };
+        let env = MessageEnvelope::image((0..6).map(img).collect(), "look", None);
+        assert_eq!(env.msg_type, MessageType::Image);
+        assert_eq!(env.images.len(), MAX_IMAGES_PER_MESSAGE);
+        let json = serde_json::to_string(&env).expect("json");
+        assert!(json.contains("\"type\":\"image\""));
+        let back = parse_content(&json).expect("parses");
+        assert_eq!(back.images, env.images);
+        assert!(envelope_is_displayable(&MessageEnvelope::image(
+            vec![img(1)],
+            "",
+            None
+        )));
+        assert!(!envelope_is_displayable(&MessageEnvelope::image(
+            vec![],
+            "",
+            None
+        )));
+    }
+
+    #[test]
+    fn an_image_url_maps_to_its_bucket_key() {
+        assert_eq!(
+            image_key_from_url("https://chat.m3llo.app/crew-1/user-9/01ABC.jpg").as_deref(),
+            Some("crew-1/user-9/01ABC.jpg")
+        );
+        assert_eq!(
+            image_key_from_url("http://localhost:9000/mello-chat/c1/u1/a.png?x=1").as_deref(),
+            Some("c1/u1/a.png")
+        );
+        assert_eq!(image_key_from_url("https://chat.m3llo.app/a.jpg"), None);
+    }
+
     #[test]
     fn emoji_only_counts_sequences_as_one_and_stops_at_three() {
         use super::is_emoji_only;
@@ -856,6 +966,7 @@ mod tests {
             create_time: ts.to_string(),
             update_time: ts.to_string(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,
@@ -1158,6 +1269,7 @@ mod tests {
             create_time: iso.into(),
             update_time: iso.into(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,

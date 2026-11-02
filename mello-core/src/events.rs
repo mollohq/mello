@@ -34,6 +34,9 @@ pub struct ChatMessage {
     pub create_time: String,
     pub update_time: String,
     pub gif: Option<crate::chat::GifData>,
+    /// Uploaded images of an `image` message, in order.
+    #[serde(default)]
+    pub images: Vec<crate::chat::ImageData>,
     pub reply_to: Option<String>,
     pub is_system: bool,
     pub is_edited: bool,
@@ -616,6 +619,17 @@ pub enum Event {
     ClipPosted {
         clip_id: String,
         event_id: String,
+    },
+    /// A chat image is on the bucket. `attachment_id` is the composer's own
+    /// id for the pending chip.
+    ChatImageUploaded {
+        attachment_id: String,
+        image: crate::chat::ImageData,
+    },
+    /// A chat image did not reach the bucket. The chip shows the reason.
+    ChatImageUploadFailed {
+        attachment_id: String,
+        reason: String,
     },
     /// Clip MP4 uploaded to cloud storage.
     ClipUploaded {

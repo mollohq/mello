@@ -205,6 +205,30 @@ pub enum Command {
     DeleteMessage {
         message_id: String,
     },
+    /// Put one encoded image on the chat bucket. The client has resized and
+    /// re-encoded it; `bytes` is the file as it will be stored.
+    UploadChatImage {
+        attachment_id: String,
+        mime: String,
+        width: u32,
+        height: u32,
+        #[serde(with = "serde_bytes_b64")]
+        bytes: Vec<u8>,
+    },
+    /// Send an image message with the uploaded images and a caption.
+    SendImages {
+        images: Vec<crate::chat::ImageData>,
+        content: String,
+        #[serde(default)]
+        reply_to: Option<String>,
+        #[serde(default)]
+        mentions: Vec<crate::chat::MentionRef>,
+    },
+    /// Remove the objects of a deleted image message from the bucket. Only
+    /// the uploader's own keys are accepted by the server.
+    DeleteChatImages {
+        urls: Vec<String>,
+    },
     LoadHistory {
         cursor: Option<String>,
     },
@@ -641,5 +665,23 @@ mod tests {
         let cmd: Command =
             serde_json::from_str(r#"{"type":"SelectCrew","data":{"crew_id":"crew_abc"}}"#).unwrap();
         assert!(matches!(cmd, Command::SelectCrew { crew_id } if crew_id == "crew_abc"));
+    }
+}
+
+/// Image bytes as base64 in the serialized command, so a mirrored command log
+/// stays readable and a `Vec<u8>` does not become a list of numbers.
+mod serde_bytes_b64 {
+    use base64::Engine as _;
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S: Serializer>(bytes: &[u8], s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_str(&base64::engine::general_purpose::STANDARD.encode(bytes))
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(d: D) -> Result<Vec<u8>, D::Error> {
+        let text = String::deserialize(d)?;
+        base64::engine::general_purpose::STANDARD
+            .decode(text)
+            .map_err(serde::de::Error::custom)
     }
 }

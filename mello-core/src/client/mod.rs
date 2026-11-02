@@ -821,6 +821,28 @@ impl Client {
             Command::SendGif { gif, body } => {
                 self.handle_send_gif(gif, &body).await;
             }
+            Command::UploadChatImage {
+                attachment_id,
+                mime,
+                width,
+                height,
+                bytes,
+            } => {
+                self.handle_upload_chat_image(attachment_id, mime, width, height, bytes)
+                    .await;
+            }
+            Command::SendImages {
+                images,
+                content,
+                reply_to,
+                mentions,
+            } => {
+                self.handle_send_images(images, &content, reply_to.as_deref(), &mentions)
+                    .await;
+            }
+            Command::DeleteChatImages { urls } => {
+                self.handle_delete_chat_images(urls).await;
+            }
             Command::EditMessage {
                 message_id,
                 new_body,
