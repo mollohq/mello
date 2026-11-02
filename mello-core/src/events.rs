@@ -691,6 +691,12 @@ pub enum Event {
     GameClipFailed {
         reason: String,
     },
+    /// A game clip cannot go up: the server refused it, or its files are
+    /// gone. The local file stays.
+    GameClipUploadFailed {
+        clip_id: String,
+        reason: String,
+    },
     /// Clip metadata posted to backend.
     ClipPosted {
         clip_id: String,

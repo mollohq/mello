@@ -449,6 +449,19 @@ pub enum Command {
         #[serde(default)]
         quality: crate::events::GameClipQuality,
     },
+    /// Post a captured game clip to the crew and upload it in the background
+    /// (plans/GAME-CLIPS.md 6.3). The fields are those of `GameClipCaptured`.
+    ShareGameClip {
+        crew_id: String,
+        clip_id: String,
+        path: String,
+        poster_path: String,
+        duration_seconds: f32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        game_name: String,
+    },
     PostClip {
         crew_id: String,
         clip_id: String,

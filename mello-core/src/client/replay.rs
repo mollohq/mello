@@ -247,6 +247,8 @@ impl super::Client {
     /// game. Called after each game event, each voice start and leave, each
     /// setting change, and each second of a switch hold.
     pub(super) fn sync_replay(&mut self) {
+        // The upload pace: 3 Mbps while a game runs (plan 6.3, G8).
+        crate::clip_upload::pace().set_game_running(self.game_state.current_game().is_some());
         // Game clips are Windows only until the macOS work (plan 9.2).
         if !cfg!(windows) {
             return;

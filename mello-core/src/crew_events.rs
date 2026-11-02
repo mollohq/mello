@@ -268,6 +268,18 @@ pub struct PostClipRequest {
     pub local_path: String,
     #[serde(default)]
     pub waveform: String,
+    /// A game clip's video size (plans/GAME-CLIPS.md 6.5). Zero for a voice clip.
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub width: u32,
+    #[serde(default, skip_serializing_if = "is_zero")]
+    pub height: u32,
+    /// A game clip has the crew voice in it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub has_voice: bool,
+}
+
+fn is_zero(v: &u32) -> bool {
+    *v == 0
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -308,6 +320,72 @@ pub struct ClipUploadCompleteResponse {
     pub success: bool,
     #[serde(default)]
     pub media_url: String,
+    /// Set when a game clip's poster is complete.
+    #[serde(default)]
+    pub poster_url: String,
+}
+
+// --- Game clip upload (plans/GAME-CLIPS.md 6.5) ---
+
+/// `clip_upload_url` for a game clip: the poster PUT and the MP4 parts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameClipUploadUrlRequest {
+    pub clip_id: String,
+    pub crew_id: String,
+    /// Always "game".
+    pub clip_type: String,
+    pub poster_bytes: u64,
+    pub video_bytes: u64,
+    /// Set: new part URLs for this multipart upload, no new upload.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upload_id: String,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct GameClipUploadUrlResponse {
+    #[serde(default)]
+    pub poster_upload_url: String,
+    #[serde(default)]
+    pub poster_url: String,
+    #[serde(default)]
+    pub upload_id: String,
+    #[serde(default)]
+    pub part_size: u64,
+    #[serde(default)]
+    pub parts: Vec<UploadPartUrl>,
+    #[serde(default)]
+    pub media_url: String,
+    #[serde(default)]
+    pub cache_control: String,
+}
+
+/// A presigned `UploadPart` with its signed length.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UploadPartUrl {
+    pub part_number: u32,
+    pub url: String,
+    pub bytes: u64,
+}
+
+/// `clip_upload_complete` for a game clip: `part` is "poster" or "video".
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GameClipUploadCompleteRequest {
+    pub clip_id: String,
+    pub crew_id: String,
+    /// Always "game".
+    pub clip_type: String,
+    pub part: String,
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub upload_id: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<CompletedPart>,
+}
+
+/// A part that is up, with the ETag that its PUT returned.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompletedPart {
+    pub part_number: u32,
+    pub etag: String,
 }
 
 // --- Diagnostic log upload ---

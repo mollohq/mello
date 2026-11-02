@@ -1,7 +1,8 @@
 //! The game clip key (F8) in the client (plans/GAME-CLIPS.md 4.3): the replay
 //! state that core reports, the key, and the HUD toast. The Settings section
-//! and the Keybinds row are in `callbacks/settings.rs`. The clip card and the
-//! upload come with the todos `feed-card` and `upload`.
+//! and the Keybinds row are in `callbacks/settings.rs`. A saved clip goes to
+//! core for the post and the upload (`mello_core::clip_upload`). The clip
+//! card comes with the todo `feed-card`.
 
 use mello_core::events::GameClipState;
 use mello_core::{Command, Event};
@@ -74,12 +75,13 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
             }
         }
         Event::GameClipCaptured {
+            clip_id,
             path,
+            poster_path,
             game_name,
             duration_seconds,
             width,
             height,
-            ..
         } => {
             log::info!(
                 "[game clip] saved {} ({}, {:.1} s, {}x{})",
@@ -90,10 +92,30 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
                 height
             );
             toast(ctx, "Game clip saved");
+            // The clip goes to the active crew (plan 4.4, Q6), and core
+            // uploads it in the background (plan 6.3).
+            let crew_id = ctx.app.get_active_crew_id().to_string();
+            if crew_id.is_empty() {
+                log::warn!("[game clip] {clip_id} stays local: no active crew");
+                return;
+            }
+            let _ = ctx.cmd_tx.send(Command::ShareGameClip {
+                crew_id,
+                clip_id,
+                path,
+                poster_path,
+                duration_seconds,
+                width,
+                height,
+                game_name,
+            });
         }
         Event::GameClipFailed { reason } => {
             log::warn!("[game clip] no clip: {reason}");
             toast(ctx, "No game clip");
+        }
+        Event::GameClipUploadFailed { clip_id, reason } => {
+            log::warn!("[game clip] {clip_id} does not go up: {reason}");
         }
         _ => {}
     }

@@ -326,6 +326,16 @@ impl QualityController {
         self.preset_kbps
     }
 
+    /// goog_cc's encoder share in kbps, `None` before the first feedback.
+    pub fn gcc_kbps(&self) -> Option<u32> {
+        self.gcc_kbps
+    }
+
+    /// The encoder load of the last window was over the budget.
+    pub fn overloaded(&self) -> bool {
+        self.overloaded
+    }
+
     /// goog_cc limits for the sender, kbps with the RTP overhead: floor,
     /// start and preset.
     pub fn sender_limits_kbps(&self) -> (u32, u32, u32) {

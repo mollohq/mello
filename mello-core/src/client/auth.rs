@@ -129,6 +129,8 @@ impl super::Client {
     pub(super) async fn handle_logout(&mut self) {
         // A browser flow that ends after logout must not sign in or link.
         self.browser_flows.cancel();
+        // The next user on this device must not upload this user's clips.
+        self.stop_clip_uploads();
 
         // Needs the session, so it runs before anything clears it. Otherwise the
         // next user on this device receives this user's mention pushes.

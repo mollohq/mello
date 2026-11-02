@@ -97,6 +97,9 @@ impl super::Client {
             game: String::new(),
             local_path: local_path.to_string(),
             waveform: waveform.to_string(),
+            width: 0,
+            height: 0,
+            has_voice: false,
         };
         match self.nakama.post_clip(&req).await {
             Ok(resp) => {

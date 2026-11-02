@@ -193,7 +193,8 @@ fn dispatch(ctx: &AppContext, event: Event) {
         // Game clips (F8)
         Event::GameClipStateChanged { .. }
         | Event::GameClipCaptured { .. }
-        | Event::GameClipFailed { .. } => crate::game_clip::handle(ctx, event),
+        | Event::GameClipFailed { .. }
+        | Event::GameClipUploadFailed { .. } => crate::game_clip::handle(ctx, event),
 
         // About tab
         Event::TesterAvatarLoaded { .. } => crate::about::on_avatar_loaded(ctx),

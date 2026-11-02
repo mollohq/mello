@@ -7,6 +7,7 @@ pub mod auth_twitch;
 pub mod catalogue;
 pub mod chat;
 pub mod client;
+pub mod clip_upload;
 pub mod command;
 pub mod config;
 pub mod crew;

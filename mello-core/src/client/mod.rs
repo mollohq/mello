@@ -7,6 +7,7 @@ mod connection;
 mod connection_tests;
 mod crew;
 mod diagnostics;
+mod game_clip_upload;
 mod game_services;
 pub mod log_bundle;
 #[cfg(test)]
@@ -144,6 +145,8 @@ pub struct Client {
     replay_quality: crate::events::GameClipQuality,
     /// The 10 s hold before a new game in focus takes the replay.
     replay_hold: replay::GameHold,
+    /// The game clip upload thread (clip_upload), made at the first sign-in.
+    clip_uploads: Option<crate::clip_upload::UploadWorker>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -374,6 +377,7 @@ impl Client {
             replay_enabled: true,
             replay_quality: Default::default(),
             replay_hold: Default::default(),
+            clip_uploads: None,
             voice,
             event_tx,
             frame_slot,
@@ -1176,6 +1180,36 @@ impl Client {
             }
             Command::SetGameClips { enabled, quality } => {
                 self.handle_set_game_clips(enabled, quality);
+            }
+            Command::ShareGameClip {
+                crew_id,
+                clip_id,
+                path,
+                poster_path,
+                duration_seconds,
+                width,
+                height,
+                game_name,
+            } => {
+                self.handle_share_game_clip(crate::clip_upload::PendingClip {
+                    user_id: String::new(),
+                    crew_id,
+                    clip_id,
+                    game: game_name,
+                    mp4_path: path,
+                    poster_path,
+                    duration_seconds: f64::from(duration_seconds),
+                    width,
+                    height,
+                    // The replay runs only in voice (plan Q5): every game
+                    // clip has the crew voice.
+                    has_voice: true,
+                    created_ms: chrono::Utc::now().timestamp_millis(),
+                    posted: false,
+                    poster_done: false,
+                    upload_id: String::new(),
+                    done_parts: Vec::new(),
+                });
             }
             Command::PostClip {
                 crew_id,
