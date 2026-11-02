@@ -163,6 +163,12 @@ jobs:
             Remove-Item -Recurse -Force libmello/build-ci -ErrorAction SilentlyContinue
           }
 
+      # client/build_notices.rs runs `cargo tree --offline` for every target,
+      # so the crates of every target must be in the cache, not only this
+      # host's. Same step as the Linux lane and release.yml.
+      - name: Fetch crates
+        run: cargo fetch --locked
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -237,6 +243,12 @@ jobs:
             rm -rf libmello/build-ci
           fi
 
+      # client/build_notices.rs runs `cargo tree --offline` for every target,
+      # so the crates of every target must be in the cache, not only this
+      # host's. Same step as the Linux lane and release.yml.
+      - name: Fetch crates
+        run: cargo fetch --locked
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 
@@ -274,6 +286,16 @@ jobs:
         run: |
           cargo clean
           rm -rf libmello/build-ci
+
+  # GitHub-hosted Ubuntu 24.04, defined in linux-build-test.yml so the Linux
+  # branch can run it before it has a PR.
+  test-linux:
+    name: Test (Linux)
+    needs: changes
+    # See test-windows for this condition.
+    if: ${{ !cancelled() && (needs.changes.result != 'success' || needs.changes.outputs.code == 'true') }}
+    uses: ./.github/workflows/linux-build-test.yml
+    secrets: inherit
 
   # Pure Go unit tests over the Nakama modules — no native deps, no Docker, no
   # backend. Runs on GitHub-hosted Linux (already used by release.yml) rather

@@ -7,9 +7,13 @@ pub mod host;
 pub mod input;
 pub mod manager;
 pub mod members;
+#[cfg(target_os = "linux")]
+pub mod openh264;
 pub mod pacer;
 pub mod pause;
 pub mod rtp_peer;
+#[cfg(target_os = "linux")]
+pub mod screencast;
 pub mod sink;
 pub mod sink_sfu;
 pub mod teardown;

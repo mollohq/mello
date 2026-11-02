@@ -50,6 +50,10 @@ static PROCESS_CAPACITY: std::sync::atomic::AtomicUsize =
 /// session that closes and reopens is recorded as two sessions, which is worse
 /// than ending a few seconds late.
 const WINDOWLESS_GRACE_SCANS: u32 = 2;
+
+/// Whether a resolved game without a window ends its session (§2.4). Not on
+/// Linux: there the session ends when the process exits (§2.9).
+const WINDOW_ENDS_SESSION: bool = !cfg!(target_os = "linux");
 /// Executables that look game-like (fullscreen/foreground) but never are.
 /// Lowercase. Browsers, media players, launchers, comms, capture, system.
 const UNKNOWN_DENYLIST: &[&str] = &[
@@ -236,11 +240,21 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
 
         // Scan first, sleep after: the reconciliation below must run at
         // startup, not one interval late.
-        let processes = enumerate_game_processes(ctx.0);
+        #[cfg_attr(not(target_os = "linux"), allow(unused_mut))]
+        let mut processes = enumerate_game_processes(ctx.0);
+        // Linux: libmello reports no windows; KWin fills them on KDE.
+        #[cfg(target_os = "linux")]
+        crate::kwin_windows::annotate(&mut processes);
         let now = now_ms();
 
         let detected = detect_games(&library, &processes, now);
-        let detected = drop_windowless(detected, &processes, &mut windowless);
+        // Linux: a session ends when its process exits (§2.9). Window state
+        // is known on KDE only, so the window cannot end a session there.
+        let detected = if WINDOW_ENDS_SESSION {
+            drop_windowless(detected, &processes, &mut windowless)
+        } else {
+            detected
+        };
 
         // Restart recovery, first scan only. A session whose process is still
         // alive resumes with its original start time; one whose process is

@@ -322,7 +322,7 @@ If no item exists, the feed has no hero. The latest recap then takes its own pin
 - Head2head is always two columns wide, at every crew size. It leads a feed with no hero. Behind any other lead it takes the first wide slot after the lead (row 2, else row 3), never the one-column side slot. After one live stream it leads the grid beside the stream. A feed with no hero, head2head and a recap with content puts the recap second, tall (TallTrio): two plain cells sit under head2head.
 - Row 2 is the last row and has free cells: the stream and voice clip skeletons fill them at the card height, and the recap skeleton is the slim row under them (frame B). A full last row keeps the trio as one row.
 - A recap holds the whole side column beside the two-stream hero.
-- The weekly recap is never a one-cell card. It has two shapes: the tall card (one column, two rows) in the side column beside a hero, beside one live stream or in frame F, and the wide card (two columns, one row: the week, the belts moved and the belts held side by side). When the side column is taken, the recap takes the first wide slot of the next row, and the poster grid moves to the wide slot of the row after it (`feed_grid.rs`, `place_wide_cards`).
+- The weekly recap with content always stands top right: the tall card, one column and two rows, in the side column of the first two rows, whatever leads. The lead block beside it is two columns for those two rows: a wide card alone (head2head, a versus hero, a hero clip, a live session with poster art fills both rows), or a cell with the next card, then one wide card or two cells. The rows after the block are three columns (`feed_grid.rs`, `Lead::RecapSide`; `recap-side` in `crew_feed.slint`). The recap is never three rows and never a wide card.
 
 #### Two streams (frame D)
 
@@ -468,11 +468,11 @@ A backend job runs weekly (Monday 00:00 UTC) and generates a recap from ledger d
 
 ### 10.2 Presentation
 
-Appears as a card in the crew feed. NOT posted to chat. Tapping expands to a full-screen stats view.
+Appears as a card in the crew feed. NOT posted to chat. It arrives sealed and opens in the centre with the reveal (SEALED-REVEAL.md); the card in its slot is the opened view, there is no full-screen view.
 
-The tall card (one column, three grid rows with belts, two without) shows, top to bottom: the label and the week; hangout, clips, longest and top game with its art, two by two; Most active and Most clipped, one line each; Belts moved (two rows, then "+N more"); Belts held (octagon, count, "belts"); Games played (four small art tiles with hours); and "See the week" in a row of its own. A week with no belts drops both belt sections. The server sends `most_clipped`, `most_clipped_user_id`, `most_clipped_count`, `clip_of_week` (the longest clip of the week: id, title, duration, game, media) and `games_played` with `minutes` for each game. A card carries no note that explains it: no day, no source label.
+The tall card (one column, two grid rows, with or without belts) shows, top to bottom: the label and the week; hangout, clips, longest and top game with its art, two by two; Most active and Most clipped, one line each; Belts moved (two rows, "+N more" in the section header); Belts held (octagon, count, "belts"); Games played (the art tiles of the week's games, the hours in the section header). A week with no belts drops both belt sections. The card carries no control. The server sends `most_clipped`, `most_clipped_user_id`, `most_clipped_count`, `clip_of_week` (the longest clip of the week: id, title, duration, game, media) and `games_played` with `minutes` for each game. A card carries no note that explains it: no day, no source label.
 
-"See the week" opens the recap in the feed panel, min(880 px, panel less 48 px) wide and centred: this week (hangout, top game, longest, clips, most active, most clipped), every belt that moved with "was held by" and "now held by", every member with rank, count and titles, the clip of the week with a play ring that plays it through the clip player, and every game with its hours. A section the week did not have is left out.
+The centre view shows the same card at up to 1.1 times its slot size, with the numbers counting up. A click on the scrim sends it back to its slot, open.
 
 ---
 

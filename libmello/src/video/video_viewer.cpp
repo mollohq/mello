@@ -10,6 +10,9 @@
 #include <windows.h>
 #include <timeapi.h>
 #endif
+#if defined(__linux__)
+#include "yuv_convert.hpp"
+#endif
 #ifdef __APPLE__
 #include <CoreVideo/CoreVideo.h>
 #include <Accelerate/Accelerate.h>
@@ -33,6 +36,14 @@ static constexpr int64_t kPresentLeadUs = 2'000;
 // the decode jobs queue up to this many access units. Dropping a delta frame
 // breaks every frame after it, so the bound is only a memory guard.
 static constexpr size_t kMaxDecodeJobs = 1024;
+#if defined(__linux__)
+// A decoder gives way to the next one after two key frames it could not
+// decode, ten errors in a row, or a second of access units with no picture,
+// each counted from its first key frame.
+static constexpr int kSwitchAfterFailedKeyframes = 2;
+static constexpr int kSwitchAfterErrors = 10;
+static constexpr int kSwitchAfterSilentFrames = 60;
+#endif
 
 int64_t ViewerPipeline::now_us() {
     return std::chrono::duration_cast<std::chrono::microseconds>(
@@ -68,7 +79,16 @@ bool ViewerPipeline::start(const GraphicsDevice& device, const ViewerConfig& con
         MELLO_LOG_ERROR(TAG, "No decoder available");
         return false;
     }
-    decoder_name_ = decoder_->name();
+    {
+        std::lock_guard<std::mutex> lock(decoder_name_mutex_);
+        decoder_name_ = decoder_->name();
+    }
+#if defined(__linux__)
+    decoder_config_ = dec_config;
+    tried_decoders_.clear();
+    health_ = DecoderHealth{};
+    no_other_decoder_ = false;
+#endif
 #ifdef _WIN32
     // The CPU readback is set up for every viewer: the gate and the tools
     // use the CPU callback, the client the native one. It costs one small
@@ -197,7 +217,10 @@ bool ViewerPipeline::take_presented() {
 }
 
 void ViewerPipeline::stats(ViewerStats& out) const {
-    out.decoder_name = decoder_name_;
+    {
+        std::lock_guard<std::mutex> lock(decoder_name_mutex_);
+        out.decoder_name = decoder_name_;
+    }
     out.attached = attached_.load();
     out.frames_decoded = frames_decoded_.load();
     out.decode_errors = decode_errors_.load();
@@ -335,6 +358,8 @@ int ViewerPipeline::acquire_slot_for_decode() {
 void ViewerPipeline::release_slot_locked(RingSlot& slot) {
 #ifdef _WIN32
     slot.picture = DecodedPicture{};
+#elif defined(__linux__)
+    slot.picture = CpuPicture{};
 #elif defined(__APPLE__)
     if (slot.pixel_buffer) {
         CVPixelBufferRelease(static_cast<CVPixelBufferRef>(slot.pixel_buffer));
@@ -357,13 +382,33 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     const double mean = decode_ms_mean_.load(std::memory_order_relaxed);
     decode_ms_mean_.store(mean == 0.0 ? ms : mean * 0.95 + ms * 0.05, std::memory_order_relaxed);
 
+#if defined(__linux__)
+    note_decode_result(result, keyframe);
+#endif
+
     std::unique_lock<std::mutex> lock(ring_mutex_);
     RingSlot& slot = ring_[static_cast<size_t>(slot_index)];
     if (result != DecodeFeedResult::FrameReady) {
         slot.state = RingSlot::State::Free;
-        return result == DecodeFeedResult::Accepted;
+        const bool accepted = result == DecodeFeedResult::Accepted;
+#if defined(__linux__)
+        lock.unlock();
+        ring_cv_.notify_all();
+        if (!no_other_decoder_ && (health_.failed_keyframes >= kSwitchAfterFailedKeyframes ||
+                                   health_.consecutive_errors >= kSwitchAfterErrors ||
+                                   health_.accepted_without_frame >= kSwitchAfterSilentFrames)) {
+            switch_decoder();
+        }
+#endif
+        return accepted;
     }
 #ifdef _WIN32
+    if (!decoder_->picture(slot_index, slot.picture)) {
+        slot.state = RingSlot::State::Free;
+        MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a picture", decoder_->name());
+        return false;
+    }
+#elif defined(__linux__)
     if (!decoder_->picture(slot_index, slot.picture)) {
         slot.state = RingSlot::State::Free;
         MELLO_LOG_ERROR(TAG, "Decoder %s reported a frame without a picture", decoder_->name());
@@ -397,6 +442,68 @@ bool ViewerPipeline::decode_into_ring(const std::vector<uint8_t>& bytes, bool ke
     }
     return true;
 }
+
+#if defined(__linux__)
+void ViewerPipeline::note_decode_result(DecodeFeedResult result, bool keyframe) {
+    if (keyframe) health_.seen_keyframe = true;
+    if (result == DecodeFeedResult::FrameReady) {
+        health_ = DecoderHealth{};
+        health_.seen_keyframe = true;
+        return;
+    }
+    if (!health_.seen_keyframe) return;
+    if (result == DecodeFeedResult::Error) {
+        ++health_.consecutive_errors;
+        if (keyframe) ++health_.failed_keyframes;
+    } else {
+        ++health_.accepted_without_frame;
+    }
+}
+
+void ViewerPipeline::switch_decoder() {
+    const std::string failed = decoder_->name();
+    MELLO_LOG_WARN(TAG, "Decoder %s stopped working (failed key frames=%d, errors in a row=%d, "
+                        "access units without a picture=%d): trying the next decoder",
+                   failed.c_str(), health_.failed_keyframes, health_.consecutive_errors,
+                   health_.accepted_without_frame);
+    tried_decoders_.push_back(failed);
+    health_ = DecoderHealth{};
+    auto next = create_next_decoder(device_, decoder_config_, tried_decoders_);
+    if (!next) {
+        MELLO_LOG_ERROR(TAG, "No other decoder: %s stays", failed.c_str());
+        no_other_decoder_ = true;
+        return;
+    }
+    std::unique_ptr<Decoder> old;
+    {
+        // The ring's pictures live in the old decoder's slots. Wait for the
+        // one on screen, drop the ready ones, then swap.
+        std::unique_lock<std::mutex> lock(ring_mutex_);
+        ring_cv_.wait(lock, [this] {
+            return !running_.load(std::memory_order_acquire) ||
+                   std::none_of(ring_.begin(), ring_.end(), [](const RingSlot& s) {
+                       return s.state == RingSlot::State::Presenting;
+                   });
+        });
+        for (RingSlot& s : ring_) {
+            if (s.state == RingSlot::State::Ready) {
+                release_slot_locked(s);
+                frames_dropped_present_.fetch_add(1, std::memory_order_relaxed);
+            }
+        }
+        old = std::move(decoder_);
+        decoder_ = std::move(next);
+    }
+    old->shutdown();
+    {
+        std::lock_guard<std::mutex> lock(decoder_name_mutex_);
+        decoder_name_ = decoder_->name();
+    }
+    // The new decoder starts at a key frame: its first delta fails and the
+    // timeline asks for one (on_decode_error).
+    MELLO_LOG_INFO(TAG, "Viewer decoder is now %s (was %s)", decoder_->name(), failed.c_str());
+}
+#endif
 
 // ---- present thread ---------------------------------------------------------
 
@@ -443,6 +550,8 @@ void ViewerPipeline::present_thread_main() {
 
         lock.lock();
         release_slot_locked(slot);
+        // A decoder switch waits for the slot on screen (switch_decoder).
+        ring_cv_.notify_all();
     }
 }
 
@@ -497,6 +606,14 @@ void ViewerPipeline::present_slot(RingSlot& slot) {
             shown = true;
         }
         CVPixelBufferUnlockBaseAddress(pb, kCVPixelBufferLock_ReadOnly);
+    }
+#elif defined(__linux__)
+    const CpuPicture& pic = slot.picture;
+    if (frame_cb && pic.y && pic.width > 0 && pic.height > 0) {
+        rgba_buf_.resize(static_cast<size_t>(pic.width) * pic.height * 4);
+        i420_to_rgba(pic, rgba_buf_.data());
+        frame_cb(rgba_buf_.data(), pic.width, pic.height, ts);
+        shown = true;
     }
 #else
     (void)ts;

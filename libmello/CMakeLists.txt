@@ -308,6 +308,17 @@ elseif(APPLE)
         src/audio/clip_encoder_audiotoolbox.cpp
         src/audio/mic_permission_macos.mm
     )
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # PipeWire capture, playback and device list. No microphone permission on
+    # Linux outside a sandbox, so the permission stub answers "granted".
+    list(APPEND MELLO_SOURCES
+        src/audio/pipewire_stream.cpp
+        src/audio/capture_pipewire.cpp
+        src/audio/playback_pipewire.cpp
+        src/audio/audio_backend_pipewire.cpp
+        src/audio/device_enumerator_pipewire.cpp
+        src/audio/mic_permission_stub.cpp
+    )
 else()
     list(APPEND MELLO_SOURCES
         src/audio/audio_backend_stub.cpp
@@ -375,6 +386,22 @@ else()
         src/video/process_enum.cpp
         src/video/window_thumbnail.cpp
     )
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        # The stream viewer: OpenH264 (loaded at run time) into CPU memory,
+        # converted to RGBA on the present thread.
+        list(APPEND MELLO_SOURCES
+            src/video/decoder_openh264_linux.cpp
+            src/video/openh264_dynload_linux.cpp
+            src/video/decoder_nvdec_linux.cpp
+            src/video/decoder_gst_va_linux.cpp
+            src/video/linux_gpu.cpp
+            src/video/capture_pipewire_video.cpp
+            src/video/encoder_openh264_linux.cpp
+            src/video/encoder_gst_linux.cpp
+            src/video/gst_runtime_linux.cpp
+            src/video/yuv_convert.cpp
+        )
+    endif()
 endif()
 
 # Enable ARC + modules for all ObjC++ sources.
@@ -453,6 +480,19 @@ if(MELLO_WEBRTC_GOOG_CC)
     target_link_libraries(mello PUBLIC webrtc_goog_cc)
 else()
     target_sources(mello PRIVATE src/transport/goog_cc_controller.cpp)
+endif()
+
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    # The Linux audio backend. Linked from the system: every target
+    # distribution ships libpipewire-0.3.
+    find_package(PkgConfig REQUIRED)
+    pkg_check_modules(PIPEWIRE REQUIRED IMPORTED_TARGET libpipewire-0.3)
+    target_link_libraries(mello PUBLIC PkgConfig::PIPEWIRE)
+    # The GStreamer headers for the VA-API stream decoder. Headers only:
+    # decoder_gst_va_linux.cpp loads GStreamer with dlopen, so a system
+    # without it still runs (OpenH264 decodes).
+    pkg_check_modules(GST REQUIRED gstreamer-1.0 gstreamer-app-1.0 gstreamer-video-1.0)
+    target_include_directories(mello PRIVATE ${GST_INCLUDE_DIRS})
 endif()
 
 if(WIN32)

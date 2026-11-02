@@ -269,8 +269,13 @@ public:
 private:
 #ifdef _WIN32
     void on_captured_frame(const CapturedFrame& frame);
-#elif defined(__APPLE__)
+#elif defined(__APPLE__) || defined(__linux__)
+    /// macOS: a CVPixelBufferRef. Linux: a CaptureFrame (capture thread).
     void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
+#endif
+#if defined(__linux__)
+    /// Linux: no picture for a while; drain the encoder (capture thread).
+    void on_capture_idle();
 #endif
 
     // The viewer's device. A Windows host encodes on its capture manager's

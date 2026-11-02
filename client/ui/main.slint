@@ -45,7 +45,7 @@ import { MemberVolumePopover } from "panels/member_volume_popover.slint";
 import { VoiceChannelView } from "panels/voice_channel_view.slint";
 import { ChatPanel } from "panels/chat_panel.slint";
 import { ControlBar } from "panels/control_bar.slint";
-import { CrewFeed, RecapView } from "panels/crew_feed.slint";
+import { CrewFeed } from "panels/crew_feed.slint";
 import { Clock, SealedUi } from "components/sealed.slint";
 import { SettingsModal } from "panels/settings_modal.slint";
 import { NewCrewModal } from "panels/new_crew_modal.slint";
@@ -67,10 +67,10 @@ export { StreamCardUi, StreamStatsData }
 // --- end stage 9 ---
 
 
-export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, RecapView, VideoRect, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
-    title: "Mello";
+    title: "m3llo";
     min-width: 1024px;
     min-height: 768px;
     preferred-width: 1440px;
@@ -290,6 +290,8 @@ export component MainWindow inherits Window {
     in-out property <bool> settings-auto-connect: false;
     in-out property <bool> settings-minimize-on-join: false;
     in-out property <bool> settings-hw-acceleration: true;
+    in property <bool> settings-show-openh264: false;
+    in-out property <bool> settings-openh264-enabled: true;
     // Audio settings
     in-out property <float> settings-input-volume: 1.0;
     in-out property <float> settings-output-volume: 1.0;
@@ -707,6 +709,7 @@ export component MainWindow inherits Window {
     callback setting-changed-auto-connect(bool);
     callback setting-changed-minimize-on-join(bool);
     callback setting-changed-hw-acceleration(bool);
+    callback setting-changed-openh264-enabled(bool);
     callback setting-changed-input-volume(float);
     callback setting-changed-output-volume(float);
     callback setting-changed-noise-suppression(bool);
@@ -1733,6 +1736,8 @@ export component MainWindow inherits Window {
         auto-connect <=> root.settings-auto-connect;
         minimize-on-join <=> root.settings-minimize-on-join;
         hw-acceleration <=> root.settings-hw-acceleration;
+        show-openh264: root.settings-show-openh264;
+        openh264-enabled <=> root.settings-openh264-enabled;
         // Audio
         input-volume <=> root.settings-input-volume;
         output-volume <=> root.settings-output-volume;
@@ -1842,6 +1847,10 @@ export component MainWindow inherits Window {
         setting-changed-hw-acceleration(v) => {
             root.settings-show-saved = true;
             root.setting-changed-hw-acceleration(v);
+        }
+        setting-changed-openh264-enabled(v) => {
+            root.settings-show-saved = true;
+            root.setting-changed-openh264-enabled(v);
         }
         setting-changed-input-volume(v) => {
             root.settings-show-saved = true;

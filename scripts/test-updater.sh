@@ -195,7 +195,7 @@ do_pack_body() {
         --packVersion "$pack_version" \
         --packDir "$DIST_DIR" \
         --mainExe mello \
-        --packTitle Mello \
+        --packTitle m3llo \
         --channel "$CHANNEL" \
         --outputDir "$VPK_OUT" \
         --icon "$ICON_PATH" \

@@ -94,3 +94,73 @@ private:
 
 } // namespace mello::video
 #endif
+
+#if defined(__linux__)
+#include <nvcuvid.h>
+#include <cuviddec.h>
+#include <vector>
+
+namespace mello::video {
+
+/// NVDEC on Linux (decoder_nvdec_linux.cpp): libnvcuvid and libcuda through
+/// dlopen, NVIDIA's own H.264 parser. Each decoded surface is copied from
+/// CUDA memory into a host NV12 buffer of its output slot; the viewer
+/// converts it on the CPU. Needs the NVIDIA driver (not nouveau).
+///
+/// As on Windows, the parser callbacks only record the surface to show, and
+/// the copy runs after cuvidParseVideoData returns. All calls run on the
+/// decode thread.
+class NvdecDecoder : public Decoder {
+public:
+    bool             initialize(const GraphicsDevice& device, const DecoderConfig& config) override;
+    void             shutdown() override;
+    DecodeFeedResult decode(const uint8_t* data, size_t size, bool is_keyframe, int slot) override;
+    bool             picture(int slot, CpuPicture& out) const override;
+    bool             supports_codec(VideoCodec codec) const override { return codec == VideoCodec::H264; }
+    const char*      name() const override { return "NVDEC"; }
+
+    /// True when libcuda.so.1 and libnvcuvid.so.1 load. Says nothing about a
+    /// usable GPU: initialize() finds that out.
+    static bool is_available();
+
+    ~NvdecDecoder() override { shutdown(); }
+
+private:
+    struct Api;  // the resolved entry points
+
+    struct Slot {
+        std::vector<uint8_t> nv12;  // luma rows, then the interleaved chroma
+        uint32_t width = 0;
+        uint32_t height = 0;
+    };
+
+    bool copy_to_slot(int picture_index, int slot);
+
+    static int CUDAAPI handle_video_sequence(void* user, CUVIDEOFORMAT* fmt);
+    static int CUDAAPI handle_picture_decode(void* user, CUVIDPICPARAMS* pic);
+    static int CUDAAPI handle_picture_display(void* user, CUVIDPARSERDISPINFO* disp);
+
+    void* cuda_lib_  = nullptr;
+    void* cuvid_lib_ = nullptr;
+    Api*  api_       = nullptr;
+    void* cu_context_ = nullptr;
+
+    CUvideodecoder decoder_ = nullptr;
+    CUvideoparser  parser_  = nullptr;
+
+    std::vector<CUVIDPARSERDISPINFO> pending_display_;
+
+    uint32_t display_width_  = 0;
+    uint32_t display_height_ = 0;
+    uint32_t decoder_coded_width_ = 0;
+    uint32_t decoder_coded_height_ = 0;
+    int decoder_codec_ = -1;
+    int decoder_chroma_format_ = -1;
+    bool sequence_failed_ = false;
+
+    DecoderConfig config_{};
+    Slot slots_[kOutputSlots];
+};
+
+} // namespace mello::video
+#endif

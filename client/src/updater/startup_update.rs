@@ -8,13 +8,18 @@ use slint::ComponentHandle;
 use super::{UpdateEvent, Updater};
 use crate::ForceUpdateWindow;
 
+// The dialog size, for centering on Windows and macOS. Linux has no
+// centering: Wayland does not let a client place its window, and on X11 the
+// window manager places it.
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FORCE_UPDATE_WIDTH: f32 = 360.0;
+#[cfg(any(target_os = "windows", target_os = "macos"))]
 const FORCE_UPDATE_HEIGHT: f32 = 188.0;
 
 /// Installs the winit backend. The builder does not read `SLINT_BACKEND`, so
 /// the renderer choice is made here. Other platforms keep Slint's default.
 pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error>> {
-    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg(any(target_os = "windows", target_os = "macos", target_os = "linux"))]
     {
         let mut builder = i_slint_backend_winit::Backend::builder();
 
@@ -37,6 +42,26 @@ pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error
             builder = builder.with_renderer_name(renderer);
         }
 
+        // Linux: Skia on wgpu (Vulkan) on the boot GPU by default, Skia's CPU
+        // rasterizer when the "Hardware Acceleration" setting is off or no
+        // hardware Vulkan adapter is found (renderer_choice.rs,
+        // platform/linux_gpu.rs). MELLO_RENDERER=skia-wgpu|skia-software
+        // overrides both. The Vulkan driver filter comes first, so neither the
+        // probe nor the renderer opens a second GPU's driver.
+        #[cfg(target_os = "linux")]
+        {
+            crate::platform::linux_gpu::prepare_vulkan_driver_env();
+            let settings = crate::settings::Settings::load();
+            let override_name = std::env::var("MELLO_RENDERER").ok();
+            let (renderer, reason) = crate::renderer_choice::choose_linux(
+                override_name.as_deref(),
+                settings.hardware_acceleration,
+                crate::platform::linux_gpu::probe_vulkan,
+            );
+            log::info!("[startup] Slint renderer: {renderer} ({reason:?})");
+            builder = builder.with_renderer_name(renderer);
+        }
+
         // macOS: Skia on wgpu (Metal); the debug switch forces the CPU rasterizer.
         #[cfg(target_os = "macos")]
         if std::env::args().any(|a| a == "--software-rendering") {
@@ -50,6 +75,16 @@ pub(crate) fn configure_slint_platform() -> Result<(), Box<dyn std::error::Error
             builder = builder.with_default_menu_bar(false);
         }
 
+        // Linux: the app ID on every window (Wayland app_id, X11 WM_CLASS), so
+        // the desktop matches the window to its desktop entry and icon.
+        #[cfg(target_os = "linux")]
+        {
+            use i_slint_backend_winit::winit::platform::wayland::WindowAttributesExtWayland;
+            builder = builder.with_window_attributes_hook(|attributes| {
+                attributes.with_name(crate::LINUX_APP_ID, crate::LINUX_APP_ID)
+            });
+        }
+
         slint::platform::set_platform(Box::new(builder.build()?))?;
     }
 
@@ -61,6 +96,8 @@ pub(crate) fn run_gate(
     update_event_rx: Receiver<UpdateEvent>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dialog = ForceUpdateWindow::new()?;
+    #[cfg(target_os = "windows")]
+    crate::platform::set_exe_icon(&dialog);
     let (current_version, target_version, total_bytes) = {
         let updater_ref = updater.borrow();
         let updater = updater_ref.as_ref().ok_or("Updater unavailable")?;

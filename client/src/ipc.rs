@@ -5,10 +5,29 @@ pub fn endpoint_name(lock_name: &str) -> String {
     if cfg!(target_os = "windows") {
         format!(r"\\.\pipe\{}", lock_name)
     } else {
-        std::env::temp_dir()
-            .join(format!("{}.sock", lock_name))
-            .to_string_lossy()
-            .to_string()
+        socket_dir(
+            cfg!(target_os = "linux"),
+            std::env::var_os("XDG_RUNTIME_DIR"),
+            std::env::temp_dir(),
+        )
+        .join(format!("{}.sock", lock_name))
+        .to_string_lossy()
+        .to_string()
+    }
+}
+
+/// The folder of the socket. Linux: `$XDG_RUNTIME_DIR`, which only the user
+/// can open (mode 0700). `/tmp` is shared by every user, so another account
+/// could connect and hand the app a link. macOS: the temp folder, which is
+/// per user already.
+fn socket_dir(
+    linux: bool,
+    xdg_runtime_dir: Option<std::ffi::OsString>,
+    temp_dir: std::path::PathBuf,
+) -> std::path::PathBuf {
+    match xdg_runtime_dir.filter(|d| linux && !d.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => temp_dir,
     }
 }
 
@@ -42,6 +61,19 @@ impl IpcListener {
     pub fn recv_timeout(&self, timeout: std::time::Duration) -> Option<String> {
         self.inner.recv_timeout(timeout)
     }
+}
+
+/// The message of a second instance that has no link to relay. A user who
+/// starts m3llo again (the desktop icon, the Start menu) wants the window,
+/// and it can be hidden in the tray.
+pub const SHOW_WINDOW: &str = "show";
+
+/// The message a second instance sends to the running one: the `mello://`
+/// link it was started with, or [`SHOW_WINDOW`].
+pub fn relay_message(first_arg: Option<String>) -> String {
+    first_arg
+        .filter(|a| a.starts_with("mello://"))
+        .unwrap_or_else(|| SHOW_WINDOW.to_string())
 }
 
 /// Send a message to the running instance and return true on success.
@@ -323,6 +355,22 @@ mod tests {
     }
 
     #[test]
+    fn linux_puts_the_socket_in_the_user_runtime_dir() {
+        let tmp = std::path::PathBuf::from("/tmp");
+        assert_eq!(
+            socket_dir(true, Some("/run/user/1000".into()), tmp.clone()),
+            std::path::PathBuf::from("/run/user/1000")
+        );
+        // Without a runtime dir, or off Linux, the temp folder.
+        assert_eq!(socket_dir(true, None, tmp.clone()), tmp);
+        assert_eq!(socket_dir(true, Some("".into()), tmp.clone()), tmp);
+        assert_eq!(
+            socket_dir(false, Some("/run/user/1000".into()), tmp.clone()),
+            tmp
+        );
+    }
+
+    #[test]
     fn round_trip() {
         let ep = endpoint_name(&format!("mello-ipc-test.{}", std::process::id()));
         let listener = IpcListener::bind(&ep).expect("bind failed");
@@ -339,6 +387,16 @@ mod tests {
 
         // No pending messages after drain
         assert!(listener.try_recv().is_empty());
+    }
+
+    #[test]
+    fn a_second_instance_relays_its_link_or_asks_for_the_window() {
+        assert_eq!(
+            relay_message(Some("mello://join/NITE-0001".into())),
+            "mello://join/NITE-0001"
+        );
+        assert_eq!(relay_message(None), SHOW_WINDOW);
+        assert_eq!(relay_message(Some("--instance".into())), SHOW_WINDOW);
     }
 
     #[test]

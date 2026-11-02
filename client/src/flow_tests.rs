@@ -2135,6 +2135,45 @@ fn a_relayed_join_link_on_step_one_opens_the_welcome_screen() {
     );
 }
 
+/// The user starts m3llo again (the desktop icon) while it runs hidden in
+/// the tray. The second instance relays over the real IPC endpoint, and the
+/// running app must show its window. Before, the second instance left with
+/// no sign, and the user saw nothing.
+#[test]
+fn a_second_launch_shows_the_window_hidden_in_the_tray() {
+    let mut h = Harness::new();
+    let endpoint = crate::ipc::endpoint_name(&format!("mello-relay-show.{}", std::process::id()));
+    let listener = crate::ipc::IpcListener::bind(&endpoint).expect("bind the IPC endpoint");
+    *h.ctx().ipc_listener.borrow_mut() = Some(listener);
+    h.app().show().expect("show the window");
+    h.app().hide().expect("hide the window to the tray");
+    assert!(!h.app().window().is_visible());
+
+    // What the second instance does in `lib.rs`, started with no link.
+    assert!(crate::ipc::send_to_running(
+        &endpoint,
+        &crate::ipc::relay_message(None)
+    ));
+
+    // The listener hands the line over on its own thread (Windows). Wait for
+    // the window that the test asserts on, with a limit.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    while !h.app().window().is_visible() && std::time::Instant::now() < deadline {
+        h.pump();
+        if !h.app().window().is_visible() {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+    }
+    assert!(
+        h.app().window().is_visible(),
+        "the running app shows its window"
+    );
+    assert!(
+        resolved_codes(&h.commands()).is_empty(),
+        "a plain launch is not a link"
+    );
+}
+
 /// INV-05: an invalid invite code on a fresh install shows step 1 with a
 /// message. Step 1 offers a way forward. No join modal opens.
 #[test]
@@ -3998,6 +4037,124 @@ fn hangup_click_updates_ui_before_core_confirms() {
         cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
         "hangup must still send LeaveVoice, got {cmds:?}"
     );
+}
+
+/// The window's close button with "close to tray" on hangs up. A user who
+/// closes the window thinks they left, and the channel kept hearing them.
+#[test]
+fn closing_the_window_to_tray_leaves_voice() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    h.app().set_in_voice(true);
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    assert!(
+        !h.app().get_in_voice(),
+        "closing to tray must leave the in-voice state"
+    );
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing to tray must send LeaveVoice, got {cmds:?}"
+    );
+}
+
+/// Outside a call the close button only hides the window: no LeaveVoice,
+/// which would tell the server about a call that does not exist.
+#[test]
+fn closing_the_window_to_tray_outside_a_call_sends_no_leave() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let _ = h.commands();
+
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+
+    let cmds = h.commands();
+    assert!(
+        !cmds.iter().any(|c| matches!(c, Command::LeaveVoice)),
+        "closing outside a call must not send LeaveVoice, got {cmds:?}"
+    );
+}
+
+/// Counts the tray notices the close handler posts. The OS accepts a notice
+/// when `accepted` returns true for that attempt (0 is the first).
+fn count_tray_notices(
+    h: &Harness,
+    accepted: impl Fn(u32) -> bool + 'static,
+) -> std::rc::Rc<std::cell::Cell<u32>> {
+    let attempts = std::rc::Rc::new(std::cell::Cell::new(0));
+    let seen = attempts.clone();
+    *h.ctx().tray_notice.borrow_mut() = Some(Box::new(move || {
+        let n = seen.get();
+        seen.set(n + 1);
+        accepted(n)
+    }));
+    attempts
+}
+
+fn close_the_window(h: &Harness) {
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::CloseRequested);
+}
+
+/// The first close to the tray tells the user that m3llo still runs. Users
+/// thought the app quit. Later closes say nothing.
+#[test]
+fn the_first_close_to_tray_shows_the_notice_once() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "the first close posts the notice");
+    assert!(
+        h.settings().borrow().tray_notice_shown,
+        "the notice is stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 1, "a later close posts no notice");
+}
+
+/// With no tray to bring it back (a Linux desktop without a
+/// StatusNotifierItem host), close does not hide the window to the tray: it
+/// quits. So no hang-up of its own and no tray notice.
+#[test]
+fn without_a_tray_close_quits_and_posts_no_tray_notice() {
+    let h = Harness::new();
+    *h.ctx().status_item.borrow_mut() = crate::platform::StatusItem::disabled();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |_| true);
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 0, "no tray, no tray notice");
+    assert!(!h.settings().borrow().tray_notice_shown);
+}
+
+/// A notice the OS refused did not reach the user, so the next close tries
+/// again.
+#[test]
+fn a_refused_tray_notice_shows_on_the_next_close() {
+    let h = Harness::new();
+    h.settings().borrow_mut().close_to_tray = true;
+    let attempts = count_tray_notices(&h, |n| n > 0);
+
+    close_the_window(&h);
+    assert!(
+        !h.settings().borrow().tray_notice_shown,
+        "a refused notice is not stored as shown"
+    );
+
+    close_the_window(&h);
+    assert_eq!(attempts.get(), 2, "the next close tries again");
+    assert!(h.settings().borrow().tray_notice_shown);
 }
 
 fn listed_audio_devices(cmds: &[Command]) -> bool {
@@ -6910,6 +7067,34 @@ fn preferences_menu_item_shows_the_display_name_like_the_settings_button() {
     assert_eq!(h.field_text("DISPLAY NAME"), "b0bben");
 }
 
+/// Cisco's licence for its OpenH264 binary asks for a switch (spec 12
+/// section 7.4). Settings shows it on Linux only, the one platform that
+/// downloads the binary, with the saved value.
+#[test]
+fn the_software_video_decoder_switch_shows_on_linux_with_the_saved_value() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().openh264_enabled = false;
+    h.app().invoke_settings_requested();
+    h.pump();
+    assert_eq!(
+        h.app().get_settings_show_openh264(),
+        cfg!(target_os = "linux")
+    );
+    assert!(!h.app().get_settings_openh264_enabled());
+}
+
+/// The switch saves the setting; it applies at the next start.
+#[test]
+fn the_software_video_decoder_switch_saves_the_setting() {
+    let mut h = Harness::new();
+    h.app().invoke_setting_changed_openh264_enabled(false);
+    h.pump();
+    assert!(!h.settings().borrow().openh264_enabled);
+    h.app().invoke_setting_changed_openh264_enabled(true);
+    h.pump();
+    assert!(h.settings().borrow().openh264_enabled);
+}
+
 /// Spec 10 section 8: every voice control reaches libmello. The
 /// input-sensitivity slider and its auto toggle used to save only.
 #[test]
@@ -7526,10 +7711,9 @@ fn recap_with_two_moved_belts_shows_two_rows_and_the_held_section() {
     assert_eq!(card.game_name.as_str(), "Rocket League");
 }
 
-/// The tall card shows two moved belts and "+N more". The full-screen recap
-/// shows all of them.
+/// The tall card shows two moved belts and "+N more" in the section header.
 #[test]
-fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
+fn recap_card_caps_moved_belts_at_two() {
     let mut h = Harness::new();
     emit_recap(
         &mut h,
@@ -7543,7 +7727,6 @@ fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
             "belts_held": belts_held(),
         }),
     );
-    assert_eq!(count_of(&h, "RecapOpened"), 0);
     assert_eq!(
         count_of(&h, "TitleChip"),
         2,
@@ -7553,22 +7736,11 @@ fn recap_card_caps_moved_belts_at_two_and_opens_full_screen_with_all() {
         drawn_texts(&h).iter().any(|t| t == "+2 MORE"),
         "the rest is a count"
     );
-    h.click_label("See the week");
-    let w = h.app().window().size().width;
-    h.app().window().set_size(slint::PhysicalSize::new(w, 3600));
     assert_eq!(
-        count_of(&h, "RecapOpened"),
-        1,
-        "the card opens the full-screen recap"
+        h.controls_labelled("See the week").len(),
+        0,
+        "no full-screen view"
     );
-    assert_eq!(count_of(&h, "TitleChip"), 2, "the card keeps its two rows");
-    assert_eq!(
-        count_of(&h, "BeltName"),
-        4,
-        "all four rows in the full-screen recap"
-    );
-    h.click_label("Close weekly recap");
-    assert_eq!(count_of(&h, "RecapOpened"), 0);
 }
 
 /// A recap with no belts shows neither section.
@@ -7581,12 +7753,6 @@ fn recap_without_belts_shows_neither_section() {
     assert_eq!(card.belts_moved.row_count(), 0);
     assert_eq!(card.belts_held.row_count(), 0);
     assert_eq!(count_of(&h, "TitleChip"), 0);
-    h.click_label("See the week");
-    assert_eq!(
-        count_of(&h, "TitleChip"),
-        0,
-        "no belts, no chips in the full-screen recap"
-    );
 }
 
 // ---- the tall recap card (mockup weekly-recap-card, frame 1) ----
@@ -7689,23 +7855,24 @@ fn rect_of(e: &ElementHandle) -> (f32, f32, f32, f32) {
     (p.x, p.y, p.x + s.width, p.y + s.height)
 }
 
-fn overlap(a: (f32, f32, f32, f32), b: (f32, f32, f32, f32)) -> bool {
-    a.0 < b.2 - 0.5 && b.0 < a.2 - 0.5 && a.1 < b.3 - 0.5 && b.1 < a.3 - 0.5
-}
-
-/// With belts the card has every section and three grid rows.
+/// With belts the card has every section and still two grid rows: the recap
+/// is two rows, never three.
 #[test]
-fn the_tall_recap_has_every_section_and_three_rows_with_belts() {
+fn the_tall_recap_has_every_section_and_two_rows_with_belts() {
     let h = tall_recap_crew(week_with_everything());
     for name in TALL_SECTIONS {
         assert_eq!(count_of(&h, name), 1, "{name} is on the card");
     }
-    assert_eq!(count_of(&h, "RecapFoot"), 1);
+    assert_eq!(
+        h.controls_labelled("See the week").len(),
+        0,
+        "no control on the card"
+    );
     let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
         .next()
         .expect("the recap");
     let rows = (card.size().height + 12.0) / (232.0 + 12.0);
-    assert!((rows - 3.0).abs() < 0.01, "three rows, got {rows}");
+    assert!((rows - 2.0).abs() < 0.01, "two rows, got {rows}");
     let texts = drawn_texts(&h);
     for want in [
         "WEEKLY RECAP",
@@ -7730,12 +7897,9 @@ fn the_tall_recap_has_every_section_and_three_rows_with_belts() {
         2,
         "two belts and the rest a count"
     );
-    // Four tiles with the hours of each game, the fifth game is for the opened
-    // recap.
-    assert!(texts.iter().any(|t| t == "12 H 20"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "9 H 10"), "{texts:?}");
-    assert!(texts.iter().any(|t| t == "3 H 40"), "{texts:?}");
-    assert!(!texts.iter().any(|t| t == "2 H 00"), "{texts:?}");
+    // The games strip is tiles only: the hours of the week stand in its
+    // header, Recent games names the games.
+    assert!(!texts.iter().any(|t| t == "12 H 20"), "{texts:?}");
     // No note of the mockup stays on the card: no day, no source.
     for note in ["Monday", "Head2head", "Now", "NOW", "31 h 40 together"] {
         assert!(!texts.iter().any(|t| t == note), "{note:?} in {texts:?}");
@@ -7748,7 +7912,7 @@ fn the_tall_recap_without_belts_has_no_belt_sections_and_two_rows() {
     let h = tall_recap_crew(week_without_belts());
     assert_eq!(count_of(&h, "RecapMoved"), 0);
     assert_eq!(count_of(&h, "RecapHeld"), 0);
-    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip", "RecapFoot"] {
+    for name in ["RecapHead", "RecapPeople", "RecapGamesStrip"] {
         assert_eq!(count_of(&h, name), 1, "{name} is on the card");
     }
     let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
@@ -7799,34 +7963,6 @@ fn first_recap(h: &Harness) -> FeedCardData {
         .expect("a recap card")
 }
 
-/// "See the week" stands in a row of its own: it touches no section.
-#[test]
-fn see_the_week_intersects_no_sibling() {
-    for week in [week_with_everything(), week_without_belts()] {
-        let h = tall_recap_crew(week);
-        let controls = h.controls_labelled("See the week");
-        assert_eq!(controls.len(), 1);
-        let button = rect_of(&controls[0]);
-        let card = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot")
-            .next()
-            .expect("the recap");
-        let card = rect_of(&card);
-        assert!(
-            button.2 <= card.2 && button.3 <= card.3 && button.0 >= card.0,
-            "the button {button:?} is inside the card {card:?}"
-        );
-        for name in TALL_SECTIONS {
-            for e in ElementHandle::find_by_element_type_name(h.app(), name) {
-                assert!(
-                    !overlap(button, rect_of(&e)),
-                    "the button {button:?} sits on {name} {:?}",
-                    rect_of(&e)
-                );
-            }
-        }
-    }
-}
-
 /// The server's new fields reach the card: the most clipped member with the
 /// count, the hours of every game and the week.
 #[test]
@@ -7855,138 +7991,6 @@ fn an_older_recap_draws_without_the_new_fields() {
     assert_eq!(card.recap_games.row_count(), 0);
     assert_eq!(count_of(&h, "RecapGamesStrip"), 0);
     assert_eq!(count_of(&h, "RecapHead"), 1);
-}
-
-// ---- the opened recap (mockup weekly-recap-card, frame 2) ----
-
-fn open_the_week(h: &mut Harness) {
-    h.click_label("See the week");
-    // A window tall enough for every section: what is below the scroll area
-    // is absent from queries.
-    let w = h.app().window().size().width;
-    h.app().window().set_size(slint::PhysicalSize::new(w, 3600));
-    assert_eq!(count_of(h, "RecapOpened"), 1);
-}
-
-/// Every section of frame 2 is there, with every game and its hours.
-#[test]
-fn the_opened_recap_shows_every_section() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    let texts = drawn_texts(&h);
-    for want in [
-        "THIS WEEK",
-        "HANGOUT TIME",
-        "TOP GAME",
-        "LONGEST SESSION",
-        "CLIPS CAPTURED",
-        "MOST ACTIVE",
-        "MOST CLIPPED",
-        "BELTS MOVED THIS WEEK",
-        "WAS HELD BY",
-        "NOW HELD BY",
-        "BELTS HELD",
-        "RANK 1",
-        "CLIP OF THE WEEK",
-        "Leo clipped that",
-        "0:29",
-        "GAMES PLAYED",
-        "31 h 40",
-        "Rocket League",
-        "Counter-Strike 2",
-        "Fall Guys",
-        "Dota 2",
-        "Night Stones",
-        "12 H 20",
-        "9 H 10",
-        "4 H 30",
-        "3 H 40",
-        "2 H 00",
-    ] {
-        assert!(texts.iter().any(|t| t == want), "{want:?} in {texts:?}");
-    }
-    assert_eq!(count_of(&h, "BeltName"), 3, "every moved belt");
-    // The held section lists each member once with a rank.
-    assert!(texts.iter().any(|t| t == "RANK 2"), "{texts:?}");
-    // No source note stays.
-    for note in ["HEAD2HEAD · NOW", "31 h 40 together"] {
-        assert!(!texts.iter().any(|t| t == note), "{note:?} in {texts:?}");
-    }
-}
-
-/// A week with no belts, no clip and no games has only the numbers.
-#[test]
-fn the_opened_recap_leaves_out_what_the_week_did_not_have() {
-    let mut h = tall_recap_crew(serde_json::json!({
-        "total_min": 90, "clip_count": 0,
-        "top_members": [{"user_id": "u4", "display_name": "Max", "hangout_min": 90}],
-    }));
-    open_the_week(&mut h);
-    let texts = drawn_texts(&h);
-    assert!(texts.iter().any(|t| t == "THIS WEEK"), "{texts:?}");
-    for gone in [
-        "BELTS MOVED THIS WEEK",
-        "BELTS HELD",
-        "CLIP OF THE WEEK",
-        "GAMES PLAYED",
-    ] {
-        assert!(!texts.iter().any(|t| t == gone), "{gone:?} in {texts:?}");
-    }
-}
-
-/// The play ring plays the clip of the week through the clip player.
-#[test]
-fn the_play_ring_of_the_clip_of_the_week_plays_the_clip() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    h.click_label("Play");
-    assert!(
-        h.commands().iter().any(|c| matches!(
-            c,
-            Command::PlayClip { path } if path == "https://example.invalid/c1.opus"
-        )),
-        "the ring sends the clip to the player: {:?}",
-        h.commands()
-    );
-}
-
-/// The recap is min(880, panel less 48) wide, centred in the feed panel.
-#[test]
-fn the_opened_recap_is_880_wide_or_the_panel_less_48_and_centred() {
-    let mut h = tall_recap_crew(week_with_everything());
-    open_the_week(&mut h);
-    for panel_w in [1100.0_f32, 700.0] {
-        let win = h.app().window().size();
-        let (_, _, w0, _) = {
-            let c = ElementHandle::find_by_element_type_name(h.app(), "CrewFeed")
-                .next()
-                .expect("feed");
-            let r = rect_of(&c);
-            (r.0, r.1, r.2 - r.0, r.3 - r.1)
-        };
-        h.app().window().set_size(slint::PhysicalSize::new(
-            (win.width as f32 + panel_w - w0) as u32,
-            win.height,
-        ));
-        let feed = ElementHandle::find_by_element_type_name(h.app(), "CrewFeed")
-            .next()
-            .map(|e| rect_of(&e))
-            .expect("feed");
-        let section = ElementHandle::find_by_element_type_name(h.app(), "Section")
-            .next()
-            .map(|e| rect_of(&e))
-            .expect("a section");
-        let feed_w = feed.2 - feed.0;
-        let want = 880.0_f32.min(feed_w - 48.0);
-        assert!(
-            ((section.2 - section.0) - want).abs() < 1.5,
-            "panel {feed_w}: section {} wide, want {want}",
-            section.2 - section.0
-        );
-        let left = section.0 - feed.0;
-        let right = feed.2 - section.2;
-        assert!((left - right).abs() < 1.5, "centred: {left} and {right}");
-    }
 }
 
 /// A crew of one has no weekly recap: with nobody to be in voice with and no
@@ -9832,7 +9836,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     let _ = h.commands();
 
     h.click_label("Pop out");
-    assert_eq!(*calls.borrow(), ["open alice - Mello"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo"]);
     assert!(card_ui(&h).get_popped_out());
     assert!(
         !h.controls_labelled("Show it here").is_empty(),
@@ -9846,7 +9850,7 @@ fn pop_out_opens_a_window_and_close_pause_end_and_leave_bring_it_back() {
     no_restart(&mut h);
 
     h.click_label("Show it here");
-    assert_eq!(*calls.borrow(), ["open alice - Mello", "close"]);
+    assert_eq!(*calls.borrow(), ["open alice - m3llo", "close"]);
     assert!(!card_ui(&h).get_popped_out());
 
     // The window's close button: the native window procedure calls this.
@@ -10311,14 +10315,17 @@ fn crew_history_of_two_recaps(width: u32, top_game: &str) -> Harness {
 }
 
 /// A recap in Crew history is the tall card as in the week: one column, two
-/// rows (three with belts). "Most active" and "See the week" stand inside it.
+/// rows, with or without belts. "Most active" stands inside it.
 #[test]
-fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
+fn a_recap_in_crew_history_is_the_tall_card() {
     let h = crew_history_of_two_recaps(1280, "Rocket League");
     let slots: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "RecapSlot").collect();
     assert_eq!(slots.len(), 2, "both recaps are drawn");
-    let see = h.controls_labelled("See the week");
-    assert_eq!(see.len(), 2);
+    assert_eq!(
+        h.controls_labelled("See the week").len(),
+        0,
+        "no control on the card"
+    );
     let kickers: Vec<_> = ElementHandle::find_by_element_type_name(h.app(), "Text")
         .filter(|e| e.accessible_label().is_some_and(|l| l == "MOST ACTIVE"))
         .collect();
@@ -10332,7 +10339,7 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
             slot.size().width < slot.size().height,
             "one column, not a wide card: {card:?}"
         );
-        for inner in see.iter().map(rect_of).chain(kickers.iter().map(rect_of)) {
+        for inner in kickers.iter().map(rect_of) {
             let centre = ((inner.0 + inner.2) / 2.0, (inner.1 + inner.3) / 2.0);
             let inside = centre.0 >= card.0
                 && centre.0 <= card.2
@@ -10350,9 +10357,9 @@ fn a_recap_in_crew_history_is_the_tall_card_and_its_control_is_inside() {
         }
     }
     rows.sort();
-    assert_eq!(rows, vec![2, 3], "two rows without belts, three with");
-    // Each card holds its own control and its own label.
-    for kind in [&see, &kickers] {
+    assert_eq!(rows, vec![2, 2], "two rows, with or without belts");
+    // Each card holds its own label.
+    for kind in [&kickers] {
         for slot in &slots {
             let card = rect_of(slot);
             let n = kind

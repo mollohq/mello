@@ -157,9 +157,8 @@ fn the_sealed_cards_and_the_scrim_are_controls_with_a_role_and_a_label() {
     at(&h, 2100);
     h.pump();
     assert!(h.controls_labelled("Sealed recap, open it").is_empty());
-    let see = h.controls_labelled("See the week");
-    assert_eq!(see.len(), 1, "the open recap card has its control");
-    assert_eq!(see[0].accessible_role(), Some(Button));
+    // The open recap card has no control of its own.
+    assert!(h.controls_labelled("See the week").is_empty());
 }
 
 #[test]
@@ -406,10 +405,8 @@ fn opening_the_recap_stores_the_week_and_the_card_returns_open() {
         (count_of(&h, "SealedRecap"), count_of(&h, "RecapCard")),
         (0, 1)
     );
-
-    // "See the week" opens the full-screen recap.
-    h.click_label("See the week");
-    assert_eq!(count_of(&h, "RecapOpened"), 1);
+    // The card in the slot is the opened view: no full-screen recap.
+    assert_eq!(h.controls_labelled("See the week").len(), 0);
 }
 
 /// A belt that moved is sealed in the versus hero too, and the tally stays.
@@ -715,17 +712,21 @@ fn open_recap_in_the_centre(panel_w: f32, panel_h: f32) -> Harness {
     h
 }
 
-/// Bob's centre recap was taller than the panel: the top cut off, the belts held
-/// row visible and "See the week" half outside. The card scales to
-/// `min(1, (panel height - 80) / card height, (panel width - 80) / card width)`.
+/// The recap in the centre keeps 40 px of the panel on every side and grows
+/// to 1.1 times its slot at most (the fx lab): `min(1.1, (panel height - 80)
+/// / card height, (panel width - 80) / card width)`.
 #[test]
 fn the_opened_recap_is_inside_a_900_px_tall_feed_panel() {
     let h = open_recap_in_the_centre(1008.0, 900.0);
     assert_card_inside_panel(&h);
-    // It does not grow past its own size.
+    // It grows to 1.1 times its slot, not past it.
     let (_, _, w, _) = bounds_of(&h, "SealedCardBounds");
     let (_, _, sw, _) = bounds_of(&h, "RecapCard");
-    assert!(w <= sw + 0.5, "card {w} wide from a {sw} wide slot");
+    assert!(w <= sw * 1.1 + 0.5, "card {w} wide from a {sw} wide slot");
+    assert!(
+        w >= sw * 1.1 - 0.5,
+        "card {w} wide: the 900 px panel has room for 1.1 of {sw}"
+    );
 }
 
 #[test]

@@ -10,6 +10,9 @@
 #ifdef _WIN32
 #include <d3d11.h>
 #endif
+#if defined(__linux__)
+#include "capture_frame.hpp"
+#endif
 
 namespace mello::video {
 
@@ -20,6 +23,10 @@ enum class CaptureMode {
     /// Test only: play a YUV clip from a file (capture_reference.hpp). The
     /// streaming quality gate uses it; nothing in the product selects it.
     Reference,
+    /// Linux: the PipeWire stream of a ScreenCast portal session
+    /// (capture_pipewire_video.hpp). The client runs the portal; the desc
+    /// carries its socket and node.
+    PipeWire,
 };
 
 /// A raw YUV 4:2:0 clip for CaptureMode::Reference: frames back to back,
@@ -51,6 +58,16 @@ struct CaptureSourceDesc {
     bool allow_hook = false;
     /// Reference mode only: the clip to play.
     ReferenceClip reference{};
+    /// PipeWire mode only: the portal's PipeWire socket (the capture keeps a
+    /// duplicate, the caller keeps its own) and the stream's node id.
+    int      pipewire_fd = -1;
+    uint32_t pipewire_node = 0;
+#if defined(__linux__)
+    /// PipeWire mode only: the DMA-BUF layouts the encoder imports. Offered
+    /// first, so the picture stays on the GPU; shared memory is the fallback.
+    /// Empty: shared memory only.
+    std::vector<DmaBufFormat> dmabuf_formats;
+#endif
 };
 
 /// The pointer as a backend sees it, in the pixels of the frames it delivers.
@@ -105,6 +122,10 @@ class CaptureSource {
 public:
 #ifdef _WIN32
     using FrameCallback = std::function<void(ID3D11Texture2D* texture, uint64_t timestamp_us)>;
+#elif defined(__linux__)
+    /// Linux: `frame` points at a CaptureFrame (capture_frame.hpp), valid during the
+    /// call only.
+    using FrameCallback = std::function<void(void* frame, uint64_t timestamp_us)>;
 #else
     using FrameCallback = std::function<void(void* texture, uint64_t timestamp_us)>;
 #endif
@@ -147,6 +168,13 @@ public:
     virtual bool provides_timed_audio() const { return false; }
     /// Route that audio to `cb` (null: stop). Safe before or after start().
     virtual void set_timed_audio_callback(TimedAudioCallback cb) { (void)cb; }
+#if defined(__linux__)
+    /// Linux: called on the capture thread when no picture came for a short
+    /// while (a still screen), never at the same time as the frame callback.
+    /// The pipeline drains the encoder there. Null: stop.
+    using IdleCallback = std::function<void()>;
+    virtual void set_idle_callback(IdleCallback cb) { (void)cb; }
+#endif
     // Backends with runtime source/backend switching can raise a swap event.
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }

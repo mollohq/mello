@@ -393,6 +393,14 @@ set_source_files_properties("${WAP_ROOT}/webrtc/third_party/pffft/src/pffft.c"
     PROPERTIES COMPILE_DEFINITIONS "_GNU_SOURCE"
 )
 
+# rtc_base/trace_event.h uses uint8_t and uintptr_t without <cstdint>.
+# libstdc++ 13 and newer no longer bring it in through <string>.
+if(NOT MSVC)
+    set_source_files_properties("${WAP_ROOT}/webrtc/rtc_base/event_tracer.cc"
+        PROPERTIES COMPILE_OPTIONS "-include;cstdint"
+    )
+endif()
+
 target_include_directories(webrtc_audio_processing
     PUBLIC  ${WAP_ROOT} ${WAP_ROOT}/webrtc
 )

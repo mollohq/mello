@@ -17,6 +17,12 @@ std::unique_ptr<Encoder> create_best_encoder(
 /// call, so a test can set it before a host starts.
 bool soft_encoder_requested();
 
+#if defined(__linux__)
+/// Linux: the DMA-BUF layouts the first encoder of the order imports, for
+/// the capture to offer. Empty when that encoder takes CPU pictures only.
+std::vector<DmaBufFormat> linux_encoder_dmabuf_formats();
+#endif
+
 /// Returns all encoder backend names available on this machine. Hardware
 /// only, or only "OpenH264" when soft_encoder_requested().
 std::vector<const char*> enumerate_encoders(const GraphicsDevice& device);

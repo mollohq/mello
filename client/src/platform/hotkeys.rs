@@ -465,10 +465,61 @@ fn code_str_to_macos_vk(s: &str) -> Option<u16> {
     })
 }
 
-// ── Non-macOS: rdev listener ───────────────────────────────────────────────
+// ── Windows and Linux X11: rdev listener ──────────────────────────────────
+
+#[cfg(target_os = "windows")]
+fn start_listener(
+    binding: Arc<Mutex<Option<PttBinding>>>,
+    active: Arc<AtomicBool>,
+    event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    start_rdev_listener(
+        binding,
+        active,
+        event_tx,
+        clip_binding,
+        clip_tx,
+        game_clip_binding,
+        game_clip_tx,
+    )
+}
+
+/// Linux: the GlobalShortcuts portal on Wayland (`rdev` sees no key while
+/// another app's window has focus there), `rdev` on X11.
+#[cfg(target_os = "linux")]
+fn start_listener(
+    binding: Arc<Mutex<Option<PttBinding>>>,
+    active: Arc<AtomicBool>,
+    event_tx: mpsc::Sender<PttEvent>,
+    clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    if super::linux_shortcuts::wayland_session() {
+        // Game clips are Windows only (plans/GAME-CLIPS.md 9.2): the portal
+        // binds no game clip key.
+        drop(game_clip_tx);
+        super::linux_shortcuts::start(binding, active, event_tx, clip_binding, clip_tx)
+    } else {
+        start_rdev_listener(
+            binding,
+            active,
+            event_tx,
+            clip_binding,
+            clip_tx,
+            game_clip_binding,
+            game_clip_tx,
+        )
+    }
+}
 
 #[cfg(not(target_os = "macos"))]
-fn start_listener(
+fn start_rdev_listener(
     binding: Arc<Mutex<Option<PttBinding>>>,
     active: Arc<AtomicBool>,
     event_tx: mpsc::Sender<PttEvent>,

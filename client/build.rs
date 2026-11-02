@@ -21,6 +21,11 @@ fn main() {
     #[cfg(target_os = "macos")]
     println!("cargo:rustc-link-arg=-Wl,-rpath,@executable_path");
 
+    // Linux: $ORIGIN, so the binary finds libonnxruntime.so next to itself
+    // (in the AppImage and in target/release/).
+    #[cfg(target_os = "linux")]
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+
     #[cfg(target_os = "windows")]
     {
         let mut res = winresource::WindowsResource::new();
@@ -41,6 +46,11 @@ fn main() {
 </assembly>
 "#,
         );
+        // Task Manager, the volume mixer and firewall prompts show these.
+        // winresource fills both with the package name ("mello-client")
+        // otherwise. Keep them equal to APP_NAME in src/lib.rs.
+        res.set("FileDescription", "m3llo");
+        res.set("ProductName", "m3llo");
         res.compile().expect("failed to compile windows resources");
     }
 
