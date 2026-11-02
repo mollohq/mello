@@ -131,16 +131,30 @@ jobs:
       - name: Verify Azure Login
         run: az account show --output table
 
+      # .NET 8 for vpk, in the runner's tool cache: the machine's own .NET
+      # installs (system, Homebrew, an old global vpk) do not take part.
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
+
       # vpk at the version of the velopack crate the client links: the
-      # updater inside the package and the library must match.
+      # updater inside the package and the library must match. Installed for
+      # this run only, as its .NET 8 build: vpk 1.2 also ships a .NET 10
+      # build, which a newer SDK picks and the .NET 8 runtime cannot start.
       - name: Install vpk
         shell: pwsh
         run: |
           $lines = Get-Content Cargo.lock
           $i = [array]::IndexOf($lines, 'name = "velopack"')
           $version = $lines[$i + 1] -replace '^version = "(.*)"$', '$1'
-          dotnet tool update -g vpk --version $version
-          vpk --help | Select-Object -First 1
+          $toolPath = Join-Path $env:RUNNER_TEMP 'vpk'
+          dotnet tool install vpk --version $version --framework net8.0 --tool-path $toolPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $toolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $toolPath 'vpk.exe') --help | Select-Object -First 1
 
       - name: Velopack Package
         shell: cmd
@@ -283,11 +297,23 @@ jobs:
               "$dylib"
           done
 
-      # vpk at the version of the velopack crate the client links.
+      # .NET 8 for vpk, as on Windows: the Mac's Homebrew .NET 10 SDK and its
+      # .NET 6 and 8 runtimes in /usr/local/share/dotnet do not take part.
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
+
+      # vpk at the version of the velopack crate the client links, for this
+      # run only, as its .NET 8 build (see the Windows job).
       - name: Install vpk
         run: |
           VPK_VERSION=$(grep -A1 '^name = "velopack"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
-          dotnet tool update -g vpk --version "$VPK_VERSION"
+          dotnet tool install vpk --version "$VPK_VERSION" --framework net8.0 --tool-path "$RUNNER_TEMP/vpk"
+          echo "$RUNNER_TEMP/vpk" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/vpk/vpk" --help | head -2
 
       - name: Velopack Package
         run: |
