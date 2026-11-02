@@ -16,6 +16,16 @@ fn main() {
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
     watch_third_party(Path::new(&manifest_dir));
 
+    // MELLO_SYS_BINDINGS_ONLY=1: bindings.rs only, for `cargo check` and
+    // `cargo clippy`, which never link. No vcpkg, no CMake, no libmello build
+    // and no link directives, so a build or test with it set fails at link.
+    // The crate source reads nothing else from this script.
+    println!("cargo:rerun-if-env-changed=MELLO_SYS_BINDINGS_ONLY");
+    if env::var("MELLO_SYS_BINDINGS_ONLY").as_deref() == Ok("1") {
+        run_bindgen(&manifest_dir);
+        return;
+    }
+
     // iOS: cross-compile libmello via the vcpkg toolchain. Step 1 links the voice
     // DSP + transport for real; audio I/O, Silero VAD, and video are stubbed (no
     // RemoteIO/ORT/VideoToolbox yet). See mello-ios/specs/IOS-LIBMELLO-PORT.md §1a.

@@ -81,7 +81,14 @@ pub fn rerun_paths(manifest_dir: &Path) -> Vec<PathBuf> {
     }
     // ONNX Runtime: the licence in each extracted folder. Before CMake has
     // extracted one, watch the folder itself, so the script runs again once
-    // the licence is there.
+    // the licence is there. A missing folder makes Cargo rerun the script on
+    // every command, which is what a cold build needs: this script does not
+    // wait for the mello-sys build script, where CMake extracts ORT.
+    //
+    // With MELLO_SYS_BINDINGS_ONLY=1 (check and clippy, mello-sys/build.rs)
+    // CMake never runs and nothing ships, so a missing folder is not
+    // watched: it would compile the UI again on every check. client/build.rs
+    // reruns this script when the variable changes.
     let ort = third_party.join("onnxruntime");
     let ort_licenses: Vec<PathBuf> = std::fs::read_dir(&ort)
         .map(|rd| {
@@ -90,10 +97,11 @@ pub fn rerun_paths(manifest_dir: &Path) -> Vec<PathBuf> {
                 .collect()
         })
         .unwrap_or_default();
-    if ort_licenses.is_empty() {
-        paths.push(ort);
-    } else {
+    let bindings_only = std::env::var("MELLO_SYS_BINDINGS_ONLY").as_deref() == Ok("1");
+    if !ort_licenses.is_empty() {
         paths.extend(ort_licenses);
+    } else if !bindings_only || ort.is_dir() {
+        paths.push(ort);
     }
     paths
 }

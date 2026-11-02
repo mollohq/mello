@@ -11,6 +11,8 @@ fn main() {
     for p in build_notices::rerun_paths(&manifest_dir) {
         println!("cargo:rerun-if-changed={}", p.display());
     }
+    // build_notices::rerun_paths reads it (the ONNX Runtime licence).
+    println!("cargo:rerun-if-env-changed=MELLO_SYS_BINDINGS_ONLY");
     println!("cargo:rerun-if-changed=assets/icons/mello.ico");
     println!("cargo:rerun-if-changed=build.rs");
     let out_dir = std::path::PathBuf::from(std::env::var("OUT_DIR").expect("out dir"));
