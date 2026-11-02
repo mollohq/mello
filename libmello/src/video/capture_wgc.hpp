@@ -1,6 +1,7 @@
 #pragma once
 #include "capture_source.hpp"
 #include "process_liveness.hpp"
+#include "window_crop.hpp"
 
 #ifdef _WIN32
 #include <winrt/Windows.Graphics.Capture.h>
@@ -22,8 +23,9 @@ public:
     bool start(uint32_t target_fps, FrameCallback callback) override;
     void stop() override;
 
-    uint32_t width()  const override { return width_.load(std::memory_order_relaxed); }
-    uint32_t height() const override { return height_.load(std::memory_order_relaxed); }
+    /// The size of the frames this capture delivers: a window's client area.
+    uint32_t width()  const override { return out_width_.load(std::memory_order_relaxed); }
+    uint32_t height() const override { return out_height_.load(std::memory_order_relaxed); }
     const char* backend_name() const override { return monitor_ ? "WGC-Monitor" : "WGC"; }
     bool frames_show_only_target() const override { return !monitor_; }
 
@@ -47,6 +49,14 @@ private:
         winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const& pool,
         winrt::Windows::Foundation::IInspectable const&
     );
+    /// The window's client area in a picture of `content_w` x `content_h`,
+    /// or nothing (window_crop.hpp). Window capture only.
+    std::optional<CropRect> window_client_crop(uint32_t content_w, uint32_t content_h) const;
+    /// Copies `crop` of `source` into `crop_texture_` and returns it, or
+    /// null when the texture cannot be made. On the frame thread.
+    ID3D11Texture2D* crop_frame(ID3D11Texture2D* source, const CropRect& crop);
+    /// Sets the delivered size, and logs a change of the cut.
+    void set_out_size(const std::optional<CropRect>& crop, uint32_t content_w, uint32_t content_h);
 
     winrt::Windows::Graphics::Capture::GraphicsCaptureItem    item_{nullptr};
     winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool frame_pool_{nullptr};
@@ -59,6 +69,16 @@ private:
     // (`on_frame_arrived` recreates the pool), so other threads read atomics.
     std::atomic<uint32_t> width_{0};
     std::atomic<uint32_t> height_{0};
+    // The delivered size: the client area of a windowed game, cut out of the
+    // window frame (title bar, borders); else the frame pool size.
+    std::atomic<uint32_t> out_width_{0};
+    std::atomic<uint32_t> out_height_{0};
+    // The cut of the last frame, logged when it changes. Set at initialize
+    // and at a start that remakes the item, then on the frame thread.
+    std::optional<CropRect> last_crop_;
+    // The client area of the last frame, reused while its size holds.
+    // Frame thread only.
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> crop_texture_;
     bool              monitor_ = false;
     // What the capture item was made from, kept so start() can make it again.
     // stop() closes the item, and the capture ladder stops a backend and

@@ -562,6 +562,10 @@ Playback opens in the expanded view of the feed area, as `ExpandedStreamCard` do
 | Retention | Game clip media is kept forever, as voice clip media is (Q10). |
 | Limits | The existing per-user daily clip limit applies to game clips. |
 
+### 6.4a The title bar (2026-11-02)
+
+WGC captures a window's visible frame. A windowed game (Hearthstone by default) came with its title bar and borders, in every clip and poster, and in a stream on the WGC window rung. `WgcCapture` now cuts the client area out of each window frame: the DWM extended frame bounds against the client origin, in physical pixels (`window_crop.hpp`), copied into one texture of its own; `width()` and `height()` name the cut size. A borderless or fullscreen game is its client area and stays as it was. The hook rung captures the swapchain and had no title bar. Tests: `WindowCrop.*` (the rule, and a real window with a title bar: the size and the top-left pixel). The stream gate A/B runs on it before the release (todo gates), because the stream's WGC rung changed.
+
 ### 6.5 The RPC contract for a game clip (2026-11-02)
 
 The voice clip calls do not change. An empty `clip_type` is `voice`. A game clip uses three calls in this order: `post_clip`, `clip_upload_url`, `clip_upload_complete` (once for the poster, once for the video).

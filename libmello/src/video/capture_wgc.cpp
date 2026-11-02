@@ -13,6 +13,8 @@
 #include <Windows.Graphics.Capture.Interop.h>
 #include <windows.graphics.directx.direct3d11.interop.h>
 #include <inspectable.h>
+#include <dwmapi.h>
+#pragma comment(lib, "dwmapi.lib")
 
 namespace mello::video {
 
@@ -130,6 +132,7 @@ bool WgcCapture::initialize_monitor(const GraphicsDevice& device, HMONITOR monit
     auto size = item_.Size();
     width_  = static_cast<uint32_t>(size.Width);
     height_ = static_cast<uint32_t>(size.Height);
+    set_out_size(std::nullopt, width_.load(), height_.load());
     MELLO_LOG_INFO(TAG, "Source: Monitor(hmonitor=0x%p) backend=WGC resolution=%ux%u",
         monitor, width_.load(), height_.load());
     return true;
@@ -173,9 +176,11 @@ bool WgcCapture::initialize(const GraphicsDevice& device, const CaptureSourceDes
     auto size = item_.Size();
     width_  = static_cast<uint32_t>(size.Width);
     height_ = static_cast<uint32_t>(size.Height);
+    // A consumer sizes its encoder from width() before the first frame.
+    set_out_size(window_client_crop(width_.load(), height_.load()), width_.load(), height_.load());
 
     MELLO_LOG_INFO(TAG, "Source: Window(hwnd=0x%p) backend=WGC resolution=%ux%u",
-        hwnd, width_.load(), height_.load());
+        hwnd, out_width_.load(), out_height_.load());
     return true;
 }
 
@@ -199,6 +204,8 @@ bool WgcCapture::start(uint32_t target_fps, FrameCallback callback) {
         auto size = item_.Size();
         width_  = static_cast<uint32_t>(size.Width);
         height_ = static_cast<uint32_t>(size.Height);
+        set_out_size(window_client_crop(width_.load(), height_.load()), width_.load(),
+                     height_.load());
         if (!monitor_) {
             DWORD wnd_pid = 0;
             GetWindowThreadProcessId(source_hwnd_, &wnd_pid);
@@ -381,11 +388,94 @@ void WgcCapture::on_frame_arrived(
         }
     }
 
+    // A windowed game: deliver its client area, not its title bar and borders.
+    ID3D11Texture2D* deliver = texture.Get();
+    const uint32_t content_w = width_.load(std::memory_order_relaxed);
+    const uint32_t content_h = height_.load(std::memory_order_relaxed);
+    const auto crop = window_client_crop(content_w, content_h);
+    if (crop) {
+        deliver = crop_frame(texture.Get(), *crop);
+        if (!deliver) {
+            frame.Close();
+            return;
+        }
+    }
+    set_out_size(crop, content_w, content_h);
+
     if (callback_) {
-        callback_(texture.Get(), now);
+        callback_(deliver, now);
     }
 
     frame.Close();
+}
+
+std::optional<CropRect> WgcCapture::window_client_crop(uint32_t content_w,
+                                                       uint32_t content_h) const {
+    if (monitor_ || !source_hwnd_ || IsIconic(source_hwnd_)) return std::nullopt;
+    // The WGC picture and the DWM frame bounds are in physical pixels. The
+    // client rectangle is too, under per-monitor awareness, whatever the
+    // process declared.
+    const DPI_AWARENESS_CONTEXT previous =
+        SetThreadDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    RECT frame{};
+    RECT client{};
+    POINT origin{0, 0};
+    const bool ok = SUCCEEDED(DwmGetWindowAttribute(source_hwnd_, DWMWA_EXTENDED_FRAME_BOUNDS,
+                                                    &frame, sizeof(frame))) &&
+                    GetClientRect(source_hwnd_, &client) && ClientToScreen(source_hwnd_, &origin);
+    if (previous) SetThreadDpiAwarenessContext(previous);
+    if (!ok) return std::nullopt;
+    return client_crop(frame.left, frame.top, origin.x, origin.y,
+                       static_cast<uint32_t>(client.right - client.left),
+                       static_cast<uint32_t>(client.bottom - client.top), content_w, content_h);
+}
+
+ID3D11Texture2D* WgcCapture::crop_frame(ID3D11Texture2D* source, const CropRect& crop) {
+    D3D11_TEXTURE2D_DESC have{};
+    if (crop_texture_) crop_texture_->GetDesc(&have);
+    if (!crop_texture_ || have.Width != crop.width || have.Height != crop.height) {
+        // The frame's own format and bind flags, so every consumer reads it
+        // as it reads a WGC frame. One texture is enough: a frame is valid
+        // only during the callback, and the GPU runs the copies in order.
+        D3D11_TEXTURE2D_DESC desc{};
+        source->GetDesc(&desc);
+        desc.Width = crop.width;
+        desc.Height = crop.height;
+        desc.MipLevels = 1;
+        desc.ArraySize = 1;
+        desc.Usage = D3D11_USAGE_DEFAULT;
+        desc.CPUAccessFlags = 0;
+        desc.MiscFlags = 0;
+        crop_texture_.Reset();
+        HRESULT hr = device_->CreateTexture2D(&desc, nullptr, &crop_texture_);
+        if (FAILED(hr)) {
+            MELLO_LOG_ERROR(TAG, "WGC: client area texture %ux%u failed: hr=0x%08X", crop.width,
+                            crop.height, static_cast<unsigned>(hr));
+            crop_texture_.Reset();
+            return nullptr;
+        }
+    }
+    const D3D11_BOX box{crop.x, crop.y, 0, crop.x + crop.width, crop.y + crop.height, 1};
+    context_->CopySubresourceRegion(crop_texture_.Get(), 0, 0, 0, 0, source, 0, &box);
+    return crop_texture_.Get();
+}
+
+void WgcCapture::set_out_size(const std::optional<CropRect>& crop, uint32_t content_w,
+                              uint32_t content_h) {
+    out_width_.store(crop ? crop->width : content_w, std::memory_order_relaxed);
+    out_height_.store(crop ? crop->height : content_h, std::memory_order_relaxed);
+    const bool same = crop.has_value() == last_crop_.has_value() &&
+                      (!crop || (crop->x == last_crop_->x && crop->y == last_crop_->y &&
+                                 crop->width == last_crop_->width &&
+                                 crop->height == last_crop_->height));
+    if (same) return;
+    last_crop_ = crop;
+    if (crop) {
+        MELLO_LOG_INFO(TAG, "WGC: window frame %ux%u, the client area %ux%u at %u,%u is captured",
+                       content_w, content_h, crop->width, crop->height, crop->x, crop->y);
+    } else if (!monitor_ && content_w > 0 && content_h > 0) {
+        MELLO_LOG_INFO(TAG, "WGC: the window is its client area (%ux%u)", content_w, content_h);
+    }
 }
 
 } // namespace mello::video

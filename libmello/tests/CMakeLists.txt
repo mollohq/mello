@@ -29,6 +29,7 @@ add_executable(mello_tests
     test_graphics_device.cpp
     test_process_liveness.cpp
     test_capture_wgc_restart.cpp
+    test_window_crop.cpp
     test_video_preprocessor.cpp
     test_pipewire_metadata.cpp
     test_yuv_convert.cpp
