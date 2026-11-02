@@ -54,8 +54,6 @@ pub struct CardInfo {
     pub has_poster: bool,
     /// A recap with content takes the side column alone.
     pub recap_has_content: bool,
-    /// A recap with belts: the tall card is three rows high, else two.
-    pub recap_belts: bool,
     /// The recent games card as a poster grid: two or more members own games.
     pub recent_grid: bool,
     /// The day card: a daily recap of a day that is over, with its sessions
@@ -72,7 +70,6 @@ impl CardInfo {
             has_poster: c.live.has_poster,
             recent_grid: c.card_type == "recent-games" && c.recent_pc_count >= 2,
             recap_has_content: c.card_type == "recap" && c.recap_rows > 0,
-            recap_belts: c.card_type == "recap" && c.recap_rows >= 3,
             day_wide: c.card_type == "daily-recap" && c.day_wide,
         }
     }
@@ -181,7 +178,6 @@ impl RecapSide {
 /// A card that takes both columns of the recap side block.
 fn rs_wide(c: &CardInfo) -> bool {
     (c.card_type == "head2head" && c.variant != "invite")
-        || (c.card_type == "clip" && c.is_hero)
         || c.recent_grid
         || c.day_wide
         || c.is_hero
@@ -275,15 +271,6 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         at(start + 1).is_some_and(CardInfo::is_h2h_wide) || (lead == Lead::Wide && side_recap);
     // Beside a hero, the first of the two side slots that holds head2head.
     let h2h_in_side = (1..=2).find(|&k| at(start + k).is_some_and(CardInfo::is_h2h_wide));
-    // The recap with belts is the tall card of the side column, three rows
-    // high: beside a hero, beside head2head in frame F, or alone beside a live
-    // stream (`start` is 1 and the recap leads, see `grid_start`). Beside a
-    // stream it needs the cards under the stream to leave the third column
-    // free: a wide card (`Lead::Wide`) and a plain row do, a hero and a full
-    // row do not, and the recap stays two rows.
-    let tall_recap = |i: usize| at(i).is_some_and(|c| c.is_recap() && c.recap_belts);
-    let tall3 = matches!(lead, Lead::Hero | Lead::TallTrio) && tall_recap(start + 1)
-        || (start == 1 && tall_recap(0) && matches!(lead, Lead::Wide | Lead::Plain));
     let left = cards.len().saturating_sub(start);
     let consumed = if cards.len() <= start {
         0
@@ -291,7 +278,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         match lead {
             Lead::RecapSide => rs.map_or(0, |r| r.consumed().min(left)),
             Lead::Plain => 0,
-            Lead::Wide if wide_follows || tall3 => 1,
+            Lead::Wide if wide_follows => 1,
             Lead::Wide | Lead::CellWide => left.min(2),
             Lead::Belt | Lead::TallTrio => left.min(4),
             Lead::FullRow => 1,
@@ -308,7 +295,7 @@ fn layout(cards: &[CardInfo], start: usize) -> Layout {
         row2_base,
         r2_wide: at(row2_base).is_some_and(CardInfo::is_wide_card),
         // The recap is two rows, never three.
-        tall3: tall3 && rs.is_none() && false,
+        tall3: false,
         rs,
     }
 }
@@ -1257,13 +1244,6 @@ mod tests {
         assert_eq!(arrange(&infos, 0), (0..infos.len()).collect::<Vec<_>>());
     }
 
-    fn belts_recap() -> CardInfo {
-        CardInfo {
-            recap_belts: true,
-            ..recap()
-        }
-    }
-
     #[test]
     fn the_recap_is_top_right_two_rows_whatever_leads() {
         // The recap is the second card from the start, the side column of
@@ -1388,12 +1368,7 @@ mod tests {
     fn the_recap_is_never_three_rows() {
         // A stream takes the recap alone (start 1): head2head leads the grid
         // under it and the row after is full, the recap stays two rows.
-        let cards = vec![
-            belts_recap(),
-            h2h("pairs"),
-            card("session"),
-            card("session"),
-        ];
+        let cards = vec![recap(), h2h("pairs"), card("session"), card("session")];
         let order = arrange(&cards, 1);
         let infos: Vec<CardInfo> = order.iter().map(|&i| cards[i].clone()).collect();
         let l = layout(&infos, 1);
