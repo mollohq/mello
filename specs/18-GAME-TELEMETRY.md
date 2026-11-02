@@ -113,6 +113,10 @@ pub trait GameTelemetryAdapter: Send + Sync {
 
     /// Stop any transport + clear cross-payload state on game exit.
     fn reset(&self) {}
+
+    /// This adapter opens and closes the game's session itself (§2.4).
+    /// Default: false, the window decides (spec 17 §2.4).
+    fn gates_session(&self) -> bool { false }
 }
 
 #[derive(Debug, Clone)]
@@ -121,6 +125,10 @@ pub enum TelemetryEvent {
     /// Live score change, player perspective (HUD / auto-clip hooks).
     ScoreChanged { own: u32, opp: u32 },
     MatchEnded(MatchResult),
+    /// Gated sessions only (§2.4): play started in an activity.
+    ActivityStarted { game_id: String, activity_id: String, ts: i64 },
+    /// Gated sessions only (§2.4): play ended; the process is still up.
+    ActivityEnded { game_id: String, ts: i64 },
 }
 ```
 
@@ -195,6 +203,40 @@ Alongside the existing `GameSensor`:
 2. On `GameEvent::Started(game)`: set `active_game = Some(game.game_id)`; if an adapter exists, call `ensure_installed(token, TELEMETRY_PORT)` (log + continue on error).
 3. On `GameEvent::Stopped`: clear `active_game`; any in-flight match is finalized as `Incomplete`.
 4. Drain the telemetry receiver in the event loop (next to the game-event drain) and feed `TelemetryEvent`s to `GameStateManager`.
+5. `refresh_gated_games` tells `GameStateManager` which games are gated (§2.4): every adapter with `gates_session()`, minus the integrations the user turned off. Called when game services start and when the disabled set changes.
+
+### 2.4 Adapter-gated sessions
+
+Spec 17 §2.4 opens a session when a resolved process shows a window. For
+most games that is play. For Roblox it is not: one process and one window
+serve the tray-resident launcher, the home screen and the experience being
+played. Only the player's own log says when an experience starts and ends.
+
+An adapter that returns `gates_session() == true` owns the session of its
+game:
+
+| Signal | Without a gate | With a gate |
+|---|---|---|
+| Sensor `Started` | Session opens, `GameDetected` | Game parks in `pending`; no event |
+| `ActivityStarted { ts }` | Not sent | Session opens at `ts`; `GameDetected` carries `ts` |
+| `ActivityEnded { ts }` | Not sent | Session closes at `ts`; summary and `GameEnded`; game parks again |
+| Sensor `Stopped` | Session closes | Open session closes; a parked game is dropped quietly |
+| `ActivityStarted` while open | Not sent | Teleport: the session stays open, the activity id moves |
+
+The sensor's `Foreground` event carries the process's running foreground
+total. A gated session records the foreground time between its open and its
+close, so two experiences in one process do not share minutes.
+
+A gated game whose integration the user turned off is not gated: the adapter
+never runs, so the window opens the session as for any game. `PrimaryChanged`
+to a parked game falls back to an open session; the home screen is not what
+the user plays.
+
+The adapter must know where it stands when it attaches. A log tailer reads
+the existing log first (`Start::Beginning`), folds it into its state without
+events, and announces the current state once when caught up. Replaying the
+history would open and close sessions that happened while the client was
+not running.
 
 ---
 
@@ -303,6 +345,32 @@ Log tailer over the GGG-tolerated client log (Steam install; found via the share
 ### 3.10 StarCraft II Client API Adapter
 
 Poll source on the undocumented-but-stable `127.0.0.1:6119` (`/ui` + `/game`). Empty `activeScreens` = in a game; the transition back to menus ends it, reading each player's `result` from `/game`. Attribution limit: the API doesn't mark the local player, so vs-AI games (exactly one `user`-type player) get a real outcome (never streaked — it's AI) with race → `build.character`; ladder games with two `user` players are recorded played-only (`Incomplete`) until cross-game name tracking exists. Replays are ignored entirely.
+
+### 3.11 Roblox Player Log Adapter
+
+Log tailer that gates the Roblox session (§2.4). Nothing is installed: the
+player writes one log per process under `%LOCALAPPDATA%\Roblox\logs`
+(`<version>_<time>_Player_<id>_last.log`; the crash handler's log sits beside
+it and is skipped). The tailer follows the newest player log from its
+beginning.
+
+| Line | Meaning |
+|---|---|
+| `[FLog::Output] ! Joining game '<uuid>' place <placeId> at <ip>` | `ActivityStarted`, `activity_id` = place id |
+| `Disconnected from server for reason: ...` | `ActivityEnded` |
+| `[DFLog::NetworkClient] Client:Disconnect` | `ActivityEnded` when still in an experience (the two come a second apart) |
+
+Each line starts with an RFC 3339 timestamp; it is the event's `ts`, so a
+session opened from history starts at the real join. The log does not name
+the experience. The place id and the universe id (`[FLog::GameJoinLoadTime]
+... placeid:..., universeid:...`) identify it; a name needs a lookup against
+Roblox's public games API, which is not part of this adapter. No outcome is
+derived: Roblox experiences have no common result model.
+
+Observed on 2026-11-02: the experience runs in the same player process and
+the same window as the tray-resident launcher and the home screen. Joining
+restores the parked window; leaving returns the window to the home screen,
+still on screen.
 
 ---
 
@@ -481,6 +549,7 @@ mello-core/src/telemetry/
 ├── hearthstone_log.rs  # Hearthstone Power.log tailer
 ├── minecraft_stats.rs  # Minecraft world-stats diff
 ├── poe_log.rs          # Path of Exile Client.txt tailer
+├── roblox_log.rs       # Roblox player log tailer; gates the session (§2.4)
 └── sc2_client.rs       # StarCraft II client API poller
 
 backend/nakama/data/modules/

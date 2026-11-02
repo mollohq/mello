@@ -45,6 +45,7 @@ impl Client {
         self.game_sensor = Some(sensor);
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");
+        self.refresh_gated_games();
 
         let telemetry_token = telemetry::load_or_create_token();
         match TelemetryListener::start(
@@ -159,6 +160,60 @@ impl Client {
             out.push(ev);
         }
         out
+    }
+
+    /// Tell the state manager which games wait for their adapter (spec 18
+    /// §2.4): every adapter that gates its session, minus the integrations
+    /// the user turned off. Called at start and whenever that set changes.
+    pub(super) fn refresh_gated_games(&mut self) {
+        let gated: Vec<String> = self
+            .telemetry_registry
+            .all()
+            .iter()
+            .filter(|a| a.gates_session() && !self.disabled_integrations.contains(a.game_id()))
+            .map(|a| a.game_id().to_string())
+            .collect();
+        log::info!("[game-state] adapter-gated games: {gated:?}");
+        self.game_state.set_gated_games(gated);
+    }
+
+    /// Feed one adapter event to the state manager and act on what it
+    /// returns: UI events, a presence change when a gated session opened or
+    /// closed, and the ledger call for a closed session.
+    pub(super) async fn apply_telemetry(&mut self, event: crate::telemetry::TelemetryEvent) {
+        let (ui_events, session_end) = self.game_state.handle_telemetry(event);
+        let presence_may_change = !ui_events.is_empty() || session_end.is_some();
+        for ev in ui_events {
+            let _ = self.event_tx.send(ev);
+        }
+        if presence_may_change {
+            self.sync_game_presence().await;
+        }
+        if let Some(summary) = session_end {
+            self.finish_session(summary).await;
+        }
+    }
+
+    /// Record a closed session on the ledger when the user shares activity.
+    pub(super) async fn finish_session(&mut self, summary: crate::game_state::SessionSummary) {
+        if !should_emit_game_session_end(self.share_game_activity) {
+            return;
+        }
+        let crew_id = self.nakama.active_crew_id().map(String::from);
+        self.handle_game_session_end(
+            crew_id.as_deref(),
+            &summary.game_name,
+            &summary.game_id,
+            summary.duration_min,
+            summary.active_min,
+            summary.igdb_id,
+            summary.wins,
+            summary.losses,
+            summary.draws,
+            summary.start_ms,
+            summary.end_ms,
+        )
+        .await;
     }
 
     pub(super) fn drain_telemetry_events(&self) -> Vec<crate::telemetry::TelemetryEvent> {

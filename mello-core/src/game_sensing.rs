@@ -151,6 +151,15 @@ pub enum GameEvent {
     PrimaryChanged {
         game_id: Option<String>,
     },
+    /// The foreground time of an open session grew. `foreground_ms` is the
+    /// running total since the process started. `Started` carries only a
+    /// snapshot and `Stopped` the final total; a session that an adapter
+    /// closes while the process is still up (spec 18 §2.4) needs the total
+    /// between the two.
+    Foreground {
+        game_id: String,
+        foreground_ms: i64,
+    },
     /// A library scan finished. Sent after the first scan and after each
     /// rescan. The client may report these games to the crew (library_report).
     LibraryScanned {
@@ -365,8 +374,18 @@ fn scan_loop(ctx: &SendCtx, tx: &Sender<GameEvent>) {
         // Carry accumulated foreground time forward onto session representatives.
         for session in active.values_mut() {
             let is_fg = any_foreground_for_game(&session.game_id, &live, &processes);
+            let before = session.foreground_ms;
             session.foreground_ms =
                 accumulate_foreground_ms(session.foreground_ms, is_fg, elapsed_ms);
+            if session.foreground_ms != before {
+                let grew = GameEvent::Foreground {
+                    game_id: session.game_id.clone(),
+                    foreground_ms: session.foreground_ms,
+                };
+                if tx.send(grew).is_err() {
+                    return;
+                }
+            }
         }
 
         let next_primary = pick_primary(&active, &processes);

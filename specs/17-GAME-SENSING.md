@@ -74,6 +74,12 @@ for the next scan. The stream picker uses the same function. A fixed buffer
 cut the table in boot order: at 512 entries it never reached `cs2.exe`, which
 was entry 961 on a machine with hundreds of leaked helper processes.
 
+The loop sends `Started`, `Stopped`, `PrimaryChanged` and `LibraryScanned`,
+and `Foreground { game_id, foreground_ms }` on each scan where an open
+session's foreground total grew. `Started` carries a snapshot and `Stopped`
+the final total; `Foreground` is for a session closed by an adapter while the
+process is still up (§4.2).
+
 The loop runs at two rates.
 
 | Constant | Value | Condition |
@@ -408,7 +414,18 @@ Do not re-implement process coalescing here. The sensor owns it. An earlier
 attempt held a set of live pids in this struct, which duplicated
 `coalesce_stops` and disagreed with it.
 
-### 4.2 Minimum Session Thresholds
+### 4.2 Adapter-gated sessions (spec 18 §2.4)
+
+A game whose telemetry adapter gates its session does not open on the
+sensor's `Started`. The manager parks it in `pending` until the adapter sends
+`ActivityStarted`, and closes it on `ActivityEnded` with the process still up.
+Roblox is the first such game: its player is one process and one window for
+the tray launcher, the home screen and the experience. The sensor still owns
+process detection and coalescing; the adapter only says when play starts and
+ends. The sensor's `Foreground` event keeps the parked game's foreground
+total current so a session closed by the adapter reports honest active time.
+
+### 4.3 Minimum Session Thresholds
 
 | Threshold | Value | Purpose |
 |-----------|-------|---------|
