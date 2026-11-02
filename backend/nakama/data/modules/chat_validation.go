@@ -17,6 +17,7 @@ type messageEnvelope struct {
 	ReplyTo  *string                `json:"reply_to,omitempty"`
 	Mentions []string               `json:"mentions,omitempty"`
 	Gif      map[string]interface{} `json:"gif,omitempty"`
+	Images   []chatImage            `json:"images,omitempty"`
 	Event    string                 `json:"event,omitempty"`
 	Data     map[string]interface{} `json:"data,omitempty"`
 }
@@ -37,55 +38,70 @@ func BeforeChannelMessageSendHook(
 		return in, nil
 	}
 
-	content := send.GetContent()
+	if err := validateChatContent(send.GetContent(), ChatPublicBase()); err != nil {
+		return nil, err
+	}
+	return in, nil
+}
+
+// validateChatContent is the hook's rule set on the content alone, so a test
+// can run it without Nakama. `chatBase` is the chat bucket's public base, ""
+// when images are off.
+func validateChatContent(content, chatBase string) error {
 	if content == "" {
-		return nil, runtime.NewError("empty message content", 3)
+		return runtime.NewError("empty message content", 3)
 	}
 
 	var raw map[string]interface{}
 	if err := json.Unmarshal([]byte(content), &raw); err != nil {
-		return nil, runtime.NewError("invalid message format", 3)
+		return runtime.NewError("invalid message format", 3)
 	}
 
 	// Allow signaling messages to pass through
 	if sig, ok := raw["signal"]; ok {
 		if sigBool, isBool := sig.(bool); isBool && sigBool {
-			return in, nil
+			return nil
 		}
 	}
 
 	// Allow legacy {"text":"..."} format
 	if _, hasText := raw["text"]; hasText {
 		if _, hasV := raw["v"]; !hasV {
-			return in, nil
+			return nil
 		}
 	}
 
 	// Validate structured envelope
 	var env messageEnvelope
 	if err := json.Unmarshal([]byte(content), &env); err != nil {
-		return nil, runtime.NewError("invalid message format", 3)
+		return runtime.NewError("invalid message format", 3)
 	}
 
 	if env.V == nil {
-		return nil, runtime.NewError("missing version field", 3)
+		return runtime.NewError("missing version field", 3)
 	}
 
 	if *env.V != 1 {
-		return nil, runtime.NewError("unsupported message version", 3)
+		return runtime.NewError("unsupported message version", 3)
 	}
 
-	if env.Type != "text" && env.Type != "gif" {
-		return nil, runtime.NewError("invalid message type", 3)
+	if env.Type != "text" && env.Type != "gif" && env.Type != "image" {
+		return runtime.NewError("invalid message type", 3)
 	}
 
 	if len(env.Body) > maxBodyLength {
-		return nil, runtime.NewError("message too long (max 2000)", 3)
+		return runtime.NewError("message too long (max 2000)", 3)
 	}
 
 	if env.Type == "gif" && env.Gif == nil {
-		return nil, runtime.NewError("gif type requires gif object", 3)
+		return runtime.NewError("gif type requires gif object", 3)
 	}
 
-	return in, nil
+	if env.Type == "image" {
+		if reason := validateChatImages(env.Images, chatBase); reason != "" {
+			return runtime.NewError(reason, 3)
+		}
+	}
+
+	return nil
 }

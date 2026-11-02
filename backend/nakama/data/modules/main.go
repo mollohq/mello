@@ -346,6 +346,12 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("clip_upload_complete", ClipUploadCompleteRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("chat_upload_url", ChatUploadURLRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("chat_delete_images", ChatDeleteImagesRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("diagnostic_log_upload_url", DiagnosticLogUploadURLRPC); err != nil {
 		return err
 	}
