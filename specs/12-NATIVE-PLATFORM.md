@@ -276,7 +276,7 @@ pub fn build_menu_bar() -> Menu {
 
     // ── Mello ──────────────────────────────────────────────────────────────
     let app_menu = Submenu::with_title("m3llo", true);
-    app_menu.append(&PredefinedMenuItem::about(Some("About Mello"), None)).ok();
+    app_menu.append(&PredefinedMenuItem::about(Some("About m3llo"), None)).ok();
     app_menu.append(&PredefinedMenuItem::separator()).ok();
     app_menu.append(&MenuItem::with_id(
         MenuId::new("prefs"),
@@ -336,7 +336,7 @@ pub fn build_menu_bar() -> Menu {
     let help_menu = Submenu::with_title("Help", true);
     help_menu.append(&MenuItem::with_id(
         MenuId::new("github"),
-        "Mello on GitHub",
+        "m3llo on GitHub",
         true,
         None,
     )).ok();
@@ -632,32 +632,42 @@ On Windows a toast needs an AppUserModelID with a Start menu shortcut. Velopack 
 
 use notify_rust::Notification;
 
+/// `velopack.<packId>`, the AppUserModelID of the Velopack shortcuts (§8.2).
+#[cfg(target_os = "windows")]
+const TOAST_APP_ID: &str = "velopack.m3llo";
+
+/// A notification with the app's identity on it.
+fn notification() -> Notification {
+    #[allow(unused_mut)]
+    let mut n = Notification::new();
+    #[cfg(target_os = "windows")]
+    n.app_id(TOAST_APP_ID);
+    n
+}
+
 pub fn notify_member_joined(name: &str) {
-    Notification::new()
+    notification()
         .summary("Crew")
         .body(&format!("{} jumped in", name))
-        .icon("app.mello.desktop")
         .timeout(notify_rust::Timeout::Milliseconds(4000))
         .show()
         .ok();
 }
 
 pub fn notify_message(crew: &str, sender: &str, preview: &str) {
-    Notification::new()
+    notification()
         .summary(crew)
         .body(&format!("{}: {}", sender, preview))
-        .icon("app.mello.desktop")
         .timeout(notify_rust::Timeout::Milliseconds(4000))
         .show()
         .ok();
 }
 
 pub fn notify_invite(inviter: &str, crew: &str) {
-    Notification::new()
-        .summary("Mello invite")
+    notification()
+        .summary(&format!("{} invite", crate::APP_NAME))
         .body(&format!("{} invited you to {}", inviter, crew))
-        .icon("app.mello.desktop")
-        .timeout(notify_rust::Timeout::Milliseconds(0))  // persistent
+        .timeout(notify_rust::Timeout::Milliseconds(0)) // persistent
         .show()
         .ok();
 }
@@ -689,7 +699,7 @@ osx_url_schemes = ["mello"]
 
 ```
 HKEY_CLASSES_ROOT\mello
-  (Default) = "URL:Mello Protocol"
+  (Default) = "URL:mello Protocol"
   URL Protocol = ""
   \shell\open\command
     (Default) = "\"C:\...\mello.exe\" \"%1\""
