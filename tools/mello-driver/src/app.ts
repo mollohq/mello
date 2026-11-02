@@ -135,7 +135,8 @@ export type AppState = {
     cards: { host_id: string; streamer_name: string; viewer_count: number; width: number; height: number; can_watch: boolean }[];
   };
   /** The feed of the active crew, in screen order (newest first), at most 20. */
-  feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string }[];
+  /** The feed cards on screen. `row` is the grid row, one-based (0 in the stream rows above the grid); `wide` is a two-column slot. */
+  feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string; row: number; wide: boolean }[];
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };
   /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */

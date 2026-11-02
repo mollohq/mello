@@ -7994,11 +7994,10 @@ fn five_clips_never_take_a_wide_slot() {
     }
 }
 
-/// Recent games is on the first screen for a big crew: in the first two rows
-/// of the plain grid (head2head, invite and one card, then one card and the
-/// wide slot), not behind the clips.
+/// Recent games is on the first screen for a big crew: in the first three rows
+/// of the grid (row 2, or row 3 under a day card), not behind the clips.
 #[test]
-fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
+fn recent_games_is_in_the_first_three_rows_of_a_big_crew() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 50);
     set_roster(
@@ -8014,9 +8013,18 @@ fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
         .iter()
         .position(|t| t == "recent-games")
         .expect("recent games card");
+    let infos: Vec<crate::feed_grid::CardInfo> = {
+        let m = h.app().get_feed_cards();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i))
+            .map(|c| crate::feed_grid::CardInfo::of(&c))
+            .collect()
+    };
+    let rows = crate::feed_grid::rows(&infos, 0);
     assert!(
-        at <= 4,
-        "recent games at card {at}, past the second row: {types:?}"
+        rows[at] <= 3,
+        "recent games at card {at}, row {}, past the third row: {types:?}",
+        rows[at]
     );
 }
 
