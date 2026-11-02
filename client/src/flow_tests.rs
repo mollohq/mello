@@ -6727,6 +6727,34 @@ fn preferences_menu_item_shows_the_display_name_like_the_settings_button() {
     assert_eq!(h.field_text("DISPLAY NAME"), "b0bben");
 }
 
+/// Cisco's licence for its OpenH264 binary asks for a switch (spec 12
+/// section 7.4). Settings shows it on Linux only, the one platform that
+/// downloads the binary, with the saved value.
+#[test]
+fn the_software_video_decoder_switch_shows_on_linux_with_the_saved_value() {
+    let mut h = Harness::new();
+    h.settings().borrow_mut().openh264_enabled = false;
+    h.app().invoke_settings_requested();
+    h.pump();
+    assert_eq!(
+        h.app().get_settings_show_openh264(),
+        cfg!(target_os = "linux")
+    );
+    assert!(!h.app().get_settings_openh264_enabled());
+}
+
+/// The switch saves the setting; it applies at the next start.
+#[test]
+fn the_software_video_decoder_switch_saves_the_setting() {
+    let mut h = Harness::new();
+    h.app().invoke_setting_changed_openh264_enabled(false);
+    h.pump();
+    assert!(!h.settings().borrow().openh264_enabled);
+    h.app().invoke_setting_changed_openh264_enabled(true);
+    h.pump();
+    assert!(h.settings().borrow().openh264_enabled);
+}
+
 /// Spec 10 section 8: every voice control reaches libmello. The
 /// input-sensitivity slider and its auto toggle used to save only.
 #[test]

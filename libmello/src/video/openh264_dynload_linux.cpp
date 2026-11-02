@@ -1,11 +1,16 @@
 #if defined(__linux__)
 // Linux loader for OpenH264. The same entry points as openh264_dynload.cpp,
-// from a shared library: Cisco's prebuilt binary next to the executable
-// first (the one we ship), then the system library. Both must have the ABI
-// of the vendored v2.6.0 headers, which is soname 8.
+// from a shared library, in this order: the Cisco binary the client
+// downloaded (MELLO_OPENH264_PATH), Cisco's binary next to the executable,
+// then the system library. All must have the ABI of the vendored v2.6.0
+// headers, which is soname 8. MELLO_OPENH264_DISABLED=1 (the user turned
+// the Cisco codec off) loads none. The client sets both variables at start
+// (mello-core stream/openh264.rs), before any thread reads them.
 #include "openh264_dynload.hpp"
 #include "../util/log.hpp"
 
+#include <cstdlib>
+#include <cstring>
 #include <dlfcn.h>
 #include <limits.h>
 #include <string>
@@ -42,16 +47,33 @@ static bool load_fn(void* mod, const char* name, T& out) {
     return true;
 }
 
+static bool disabled() {
+    const char* v = std::getenv("MELLO_OPENH264_DISABLED");
+    return v && std::strcmp(v, "1") == 0;
+}
+
 bool load() {
     if (loaded_) return true;
+    if (disabled()) {
+        static bool logged = false;
+        if (!logged) {
+            logged = true;
+            MELLO_LOG_INFO(TAG, "OpenH264 turned off in the settings, H.264 software decoder unavailable");
+        }
+        return false;
+    }
 
+    std::string from;
+    if (const char* downloaded = std::getenv("MELLO_OPENH264_PATH"); downloaded && *downloaded) {
+        handle_ = dlopen(downloaded, RTLD_NOW | RTLD_LOCAL);
+        if (handle_) from = downloaded;
+    }
     const std::string dir = exe_dir();
     const std::string bundled[] = {
         dir + "libopenh264-2.6.0-linux64.8.so",
         dir + "libopenh264-2.5.0-linux64.8.so",
     };
-    std::string from;
-    if (!dir.empty()) {
+    if (!handle_ && !dir.empty()) {
         for (const std::string& path : bundled) {
             handle_ = dlopen(path.c_str(), RTLD_NOW | RTLD_LOCAL);
             if (handle_) { from = path; break; }

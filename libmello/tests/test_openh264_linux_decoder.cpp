@@ -12,7 +12,11 @@
 #include <cstdlib>
 #include <chrono>
 #include <cstring>
+#include <dlfcn.h>
+#include <filesystem>
+#include <string>
 #include <thread>
+#include <unistd.h>
 #include <vector>
 
 #include <stdbool.h>
@@ -74,6 +78,79 @@ protected:
         if (!openh264::encoder_api_loaded()) GTEST_SKIP() << "OpenH264 without an encoder";
     }
 };
+
+// The file the loaded OpenH264 came from.
+std::string loaded_file() {
+    Dl_info info{};
+    void* fn = reinterpret_cast<void*>(openh264::api().create_decoder);
+    if (!fn || dladdr(fn, &info) == 0 || !info.dli_fname) return {};
+    return info.dli_fname;
+}
+
+// Sets an environment variable for one test and restores the old value.
+class ScopedEnv {
+public:
+    ScopedEnv(const char* name, const char* value) : name_(name) {
+        if (const char* old = std::getenv(name)) { had_ = true; old_ = old; }
+        setenv(name, value, 1);
+    }
+    ~ScopedEnv() {
+        if (had_) setenv(name_, old_.c_str(), 1);
+        else unsetenv(name_);
+    }
+private:
+    const char* name_;
+    bool had_ = false;
+    std::string old_;
+};
+
+// The user turned the Cisco codec off: no library loads, from any place.
+TEST(OpenH264LinuxLoader, TurnedOffLoadsNoLibrary) {
+    openh264::unload();
+    {
+        ScopedEnv off("MELLO_OPENH264_DISABLED", "1");
+        EXPECT_FALSE(openh264::load());
+        EXPECT_FALSE(openh264::is_loaded());
+        EXPECT_FALSE(OpenH264Decoder::is_available());
+    }
+    openh264::unload();
+}
+
+// The client's download comes before the copy next to the executable and the
+// system library. The test copies the library this machine has to a new name
+// and checks that the copy is the one that loads.
+TEST(OpenH264LinuxLoader, TheDownloadedFileComesFirst) {
+    openh264::unload();
+    if (!openh264::load()) GTEST_SKIP() << "no OpenH264 (soname 8)";
+    const std::string source = loaded_file();
+    openh264::unload();
+    ASSERT_FALSE(source.empty());
+
+    namespace fs = std::filesystem;
+    const fs::path dir = fs::temp_directory_path() / ("m3llo-openh264-" + std::to_string(getpid()));
+    fs::create_directories(dir);
+    const fs::path copy = dir / "libopenh264-downloaded.so";
+    fs::copy_file(source, copy, fs::copy_options::overwrite_existing);
+    {
+        ScopedEnv path("MELLO_OPENH264_PATH", copy.c_str());
+        ASSERT_TRUE(openh264::load());
+        EXPECT_EQ(fs::canonical(loaded_file()), fs::canonical(copy));
+    }
+    openh264::unload();
+    fs::remove_all(dir);
+}
+
+// A path to no file is not an error: the loader goes on to the next place.
+TEST(OpenH264LinuxLoader, AMissingDownloadFallsThrough) {
+    openh264::unload();
+    const bool elsewhere = openh264::load();
+    openh264::unload();
+    {
+        ScopedEnv path("MELLO_OPENH264_PATH", "/nonexistent/libopenh264-2.6.0-linux64.8.so");
+        EXPECT_EQ(openh264::load(), elsewhere);
+    }
+    openh264::unload();
+}
 
 TEST_F(OpenH264LinuxDecoder, APictureLandsInTheChosenSlotAtTheStreamSize) {
     // 36 rows: the encoder crops a 48-row coded picture, the decoder must not

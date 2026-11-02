@@ -312,6 +312,12 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // Slint reads SLINT_FONT_PATH once when the font collection is first used.
     emoji_font::setup();
 
+    // Linux: Cisco's OpenH264 for the stream viewer. Before the runtime and
+    // libmello start: it sets the variables libmello reads when it loads
+    // OpenH264, and may start the background download.
+    #[cfg(target_os = "linux")]
+    platform::linux_openh264::setup();
+
     let perf_mode = perf_mode::enabled();
 
     // --- Auto-updater ---

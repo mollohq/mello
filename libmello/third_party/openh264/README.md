@@ -30,3 +30,12 @@ The runtime loader tries these names in order:
 OpenH264 is BSD-2-Clause licensed. Cisco pays the MPEG-LA royalties for
 their prebuilt binaries. If you build from source, YOU are responsible
 for MPEG-LA licensing — so don't.
+
+`BINARY_LICENSE.txt` is Cisco's licence for the binary (v1.0, from
+https://www.openh264.org/BINARY_LICENSE.txt). The third-party notices show
+it in full (`client/build_notices.rs`). Its patent conditions ask that the
+binary is downloaded to the user's device by itself, that the user can turn
+it off, and that the text "OpenH264 Video Codec provided by Cisco Systems,
+Inc." is shown at that switch. On Linux the client downloads the binary at
+the first start (mello-core `stream/openh264.rs`), and the Audio & Video
+settings have the switch.

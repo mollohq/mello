@@ -41,6 +41,10 @@ pub struct Settings {
     pub auto_connect: bool,
     pub minimize_on_join: bool,
     pub hardware_acceleration: bool,
+    /// Linux: use Cisco's OpenH264 binary, which the client downloads at the
+    /// first start (`platform/linux_openh264.rs`). Cisco's licence asks for
+    /// a way to turn it off. Read at startup only.
+    pub openh264_enabled: bool,
     // Audio tab
     pub input_volume: f32,
     pub output_volume: f32,
@@ -124,6 +128,7 @@ impl Default for Settings {
             auto_connect: false,
             minimize_on_join: false,
             hardware_acceleration: true,
+            openh264_enabled: true,
             input_volume: 1.0,
             output_volume: 1.0,
             noise_suppression: true,
@@ -306,6 +311,17 @@ mod tests {
         let partial = r#"dark_theme = false"#;
         let decoded: Settings = toml::from_str(partial).expect("deserialize");
         assert!(decoded.share_game_activity);
+    }
+
+    /// Cisco's OpenH264 is on unless the user turned it off, also after an
+    /// update from a version without the setting.
+    #[test]
+    fn openh264_is_on_by_default_also_for_old_settings_files() {
+        assert!(Settings::default().openh264_enabled);
+        let old: Settings = toml::from_str("hardware_acceleration = true").expect("deserialize");
+        assert!(old.openh264_enabled);
+        let off: Settings = toml::from_str("openh264_enabled = false").expect("deserialize");
+        assert!(!off.openh264_enabled);
     }
 
     #[test]

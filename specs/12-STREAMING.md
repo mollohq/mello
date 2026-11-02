@@ -807,7 +807,29 @@ with `dlopen`, so a missing one only removes that decoder:
 |---|---|---|
 | NVDEC | `libcuda.so.1`, `libnvcuvid.so.1` | The NVIDIA driver (not nouveau) |
 | VA-API | `libgstreamer-1.0.so.0`, `libgstapp-1.0.so.0`, `libgstvideo-1.0.so.0` | GStreamer with `h264parse` and the `va` plugin. FFmpeg is not used |
-| OpenH264 | Cisco's `libopenh264-2.6.0-linux64.8.so` next to the executable, else `libopenh264.so.8` | The ABI of the vendored v2.6.0 headers |
+| OpenH264 | Cisco's `libopenh264-2.6.0-linux64.8.so` that the client downloads (`MELLO_OPENH264_PATH`), then the same file next to the executable, then `libopenh264.so.8` | The ABI of the vendored v2.6.0 headers |
+
+**Cisco's OpenH264 binary.** Cisco pays the H.264 patent royalty for its
+binary only under the conditions in its `BINARY_LICENSE.txt`
+(`libmello/third_party/openh264/`):
+
+| Condition | How the client meets it |
+|---|---|
+| The binary is downloaded to the user's device by itself | The AppImage does not carry it. At the first start the client downloads `libopenh264-2.6.0-linux64.8.so.bz2` from `ciscobinary.openh264.org` over HTTPS, on a background thread (mello-core `stream/openh264.rs`) |
+| The user can turn it on and off | The setting "Software Video Decoder" (Audio & Video, VIDEO, Linux only). Off sets `MELLO_OPENH264_DISABLED=1`: libmello loads no OpenH264, and nothing downloads. A change applies at the next start |
+| The text "OpenH264 Video Codec provided by Cisco Systems, Inc." at the switch | In the switch's description |
+| The licence text where licence information is | The third-party notices carry the full text |
+
+The download checks the size and SHA-256 of the `.bz2` and of the library
+against values pinned in the client (Cisco publishes only an MD5; the pinned
+file matched it). The library goes to a temporary file in
+`~/.local/share/m3llo/codecs/`, then a rename, so a file is at the path only
+after both checks. At each start the client checks the copy on disk again and
+removes one that fails. No download happens when the distribution has
+`libopenh264.so.8` (Arch and CachyOS build it from source). The client sets
+`MELLO_OPENH264_PATH` at start, before the file exists: libmello retries the
+load at each decoder it makes, so a download that finishes later is used at
+the next watch. A failed download is logged; the next start tries again.
 
 The order (`linux_gpu.cpp`) starts with the decoder of the GPU that draws
 the desktop (section 3.6): NVDEC, VA-API, OpenH264 when it is NVIDIA, else

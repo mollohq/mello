@@ -69,6 +69,9 @@ zbus = "5"
 # The ScreenCast portal for stream hosting (stream/screencast.rs). The ashpd
 # the client already uses for the GlobalShortcuts portal, same features.
 ashpd = { version = "0.11.1", default-features = false, features = ["async-std"] }
+# Unpacks Cisco's OpenH264 binary (stream/openh264.rs). Pure Rust backend
+# (libbz2-rs-sys), no system libbz2.
+bzip2 = "0.6"
 
 [dev-dependencies]
 tokio-test = "0.4"

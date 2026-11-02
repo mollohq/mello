@@ -376,11 +376,20 @@ fn libmello_deps(root: &Path) -> Vec<Dep> {
             break;
         }
     }
+    // Cisco's licence for its binary asks for its full text, the patent
+    // conditions included, where the app shows licence information.
+    let cisco =
+        std::fs::read_to_string(root.join("libmello/third_party/openh264/BINARY_LICENSE.txt"))
+            .expect("missing libmello/third_party/openh264/BINARY_LICENSE.txt")
+            .replace("\r\n", "\n");
     deps.push(Dep {
         name: "OpenH264".into(),
         version: "(Cisco binary)".into(),
         license: "BSD-2-Clause".into(),
-        text: "OpenH264 is used as the prebuilt binary from Cisco. Licence: BSD-2-Clause.\nSource and licence: https://github.com/cisco/openh264".into(),
+        text: format!(
+            "{}\n\nSource: https://github.com/cisco/openh264",
+            cisco.trim()
+        ),
     });
     deps.push(Dep {
         name: "Silero VAD".into(),
