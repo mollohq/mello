@@ -31,6 +31,12 @@ run() {
 
 START=$(date +%s)
 
+step "fetch"
+# client/build_notices.rs runs `cargo tree --offline` for every target, so the
+# crates of every target must be in the cache, not only this host's. A fresh
+# checkout has none of the other platforms' crates. Same step as CI.
+run cargo fetch --locked --quiet
+
 step "fmt"
 run cargo fmt --all -- --check
 
