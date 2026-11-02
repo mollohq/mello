@@ -1,6 +1,8 @@
 # Crew chat v2
 
-> Status: draft for discussion. No code changes until Bob approves.
+> Status: approved 2 Nov 2026. Phase 0 built on `feat/chat-v2` (worktree `mello-wt-chat-v2`).
+> Before the next release: add the `GIPHY_API_KEY` secret to the mollohq/mello repository.
+> The release workflow passes it, and a production build refuses to compile without it.
 > Mockup: `designs/chat-v2.html`. Spec to update after: `specs/features/TEXT-CHAT.md`.
 
 ## 1. What is broken today, and why
@@ -33,6 +35,9 @@ Not in scope: DMs, threads, voice messages, stickers, read receipts, custom emoj
 Each phase is one branch and one PR. Order is fixed. Phase 0 ships alone first.
 
 ### Phase 0: make what exists work
+
+Built. Each row below is a commit on `feat/chat-v2`. Not yet verified in the running app: the
+Twemoji glyphs and the jumbo size, because the headless viewer draws no colour fonts.
 
 | # | Change | Notes |
 |---|---|---|
