@@ -3726,6 +3726,55 @@ fn the_clip_key_captures_a_voice_clip_only_in_voice() {
     assert_eq!(capture(&h.commands()), 1);
 }
 
+/// F8 clips the game while core reports the replay running, also while it
+/// waits or is paused: its ring still has the game (GAME-CLIPS.md 4.3). With
+/// no replay, or one that is not available for the game, F8 makes no clip.
+#[test]
+fn the_game_clip_key_clips_only_while_the_replay_runs() {
+    use mello_core::events::GameClipState;
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let capture = |cmds: &[Command]| {
+        cmds.iter()
+            .filter(|c| matches!(c, Command::CaptureGameClip))
+            .count()
+    };
+    let _ = h.commands();
+
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "no replay: no clip");
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::Unavailable,
+        game_name: "Counter-Strike 2".into(),
+        reason: "no hardware encoder".into(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "not available: no clip");
+
+    for state in [
+        GameClipState::Recording,
+        GameClipState::Waiting,
+        GameClipState::Paused,
+    ] {
+        h.emit(Event::GameClipStateChanged {
+            state,
+            game_name: "Counter-Strike 2".into(),
+            reason: String::new(),
+        });
+        crate::game_clip::game_clip_key_pressed(h.ctx());
+        assert_eq!(capture(&h.commands()), 1, "{state:?}: one clip");
+    }
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::Off,
+        game_name: String::new(),
+        reason: String::new(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "the replay stopped: no clip");
+}
+
 /// The clip button names the clip key, F7 on a new install.
 #[test]
 fn the_clip_button_names_the_clip_key() {

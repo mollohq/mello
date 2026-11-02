@@ -410,7 +410,8 @@ MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_pa
 /** What the replay buffer records. */
 typedef struct MelloReplayConfig {
     /** The game window. The replay captures it with WGC window capture and
-     *  nothing else: no monitor or desktop capture. */
+     *  nothing else: no monitor or desktop capture. NULL: the main window of
+     *  `pid`, found as the stream's process capture finds it. */
     void*       hwnd;
     /** The game process: its audio through process loopback. 0: none. */
     uint32_t    pid;

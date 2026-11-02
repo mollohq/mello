@@ -21,8 +21,8 @@ todos:
     content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s. Built 2026-11-02 (c45b73d0): a 30 s clip at 5 Mbps muxes in under 1 s"
     status: completed
   - id: core-lifecycle
-    content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game"
-    status: pending
+    content: "mello-core: replay manager (setting, foreground game with a 10 s hold, exclusive fullscreen, disk, encoder), CaptureGameClip, post_clip with clip_type game. Built 2026-11-02 for a first manual test (client/replay.rs): a worker thread runs the replay for the primary game while in voice, CaptureGameClip writes the MP4 and the poster to %TEMP%/mello_clips. Open: the setting, the 10 s foreground hold, the disk check, post_clip"
+    status: in_progress
   - id: upload
     content: "mello-core: the poster at once, the MP4 as S3 multipart in 5 MB parts from disk (no full-file read into RAM), a token-bucket pace (G5), the stream budget and pause from the rung controller (G2 to G4, needs the host's GoogCC estimate and send rate in the stream telemetry), a persisted queue with the upload id and done parts for the resume after a restart"
     status: pending
@@ -30,8 +30,8 @@ todos:
     content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests"
     status: pending
   - id: client-key-settings
-    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests"
-    status: pending
+    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Open: the Settings section and the KEYBINDS row"
+    status: in_progress
   - id: feed-card
     content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file"
     status: pending

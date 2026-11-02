@@ -12,6 +12,7 @@
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
 #include "replay/replay_session.hpp"
+#include "video/capture_process.hpp"
 #include <filesystem>
 #endif
 #include "audio/clip_encoder.hpp"
@@ -708,6 +709,12 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
         mello::replay::ReplayConfig rc;
         rc.hwnd = config->hwnd;
         rc.pid = config->pid;
+        // The game's main window, as the stream's process capture finds it.
+        if (!rc.hwnd && rc.pid != 0) rc.hwnd = mello::video::find_main_window(rc.pid);
+        if (!rc.hwnd) {
+            c->set_error("the game has no window");
+            return MELLO_ERROR_FAILED;
+        }
         if (config->height) rc.height = config->height;
         if (config->fps) rc.fps = config->fps;
         if (config->bitrate_kbps) rc.bitrate_kbps = config->bitrate_kbps;

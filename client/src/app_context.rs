@@ -123,6 +123,8 @@ pub struct AppContext {
     /// The watched stream in its own window.
     pub stream_popout: Rc<RefCell<crate::stream_popout::StreamPopout>>,
     // --- end stage 9 ---
+    /// The game clip replay as core last reported it (F8, game_clip.rs).
+    pub game_clip: Rc<RefCell<crate::game_clip::GameClipUi>>,
 }
 
 #[cfg(any(test, feature = "testkit"))]
@@ -226,6 +228,7 @@ impl AppContext {
             taskbar_toolbar: Rc::new(RefCell::new(None)),
             stream_card: Rc::new(RefCell::new(Default::default())),
             stream_popout: Rc::new(RefCell::new(Default::default())),
+            game_clip: Rc::new(RefCell::new(Default::default())),
         }
     }
 }
@@ -291,6 +294,7 @@ impl Clone for AppContext {
             taskbar_toolbar: self.taskbar_toolbar.clone(),
             stream_card: self.stream_card.clone(),
             stream_popout: self.stream_popout.clone(),
+            game_clip: self.game_clip.clone(),
         }
     }
 }

@@ -88,6 +88,24 @@ pub enum StreamRole {
 }
 // --- end stage 6 ---
 
+/// The state of the game clip replay buffer (plans/GAME-CLIPS.md 4).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GameClipState {
+    /// No replay: not in voice, or no game runs.
+    #[default]
+    Off,
+    /// The replay records the game: F8 makes a clip.
+    Recording,
+    /// The game draws nothing now (minimized, a loading screen). F8 still
+    /// makes a clip of what the ring has.
+    Waiting,
+    /// Overload: the replay gave up its frames before a stream did (F3).
+    Paused,
+    /// The replay cannot run for this game (`reason` says why).
+    Unavailable,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchResult {
     pub id: String,
@@ -605,6 +623,29 @@ pub enum Event {
     },
     /// Clip capture failed.
     ClipCaptureFailed {
+        reason: String,
+    },
+    /// The game clip replay buffer changed state (plans/GAME-CLIPS.md 4).
+    /// `reason` says why it is off or not available, for the HUD toast.
+    GameClipStateChanged {
+        state: GameClipState,
+        #[serde(default)]
+        game_name: String,
+        #[serde(default)]
+        reason: String,
+    },
+    /// F8: a game clip saved to local disk, with its poster.
+    GameClipCaptured {
+        clip_id: String,
+        path: String,
+        poster_path: String,
+        duration_seconds: f32,
+        width: u32,
+        height: u32,
+        game_name: String,
+    },
+    /// F8 made no clip.
+    GameClipFailed {
         reason: String,
     },
     /// Clip metadata posted to backend.

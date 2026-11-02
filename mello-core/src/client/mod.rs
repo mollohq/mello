@@ -16,6 +16,7 @@ mod mic_permission;
 mod presence;
 mod push;
 mod reconnect;
+mod replay;
 #[cfg(test)]
 mod sfu_reconnect_live_tests;
 mod sfu_voice_join;
@@ -130,6 +131,14 @@ pub struct Client {
     /// The activity last sent to the server and the socket generation it was
     /// sent on. A new socket session starts unreported, so a reconnect resends.
     reported_activity: Option<(bool, u64)>,
+    /// The game clip replay worker (replay.rs), made at the first game in
+    /// voice. Declared before `voice`: it drops first, so its thread stops
+    /// before the libmello context goes.
+    replay: Option<replay::ReplayWorker>,
+    /// In voice, for the replay (set where the clip buffer starts and stops).
+    replay_in_voice: bool,
+    /// The game the replay records now.
+    replay_target: Option<replay::ReplayTarget>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -354,6 +363,9 @@ impl Client {
         log_bundle::set_event_sender(event_tx.clone());
         Self {
             nakama: NakamaClient::new(config),
+            replay: None,
+            replay_in_voice: false,
+            replay_target: None,
             voice,
             event_tx,
             frame_slot,
@@ -528,6 +540,8 @@ impl Client {
                 for ev in ui_events {
                     let _ = self.event_tx.send(ev);
                 }
+                // The game clip replay follows the game the user looks at.
+                self.sync_replay();
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
                     if game_services::should_emit_game_session_end(self.share_game_activity) {
@@ -1139,6 +1153,9 @@ impl Client {
             }
             Command::CaptureClip { seconds } => {
                 self.handle_capture_clip(seconds);
+            }
+            Command::CaptureGameClip => {
+                self.handle_capture_game_clip();
             }
             Command::PostClip {
                 crew_id,

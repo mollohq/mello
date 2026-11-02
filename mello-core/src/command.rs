@@ -438,6 +438,9 @@ pub enum Command {
         #[serde(default = "default_clip_seconds")]
         seconds: f32,
     },
+    /// F8: the last 30 s of the game, from the replay buffer, as an MP4 with
+    /// a poster (plans/GAME-CLIPS.md 5.3). Runs on the replay worker thread.
+    CaptureGameClip,
     PostClip {
         crew_id: String,
         clip_id: String,
