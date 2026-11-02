@@ -15,6 +15,9 @@ description = "Streaming quality gate: a reference clip through the real stream 
 [[bin]]
 name = "stream-gate"
 path = "src/main.rs"
+# The bin sources hold no tests. A test harness would link all of libmello
+# and ONNX Runtime for nothing.
+test = false
 
 [lib]
 path = "src/lib.rs"

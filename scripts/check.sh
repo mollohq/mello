@@ -13,6 +13,9 @@ set -eu
 
 cd "$(dirname "$0")/.."
 
+# A CI job on this machine (the runners are dev machines): yield to it.
+. scripts/ci-yield.sh
+
 # Hardware-dependent voice/video tests block forever waiting on real capture
 # devices without this. Mandatory for `cargo test --workspace`.
 export CI=true
