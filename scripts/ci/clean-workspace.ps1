@@ -1,7 +1,7 @@
 # Resets and cleans the workspace of a self-hosted runner, and keeps what the
 # libmello CMake build downloads into libmello/ while it is still current.
-# release.yml (Windows) runs it right after a checkout with clean: false,
-# before any build. clean-workspace.sh is the same for macOS.
+# release.yml and pr-checks.yml (Windows) run it right after a checkout with
+# clean: false, before any build. clean-workspace.sh is the same for macOS.
 #
 # - libmello/third_party/onnxruntime: only the folder of the ORT_VERSION in
 #   libmello/CMakeLists.txt stays, so an older ORT is never linked or packed.

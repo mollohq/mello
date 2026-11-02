@@ -44,7 +44,7 @@ jobs:
       # while their sources in libmello/CMakeLists.txt are the same as when
       # they were last kept (a stamp file), because CMake downloads a model
       # only when the file is missing. scripts/ci/clean-workspace.ps1 and
-      # clean-workspace.sh do this.
+      # clean-workspace.sh do this; PR Checks runs the same scripts.
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
