@@ -311,7 +311,7 @@ If no item exists, the feed has no hero. The latest recap then takes its own pin
 
 - A crew of one with a session puts the session first (CellWide). Frame A has no session, so the wide card stays first.
 - After a live stream or the two-stream hero the grid is plain rows. A card there is a cell, never a second hero.
-- Under a hero the poster grid of recent games takes the wide slot of row 3 (frames C and D). The one-PC list stays in the side column.
+- The poster grid of recent games takes the first wide slot after head2head, the recap and the day card: row 2, or row 3 when the day card holds row 2 (and under a hero, frames C and D). It is always on the first screen. The one-PC list stays in the side column.
 - Head2head is always two columns wide, at every crew size. It leads a feed with no hero. Behind any other lead it takes the first wide slot after the lead (row 2, else row 3), never the one-column side slot. After one live stream it leads the grid beside the stream. A feed with no hero, head2head and a recap with content puts the recap second, tall (TallTrio): two plain cells sit under head2head.
 - Row 2 is the last row and has free cells: the stream and voice clip skeletons fill them at the card height, and the recap skeleton is the slim row under them (frame B). A full last row keeps the trio as one row.
 - A recap holds the whole side column beside the two-stream hero.

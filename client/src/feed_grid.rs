@@ -29,10 +29,10 @@
 //! - The weekly recap is never a one-cell card. It is the tall card of the
 //!   side column beside a hero (two rows high, one column), else the wide card
 //!   of the first wide slot after the lead (`place_wide_cards`).
-//! - The recent games card is on the first screen for every crew size. In the
-//!   plain layout (head2head cell and invite card lead) it takes the wide slot
-//!   of the second row. Next to a hero or a wide head2head it takes the first
-//!   cell of the side column.
+//! - The recent games card is on the first screen for every crew size: the
+//!   first wide slot after head2head, the recap and the day card, so row 2, or
+//!   row 3 when the day card holds row 2. Next to a hero or a wide head2head
+//!   without those it takes the first cell of the side column.
 //!
 //! `arrange` is pure over card descriptors, so the rules are unit-tested
 //! without a window. `arrange_model` applies it to the card model.
@@ -358,7 +358,51 @@ fn wide_slots(l: &Layout, len: usize) -> Vec<usize> {
     w
 }
 
-/// The indices of the two-column slots of the cards, in the order on screen.
+/// The grid row of each card, one-based, in the order on screen. A card before
+/// `start` (the stream rows) is row 0. The lead block is one or two rows: a
+/// hero and the recap side block are two, a wide card or a full row is one,
+/// a plain grid has none. After the block the rows hold three columns, and a
+/// card in a wide slot takes two. A tall card (the recap, the head2head cell
+/// of a trio) is the row it starts in.
+#[cfg_attr(not(any(test, feature = "e2e")), allow(dead_code))]
+pub fn rows(cards: &[CardInfo], start: usize) -> Vec<usize> {
+    let l = layout(cards, start);
+    let wide = wide_slots(&l, cards.len());
+    let mut rows = vec![0; cards.len()];
+    let block_rows = match l.lead {
+        Lead::Plain => 0,
+        Lead::Wide | Lead::CellWide | Lead::FullRow => 1,
+        Lead::Hero | Lead::TallTrio | Lead::Belt | Lead::RecapSide => 2,
+    };
+    let block_end = l.row2_base.min(cards.len());
+    for (i, row) in rows.iter_mut().enumerate().take(block_end).skip(start) {
+        let k = i - start;
+        *row = match l.lead {
+            // The hero and the first side card, then the second side card.
+            Lead::Hero => usize::from(k == 2) + 1,
+            // The wide card and the tall card beside it, then two cells.
+            Lead::TallTrio | Lead::Belt => usize::from(k >= 2) + 1,
+            Lead::RecapSide => match l.rs {
+                Some(rs) if i == rs.recap || i == rs.idx(0) => 1,
+                Some(rs) if !rs.lead_wide && i == rs.idx(1) => 1,
+                _ => 2,
+            },
+            _ => 1,
+        };
+    }
+    let (mut row, mut cols) = (block_rows + 1, 0);
+    for (i, r) in rows.iter_mut().enumerate().skip(l.row2_base) {
+        let w = if wide.contains(&i) { 2 } else { 1 };
+        if cols + w > 3 {
+            row += 1;
+            cols = 0;
+        }
+        *r = row;
+        cols += w;
+    }
+    rows
+}
+
 /// Columns of the Crew history grid.
 const MEMORY_COLS: usize = 3;
 
@@ -395,7 +439,8 @@ pub(crate) fn place_memory(mut cards: Vec<FeedCardData>) -> (Vec<FeedCardData>, 
     (cards, taken.len() as i32)
 }
 
-#[cfg(test)]
+/// The indices of the two-column slots of the cards, in the order on screen.
+#[cfg_attr(not(any(test, feature = "e2e")), allow(dead_code))]
 pub fn wide_slot_indices(cards: &[CardInfo], start: usize) -> Vec<usize> {
     wide_slots(&layout(cards, start), cards.len())
 }
@@ -569,9 +614,9 @@ fn infos_of(cards: &[CardInfo], order: &[usize]) -> Vec<CardInfo> {
 ///   takes the first wide slot after the lead block.
 /// - The recap is the tall card of the side column beside a hero, else the wide
 ///   card of the next wide slot. Never one cell.
-/// - Recent games is on the first screen for every crew size. Under a hero or
-///   in a plain grid it takes the wide slot of row 3 (frames C and D). A wide
-///   card in row 2 pushes it one card up the order.
+/// - Recent games is on the first screen for every crew size: the first wide
+///   slot after the recap and the day card, row 2 or row 3 (frames C and D
+///   under a hero). A wide card in row 2 pushes it one card up the order.
 ///
 /// A wide card that is not at home leaves the order, the lead is read from the
 /// other cards, and each card goes back in at its slot: head2head first, then
@@ -947,6 +992,70 @@ mod tests {
         let l = layout(&infos, 0);
         assert_eq!(l.lead, Lead::Wide);
         assert_eq!(wide_slots(&l, infos.len())[..2], [0, 2]);
+    }
+
+    #[test]
+    fn recent_games_is_in_row_two_or_under_the_day_card_in_row_three() {
+        // The plain big crew: head2head and the invite card are row 1, the
+        // poster grid leads row 2.
+        let cards = fifty();
+        let order = arrange(&cards, 0);
+        let infos = infos_of(&cards, &order);
+        let r = rows(&infos, 0);
+        let games = infos
+            .iter()
+            .position(|c| c.card_type == "recent-games")
+            .unwrap();
+        assert_eq!(r[games], 2, "{:?} rows {r:?}", types(&cards, &order));
+        assert_eq!(&r[..3], [1, 1, 2]);
+
+        // With a day card: it holds the wide slot of row 2, the grid takes the
+        // wide slot of row 3, after one cell. The run of 2026-11-02 saw the
+        // grid at card 5 of head2head, clip, day, joined, joined, games.
+        let mut day = card("daily-recap");
+        day.day_wide = true;
+        let mut with_day = fifty();
+        with_day.insert(2, day);
+        let order = arrange(&with_day, 0);
+        let infos = infos_of(&with_day, &order);
+        let r = rows(&infos, 0);
+        let games = infos
+            .iter()
+            .position(|c| c.card_type == "recent-games")
+            .unwrap();
+        let day_at = infos.iter().position(|c| c.day_wide).unwrap();
+        assert_eq!(r[day_at], 2, "{:?} rows {r:?}", types(&with_day, &order));
+        assert_eq!(r[games], 3, "{:?} rows {r:?}", types(&with_day, &order));
+        assert!(wide_slot_indices(&infos, 0).contains(&games));
+        assert_eq!(r[games - 1], 3, "one cell before the grid in row 3");
+        assert_eq!(r[games + 1], 4, "the next card starts row 4");
+    }
+
+    #[test]
+    fn rows_count_the_lead_block_and_the_stream_rows() {
+        // A versus hero is one full row; head2head wide takes row 2 with a cell.
+        let cards = vec![
+            h2h("versus"),
+            h2h("pairs"),
+            card("clip"),
+            card("clip"),
+            card("clip"),
+        ];
+        let order = arrange(&cards, 0);
+        let infos = infos_of(&cards, &order);
+        let r = rows(&infos, 0);
+        assert_eq!(r, [1, 2, 2, 3, 3], "{:?}", types(&cards, &order));
+
+        // After one live stream the first card is a stream row (row 0).
+        let cards = vec![
+            card("clip"),
+            card("clip"),
+            card("clip"),
+            card("clip"),
+            card("clip"),
+        ];
+        let r = rows(&cards, 1);
+        assert_eq!(r, [0, 1, 1, 1, 2]);
     }
 
     #[test]
