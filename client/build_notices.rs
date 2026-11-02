@@ -42,17 +42,60 @@ struct Dep {
     text: String,
 }
 
+/// Libraries vendored under `libmello/third_party`, with the licence file
+/// they carry: directory, display name, SPDX licence.
+const VENDORED: [(&str, &str, &str); 5] = [
+    ("rnnoise", "RNNoise", "BSD-3-Clause"),
+    (
+        "webrtc-audio-processing",
+        "WebRTC audio processing",
+        "BSD-3-Clause",
+    ),
+    (
+        "webrtc-goog-cc",
+        "WebRTC congestion control",
+        "BSD-3-Clause",
+    ),
+    ("webrtc-neteq", "WebRTC NetEQ", "BSD-3-Clause"),
+    ("webrtc-video-timing", "WebRTC video timing", "BSD-3-Clause"),
+];
+
 /// Paths the build script must watch. Without these Cargo reruns the script
 /// on every edit in the package, which compiles the Slint UI again.
+///
+/// Only the files that `generate` reads, not all of `libmello/third_party`:
+/// the libmello CMake build extracts ONNX Runtime into that directory, so
+/// watching it made this script stale for the next cargo command.
 pub fn rerun_paths(manifest_dir: &Path) -> Vec<PathBuf> {
     let root = manifest_dir.join("..");
-    vec![
+    let third_party = root.join("libmello/third_party");
+    let mut paths = vec![
         root.join("Cargo.lock"),
         root.join("libmello/vcpkg.json"),
-        root.join("libmello/third_party"),
+        third_party.join("openh264/BINARY_LICENSE.txt"),
         manifest_dir.join("ui/fonts"),
         manifest_dir.join("build_notices.rs"),
-    ]
+    ];
+    for (dir, _, _) in VENDORED {
+        paths.extend(license_files(&third_party.join(dir)));
+    }
+    // ONNX Runtime: the licence in each extracted folder. Before CMake has
+    // extracted one, watch the folder itself, so the script runs again once
+    // the licence is there.
+    let ort = third_party.join("onnxruntime");
+    let ort_licenses: Vec<PathBuf> = std::fs::read_dir(&ort)
+        .map(|rd| {
+            rd.flatten()
+                .flat_map(|e| license_files(&e.path()))
+                .collect()
+        })
+        .unwrap_or_default();
+    if ort_licenses.is_empty() {
+        paths.push(ort);
+    } else {
+        paths.extend(ort_licenses);
+    }
+    paths
 }
 
 /// Collect the notices and write the asset. Returns the number of records.
@@ -120,21 +163,30 @@ fn registry_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The text of every licence file in a directory, joined.
-fn license_text(dir: &Path) -> String {
+/// The licence files in a directory, sorted.
+fn license_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
+    files.retain(|f| {
+        let lower = f
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        f.is_file() && LICENSE_PREFIXES.iter().any(|p| lower.starts_with(p))
+    });
     files.sort();
+    files
+}
+
+/// The text of every licence file in a directory, joined.
+fn license_text(dir: &Path) -> String {
     let mut out: Vec<String> = Vec::new();
-    for f in files {
+    for f in license_files(dir) {
         let Some(name) = f.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let lower = name.to_lowercase();
-        if !f.is_file() || !LICENSE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
-            continue;
-        }
         if let Ok(t) = std::fs::read_to_string(&f) {
             let t = t.replace("\r\n", "\n");
             out.push(if out.is_empty() {
@@ -328,21 +380,7 @@ fn libmello_deps(root: &Path) -> Vec<Dep> {
         }
     }
     // Libraries vendored under third_party, with the licence file they carry.
-    for (dir, name, license) in [
-        ("rnnoise", "RNNoise", "BSD-3-Clause"),
-        (
-            "webrtc-audio-processing",
-            "WebRTC audio processing",
-            "BSD-3-Clause",
-        ),
-        (
-            "webrtc-goog-cc",
-            "WebRTC congestion control",
-            "BSD-3-Clause",
-        ),
-        ("webrtc-neteq", "WebRTC NetEQ", "BSD-3-Clause"),
-        ("webrtc-video-timing", "WebRTC video timing", "BSD-3-Clause"),
-    ] {
+    for (dir, name, license) in VENDORED {
         let text = license_text(&root.join("libmello/third_party").join(dir));
         if !text.is_empty() {
             deps.push(Dep {
