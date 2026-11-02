@@ -3,14 +3,13 @@
 // members are seeded over REST.
 
 import { journey } from "../../tools/mello-driver/src/journey.ts";
-import { CARRY_TAKER_PLAYTIME_MIN, profiles, reportLibrary } from "./lib/seed.ts";
-import { bobWithSeededCrew, expectFullFeed, waitForFullFeed } from "./lib/stage.ts";
+import { bobWithSeededCrew, expectFullFeed, moveTheCarryBetweenOthers, waitForFullFeed } from "./lib/stage.ts";
 
 export default journey({
   id: "feed.stage-five",
   flows: ["FEED-05"],
   async run(ctx) {
-    const { step, expect, runId } = ctx;
+    const { step, expect } = ctx;
     const { bob, members } = await bobWithSeededCrew(ctx, 4);
 
     await step("head2head is the wide card with no seats, over five members", async () => {
@@ -59,20 +58,11 @@ export default journey({
     });
 
     await step("a member re-reports a library that takes the_carry from another member", async () => {
-      const s0 = await bob.state();
-      const holder = s0.head2head.titles.find((t) => t.title_id === "the_carry")?.holder_name;
-      const taker = bobTakerFor(holder, members);
-      expect(taker !== undefined, `a seeded member other than the holder ${holder} exists`);
-      // The taker keeps the library the seed gave them and plays the shared
-      // top game far more than anyone. Every belt that moves lands on them,
-      // so one pair row wears the dot.
-      const own = profiles(members.length, runId).find((p) => p.name === taker!.name)?.games ?? [];
-      const library = own.filter((g) => g.id !== "steam-730").map((g) => ({ id: g.id, name: g.name, playtimeMin: g.playtimeMin }));
-      library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin: CARRY_TAKER_PLAYTIME_MIN });
-      await reportLibrary(taker!.token, library);
+      // Every belt that moves lands on the taker, so one pair row wears the dot.
+      const taker = await moveTheCarryBetweenOthers(ctx, bob, members);
       const s = await bob.waitFor(
         "the_carry held by the taker and one pair row with the dot",
-        (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker!.name) && st.head2head.pair_rows_dot === 1,
+        (st) => st.head2head.titles.some((t) => t.title_id === "the_carry" && t.holder_name === taker.name) && st.head2head.pair_rows_dot === 1,
         60_000,
       );
       expect(s.head2head.placement === "wide", `no hero for a move between others, placement ${s.head2head.placement}`);
@@ -88,8 +78,3 @@ export default journey({
     });
   },
 });
-
-/** A seeded member who is not the current holder of the title. */
-function bobTakerFor<T extends { name: string }>(holder: string | undefined, members: T[]): T | undefined {
-  return members.find((m) => m.name !== holder);
-}

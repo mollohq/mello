@@ -5,7 +5,17 @@ import type { App, AppEvent, AppState } from "../../../tools/mello-driver/src/ap
 import type { JourneyContext } from "../../../tools/mello-driver/src/journey.ts";
 import { onboardWithNewCrew } from "./onboarding.ts";
 import { readInviteCode } from "./setup.ts";
-import { crewFeed, endSession, profiles, seedCrew, signInEmail, type SeededMember } from "./seed.ts";
+import {
+  CARRY_SECOND_TAKER_PLAYTIME_MIN,
+  CARRY_TAKER_PLAYTIME_MIN,
+  crewFeed,
+  endSession,
+  profiles,
+  reportLibrary,
+  seedCrew,
+  signInEmail,
+  type SeededMember,
+} from "./seed.ts";
 
 export type Stage = { bob: App; crew: string; code: string; members: SeededMember[] };
 
@@ -53,6 +63,48 @@ export async function bobWithSeededCrew(ctx: JourneyContext, seeded: number): Pr
     await bob.waitFor("the app, logged in", (s) => s.screen === "app" && s.logged_in, 30_000);
   });
   return { bob, crew, code, members };
+}
+
+/** The holder of the_carry in bob's head2head card, by name. */
+function carryHolder(s: AppState): string | undefined {
+  return s.head2head.titles.find((t) => t.title_id === "the_carry")?.holder_name;
+}
+
+/**
+ * Seeded members re-report their libraries until the last move of the_carry is
+ * between two members other than bob: no versus hero, and the pair of bob and
+ * the new holder wears the unread dot. Returns the new holder.
+ *
+ * bob's app reports the library of the machine it runs on. With more Counter-
+ * Strike 2 hours there than any seeded member has, bob holds the_carry, and
+ * one move would take it from him. Then a first member takes it from bob and a
+ * second member takes it from the first.
+ */
+export async function moveTheCarryBetweenOthers(ctx: JourneyContext, bob: App, members: SeededMember[]): Promise<SeededMember> {
+  const { runId, expect } = ctx;
+  const take = async (taker: SeededMember, playtimeMin: number) => {
+    // The taker keeps the library the seed gave them and plays the shared top
+    // game far more than anyone.
+    const own = profiles(members.length, runId).find((p) => p.name === taker.name)?.games ?? [];
+    const library = own.filter((g) => g.id !== "steam-730").map((g) => ({ id: g.id, name: g.name, playtimeMin: g.playtimeMin }));
+    library.push({ id: "steam-730", name: "Counter-Strike 2", playtimeMin });
+    await reportLibrary(taker.token, library);
+    await bob.waitFor(`the_carry held by ${taker.name}`, (st) => carryHolder(st) === taker.name, 60_000);
+  };
+  const holder = carryHolder(await bob.state());
+  expect(holder !== undefined, "the_carry has a holder before the move");
+  if (members.some((m) => m.name === holder)) {
+    const taker = members.find((m) => m.name !== holder);
+    expect(taker !== undefined, `a seeded member other than the holder ${holder} exists`);
+    await take(taker!, CARRY_TAKER_PLAYTIME_MIN);
+    return taker!;
+  }
+  // bob holds it, from the library of this machine.
+  expect(members.length >= 2, `two seeded members to move the_carry between, got ${members.length}`);
+  const [first, second] = members;
+  await take(first, CARRY_TAKER_PLAYTIME_MIN);
+  await take(second, CARRY_SECOND_TAKER_PLAYTIME_MIN);
+  return second;
 }
 
 /** ms between two events of a run, or null when one is missing. */
