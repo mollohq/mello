@@ -1,0 +1,1275 @@
+{
+  "audio": {
+    "audio_fingerprint": "9a21f3b53f756e05",
+    "audio_version": 1,
+    "detector_bias_samples": 0.0
+  },
+  "clip": {
+    "file": "stream-gate-v1-1280x720p60-1200f-seed20261021.yuv",
+    "fnv1a": "1005db54bb331c6e",
+    "fps": 60,
+    "frames": 1200,
+    "generator_version": 1,
+    "height": 720,
+    "seed": 20261021,
+    "width": 1280
+  },
+  "clips": {
+    "press-35s": {
+      "info": {
+        "audio_samples": 1440768,
+        "audio_start_us": 0,
+        "bytes": 18963234,
+        "decode_s": 7.3,
+        "first_frame": 300,
+        "keyframes": 30,
+        "last_frame": 2099,
+        "mp4": "clip.mp4",
+        "mp4_size": [
+          1280,
+          720
+        ],
+        "press_s": 35.0,
+        "press_us": 96068103146,
+        "scratch_bytes": 6635520000,
+        "target_frame": 300
+      },
+      "metrics": {
+        "av_markers_expected": 119.0,
+        "av_markers_matched": 119.0,
+        "av_markers_missing": 0.0,
+        "av_offset_abs_max_ms": 0.0,
+        "av_offset_max_ms": 0.0,
+        "av_offset_min_ms": 0.0,
+        "av_offset_p50_ms": 0.0,
+        "clip_kbps": 5056.8617,
+        "decoder_held": 0.0,
+        "duration_s": 30.0,
+        "end_lag_ms": 16.668,
+        "frames": 1800.0,
+        "frames_missing": 0.0,
+        "frames_out_of_order": 0.0,
+        "frames_undecoded": 0.0,
+        "frames_unreadable": 0.0,
+        "frames_wrong_size": 0.0,
+        "game_audio": 1.0,
+        "mux_ms": 355.368,
+        "poster_live": 1.0,
+        "press_state": 1.0,
+        "psnr_y_mean": 27.743,
+        "psnr_y_min": 25.2271,
+        "ssim_y_mean": 0.75,
+        "ssim_y_min": 0.6557,
+        "start_lead_frames": 0.0,
+        "units": 1800.0,
+        "vmaf_mean": 78.7734,
+        "vmaf_min": 59.9779,
+        "vmaf_p5": 66.7963
+      }
+    },
+    "press-47s": {
+      "info": {
+        "audio_samples": 1440768,
+        "audio_start_us": 0,
+        "bytes": 18965186,
+        "decode_s": 7.3,
+        "first_frame": 1020,
+        "keyframes": 30,
+        "last_frame": 2819,
+        "mp4": "clip.mp4",
+        "mp4_size": [
+          1280,
+          720
+        ],
+        "press_s": 47.0,
+        "press_us": 96080103146,
+        "scratch_bytes": 6635520000,
+        "target_frame": 1020
+      },
+      "metrics": {
+        "av_markers_expected": 119.0,
+        "av_markers_matched": 119.0,
+        "av_markers_missing": 0.0,
+        "av_offset_abs_max_ms": 0.0,
+        "av_offset_max_ms": 0.0,
+        "av_offset_min_ms": 0.0,
+        "av_offset_p50_ms": 0.0,
+        "clip_kbps": 5057.3823,
+        "decoder_held": 0.0,
+        "duration_s": 30.0,
+        "end_lag_ms": 16.668,
+        "frames": 1800.0,
+        "frames_missing": 0.0,
+        "frames_out_of_order": 0.0,
+        "frames_undecoded": 0.0,
+        "frames_unreadable": 0.0,
+        "frames_wrong_size": 0.0,
+        "game_audio": 1.0,
+        "mux_ms": 294.219,
+        "poster_live": 1.0,
+        "press_state": 1.0,
+        "psnr_y_mean": 27.8116,
+        "psnr_y_min": 25.2271,
+        "ssim_y_mean": 0.7464,
+        "ssim_y_min": 0.6557,
+        "start_lead_frames": 0.0,
+        "units": 1800.0,
+        "vmaf_mean": 79.7164,
+        "vmaf_min": 59.872,
+        "vmaf_p5": 67.356
+      }
+    },
+    "press-60s": {
+      "info": {
+        "audio_samples": 1440768,
+        "audio_start_us": 0,
+        "bytes": 18963255,
+        "decode_s": 7.0,
+        "first_frame": 1800,
+        "keyframes": 30,
+        "last_frame": 3599,
+        "mp4": "clip.mp4",
+        "mp4_size": [
+          1280,
+          720
+        ],
+        "press_s": 60.0,
+        "press_us": 96093103146,
+        "scratch_bytes": 6635520000,
+        "target_frame": 1800
+      },
+      "metrics": {
+        "av_markers_expected": 119.0,
+        "av_markers_matched": 119.0,
+        "av_markers_missing": 0.0,
+        "av_offset_abs_max_ms": 0.0,
+        "av_offset_max_ms": 0.0,
+        "av_offset_min_ms": 0.0,
+        "av_offset_p50_ms": 0.0,
+        "clip_kbps": 5056.8672,
+        "decoder_held": 0.0,
+        "duration_s": 30.0,
+        "end_lag_ms": 16.668,
+        "frames": 1800.0,
+        "frames_missing": 0.0,
+        "frames_out_of_order": 0.0,
+        "frames_undecoded": 0.0,
+        "frames_unreadable": 0.0,
+        "frames_wrong_size": 0.0,
+        "game_audio": 1.0,
+        "mux_ms": 289.329,
+        "poster_live": 1.0,
+        "press_state": 1.0,
+        "psnr_y_mean": 27.679,
+        "psnr_y_min": 25.2271,
+        "ssim_y_mean": 0.7582,
+        "ssim_y_min": 0.6557,
+        "start_lead_frames": 0.0,
+        "units": 1800.0,
+        "vmaf_mean": 77.9459,
+        "vmaf_min": 59.9779,
+        "vmaf_p5": 66.0609
+      }
+    },
+    "press-62s": {
+      "info": {
+        "audio_samples": 1440768,
+        "audio_start_us": 0,
+        "bytes": 18960591,
+        "decode_s": 7.3,
+        "first_frame": 1920,
+        "keyframes": 30,
+        "last_frame": 3719,
+        "mp4": "clip.mp4",
+        "mp4_size": [
+          1280,
+          720
+        ],
+        "press_s": 62.0,
+        "press_us": 96095103146,
+        "scratch_bytes": 6635520000,
+        "target_frame": 1920
+      },
+      "metrics": {
+        "av_markers_expected": 119.0,
+        "av_markers_matched": 119.0,
+        "av_markers_missing": 0.0,
+        "av_offset_abs_max_ms": 0.0,
+        "av_offset_max_ms": 0.0,
+        "av_offset_min_ms": 0.0,
+        "av_offset_p50_ms": 0.0,
+        "clip_kbps": 5056.1566,
+        "decoder_held": 0.0,
+        "duration_s": 30.0,
+        "end_lag_ms": 16.668,
+        "frames": 1800.0,
+        "frames_missing": 0.0,
+        "frames_out_of_order": 0.0,
+        "frames_undecoded": 0.0,
+        "frames_unreadable": 0.0,
+        "frames_wrong_size": 0.0,
+        "game_audio": 1.0,
+        "mux_ms": 295.585,
+        "poster_live": 1.0,
+        "press_state": 1.0,
+        "psnr_y_mean": 27.7946,
+        "psnr_y_min": 25.2271,
+        "ssim_y_mean": 0.7612,
+        "ssim_y_min": 0.6557,
+        "start_lead_frames": 0.0,
+        "units": 1800.0,
+        "vmaf_mean": 78.4462,
+        "vmaf_min": 59.9779,
+        "vmaf_p5": 66.0796
+      }
+    }
+  },
+  "decoder": "OpenH264 (MELLO_SOFT_DECODER=1)",
+  "decoders_available": [
+    "NVDEC",
+    "OpenH264"
+  ],
+  "encoder": "OpenH264 (MELLO_SOFT_ENCODER=1)",
+  "encoders_available": [],
+  "free_gb_before": 22.85,
+  "gates": [
+    {
+      "enforced": true,
+      "metric": "duration_s",
+      "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": ">= 30, <= 31",
+      "value": 30.000004
+    },
+    {
+      "enforced": true,
+      "metric": "start_lead_frames",
+      "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": ">= 0, <= 60",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_missing",
+      "note": "plan 10.3: no missing frame index from the first frame to the last",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_out_of_order",
+      "note": "plan 10.3: every frame index in order",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_unreadable",
+      "note": "every frame code reads",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_undecoded",
+      "note": "every video unit of the clip decodes to a picture",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_markers_missing",
+      "note": "the sound has every game audio marker of the clip's frames",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_offset_abs_max_ms",
+      "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker",
+      "pass": true,
+      "profile": "press-35s",
+      "rule": "<= 20",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "duration_s",
+      "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": ">= 30, <= 31",
+      "value": 30.000004
+    },
+    {
+      "enforced": true,
+      "metric": "start_lead_frames",
+      "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": ">= 0, <= 60",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_missing",
+      "note": "plan 10.3: no missing frame index from the first frame to the last",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_out_of_order",
+      "note": "plan 10.3: every frame index in order",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_unreadable",
+      "note": "every frame code reads",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_undecoded",
+      "note": "every video unit of the clip decodes to a picture",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_markers_missing",
+      "note": "the sound has every game audio marker of the clip's frames",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_offset_abs_max_ms",
+      "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker",
+      "pass": true,
+      "profile": "press-47s",
+      "rule": "<= 20",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "duration_s",
+      "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": ">= 30, <= 31",
+      "value": 30.000005
+    },
+    {
+      "enforced": true,
+      "metric": "start_lead_frames",
+      "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": ">= 0, <= 60",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_missing",
+      "note": "plan 10.3: no missing frame index from the first frame to the last",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_out_of_order",
+      "note": "plan 10.3: every frame index in order",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_unreadable",
+      "note": "every frame code reads",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_undecoded",
+      "note": "every video unit of the clip decodes to a picture",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_markers_missing",
+      "note": "the sound has every game audio marker of the clip's frames",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_offset_abs_max_ms",
+      "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker",
+      "pass": true,
+      "profile": "press-60s",
+      "rule": "<= 20",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "duration_s",
+      "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": ">= 30, <= 31",
+      "value": 30.000006
+    },
+    {
+      "enforced": true,
+      "metric": "start_lead_frames",
+      "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": ">= 0, <= 60",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_missing",
+      "note": "plan 10.3: no missing frame index from the first frame to the last",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_out_of_order",
+      "note": "plan 10.3: every frame index in order",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_unreadable",
+      "note": "every frame code reads",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "frames_undecoded",
+      "note": "every video unit of the clip decodes to a picture",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_markers_missing",
+      "note": "the sound has every game audio marker of the clip's frames",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 0",
+      "value": 0.0
+    },
+    {
+      "enforced": true,
+      "metric": "av_offset_abs_max_ms",
+      "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker",
+      "pass": true,
+      "profile": "press-62s",
+      "rule": "<= 20",
+      "value": 0.0
+    }
+  ],
+  "git": {
+    "commit": "6d875cd92d280b776cb48b4ee04712119e9562aa",
+    "dirty": true
+  },
+  "kind": "replay-gate-baseline",
+  "lane": "cpu",
+  "machine": {
+    "computer": "WIN10-GAMING",
+    "cpu": "AMD Ryzen 7 5800X 8-Core Processor",
+    "gpus": [
+      "Parsec Virtual Display Adapter (driver 0.45.0.0)",
+      "NVIDIA GeForce RTX 3080 Ti (driver 32.0.16.1088)"
+    ],
+    "memory_gb": "32",
+    "os": "Microsoft Windows 11 Pro 10.0.26300"
+  },
+  "method": {
+    "loopback": "mello_tone_player: 1 kHz, 100 ms every 1000 ms; each onset (steady clock) maps to the clip time of the frame the source captured then",
+    "markers": "marker k (frame 15k): its onset in the clip's sound, less the detector bias, minus the clip time of frame 15k; markers within 50 ms of either end of the sound are not expected",
+    "path": "reference clip and game audio (MELLO_CAPTURE_REFERENCE) -> capture manager -> replay session: preprocessor, recording encoder, video and audio rings -> mello_replay_capture (30 s, MP4 passthrough and AAC) -> mello_test_mp4_read_video -> stream viewer, one unit at a time, CPU frame callback -> burned-in code; mello_test_mp4_read_audio -> marker onsets",
+    "presses": [
+      {
+        "at_s": 35.0,
+        "name": "press-35s"
+      },
+      {
+        "at_s": 47.0,
+        "name": "press-47s"
+      },
+      {
+        "at_s": 60.0,
+        "name": "press-60s"
+      },
+      {
+        "at_s": 62.0,
+        "name": "press-62s"
+      }
+    ],
+    "start": "start_lead_frames = the frame the source captured 30 s before the press (its clock) minus the clip's first frame"
+  },
+  "notes": [],
+  "platform": {
+    "arch": "x86_64",
+    "os": "windows"
+  },
+  "quality": {
+    "bitrate_kbps": 5000,
+    "fps": 60,
+    "height": 720,
+    "name": "720p60",
+    "source": "GameClipQuality::encoding (mello-core/src/events.rs)"
+  },
+  "runs": [
+    {
+      "busy": [],
+      "other_cpu_pct": 6.269960548562841,
+      "readback_s": 98.0,
+      "record_s": 62.4
+    },
+    {
+      "busy": [],
+      "other_cpu_pct": 7.127095168787267,
+      "readback_s": 81.6,
+      "record_s": 62.4
+    },
+    {
+      "busy": [],
+      "other_cpu_pct": 7.021140094199383,
+      "readback_s": 81.9,
+      "record_s": 62.4
+    }
+  ],
+  "runtime_s": 451.4,
+  "schema": 1,
+  "scorer": {
+    "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
+    "vmaf": {
+      "available": true,
+      "model": "vmaf_v0.6.1",
+      "python_version": "3.14.4",
+      "results": [
+        {
+          "frames": 1800,
+          "id": "press-62s",
+          "mean": 78.4462,
+          "min": 59.9779,
+          "p5": 66.0796
+        }
+      ],
+      "scorer": "vmaf 3.0.0 vmaf_v0.6.1",
+      "vmaf_version": "3.0.0"
+    },
+    "vmaf_subsample": 1
+  },
+  "scratch_peak_gb": 6.64,
+  "source": {
+    "clip_frames": 1200,
+    "fps": 60,
+    "frames_delivered": 3738,
+    "late_frames": 2,
+    "max_late_us": 9576,
+    "other_cpu_pct": 6.269960548562841,
+    "presses": [
+      {
+        "at_s": 35.0,
+        "error": null,
+        "late_us": 1,
+        "mux_ms": 355.368,
+        "name": "press-35s",
+        "state": 1
+      },
+      {
+        "at_s": 47.0,
+        "error": null,
+        "late_us": 1,
+        "mux_ms": 294.219,
+        "name": "press-47s",
+        "state": 1
+      },
+      {
+        "at_s": 60.0,
+        "error": null,
+        "late_us": 1,
+        "mux_ms": 289.329,
+        "name": "press-60s",
+        "state": 1
+      },
+      {
+        "at_s": 62.0,
+        "error": null,
+        "late_us": 1,
+        "mux_ms": 295.585,
+        "name": "press-62s",
+        "state": 1
+      }
+    ],
+    "record_s": 62.4,
+    "start_us": 96033103145
+  },
+  "spread": {
+    "press-35s": {
+      "av_markers_expected": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_matched": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_abs_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_min_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_p50_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clip_kbps": [
+        5056.86172575177,
+        5056.862679150351,
+        5056.861499216434
+      ],
+      "decoder_held": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": [
+        30.000004,
+        30.000011,
+        30.000018
+      ],
+      "end_lag_ms": [
+        16.668,
+        16.67,
+        16.668
+      ],
+      "frames": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "frames_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_out_of_order": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_undecoded": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_unreadable": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_wrong_size": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "game_audio": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "mux_ms": [
+        355.368,
+        306.193,
+        293.772
+      ],
+      "poster_live": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "press_state": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "psnr_y_mean": [
+        27.743021239550124,
+        27.743021239550124,
+        27.743021239550124
+      ],
+      "psnr_y_min": [
+        25.22710851422992,
+        25.22710851422992,
+        25.22710851422992
+      ],
+      "ssim_y_mean": [
+        0.750042594742807,
+        0.750042594742807,
+        0.750042594742807
+      ],
+      "ssim_y_min": [
+        0.6556656132752657,
+        0.6556656132752657,
+        0.6556656132752657
+      ],
+      "start_lead_frames": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "units": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "vmaf_mean": [
+        78.7734,
+        78.7734,
+        78.7734
+      ],
+      "vmaf_min": [
+        59.9779,
+        59.9779,
+        59.9779
+      ],
+      "vmaf_p5": [
+        66.7963,
+        66.7963,
+        66.7963
+      ]
+    },
+    "press-47s": {
+      "av_markers_expected": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_matched": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_abs_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_min_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_p50_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clip_kbps": [
+        5057.382259015699,
+        5057.381753277591,
+        5057.382259015699
+      ],
+      "decoder_held": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": [
+        30.000004,
+        30.000007,
+        30.000004
+      ],
+      "end_lag_ms": [
+        16.668,
+        16.669,
+        16.668
+      ],
+      "frames": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "frames_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_out_of_order": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_undecoded": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_unreadable": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_wrong_size": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "game_audio": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "mux_ms": [
+        294.219,
+        310.634,
+        298.969
+      ],
+      "poster_live": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "press_state": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "psnr_y_mean": [
+        27.811590902092714,
+        27.811590902092714,
+        27.811590902092714
+      ],
+      "psnr_y_min": [
+        25.22710851422992,
+        25.22710851422992,
+        25.22710851422992
+      ],
+      "ssim_y_mean": [
+        0.7464362834869998,
+        0.7464362834869998,
+        0.7464362834869998
+      ],
+      "ssim_y_min": [
+        0.6556656132752657,
+        0.6556656132752657,
+        0.6556656132752657
+      ],
+      "start_lead_frames": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "units": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "vmaf_mean": [
+        79.7164,
+        79.7164,
+        79.7164
+      ],
+      "vmaf_min": [
+        59.872,
+        59.872,
+        59.872
+      ],
+      "vmaf_p5": [
+        67.356,
+        67.356,
+        67.356
+      ]
+    },
+    "press-60s": {
+      "av_markers_expected": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_matched": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_abs_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_min_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_p50_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clip_kbps": [
+        5056.867157188807,
+        5056.867157188807,
+        5056.867157188807
+      ],
+      "decoder_held": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": [
+        30.000005,
+        30.000005,
+        30.000005
+      ],
+      "end_lag_ms": [
+        16.668,
+        16.668,
+        16.668
+      ],
+      "frames": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "frames_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_out_of_order": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_undecoded": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_unreadable": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_wrong_size": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "game_audio": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "mux_ms": [
+        289.329,
+        293.596,
+        329.015
+      ],
+      "poster_live": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "press_state": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "psnr_y_mean": [
+        27.679043929324223,
+        27.679043929324223,
+        27.679043929324223
+      ],
+      "psnr_y_min": [
+        25.22710851422992,
+        25.22710851422992,
+        25.22710851422992
+      ],
+      "ssim_y_mean": [
+        0.7581505492605574,
+        0.7581505492605574,
+        0.7581505492605574
+      ],
+      "ssim_y_min": [
+        0.6556656132752657,
+        0.6556656132752657,
+        0.6556656132752657
+      ],
+      "start_lead_frames": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "units": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "vmaf_mean": [
+        77.9459,
+        77.9459,
+        77.9459
+      ],
+      "vmaf_min": [
+        59.9779,
+        59.9779,
+        59.9779
+      ],
+      "vmaf_p5": [
+        66.0609,
+        66.0609,
+        66.0609
+      ]
+    },
+    "press-62s": {
+      "av_markers_expected": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_matched": [
+        119.0,
+        119.0,
+        119.0
+      ],
+      "av_markers_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_abs_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_max_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_min_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "av_offset_p50_ms": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "clip_kbps": [
+        5056.156588768682,
+        5056.156925845743,
+        5056.156588768682
+      ],
+      "decoder_held": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "duration_s": [
+        30.000006,
+        30.000004,
+        30.000006
+      ],
+      "end_lag_ms": [
+        16.668,
+        16.668,
+        16.669
+      ],
+      "frames": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "frames_missing": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_out_of_order": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_undecoded": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_unreadable": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "frames_wrong_size": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "game_audio": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "mux_ms": [
+        295.585,
+        309.108,
+        309.951
+      ],
+      "poster_live": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "press_state": [
+        1.0,
+        1.0,
+        1.0
+      ],
+      "psnr_y_mean": [
+        27.79463178828808,
+        27.79463178828808,
+        27.79463178828808
+      ],
+      "psnr_y_min": [
+        25.22710851422992,
+        25.22710851422992,
+        25.22710851422992
+      ],
+      "ssim_y_mean": [
+        0.7611694596542452,
+        0.7611694596542452,
+        0.7611694596542452
+      ],
+      "ssim_y_min": [
+        0.6556656132752657,
+        0.6556656132752657,
+        0.6556656132752657
+      ],
+      "start_lead_frames": [
+        0.0,
+        0.0,
+        0.0
+      ],
+      "units": [
+        1800.0,
+        1800.0,
+        1800.0
+      ],
+      "vmaf_mean": [
+        78.4462,
+        78.4462,
+        78.4462
+      ],
+      "vmaf_min": [
+        59.9779,
+        59.9779,
+        59.9779
+      ],
+      "vmaf_p5": [
+        66.0796,
+        66.0796,
+        66.0796
+      ]
+    }
+  },
+  "taken_at_utc": "2026-11-02T23:10:46Z"
+}

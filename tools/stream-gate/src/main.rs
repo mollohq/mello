@@ -33,6 +33,23 @@
 //!
 //! Exit codes: 0 = every enforced gate passed, 1 = an enforced gate failed,
 //! 2 = setup or run error.
+//!
+//! ```text
+//! stream-gate replay [--lane cpu|hw] [--loopback] [--out DIR] [--repeat N]
+//!                    [--write-baseline] [--no-vmaf] [--keep]
+//! ```
+//!
+//! The replay lane (plans/GAME-CLIPS.md 10.3, `replay.rs`). Use
+//! scripts/replay-gate.sh. `--lane cpu` (default): the 720p60 clip and the
+//! 720p60 clip quality, OpenH264 encode and decode. `--lane hw`: the 1080p60
+//! clip and quality, the machine's encoder and decoder. `--loopback` (hw
+//! lane) adds the real loopback row: it plays tone bursts on the speakers.
+//! `--repeat N` runs the lane N times: the gates read the first run, the
+//! results keep the spread. `--write-baseline` writes
+//! `benchmarks/baselines/replay/baseline-<lane>.json` (refused when it
+//! exists) and sets the lane's quality floors in `gates.json` from the runs.
+//! Output: `target/replay-gate/<lane>/`. Exit codes: 0 pass, 1 an enforced
+//! gate failed, 2 setup error or a busy machine.
 
 use serde_json::{json, Value};
 use std::collections::BTreeMap;
@@ -45,7 +62,7 @@ use stream_gate::profile::{self, GateFile, Lane, Profile};
 use stream_gate::report::{self, Metrics};
 use stream_gate::session::{self, clock_us, Ctx, Host, ViewerRecord, ViewerSpec};
 use stream_gate::shim::{Plan, Shim};
-use stream_gate::{audio, clip, score, sfu};
+use stream_gate::{audio, clip, replay, score, sfu};
 
 /// Stage 7: the clip's game audio and how to score it.
 struct AudioRun {
@@ -1685,9 +1702,1207 @@ fn real_main() -> Result<bool, String> {
     }
 }
 
+// ---- the replay lane (plans/GAME-CLIPS.md 10.3) ----------------------------------
+
+struct ReplayArgs {
+    lane: String,
+    loopback: bool,
+    out: Option<PathBuf>,
+    repeat: u32,
+    write_baseline: bool,
+    no_vmaf: bool,
+    keep: bool,
+}
+
+fn parse_replay_args() -> Result<ReplayArgs, String> {
+    let mut a = ReplayArgs {
+        lane: "cpu".into(),
+        loopback: false,
+        out: None,
+        repeat: 1,
+        write_baseline: false,
+        no_vmaf: false,
+        keep: false,
+    };
+    // After the program name and "replay".
+    let mut it = std::env::args().skip(2);
+    while let Some(arg) = it.next() {
+        let mut val = |name: &str| it.next().ok_or(format!("{name} needs a value"));
+        match arg.as_str() {
+            "--lane" => a.lane = val("--lane")?,
+            "--loopback" => a.loopback = true,
+            "--out" => a.out = Some(PathBuf::from(val("--out")?)),
+            "--repeat" => {
+                a.repeat = val("--repeat")?
+                    .parse()
+                    .map_err(|e| format!("--repeat: {e}"))?
+            }
+            "--write-baseline" => a.write_baseline = true,
+            "--no-vmaf" => a.no_vmaf = true,
+            "--keep" => a.keep = true,
+            "-h" | "--help" => {
+                println!(
+                    "stream-gate replay [--lane cpu|hw] [--loopback] [--out DIR] [--repeat N] \
+                     [--write-baseline] [--no-vmaf] [--keep]"
+                );
+                std::process::exit(0);
+            }
+            other => return Err(format!("unknown argument '{other}'")),
+        }
+    }
+    if a.repeat == 0 {
+        return Err("--repeat must be at least 1".into());
+    }
+    Ok(a)
+}
+
+/// The scores of one clip.
+#[derive(Clone)]
+struct ClipRun {
+    metrics: Metrics,
+    info: Value,
+}
+
+/// One run of the lane: every clip's scores.
+struct ReplayRun {
+    clips: BTreeMap<String, ClipRun>,
+    source: Value,
+    other_cpu_pct: Option<f64>,
+    /// Recordings on a busy machine (the load guard).
+    busy: Vec<String>,
+    record_s: f64,
+    readback_s: f64,
+}
+
+/// What every clip of a run is scored with.
+struct ReplayScoring<'a> {
+    ctx: &'a Ctx,
+    lane: replay::ReplayLane,
+    clip_path: &'a Path,
+    clip_spec: &'a clip::ClipSpec,
+    spec: &'a audio::AudioSpec,
+    /// The marker detector's own delay, samples.
+    bias: f64,
+    script: &'a Path,
+    no_vmaf: bool,
+    keep: bool,
+    /// The scorer's answer of the last clip that ran VMAF.
+    vmaf: Option<score::VmafScores>,
+    /// The most scratch disk one clip used (luma and VMAF files), bytes.
+    scratch_peak: u64,
+}
+
+fn mean(v: &[f64]) -> Option<f64> {
+    (!v.is_empty()).then(|| v.iter().sum::<f64>() / v.len() as f64)
+}
+
+fn file_bytes(p: &Path) -> u64 {
+    std::fs::metadata(p).map_or(0, |m| m.len())
+}
+
+/// The metrics every clip has from its capture.
+fn capture_metrics(cap: &replay::Capture, m: &mut Metrics) {
+    m.insert("press_state".into(), Some(f64::from(cap.state)));
+    if let Some(c) = &cap.clip {
+        m.insert("duration_s".into(), Some(c.duration_us as f64 / 1e6));
+        m.insert(
+            "mux_ms".into(),
+            Some(cap.done_us.saturating_sub(cap.press_us) as f64 / 1000.0),
+        );
+        m.insert(
+            "clip_kbps".into(),
+            (c.duration_us > 0).then(|| c.bytes as f64 * 8.0 * 1000.0 / c.duration_us as f64),
+        );
+        m.insert(
+            "game_audio".into(),
+            Some(f64::from(u8::from(c.has_game_audio))),
+        );
+        m.insert(
+            "poster_live".into(),
+            Some(f64::from(u8::from(c.poster_live))),
+        );
+    }
+}
+
+impl ReplayScoring<'_> {
+    /// Read one clip back and score it. Its luma and VMAF files are deleted
+    /// before the next clip (unless `--keep`).
+    fn score_clip(
+        &mut self,
+        cap: &replay::Capture,
+        clock: &SourceClock,
+    ) -> Result<ClipRun, String> {
+        let mut m = Metrics::new();
+        capture_metrics(cap, &mut m);
+        let Some(clip) = cap.clip else {
+            return Ok(ClipRun {
+                metrics: m,
+                info: json!({ "error": cap.error }),
+            });
+        };
+        let dir = cap.mp4.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let (w, h, fps) = (
+            self.clip_spec.width,
+            self.clip_spec.height,
+            self.clip_spec.fps,
+        );
+        let (units, mw, mh) = replay::read_units(&cap.mp4)?;
+        let luma = dir.join("luma.y");
+        let dec = replay::decode(self.ctx, &units, w, h, fps, Some(&luma))?;
+
+        // The order, against the frame captured 30 s before the press.
+        let back_us = (f64::from(replay::CLIP_S) * 1e6) as u64;
+        let target =
+            replay::frame_at(clock, cap.press_us.saturating_sub(back_us)).map(|n| n as i64);
+        let first_expect = target.unwrap_or(0) - i64::from(fps) / 2;
+        let order = replay::frame_order(&dec.frames, first_expect, clock.clip_frames, fps);
+        let first_abs = order.abs.first().copied().flatten();
+        let last_abs = order.abs.iter().rev().find_map(|a| *a);
+        m.insert("units".into(), Some(units.len() as f64));
+        m.insert("frames".into(), Some(dec.frames.len() as f64));
+        m.insert(
+            "frames_undecoded".into(),
+            Some(units.len().saturating_sub(dec.frames.len()) as f64),
+        );
+        m.insert("frames_unreadable".into(), Some(order.unreadable as f64));
+        m.insert("frames_missing".into(), Some(order.missing as f64));
+        m.insert(
+            "frames_out_of_order".into(),
+            Some(order.out_of_order as f64),
+        );
+        m.insert("frames_wrong_size".into(), Some(dec.wrong_size as f64));
+        m.insert("decoder_held".into(), Some(dec.held as f64));
+        m.insert(
+            "start_lead_frames".into(),
+            target.zip(first_abs).map(|(t, f)| (t - f) as f64),
+        );
+        // How far before the press the last frame was captured: the encode
+        // and ring latency at the press.
+        m.insert(
+            "end_lag_ms".into(),
+            last_abs.map(|a| {
+                (cap.press_us as f64 - replay::due_us(clock, a.max(0) as u64) as f64) / 1000.0
+            }),
+        );
+
+        // PSNR and SSIM of every readable frame, VMAF on every n-th.
+        let pairs: Vec<(usize, score::Pair)> = dec
+            .frames
+            .iter()
+            .enumerate()
+            .filter_map(|(k, f)| {
+                f.code.map(|c| {
+                    (
+                        k,
+                        score::Pair {
+                            dis_slot: k as u64,
+                            clip_frame: c.index,
+                        },
+                    )
+                })
+            })
+            .collect();
+        let only: Vec<score::Pair> = pairs.iter().map(|(_, p)| *p).collect();
+        let (wu, hu) = (w as usize, h as usize);
+        let mut per_frame: Vec<Option<(f64, f64)>> = vec![None; dec.frames.len()];
+        let mut scratch = file_bytes(&luma);
+        if !only.is_empty() {
+            let vis = score::psnr_ssim(self.clip_path, &luma, wu, hu, &only)?;
+            for (i, (k, _)) in pairs.iter().enumerate() {
+                per_frame[*k] = vis.psnr.get(i).copied().zip(vis.ssim.get(i).copied());
+            }
+            m.insert("psnr_y_mean".into(), mean(&vis.psnr));
+            m.insert(
+                "psnr_y_min".into(),
+                vis.psnr.iter().copied().reduce(f64::min),
+            );
+            m.insert("ssim_y_mean".into(), mean(&vis.ssim));
+            m.insert(
+                "ssim_y_min".into(),
+                vis.ssim.iter().copied().reduce(f64::min),
+            );
+            if !self.no_vmaf {
+                let (rp, dp) = (dir.join("vmaf-ref.yuv"), dir.join("vmaf-dis.yuv"));
+                let n = score::write_vmaf_pair(
+                    self.clip_path,
+                    &luma,
+                    wu,
+                    hu,
+                    &only,
+                    self.lane.vmaf_subsample,
+                    &rp,
+                    &dp,
+                )?;
+                scratch += file_bytes(&rp) + file_bytes(&dp);
+                if n > 0 {
+                    let job = score::VmafJob {
+                        id: cap.name.clone(),
+                        reference: rp.clone(),
+                        distorted: dp.clone(),
+                        width: wu,
+                        height: hu,
+                    };
+                    let scores = score::vmaf(self.script, &dir, &[job]);
+                    if let Some((_, Some((mean, p5, min)))) =
+                        scores.results.iter().find(|(id, _)| id == &cap.name)
+                    {
+                        m.insert("vmaf_mean".into(), Some(*mean));
+                        m.insert("vmaf_p5".into(), Some(*p5));
+                        m.insert("vmaf_min".into(), Some(*min));
+                    }
+                    if self.vmaf.is_none() || scores.available {
+                        self.vmaf = Some(scores);
+                    }
+                }
+                if !self.keep {
+                    let _ = std::fs::remove_file(&rp);
+                    let _ = std::fs::remove_file(&dp);
+                }
+            }
+        }
+        self.scratch_peak = self.scratch_peak.max(scratch);
+        if !self.keep {
+            let _ = std::fs::remove_file(&luma);
+        }
+
+        // The game audio markers against their frames' clip times.
+        let frames: BTreeMap<i64, i64> = order
+            .abs
+            .iter()
+            .zip(&dec.frames)
+            .filter_map(|(a, f)| a.map(|a| (a, f.time_us)))
+            .collect();
+        let sound = replay::read_audio(&cap.mp4)?;
+        let markers = replay::score_markers(
+            self.spec,
+            self.bias,
+            &sound,
+            &frames,
+            clock.clip_frames,
+            fps,
+        );
+        let offsets: Vec<f64> = markers
+            .iter()
+            .filter_map(replay::Marker::offset_ms)
+            .collect();
+        let missing = markers.iter().filter(|mk| mk.audio_us.is_none()).count();
+        m.insert("av_markers_expected".into(), Some(markers.len() as f64));
+        m.insert("av_markers_matched".into(), Some(offsets.len() as f64));
+        m.insert("av_markers_missing".into(), Some(missing as f64));
+        m.insert(
+            "av_offset_abs_max_ms".into(),
+            (!markers.is_empty() && offsets.len() == markers.len())
+                .then(|| offsets.iter().map(|o| o.abs()).fold(0.0, f64::max)),
+        );
+        m.insert(
+            "av_offset_p50_ms".into(),
+            metrics::percentile(&offsets, 50.0),
+        );
+        m.insert(
+            "av_offset_min_ms".into(),
+            offsets.iter().copied().reduce(f64::min),
+        );
+        m.insert(
+            "av_offset_max_ms".into(),
+            offsets.iter().copied().reduce(f64::max),
+        );
+
+        // Per-clip files.
+        let mut csv = String::from("frame,abs_frame,index,clock_ms,clip_ms,psnr_y,ssim_y\n");
+        for (k, f) in dec.frames.iter().enumerate() {
+            let (abs, index, clock_ms) = match (order.abs[k], f.code) {
+                (Some(a), Some(c)) => (a.to_string(), c.index.to_string(), c.clock_ms.to_string()),
+                _ => (String::new(), String::new(), String::new()),
+            };
+            let (p, s) = per_frame[k].map_or((String::new(), String::new()), |(p, s)| {
+                (format!("{p:.3}"), format!("{s:.5}"))
+            });
+            csv.push_str(&format!(
+                "{k},{abs},{index},{clock_ms},{:.3},{p},{s}\n",
+                f.time_us as f64 / 1000.0
+            ));
+        }
+        let _ = std::fs::write(dir.join("frames.csv"), csv);
+        let mut mcsv = String::from("marker,frame,video_ms,audio_ms,offset_ms\n");
+        for mk in &markers {
+            let frame =
+                (mk.k as f64 * self.spec.marker_period_ms * f64::from(fps) / 1000.0).round();
+            mcsv.push_str(&format!(
+                "{},{frame:.0},{:.3},{},{}\n",
+                mk.k,
+                mk.video_us / 1000.0,
+                mk.audio_us
+                    .map_or(String::new(), |a| format!("{:.3}", a / 1000.0)),
+                mk.offset_ms().map_or(String::new(), |o| format!("{o:.3}"))
+            ));
+        }
+        let _ = std::fs::write(dir.join("markers.csv"), mcsv);
+
+        Ok(ClipRun {
+            metrics: m,
+            info: json!({
+                "press_s": cap.at_s,
+                "press_us": cap.press_us,
+                "mp4": cap.mp4.file_name().map(|f| f.to_string_lossy().into_owned()),
+                "mp4_size": [mw, mh],
+                "bytes": clip.bytes,
+                "keyframes": units.iter().filter(|u| u.keyframe).count(),
+                "target_frame": target,
+                "first_frame": first_abs,
+                "last_frame": last_abs,
+                "decode_s": (dec.seconds * 10.0).round() / 10.0,
+                "audio_start_us": sound.start_us,
+                "audio_samples": sound.left.len(),
+                "scratch_bytes": scratch,
+            }),
+        })
+    }
+
+    /// The loopback row: the clip's frames and its sound against the
+    /// player's onsets.
+    fn score_loopback(
+        &mut self,
+        cap: &replay::Capture,
+        clock: &SourceClock,
+        onsets_csv: &Path,
+    ) -> Result<ClipRun, String> {
+        let mut m = Metrics::new();
+        capture_metrics(cap, &mut m);
+        if cap.clip.is_none() {
+            return Ok(ClipRun {
+                metrics: m,
+                info: json!({ "error": cap.error }),
+            });
+        }
+        let dir = cap.mp4.parent().unwrap_or(Path::new(".")).to_path_buf();
+        let fps = self.clip_spec.fps;
+        let (units, _, _) = replay::read_units(&cap.mp4)?;
+        let dec = replay::decode(
+            self.ctx,
+            &units,
+            self.clip_spec.width,
+            self.clip_spec.height,
+            fps,
+            None,
+        )?;
+        let back_us = (f64::from(replay::CLIP_S) * 1e6) as u64;
+        let target =
+            replay::frame_at(clock, cap.press_us.saturating_sub(back_us)).map(|n| n as i64);
+        let order = replay::frame_order(
+            &dec.frames,
+            target.unwrap_or(0) - i64::from(fps) / 2,
+            clock.clip_frames,
+            fps,
+        );
+        let frames: BTreeMap<i64, i64> = order
+            .abs
+            .iter()
+            .zip(&dec.frames)
+            .filter_map(|(a, f)| a.map(|a| (a, f.time_us)))
+            .collect();
+        let onsets = replay::read_player_onsets(onsets_csv)?;
+        let sound = replay::read_audio(&cap.mp4)?;
+        let bursts = replay::score_loopback(&onsets, clock, &frames, &sound, replay::tone_bias());
+        let offsets: Vec<f64> = bursts.iter().filter_map(replay::Burst::offset_ms).collect();
+        m.insert("loopback_bursts_expected".into(), Some(bursts.len() as f64));
+        m.insert(
+            "loopback_bursts_missing".into(),
+            Some((bursts.len() - offsets.len()) as f64),
+        );
+        m.insert(
+            "loopback_offset_abs_max_ms".into(),
+            (!bursts.is_empty() && offsets.len() == bursts.len())
+                .then(|| offsets.iter().map(|o| o.abs()).fold(0.0, f64::max)),
+        );
+        m.insert(
+            "loopback_offset_p50_ms".into(),
+            metrics::percentile(&offsets, 50.0),
+        );
+        m.insert(
+            "loopback_offset_min_ms".into(),
+            offsets.iter().copied().reduce(f64::min),
+        );
+        m.insert(
+            "loopback_offset_max_ms".into(),
+            offsets.iter().copied().reduce(f64::max),
+        );
+        m.insert("frames_missing".into(), Some(order.missing as f64));
+        let mut csv = String::from("burst,onset_steady_us,expected_ms,heard_ms,offset_ms\n");
+        for b in &bursts {
+            csv.push_str(&format!(
+                "{},{},{:.3},{},{}\n",
+                b.row,
+                b.onset_us,
+                b.expected_us / 1000.0,
+                b.heard_us
+                    .map_or(String::new(), |h| format!("{:.3}", h / 1000.0)),
+                b.offset_ms().map_or(String::new(), |o| format!("{o:.3}"))
+            ));
+        }
+        let _ = std::fs::write(dir.join("bursts.csv"), csv);
+        Ok(ClipRun {
+            metrics: m,
+            info: json!({
+                "press_s": cap.at_s,
+                "press_us": cap.press_us,
+                "player_onsets": onsets.len(),
+                "tone_bias_samples": replay::tone_bias(),
+                "first_frame": order.abs.first().copied().flatten(),
+                "decode_s": (dec.seconds * 10.0).round() / 10.0,
+            }),
+        })
+    }
+}
+
+/// The recording's busy-machine guard: a run on a busy machine says
+/// nothing about the code. Returns the reason when it was busy.
+fn replay_load_guard(rec: &replay::Recording, what: &str) -> Option<String> {
+    match rec.other_cpu_pct {
+        Some(pct) if pct > stream_gate::load::MAX_OTHER_PCT => {
+            eprintln!(
+                "replay-gate: WARNING: other processes used {pct:.0} % of the CPU while the replay recorded {what}"
+            );
+            Some(format!("{what} ({pct:.0} %)"))
+        }
+        _ => None,
+    }
+}
+
+fn source_json(rec: &replay::Recording) -> Value {
+    json!({
+        "start_us": rec.clock.start_us,
+        "clip_frames": rec.clock.clip_frames,
+        "fps": rec.clock.fps,
+        "frames_delivered": rec.source.frames_delivered,
+        "late_frames": rec.source.late_frames,
+        "max_late_us": rec.source.max_late_us,
+        "other_cpu_pct": rec.other_cpu_pct,
+        "record_s": (rec.seconds * 10.0).round() / 10.0,
+        "presses": rec.captures.iter().map(|c| json!({
+            "name": c.name,
+            "at_s": c.at_s,
+            "late_us": c.press_us as i64 - (rec.clock.start_us + (c.at_s * 1e6) as u64) as i64,
+            "state": c.state,
+            "mux_ms": c.done_us.saturating_sub(c.press_us) as f64 / 1000.0,
+            "error": c.error,
+        })).collect::<Vec<_>>(),
+    })
+}
+
+/// The recordings of one run, before the read-back.
+struct Recorded {
+    run: u32,
+    rec: replay::Recording,
+    /// The loopback row's recording and the player's onsets.
+    looped: Option<(replay::Recording, PathBuf)>,
+    busy: Vec<String>,
+}
+
+/// Record one run into `dir`: the presses on the reference source, then the
+/// loopback row when `loopback` names the player.
+fn record_once(
+    ctx: &Arc<Ctx>,
+    s: &ReplayScoring<'_>,
+    run: u32,
+    dir: &Path,
+    track: &Path,
+    encoding: (u32, u32, u32),
+    loopback: Option<&Path>,
+) -> Result<Recorded, String> {
+    let (height, fps, bitrate_kbps) = encoding;
+    for name in replay::PRESSES
+        .iter()
+        .map(|(n, _)| *n)
+        .chain([replay::LOOPBACK, "rings"])
+    {
+        let _ = std::fs::remove_dir_all(dir.join(name));
+    }
+    let rings = dir.join("rings");
+    let last_press = replay::PRESSES.iter().map(|p| p.1).fold(0.0, f64::max);
+    eprint!(
+        "replay-gate: run {run}: recording, {} presses up to {last_press:.0} s ... ",
+        replay::PRESSES.len()
+    );
+    let spec = replay::RecordSpec {
+        clip_path: s.clip_path,
+        clip: s.clip_spec,
+        track: Some(track),
+        height,
+        fps,
+        bitrate_kbps,
+        pid: 0,
+        buffer_dir: &rings,
+        out_dir: dir,
+        presses: replay::PRESSES
+            .iter()
+            .map(|(n, at)| ((*n).to_owned(), *at))
+            .collect(),
+        own_processes: Vec::new(),
+    };
+    let rec = replay::record(ctx, &spec)?;
+    eprintln!(
+        "{:.1} s (other CPU {} %)",
+        rec.seconds,
+        report::fmt_num(rec.other_cpu_pct)
+    );
+    let mut busy: Vec<String> = replay_load_guard(&rec, &format!("run {run}, the reference clips"))
+        .into_iter()
+        .collect();
+
+    // The loopback row: its own replay on the player's sound.
+    let mut looped = None;
+    if let Some(exe) = loopback {
+        let ldir = dir.join(replay::LOOPBACK);
+        std::fs::create_dir_all(&ldir).map_err(|e| format!("{}: {e}", ldir.display()))?;
+        let csv = ldir.join("onsets.csv");
+        eprint!("replay-gate: run {run}: loopback row, tone bursts on the speakers ... ");
+        let player = replay::TonePlayer::start(exe, replay::LOOPBACK_PRESS_S + 4.0, &csv)?;
+        let lspec = replay::RecordSpec {
+            track: None,
+            pid: player.pid,
+            presses: vec![(replay::LOOPBACK.to_owned(), replay::LOOPBACK_PRESS_S)],
+            own_processes: vec![player.handle()],
+            ..spec
+        };
+        let lrec = replay::record(ctx, &lspec);
+        let finished = player.finish(Duration::from_secs(20));
+        let lrec = lrec?;
+        finished?;
+        eprintln!(
+            "{:.1} s (other CPU {} %)",
+            lrec.seconds,
+            report::fmt_num(lrec.other_cpu_pct)
+        );
+        busy.extend(replay_load_guard(
+            &lrec,
+            &format!("run {run}, the loopback row"),
+        ));
+        looped = Some((lrec, csv));
+    }
+    let _ = std::fs::remove_dir_all(&rings);
+    Ok(Recorded {
+        run,
+        rec,
+        looped,
+        busy,
+    })
+}
+
+/// Read every clip of a run back and score it.
+fn read_back(s: &mut ReplayScoring<'_>, r: &Recorded) -> Result<ReplayRun, String> {
+    let t = Instant::now();
+    let mut clips = BTreeMap::new();
+    for cap in &r.rec.captures {
+        eprint!(
+            "replay-gate: run {}: {:<10} read back ... ",
+            r.run, cap.name
+        );
+        let tc = Instant::now();
+        let run = s.score_clip(cap, &r.rec.clock)?;
+        let g = |k: &str| report::fmt_num(run.metrics.get(k).cloned().flatten());
+        eprintln!(
+            "{:.1} s (frames {}, missing {}, VMAF {}, A/V max {} ms)",
+            tc.elapsed().as_secs_f64(),
+            g("frames"),
+            g("frames_missing"),
+            g("vmaf_mean"),
+            g("av_offset_abs_max_ms")
+        );
+        clips.insert(cap.name.clone(), run);
+    }
+    let mut source = source_json(&r.rec);
+    if let Some((lrec, csv)) = &r.looped {
+        for cap in &lrec.captures {
+            eprint!(
+                "replay-gate: run {}: {:<10} read back ... ",
+                r.run, cap.name
+            );
+            let run = s.score_loopback(cap, &lrec.clock, csv)?;
+            eprintln!(
+                "offset max {} ms",
+                report::fmt_num(
+                    run.metrics
+                        .get("loopback_offset_abs_max_ms")
+                        .cloned()
+                        .flatten()
+                )
+            );
+            clips.insert(cap.name.clone(), run);
+        }
+        if let Some(o) = source.as_object_mut() {
+            o.insert("loopback".into(), source_json(lrec));
+        }
+    }
+    Ok(ReplayRun {
+        clips,
+        source,
+        other_cpu_pct: r.rec.other_cpu_pct,
+        busy: r.busy.clone(),
+        record_s: r.rec.seconds,
+        readback_s: t.elapsed().as_secs_f64(),
+    })
+}
+
+/// Each row's gates against its metrics. A VMAF gate without a VMAF score
+/// is a note, as in the stream gate.
+fn check_replay_gates(
+    per: &BTreeMap<String, Vec<profile::Gate>>,
+    results: &BTreeMap<String, Metrics>,
+    vmaf_scored: bool,
+) -> (Vec<report::GateResult>, Vec<String>) {
+    let mut out = Vec::new();
+    let mut notes = Vec::new();
+    for (row, m) in results {
+        let Some(list) = per.get(row) else {
+            notes.push(format!("{row}: no gates"));
+            continue;
+        };
+        for g in list {
+            if g.metric.starts_with("vmaf") && !vmaf_scored {
+                notes.push(format!(
+                    "{row} {}: VMAF not scored; gate not checked.",
+                    g.metric
+                ));
+                continue;
+            }
+            out.push(report::check(row, g, m.get(&g.metric).cloned().flatten()));
+        }
+    }
+    (out, notes)
+}
+
+/// The metrics of the summary table.
+const REPLAY_SUMMARY: &[(&str, &str)] = &[
+    ("duration_s", "length s"),
+    ("start_lead_frames", "lead"),
+    ("frames", "frames"),
+    ("frames_missing", "missing"),
+    ("frames_unreadable", "unread"),
+    ("psnr_y_mean", "PSNR"),
+    ("ssim_y_mean", "SSIM"),
+    ("vmaf_mean", "VMAF"),
+    ("vmaf_p5", "VMAF p5"),
+    ("av_markers_expected", "markers"),
+    ("av_markers_missing", "m miss"),
+    ("av_offset_p50_ms", "A/V p50"),
+    ("av_offset_abs_max_ms", "A/V max"),
+    ("loopback_offset_abs_max_ms", "loop max"),
+    ("clip_kbps", "kbps"),
+    ("mux_ms", "mux ms"),
+];
+
+fn replay_main() -> Result<bool, String> {
+    let args = parse_replay_args()?;
+    let started = Instant::now();
+    let root = repo_root()?;
+    let stream_dir = root.join("benchmarks/baselines/stream");
+    let base_dir = root.join("benchmarks/baselines/replay");
+    let gf = profile::load(&stream_dir.join("profiles.json"))?;
+    let gates_path = base_dir.join("gates.json");
+    let gates = profile::load_gates(&gates_path)?;
+    // No audio device: the clip's game audio comes from the reference
+    // source, and a context with the test backend opens nothing.
+    std::env::set_var("MELLO_AUDIO_BACKEND", "test");
+    let log_level = std::env::var("STREAM_GATE_LOG")
+        .ok()
+        .and_then(|v| v.parse::<i32>().ok())
+        .unwrap_or(2);
+    // SAFETY: global setter.
+    unsafe { mello_sys::mello_set_log_level(log_level) };
+
+    let lane = replay::lane(&args.lane).ok_or(format!("unknown lane '{}'", args.lane))?;
+    if args.loopback && lane.name != "hw" {
+        return Err("--loopback is a row of the hw lane".into());
+    }
+    if lane.soft {
+        std::env::set_var("MELLO_SOFT_ENCODER", "1");
+        std::env::set_var("MELLO_SOFT_DECODER", "1");
+    } else {
+        std::env::remove_var("MELLO_SOFT_ENCODER");
+        std::env::remove_var("MELLO_SOFT_DECODER");
+    }
+    let (height, fps, bitrate_kbps) = lane.quality.encoding();
+    let entry = gf
+        .clips
+        .get(lane.clip)
+        .cloned()
+        .ok_or(format!("profiles.json has no clip '{}'", lane.clip))?;
+    if entry.spec.height != height || entry.spec.fps != fps {
+        return Err(format!(
+            "the clip {} is {}p{}, the clip quality {} encodes {height}p{fps}",
+            lane.clip,
+            entry.spec.height,
+            entry.spec.fps,
+            lane.quality.as_str()
+        ));
+    }
+    let mut rows: Vec<String> = replay::PRESSES
+        .iter()
+        .map(|(n, _)| (*n).to_owned())
+        .collect();
+    if args.loopback {
+        rows.push(replay::LOOPBACK.to_owned());
+    }
+    let lane_gates = gates.lanes.get(lane.name).ok_or(format!(
+        "{} has no lane '{}'",
+        gates_path.display(),
+        lane.name
+    ))?;
+    if let Some(r) = rows.iter().find(|r| !lane_gates.contains_key(*r)) {
+        return Err(format!(
+            "{} has no gates for '{r}' in lane '{}'",
+            gates_path.display(),
+            lane.name
+        ));
+    }
+    let baseline_path = base_dir.join(format!("baseline-{}.json", lane.name));
+    if args.write_baseline {
+        if baseline_path.exists() {
+            return Err(format!(
+                "{} exists. A baseline is never edited. Delete it only to re-take it on the commit it came from.",
+                baseline_path.display()
+            ));
+        }
+        if args.no_vmaf {
+            return Err("--write-baseline sets the VMAF floors: drop --no-vmaf".into());
+        }
+    }
+    let tone_exe = root.join("libmello/build-ci/tests/Release/mello_tone_player.exe");
+    if args.loopback && !tone_exe.exists() {
+        return Err(format!(
+            "{} is missing: cmake --build libmello/build-ci --config Release --target mello_tone_player",
+            tone_exe.display()
+        ));
+    }
+
+    let out_dir = args
+        .out
+        .clone()
+        .unwrap_or_else(|| root.join("target/replay-gate").join(lane.name));
+    std::fs::create_dir_all(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let out_dir =
+        std::path::absolute(&out_dir).map_err(|e| format!("{}: {e}", out_dir.display()))?;
+    let (clip_path, clip_hash) = ensure_clip(&root, &entry)?;
+    let clip_spec = entry.spec.clone();
+
+    // Disk: one clip's luma file and VMAF pair at a time, and 1 GB more.
+    let frames = (f64::from(replay::CLIP_S) + 1.0) * f64::from(fps);
+    let plane = f64::from(clip_spec.width) * f64::from(clip_spec.height);
+    let pair = if args.no_vmaf {
+        0.0
+    } else {
+        2.0 * plane * 1.5 * frames / lane.vmaf_subsample as f64
+    };
+    let need = plane * frames + pair + 1e9;
+    let free = replay::free_bytes(&out_dir);
+    if let Some(free) = free {
+        if (free as f64) < need {
+            return Err(format!(
+                "{:.1} GB free on the volume of {}; one clip needs {:.1} GB of scratch",
+                free as f64 / 1e9,
+                out_dir.display(),
+                need / 1e9
+            ));
+        }
+    }
+
+    // The clip's game audio, as the stream gate builds it.
+    let spec = audio::load(&stream_dir.join("audio.json"))?;
+    let loop_samples = (u64::from(clip_spec.frames) * audio::SAMPLE_RATE as u64
+        / u64::from(clip_spec.fps.max(1))) as usize;
+    let reference = audio::build(
+        &spec,
+        &root.join("libmello/tests/fixtures/voice"),
+        loop_samples,
+    )?;
+    let track = audio::track_path(&out_dir, &spec, loop_samples);
+    audio::write_raw(&track, &reference)?;
+    let bias = audio::detector_bias(&spec, &reference);
+
+    let ctx = Arc::new(Ctx::new()?);
+    let encoders = names(&ctx, true);
+    let decoders = names(&ctx, false);
+    let script = root.join("scripts/stream-gate-score.py");
+    let mut scoring = ReplayScoring {
+        ctx: &ctx,
+        lane,
+        clip_path: &clip_path,
+        clip_spec: &clip_spec,
+        spec: &spec,
+        bias,
+        script: &script,
+        no_vmaf: args.no_vmaf,
+        keep: args.keep,
+        vmaf: None,
+        scratch_peak: 0,
+    };
+    // Every recording first, back to back: the load guard needs a quiet
+    // machine only while the replay records. The read-back runs after.
+    let mut recorded: Vec<Recorded> = Vec::new();
+    for rep in 1..=args.repeat {
+        let dir = if rep == 1 {
+            out_dir.clone()
+        } else {
+            out_dir.join(format!("run{rep}"))
+        };
+        recorded.push(record_once(
+            &ctx,
+            &scoring,
+            rep,
+            &dir,
+            &track,
+            (height, fps, bitrate_kbps),
+            args.loopback.then_some(tone_exe.as_path()),
+        )?);
+    }
+    if args.write_baseline && recorded.iter().any(|r| !r.busy.is_empty()) {
+        let busy: Vec<String> = recorded.iter().flat_map(|r| r.busy.clone()).collect();
+        return Err(format!(
+            "INVALID: other processes used more than {} % of the CPU while the replay recorded: {}. \
+             Run --write-baseline again on a quiet machine. Nothing was scored or written.",
+            stream_gate::load::MAX_OTHER_PCT,
+            busy.join(", ")
+        ));
+    }
+    let mut runs: Vec<ReplayRun> = Vec::new();
+    for r in &recorded {
+        runs.push(read_back(&mut scoring, r)?);
+    }
+    let vmaf = scoring.vmaf.take();
+    let scratch_peak = scoring.scratch_peak;
+    let vmaf_scored = vmaf.as_ref().is_some_and(|v| v.available);
+    if !vmaf_scored && !args.no_vmaf {
+        eprintln!(
+            "replay-gate: WARNING: no VMAF ({}). PSNR and SSIM only.",
+            vmaf.as_ref()
+                .and_then(|v| v.detail.get("reason"))
+                .and_then(Value::as_str)
+                .unwrap_or("unknown")
+        );
+    }
+
+    // The gates read the first run. A baseline run checks the structural
+    // gates only: it sets the floors.
+    let first = &runs[0];
+    let results: BTreeMap<String, Metrics> = first
+        .clips
+        .iter()
+        .map(|(k, c)| (k.clone(), c.metrics.clone()))
+        .collect();
+    let structural: BTreeMap<String, Vec<profile::Gate>> = rows
+        .iter()
+        .map(|r| {
+            let list = if r == replay::LOOPBACK {
+                replay::loopback_gates()
+            } else {
+                replay::structural_gates(fps)
+            };
+            (r.clone(), list)
+        })
+        .collect();
+    let (gate_results, notes) = if args.write_baseline {
+        check_replay_gates(&structural, &results, vmaf_scored)
+    } else {
+        check_replay_gates(lane_gates, &results, vmaf_scored)
+    };
+
+    // Per row and metric, the values of every run.
+    let mut spread: BTreeMap<String, BTreeMap<String, Vec<Option<f64>>>> = BTreeMap::new();
+    for run in &runs {
+        for (row, c) in &run.clips {
+            for (k, v) in &c.metrics {
+                spread
+                    .entry(row.clone())
+                    .or_default()
+                    .entry(k.clone())
+                    .or_default()
+                    .push(*v);
+            }
+        }
+    }
+
+    let commit = git(&root, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".into());
+    let dirty = git(&root, &["status", "--porcelain", "--untracked-files=no"])
+        .map(|s| !s.is_empty())
+        .unwrap_or(true);
+    let clips_json: serde_json::Map<String, Value> = first
+        .clips
+        .iter()
+        .map(|(k, c)| {
+            (
+                k.clone(),
+                json!({
+                    "metrics": c.metrics.iter().map(|(m, v)| (m.clone(), v.map(|x| (x * 1e4).round() / 1e4))).collect::<BTreeMap<_, _>>(),
+                    "info": c.info,
+                }),
+            )
+        })
+        .collect();
+    let runtime_s = (started.elapsed().as_secs_f64() * 10.0).round() / 10.0;
+    let result = json!({
+        "schema": 1,
+        "kind": "replay-gate-result",
+        "lane": lane.name,
+        "git": { "commit": commit, "dirty": dirty },
+        "taken_at_utc": voice_gate::report::utc_now(),
+        "platform": { "os": std::env::consts::OS, "arch": std::env::consts::ARCH },
+        "machine": host_info(),
+        "encoders_available": encoders,
+        "decoders_available": decoders,
+        "encoder": if lane.soft { "OpenH264 (MELLO_SOFT_ENCODER=1)".to_owned() } else { format!("the first of {} that starts (the replay API does not name it)", encoders.join(", ")) },
+        "decoder": if lane.soft { "OpenH264 (MELLO_SOFT_DECODER=1)".to_owned() } else { decoders.first().cloned().unwrap_or_default() },
+        "quality": {
+            "name": lane.quality.as_str(),
+            "height": height, "fps": fps, "bitrate_kbps": bitrate_kbps,
+            "source": "GameClipQuality::encoding (mello-core/src/events.rs)",
+        },
+        "clip": {
+            "file": clip_path.file_name().map(|f| f.to_string_lossy().into_owned()),
+            "width": clip_spec.width, "height": clip_spec.height, "fps": clip_spec.fps,
+            "frames": clip_spec.frames, "seed": clip_spec.seed, "fnv1a": clip_hash,
+            "generator_version": clip::CLIP_VERSION,
+        },
+        "audio": {
+            "audio_fingerprint": spec.fingerprint,
+            "audio_version": spec.version,
+            "detector_bias_samples": bias,
+        },
+        "scorer": {
+            "vmaf": vmaf.as_ref().map(|v| v.detail.clone()),
+            "vmaf_subsample": lane.vmaf_subsample,
+            "psnr_ssim": "stream-gate score.rs: luma, PSNR 10 log10(255^2/MSE) capped at 100, SSIM 8x8 windows on a 4 px grid",
+        },
+        "method": {
+            "path": "reference clip and game audio (MELLO_CAPTURE_REFERENCE) -> capture manager -> replay session: preprocessor, recording encoder, video and audio rings -> mello_replay_capture (30 s, MP4 passthrough and AAC) -> mello_test_mp4_read_video -> stream viewer, one unit at a time, CPU frame callback -> burned-in code; mello_test_mp4_read_audio -> marker onsets",
+            "presses": replay::PRESSES.iter().map(|(n, at)| json!({ "name": n, "at_s": at })).collect::<Vec<_>>(),
+            "start": "start_lead_frames = the frame the source captured 30 s before the press (its clock) minus the clip's first frame",
+            "markers": "marker k (frame 15k): its onset in the clip's sound, less the detector bias, minus the clip time of frame 15k; markers within 50 ms of either end of the sound are not expected",
+            "loopback": "mello_tone_player: 1 kHz, 100 ms every 1000 ms; each onset (steady clock) maps to the clip time of the frame the source captured then",
+        },
+        "source": first.source,
+        "runs": runs.iter().map(|r| json!({
+            "other_cpu_pct": r.other_cpu_pct,
+            "busy": r.busy,
+            "record_s": (r.record_s * 10.0).round() / 10.0,
+            "readback_s": (r.readback_s * 10.0).round() / 10.0,
+        })).collect::<Vec<_>>(),
+        "clips": Value::Object(clips_json),
+        "spread": if args.repeat > 1 { json!(spread) } else { json!({}) },
+        "gates": report::gates_json(&gate_results),
+        "notes": notes,
+        "scratch_peak_gb": (scratch_peak as f64 / 1e7).round() / 100.0,
+        "free_gb_before": free.map(|f| (f as f64 / 1e7).round() / 100.0),
+        "runtime_s": runtime_s,
+    });
+    let results_path = out_dir.join("results.json");
+    std::fs::write(
+        &results_path,
+        serde_json::to_string_pretty(&result).map_err(|e| e.to_string())?,
+    )
+    .map_err(|e| format!("{}: {e}", results_path.display()))?;
+
+    println!();
+    println!(
+        "Replay gate, lane {}: clip quality {} ({height}p{fps}, {bitrate_kbps} kbps), {}.",
+        lane.name,
+        lane.quality.as_str(),
+        if lane.soft {
+            "OpenH264"
+        } else {
+            "hardware encode and decode"
+        }
+    );
+    println!();
+    let mut table = String::from("| clip |");
+    for (_, h) in REPLAY_SUMMARY {
+        table.push_str(&format!(" {h} |"));
+    }
+    table.push_str("\n|---|");
+    for _ in REPLAY_SUMMARY {
+        table.push_str("---:|");
+    }
+    table.push('\n');
+    for (row, m) in &results {
+        table.push_str(&format!("| {row} |"));
+        for (k, _) in REPLAY_SUMMARY {
+            table.push_str(&format!(
+                " {} |",
+                report::fmt_num(m.get(*k).cloned().flatten())
+            ));
+        }
+        table.push('\n');
+    }
+    print!("{table}");
+    println!();
+    print!("{}", report::gate_table(&gate_results));
+    for n in &notes {
+        println!("NOTE: {n}");
+    }
+    println!();
+    println!("Results: {}", results_path.display());
+    println!(
+        "Runtime: {runtime_s:.1} s. Scratch disk: {:.2} GB at most (one clip's luma and VMAF files).",
+        scratch_peak as f64 / 1e9
+    );
+
+    let busy: Vec<String> = runs.iter().flat_map(|r| r.busy.clone()).collect();
+    if !busy.is_empty() {
+        return Err(format!(
+            "INVALID: other processes used more than {} % of the CPU while the replay recorded: {}. \
+             A busy machine moves the encoder and the rings; run the gate again on a quiet machine. \
+             Nothing was compared{}.",
+            stream_gate::load::MAX_OTHER_PCT,
+            busy.join(", "),
+            if args.write_baseline { " and no baseline was written" } else { "" }
+        ));
+    }
+    let failed = gate_results
+        .iter()
+        .filter(|g| g.enforced && !g.pass)
+        .count();
+    if args.write_baseline {
+        // Every run of a baseline passes the structural gates, not only the
+        // first: the floors take the spread of all of them.
+        let later: usize = runs[1..]
+            .iter()
+            .map(|r| {
+                let m: BTreeMap<String, Metrics> = r
+                    .clips
+                    .iter()
+                    .map(|(k, c)| (k.clone(), c.metrics.clone()))
+                    .collect();
+                check_replay_gates(&structural, &m, vmaf_scored)
+                    .0
+                    .iter()
+                    .filter(|g| g.enforced && !g.pass)
+                    .count()
+            })
+            .sum();
+        if failed + later > 0 {
+            return Err(format!(
+                "{} structural gate(s) failed over the runs: a baseline needs runs that pass them. Nothing was written.",
+                failed + later
+            ));
+        }
+        if !vmaf_scored {
+            return Err("no VMAF: the floors need it. Nothing was written.".into());
+        }
+        write_replay_baseline(
+            &result,
+            &baseline_path,
+            &gates_path,
+            lane.name,
+            &structural,
+            &spread,
+        )?;
+        println!("Baseline written: {}", baseline_path.display());
+        println!(
+            "Floors written: {} (lane {})",
+            gates_path.display(),
+            lane.name
+        );
+        return Ok(true);
+    }
+    if failed == 0 {
+        println!("Replay gate: PASS");
+        Ok(true)
+    } else {
+        println!("Replay gate: FAIL ({failed} enforced gate(s))");
+        Ok(false)
+    }
+}
+
+/// Write the baseline, then the lane's gates: the structural gates and a
+/// floor per quality metric from the runs (`replay::FLOOR_RULES`). Rows that
+/// did not run keep their gates.
+fn write_replay_baseline(
+    result: &Value,
+    baseline_path: &Path,
+    gates_path: &Path,
+    lane: &str,
+    structural: &BTreeMap<String, Vec<profile::Gate>>,
+    spread: &BTreeMap<String, BTreeMap<String, Vec<Option<f64>>>>,
+) -> Result<(), String> {
+    let mut b = result.clone();
+    if let Some(m) = b.as_object_mut() {
+        m.insert("kind".into(), json!("replay-gate-baseline"));
+    }
+    std::fs::write(
+        baseline_path,
+        serde_json::to_string_pretty(&b).map_err(|e| e.to_string())? + "\n",
+    )
+    .map_err(|e| format!("{}: {e}", baseline_path.display()))?;
+
+    let mut root: Value = serde_json::from_slice(
+        &std::fs::read(gates_path).map_err(|e| format!("{}: {e}", gates_path.display()))?,
+    )
+    .map_err(|e| format!("{}: {e}", gates_path.display()))?;
+    let gate_json = |g: &profile::Gate| {
+        let mut o = serde_json::Map::new();
+        o.insert("metric".into(), json!(g.metric));
+        o.insert("enforced".into(), json!(g.enforced));
+        o.insert("note".into(), json!(g.note));
+        if let Some(x) = g.min {
+            o.insert("min".into(), json!(x));
+        }
+        if let Some(x) = g.max {
+            o.insert("max".into(), json!(x));
+        }
+        Value::Object(o)
+    };
+    let mut used = serde_json::Map::new();
+    let lanes = root
+        .get_mut("lanes")
+        .and_then(Value::as_object_mut)
+        .ok_or("gates.json: missing 'lanes'")?;
+    let per = lanes
+        .entry(lane.to_owned())
+        .or_insert_with(|| json!({}))
+        .as_object_mut()
+        .ok_or("gates.json: a lane is an object")?;
+    for (row, list) in structural {
+        let mut out: Vec<Value> = list.iter().map(gate_json).collect();
+        let mut row_used = serde_json::Map::new();
+        for (metric, fixed, share) in replay::FLOOR_RULES {
+            let values: Option<Vec<f64>> = spread
+                .get(row)
+                .and_then(|m| m.get(*metric))
+                .and_then(|v| v.iter().copied().collect::<Option<Vec<f64>>>());
+            // A metric missing in any run gets no floor.
+            let Some(values) = values else { continue };
+            if let Some(g) = replay::floor_gate(metric, *fixed, *share, &values) {
+                out.push(gate_json(&g));
+                row_used.insert((*metric).to_owned(), json!(values));
+            }
+        }
+        per.insert(row.clone(), Value::Array(out));
+        if !row_used.is_empty() {
+            used.insert(row.clone(), Value::Object(row_used));
+        }
+    }
+    let spread_all = root
+        .as_object_mut()
+        .ok_or("gates.json: an object")?
+        .entry("_spread")
+        .or_insert_with(|| json!({}));
+    if let Some(o) = spread_all.as_object_mut() {
+        o.insert(lane.to_owned(), Value::Object(used));
+    }
+    std::fs::write(
+        gates_path,
+        serde_json::to_string_pretty(&root).map_err(|e| e.to_string())? + "\n",
+    )
+    .map_err(|e| format!("{}: {e}", gates_path.display()))
+}
+
 fn main() -> ExitCode {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-    match real_main() {
+    let replay_lane = std::env::args().nth(1).as_deref() == Some("replay");
+    match if replay_lane {
+        replay_main()
+    } else {
+        real_main()
+    } {
         Ok(true) => ExitCode::SUCCESS,
         Ok(false) => ExitCode::from(1),
         Err(e) => {

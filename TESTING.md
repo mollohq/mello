@@ -465,6 +465,42 @@ Output (`results.json`, and per profile `presents.csv`, `host.csv`,
 `--write-fixture FILE` encodes the first 2 s of the 720p clip with the
 OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
 
+### Replay gate (game clips)
+
+The replay lane of the stream gate (plans/GAME-CLIPS.md 10.3,
+`tools/stream-gate/src/replay.rs`). The same clip and game audio play into
+the replay buffer in place of a game window
+(`mello_test_replay_start_reference`). Presses at 35 s, 47 s, 60 s and 62 s
+after the source's first frame capture 30 s clips (`mello_replay_capture`).
+Each MP4 is read back (`mello_test_mp4_read_video`,
+`mello_test_mp4_read_audio`): the units go through a stream viewer one at a
+time, so every frame is decoded and its code read. No SFU and no shim.
+
+```bash
+./scripts/replay-gate.sh                                # CPU lane: 720p60 clip quality, OpenH264
+./scripts/replay-gate.sh --lane hw                      # 1080p60 clip quality, the machine's encoder
+./scripts/replay-gate.sh --lane hw --loopback           # adds the real loopback row: tones ON THE SPEAKERS
+./scripts/replay-gate.sh --lane cpu --repeat 3 --write-baseline   # set the lane's floors
+```
+
+| Gate (per clip) | Rule |
+|---|---|
+| `duration_s` | 30 to 31 s |
+| `start_lead_frames` | the frame captured 30 s before the press minus the first frame: 0 to 60 (one GOP) |
+| `frames_missing`, `frames_out_of_order`, `frames_unreadable`, `frames_undecoded` | 0 |
+| `av_markers_missing`, `av_offset_abs_max_ms` | every game audio marker found; onset to the clip time of its frame (marker k: frame 15k) within +-20 ms |
+| `psnr_y_mean`, `ssim_y_mean`, `vmaf_mean` | floors from `--write-baseline` (the first run less the largest of a fixed margin and 1.1 x the spread, as `make_gates.py`) |
+| `loopback_offset_abs_max_ms` (hw, `--loopback`) | `mello_tone_player` bursts through process loopback, onset to the clip time of the frame captured then within +-20 ms |
+
+The gates are in `benchmarks/baselines/replay/gates.json`; the structural
+ones are absolute, a test keeps them equal to the code. The clip quality's
+height, rate and bitrate are `GameClipQuality::encoding`. The load guard is
+the stream gate's: over 10 % of other CPU while the replay records, the run
+is INVALID (exit code 2). Each clip's luma frames and VMAF files are deleted
+before the next clip; the gate refuses to start without the scratch space.
+Output (`results.json`; per clip the MP4, `frames.csv`, `markers.csv`) lands
+in `target/replay-gate/<lane>/`.
+
 ### Stream start, watch and reconnect (streaming-quality stage 6)
 
 The gate measures the media path with the harness's own host and viewer.

@@ -34,6 +34,7 @@
 #   ./scripts/stream-gate.sh --no-vmaf             # PSNR and SSIM only
 #   ./scripts/stream-gate.sh --repeat 3            # spread of every metric
 #   ./scripts/stream-gate.sh --report-only         # print every gate, enforce none
+#   ./scripts/stream-gate.sh replay --lane cpu     # the replay lane (scripts/replay-gate.sh)
 # Output (results.json, per-profile presents.csv, host.csv, wire.csv, the
 # SFU log) lands in target/stream-gate/<lane>/.
 set -eu
@@ -125,8 +126,9 @@ fi
 # Stage 7: the game audio's MOS (PESQ wideband on the clip's speech) uses the
 # voice gate's pinned scorer in target/voice-gate/pyenv (scripts/voice-gate.sh
 # makes it). Without it the gate reports audio_mos as missing, and the mobile
-# MOS gate fails. Set VOICE_GATE_PYTHON to use another interpreter.
-if [ -z "${VOICE_GATE_PYTHON:-}" ]; then
+# MOS gate fails. Set VOICE_GATE_PYTHON to use another interpreter. The
+# replay lane (scripts/replay-gate.sh) scores no MOS.
+if [ -z "${VOICE_GATE_PYTHON:-}" ] && [ "${1:-}" != "replay" ]; then
     VENV="$ROOT/target/voice-gate/pyenv"
     for cand in "$VENV/Scripts/python.exe" "$VENV/bin/python"; do
         if [ -x "$cand" ]; then
