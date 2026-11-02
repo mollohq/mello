@@ -39,6 +39,9 @@ public:
     /// OPUS_SET_INBAND_FEC: 0 off, 1 on (LBRR when the expected loss is
     /// above 0; the encoder may move to a SILK or hybrid mode for it).
     void set_inband_fec(int mode);
+    /// OPUS_GET_LOOKAHEAD: the samples by which the decoded audio lags the
+    /// input. 0 before initialize.
+    int lookahead() const;
 
 private:
     ::OpusEncoder* encoder_ = nullptr;

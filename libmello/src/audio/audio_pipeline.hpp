@@ -250,6 +250,9 @@ public:
     void stop_clip_buffer();
     bool clip_buffer_active() const;
     bool clip_capture(float seconds, const std::string& output_path);
+    /// The voice of [start_us, end_us) for a game clip: the crew mix and the
+    /// mic at their own times, and m3llo's mixer volume (game clips 5.1).
+    bool clip_voice_window(uint64_t start_us, uint64_t end_us, ClipBuffer::VoiceWindow& out);
     bool play_clip(const std::string& wav_path);
     bool play_mp4(const std::string& mp4_path);
     void stop_clip_playback();
@@ -441,7 +444,14 @@ private:
     bool initialized_ = false;
 
     std::unique_ptr<ClipBuffer> clip_buffer_;
-    std::unique_ptr<util::RingBuffer<int16_t>> local_clip_ring_;
+    // m3llo's volume in the Windows volume mixer (0 when muted), written by
+    // the WASAPI render thread about every 100 ms. The clip voice ring keeps
+    // it with the crew mix (game clips Q20). It lives here, not in the
+    // playback, so a device switch keeps it. 1.0 on other platforms.
+    std::atomic<float> session_volume_{1.0f};
+    // capture_->input_latency_ms() at the last device (re)open, for the time
+    // of a mic frame on the capture thread (refresh_stream_delay_hint).
+    std::atomic<int> input_device_latency_ms_{0};
 
     // Clip playback: retained PCM with atomic position for lock-free read from audio thread
     std::vector<int16_t> clip_playback_pcm_;

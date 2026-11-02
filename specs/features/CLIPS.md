@@ -76,14 +76,16 @@ This is the same approach ShadowPlay, Medal, and OBS Replay Buffer use. Proven p
 
 ### 4.1 Voice Buffer (v1)
 
-Mixed audio output written to a temp file as Opus packets. 60 seconds of voice audio is well under 1MB on disk. Essentially free.
+Voice written to temp files as Opus packets, in two streams. 60 seconds of both is 1.5 MB on disk. Essentially free.
 
-- `ClipBuffer` (`libmello/src/audio/clip_buffer.cpp`). The render thread copies the mix (all voices, the local mic, stream game audio) into a 2 s RAM queue. It never waits on the disk.
-- A writer thread encodes the queue every 20 ms as 20 ms Opus frames (48 kHz mono, 64 kbps) into a ring file of fixed 256-byte slots: a 2-byte length, then the packet. 60 s is 3000 slots, 768 KB.
-- The ring file is in the `mello_clips` folder of the OS temp folder. It is opened delete on close (Windows) or unlinked after open (macOS), so a crash leaves no file.
+- `ClipBuffer` (`libmello/src/audio/clip_buffer.cpp`) keeps two streams, each with a 2 s RAM queue that never waits on the disk:
+  - the crew mix (all voices, stream game audio), from the render thread, with the time it plays (render time plus output latency) and m3llo's volume in the Windows volume mixer;
+  - the local mic after the echo canceller, from the capture thread, with its capture time.
+- A writer thread encodes each queue every 20 ms as 20 ms Opus frames (48 kHz mono, 64 kbps) into a ring file of fixed 256-byte slots: a 2-byte length, the 8-byte time of the frame, the volume as a 16-bit fraction, then the packet. 60 s is 3000 slots, 768 KB per stream.
+- The ring files (`voice_ring_*`, `voice_mic_*`) are in the `mello_clips` folder of the OS temp folder. They are opened delete on close (Windows) or unlinked after open (macOS), so a crash leaves no file.
 - A write error turns the buffer off.
 
-On clip capture: the buffer encodes what is still in the queue, reads the last 30 seconds of slots, decodes them to a WAV, and the clip flow muxes that into an MP4 container.
+On clip capture: the buffer encodes what is still in the queues, reads the last 30 seconds of slots of both streams, decodes them, and mixes them at their own times (the Opus lookahead taken out) into a WAV. The clip flow muxes that into an MP4 container. A game clip (F8) reads the same window with `read_window`, and the mux applies the mixer volume to the crew mix (plans/GAME-CLIPS.md 5.1, Q20, Q24).
 
 ### 4.2 Stream Buffer (Future)
 

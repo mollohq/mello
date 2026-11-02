@@ -39,6 +39,15 @@ static bool wants_vpio_duplex(bool aec_enabled) {
 
 // Default speech gate pre-roll, chosen with the voice gate (TESTING.md,
 // talk-spurt gate).
+// The steady clock of mello_clock_now_us() and of the video capture times,
+// in microseconds: the times of the clip voice ring (game clips 5.1). Not the
+// test clock: a clip's audio and video must share one clock.
+static uint64_t steady_now_us() {
+    return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                     std::chrono::steady_clock::now().time_since_epoch())
+                                     .count());
+}
+
 static constexpr int DEFAULT_SPEECH_PRE_ROLL_FRAMES = 5;
 static constexpr int CANDIDATE_HANGOVER_FRAMES = 10;   // Keep Silero warm across brief dips.
 static constexpr int SPEECH_ENCODE_HANGOVER_FRAMES = 8;
@@ -681,6 +690,10 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
         backend_cancels_echo_.load(std::memory_order_relaxed);
 
     capture_accum_.insert(capture_accum_.end(), samples, samples + count);
+    // When the newest sample was captured: now, less the input latency.
+    const uint64_t arrival_us =
+        steady_now_us() -
+        static_cast<uint64_t>(input_device_latency_ms_.load(std::memory_order_relaxed)) * 1000;
 
     while (capture_accum_.size() >= FRAME_SIZE) {
         // Media time of this frame, counted whether it is encoded or not.
@@ -743,8 +756,12 @@ void AudioPipeline::on_captured_audio(const int16_t* samples, size_t count) {
                 gate_rms = static_cast<float>(std::sqrt(sum / FRAME_SIZE));
             }
 
-            if (local_clip_ring_ && clip_buffer_ && clip_buffer_->is_active()) {
-                local_clip_ring_->write(capture_accum_.data(), FRAME_SIZE);
+            if (clip_buffer_ && clip_buffer_->is_active()) {
+                // The capture time of this frame: the newest sample of the
+                // accumulator arrived about now, after the input latency.
+                const uint64_t frame_us =
+                    arrival_us - static_cast<uint64_t>(capture_accum_.size()) * 1'000'000 / SAMPLE_RATE;
+                clip_buffer_->write_mic(capture_accum_.data(), FRAME_SIZE, frame_us);
             }
 
             if (push_to_talk_mode_.load(std::memory_order_relaxed)) {
@@ -1064,20 +1081,14 @@ void AudioPipeline::render_frame() {
     }
     last_late_frames_ = late;
 
-    // Clip buffer: remote playback plus the local mic ("all participants").
+    // Clip buffer: the remote playback as heard, at the time it plays. The
+    // local mic goes in on the capture thread at its own time, so the ring
+    // does not move it to the render time (game clips Q24).
     if (clip_buffer_ && clip_buffer_->is_active()) {
-        if (local_clip_ring_ && local_clip_ring_->available() >= kFrames) {
-            std::array<int16_t, kFrames> local{};
-            local_clip_ring_->read(local.data(), kFrames);
-            std::array<int16_t, kFrames> clip_mix{};
-            for (size_t i = 0; i < kFrames; ++i) {
-                const int32_t mixed = static_cast<int32_t>(mono_[i]) + static_cast<int32_t>(local[i]);
-                clip_mix[i] = static_cast<int16_t>(std::clamp(mixed, -32768, 32767));
-            }
-            clip_buffer_->write(clip_mix.data(), kFrames);
-        } else {
-            clip_buffer_->write(mono_.data(), kFrames);
-        }
+        const uint64_t heard_us =
+            steady_now_us() + static_cast<uint64_t>(output_latency_ms() * 1000.0f);
+        clip_buffer_->write_crew(mono_.data(), kFrames, heard_us,
+                                 session_volume_.load(std::memory_order_relaxed));
     }
 
     // Clip playback into the speaker output (retained PCM, lock-free read).
@@ -1187,6 +1198,7 @@ void AudioPipeline::refresh_stream_delay_hint() {
     const int out_ms = playback_->output_latency_ms();
     const int in_ms = capture_->input_latency_ms();
     output_device_latency_ms_.store(out_ms < 0 ? 0 : out_ms, std::memory_order_relaxed);
+    input_device_latency_ms_.store(in_ms < 0 ? 0 : in_ms, std::memory_order_relaxed);
     const float ring_ms =
         static_cast<float>(ring_frames_left_.load(std::memory_order_relaxed)) / 48.0f;
     int delay = out_ms + in_ms + static_cast<int>(ring_ms + 0.5f);
@@ -1318,10 +1330,6 @@ bool AudioPipeline::start_clip_buffer() {
     if (!clip_buffer_) {
         clip_buffer_ = std::make_unique<ClipBuffer>(SAMPLE_RATE, 60);
     }
-    if (!local_clip_ring_) {
-        local_clip_ring_ = std::make_unique<util::RingBuffer<int16_t>>(SAMPLE_RATE);
-    }
-    local_clip_ring_->clear();
     return clip_buffer_->start();
 }
 
@@ -1336,6 +1344,12 @@ bool AudioPipeline::clip_buffer_active() const {
 bool AudioPipeline::clip_capture(float seconds, const std::string& output_path) {
     if (!clip_buffer_) return false;
     return clip_buffer_->capture(seconds, output_path);
+}
+
+bool AudioPipeline::clip_voice_window(uint64_t start_us, uint64_t end_us,
+                                      ClipBuffer::VoiceWindow& out) {
+    if (!clip_buffer_) return false;
+    return clip_buffer_->read_window(start_us, end_us, out);
 }
 
 bool AudioPipeline::play_clip(const std::string& wav_path) {
@@ -1438,11 +1452,12 @@ void AudioPipeline::clip_seek(uint64_t position_samples) {
 
 #ifdef _WIN32
 void AudioPipeline::apply_session(AudioPlayback* pb) {
-    if (!session_win_ || !pb) return;
+    if (!pb) return;
     // The test backend (MELLO_AUDIO_BACKEND=test) is not a WasapiPlayback.
     auto* wasapi = dynamic_cast<WasapiPlayback*>(pb);
     if (!wasapi) return;
-    wasapi->set_session(session_win_.get());
+    if (session_win_) wasapi->set_session(session_win_.get());
+    wasapi->set_session_volume_target(&session_volume_);
 }
 #endif
 
