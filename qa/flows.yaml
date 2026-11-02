@@ -549,6 +549,15 @@ flows:
     protocol: []
     issues: []
 
+  - id: FEED-12
+    title: "Game clip: F8 in voice while a game runs, the card shows with its poster, the video goes up, the crew plays, pauses and seeks"
+    priority: P1
+    users: 2
+    harness: [the_game_clip_key_clips_only_while_the_replay_runs, a_saved_game_clip_is_shared_with_the_active_crew, a_game_clip_in_the_feed_is_a_footage_card]
+    journeys: [qa/journeys/feed-game-clip.ts]
+    protocol: []
+    issues: []
+
   # ── Settings ──────────────────────────────────────────────────
   - id: SET-01
     title: Change the profile avatar

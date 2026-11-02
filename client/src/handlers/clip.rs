@@ -2081,8 +2081,11 @@ struct GameClipFields {
     can_play: bool,
 }
 
+/// `viewer_id` is the user who sees the card. Only the clipper plays the
+/// local file: two accounts on one PC must not share it.
 fn game_clip_fields(
     data: &serde_json::Value,
+    viewer_id: &str,
     exists: impl Fn(&str) -> bool,
 ) -> Option<GameClipFields> {
     if data.get("clip_type").and_then(|v| v.as_str()) != Some("game") {
@@ -2095,7 +2098,8 @@ fn game_clip_fields(
             .map(String::from)
     };
     let media_url = field("media_url");
-    let local = field("local_path").filter(|p| exists(p));
+    let clipper = field("actor_id").is_some_and(|id| id == viewer_id);
+    let local = field("local_path").filter(|p| clipper && exists(p));
     let local_poster = local
         .as_deref()
         .map(|p| {
@@ -2238,7 +2242,9 @@ fn build_feed_card(
         .unwrap_or("")
         .to_string();
     let game_clip = if feed_type == "clip" {
-        game_clip_fields(&data, |p| std::path::Path::new(p).exists())
+        game_clip_fields(&data, ctx.app.get_user_id().as_str(), |p| {
+            std::path::Path::new(p).exists()
+        })
     } else {
         None
     };
@@ -3040,6 +3046,7 @@ mod tests {
     fn a_game_clip_plays_the_local_file_first_and_waits_for_the_upload() {
         let clip = serde_json::json!({
             "clip_type": "game",
+            "actor_id": "bob",
             "local_path": "C:/clips/game_clip_1.mp4",
             "poster_url": "http://minio/crews/c/game_clip_1.jpg",
         });
@@ -3048,7 +3055,7 @@ mod tests {
 
         // The clipper: the local clip and poster, while the video uploads.
         assert_eq!(
-            game_clip_fields(&clip, on_this_pc),
+            game_clip_fields(&clip, "bob", on_this_pc),
             Some(GameClipFields {
                 play_path: "C:/clips/game_clip_1.mp4".into(),
                 poster_url: "http://minio/crews/c/game_clip_1.jpg".into(),
@@ -3058,20 +3065,22 @@ mod tests {
             })
         );
         // The crew: the poster, "uploading", and nothing to play yet.
-        let crew = game_clip_fields(&clip, nowhere).expect("a game clip");
+        let crew = game_clip_fields(&clip, "alice", nowhere).expect("a game clip");
         assert!(crew.uploading && !crew.can_play);
         assert_eq!(crew.local_poster, "");
+        // A crewmate on the clipper's PC (two accounts): not the clipper's file.
+        assert_eq!(game_clip_fields(&clip, "alice", on_this_pc), Some(crew));
 
         // The video is up: the crew plays the MP4.
         let mut up = clip.clone();
         up["media_url"] = "http://minio/crews/c/game_clip_1.mp4".into();
-        let crew = game_clip_fields(&up, nowhere).expect("a game clip");
+        let crew = game_clip_fields(&up, "alice", on_this_pc).expect("a game clip");
         assert_eq!(crew.play_path, "http://minio/crews/c/game_clip_1.mp4");
         assert!(!crew.uploading && crew.can_play);
 
         // A voice clip is not a game clip.
         let voice = serde_json::json!({ "clip_type": "voice", "media_url": "x" });
-        assert_eq!(game_clip_fields(&voice, on_this_pc), None);
+        assert_eq!(game_clip_fields(&voice, "bob", on_this_pc), None);
     }
 
     #[test]

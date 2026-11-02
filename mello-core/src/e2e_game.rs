@@ -78,6 +78,80 @@ pub fn inject(action: Action, game_id: &str, ago_min: i64) -> Result<(), String>
     Ok(())
 }
 
+/// The pids `inject` gives fake games: just under 4e9, where no real
+/// process is.
+pub fn is_fake_pid(pid: u32) -> bool {
+    (3_999_999_000..=4_000_000_000).contains(&pid)
+}
+
+const REFERENCE_W: u32 = 320;
+const REFERENCE_H: u32 = 180;
+const REFERENCE_FRAMES: u32 = 120;
+
+/// A 2 s loop of 320x180 at 60 fps in I420: a white bar that moves one step
+/// a frame on grey. Written once to the temp folder.
+fn reference_clip() -> Option<std::path::PathBuf> {
+    let path = std::env::temp_dir().join("mello_e2e_reference_320x180.yuv");
+    let frame_bytes = (REFERENCE_W * REFERENCE_H * 3 / 2) as u64;
+    if std::fs::metadata(&path).map(|m| m.len()).ok() == Some(frame_bytes * REFERENCE_FRAMES as u64)
+    {
+        return Some(path);
+    }
+    let (w, h) = (REFERENCE_W as usize, REFERENCE_H as usize);
+    let mut data = Vec::with_capacity((frame_bytes * REFERENCE_FRAMES as u64) as usize);
+    for n in 0..REFERENCE_FRAMES as usize {
+        let bar = (n * w / REFERENCE_FRAMES as usize) % w;
+        for _y in 0..h {
+            for x in 0..w {
+                data.push(if x.abs_diff(bar) < 8 { 235 } else { 96 });
+            }
+        }
+        data.extend(std::iter::repeat_n(128u8, w * h / 2)); // U and V: grey
+    }
+    if let Err(e) = std::fs::write(&path, &data) {
+        log::warn!("[e2e] cannot write the reference clip: {e}");
+        return None;
+    }
+    Some(path)
+}
+
+/// The replay of a fake game: the reference clip in place of the game's
+/// window, which a fake game does not have (plans/GAME-CLIPS.md 10.5).
+pub(crate) fn start_reference_replay(
+    ctx: *mut mello_sys::MelloContext,
+    config: &mello_sys::MelloReplayConfig,
+) -> mello_sys::MelloResult {
+    let Some(path) = reference_clip() else {
+        return mello_sys::MelloResult_MELLO_ERROR_FAILED;
+    };
+    let Ok(c_path) = std::ffi::CString::new(path.to_string_lossy().into_owned()) else {
+        return mello_sys::MelloResult_MELLO_ERROR_FAILED;
+    };
+    let set = unsafe {
+        mello_sys::mello_test_set_reference_clip(
+            ctx,
+            c_path.as_ptr(),
+            REFERENCE_W,
+            REFERENCE_H,
+            60,
+            mello_sys::MelloReferencePixelFormat_MELLO_REFERENCE_I420,
+        )
+    };
+    if set != mello_sys::MelloResult_MELLO_OK {
+        return set;
+    }
+    let reference = mello_sys::MelloReplayConfig {
+        hwnd: std::ptr::null_mut(),
+        pid: 0,
+        height: config.height,
+        fps: config.fps,
+        bitrate_kbps: config.bitrate_kbps,
+        buffer_dir: config.buffer_dir,
+    };
+    log::info!("[e2e] the fake game's replay records the reference clip");
+    unsafe { mello_sys::mello_test_replay_start_reference(ctx, &reference) }
+}
+
 /// The queued events, oldest first. Called by the client loop.
 pub(crate) fn take() -> Vec<GameEvent> {
     QUEUE

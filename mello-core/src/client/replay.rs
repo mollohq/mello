@@ -412,6 +412,15 @@ impl Worker {
             bitrate_kbps,
             buffer_dir: std::ptr::null(),
         };
+        #[cfg(feature = "e2e-game")]
+        let result = if crate::e2e_game::is_fake_pid(target.pid) {
+            // A fake game has no window: the replay records a reference clip
+            // in its place (plans/GAME-CLIPS.md 10.5).
+            crate::e2e_game::start_reference_replay(self.ctx, &config)
+        } else {
+            unsafe { mello_sys::mello_replay_start(self.ctx, &config) }
+        };
+        #[cfg(not(feature = "e2e-game"))]
         let result = unsafe { mello_sys::mello_replay_start(self.ctx, &config) };
         if result == mello_sys::MelloResult_MELLO_OK {
             log::info!(
