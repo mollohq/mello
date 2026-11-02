@@ -61,6 +61,8 @@ pub(crate) fn run_gate(
     update_event_rx: Receiver<UpdateEvent>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     let dialog = ForceUpdateWindow::new()?;
+    #[cfg(target_os = "windows")]
+    crate::platform::set_exe_icon(&dialog);
     let (current_version, target_version, total_bytes) = {
         let updater_ref = updater.borrow();
         let updater = updater_ref.as_ref().ok_or("Updater unavailable")?;

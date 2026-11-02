@@ -403,6 +403,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
 
     let app = MainWindow::new()?;
     about::show_build(&app);
+    #[cfg(target_os = "windows")]
+    platform::set_exe_icon(&app);
 
     // Dev-only: start the embedded Slint MCP server so AI tooling can inspect/drive the
     // running UI. No-op unless SLINT_MCP_PORT is set. Called explicitly here (after the

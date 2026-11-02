@@ -180,6 +180,60 @@ pub fn main_window_hwnd(app: &crate::MainWindow) -> Option<windows::Win32::Found
         .flatten()
 }
 
+/// Put the exe's icon on a window's title bar, taskbar button and Alt+Tab
+/// entry. Winit registers its window class without an icon, so Windows draws
+/// its default icon. Runs when winit creates the window, at its scale.
+#[cfg(target_os = "windows")]
+pub fn set_exe_icon<T: slint::ComponentHandle + 'static>(component: &T) {
+    use i_slint_backend_winit::winit::dpi::PhysicalSize;
+    use i_slint_backend_winit::winit::platform::windows::{IconExtWindows, WindowExtWindows};
+    use i_slint_backend_winit::winit::window::Icon;
+    use i_slint_backend_winit::WinitWindowAccessor;
+
+    // build.rs embeds assets/icons/mello.ico with winresource's default
+    // application icon ID.
+    const EXE_ICON_ID: u16 = 1;
+
+    let weak = component.as_weak();
+    let spawned = slint::spawn_local(async move {
+        let Some(component) = weak.upgrade() else {
+            return;
+        };
+        let window = match component.window().winit_window().await {
+            Ok(w) => w,
+            Err(e) => {
+                log::warn!("[window] no native window for the icon: {e}");
+                return;
+            }
+        };
+        // The small icon (title bar) is 16 px and the large icon (taskbar,
+        // Alt+Tab) 32 px at 100 %. Windows picks the nearest frame of the .ico.
+        let scale = window.scale_factor();
+        let size = |logical: f64| {
+            let px = (logical * scale).round() as u32;
+            Some(PhysicalSize::new(px, px))
+        };
+        match (
+            Icon::from_resource(EXE_ICON_ID, size(16.0)),
+            Icon::from_resource(EXE_ICON_ID, size(32.0)),
+        ) {
+            (Ok(small), Ok(big)) => {
+                window.set_window_icon(Some(small));
+                window.set_taskbar_icon(Some(big));
+                log::info!("[window] exe icon set, scale {scale}");
+            }
+            (small, big) => log::warn!(
+                "[window] exe icon not loaded: small {:?}, big {:?}",
+                small.err(),
+                big.err()
+            ),
+        }
+    });
+    if let Err(e) = spawned {
+        log::warn!("[window] could not schedule the window icon: {e}");
+    }
+}
+
 /// Bring the main window to the foreground on Windows.
 /// On other platforms, this is a no-op (Slint's show() is sufficient).
 pub fn bring_main_window_to_front(app: &crate::MainWindow) {

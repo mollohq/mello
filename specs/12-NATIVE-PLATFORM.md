@@ -88,6 +88,21 @@ sips -z 1024 1024 app_icon_master.png --out Mello.iconset/icon_512x512@2x.png
 iconutil -c icns Mello.iconset
 ```
 
+### 2.5 Window icon on Windows
+
+`build.rs` embeds `assets/icons/mello.ico` in the exe as icon resource 1. Explorer reads it from there. A window does not: winit registers its window class without an icon, so Windows draws its default icon on the title bar.
+
+`platform::set_exe_icon` loads resource 1 when winit creates the window, at the window's scale:
+
+| Icon | Size at 100 % | Shows on |
+|---|---|---|
+| Small (`set_window_icon`) | 16 px | Title bar |
+| Large (`set_taskbar_icon`) | 32 px | Taskbar button, Alt+Tab |
+
+The main window and the startup update window call it. The stream pop-out copies the main window's icons.
+
+The window's `title` is `APP_NAME` ("m3llo"). Windows code finds the main window by its handle (`platform::main_window_hwnd`), not by `FindWindowW` on the title. A title lookup also matches a foreign window with the same title, such as an Explorer folder.
+
 ---
 
 ## 3. Window Chrome (Slint style)
