@@ -128,6 +128,26 @@ struct MelloStreamHost {
 /// decreases; a non-zero value means this session leaked a capture pipeline.
 static std::atomic<uint32_t> g_abandoned_pipelines{0};
 
+#ifdef _WIN32
+/// The game a stream shows, as ReplaySession::game_key has it: the pid of a
+/// process or of a window's process, the reference key, or 0 for a monitor.
+static uint32_t stream_game_key(const mello::video::CaptureSourceDesc& desc) {
+    switch (desc.mode) {
+        case mello::video::CaptureMode::Process:
+            return desc.pid;
+        case mello::video::CaptureMode::Window: {
+            DWORD pid = 0;
+            if (desc.hwnd) GetWindowThreadProcessId(static_cast<HWND>(desc.hwnd), &pid);
+            return static_cast<uint32_t>(pid);
+        }
+        case mello::video::CaptureMode::Reference:
+            return mello::replay::ReplaySession::kReferenceKey;
+        default:
+            return 0;
+    }
+}
+#endif
+
 /// Detach the capture audio callback, then destroy the pipeline.
 ///
 /// Order is load-bearing: the callback holds a raw pointer to the pipeline and
@@ -700,6 +720,9 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
             c->set_error(error.empty() ? "the replay did not start" : error);
             return MELLO_ERROR_FAILED;
         }
+        // The user already streams this game: join that capture now.
+        const auto stream = c->stream_capture();
+        if (auto manager = stream.manager.lock()) session->follow_stream(manager, stream.key, stream.fps);
         c->exchange_replay(std::move(session));
         return MELLO_OK;
     } catch (...) {
@@ -1626,6 +1649,15 @@ MelloStreamHost* mello_stream_start_host(
             return nullptr;
         }
         stream_timer_resolution_acquire();
+#ifdef _WIN32
+        // A game clip replay of the same game moves onto this stream's
+        // capture: one capture per game (plans/GAME-CLIPS.md 3.2). The stream
+        // started exactly as it would without it (F2).
+        const auto manager = host->video->shared_capture_manager();
+        const uint32_t key = stream_game_key(desc);
+        c->set_stream_capture({manager, key, pc.fps});
+        if (auto replay = c->replay()) replay->follow_stream(manager, key, pc.fps);
+#endif
         return host;
     } catch (...) { return nullptr; }
 }
@@ -1635,6 +1667,16 @@ void mello_stream_stop_host(MelloStreamHost* host) {
     try {
         MELLO_LOG_INFO("stream", "stop_host: audio teardown");
         stream_audio_teardown(host);
+#ifdef _WIN32
+        // A replay that follows this stream goes back to its own capture
+        // first, so this stream's capture stops with the stream (Q19).
+        if (const auto mine = host->video->shared_capture_manager()) {
+            if (host->ctx->stream_capture().manager.lock() == mine) host->ctx->set_stream_capture({});
+            if (auto replay = host->ctx->replay()) {
+                if (replay->follows(mine.get())) replay->leave_stream();
+            }
+        }
+#endif
         MELLO_LOG_INFO("stream", "stop_host: video pipeline stop");
         host->video->stop_host();
         if (host->video->abandoned()) {

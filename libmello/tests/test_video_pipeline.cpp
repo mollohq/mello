@@ -1174,6 +1174,44 @@ TEST(CaptureLadder, ASwapToASlowMethodLeavesNoGap) {
     capture.stop();
 }
 
+// Game clips plan 3.3: the replay records only frames that show the game.
+// ProcessCapture tells, during each frame, whether the method that delivered
+// it shows only the game (hook, WGC window) or the monitor.
+TEST(CaptureLadder, EachFrameSaysWhetherItShowsOnlyTheGame) {
+    FakeLadderBackend::Shared window_state, monitor_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::WgcWindow, LadderStep::WgcMonitor},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &window_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 0, true, &monitor_state);
+        },
+        /*start_index=*/0));
+
+    std::mutex mu;
+    std::vector<std::pair<uintptr_t, bool>> seen;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        std::lock_guard<std::mutex> lock(mu);
+        seen.emplace_back(reinterpret_cast<uintptr_t>(texture), capture.frames_show_only_target());
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_TRUE(capture.frames_show_only_target());
+    ASSERT_TRUE(capture.move_for_test(1, /*keep_old_until_first_frame=*/false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_FALSE(capture.frames_show_only_target());
+    capture.stop();
+
+    std::lock_guard<std::mutex> lock(mu);
+    size_t monitor_frames = 0;
+    for (const auto& [id, only_game] : seen) {
+        EXPECT_EQ(only_game, id == 1) << "a frame of method " << id;
+        if (id == 2) ++monitor_frames;
+    }
+    EXPECT_GT(monitor_frames, 0u);
+}
+
 // A better method that never delivers costs nothing: the method that has the
 // stream keeps delivering through the whole attempt and after it.
 TEST(CaptureLadder, AFailedSwapKeepsTheOldMethodDelivering) {

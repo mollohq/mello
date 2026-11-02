@@ -300,6 +300,12 @@ static bool process_in_exclusive_fullscreen(uint32_t pid) {
 
 // --- ProcessCapture ---
 
+/// The hook and WGC window show only the game. WGC monitor and DXGI show the
+/// whole monitor, which the game clip replay never records (GAME-CLIPS.md 3.3).
+static bool step_shows_only_target(LadderStep step) {
+    return step == LadderStep::Hook || step == LadderStep::WgcWindow;
+}
+
 std::unique_ptr<CaptureSource> ProcessCapture::make_step(LadderStep step, HWND hwnd) const {
     if (!hwnd) return nullptr;
     HMONITOR mon = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
@@ -506,6 +512,7 @@ bool ProcessCapture::activate(size_t index, const char* reason,
     {
         std::lock_guard<std::mutex> lock(deliver_mutex_);
         active_token_ = token;
+        active_shows_target_.store(step_shows_only_target(step), std::memory_order_release);
         step_frames_.store(0, std::memory_order_relaxed);
     }
     swap_occurred_.store(true, std::memory_order_release);
@@ -698,6 +705,10 @@ bool ProcessCapture::start(uint32_t target_fps, FrameCallback callback) {
     {
         std::lock_guard<std::mutex> lock(deliver_mutex_);
         active_token_ = token;
+        if (step_index_ < ladder_.size()) {
+            active_shows_target_.store(step_shows_only_target(ladder_[step_index_]),
+                                       std::memory_order_release);
+        }
     }
     {
         std::lock_guard<std::mutex> lock(swap_mutex_);

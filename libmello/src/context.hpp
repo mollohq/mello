@@ -61,6 +61,25 @@ public:
         return next;
     }
 
+#ifdef _WIN32
+    /// The capture of the running stream host, so a replay of the same game
+    /// that starts later joins it (plans/GAME-CLIPS.md 3.5). `key` is the
+    /// game (ReplaySession::game_key). Weak: the stream owns its capture.
+    struct StreamCapture {
+        std::weak_ptr<video::CaptureManager> manager;
+        uint32_t key = 0;
+        uint32_t fps = 0;
+    };
+    void set_stream_capture(StreamCapture capture) {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        stream_capture_ = std::move(capture);
+    }
+    StreamCapture stream_capture() const {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        return stream_capture_;
+    }
+#endif
+
     void set_error(const std::string& error);
     const char* get_error() const;
 
@@ -79,7 +98,10 @@ private:
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link_ =
         std::make_shared<audio::StreamAudioLink>();
     std::shared_ptr<replay::ReplaySession> replay_;
-    mutable std::mutex replay_mutex_;
+#ifdef _WIN32
+    StreamCapture stream_capture_;
+#endif
+    mutable std::mutex replay_mutex_;  // replay_ and stream_capture_
 };
 
 } // namespace mello

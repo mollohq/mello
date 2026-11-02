@@ -15,6 +15,7 @@
 #include "replay/replay_video_ring.hpp"
 #include "video/encoder_factory.hpp"
 #include "video/graphics_device.hpp"
+#include "video/video_pipeline.hpp"
 #include "video/video_preprocessor.hpp"
 
 #ifndef WIN32_LEAN_AND_MEAN
@@ -468,25 +469,19 @@ TEST(ReplayFixture, DISABLED_MakeTheH264Fixture) {
     std::printf("[ ReplayFixture ] %s: %zu bytes\n", file.string().c_str(), out.size());
 }
 
-// The whole replay on this PC's encoder: a reference clip through the
-// capture manager, the recording encoder and the rings, then a capture.
-// Needs a D3D11 device with a video processor and an encoder, so it skips
-// under CI like the other pipeline tests.
-TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
-    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
-    TempDir dir;
-    // 120 frames of 320x240: a luma ramp that moves one pixel a frame.
+namespace {
+
+// A reference clip of 120 frames of 320x240 at 60 fps: a luma ramp that
+// moves one pixel a frame.
+mello::video::CaptureSourceDesc write_reference_clip(const fs::path& yuv) {
     const uint32_t w = 320, h = 240, frames = 120;
-    const fs::path yuv = dir.path() / "reference.yuv";
-    {
-        std::vector<uint8_t> frame(static_cast<size_t>(w) * h * 3 / 2, 128);
-        std::ofstream f(yuv, std::ios::binary);
-        for (uint32_t n = 0; n < frames; ++n) {
-            for (uint32_t y = 0; y < h; ++y)
-                for (uint32_t x = 0; x < w; ++x)
-                    frame[y * w + x] = static_cast<uint8_t>(16 + ((x + n) * 219 / (w + frames)));
-            f.write(reinterpret_cast<const char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
-        }
+    std::vector<uint8_t> frame(static_cast<size_t>(w) * h * 3 / 2, 128);
+    std::ofstream f(yuv, std::ios::binary);
+    for (uint32_t n = 0; n < frames; ++n) {
+        for (uint32_t y = 0; y < h; ++y)
+            for (uint32_t x = 0; x < w; ++x)
+                frame[y * w + x] = static_cast<uint8_t>(16 + ((x + n) * 219 / (w + frames)));
+        f.write(reinterpret_cast<const char*>(frame.data()), static_cast<std::streamsize>(frame.size()));
     }
     mello::video::CaptureSourceDesc desc{};
     desc.mode = mello::video::CaptureMode::Reference;
@@ -494,6 +489,20 @@ TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
     desc.reference.width = w;
     desc.reference.height = h;
     desc.reference.fps = 60;
+    return desc;
+}
+
+}  // namespace
+
+// The whole replay on this PC's encoder: a reference clip through the
+// capture manager, the recording encoder and the rings, then a capture.
+// Needs a D3D11 device with a video processor and an encoder, so it skips
+// under CI like the other pipeline tests.
+TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    TempDir dir;
+    const uint32_t w = 320, h = 240;
+    const mello::video::CaptureSourceDesc desc = write_reference_clip(dir.path() / "reference.yuv");
 
     ReplayConfig config;
     config.source = desc;
@@ -537,5 +546,74 @@ TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
                 static_cast<unsigned long long>(clip.bytes),
                 static_cast<unsigned long long>(stats.frames_captured),
                 static_cast<unsigned long long>(stats.frames_encoded));
+}
+
+// Game clips plan 3.2 and 3.5: a stream of the same game starts, and the
+// replay moves onto the stream's capture and keeps recording while the
+// stream keeps its frames. Before the stream stops, the replay goes back to
+// its own capture and keeps recording. A clip over both switches plays.
+TEST(ReplaySession, FollowsAStreamOfTheSameGameAndComesBack) {
+    if (std::getenv("CI")) GTEST_SKIP() << "hardware-dependent test skipped under CI";
+    TempDir dir;
+    const mello::video::CaptureSourceDesc desc = write_reference_clip(dir.path() / "reference.yuv");
+    ReplayConfig config;
+    config.source = desc;
+    config.height = 240;
+    config.fps = 60;
+    config.bitrate_kbps = 2000;
+    config.dir = dir.path();
+    std::string error;
+    auto session = ReplaySession::start(config, &error);
+    if (!session && error == "no hardware encoder") GTEST_SKIP() << "no encoder on this machine";
+    ASSERT_TRUE(session) << error;
+    EXPECT_EQ(session->game_key(), ReplaySession::kReferenceKey);
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const uint64_t alone = session->stats().frames_encoded;
+
+    mello::video::VideoPipeline stream;
+    mello::video::PipelineConfig pc{};
+    pc.fps = 60;
+    pc.bitrate_kbps = 2000;
+    std::atomic<int> packets{0};
+    ASSERT_TRUE(stream.start_host(desc, pc, [&](const uint8_t*, size_t, bool, uint64_t) { ++packets; }));
+    // Another game: the replay stays where it is.
+    session->follow_stream(stream.shared_capture_manager(), 1234, 60);
+    EXPECT_FALSE(session->following_stream());
+    session->follow_stream(stream.shared_capture_manager(), ReplaySession::kReferenceKey, 60);
+    EXPECT_TRUE(session->follows(stream.capture_manager()));
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    const uint64_t following = session->stats().frames_encoded;
+    EXPECT_GT(following, alone + 30) << "the replay records from the stream's capture";
+    EXPECT_GT(packets.load(), 30) << "the stream keeps its frames";
+    EXPECT_EQ(session->state(), ReplayState::Recording);
+
+    session->leave_stream();
+    EXPECT_FALSE(session->following_stream());
+    const int packets_at_leave = packets.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    EXPECT_GT(packets.load(), packets_at_leave) << "the stream does not notice the replay leave";
+    stream.stop_host();
+
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+    EXPECT_GT(session->stats().frames_encoded, following + 30) << "back on its own capture";
+    EXPECT_EQ(session->state(), ReplayState::Recording);
+
+    const fs::path mp4 = dir.path() / "clip.mp4";
+    const fs::path poster = dir.path() / "poster.jpg";
+    ReplayClip clip;
+    ASSERT_TRUE(session->capture(3.0f, nullptr, mp4, poster, &clip));
+    session->stop();
+    const auto v = read_video(mp4);
+    ASSERT_FALSE(v.times.empty());
+    EXPECT_TRUE(v.clean_points.front());
+    EXPECT_EQ(clip.width, 320u) << "one picture size over the switches";
+    EXPECT_GE(v.times.size(), 150u) << "about 60 frames a second, a short gap at each switch";
+    LONGLONG longest_gap = 0;
+    for (const LONGLONG d : v.durations) longest_gap = (std::max)(longest_gap, d);
+    std::printf("[ ReplaySession ] follow and back: %u frames in %.2f s, longest frame %.0f ms\n",
+                static_cast<unsigned>(v.times.size()), static_cast<double>(clip.duration_us) / 1e6,
+                static_cast<double>(longest_gap) / 1e4);
 }
 #endif // _WIN32

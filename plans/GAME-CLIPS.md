@@ -15,7 +15,7 @@ todos:
     content: "libmello: one preallocated ring file of encoded video with a byte index per GOP, game audio PCM, the voice ring with the crew mix and the mic as two Opus streams, each with its own time anchors (Q24), and m3llo's session volume (Q20), pinning during a capture with a spare rule. Built 2026-11-02 (abaee4f6, 63e036ca)"
     status: completed
   - id: replay-session
-    content: "libmello: mello_replay_* C API, an encoder intent (stream or recording) through EncoderFactory into NVENC and AMF with a test per encoder, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture), the stream priority rules of section 3.6, one shared game audio loopback per game (F7). Built 2026-11-02: the encoder intent (b817ecbf), the session with its own CaptureManager on the game window and the C API (747435b7). Open: the shared capture with a stream of the same game (registry, ladder policy per consumer, set_target_fps, F1 to F3) and the shared game audio loopback (F7). Until then the replay must not run while the user streams the same game"
+    content: "libmello: mello_replay_* C API, an encoder intent (stream or recording) through EncoderFactory into NVENC and AMF with a test per encoder, replay ladder (the hook only when it is already the active capturer, WGC window, no monitor capture), the stream priority rules of section 3.6, one shared game audio loopback per game (F7). Built 2026-11-02: the encoder intent (b817ecbf), the session with its own CaptureManager on the game window and the C API (747435b7), the shared capture with a stream of the same game (section 3.5 item 5, as built: the replay moves onto the stream's manager and back; F1, F2, Q18, Q19). Open: the overload rule F3 (the replay sheds first) and one shared game audio loopback (F7; now the stream and the replay each open one). The stream path changed a little (a flag per frame, the follow at start and stop): the stream gate A/B runs on it before the release"
     status: in_progress
   - id: mp4-mux
     content: "libmello: MP4 mux on Windows (IMFSinkWriter, H.264 passthrough, AAC, moov first), the poster JPEG with an IDR-decode fallback, mux time under 3 s for 30 s. Built 2026-11-02 (c45b73d0): a 30 s clip at 5 Mbps muxes in under 1 s"
@@ -278,6 +278,17 @@ In step 1 each stream host makes a private manager with one consumer. The regist
 - The replay drops a frame of a step that it does not take. That is a gap in its ring.
 - A stream joins a replay on `WgcWindow`: the manager runs the stream's ladder exactly as at a stream start today, with `keep_old_until_first_frame` and all its timings. The replay follows the step that the stream's ladder chose, or pauses on a step that it does not take (section 3.6, F2, Q18).
 - The stream leaves while the step is `Hook`, `WgcMonitor` or `Dxgi`: the manager goes back to `[WgcWindow]` with `keep_old_until_first_frame`. The replay does not keep the hook. The hook stops 5 s after the heartbeat stops (Q19).
+
+**As built (2026-11-02).** A manager keeps one source, so the replay moves between managers in place of one manager that changes its ladder:
+
+| Event | What happens |
+|---|---|
+| A stream of the replay's game starts | The stream starts exactly as without the replay. Then `follow_stream` stops the replay's own WGC capture and makes the replay a consumer of the stream's manager, with its preprocessor and encoder rebuilt on that manager's device, at min(replay rate, stream rate) (F1). |
+| A frame of a monitor method (WGC monitor, DXGI) | `CapturedFrame::target_only` is false (`CaptureSource::frames_show_only_target`, for ProcessCapture the method that delivers now). The replay drops it and reports Waiting. |
+| The stream stops | Before the stream removes its consumer, `leave_stream` puts the replay back on its own WGC window capture. The stream's capture, the hook too, stops with the stream (Q19). |
+| The replay starts while the same game is streamed | The context keeps a weak reference to the running stream's capture and its game, so the new replay joins it at once. |
+| A switch | The encode size stays the same (the preprocessor fits each source into it), so a clip has one picture size. Each switch starts a new segment with an IDR. The gap is about 100 ms (measured with the reference source). |
+| A failure in a switch | Only the replay turns off (F5). |
 
 **6. The device and a poisoned device**
 

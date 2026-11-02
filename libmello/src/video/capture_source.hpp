@@ -151,6 +151,13 @@ public:
     // The pipeline consumes this to force a keyframe and accelerate recovery.
     virtual bool consume_swap_event() { return false; }
 
+    /// True when the frames show only the capture target (a window, a game, a
+    /// clip). False when they show a monitor: the desktop, other windows and
+    /// notifications. The game clip replay records only target frames
+    /// (plans/GAME-CLIPS.md 3.3). ProcessCapture answers for the method that
+    /// delivers now, so a consumer reads it during its frame callback.
+    virtual bool frames_show_only_target() const { return true; }
+
     /// True when the backend has stopped for good (duplication rebuild gave up,
     /// capture item closed) or, for ProcessCapture, when every capture method
     /// failed to deliver a first frame. Silence alone never sets this: a static

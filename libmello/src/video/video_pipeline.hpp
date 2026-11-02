@@ -207,6 +207,9 @@ public:
     /// The capture this host encodes, or nullptr when not hosting. Valid
     /// until stop_host().
     CaptureManager* capture_manager() const { return manager_.get(); }
+    /// The same, for a second consumer that holds it (the game clip replay,
+    /// plans/GAME-CLIPS.md 3.2). Null when not hosting.
+    std::shared_ptr<CaptureManager> shared_capture_manager() const { return manager_; }
 #endif
 
     // VIEWER SIDE (streaming-quality stage 3). The work runs in

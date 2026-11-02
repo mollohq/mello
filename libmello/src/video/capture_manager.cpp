@@ -298,6 +298,7 @@ void CaptureManager::deliver_frame(void* texture, uint64_t capture_us) {
     frame.texture = texture;
     frame.capture_us = capture_us;
     frame.swap_generation = swap_generation_.load(std::memory_order_acquire);
+    frame.target_only = source_->frames_show_only_target();
 
     // The check of `removed` and the count go under one lock, so a remove
     // cannot pass between them. The calls run outside it.

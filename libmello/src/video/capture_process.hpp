@@ -134,6 +134,11 @@ public:
     CursorMode cursor_mode() const override;
     bool consume_swap_event() override;
     bool failed() const override { return exhausted_.load(std::memory_order_relaxed); }
+    /// The hook and WGC window show only the game; WGC monitor and DXGI show
+    /// the monitor. Changes with the active token, under `deliver_mutex_`.
+    bool frames_show_only_target() const override {
+        return active_shows_target_.load(std::memory_order_acquire);
+    }
     CaptureState state() const override;
     bool target_exited() const override { return target_liveness_.exited(); }
     bool stop_timed_out() const override { return stop_timed_out_.load(std::memory_order_relaxed); }
@@ -212,6 +217,8 @@ private:
     // (the pipeline reads the cursor inside a delivery), never after it.
     std::mutex                       deliver_mutex_;
     uint64_t                         active_token_ = 0;
+    // The step of `active_token_` shows only the game (written with it).
+    std::atomic<bool>                active_shows_target_{true};
     std::atomic<uint64_t>            next_token_{1};
     // The candidate of a swap in progress, and whether it has delivered.
     std::mutex                       candidate_mutex_;

@@ -25,6 +25,10 @@ struct CapturedFrame {
     /// Goes up by one each time the capture method changes. A consumer
     /// forces a keyframe on the first frame it encodes with a new value.
     uint32_t swap_generation = 0;
+    /// The frame shows only the capture target, not a monitor
+    /// (`CaptureSource::frames_show_only_target`). The game clip replay drops
+    /// the others (plans/GAME-CLIPS.md 3.3).
+    bool target_only = true;
 };
 
 /// The capture of one target, given to every consumer that encodes it

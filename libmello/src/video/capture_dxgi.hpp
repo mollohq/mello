@@ -22,6 +22,7 @@ public:
     uint32_t width()  const override { return width_.load(std::memory_order_relaxed); }
     uint32_t height() const override { return height_.load(std::memory_order_relaxed); }
     const char* backend_name() const override { return "DXGI-DDI"; }
+    bool frames_show_only_target() const override { return false; }
 
     bool get_cursor(CursorData& out) override;
     CursorMode cursor_mode() const override { return CursorMode::Composite; }

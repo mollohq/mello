@@ -55,35 +55,27 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
     config_ = config;
     if (config_.fps == 0) config_.fps = 60;
 
-    // 1. The capture: the game window with WGC, and nothing else. No
-    // resolve_capture_target here: it would turn a window that cannot carry
-    // a stream into its process and run the whole ladder, monitor capture
-    // included (plan 3.3).
-    video::CaptureSourceDesc desc{};
+    // The game that this replay records, to match a stream of the same game.
     if (config_.source) {
-        desc = *config_.source;
+        game_key_ = config_.source->mode == video::CaptureMode::Reference ? kReferenceKey
+                                                                          : config_.pid;
     } else {
         if (!config_.hwnd) {
             set_error(error, "no game window");
             return false;
         }
-        desc.mode = video::CaptureMode::Window;
-        desc.hwnd = config_.hwnd;
-    }
-    video::GraphicsDevice device = video::create_d3d11_device();
-    if (!device.handle) {
-        set_error(error, "no graphics device");
-        return false;
-    }
-    manager_ = video::CaptureManager::create_from(device, video::create_capture_source(desc), desc);
-    if (!manager_) {
-        set_error(error, "the game window cannot be captured");
-        return false;
+        DWORD pid = 0;
+        GetWindowThreadProcessId(static_cast<HWND>(config_.hwnd), &pid);
+        game_key_ = config_.pid != 0 ? config_.pid : static_cast<uint32_t>(pid);
     }
 
-    // 2. The encode size: the clip quality's height, the source aspect.
-    const uint32_t cap_w = manager_->width() & ~1u;
-    const uint32_t cap_h = manager_->height() & ~1u;
+    std::shared_ptr<video::CaptureManager> own = make_own_capture(error);
+    if (!own) return false;
+
+    // The encode size: the clip quality's height, the source aspect. It stays
+    // fixed for the session (a clip has one picture size).
+    const uint32_t cap_w = own->width() & ~1u;
+    const uint32_t cap_h = own->height() & ~1u;
     const auto size = video::VideoPipeline::encode_size_for(cap_w, cap_h, config_.height, config_.fps);
     enc_w_ = size.width;
     enc_h_ = size.height;
@@ -92,28 +84,7 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         return false;
     }
 
-    preprocessor_ = std::make_unique<video::VideoPreprocessor>();
-    if (!preprocessor_->initialize(manager_->device(), manager_->width(), manager_->height(), enc_w_,
-                                   enc_h_)) {
-        set_error(error, "no video processor");
-        return false;
-    }
-
-    // 3. The recording encoder: a 1 s GOP, the quality tuning (plan 3.4).
-    video::EncoderConfig enc{};
-    enc.width = enc_w_;
-    enc.height = enc_h_;
-    enc.fps = config_.fps;
-    enc.bitrate_kbps = config_.bitrate_kbps;
-    enc.keyframe_interval = config_.fps;
-    enc.intent = video::EncoderIntent::Recording;
-    encoder_ = video::create_best_encoder(manager_->device(), enc);
-    if (!encoder_) {
-        set_error(error, "no hardware encoder");
-        return false;
-    }
-
-    // 4. The rings.
+    // The rings.
     ReplayVideoRing::Config vring;
     vring.dir = config_.dir;
     vring.segment_bytes = ReplayVideoRing::segment_bytes_for(config_.bitrate_kbps);
@@ -124,7 +95,7 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         return false;
     }
 
-    // 5. The game audio: process loopback of the game's process tree. Never
+    // The game audio: process loopback of the game's process tree. Never
     // endpoint loopback: it records the crew voice and every other app twice
     // (plan 9.1).
     if (config_.pid != 0) {
@@ -140,22 +111,161 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
         }
     }
 
-    // 6. The encode thread, then the capture.
-    running_.store(true, std::memory_order_release);
-    encode_thread_ = std::thread([this] { encode_loop(); });
-    handled_swap_generation_ = manager_->swap_generation();
-    keyframe_wanted_.store(true, std::memory_order_relaxed);
-    consumer_id_ = manager_->add_consumer([this](const video::CapturedFrame& f) { on_frame(f); });
-    if (consumer_id_ == 0 || !manager_->start(config_.fps)) {
-        set_error(error, "the capture did not start");
+    std::lock_guard<std::mutex> control(control_mutex_);
+    if (!open_capture(std::move(own), true, config_.fps, error)) return false;
+    MELLO_LOG_INFO(TAG, "recording %u: %ux%u at %u fps, %u kbps, game audio %s", game_key_, enc_w_,
+                   enc_h_, config_.fps, config_.bitrate_kbps, has_game_audio_ ? "on" : "off");
+    return true;
+}
+
+std::shared_ptr<video::CaptureManager> ReplaySession::make_own_capture(std::string* error) const {
+    // WGC on the game window, and nothing else. No resolve_capture_target: it
+    // would turn a window that cannot carry a stream into its process and
+    // run the whole ladder, monitor capture included (plan 3.3).
+    video::CaptureSourceDesc desc{};
+    if (config_.source) {
+        desc = *config_.source;
+    } else {
+        desc.mode = video::CaptureMode::Window;
+        desc.hwnd = config_.hwnd;
+    }
+    video::GraphicsDevice device = video::create_d3d11_device();
+    if (!device.handle) {
+        set_error(error, "no graphics device");
+        return nullptr;
+    }
+    auto manager = video::CaptureManager::create_from(device, video::create_capture_source(desc), desc);
+    if (!manager) set_error(error, "the game window cannot be captured");
+    return manager;
+}
+
+bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager, bool own,
+                                 uint32_t fps, std::string* error) {
+    // The preprocessor and the encoder live on the manager's device: the
+    // capture's textures are on it (zero copy, 14-VIDEO-PIPELINE.md 2.2).
+    preprocessor_ = std::make_unique<video::VideoPreprocessor>();
+    if (!preprocessor_->initialize(manager->device(), manager->width(), manager->height(), enc_w_,
+                                   enc_h_)) {
+        set_error(error, "no video processor");
+        preprocessor_.reset();
         return false;
     }
 
-    MELLO_LOG_INFO(TAG, "recording: %s %ux%u -> %ux%u at %u fps, %u kbps, encoder %s, game audio %s",
-                   manager_->backend_name(), manager_->width(), manager_->height(), enc_w_, enc_h_,
-                   config_.fps, config_.bitrate_kbps, encoder_->name(),
-                   has_game_audio_ ? "on" : "off");
+    // The recording encoder: a 1 s GOP, the quality tuning (plan 3.4).
+    video::EncoderConfig enc{};
+    enc.width = enc_w_;
+    enc.height = enc_h_;
+    enc.fps = fps;
+    enc.bitrate_kbps = config_.bitrate_kbps;
+    enc.keyframe_interval = fps;
+    enc.intent = video::EncoderIntent::Recording;
+    encoder_ = video::create_best_encoder(manager->device(), enc);
+    if (!encoder_) {
+        set_error(error, "no hardware encoder");
+        preprocessor_.reset();
+        return false;
+    }
+    encode_fps_ = fps;
+
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        queue_head_ = 0;
+        queue_count_ = 0;
+    }
+    next_deadline_us_ = 0;
+    monitor_frames_.store(false, std::memory_order_relaxed);
+    keyframe_wanted_.store(true, std::memory_order_relaxed);
+    running_.store(true, std::memory_order_release);
+    encode_thread_ = std::thread([this] { encode_loop(); });
+
+    // Atomic: state() reads it without control_mutex_.
+    std::atomic_store(&manager_, std::move(manager));
+    handled_swap_generation_ = manager_->swap_generation();
+    consumer_id_ = manager_->add_consumer([this](const video::CapturedFrame& f) { on_frame(f); });
+    if (consumer_id_ == 0 || (own && !manager_->start(fps))) {
+        set_error(error, "the capture did not start");
+        close_capture();
+        return false;
+    }
+    MELLO_LOG_INFO(TAG, "capture: %s %s %ux%u -> %ux%u at %u fps, encoder %s",
+                   own ? "own" : "the stream's", manager_->backend_name(), manager_->width(),
+                   manager_->height(), enc_w_, enc_h_, fps, encoder_->name());
     return true;
+}
+
+bool ReplaySession::close_capture() {
+    if (manager_ && consumer_id_ != 0) {
+        const auto result = manager_->remove_consumer(consumer_id_);
+        consumer_id_ = 0;
+        if (result == video::CaptureManager::RemoveResult::Abandoned) {
+            // A capture thread is stuck in the driver or in on_frame and may
+            // still use the session: it stays allocated for good.
+            MELLO_LOG_ERROR(TAG, "the capture did not stop; the replay session is abandoned");
+            failed_.store(true, std::memory_order_relaxed);
+            if (auto self = weak_from_this().lock()) keep_forever(std::move(self));
+            return false;
+        }
+    }
+    // No frame comes in now: the encode thread can stop, and the NV12 slots
+    // in its queue go with the preprocessor.
+    running_.store(false, std::memory_order_release);
+    queue_cv_.notify_all();
+    if (encode_thread_.joinable()) encode_thread_.join();
+    {
+        std::lock_guard<std::mutex> lock(queue_mutex_);
+        queue_count_ = 0;
+    }
+    if (encoder_) {
+        encoder_->shutdown();
+        encoder_.reset();
+    }
+    preprocessor_.reset();
+    {
+        std::lock_guard<std::mutex> lock(poster_mutex_);
+        poster_staging_.Reset();
+        poster_ready_ = false;
+    }
+    std::atomic_store(&manager_, std::shared_ptr<video::CaptureManager>());
+    return true;
+}
+
+void ReplaySession::follow_stream(const std::shared_ptr<video::CaptureManager>& manager,
+                                  uint32_t stream_key, uint32_t stream_fps) {
+    if (!manager || stream_key == 0 || stream_key != game_key_) return;
+    std::lock_guard<std::mutex> control(control_mutex_);
+    if (stopped_.load(std::memory_order_acquire) || failed_.load(std::memory_order_relaxed) ||
+        following_.load(std::memory_order_acquire)) {
+        return;
+    }
+    // The stream started exactly as it would without the replay (F2). The
+    // replay's own capture stops; the game keeps one capture.
+    if (!close_capture()) return;
+    // F1: the stream's rate, never above it.
+    const uint32_t fps = std::min(config_.fps, stream_fps > 0 ? stream_fps : config_.fps);
+    std::string error;
+    if (!open_capture(manager, false, fps, &error)) {
+        // F5: the replay is off; the stream does not notice.
+        MELLO_LOG_ERROR(TAG, "follow the stream: %s; the replay is off", error.c_str());
+        failed_.store(true, std::memory_order_relaxed);
+        return;
+    }
+    following_.store(true, std::memory_order_release);
+}
+
+void ReplaySession::leave_stream() {
+    std::lock_guard<std::mutex> control(control_mutex_);
+    if (!following_.load(std::memory_order_acquire)) return;
+    following_.store(false, std::memory_order_release);
+    if (!close_capture()) return;
+    if (stopped_.load(std::memory_order_acquire)) return;
+    // Back to WGC window. The stream's capture, the hook too, stops with the
+    // stream (Q19).
+    std::string error;
+    std::shared_ptr<video::CaptureManager> own = make_own_capture(&error);
+    if (!own || !open_capture(std::move(own), true, config_.fps, &error)) {
+        MELLO_LOG_ERROR(TAG, "back to the own capture: %s; the replay is off", error.c_str());
+        failed_.store(true, std::memory_order_relaxed);
+    }
 }
 
 ReplaySession::~ReplaySession() {
@@ -164,43 +274,25 @@ ReplaySession::~ReplaySession() {
 
 void ReplaySession::stop() {
     std::lock_guard<std::mutex> control(control_mutex_);
+    if (stopped_.exchange(true, std::memory_order_acq_rel)) return;
     if (loopback_) {
         loopback_->stop();
         loopback_.reset();
     }
-    if (manager_ && consumer_id_ != 0) {
-        const auto result = manager_->remove_consumer(consumer_id_);
-        consumer_id_ = 0;
-        if (result == video::CaptureManager::RemoveResult::Abandoned) {
-            // A capture thread is stuck in the driver and may still call
-            // on_frame: the session and all it holds stay allocated.
-            MELLO_LOG_ERROR(TAG, "the capture did not stop; the replay session is abandoned");
-            failed_.store(true, std::memory_order_relaxed);
-            if (auto self = weak_from_this().lock()) keep_forever(std::move(self));
-            return;
-        }
-    }
-    running_.store(false, std::memory_order_release);
-    queue_cv_.notify_all();
-    if (encode_thread_.joinable()) encode_thread_.join();
-    if (encoder_) {
-        encoder_->shutdown();
-        encoder_.reset();
-    }
-    preprocessor_.reset();
+    following_.store(false, std::memory_order_release);
+    if (!close_capture()) return;  // abandoned: everything stays allocated
     video_ring_.stop();
     audio_ring_.stop();
-    {
-        std::lock_guard<std::mutex> lock(poster_mutex_);
-        poster_staging_.Reset();
-    }
-    manager_.reset();
 }
 
 ReplayState ReplaySession::state() const {
     if (failed_.load(std::memory_order_relaxed) || !video_ring_.is_active()) return ReplayState::Failed;
-    if (!manager_) return ReplayState::Failed;
-    switch (manager_->state()) {
+    // The pointer changes only under control_mutex_, with atomic stores; a
+    // copy here may be one switch old, which a state poll tolerates.
+    const std::shared_ptr<video::CaptureManager> manager = std::atomic_load(&manager_);
+    if (!manager) return ReplayState::Failed;
+    if (monitor_frames_.load(std::memory_order_relaxed)) return ReplayState::Waiting;
+    switch (manager->state()) {
         case video::CaptureState::Failed:
             return ReplayState::Failed;
         case video::CaptureState::Capturing:
@@ -214,10 +306,18 @@ void ReplaySession::on_frame(const video::CapturedFrame& frame) {
     if (!running_.load(std::memory_order_acquire)) return;
     frames_captured_.fetch_add(1, std::memory_order_relaxed);
 
+    // A stream's ladder on a monitor method: the frames show the desktop.
+    // The replay waits for a method that shows only the game (3.3, F2).
+    if (!frame.target_only) {
+        monitor_frames_.store(true, std::memory_order_relaxed);
+        return;
+    }
+    monitor_frames_.store(false, std::memory_order_relaxed);
+
     // The poster takes the first frame after the press, whatever the rate.
     if (poster_wanted_.exchange(false, std::memory_order_acq_rel)) copy_poster_frame(frame.texture);
 
-    if (!video::VideoPipeline::decimation_accepts(frame.capture_us, next_deadline_us_, config_.fps)) {
+    if (!video::VideoPipeline::decimation_accepts(frame.capture_us, next_deadline_us_, encode_fps_)) {
         return;
     }
     // A new capture method starts a new segment.

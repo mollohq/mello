@@ -68,9 +68,21 @@ struct ReplayClip {
 /// CaptureManager with its own preprocessor and recording encoder, the video
 /// and game audio rings, and the capture of a clip into an MP4 and a poster.
 ///
-/// This version has its own capture manager on the game window. The shared
-/// capture with a running stream of the same game (plan 3.5, items 4 and 5)
-/// comes next.
+/// Alone, the replay has its own capture manager on the game window (WGC
+/// window). While the user streams the same game, it is a second consumer of
+/// the stream's capture manager, so the game has one capture (plan 3.2):
+///  - The stream starts exactly as without the replay (F2, Q18). Then
+///    `follow_stream` stops the replay's own capture and attaches the replay
+///    to the stream's manager, on that manager's device.
+///  - The replay takes the frames of the hook and of WGC window. It drops the
+///    frames of a monitor method (WGC monitor, DXGI) and waits (3.3, Q4).
+///  - It records at the stream's rate, never above it (F1).
+///  - Before the stream stops, `leave_stream` puts the replay back on its own
+///    WGC window capture. The stream's capture, the hook too, then stops with
+///    the stream (Q19).
+/// The encode size stays the same over a switch: the preprocessor fits each
+/// source into it, so a clip has one picture size. Each switch starts a new
+/// segment with an IDR.
 ///
 /// Threads:
 ///  - The capture thread calls the frame callback: decimate, convert into the
@@ -98,6 +110,28 @@ public:
     void stop();
 
     ReplayState state() const;
+
+    /// The key of the game that a capture shows: its pid, kReferenceKey for
+    /// the reference clip, 0 for a monitor (never the same game).
+    static constexpr uint32_t kReferenceKey = 0xFFFFFFFFu;
+    uint32_t game_key() const { return game_key_; }
+
+    /// A stream of `stream_key` started on `manager` at `stream_fps`. When it
+    /// is this replay's game, the replay moves onto that manager. Call it
+    /// after the stream's own start, on the stream's control thread. A
+    /// failure turns only the replay off (F5).
+    void follow_stream(const std::shared_ptr<video::CaptureManager>& manager, uint32_t stream_key,
+                       uint32_t stream_fps);
+    /// The stream that the replay follows stops: the replay goes back to its
+    /// own capture first. Call it before the stream removes its consumer.
+    /// Does nothing when the replay follows no stream.
+    void leave_stream();
+    /// True while the replay is a consumer of a stream's capture manager.
+    bool following_stream() const { return following_.load(std::memory_order_acquire); }
+    /// True while the replay is a consumer of `manager`, a stream's.
+    bool follows(const video::CaptureManager* manager) const {
+        return following_stream() && manager && std::atomic_load(&manager_).get() == manager;
+    }
 
     /// Writes the last `seconds` of the game as an MP4 at `mp4` and a JPEG
     /// poster at `poster`: the video from the last keyframe at or before the
@@ -136,6 +170,17 @@ private:
     static constexpr size_t kQueueCap = 2;
 
     bool start_impl(const ReplayConfig& config, std::string* error);
+    /// The replay's own capture: WGC on the game window (or the test source).
+    std::shared_ptr<video::CaptureManager> make_own_capture(std::string* error) const;
+    /// control_mutex_ held. Builds the preprocessor and the encoder on
+    /// `manager`'s device at `fps`, starts the encode thread and attaches to
+    /// `manager`. Starts the manager when `own`.
+    bool open_capture(std::shared_ptr<video::CaptureManager> manager, bool own, uint32_t fps,
+                      std::string* error);
+    /// control_mutex_ held. Detaches from the manager, stops the encode
+    /// thread and frees the preprocessor and the encoder. False when the
+    /// capture thread did not leave in time: the session is then abandoned.
+    bool close_capture();
     void on_frame(const video::CapturedFrame& frame);
     void encode_loop();
     void on_game_audio(const int16_t* samples, size_t count);
@@ -144,12 +189,19 @@ private:
     bool write_live_poster(const std::filesystem::path& poster, std::chrono::milliseconds wait);
 
     ReplayConfig config_;
+    uint32_t game_key_ = 0;
+    // The capture the replay is attached to (control_mutex_ for writes).
     std::shared_ptr<video::CaptureManager> manager_;
     video::CaptureManager::ConsumerId consumer_id_ = 0;
     std::unique_ptr<video::VideoPreprocessor> preprocessor_;
     std::unique_ptr<video::Encoder> encoder_;
-    uint32_t enc_w_ = 0;
+    uint32_t enc_w_ = 0;  // fixed at start
     uint32_t enc_h_ = 0;
+    uint32_t encode_fps_ = 0;
+    std::atomic<bool> following_{false};
+    std::atomic<bool> stopped_{false};
+    // The frames now come from a monitor method of the stream: dropped.
+    std::atomic<bool> monitor_frames_{false};
 
     ReplayVideoRing video_ring_;
     ReplayAudioRing audio_ring_;
@@ -179,7 +231,7 @@ private:
     Microsoft::WRL::ComPtr<ID3D11Texture2D> poster_staging_;  // poster_mutex_
     bool poster_ready_ = false;                                // poster_mutex_
 
-    // Serializes stop and capture.
+    // Serializes stop, the follow and leave switches, and the start of a capture.
     std::mutex control_mutex_;
 
     std::atomic<uint64_t> frames_captured_{0};
