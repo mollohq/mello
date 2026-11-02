@@ -3,6 +3,8 @@ find_package(GTest CONFIG REQUIRED)
 add_executable(mello_tests
     test_opus_codec.cpp
     test_clip_buffer.cpp
+    test_replay_mix.cpp
+    test_replay_mux.cpp
     test_replay_ring.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
@@ -54,6 +56,8 @@ target_link_libraries(mello_tests PRIVATE
 # real speech (Opus in-band FEC is coded for speech, not for a tone).
 target_compile_definitions(mello_tests PRIVATE
     MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
+    # A short H.264 stream for the game clip mux tests (test_replay_mux.cpp).
+    MELLO_REPLAY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/replay"
 )
 
 # The NVENC, AMF and oneVPL headers, for the cost-tier tables of the encoders

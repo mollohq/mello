@@ -251,6 +251,8 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
+    src/replay/mp4_faststart.cpp
+    src/replay/replay_audio_mix.cpp
     src/replay/replay_audio_ring.cpp
     src/replay/replay_video_ring.cpp
     src/transport/peer_connection.cpp
@@ -279,6 +281,7 @@ if(WIN32)
         src/audio/device_enumerator_wasapi.cpp
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
+        src/replay/replay_mux_wmf.cpp
     )
 elseif(IOS)
     # RemoteIO capture/playback + AVAudioSession + mic permission (Step 3). Device
@@ -465,6 +468,7 @@ if(WIN32)
         d3dcompiler
         windowsapp
         shell32
+        windowscodecs
     )
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
 elseif(IOS)

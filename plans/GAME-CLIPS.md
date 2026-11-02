@@ -453,7 +453,7 @@ F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ mello-core worker t
 | Item | Windows | macOS |
 |---|---|---|
 | Muxer | `IMFSinkWriter`, H.264 input type equal to output type (passthrough), AAC encoder MFT | `AVAssetWriter`, video input with `outputSettings: nil` (passthrough) |
-| moov first (web and phone playback start before the download ends) | `MF_MPEG4SINK_MOOV_BEFORE_MDAT` | `shouldOptimizeForNetworkUse = true` |
+| moov first (web and phone playback start before the download ends) | `mp4_faststart` after `Finalize`: moov moves before mdat and the chunk offsets move with it. `MF_MPEG4SINK_MOOV_BEFORE_MDAT` wrote chunk offsets that point before the media data (measured 2026-11-02), so it is not used. | `shouldOptimizeForNetworkUse = true` |
 | New dependency | None. Media Foundation is already linked (`clip_encoder_wmf.cpp`). | AVFoundation framework (OS, no install size) |
 
 ---
