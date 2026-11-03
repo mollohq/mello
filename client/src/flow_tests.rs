@@ -5201,6 +5201,7 @@ fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
     );
 }
 
+#[cfg(windows)]
 fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::GameClipQuality)> {
     cmds.iter().rev().find_map(|c| match c {
         Command::SetGameClips { enabled, quality } => Some((*enabled, *quality)),
