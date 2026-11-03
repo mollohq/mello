@@ -198,7 +198,8 @@ func DevSeedChatRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, nk r
 	}
 
 	if req.Reset {
-		res, err := db.ExecContext(ctx, `DELETE FROM message WHERE content LIKE '%"seed":true%'`)
+		// `content` is jsonb, so match the marker as JSON, not as text.
+		res, err := db.ExecContext(ctx, `DELETE FROM message WHERE content @> '{"seed": true}'::jsonb`)
 		if err != nil {
 			return "", runtime.NewError("reset failed: "+err.Error(), 13)
 		}
