@@ -11,13 +11,23 @@ component LinkPill inherits Rectangle {
 
     property <length> pill-max-width: 260px;
     max-width: pill-max-width;
+    background: transparent;
 
-    border-radius: Theme.r-pill;
-    background: pill-touch.has-hover
-        ? (Theme.dark ? Theme.graphic-light : Theme.hover-overlay)
-        : (Theme.dark ? Theme.hover-overlay : Theme.hover-overlay);
-    border-width: 1px;
-    border-color: Theme.graphic-light;
+    // A link is a button, so it cuts top-left and bottom-right and carries a
+    // keyline. No radius: radii are for dots, discs and pips.
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 6px;
+        fill: Theme.graphic-light;
+    }
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 6px;
+        inset: Theme.keyline;
+        fill: pill-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
+    }
 
     pill-touch := TouchArea {
         accessible-role: button;
@@ -201,40 +211,33 @@ component PillButton inherits Rectangle {
     in property <bool> active: false;
     callback clicked();
 
+    // An icon button: the label is what a screen reader and the driver read.
+    // The open one is white on the dim fill, with the button's cut corners.
     height: 28px;
-    width: pill-layout.preferred-width + 16px;
+    width: 32px;
     background: transparent;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Theme.action;
+
+    if active || touch.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 5px;
+        fill: active ? Theme.action-dim : Theme.surface-hover;
+    }
 
     touch := TouchArea {
         accessible-role: button;
         accessible-label: root.label;
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 
-    pill-layout := HorizontalLayout {
-        spacing: 4px;
-        padding-left: 8px;
-        padding-right: 8px;
-        alignment: center;
-
-        Image {
-            source: icon;
-            width: 14px;
-            height: 14px;
-            colorize: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            font-family: Theme.font-body;
-            text: label;
-            font-size: Theme.font-xs;
-            font-weight: 500;
-            color: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
-            vertical-alignment: center;
-        }
+    Image {
+        source: icon;
+        width: 16px;
+        height: 16px;
+        colorize: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
 }
 
