@@ -28,7 +28,7 @@
 
 m3llo is the app for your gaming crew. Voice and streams while you play, a clip button for the plays worth keeping, and a crew feed that holds on to all of it: the session, the clips, who showed up, who carried, and a weekly recap of how it went.
 
-Built for the people you actually play with. Five of you, or fifty, who know each other by name. Bigger than that and Discord is probably the better home, but you're welcome to try ;)
+Built for the people you actually play with. Five of you, or fifty, who know each other by name. If you run a big community on Discord, this is not for you.
 
 Open source. Made in Europe. Apache 2.0.
 
