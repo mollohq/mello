@@ -35,6 +35,15 @@ private:
     fs::path path_;
 };
 
+// The folder entries of an open ring file (util/ring_file.hpp). Windows keeps
+// the name until the last handle closes (delete on close). POSIX unlinks the
+// file at open, so the folder is empty from the start.
+#ifdef _WIN32
+constexpr size_t kOpenRingEntries = 1;
+#else
+constexpr size_t kOpenRingEntries = 0;
+#endif
+
 // A unit whose bytes name its GOP and its place in the GOP.
 std::vector<uint8_t> unit_bytes(uint32_t gop, uint32_t index, size_t size) {
     std::vector<uint8_t> data(size);
@@ -216,7 +225,7 @@ TEST(ReplayVideoRing, TheFileIsGoneAfterStopAndAWindowKeepsItUntilReleased) {
     TempDir dir;
     ReplayVideoRing ring;
     ASSERT_TRUE(ring.start(video_config(dir, 4)));
-    EXPECT_EQ(dir.entries(), 1u);
+    EXPECT_EQ(dir.entries(), kOpenRingEntries);
     push_gop(ring, 0, 4, gop_start(0));
     ring.flush();
     auto window = ring.pin_window(0, UINT64_MAX);
@@ -366,7 +375,7 @@ TEST(ReplayAudioRing, TheFileIsGoneAfterStop) {
     TempDir dir;
     ReplayAudioRing ring;
     ASSERT_TRUE(ring.start(audio_config(dir, 1)));
-    EXPECT_EQ(dir.entries(), 1u);
+    EXPECT_EQ(dir.entries(), kOpenRingEntries);
     ring.stop();
     EXPECT_EQ(dir.entries(), 0u);
 }

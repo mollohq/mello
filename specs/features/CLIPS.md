@@ -693,7 +693,8 @@ mux puts all sources on that clock.
 | Voice | The voice clip ring (section 4.1) | The crew mix and the mic as two Opus streams | 1.5 MB |
 
 - The ring files are in the `mello_clips` folder of the OS temp folder,
-  preallocated, and opened delete on close. A crash leaves no file.
+  preallocated, and opened delete on close (Windows) or unlinked after open
+  (macOS). A crash leaves no file.
 - A GOP that is larger than its slot ends its segment early, and the ring
   asks the encoder for an IDR.
 - The encode thread hands each unit to a bounded RAM queue (2 MB) and a
