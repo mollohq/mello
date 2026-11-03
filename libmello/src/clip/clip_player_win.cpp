@@ -48,10 +48,11 @@ int64_t now_us() { return ViewerPipeline::now_us(); }
 
 // ---- Byte stream ------------------------------------------------------------
 
-/// The bytes read by one BeginRead, for EndRead.
-class ReadResult : public IUnknown {
+/// One BeginRead: where, how much, and (when done) the bytes read, for
+/// EndRead. The object of the caller's async result.
+class PendingRead : public IUnknown {
 public:
-    explicit ReadResult(ULONG bytes) : bytes(bytes) {}
+    PendingRead(QWORD at, BYTE* buf, ULONG len) : at(at), buf(buf), len(len) {}
     STDMETHODIMP QueryInterface(REFIID riid, void** ppv) override {
         if (!ppv) return E_POINTER;
         if (riid == __uuidof(IUnknown)) {
@@ -68,7 +69,10 @@ public:
         if (r == 0) delete this;
         return r;
     }
-    const ULONG bytes;
+    const QWORD at;
+    BYTE* const buf;
+    const ULONG len;
+    ULONG got = 0;
 
 private:
     std::atomic<ULONG> refs_{1};
@@ -77,7 +81,12 @@ private:
 /// The MP4 as Media Foundation reads it: every read goes to the read
 /// callback. A read that waits for bytes asks again every 15 ms until they
 /// are there or the player stops. Called on Media Foundation threads.
-class ClipByteStream : public IMFByteStream {
+///
+/// BeginRead returns at once and reads on Media Foundation's long-function
+/// work queue. A read that waited on the source's own thread kept the MPEG-4
+/// source from answering sample requests: over a slow link it read 3 to 6 MiB
+/// ahead before it gave the first sample (plans/GAME-CLIPS.md 10.3).
+class ClipByteStream : public IMFByteStream, public IMFAsyncCallback {
 public:
     ClipByteStream(uint64_t length, ReadFn read, std::shared_ptr<std::atomic<bool>> stop,
                    std::shared_ptr<std::atomic<bool>> waiting)
@@ -90,6 +99,11 @@ public:
             AddRef();
             return S_OK;
         }
+        if (riid == __uuidof(IMFAsyncCallback)) {
+            *ppv = static_cast<IMFAsyncCallback*>(this);
+            AddRef();
+            return S_OK;
+        }
         *ppv = nullptr;
         return E_NOINTERFACE;
     }
@@ -98,6 +112,15 @@ public:
         const ULONG r = --refs_;
         if (r == 0) delete this;
         return r;
+    }
+
+    /// Ends every read: a read that waits returns E_ABORT, and this waits
+    /// until no read runs. The demux thread calls it before it shuts the
+    /// source down, so no read calls back into a source that is gone.
+    void abort_reads() {
+        closing_.store(true, std::memory_order_release);
+        std::unique_lock<std::mutex> lock(idle_mutex_);
+        idle_cv_.wait(lock, [this] { return in_flight_ == 0; });
     }
 
     STDMETHODIMP GetCapabilities(DWORD* caps) override {
@@ -143,25 +166,55 @@ public:
         if (read) *read = got;
         return hr;
     }
-    // The read completes before the callback is queued: Media Foundation
-    // allows that, and the callback still runs on its work queue.
     STDMETHODIMP BeginRead(BYTE* buf, ULONG len, IMFAsyncCallback* callback, IUnknown* state) override {
-        ULONG got = 0;
-        const HRESULT hr = Read(buf, len, &got);
+        if (!buf || !callback) return E_POINTER;
+        QWORD at = 0;
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            at = position_;
+        }
         ComPtr<IUnknown> op;
-        op.Attach(new ReadResult(got));
-        ComPtr<IMFAsyncResult> result;
-        HRESULT made = MFCreateAsyncResult(op.Get(), callback, state, &result);
-        if (FAILED(made)) return made;
-        result->SetStatus(hr);
-        return MFInvokeCallback(result.Get());
+        op.Attach(new PendingRead(at, buf, len));
+        ComPtr<IMFAsyncResult> caller;
+        HRESULT hr = MFCreateAsyncResult(op.Get(), callback, state, &caller);
+        if (FAILED(hr)) return hr;
+        {
+            std::lock_guard<std::mutex> lock(idle_mutex_);
+            ++in_flight_;
+        }
+        // The caller's result is the work item's state: Invoke reads into
+        // its PendingRead and then calls the caller back.
+        hr = MFPutWorkItem2(MFASYNC_CALLBACK_QUEUE_LONG_FUNCTION, 0, this, caller.Get());
+        if (FAILED(hr)) read_done();
+        return hr;
     }
     STDMETHODIMP EndRead(IMFAsyncResult* result, ULONG* read) override {
         if (!result || !read) return E_POINTER;
         ComPtr<IUnknown> op;
         result->GetObject(&op);
-        *read = op ? static_cast<ReadResult*>(op.Get())->bytes : 0;
+        *read = op ? static_cast<PendingRead*>(op.Get())->got : 0;
         return result->GetStatus();
+    }
+
+    // IMFAsyncCallback: one queued read, on the long-function work queue.
+    STDMETHODIMP GetParameters(DWORD*, DWORD*) override { return E_NOTIMPL; }
+    STDMETHODIMP Invoke(IMFAsyncResult* work) override {
+        ComPtr<IUnknown> state;
+        ComPtr<IMFAsyncResult> caller;
+        ComPtr<IUnknown> op;
+        if (work && SUCCEEDED(work->GetState(&state)) && SUCCEEDED(state.As(&caller)) &&
+            SUCCEEDED(caller->GetObject(&op))) {
+            auto* read = static_cast<PendingRead*>(op.Get());
+            const HRESULT hr = read_at(read->at, read->buf, read->len, &read->got);
+            if (SUCCEEDED(hr)) {
+                std::lock_guard<std::mutex> lock(mutex_);
+                position_ = read->at + read->got;
+            }
+            caller->SetStatus(hr);
+            MFInvokeCallback(caller.Get());
+        }
+        read_done();
+        return S_OK;
     }
     STDMETHODIMP Write(const BYTE*, ULONG, ULONG*) override { return E_NOTIMPL; }
     STDMETHODIMP BeginWrite(const BYTE*, ULONG, IMFAsyncCallback*, IUnknown*) override { return E_NOTIMPL; }
@@ -178,9 +231,17 @@ public:
     STDMETHODIMP Close() override { return S_OK; }
 
 private:
+    void read_done() {
+        {
+            std::lock_guard<std::mutex> lock(idle_mutex_);
+            --in_flight_;
+        }
+        idle_cv_.notify_all();
+    }
+
     HRESULT read_at(QWORD at, BYTE* buf, ULONG len, ULONG* got) {
         while (*got < len && at + *got < length_) {
-            if (stop_->load(std::memory_order_acquire)) {
+            if (stop_->load(std::memory_order_acquire) || closing_.load(std::memory_order_acquire)) {
                 waiting_->store(false);
                 return E_ABORT;
             }
@@ -209,6 +270,10 @@ private:
     std::shared_ptr<std::atomic<bool>> waiting_;
     std::mutex mutex_;
     QWORD position_ = 0;
+    std::atomic<bool> closing_{false};
+    std::mutex idle_mutex_;
+    std::condition_variable idle_cv_;
+    int in_flight_ = 0;  // idle_mutex_
     std::atomic<ULONG> refs_{1};
 };
 
@@ -395,7 +460,7 @@ public:
         s.width = width_.load();
         s.height = height_.load();
         s.paused = paused_;
-        s.buffering = (buffering_ || waiting_->load()) && !ended_locked(now);
+        s.buffering = reports_buffering(buffering_, has_audio_, waiting_->load(), ended_locked(now));
         s.ended = ended_locked(now);
         s.failed = failed_.load();
         return s;
@@ -486,15 +551,14 @@ private:
     }
 
     bool open() {
-        ComPtr<IMFByteStream> stream;
-        stream.Attach(new ClipByteStream(options_.length, options_.read, stop_flag_, waiting_));
+        byte_stream_.Attach(new ClipByteStream(options_.length, options_.read, stop_flag_, waiting_));
         ComPtr<IMFSourceResolver> resolver;
         HRESULT hr = MFCreateSourceResolver(&resolver);
         MF_OBJECT_TYPE type = MF_OBJECT_INVALID;
         ComPtr<IUnknown> object;
         if (SUCCEEDED(hr)) {
             hr = resolver->CreateObjectFromByteStream(
-                stream.Get(), L"clip.mp4",
+                static_cast<IMFByteStream*>(byte_stream_.Get()), L"clip.mp4",
                 MF_RESOLUTION_MEDIASOURCE | MF_RESOLUTION_CONTENT_DOES_NOT_HAVE_TO_MATCH_EXTENSION_OR_MIME_TYPE,
                 nullptr, &type, &object);
         }
@@ -621,6 +685,7 @@ private:
     }
 
     void close_source() {
+        if (byte_stream_) byte_stream_->abort_reads();
         reader_.Reset();
         if (media_source_) media_source_->Shutdown();
         media_source_.Reset();
@@ -767,6 +832,7 @@ private:
     std::atomic<uint32_t> height_{0};
 
     // Demux thread.
+    ComPtr<ClipByteStream> byte_stream_;
     ComPtr<IMFMediaSource> media_source_;
     ComPtr<IMFSourceReader> reader_;
     DWORD video_index_ = kNone;

@@ -755,6 +755,26 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | `ClipPlayer::state()` says buffering while a read waits (`waiting_`), also when the sound and the picture play on. The client shows BUFFERING then. The waits come while the source's read-ahead is ahead of the fetch: at the start, and at 8 Mbps also during play (3.3, 5.1, 10.2 and 19.2 s after the start call). | `state.csv`: buffering with a moving position; the longest gap between two shown frames is 19 ms (cpu) and 36 ms (hw). |
 | Seek (hw): the source starts the seek only when its read that waits returns (424 ms). The range reader then fetches one more range after the old position (464 ms) before the seek's range. The first sample after the seek needs two ranges (2 x 470 ms). On the cpu lane the source does not wait at the seek, so the seek costs the range in flight and one range. | `results.json` `clips.playback.info.seek.fetch`, `read_waits.csv`. |
 
+**Fixes, measured 2026-11-03** (the same PC; cpu 1 run, hw 2 runs):
+
+| Fix | Where |
+|---|---|
+| `ClipByteStream::BeginRead` returns at once and reads on Media Foundation's long-function work queue. The source answers sample requests while a read waits, so it gives the first sample after the first range, not after 3 to 6 MiB. The demux thread aborts the reads and waits for them before it shuts the source down. | `libmello/src/clip/clip_player_win.cpp` |
+| `reports_buffering`: with sound, the state says buffering only when the sound stalls. A read that waits while the sound plays on is a read ahead. | `libmello/src/clip/clip_player.hpp`, test `ClipPlayer.AReadThatWaitsIsAStallOnlyWithoutSound` |
+| The range reader: a range ahead in flight stops when a read waits for a range more than 4 ranges away (a seek); a range that a read waits for always completes. A read far behind the head (a seek back) moves the ranges ahead back to it. | `mello-core/src/clip_play/range_reader.rs`, tests `a_seek_far_away_stops_the_fetch_ahead`, `a_seek_back_moves_the_ranges_ahead_back` |
+
+| Metric | cpu lane | hw lane | Gate |
+|---|---|---|---|
+| First frame | 528 ms (first range 467 ms): pass | 607 and 611 ms: pass | 1000 ms |
+| Buffering after the first frame | 0 ms: pass | 0 and 0 ms: pass | 0 |
+| Frames out of order, skipped, unreadable | 0, 0, 0 (1800 shown): pass | run 1: 0, 1, 1 (the first frame shown did not read); run 2: 0, 0, 0 (1290 shown) | 0 |
+| Seek to 20 s | 944 ms: pass, 56 ms of margin | 1785 and 1784 ms: FAIL | 1000 ms |
+
+Open:
+- **The hw seek.** Before the seek, the source makes one or two more reads (1 MiB, then 2 MiB: about 800 ms). The keyframe at 20 s then spans two 1 MiB ranges (2 x 470 ms). A seek under 1 s at 8 Mbps needs both: a source that starts the seek at once (a read that waits must end without an error state in the MPEG-4 source, or a demux of our own), and a wanted range smaller than 1 MiB. The cpu seek passes with a 56 ms margin and has the same causes.
+- **Unreadable first frames on hw.** Run 1: the first frame of the full play did not read. Run 2: the first 5 frames of the seek play did not read. The cpu lane had none. A first-frame race in the hw viewer's CPU readback is a possible cause; not checked.
+- **The hw recording.** NVENC dropped to cost tier 1, then 2, and the clips had 1290 to 1351 of 1800 frames. Parsec ran on the PC (it can use NVENC); not checked.
+
 The gate runs from the QA harness, not from `check.sh`.
 
 ### 10.4 Perf gate

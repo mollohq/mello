@@ -366,3 +366,15 @@ TEST(ClipPlayer, APauseHoldsTheClock) {
 }
 
 #endif  // _WIN32
+
+// A read that waits is a stall only in a clip without sound. With sound, the
+// source reads ahead while the sound plays on; the sound's stall rule says
+// when play waits.
+TEST(ClipPlayer, AReadThatWaitsIsAStallOnlyWithoutSound) {
+    using mello::clip::reports_buffering;
+    EXPECT_FALSE(reports_buffering(false, true, true, false)) << "a read ahead while the sound plays";
+    EXPECT_TRUE(reports_buffering(true, true, false, false)) << "the sound ran out";
+    EXPECT_TRUE(reports_buffering(false, false, true, false)) << "no sound: the read is the stall";
+    EXPECT_FALSE(reports_buffering(true, true, true, true)) << "the clip ended";
+    EXPECT_FALSE(reports_buffering(false, false, false, false));
+}

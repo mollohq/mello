@@ -53,7 +53,8 @@ struct ClipPlayerState {
     int64_t duration_us = 0;
     uint32_t width = 0;
     uint32_t height = 0;
-    /// A read waits for bytes, or the sound ran out: the picture holds.
+    /// Play waits: the sound ran out (or, in a clip without sound, a read
+    /// waits for bytes). See `reports_buffering`.
     bool buffering = false;
     bool paused = false;
     /// The last frame was shown.
@@ -61,6 +62,14 @@ struct ClipPlayerState {
     /// The clip cannot play (no video, a read error, no decoder).
     bool failed = false;
 };
+
+/// The `buffering` of the state. With sound, the sound's stall rule says when
+/// play waits: a read that waits while the sound plays on is the source
+/// reading ahead, not a stall (plans/GAME-CLIPS.md 10.3). Without sound, a
+/// read that waits is the only sign.
+inline bool reports_buffering(bool stalled, bool has_audio, bool read_waits, bool ended) {
+    return (stalled || (!has_audio && read_waits)) && !ended;
+}
 
 class ClipPlayer {
 public:

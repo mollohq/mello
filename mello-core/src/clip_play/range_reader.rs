@@ -4,7 +4,9 @@
 //! ranges ahead of the last read, into a cache file at their offsets. The
 //! player's reads never wait on the network: a read of bytes that are not
 //! there asks for their range and returns `READ_WAIT`, and the player asks
-//! again. The clipper's own file is read as it is.
+//! again. A range ahead that is in flight when a read waits for a range far
+//! from it (a seek) stops, so the wanted range comes next. The clipper's own
+//! file is read as it is.
 
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
@@ -116,7 +118,11 @@ impl Coverage {
     /// range is missing (it becomes the wanted one).
     pub(crate) fn readable(&mut self, offset: u64, len: u64, length: u64) -> u64 {
         let first = offset / CHUNK;
-        self.head = self.head.max(first);
+        // The head follows the reads forward. A read far behind it is a seek
+        // back: the ranges ahead start there again.
+        if first > self.head || first + AHEAD_CHUNKS < self.head {
+            self.head = first;
+        }
         if !self.has(first) {
             self.wanted = Some(first);
             return 0;
@@ -129,6 +135,14 @@ impl Coverage {
             chunk += 1;
         }
         until - offset
+    }
+
+    /// A read waits for a range more than `AHEAD_CHUNKS` from `chunk` (a
+    /// seek): a fetch ahead of `chunk` stops for it. A range near `chunk`
+    /// waits: `chunk` is soon read too.
+    pub(crate) fn wants_far_from(&self, chunk: u64) -> bool {
+        self.wanted
+            .is_some_and(|w| w.abs_diff(chunk) > AHEAD_CHUNKS && !self.has(w))
     }
 
     /// The next range to fetch: the wanted one, else the first missing one
@@ -288,14 +302,16 @@ impl Drop for RangeReader {
 
 fn fetch_main(http: reqwest::blocking::Client, shared: Arc<Shared>) {
     loop {
-        let chunk = {
+        let (chunk, ahead) = {
             let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
             loop {
                 if state.stop || state.failed {
                     return;
                 }
                 if let Some(c) = state.coverage.next() {
-                    break c;
+                    // Only a range ahead gives way: a range that a read waits
+                    // for always completes.
+                    break (c, state.coverage.wanted != Some(c));
                 }
                 state = shared
                     .cv
@@ -306,17 +322,27 @@ fn fetch_main(http: reqwest::blocking::Client, shared: Arc<Shared>) {
         };
         let start = chunk * CHUNK;
         let end = ((chunk + 1) * CHUNK).min(shared.length) - 1;
+        let give_way = || {
+            let state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
+            state.stop || (ahead && state.coverage.wants_far_from(chunk))
+        };
         let mut done = false;
+        let mut left = false;
         for attempt in 1..=RETRIES {
-            match fetch_range(&http, &shared.url, start, end) {
-                Ok(bytes) if bytes.len() as u64 == end - start + 1 => {
+            match fetch_range(&http, &shared.url, start, end, &give_way) {
+                Ok(None) => {
+                    log::debug!("[clip-play] range {start}-{end} left for a wanted range");
+                    left = true;
+                    break;
+                }
+                Ok(Some(bytes)) if bytes.len() as u64 == end - start + 1 => {
                     let mut file = shared.file.lock().unwrap_or_else(|e| e.into_inner());
                     if file.seek(SeekFrom::Start(start)).is_ok() && file.write_all(&bytes).is_ok() {
                         done = true;
                     }
                     break;
                 }
-                Ok(bytes) => log::warn!(
+                Ok(Some(bytes)) => log::warn!(
                     "[clip-play] range {start}-{end}: {} bytes (attempt {attempt})",
                     bytes.len()
                 ),
@@ -326,6 +352,9 @@ fn fetch_main(http: reqwest::blocking::Client, shared: Arc<Shared>) {
                 return;
             }
             std::thread::sleep(Duration::from_millis(250 << attempt));
+        }
+        if left {
+            continue;
         }
         let mut state = shared.state.lock().unwrap_or_else(|e| e.into_inner());
         if done {
@@ -337,13 +366,16 @@ fn fetch_main(http: reqwest::blocking::Client, shared: Arc<Shared>) {
     }
 }
 
+/// One range, or `None` when `give_way` said to stop before its end. A
+/// stopped range drops its connection: the next request opens a new one.
 fn fetch_range(
     http: &reqwest::blocking::Client,
     url: &str,
     start: u64,
     end: u64,
-) -> Result<Vec<u8>, String> {
-    let resp = http
+    give_way: &dyn Fn() -> bool,
+) -> Result<Option<Vec<u8>>, String> {
+    let mut resp = http
         .get(url)
         .header(reqwest::header::RANGE, format!("bytes={start}-{end}"))
         .send()
@@ -351,7 +383,18 @@ fn fetch_range(
     if resp.status().as_u16() != 206 {
         return Err(format!("HTTP {}", resp.status()));
     }
-    resp.bytes().map(|b| b.to_vec()).map_err(|e| e.to_string())
+    let mut bytes = Vec::with_capacity((end - start + 1) as usize);
+    let mut piece = vec![0u8; 16 * 1024];
+    loop {
+        if give_way() {
+            return Ok(None);
+        }
+        let n = resp.read(&mut piece).map_err(|e| e.to_string())?;
+        if n == 0 {
+            return Ok(Some(bytes));
+        }
+        bytes.extend_from_slice(&piece[..n]);
+    }
 }
 
 /// `bytes 0-1048575/20971520` -> 20971520.
@@ -394,6 +437,42 @@ mod tests {
         assert_eq!(c.readable(7 * CHUNK + 3, 100, length), 100);
         // Then the ranges ahead of the new head.
         assert_eq!(c.next(), Some(8));
+    }
+
+    #[test]
+    fn a_seek_far_away_stops_the_fetch_ahead() {
+        let length = 10 * CHUNK;
+        let mut c = Coverage::new(length);
+        c.mark(0);
+        c.readable(10, 100, length);
+        assert_eq!(c.next(), Some(1), "range 1 is fetched ahead");
+        assert!(!c.wants_far_from(1), "no read waits");
+        // A read waits for range 3, near range 1: range 1 goes on.
+        assert_eq!(c.readable(3 * CHUNK, 100, length), 0);
+        assert!(!c.wants_far_from(1));
+        // A seek: a read waits for range 7 while range 1 is in flight.
+        assert_eq!(c.readable(7 * CHUNK, 100, length), 0);
+        assert!(c.wants_far_from(1), "range 1 stops for range 7");
+        assert!(
+            !c.wants_far_from(7),
+            "range 7 is the one the read waits for"
+        );
+        c.mark(7);
+        assert!(!c.wants_far_from(1), "range 7 is there");
+    }
+
+    #[test]
+    fn a_seek_back_moves_the_ranges_ahead_back() {
+        let length = 20 * CHUNK;
+        let mut c = Coverage::new(length);
+        for chunk in (0..=12).filter(|&c| c != 3) {
+            c.mark(chunk);
+        }
+        c.readable(12 * CHUNK, 1, length);
+        assert_eq!(c.next(), Some(13), "ahead of a read at range 12");
+        // A seek back to range 1, which is there: range 3 is ahead of it.
+        assert_eq!(c.readable(CHUNK, 1, length), 1);
+        assert_eq!(c.next(), Some(3));
     }
 
     #[test]
