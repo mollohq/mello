@@ -78,6 +78,9 @@ Privacy: keys are ULIDs, unguessable. The bucket stays in the EU. No EXIF leaves
 
 ### Phase 2: feel
 
+Built on `feat/chat-v2`: 2.1, 2.2 (server-side model as decided), 2.3, 2.4. 2.5 was dropped
+(Giphy forbids a proxy). Not run against the local stack yet.
+
 | # | Change |
 |---|---|
 | 2.1 | Date separators: Today, Yesterday, then the date. |

@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -51,8 +52,13 @@ pub fn invite_person(p: &mello_core::crew::InvitePerson) -> InvitePersonData {
     }
 }
 
+/// Message id to emoji to the users who reacted, as the server keeps it.
+pub type ReactionMap =
+    Rc<RefCell<HashMap<String, std::collections::BTreeMap<String, Vec<String>>>>>;
+
 pub struct ChatConvertOptions<'a> {
     pub user_id: &'a str,
+    pub reactions: &'a HashMap<String, std::collections::BTreeMap<String, Vec<String>>>,
     pub user_avatar: &'a slint::Image,
     pub has_user_avatar: bool,
     pub avatar_cache: &'a HashMap<String, slint::Image>,
@@ -145,6 +151,21 @@ pub fn chat_messages_to_slint(
         };
 
         let mentions_self = d.mentions.iter().any(|m| m.user_id == opts.user_id);
+        let reactions: Vec<crate::ReactionData> = opts
+            .reactions
+            .get(&d.message_id)
+            .map(|by_emoji| {
+                by_emoji
+                    .iter()
+                    .filter(|(_, users)| !users.is_empty())
+                    .map(|(emoji, users)| crate::ReactionData {
+                        emoji: emoji.clone().into(),
+                        count: users.len() as i32,
+                        mine: users.iter().any(|u| u == opts.user_id),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
         let is_image = !d.images.is_empty();
         let images: Vec<ChatImageData> = d
             .images
@@ -231,6 +252,7 @@ pub fn chat_messages_to_slint(
             is_system: d.is_system,
             is_unread_divider: false,
             day_label: d.day_label.clone().into(),
+            reactions: Rc::new(slint::VecModel::from(reactions)).into(),
             is_gif,
             gif_image: slint::Image::default(),
             has_gif_image: false,
@@ -295,6 +317,19 @@ pub fn sync_chat_rows(app: &MainWindow, rows: Vec<ChatMessageData>) {
     }
 }
 
+fn same_reactions(
+    a: &slint::ModelRc<crate::ReactionData>,
+    b: &slint::ModelRc<crate::ReactionData>,
+) -> bool {
+    if a.row_count() != b.row_count() {
+        return false;
+    }
+    (0..a.row_count()).all(|i| match (a.row_data(i), b.row_data(i)) {
+        (Some(x), Some(y)) => x.emoji == y.emoji && x.count == y.count && x.mine == y.mine,
+        _ => false,
+    })
+}
+
 /// The fields a rebuild can change. `gif_image` and `has_gif_image` are
 /// owned by the animator and compared on purpose: a rebuild carries an empty
 /// image, so comparing it would wipe the frame; `sync_gif_images` puts it back.
@@ -315,6 +350,7 @@ fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
         && a.is_emoji_only == b.is_emoji_only
         && a.is_image == b.is_image
         && a.day_label == b.day_label
+        && same_reactions(&a.reactions, &b.reactions)
         && a.images.row_count() == b.images.row_count()
 }
 

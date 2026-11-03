@@ -1577,6 +1577,135 @@ fn clicking_an_image_opens_the_viewer() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat: reactions
+// ---------------------------------------------------------------------------
+
+fn reaction_update(
+    message_id: &str,
+    pairs: &[(&str, &[&str])],
+) -> mello_core::crew_state::ReactionUpdate {
+    mello_core::crew_state::ReactionUpdate {
+        crew_id: "crew-1".into(),
+        message_id: message_id.into(),
+        reactions: pairs
+            .iter()
+            .map(|(e, users)| {
+                (
+                    (*e).to_string(),
+                    users.iter().map(|u| (*u).to_string()).collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Loaded reactions show as chips with a count; the user's own is marked.
+/// A click on a chip toggles: remove when it is mine, add when it is not.
+#[test]
+fn reactions_show_as_chips_and_a_click_toggles_mine() {
+    use slint::Model;
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    h.emit(Event::ChatReactionsLoaded {
+        crew_id: "crew-1".into(),
+        items: vec![reaction_update(
+            "m0",
+            &[("🔥", &["u-bob", "u-me"]), ("💀", &["u-bob"])],
+        )],
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "m0")
+        .expect("row");
+    let chips: Vec<(String, i32, bool)> = (0..row.reactions.row_count())
+        .filter_map(|i| row.reactions.row_data(i))
+        .map(|r| (r.emoji.to_string(), r.count, r.mine))
+        .collect();
+    assert_eq!(
+        chips,
+        vec![("💀".to_string(), 1, false), ("🔥".to_string(), 2, true)]
+    );
+
+    let _ = h.commands();
+    h.app().invoke_react("m0".into(), "🔥".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::ReactToMessage { message_id, emoji, add: false } if message_id == "m0" && emoji == "🔥")),
+        "mine comes off, got {cmds:?}"
+    );
+    h.app().invoke_react("m0".into(), "💀".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Command::ReactToMessage { emoji, add: true, .. } if emoji == "💀")
+        ),
+        "not mine goes on, got {cmds:?}"
+    );
+
+    // The server's answer replaces the message's reactions in place.
+    h.emit(Event::ChatReactionChanged {
+        update: reaction_update("m0", &[("💀", &["u-bob", "u-me"])]),
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "m0")
+        .expect("row");
+    assert_eq!(row.reactions.row_count(), 1);
+    let only = row.reactions.row_data(0).expect("chip");
+    assert_eq!(
+        (only.emoji.to_string(), only.count, only.mine),
+        ("💀".to_string(), 2, true)
+    );
+}
+
+/// React on a message opens the picker in reaction mode: the pick becomes a
+/// reaction, the picker closes, and the field keeps its text.
+#[test]
+fn the_picker_in_reaction_mode_reacts_instead_of_typing() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-me".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    next_frame();
+    h.app().set_chat_input_text("draft".into());
+    h.app().set_emoji_target_message("m1".into());
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    h.app().invoke_emoji_search("fire".into());
+    next_frame();
+    let _ = h.commands();
+    h.click_label("fire");
+    next_frame();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::ReactToMessage { message_id, emoji, add: true } if message_id == "m1" && emoji == "🔥")),
+        "the pick is a reaction, got {cmds:?}"
+    );
+    assert_eq!(
+        h.app().get_chat_input_text(),
+        "draft",
+        "the field is untouched"
+    );
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "a reaction closes the picker"
+    );
+    assert_eq!(h.app().get_emoji_target_message(), "");
+}
+
+// ---------------------------------------------------------------------------
 // Chat: read cursor
 // ---------------------------------------------------------------------------
 

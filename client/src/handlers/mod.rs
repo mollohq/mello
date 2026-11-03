@@ -136,6 +136,8 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::ChatMessageDeleted { .. }
         | Event::GifsLoaded { .. }
         | Event::GifsFailed { .. }
+        | Event::ChatReactionsLoaded { .. }
+        | Event::ChatReactionChanged { .. }
         | Event::ChatReadCursorLoaded { .. }
         | Event::ChatReadCursors { .. }
         | Event::ChatImageUploaded { .. }

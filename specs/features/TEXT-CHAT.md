@@ -130,7 +130,40 @@ Feed: images render under the body, each at most 300px wide with one cut
 corner and the size tag. A click opens the viewer over the panel with Save,
 Copy and Close; Escape closes.
 
-### 2.4 System Message
+### 2.4 Reactions
+
+Reactions are not messages. One storage object per message
+(`chat_reactions/{message_id}`, system-owned, read by all crew members) holds
+emoji to the user ids that reacted, in order. `chat_react` (crew, message,
+emoji, add or remove) updates it and notifies every crew member (code 117)
+with the message's reactions; the client replaces what it holds for that
+message. On a load, `chat_reactions` returns the objects of the loaded window
+in one call. At most 20 distinct emoji per message; text is refused.
+
+Client: a reaction row under the message with emoji and count, the user's own
+chip with the white outline, and a plus that opens the picker for one more.
+The hover row's React opens the picker in reaction mode: the pick becomes a
+reaction, the picker closes, the field keeps its text. A click on a chip
+toggles the user's own reaction.
+
+### 2.5 Read cursor
+
+Where the user stopped reading each crew lives in the user's own storage,
+`chat_read/{crew_id}` = `{message_id, time}`. The client stores the newest
+message when the feed reaches the bottom, once per message. On open, the feed
+starts at the unread rule when the cursor is behind the newest message, else
+at the bottom. The sidebar badge of another crew counts its message previews
+newer than the cursor, the user's own messages excluded; a crew with no
+cursor counts every preview by others.
+
+### 2.6 Day separators
+
+A message that starts a new local day carries a label: Today, Yesterday, the
+weekday with the date inside a week, then the date, and the date with the year
+before this year. The row draws it as a graphite rule with the label register.
+A day change starts a new group.
+
+### 2.7 System Message
 
 System messages are sent by the server (not users) for crew events.
 
@@ -591,10 +624,10 @@ Opens upward from the Emoji pill, same pattern as the GIF popover.
 
 ## 9. Unread Tracking
 
-### 9.1 Beta Approach (Client-Side Only)
+### 9.1 Read cursor
 
-No backend storage for read cursors in beta. Unread state is volatile (resets on
-app restart). This is acceptable for small crews.
+Superseded by 2.5: the read cursor lives in the user's own storage and the
+unread state survives a restart.
 
 ### 9.2 Logic
 

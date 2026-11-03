@@ -606,6 +606,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         chat_attachments: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
         read_cursors: Rc::new(RefCell::new(std::collections::HashMap::new())),
         crew_previews: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        reactions: Rc::new(RefCell::new(std::collections::HashMap::new())),
         unread_tracker: Rc::new(RefCell::new(mello_core::chat::UnreadTracker::new())),
         active_crew_id: Rc::new(RefCell::new(String::new())),
         avatar_state: std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new())),

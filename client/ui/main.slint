@@ -220,6 +220,8 @@ export component MainWindow inherits Window {
     in property <[EmojiItemData]> recent-emoji: [];
     in property <[EmojiCategoryData]> emoji-categories: [];
     in-out property <int> emoji-category: 0;
+    /// When set, the next emoji pick is a reaction on this message, not text.
+    in-out property <string> emoji-target-message: "";
     /// The composer's pending image chips.
     in property <[AttachmentData]> chat-attachments: [];
     /// The image open in the viewer over the chat panel. Empty when closed.
@@ -692,6 +694,8 @@ export component MainWindow inherits Window {
     callback emoji-search(/* query */ string);
     callback emoji-category-selected(/* index */ int);
     callback emoji-picked(/* emoji */ string);
+    /// Toggle this user's reaction under `emoji` on a message.
+    callback react(/* message_id */ string, /* emoji */ string);
     callback chat-viewport-changed(/* at_bottom */ bool);
     callback scroll-to-bottom-done();
     callback link-clicked(/* url */ string);
@@ -1305,6 +1309,8 @@ export component MainWindow inherits Window {
                     recent-emoji: root.recent-emoji;
                     emoji-categories: root.emoji-categories;
                     emoji-category <=> root.emoji-category;
+                    emoji-target-message <=> root.emoji-target-message;
+                    react(id, emoji) => { root.react(id, emoji); }
                     emoji-search(query) => { root.emoji-search(query); }
                     emoji-category-selected(index) => { root.emoji-category-selected(index); }
                     emoji-picked(emoji) => { root.emoji-picked(emoji); }

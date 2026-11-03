@@ -1646,6 +1646,37 @@ impl NakamaClient {
         Ok(())
     }
 
+    pub async fn chat_react(
+        &self,
+        crew_id: &str,
+        message_id: &str,
+        emoji: &str,
+        add: bool,
+    ) -> Result<crate::crew_state::ReactionUpdate> {
+        let payload = serde_json::json!({
+            "crew_id": crew_id,
+            "message_id": message_id,
+            "emoji": emoji,
+            "op": if add { "add" } else { "remove" },
+        });
+        let resp = self.rpc("chat_react", &payload).await?;
+        Ok(serde_json::from_str(&resp)?)
+    }
+
+    pub async fn chat_reactions(
+        &self,
+        crew_id: &str,
+        message_ids: &[String],
+    ) -> Result<Vec<crate::crew_state::ReactionUpdate>> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let payload = serde_json::json!({ "crew_id": crew_id, "message_ids": message_ids });
+        let resp = self.rpc("chat_reactions", &payload).await?;
+        let parsed: crate::crew_state::ChatReactionsResponse = serde_json::from_str(&resp)?;
+        Ok(parsed.items)
+    }
+
     pub async fn clip_upload_complete(
         &self,
         req: &crate::crew_events::ClipUploadCompleteRequest,
@@ -2688,6 +2719,13 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
                 });
             }
             Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
+        },
+        // 117 = one message's reactions
+        117 => match serde_json::from_str::<crew_state::ReactionUpdate>(content) {
+            Ok(update) => {
+                let _ = event_tx.send(Event::ChatReactionChanged { update });
+            }
+            Err(e) => log::warn!("Failed to parse chat_reaction notification: {}", e),
         },
         // 116 = the crew feed has new content
         116 => match serde_json::from_str::<crew_state::FeedChanged>(content) {

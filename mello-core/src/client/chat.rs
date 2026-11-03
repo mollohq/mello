@@ -209,6 +209,40 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_react(&self, message_id: &str, emoji: &str, add: bool) {
+        let Some(crew_id) = self.nakama.active_crew_id().map(str::to_string) else {
+            return;
+        };
+        match self
+            .nakama
+            .chat_react(&crew_id, message_id, emoji, add)
+            .await
+        {
+            Ok(update) => {
+                // The notification reaches everyone, this user included; the
+                // answer makes the own chip change at once.
+                let _ = self.event_tx.send(Event::ChatReactionChanged { update });
+            }
+            Err(e) => log::warn!("[chat] react on {} failed: {}", message_id, e),
+        }
+    }
+
+    /// The reactions of `message_ids` for the crew on screen, in one call.
+    pub(super) async fn load_reactions(&self, crew_id: &str, message_ids: Vec<String>) {
+        if message_ids.is_empty() {
+            return;
+        }
+        match self.nakama.chat_reactions(crew_id, &message_ids).await {
+            Ok(items) => {
+                let _ = self.event_tx.send(Event::ChatReactionsLoaded {
+                    crew_id: crew_id.to_string(),
+                    items,
+                });
+            }
+            Err(e) => log::warn!("[chat] reactions for {} failed: {}", crew_id, e),
+        }
+    }
+
     pub(super) async fn handle_mark_chat_read(&self, crew_id: &str, message_id: &str, time: &str) {
         let cursor = crate::chat::ChatReadCursor {
             message_id: message_id.to_string(),
@@ -239,10 +273,14 @@ impl super::Client {
         {
             Ok((messages, next_cursor)) => {
                 self.history_cursor = next_cursor.clone();
+                let ids: Vec<String> = messages.iter().map(|m| m.message_id.clone()).collect();
                 let _ = self.event_tx.send(Event::HistoryLoaded {
                     messages,
                     cursor: next_cursor,
                 });
+                if let Some(crew_id) = self.nakama.active_crew_id().map(str::to_string) {
+                    self.load_reactions(&crew_id, ids).await;
+                }
             }
             Err(e) => {
                 log::error!("Failed to load history: {}", e);

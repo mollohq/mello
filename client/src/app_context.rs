@@ -52,6 +52,8 @@ pub struct AppContext {
     pub chat_scroll: Rc<ChatScrollState>,
     /// The composer's pending image chips.
     pub chat_attachments: crate::chat_images::Attachments,
+    /// Reactions of the loaded messages: message id to emoji to user ids.
+    pub reactions: crate::converters::ReactionMap,
     /// Where the user stopped reading each crew, from Nakama storage.
     pub read_cursors: Rc<RefCell<HashMap<String, mello_core::chat::ChatReadCursor>>>,
     /// The newest messages of each crew, from the sidebar subscription. With
@@ -195,6 +197,7 @@ impl AppContext {
             chat_attachments: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
             read_cursors: Rc::new(RefCell::new(HashMap::new())),
             crew_previews: Rc::new(RefCell::new(HashMap::new())),
+            reactions: Rc::new(RefCell::new(HashMap::new())),
             unread_tracker: Rc::new(RefCell::new(UnreadTracker::new())),
             active_crew_id: Rc::new(RefCell::new(String::new())),
             avatar_state: Arc::new(Mutex::new(crate::avatar::AvatarGridState::new())),
@@ -270,6 +273,7 @@ impl Clone for AppContext {
             chat_attachments: self.chat_attachments.clone(),
             read_cursors: self.read_cursors.clone(),
             crew_previews: self.crew_previews.clone(),
+            reactions: self.reactions.clone(),
             unread_tracker: self.unread_tracker.clone(),
             active_crew_id: self.active_crew_id.clone(),
             avatar_state: self.avatar_state.clone(),

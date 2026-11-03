@@ -843,6 +843,13 @@ impl Client {
             Command::DeleteChatImages { urls } => {
                 self.handle_delete_chat_images(urls).await;
             }
+            Command::ReactToMessage {
+                message_id,
+                emoji,
+                add,
+            } => {
+                self.handle_react(&message_id, &emoji, add).await;
+            }
             Command::MarkChatRead {
                 crew_id,
                 message_id,

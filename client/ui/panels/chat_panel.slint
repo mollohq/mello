@@ -556,6 +556,29 @@ export component ChatPanel inherits Rectangle {
     callback image-save(/* url */ string);
     callback image-copy(/* url */ string);
 
+    /// A pick in the picker: a reaction when a message asked for one, else
+    /// text in the field. The picker stays open for text, because people pick
+    /// more than one; a reaction closes it.
+    function pick-emoji(emoji: string) {
+        root.emoji-picked(emoji);
+        if root.emoji-target-message != "" {
+            root.react(root.emoji-target-message, emoji);
+            root.emoji-target-message = "";
+            root.emoji-popover-open = false;
+            return;
+        }
+        chat-input.text += emoji;
+        root.chat-input-changed(chat-input.text);
+        chat-input.focus();
+    }
+
+    /// Open the picker to choose a reaction for `message-id`.
+    function pick-reaction-for(message-id: string) {
+        root.emoji-target-message = message-id;
+        root.emoji-popover-open = true;
+        root.emoji-pill-clicked();
+    }
+
     /// Enter and the send button. Text, or ready chips, or both.
     function submit-message() {
         if root.chat-input-text == "" && root.attachments.length == 0 {
@@ -605,6 +628,9 @@ export component ChatPanel inherits Rectangle {
     in property <[EmojiItemData]> recent-emoji: [];
     in property <[EmojiCategoryData]> emoji-categories: [];
     in-out property <int> emoji-category: 0;
+    /// A message id while the picker is choosing a reaction for it.
+    in-out property <string> emoji-target-message: "";
+    callback react(/* message_id */ string, /* emoji */ string);
     callback emoji-search(/* query */ string);
     callback emoji-category-selected(/* index */ int);
     callback emoji-picked(/* emoji */ string);
@@ -965,6 +991,28 @@ export component ChatPanel inherits Rectangle {
                                         width: 16px;
                                         height: 16px;
                                         border-radius: 4px;
+                                        background: react-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/smile.svg");
+                                            width: 12px;
+                                            height: 12px;
+                                            colorize: Theme.text-secondary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        react-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "React";
+                                            clicked => { root.pick-reaction-for(msg.message-id); }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 16px;
+                                        height: 16px;
+                                        border-radius: 4px;
                                         background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
                                         Image {
@@ -1262,6 +1310,86 @@ export component ChatPanel inherits Rectangle {
                                         root.gif-hovered(msg.gif-url);
                                     }
                                 }
+                            }
+                        }
+                    }
+
+                    // Reactions: emoji and count, the user's own with the white
+                    // outline, and a plus that opens the picker for one more.
+                    if !msg.is-system && !msg.is-unread-divider && msg.reactions.length > 0: HorizontalLayout {
+                        padding-left: 40px;
+                        padding-right: 4px;
+                        padding-top: 4px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        for r[ri] in msg.reactions: Rectangle {
+                            width: reaction-label.preferred-width + 20px;
+                            height: 22px;
+                            background: transparent;
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                fill: r.mine ? Theme.action-line : (reaction-touch.has-hover ? Theme.graphic-med : Theme.surface-hover);
+                            }
+                            if r.mine: CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                inset: Theme.keyline;
+                                fill: reaction-touch.has-hover ? Theme.graphic-med : Theme.surface;
+                            }
+                            reaction-label := HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                padding-left: 6px;
+                                padding-right: 8px;
+                                Text {
+                                    text: r.emoji;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    font-family: Theme.font-display;
+                                    font-weight: Theme.weight-display;
+                                    text: r.count;
+                                    font-size: Theme.font-sm;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            reaction-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "React " + r.emoji;
+                                mouse-cursor: pointer;
+                                clicked => { root.react(msg.message-id, r.emoji); }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 24px;
+                            height: 22px;
+                            background: transparent;
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                fill: add-reaction-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
+                            }
+                            Image {
+                                source: @image-url("../icons/plus.svg");
+                                width: 10px;
+                                height: 10px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Theme.text-secondary;
+                            }
+                            add-reaction-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Add reaction";
+                                mouse-cursor: pointer;
+                                clicked => { root.pick-reaction-for(msg.message-id); }
                             }
                         }
                     }
@@ -1696,12 +1824,7 @@ export component ChatPanel inherits Rectangle {
                             recent-touch := TouchArea {
                                 accessible-role: button;
                                 accessible-label: r.name;
-                                clicked => {
-                                    chat-input.text += r.emoji;
-                                    root.chat-input-changed(chat-input.text);
-                                    root.emoji-picked(r.emoji);
-                                    chat-input.focus();
-                                }
+                                clicked => { root.pick-emoji(r.emoji); }
                             }
                         }
                     }
@@ -1740,14 +1863,7 @@ export component ChatPanel inherits Rectangle {
                             emoji-cell-touch := TouchArea {
                                 accessible-role: button;
                                 accessible-label: cell.name;
-                                // The picker stays open: people pick more than one.
-                                // The pill or Escape closes it.
-                                clicked => {
-                                    chat-input.text += cell.emoji;
-                                    root.chat-input-changed(chat-input.text);
-                                    root.emoji-picked(cell.emoji);
-                                    chat-input.focus();
-                                }
+                                clicked => { root.pick-emoji(cell.emoji); }
                             }
                         }
                     }
@@ -1925,6 +2041,7 @@ export component ChatPanel inherits Rectangle {
                 label: "Emoji";
                 active: root.emoji-popover-open;
                 clicked => {
+                    root.emoji-target-message = "";
                     root.emoji-popover-open = !root.emoji-popover-open;
                     if root.emoji-popover-open {
                         root.emoji-pill-clicked();
@@ -1975,6 +2092,7 @@ export component ChatPanel inherits Rectangle {
                 key-pressed(event) => {
                     if event.text == Key.Escape && (root.emoji-popover-open || root.gif-popover-open) {
                         root.emoji-popover-open = false;
+                        root.emoji-target-message = "";
                         root.gif-popover-open = false;
                         return accept;
                     }
@@ -2240,6 +2358,7 @@ export component Preview inherits ChatPanel {
         // Markdown + link
         {
             message-id: "p3", sender-id: "u1", sender-name: "bobdev",
+            reactions: [ { emoji: "😂", count: 2, mine: false }, { emoji: "💀", count: 1, mine: true } ],
             sender-initials: "B0", text: "Check **bold**, *italic*, and https://slint.dev",
             display-text: "Check **bold**, *italic*, and",
             display-styled: @markdown("Check **bold**, *italic*, and"),

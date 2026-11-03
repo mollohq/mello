@@ -294,6 +294,23 @@ pub struct VoiceUpdate {
 // Message preview push
 // ---------------------------------------------------------------------------
 
+/// One message's reactions: emoji to the users who reacted, in order. The
+/// server sends the whole map after every change (notification 117) and
+/// `chat_reactions` returns one per message with any.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ReactionUpdate {
+    pub crew_id: String,
+    pub message_id: String,
+    #[serde(default)]
+    pub reactions: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct ChatReactionsResponse {
+    #[serde(default)]
+    pub items: Vec<ReactionUpdate>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct MessagePreviewUpdate {
     pub crew_id: String,

@@ -229,6 +229,13 @@ pub enum Command {
     DeleteChatImages {
         urls: Vec<String>,
     },
+    /// Add (or remove) the user's reaction under `emoji` on a message of the
+    /// crew on screen.
+    ReactToMessage {
+        message_id: String,
+        emoji: String,
+        add: bool,
+    },
     /// The user has seen `message_id` in `crew_id`: store the read cursor.
     MarkChatRead {
         crew_id: String,

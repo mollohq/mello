@@ -339,6 +339,27 @@ pub fn wire(ctx: &AppContext) {
     wire_attachments(ctx);
     {
         let cmd = ctx.cmd_tx.clone();
+        let reactions = ctx.reactions.clone();
+        let app_weak = ctx.app.as_weak();
+        ctx.app.on_react(move |message_id, emoji| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            let uid = app.get_user_id().to_string();
+            let mine = reactions
+                .borrow()
+                .get(message_id.as_str())
+                .and_then(|m| m.get(emoji.as_str()))
+                .is_some_and(|users| users.contains(&uid));
+            let _ = cmd.send(Command::ReactToMessage {
+                message_id: message_id.to_string(),
+                emoji: emoji.to_string(),
+                add: !mine,
+            });
+        });
+    }
+    {
+        let cmd = ctx.cmd_tx.clone();
         ctx.app.on_gif_pill_clicked(move || {
             log::info!("[gif] pill clicked, loading trending");
             let _ = cmd.send(Command::LoadTrendingGifs);

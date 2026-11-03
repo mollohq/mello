@@ -605,6 +605,14 @@ export struct ChatLinkData {
     label: string,
 }
 
+/// One reaction chip under a message.
+export struct ReactionData {
+    emoji: string,
+    count: int,
+    /// This user is among the reactors: the chip gets the white outline.
+    mine: bool,
+}
+
 /// One image of an image message. `image` is filled by the client's image
 /// cache once the bytes are decoded; until then the frame shows "Loading".
 export struct ChatImageData {
@@ -656,6 +664,7 @@ export struct ChatMessageData {
     images: [ChatImageData],
     /// "Today", "Yesterday" or a date when this message starts a day. "" otherwise.
     day-label: string,
+    reactions: [ReactionData],
     gif-width: int,
     gif-height: int,
     is-clip: bool,

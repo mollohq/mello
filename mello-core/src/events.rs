@@ -303,6 +303,15 @@ pub enum Event {
     ChatReadCursors {
         cursors: Vec<(String, crate::chat::ChatReadCursor)>,
     },
+    /// The reactions of the loaded messages, for the crew on screen.
+    ChatReactionsLoaded {
+        crew_id: String,
+        items: Vec<crate::crew_state::ReactionUpdate>,
+    },
+    /// One message's reactions changed (notification 117).
+    ChatReactionChanged {
+        update: crate::crew_state::ReactionUpdate,
+    },
     HistoryLoaded {
         messages: Vec<ChatMessage>,
         cursor: Option<String>,

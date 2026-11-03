@@ -26,6 +26,7 @@ pub(crate) struct ChatRefresh {
     chat_messages: Rc<std::cell::RefCell<Vec<mello_core::events::ChatMessage>>>,
     chat_scroll: Rc<crate::chat_ui::ChatScrollState>,
     avatar_cache: Rc<std::cell::RefCell<std::collections::HashMap<String, slint::Image>>>,
+    reactions: crate::converters::ReactionMap,
     rt: tokio::runtime::Handle,
     gif_chat_anim: crate::gif_animator::GifAnimator,
 }
@@ -37,6 +38,7 @@ impl ChatRefresh {
             chat_messages: ctx.chat_messages.clone(),
             chat_scroll: ctx.chat_scroll.clone(),
             avatar_cache: ctx.avatar_cache.clone(),
+            reactions: ctx.reactions.clone(),
             rt: ctx.rt.clone(),
             gif_chat_anim: ctx.gif_chat_anim.clone(),
         }
@@ -60,8 +62,10 @@ impl ChatRefresh {
         let huav = app.get_has_user_avatar();
         let mention_color = color_hex(app.global::<crate::Theme>().get_mention());
         let first_unread = self.chat_scroll.first_unread_id();
+        let reactions = self.reactions.borrow();
         let opts = ChatConvertOptions {
             user_id: &uid,
+            reactions: &reactions,
             user_avatar: &uav,
             has_user_avatar: huav,
             avatar_cache: &self.avatar_cache.borrow(),
@@ -203,11 +207,42 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .send(Command::FetchUserAvatars { user_ids: uncached });
             }
             *ctx.chat_messages.borrow_mut() = messages;
+            ctx.reactions.borrow_mut().clear();
             ctx.chat_scroll.reset_on_messages_loaded(has_more_history);
             let active = ctx.app.get_active_crew_id().to_string();
             if !active.is_empty() {
                 ctx.unread_tracker.borrow_mut().reset(&active);
                 apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
+            }
+            refresh_chat_ui(ctx);
+        }
+        Event::ChatReactionsLoaded { crew_id, items } => {
+            if crew_id != ctx.app.get_active_crew_id().as_str() {
+                return;
+            }
+            {
+                let mut map = ctx.reactions.borrow_mut();
+                for item in items {
+                    if item.reactions.is_empty() {
+                        map.remove(&item.message_id);
+                    } else {
+                        map.insert(item.message_id, item.reactions);
+                    }
+                }
+            }
+            refresh_chat_ui(ctx);
+        }
+        Event::ChatReactionChanged { update } => {
+            if update.crew_id != ctx.app.get_active_crew_id().as_str() {
+                return;
+            }
+            {
+                let mut map = ctx.reactions.borrow_mut();
+                if update.reactions.is_empty() {
+                    map.remove(&update.message_id);
+                } else {
+                    map.insert(update.message_id, update.reactions);
+                }
             }
             refresh_chat_ui(ctx);
         }
