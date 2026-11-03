@@ -57,21 +57,27 @@ fn close_presenter(ctx: &AppContext) {
 pub(crate) fn wire(ctx: &AppContext) {
     let ui = ctx.app.global::<ClipPlayerUi>();
 
-    let c = ctx.clone();
+    let app_weak = ctx.app.as_weak();
+    let cmd = ctx.cmd_tx.clone();
     ui.on_toggle_pause(move || {
-        let ui = c.app.global::<ClipPlayerUi>();
+        let Some(app) = app_weak.upgrade() else {
+            return;
+        };
+        let ui = app.global::<ClipPlayerUi>();
         // An ended clip plays again from the start (core seeks to 0).
         let paused = !(ui.get_paused() || ui.get_ended());
-        let _ = c.cmd_tx.send(Command::SetGameClipPaused { paused });
+        let _ = cmd.send(Command::SetGameClipPaused { paused });
     });
 
-    let c = ctx.clone();
+    let cmd = ctx.cmd_tx.clone();
     ui.on_seek_ms(move |ms| {
-        let _ = c.cmd_tx.send(Command::SeekGameClip {
+        let _ = cmd.send(Command::SeekGameClip {
             position_ms: ms.max(0) as u64,
         });
     });
 
+    // A strong `AppContext`: the presenter needs it. `Harness::drop` clears
+    // this callback, or the window would own itself.
     let c = ctx.clone();
     ui.on_close(move || {
         log::info!("UI: close the game clip");

@@ -74,6 +74,8 @@ pub fn wire(ctx: &AppContext) {
     crate::game_clip_player::wire(ctx);
 
     let cmd = ctx.cmd_tx.clone();
+    // A strong `AppContext`: the clip player opens the presenter with it.
+    // `Harness::drop` clears this callback, or the window would own itself.
     let player_ctx = ctx.clone();
     ctx.app.on_play_clip(move |path| {
         let path = path.to_string();

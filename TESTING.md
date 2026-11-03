@@ -53,6 +53,8 @@ Three things that are easy to get wrong:
   The rule: a callback registered on a `MainWindow` or its globals captures
   `as_weak()`, never `ctx.clone()`, unless `Harness::drop` clears it. Check
   with `(ulimit -n 256; CI=true cargo test -p mello-client --lib)`.
+  The test counts `/dev/fd`, so it measures on macOS and Linux only. On
+  Windows it always passes: a leak there shows first on the macOS lane.
 - **`MainWindow`'s default state renders nothing.** `onboarding-step 0` with
   `logged-in false` matches no branch in `main.slint`. Set a state before
   asserting, or the test passes while testing nothing.

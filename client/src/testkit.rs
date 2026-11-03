@@ -111,12 +111,12 @@ impl Drop for Harness {
     /// Cut the cycles that would keep the window, and with it the runtime's
     /// kqueue, open for the rest of the process.
     ///
-    /// A few callbacks on `StreamCardUi` and `SealedUi` capture a strong
-    /// `AppContext` clone. That clone owns the `MainWindow` that owns the
-    /// callback, so the window never drops, and every closure in it keeps a
-    /// `Handle` clone that keeps the runtime's I/O driver (one descriptor)
-    /// alive. In the app the window lives as long as the process, so only
-    /// the harness has to break it.
+    /// A few callbacks on `StreamCardUi`, `SealedUi`, `ClipPlayerUi` and
+    /// `MainWindow::play-clip` capture a strong `AppContext` clone. That
+    /// clone owns the `MainWindow` that owns the callback, so the window
+    /// never drops, and every closure in it keeps a `Handle` clone that keeps
+    /// the runtime's I/O driver (one descriptor) alive. In the app the window
+    /// lives as long as the process, so only the harness has to break it.
     fn drop(&mut self) {
         use slint::ComponentHandle as _;
         let ui = self.ctx.app.global::<crate::StreamCardUi>();
@@ -125,6 +125,8 @@ impl Drop for Harness {
         ui.on_expand_requested(|_| {});
         ui.on_popout_requested(|_| {});
         self.ctx.app.global::<crate::SealedUi>().on_landed(|| {});
+        self.ctx.app.global::<crate::ClipPlayerUi>().on_close(|| {});
+        self.ctx.app.on_play_clip(|_| {});
     }
 }
 
