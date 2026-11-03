@@ -204,6 +204,5 @@ Apache 2.0. See [LICENSE](LICENSE).
 ---
 
 <p align="center">
-  <sub>Early. Built in public. New build most weeks.</sub><br/>
   <sub>Made in Göteborg, Sweden by <a href="https://github.com/mollohq">Mollo Tech AB</a></sub>
 </p>
