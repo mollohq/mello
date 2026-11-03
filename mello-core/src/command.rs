@@ -229,6 +229,12 @@ pub enum Command {
     DeleteChatImages {
         urls: Vec<String>,
     },
+    /// The user has seen `message_id` in `crew_id`: store the read cursor.
+    MarkChatRead {
+        crew_id: String,
+        message_id: String,
+        time: String,
+    },
     LoadHistory {
         cursor: Option<String>,
     },

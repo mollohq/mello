@@ -568,6 +568,16 @@ impl UnreadTracker {
         self.counts.remove(crew_id);
     }
 
+    /// Set the unread state of a crew outright, from a read cursor.
+    pub fn set(&mut self, crew_id: &str, count: u32, has_mention: bool) {
+        if count == 0 {
+            self.counts.remove(crew_id);
+        } else {
+            self.counts
+                .insert(crew_id.to_string(), UnreadState { count, has_mention });
+        }
+    }
+
     /// Get unread state for a crew.
     pub fn get(&self, crew_id: &str) -> UnreadState {
         self.counts.get(crew_id).cloned().unwrap_or_default()
@@ -723,6 +733,43 @@ pub fn image_key_from_url(url: &str) -> Option<String> {
         return None;
     }
     Some(format!("{crew}/{user}/{file}"))
+}
+
+/// Where the user stopped reading a crew's chat. One per crew, in the user's
+/// own Nakama storage (`chat_read/{crew_id}`), so the unread rule and the
+/// sidebar badge survive a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChatReadCursor {
+    pub message_id: String,
+    /// `create_time` of that message.
+    pub time: String,
+}
+
+/// True when `ts` is later than `cursor_time`. Both are Nakama timestamps.
+/// An unparseable value is never later, so nothing reads as unread by mistake.
+pub fn is_after(ts: &str, cursor_time: &str) -> bool {
+    match (parse_timestamp(ts), parse_timestamp(cursor_time)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// The first message after the cursor: by id when the cursor's message is
+/// loaded, by time otherwise. `None` when everything is read. System rows
+/// do not count.
+pub fn first_unread_after<'a>(
+    messages: &'a [ChatMessage],
+    cursor: &ChatReadCursor,
+) -> Option<&'a ChatMessage> {
+    if let Some(pos) = messages
+        .iter()
+        .position(|m| m.message_id == cursor.message_id)
+    {
+        return messages[pos + 1..].iter().find(|m| !m.is_system);
+    }
+    messages
+        .iter()
+        .find(|m| !m.is_system && is_after(&m.create_time, &cursor.time))
 }
 
 /// The most emoji a message may hold and still render big.
@@ -1007,6 +1054,38 @@ mod tests {
             rows[2].is_group_start,
             "and a new group, even within five minutes"
         );
+    }
+
+    #[test]
+    fn the_first_unread_is_after_the_cursor_by_id_then_by_time() {
+        let a = msg("a", "u1", "A", "2026-03-08T12:00:00Z", "1");
+        let mut sys = msg("s", "u1", "A", "2026-03-08T12:01:00Z", "joined");
+        sys.is_system = true;
+        let b = msg("b", "u1", "A", "2026-03-08T12:02:00Z", "2");
+        let c = msg("c", "u1", "A", "2026-03-08T12:03:00Z", "3");
+        let list = vec![a, sys, b, c];
+        let by_id = ChatReadCursor {
+            message_id: "a".into(),
+            time: "2026-03-08T12:00:00Z".into(),
+        };
+        assert_eq!(
+            first_unread_after(&list, &by_id).map(|m| m.message_id.as_str()),
+            Some("b")
+        );
+        let old = ChatReadCursor {
+            message_id: "gone".into(),
+            time: "2026-03-08T12:02:30Z".into(),
+        };
+        assert_eq!(
+            first_unread_after(&list, &old).map(|m| m.message_id.as_str()),
+            Some("c")
+        );
+        let all_read = ChatReadCursor {
+            message_id: "c".into(),
+            time: "2026-03-08T12:03:00Z".into(),
+        };
+        assert!(first_unread_after(&list, &all_read).is_none());
+        assert!(!is_after("garbage", "2026-03-08T12:00:00Z"));
     }
 
     #[test]

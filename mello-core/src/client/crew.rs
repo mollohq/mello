@@ -47,6 +47,14 @@ impl super::Client {
                     self.handle_subscribe_sidebar(&crew_ids).await;
                 }
                 let _ = self.event_tx.send(Event::CrewsLoaded { crews });
+                if !crew_ids.is_empty() {
+                    match self.nakama.read_chat_cursors(&crew_ids).await {
+                        Ok(cursors) => {
+                            let _ = self.event_tx.send(Event::ChatReadCursors { cursors });
+                        }
+                        Err(e) => log::warn!("[chat] read cursors failed: {}", e),
+                    }
+                }
             }
             Err(e) => {
                 log::error!("Failed to load crews: {}", e);
@@ -424,6 +432,17 @@ impl super::Client {
                 let _ = self.event_tx.send(Event::MessagesLoaded {
                     messages,
                     has_more_history,
+                });
+                let cursor = match self.nakama.read_chat_cursors(&[crew_id.to_string()]).await {
+                    Ok(mut rows) => rows.pop().map(|(_, c)| c),
+                    Err(e) => {
+                        log::warn!("[chat] read cursor for {} failed: {}", crew_id, e);
+                        None
+                    }
+                };
+                let _ = self.event_tx.send(Event::ChatReadCursorLoaded {
+                    crew_id: crew_id.to_string(),
+                    cursor,
                 });
             }
             Err(e) => {

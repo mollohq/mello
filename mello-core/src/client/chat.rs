@@ -209,6 +209,17 @@ impl super::Client {
         }
     }
 
+    pub(super) async fn handle_mark_chat_read(&self, crew_id: &str, message_id: &str, time: &str) {
+        let cursor = crate::chat::ChatReadCursor {
+            message_id: message_id.to_string(),
+            time: time.to_string(),
+        };
+        match self.nakama.write_chat_cursor(crew_id, &cursor).await {
+            Ok(()) => log::debug!("[chat] read cursor for {} at {}", crew_id, message_id),
+            Err(e) => log::warn!("[chat] write read cursor for {} failed: {}", crew_id, e),
+        }
+    }
+
     pub(super) async fn handle_load_history(&mut self, cursor: Option<&str>) {
         let effective_cursor = cursor.or(self.history_cursor.as_deref());
         if effective_cursor.is_none() {

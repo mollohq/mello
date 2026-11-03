@@ -212,6 +212,7 @@ export component MainWindow inherits Window {
     in property <bool> has-more-history: false;
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
+    in-out property <bool> scroll-to-unread-request: false;
     in-out property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     /// The picker grid: the active category, or the search hits.
@@ -1296,6 +1297,7 @@ export component MainWindow inherits Window {
                     has-more-history: root.has-more-history;
                     has-new-messages <=> root.has-new-messages;
                     scroll-to-bottom-request <=> root.scroll-to-bottom-request;
+                    scroll-to-unread-request <=> root.scroll-to-unread-request;
                     history-prepended-rows: root.history-prepended-rows;
                     mention-members: root.mention-members;
                     mention-suggestions: root.mention-suggestions;

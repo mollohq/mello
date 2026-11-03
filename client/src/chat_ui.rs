@@ -19,6 +19,11 @@ pub struct ChatScrollState {
     pub window_len: Cell<usize>,
     /// The server has pages older than the oldest loaded message.
     pub server_has_more: Cell<bool>,
+    /// Open the feed at the unread rule instead of the bottom.
+    pub pending_scroll_to_unread: Cell<bool>,
+    /// The last (crew, message) read cursor sent, so a bottom reached twice
+    /// writes once.
+    pub last_marked: RefCell<Option<(String, String)>>,
 }
 
 impl ChatScrollState {
@@ -108,8 +113,24 @@ impl ChatScrollState {
         self.history_prepended_rows.set(count as i32);
     }
 
+    /// Put the unread rule at `message_id` and open the feed there. Called
+    /// when the read cursor arrives for the crew on screen.
+    pub fn open_at_unread(&self, message_id: &str) {
+        self.at_bottom.set(false);
+        self.has_new_messages.set(true);
+        *self.first_unread_id.borrow_mut() = Some(message_id.to_string());
+        self.pending_scroll_to_bottom.set(false);
+        self.pending_scroll_to_unread.set(true);
+    }
+
     pub fn apply_to_window(&self, app: &MainWindow, total: usize) {
         app.set_has_new_messages(self.has_new_messages.get());
+        if self.pending_scroll_to_unread.get() {
+            self.pending_scroll_to_unread.set(false);
+            // The load asked for the bottom a moment ago; the rule wins.
+            app.set_scroll_to_bottom_request(false);
+            app.set_scroll_to_unread_request(true);
+        }
         // The top of the feed asks for more while anything older exists,
         // loaded but hidden or still on the server.
         app.set_has_more_history(self.server_has_more.get() || self.window_start(total) > 0);

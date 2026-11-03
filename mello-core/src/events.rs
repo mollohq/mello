@@ -292,6 +292,17 @@ pub enum Event {
         /// `true` when Nakama returned a pagination cursor (older messages exist).
         has_more_history: bool,
     },
+    /// The user's read cursor for the crew whose messages just loaded. Sent
+    /// after `MessagesLoaded`; `None` when the crew was never read.
+    ChatReadCursorLoaded {
+        crew_id: String,
+        cursor: Option<crate::chat::ChatReadCursor>,
+    },
+    /// Every crew's read cursor, after the crews list. The sidebar badges
+    /// come from these and the message previews.
+    ChatReadCursors {
+        cursors: Vec<(String, crate::chat::ChatReadCursor)>,
+    },
     HistoryLoaded {
         messages: Vec<ChatMessage>,
         cursor: Option<String>,

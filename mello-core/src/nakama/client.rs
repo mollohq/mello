@@ -1,5 +1,8 @@
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
+
+/// The user-owned collection of chat read cursors, one key per crew.
+const CHAT_READ_COLLECTION: &str = "chat_read";
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -1229,6 +1232,90 @@ impl NakamaClient {
             results.len()
         );
         Ok(results)
+    }
+
+    /// Read several keys of one collection for one user. Missing keys are
+    /// absent from the result.
+    pub async fn read_storage_keys(
+        &self,
+        collection: &str,
+        keys: &[String],
+        user_id: &str,
+    ) -> Result<Vec<(String, String)>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = self.bearer()?;
+        let url = format!("{}/v2/storage", self.config.http_base());
+        let object_ids: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|key| {
+                serde_json::json!({
+                    "collection": collection,
+                    "key": key,
+                    "user_id": user_id,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({ "object_ids": object_ids });
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(format!(
+                "storage read by keys failed: {}",
+                err_text
+            )));
+        }
+        let objects: ApiStorageObjects = resp.json().await?;
+        Ok(objects
+            .objects
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|o| {
+                let key = o.key?;
+                let val = o.value.filter(|v| !v.is_empty())?;
+                Some((key, val))
+            })
+            .collect())
+    }
+
+    /// The read cursors of `crew_ids` for the signed-in user.
+    pub async fn read_chat_cursors(
+        &self,
+        crew_ids: &[String],
+    ) -> Result<Vec<(String, crate::chat::ChatReadCursor)>> {
+        let user_id = self
+            .current_user_id()
+            .ok_or_else(|| Error::Server("not signed in".into()))?
+            .to_string();
+        let rows = self
+            .read_storage_keys(CHAT_READ_COLLECTION, crew_ids, &user_id)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(key, val)| {
+                serde_json::from_str::<crate::chat::ChatReadCursor>(&val)
+                    .ok()
+                    .map(|c| (key, c))
+            })
+            .collect())
+    }
+
+    /// Store where the user stopped reading `crew_id`. Owner read and write.
+    pub async fn write_chat_cursor(
+        &self,
+        crew_id: &str,
+        cursor: &crate::chat::ChatReadCursor,
+    ) -> Result<()> {
+        let value = serde_json::to_string(cursor)?;
+        self.write_storage(CHAT_READ_COLLECTION, crew_id, &value, 1, 1)
+            .await
     }
 
     /// Write a single object to Nakama storage.

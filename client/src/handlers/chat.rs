@@ -100,6 +100,77 @@ fn set_attachment_state(
     crate::callbacks::chat::flush_pending_send(ctx);
 }
 
+/// Store the read cursor at the newest message of the crew on screen, once
+/// per message. Called when the user is at the bottom.
+pub(crate) fn mark_read(ctx: &AppContext) {
+    let crew = ctx.app.get_active_crew_id().to_string();
+    if crew.is_empty() {
+        return;
+    }
+    let newest = ctx
+        .chat_messages
+        .borrow()
+        .iter()
+        .rev()
+        .find(|m| !m.is_system)
+        .map(|m| (m.message_id.clone(), m.create_time.clone()));
+    let Some((message_id, time)) = newest else {
+        return;
+    };
+    {
+        let mut last = ctx.chat_scroll.last_marked.borrow_mut();
+        if last
+            .as_ref()
+            .is_some_and(|(c, id)| *c == crew && *id == message_id)
+        {
+            return;
+        }
+        *last = Some((crew.clone(), message_id.clone()));
+    }
+    ctx.read_cursors.borrow_mut().insert(
+        crew.clone(),
+        mello_core::chat::ChatReadCursor {
+            message_id: message_id.clone(),
+            time: time.clone(),
+        },
+    );
+    let _ = ctx.cmd_tx.send(Command::MarkChatRead {
+        crew_id: crew,
+        message_id,
+        time,
+    });
+}
+
+/// The sidebar badges from the read cursors and the newest messages of
+/// each crew. The crew on screen has no badge; its unread rule is in the feed.
+pub(crate) fn recompute_badges(ctx: &AppContext) {
+    let active = ctx.app.get_active_crew_id().to_string();
+    let uid = ctx.app.get_user_id().to_string();
+    let cursors = ctx.read_cursors.borrow();
+    let previews = ctx.crew_previews.borrow();
+    let mut tracker = ctx.unread_tracker.borrow_mut();
+    for (crew, list) in previews.iter() {
+        if *crew == active {
+            continue;
+        }
+        let unread = list
+            .iter()
+            .filter(|p| p.user_id.as_deref() != Some(uid.as_str()))
+            .filter(|p| match cursors.get(crew) {
+                Some(c) => {
+                    p.message_id.as_deref() != Some(c.message_id.as_str())
+                        && mello_core::chat::is_after(&p.timestamp, &c.time)
+                }
+                None => true,
+            })
+            .count() as u32;
+        let had_mention = tracker.get(crew).has_mention;
+        tracker.set(crew, unread, had_mention && unread > 0);
+    }
+    drop(tracker);
+    apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
+}
+
 fn upsert_message(ctx: &AppContext, message: mello_core::events::ChatMessage) {
     let mut msgs = ctx.chat_messages.borrow_mut();
     if let Some(existing) = msgs.iter_mut().find(|m| m.message_id == message.message_id) {
@@ -140,6 +211,30 @@ pub fn handle(ctx: &AppContext, event: Event) {
             }
             refresh_chat_ui(ctx);
         }
+        Event::ChatReadCursorLoaded { crew_id, cursor } => {
+            if let Some(c) = cursor.clone() {
+                ctx.read_cursors.borrow_mut().insert(crew_id.clone(), c);
+            }
+            if crew_id != ctx.app.get_active_crew_id().as_str() {
+                return;
+            }
+            let first_unread = cursor.as_ref().and_then(|c| {
+                mello_core::chat::first_unread_after(&ctx.chat_messages.borrow(), c)
+                    .map(|m| m.message_id.clone())
+            });
+            match first_unread {
+                Some(id) => {
+                    log::info!("[chat] opening {} at the unread rule, {}", crew_id, id);
+                    ctx.chat_scroll.open_at_unread(&id);
+                    refresh_chat_ui(ctx);
+                }
+                None => mark_read(ctx),
+            }
+        }
+        Event::ChatReadCursors { cursors } => {
+            ctx.read_cursors.borrow_mut().extend(cursors);
+            recompute_badges(ctx);
+        }
         Event::MessageReceived { message } => {
             if !ctx.app.window().is_visible() {
                 let crew_name = ctx.app.get_active_crew_id().to_string();
@@ -168,9 +263,12 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 apply_unread_to_crews(&ctx.app, &ctx.unread_tracker.borrow());
             }
 
-            ctx.chat_scroll.on_incoming_message(is_own, &message_id);
+            let scrolls = ctx.chat_scroll.on_incoming_message(is_own, &message_id);
             upsert_message(ctx, message);
             refresh_chat_ui(ctx);
+            if scrolls {
+                mark_read(ctx);
+            }
 
             if sender_id != uid && !ctx.avatar_cache.borrow().contains_key(&sender_id) {
                 let _ = ctx
@@ -330,6 +428,9 @@ pub fn handle(ctx: &AppContext, event: Event) {
             let mut updated: Vec<CrewData> = (0..current.row_count())
                 .map(|i| current.row_data(i).unwrap())
                 .collect();
+            ctx.crew_previews
+                .borrow_mut()
+                .insert(crew_id.clone(), messages.clone());
             if let Some(c) = updated.iter_mut().find(|c| c.id == crew_id.as_str()) {
                 c.msg_count = messages.len().min(2) as i32;
                 if let Some(m) = messages.first() {
@@ -342,6 +443,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                 }
             }
             crate::converters::sync_crews(&ctx.app, updated);
+            recompute_badges(ctx);
         }
         _ => {}
     }

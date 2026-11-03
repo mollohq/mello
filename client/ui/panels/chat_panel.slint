@@ -594,6 +594,10 @@ export component ChatPanel inherits Rectangle {
     // New messages pill state
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
+    /// Open the feed with the unread rule near the top, not at the bottom.
+    in-out property <bool> scroll-to-unread-request: false;
+    /// Where the unread rule sits in the rows, reported by the rule's row.
+    in-out property <length> unread-row-y: 0px;
     in property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     in property <[MentionMemberData]> mention-suggestions: [];
@@ -803,6 +807,11 @@ export component ChatPanel inherits Rectangle {
                         }
                     }
                     padding-bottom: idx == messages.length - 1 ? 24px : 0px;
+
+                    // The rule's row reports its place, so the unread timer
+                    // can open the feed there.
+                    init => { if msg.is-unread-divider { root.unread-row-y = self.y; } }
+                    changed y => { if msg.is-unread-divider { root.unread-row-y = self.y; } }
 
                     // Unread divider — stretch wrappers for lines; inner rect centers 1px rule (y ignored on HL children)
                     if msg.is-unread-divider: HorizontalLayout {
@@ -1346,6 +1355,16 @@ export component ChatPanel inherits Rectangle {
                 root.scroll-to-bottom-request = false;
                 root.has-new-messages = false;
                 root.scroll-to-bottom-done();
+            }
+        }
+
+        unread-timer := Timer {
+            interval: 1ms;
+            running: root.scroll-to-unread-request;
+            triggered => {
+                // The rule a little below the top edge, never past the end.
+                feed.content-y = -max(0px, min(root.unread-row-y - 24px, feed.content-height - feed.height));
+                root.scroll-to-unread-request = false;
             }
         }
 

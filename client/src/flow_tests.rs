@@ -1577,6 +1577,176 @@ fn clicking_an_image_opens_the_viewer() {
 }
 
 // ---------------------------------------------------------------------------
+// Chat: read cursor
+// ---------------------------------------------------------------------------
+
+fn preview(id: &str, user: &str, ts: &str) -> mello_core::crew_state::MessagePreview {
+    mello_core::crew_state::MessagePreview {
+        message_id: Some(id.into()),
+        user_id: Some(user.into()),
+        username: user.into(),
+        preview: format!("msg {id}"),
+        timestamp: ts.into(),
+    }
+}
+
+/// The read cursor puts the unread rule after the last read message and
+/// opens the feed there. Reaching the bottom stores the cursor at the newest
+/// message, once.
+#[test]
+fn the_feed_opens_at_the_unread_rule_from_the_read_cursor() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-me".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 40),
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.emit(Event::ChatReadCursorLoaded {
+        crew_id: "crew-1".into(),
+        cursor: Some(mello_core::chat::ChatReadCursor {
+            message_id: "m19".into(),
+            time: chat_message_fixture("m19", "bob", 190).create_time,
+        }),
+    });
+    assert_eq!(
+        h.ctx().chat_scroll.first_unread_id().as_deref(),
+        Some("m20")
+    );
+    assert!(h.app().get_has_new_messages());
+    assert!(
+        h.commands().is_empty(),
+        "nothing is marked read while unread rows are above the bottom"
+    );
+    next_frame();
+    let_feed_settle();
+    let (top, bottom) = feed_frame(&h);
+    let first_unread =
+        visible_body(&h, "message m20 from alice").expect("the first unread is on screen");
+    assert!(
+        first_unread.absolute_position().y < top + 120.0,
+        "the unread rule sits near the top: {} vs {top}",
+        first_unread.absolute_position().y
+    );
+    assert!(
+        visible_body(&h, "message m39 from bob").is_none(),
+        "the newest message is below the feed, {bottom} tall"
+    );
+
+    // Scroll to the end: at the bottom, the cursor moves to the newest message.
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: -50_000.0,
+        });
+    h.pump();
+    next_frame();
+    let cmds = h.commands();
+    let marks: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            Command::MarkChatRead {
+                crew_id,
+                message_id,
+                ..
+            } => Some((crew_id.clone(), message_id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, vec![("crew-1".to_string(), "m39".to_string())]);
+
+    h.app().invoke_chat_viewport_changed(true);
+    h.pump();
+    assert!(
+        !h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::MarkChatRead { .. })),
+        "the same newest message is not stored twice"
+    );
+}
+
+/// A crew never read before is read up to its newest message as soon as it
+/// opens, so the next start has a cursor.
+#[test]
+fn a_crew_without_a_cursor_is_marked_read_at_the_newest() {
+    let mut h = Harness::new();
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.emit(Event::ChatReadCursorLoaded {
+        crew_id: "crew-1".into(),
+        cursor: None,
+    });
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::MarkChatRead { message_id, .. } if message_id == "m2")),
+        "got {cmds:?}"
+    );
+    assert!(h.ctx().chat_scroll.first_unread_id().is_none());
+}
+
+/// The sidebar badge of another crew counts the previews newer than its
+/// cursor, own messages excluded, and the crew on screen has none.
+#[test]
+fn an_unread_crew_gets_a_badge_from_its_cursor_and_previews() {
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::ChatReadCursors {
+        cursors: vec![(
+            "crew-2".into(),
+            mello_core::chat::ChatReadCursor {
+                message_id: "p1".into(),
+                time: "2026-03-08T12:00:00Z".into(),
+            },
+        )],
+    });
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-2".into(),
+        messages: vec![
+            preview("p3", "u-me", "2026-03-08T12:05:00Z"),
+            preview("p2", "u-bob", "2026-03-08T12:02:00Z"),
+            preview("p1", "u-bob", "2026-03-08T12:00:00Z"),
+        ],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-2").count,
+        1,
+        "p2 only: p1 is read, p3 is mine"
+    );
+
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-1".into(),
+        messages: vec![preview("q1", "u-bob", "2026-03-08T12:09:00Z")],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-1").count,
+        0,
+        "the crew on screen has no badge"
+    );
+
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-3".into(),
+        messages: vec![
+            preview("r1", "u-bob", "2026-03-08T12:09:00Z"),
+            preview("r0", "u-kim", "2026-03-08T11:00:00Z"),
+        ],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-3").count,
+        2,
+        "no cursor: every preview by others is unread"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Chat: emoji
 // ---------------------------------------------------------------------------
 
@@ -1687,7 +1857,7 @@ fn the_emoji_picker_stays_open_after_a_pick() {
 #[test]
 fn the_emoji_picker_searches_by_name() {
     use slint::Model;
-    let mut h = Harness::new();
+    let h = Harness::new();
     h.app().invoke_emoji_search("thumbs up".into());
     let rows = h.app().get_emoji_rows();
     let first = rows

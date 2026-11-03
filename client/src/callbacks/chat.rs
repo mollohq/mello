@@ -397,9 +397,11 @@ pub fn wire(ctx: &AppContext) {
         let scroll = ctx.chat_scroll.clone();
         let unread = ctx.unread_tracker.clone();
         let app_weak = ctx.app.as_weak();
+        let read = MarkRead::new(ctx);
         ctx.app.on_chat_viewport_changed(move |at_bottom| {
             scroll.on_viewport_at_bottom(at_bottom);
             if at_bottom {
+                read.mark();
                 if let Some(app) = app_weak.upgrade() {
                     let active = app.get_active_crew_id().to_string();
                     if !active.is_empty() {
@@ -920,4 +922,68 @@ fn clipboard_image_png() -> Option<Vec<u8>> {
         .write_to(&mut out, image::ImageFormat::Png)
         .ok()?;
     Some(out.into_inner())
+}
+
+/// What marking the crew on screen as read needs, with the window weak.
+struct MarkRead {
+    app: slint::Weak<crate::MainWindow>,
+    messages: Rc<RefCell<Vec<mello_core::events::ChatMessage>>>,
+    scroll: Rc<crate::chat_ui::ChatScrollState>,
+    cursors: Rc<RefCell<std::collections::HashMap<String, mello_core::chat::ChatReadCursor>>>,
+    cmd: tokio::sync::mpsc::UnboundedSender<Command>,
+}
+
+impl MarkRead {
+    fn new(ctx: &AppContext) -> Self {
+        Self {
+            app: ctx.app.as_weak(),
+            messages: ctx.chat_messages.clone(),
+            scroll: ctx.chat_scroll.clone(),
+            cursors: ctx.read_cursors.clone(),
+            cmd: ctx.cmd_tx.clone(),
+        }
+    }
+
+    /// Same rule as `handlers::chat::mark_read`: the newest message, once.
+    fn mark(&self) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let crew = app.get_active_crew_id().to_string();
+        if crew.is_empty() {
+            return;
+        }
+        let newest = self
+            .messages
+            .borrow()
+            .iter()
+            .rev()
+            .find(|m| !m.is_system)
+            .map(|m| (m.message_id.clone(), m.create_time.clone()));
+        let Some((message_id, time)) = newest else {
+            return;
+        };
+        {
+            let mut last = self.scroll.last_marked.borrow_mut();
+            if last
+                .as_ref()
+                .is_some_and(|(c, id)| *c == crew && *id == message_id)
+            {
+                return;
+            }
+            *last = Some((crew.clone(), message_id.clone()));
+        }
+        self.cursors.borrow_mut().insert(
+            crew.clone(),
+            mello_core::chat::ChatReadCursor {
+                message_id: message_id.clone(),
+                time: time.clone(),
+            },
+        );
+        let _ = self.cmd.send(Command::MarkChatRead {
+            crew_id: crew,
+            message_id,
+            time,
+        });
+    }
 }
