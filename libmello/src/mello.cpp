@@ -11,11 +11,11 @@
 #ifdef _WIN32
 #include "video/hook_launcher.hpp"
 #include "video/graphics_device.hpp"
-#include "replay/mp4_read.hpp"
 #include "replay/replay_session.hpp"
 #include "video/capture_process.hpp"
-#include <filesystem>
 #endif
+#include "replay/mp4_read.hpp"
+#include <filesystem>
 #include "audio/clip_encoder.hpp"
 #include "audio/stream_audio_pipeline.hpp"
 #include "clip/clip_player.hpp"
