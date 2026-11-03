@@ -206,6 +206,8 @@ pub struct Client {
     #[allow(dead_code)]
     telemetry_listener: Option<TelemetryListener>,
     telemetry_registry: Arc<AdapterRegistry>,
+    /// Roblox experience names by place id (spec 18 §3.11).
+    roblox_names: Arc<crate::roblox_names::RobloxNames>,
     /// Game integrations the user switched off (Games settings page). Disabled
     /// ids skip config installs and active transports.
     disabled_integrations: std::collections::HashSet<String>,
@@ -289,6 +291,7 @@ impl Client {
     /// Must be called before `run()` so the startup config installs honor it.
     pub fn set_disabled_integrations(&mut self, ids: impl IntoIterator<Item = String>) {
         self.disabled_integrations = ids.into_iter().collect();
+        self.refresh_gated_games();
     }
 
     /// Seed activity-sharing consent from persisted client settings. Must be
@@ -399,6 +402,7 @@ impl Client {
             game_sensor: None,
             telemetry_listener: None,
             telemetry_registry: Arc::new(AdapterRegistry::with_defaults()),
+            roblox_names: crate::roblox_names::global(),
             disabled_integrations: std::collections::HashSet::new(),
             share_game_activity: true,
             hidden_games: std::collections::HashSet::new(),
@@ -512,15 +516,14 @@ impl Client {
                             // adapters); fold everything pending into the
                             // session before the stop is processed below.
                             for tev in self.drain_telemetry_events() {
-                                for ev in self.game_state.handle_telemetry(tev) {
-                                    let _ = self.event_tx.send(ev);
-                                }
+                                self.apply_telemetry(tev).await;
                             }
                         }
                     }
                     // Focus changes carry no telemetry side-effects; the state
                     // manager handles them below.
                     crate::game_sensing::GameEvent::PrimaryChanged { .. }
+                    | crate::game_sensing::GameEvent::Foreground { .. }
                     | crate::game_sensing::GameEvent::LibraryScanned { .. } => {}
                 }
 
@@ -530,30 +533,12 @@ impl Client {
                 }
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
-                    if game_services::should_emit_game_session_end(self.share_game_activity) {
-                        let crew_id = self.nakama.active_crew_id().map(String::from);
-                        self.handle_game_session_end(
-                            crew_id.as_deref(),
-                            &summary.game_name,
-                            &summary.game_id,
-                            summary.duration_min,
-                            summary.active_min,
-                            summary.igdb_id,
-                            summary.wins,
-                            summary.losses,
-                            summary.draws,
-                            summary.start_ms,
-                            summary.end_ms,
-                        )
-                        .await;
-                    }
+                    self.finish_session(summary).await;
                 }
             }
 
             for tev in self.drain_telemetry_events() {
-                for ev in self.game_state.handle_telemetry(tev) {
-                    let _ = self.event_tx.send(ev);
-                }
+                self.apply_telemetry(tev).await;
             }
 
             tokio::select! {
@@ -1229,6 +1214,7 @@ impl Client {
                         draws,
                         start_ms,
                         end_ms,
+                        None,
                     )
                     .await;
                 }
@@ -1340,6 +1326,7 @@ impl Client {
             Command::SetGameIntegrations { disabled } => {
                 log::info!("[telemetry] disabled integrations set to {disabled:?}");
                 self.disabled_integrations = disabled.into_iter().collect();
+                self.refresh_gated_games();
             }
             Command::SetHiddenGames { hidden } => {
                 self.hidden_games = hidden.into_iter().collect();

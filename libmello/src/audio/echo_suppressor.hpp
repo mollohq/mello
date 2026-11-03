@@ -47,7 +47,7 @@ public:
 
     void set_enabled(bool enabled);
     bool enabled() const { return enabled_.load(std::memory_order_relaxed); }
-    bool ready() const { return initialized_; }
+    bool ready() const { return initialized_.load(std::memory_order_acquire); }
 
     /// Clear GRU states, reference ring, and restart delay search.
     void reset();
@@ -75,7 +75,9 @@ private:
     // Capture-thread only.
     const float* ref_frame();
 
-    bool initialized_ = false;
+    // Set last in initialize(), so the capture thread that sees it also sees
+    // the session and the tables.
+    std::atomic<bool> initialized_{false};
     std::atomic<bool> enabled_{false};
 
 #ifndef MELLO_IOS_NO_VAD

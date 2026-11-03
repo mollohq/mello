@@ -13,4 +13,6 @@ path = "src/lib.rs"
 mello-core = { path = "../../mello-core" }
 tokio = { workspace = true, features = ["rt", "macros", "time"] }
 serde_json = { workspace = true }
+# The presigned PUT and the public GET go straight to object storage.
+reqwest = { workspace = true }
 rand = "0.8"

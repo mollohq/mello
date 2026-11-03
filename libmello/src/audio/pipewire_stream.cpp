@@ -12,6 +12,12 @@ void ensure_init() {
     std::call_once(once, [] { pw_init(nullptr, nullptr); });
 }
 
+bool device_is_known(const std::vector<AudioDeviceInfo>& devices, const std::string& id) {
+    if (id.empty() || devices.empty()) return true;
+    return std::any_of(devices.begin(), devices.end(),
+                       [&](const AudioDeviceInfo& d) { return d.id == id; });
+}
+
 std::string parse_default_node_name(const char* json) {
     if (!json) return {};
     const std::string s(json);

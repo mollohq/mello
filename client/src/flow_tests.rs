@@ -7994,11 +7994,10 @@ fn five_clips_never_take_a_wide_slot() {
     }
 }
 
-/// Recent games is on the first screen for a big crew: in the first two rows
-/// of the plain grid (head2head, invite and one card, then one card and the
-/// wide slot), not behind the clips.
+/// Recent games is on the first screen for a big crew: in the first three rows
+/// of the grid (row 2, or row 3 under a day card), not behind the clips.
 #[test]
-fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
+fn recent_games_is_in_the_first_three_rows_of_a_big_crew() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 50);
     set_roster(
@@ -8014,9 +8013,18 @@ fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
         .iter()
         .position(|t| t == "recent-games")
         .expect("recent games card");
+    let infos: Vec<crate::feed_grid::CardInfo> = {
+        let m = h.app().get_feed_cards();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i))
+            .map(|c| crate::feed_grid::CardInfo::of(&c))
+            .collect()
+    };
+    let rows = crate::feed_grid::rows(&infos, 0);
     assert!(
-        at <= 4,
-        "recent games at card {at}, past the second row: {types:?}"
+        rows[at] <= 3,
+        "recent games at card {at}, row {}, past the third row: {types:?}",
+        rows[at]
     );
 }
 
@@ -8155,6 +8163,7 @@ fn mate_plays(user: &str, game_id: &str, name: &str, ago_min: i64) -> Event {
                     game_name: name.into(),
                     game_id: game_id.into(),
                     started_at: mello_core::presence::to_rfc3339(now_ms() - ago_min * 60_000),
+                    activity: String::new(),
                 }),
             },
         },
@@ -10486,4 +10495,43 @@ fn the_notices_view_opens_lists_crates_libraries_and_fonts_and_goes_back() {
         !h.controls_labelled("Third-party notices").is_empty(),
         "the About tab is back"
     );
+}
+
+/// The Roblox experience's name arrives after the join and sits under the
+/// game's name in the bar (spec 18 §3.11). A name for another game is not
+/// the bar's; a teleport clears it; the end of the game clears it.
+#[test]
+fn the_bar_names_the_roblox_experience_under_the_game() {
+    let mut h = Harness::new();
+    h.emit(game_detected("roblox", "Roblox", now_ms() - 60_000));
+    assert_eq!(h.app().get_game_activity().as_str(), "");
+
+    h.emit(Event::GameActivity {
+        game_id: "counter-strike-2".into(),
+        activity: "Not this one".into(),
+    });
+    assert_eq!(h.app().get_game_activity().as_str(), "");
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: "Grow a Garden".into(),
+    });
+    assert_eq!(h.app().get_game_activity().as_str(), "Grow a Garden");
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: String::new(),
+    });
+    assert_eq!(
+        h.app().get_game_activity().as_str(),
+        "",
+        "a teleport clears it"
+    );
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: "Adopt Me!".into(),
+    });
+    h.emit(game_ended("roblox", "Roblox", 30));
+    assert_eq!(h.app().get_game_activity().as_str(), "", "the game ended");
 }

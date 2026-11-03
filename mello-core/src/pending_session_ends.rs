@@ -255,6 +255,7 @@ mod tests {
             losses: 0,
             draws: 0,
             session_id: id.into(),
+            activity: String::new(),
             start_ms: end_ms - 45 * 60_000,
             end_ms,
             tz_offset_min: 120,

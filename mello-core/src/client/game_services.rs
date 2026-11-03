@@ -45,6 +45,7 @@ impl Client {
         self.game_sensor = Some(sensor);
         *self.game_event_rx.lock().unwrap() = Some(game_event_rx);
         log::info!("Game sensor started (post-auth)");
+        self.refresh_gated_games();
 
         let telemetry_token = telemetry::load_or_create_token();
         match TelemetryListener::start(
@@ -83,16 +84,22 @@ impl Client {
     /// re-broadcasting identical presence would fan out to every crew member
     /// on a 15s heartbeat for no reason.
     pub(super) async fn sync_game_presence(&mut self) {
+        let activity = self
+            .game_state
+            .current_activity()
+            .unwrap_or_default()
+            .to_string();
         let raw = self.game_state.current_game().map(|g| GamePresence {
             game_name: g.game_name.clone(),
             game_id: g.game_id.clone(),
             started_at: crate::presence::to_rfc3339(g.started_at),
+            activity,
         });
         let current = game_presence_to_publish(self.share_game_activity, raw);
 
         let changed = match (&self.published_game, &current) {
             (None, None) => false,
-            (Some(a), Some(b)) => a.game_id != b.game_id,
+            (Some(a), Some(b)) => a.game_id != b.game_id || a.activity != b.activity,
             _ => true,
         };
         if !changed {
@@ -161,6 +168,93 @@ impl Client {
         out
     }
 
+    /// Tell the state manager which games wait for their adapter (spec 18
+    /// §2.4): every adapter that gates its session, minus the integrations
+    /// the user turned off. Called at start and whenever that set changes.
+    pub(super) fn refresh_gated_games(&mut self) {
+        let gated: Vec<String> = self
+            .telemetry_registry
+            .all()
+            .iter()
+            .filter(|a| a.gates_session() && !self.disabled_integrations.contains(a.game_id()))
+            .map(|a| a.game_id().to_string())
+            .collect();
+        log::info!("[game-state] adapter-gated games: {gated:?}");
+        self.game_state.set_gated_games(gated);
+    }
+
+    /// Feed one adapter event to the state manager and act on what it
+    /// returns: UI events, a presence change when a gated session opened or
+    /// closed, and the ledger call for a closed session.
+    pub(super) async fn apply_telemetry(&mut self, event: crate::telemetry::TelemetryEvent) {
+        let lookup = match &event {
+            crate::telemetry::TelemetryEvent::ActivityStarted {
+                game_id,
+                activity_id,
+                ..
+            } => Some((game_id.clone(), activity_id.clone())),
+            _ => None,
+        };
+        let (ui_events, session_end) = self.game_state.handle_telemetry(event);
+        if let Some((game_id, activity_id)) = lookup {
+            self.name_activity(game_id, activity_id);
+        }
+        let presence_may_change = !ui_events.is_empty() || session_end.is_some();
+        for ev in ui_events {
+            let _ = self.event_tx.send(ev);
+        }
+        if presence_may_change {
+            self.sync_game_presence().await;
+        }
+        if let Some(summary) = session_end {
+            self.finish_session(summary).await;
+        }
+    }
+
+    /// Ask for the name of a new activity off the loop (spec 18 §3.11). The
+    /// answer comes back on the telemetry channel as `ActivityNamed`, so the
+    /// state manager applies it in order with the adapter's own events. Only
+    /// Roblox has a lookup; another game's activity keeps its id.
+    fn name_activity(&self, game_id: String, activity_id: String) {
+        if game_id != "roblox" || !self.game_state.is_in_activity(&game_id, &activity_id) {
+            return;
+        }
+        let names = self.roblox_names.clone();
+        let tx = self.telemetry_event_tx.clone();
+        tokio::spawn(async move {
+            if let Some(name) = names.name(&activity_id).await {
+                let _ = tx.send(crate::telemetry::TelemetryEvent::ActivityNamed {
+                    game_id,
+                    activity_id,
+                    name,
+                });
+            }
+        });
+    }
+
+    /// Record a closed session on the ledger when the user shares activity.
+    pub(super) async fn finish_session(&mut self, summary: crate::game_state::SessionSummary) {
+        if !should_emit_game_session_end(self.share_game_activity) {
+            return;
+        }
+        let crew_id = self.nakama.active_crew_id().map(String::from);
+        self.handle_game_session_end(
+            crew_id.as_deref(),
+            &summary.game_name,
+            &summary.game_id,
+            summary.duration_min,
+            summary.active_min,
+            summary.igdb_id,
+            summary.wins,
+            summary.losses,
+            summary.draws,
+            summary.start_ms,
+            summary.end_ms,
+            summary.activity.as_deref(),
+        )
+        .await;
+    }
+
     pub(super) fn drain_telemetry_events(&self) -> Vec<crate::telemetry::TelemetryEvent> {
         let Ok(guard) = self.telemetry_event_rx.lock() else {
             return Vec::new();
@@ -185,6 +279,7 @@ mod tests {
             game_name: "Valorant".into(),
             game_id: "valorant".into(),
             started_at: "2026-08-21T12:00:00Z".into(),
+            activity: String::new(),
         }
     }
 

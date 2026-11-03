@@ -15,7 +15,10 @@
 //! Only an AppImage build registers (`$APPIMAGE` is set). A development build
 //! run from `target/` leaves the user's menu alone. Velopack replaces the
 //! AppImage at the same path on update, so the entry stays valid; it is
-//! rewritten when the AppImage moves.
+//! rewritten when the AppImage moves. Until the next start rewrites it, the
+//! entry's `TryExec` hides it from the menu when the AppImage is no longer
+//! at that path (an AppImage tool moved it, 2026-11-03), instead of a menu
+//! item that fails.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -94,13 +97,21 @@ fn desktop_entry(appimage: &Path) -> String {
          Name={APP_NAME}\n\
          Comment=Hang out with your crew.\n\
          Exec={} %u\n\
+         TryExec={}\n\
          Icon={LINUX_APP_ID}\n\
          Terminal=false\n\
          Categories=Network;Chat;Game;\n\
          MimeType=x-scheme-handler/mello;\n\
          StartupWMClass={LINUX_APP_ID}\n",
-        exec_quote(&appimage.to_string_lossy())
+        exec_quote(&appimage.to_string_lossy()),
+        entry_string(&appimage.to_string_lossy())
     )
+}
+
+/// A plain string value of the entry file (`TryExec` is one, `Exec` is not):
+/// only a backslash needs escaping.
+fn entry_string(value: &str) -> String {
+    value.replace('\\', "\\\\")
 }
 
 /// Quote a program path for an `Exec` key (Desktop Entry spec, "The Exec
@@ -191,9 +202,19 @@ mod tests {
         assert!(entry.starts_with("[Desktop Entry]\n"));
         assert!(entry.contains("Name=m3llo\n"));
         assert!(entry.contains("Exec=\"/opt/m3llo.AppImage\" %u\n"));
+        assert!(entry.contains("TryExec=/opt/m3llo.AppImage\n"));
         assert!(entry.contains("Icon=app.m3llo.M3llo\n"));
         assert!(entry.contains("MimeType=x-scheme-handler/mello;\n"));
         assert!(entry.contains("StartupWMClass=app.m3llo.M3llo\n"));
+    }
+
+    /// The menu hides an entry whose `TryExec` program is missing. A path with
+    /// a space stays as it is; a backslash is doubled as in any entry string.
+    #[test]
+    fn try_exec_is_the_plain_path() {
+        let entry = desktop_entry(Path::new("/home/b/My Apps/m3llo.AppImage"));
+        assert!(entry.contains("TryExec=/home/b/My Apps/m3llo.AppImage\n"));
+        assert_eq!(entry_string("a\\b"), "a\\\\b");
     }
 
     #[test]

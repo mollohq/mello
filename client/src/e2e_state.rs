@@ -270,6 +270,35 @@ struct FeedCardSnap {
     actor_name: String,
     /// The local file of a clip card. Empty for other cards.
     clip_path: String,
+    /// The grid row the card is in, one-based (`feed_grid::rows`). A card in
+    /// the stream rows above the grid is row 0.
+    row: usize,
+    /// The card holds a two-column slot.
+    wide: bool,
+}
+
+/// The feed cards on screen with their grid row and slot width.
+fn read_feed_cards(app: &MainWindow) -> Vec<FeedCardSnap> {
+    let cards: Vec<crate::FeedCardData> = app.get_feed_cards().iter().collect();
+    let infos: Vec<crate::feed_grid::CardInfo> =
+        cards.iter().map(crate::feed_grid::CardInfo::of).collect();
+    let start = crate::feed_grid::grid_start(app.get_active_stream_cards().row_count(), &infos);
+    let rows = crate::feed_grid::rows(&infos, start);
+    let wide = crate::feed_grid::wide_slot_indices(&infos, start);
+    cards
+        .iter()
+        .enumerate()
+        .take(LIST_LIMIT)
+        .map(|(i, c)| FeedCardSnap {
+            id: c.id.to_string(),
+            card_type: c.card_type.to_string(),
+            title: c.title.to_string(),
+            actor_name: c.actor_name.to_string(),
+            clip_path: c.clip_path.to_string(),
+            row: rows[i],
+            wide: wide.contains(&i),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -1255,13 +1284,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 can_watch: c.can_watch,
             }),
         },
-        feed_cards: first_rows(&app.get_feed_cards(), |c| FeedCardSnap {
-            id: c.id.to_string(),
-            card_type: c.card_type.to_string(),
-            title: c.title.to_string(),
-            actor_name: c.actor_name.to_string(),
-            clip_path: c.clip_path.to_string(),
-        }),
+        feed_cards: read_feed_cards(app),
         clip: ClipSnap {
             path: app.get_clip_playing_path().into(),
             paused: app.get_clip_paused(),

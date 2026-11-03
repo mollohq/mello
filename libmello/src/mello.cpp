@@ -1422,6 +1422,7 @@ int mello_enumerate_games(MelloContext* ctx, MelloGameProcess* out, int max_coun
             out[i].is_fullscreen = games[i].is_fullscreen;
             out[i].is_foreground = games[i].is_foreground;
             out[i].started_at_ms = games[i].started_at_ms;
+            out[i].is_minimized = games[i].is_minimized;
             strncpy(out[i].name, games[i].name.c_str(), sizeof(out[i].name) - 1);
             out[i].name[sizeof(out[i].name) - 1] = '\0';
             strncpy(out[i].exe, games[i].exe.c_str(), sizeof(out[i].exe) - 1);

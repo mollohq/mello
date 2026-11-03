@@ -45,7 +45,30 @@ use surface::Surface;
 /// made. The client calls this before it picks the renderer: a failure means the
 /// CPU renderer. The device stays cached for the renderer, so nothing is wasted.
 pub fn probe() -> Result<(), String> {
+    check_compositor()?;
     SharedDevice::get().map(|_| ()).map_err(|e| e.to_string())
+}
+
+/// The flip-model swapchain needs the desktop compositor (DWM). A Windows
+/// service runs in session 0, which has none: the device is made, but
+/// `CreateSwapChainForHwnd` then fails with DXGI_ERROR_NOT_CURRENTLY_AVAILABLE.
+/// The release runner is such a service and runs the signup smoke there.
+fn check_compositor() -> Result<(), String> {
+    use windows::Win32::Graphics::Dwm::DwmIsCompositionEnabled;
+    use windows::Win32::System::RemoteDesktop::ProcessIdToSessionId;
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+
+    unsafe {
+        let mut session = 0u32;
+        if ProcessIdToSessionId(GetCurrentProcessId(), &mut session).is_ok() && session == 0 {
+            return Err("session 0 (a Windows service) has no desktop compositor".into());
+        }
+        match DwmIsCompositionEnabled() {
+            Ok(on) if on.as_bool() => Ok(()),
+            Ok(_) => Err("desktop composition is off".into()),
+            Err(e) => Err(format!("DwmIsCompositionEnabled: {e}")),
+        }
+    }
 }
 
 struct WindowHandle {

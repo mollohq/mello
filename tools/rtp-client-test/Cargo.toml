@@ -8,6 +8,9 @@ publish = false
 [[bin]]
 name = "rtp-client-test"
 path = "src/main.rs"
+# The bin sources hold no tests. A test harness would link all of libmello
+# and ONNX Runtime for nothing.
+test = false
 
 [dependencies]
 mello-sys = { path = "../../mello-sys" }

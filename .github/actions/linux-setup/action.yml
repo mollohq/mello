@@ -1,0 +1,76 @@
+name: Linux setup
+description: >
+  The shared setup of the jobs in linux-build-test.yml: build dependencies,
+  Rust, the vcpkg and cargo registry caches, and the crates. The job checks
+  out the repository (with submodules) before it calls this action, because a
+  local action is read from the checkout.
+
+inputs:
+  rust:
+    description: "'false' skips Rust, the cargo registry cache and the crate fetch (the C++ job)."
+    default: 'true'
+  vcpkg:
+    description: >
+      'false' skips the vcpkg cache (the Clippy job, which builds no vcpkg
+      port). A job that restores the cache but builds nothing would save an
+      incomplete cache under a new primary key.
+    default: 'true'
+
+runs:
+  using: composite
+  steps:
+    - name: Install build dependencies
+      shell: bash
+      run: sudo scripts/linux/install-build-deps.sh
+
+    # Before any cargo command: RUSTC_WRAPPER (linux-build-test.yml) names
+    # sccache. The action exports the cache service variables that the GHA
+    # backend of sccache needs.
+    - name: Set up sccache
+      uses: mozilla-actions/sccache-action@v0.0.11
+
+    # RUST_VERSION comes from the env of linux-build-test.yml.
+    - name: Install Rust
+      if: ${{ inputs.rust != 'false' }}
+      shell: bash
+      run: |
+        rustup toolchain install "$RUST_VERSION" --profile minimal --component rustfmt,clippy
+        rustup default "$RUST_VERSION"
+        rustc --version
+
+    - name: vcpkg submodule commit
+      if: ${{ inputs.vcpkg != 'false' }}
+      id: vcpkg
+      shell: bash
+      run: echo "commit=$(git rev-parse HEAD:external/vcpkg)" >> "$GITHUB_OUTPUT"
+
+    # vcpkg's binary cache (the x-gha provider is gone since vcpkg 2025.06).
+    - name: Cache vcpkg packages
+      if: ${{ inputs.vcpkg != 'false' }}
+      uses: actions/cache@v6
+      with:
+        path: .vcpkg-cache
+        key: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-${{ hashFiles('libmello/vcpkg.json', 'libmello/vcpkg-overlays/**') }}
+        restore-keys: vcpkg-x64-linux-ubuntu24-${{ steps.vcpkg.outputs.commit }}-
+
+    - name: Cache cargo registry
+      if: ${{ inputs.rust != 'false' }}
+      uses: actions/cache@v6
+      with:
+        path: |
+          ~/.cargo/registry/index
+          ~/.cargo/registry/cache
+          ~/.cargo/git/db
+        key: cargo-registry-linux-${{ hashFiles('Cargo.lock') }}
+        restore-keys: cargo-registry-linux-
+
+    # Always: vcpkg rejects a VCPKG_DEFAULT_BINARY_CACHE that does not exist.
+    - name: Prepare the vcpkg cache folder
+      shell: bash
+      run: mkdir -p .vcpkg-cache
+
+    # client/build_notices.rs runs `cargo tree --offline` for every target.
+    - name: Fetch crates
+      if: ${{ inputs.rust != 'false' }}
+      shell: bash
+      run: cargo fetch --locked

@@ -13,6 +13,9 @@ set -eu
 cd "$(dirname "$0")/.."
 ROOT="$(pwd)"
 
+# A CI job on this machine (the runners are dev machines): yield to it.
+. scripts/ci-yield.sh
+
 export CI=true
 
 step() {
@@ -64,6 +67,18 @@ case "$(uname -s)" in
         ARCH_ARGS="-DVCPKG_TARGET_TRIPLET=x64-windows-static-md"
         ;;
 esac
+
+# An Xcode update removes the versioned SDK folder that a build-ci cache points
+# at (MacOSX27.0.sdk went with 27.2), and every C file then fails with
+# "'stdlib.h' file not found". A cache whose sysroot is gone starts again, so
+# cmake configures against the SDK of today.
+if [ -f libmello/build-ci/CMakeCache.txt ]; then
+    sysroot="$(sed -n 's/^CMAKE_OSX_SYSROOT:PATH=//p' libmello/build-ci/CMakeCache.txt)"
+    if [ -n "$sysroot" ] && [ ! -d "$sysroot" ]; then
+        echo "▸ libmello/build-ci was configured against $sysroot, which is gone: starting the cache again"
+        rm -rf libmello/build-ci
+    fi
+fi
 
 # shellcheck disable=SC2086
 # The two WebRTC overlays are ON by default. A build-ci left from the time they

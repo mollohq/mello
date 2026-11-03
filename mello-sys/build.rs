@@ -7,12 +7,24 @@ fn main() {
     println!("cargo:rerun-if-changed=../libmello/src/");
     println!("cargo:rerun-if-changed=../libmello/CMakeLists.txt");
     println!("cargo:rerun-if-changed=../libmello/vcpkg.json");
-    println!("cargo:rerun-if-changed=../libmello/third_party/");
+    println!("cargo:rerun-if-changed=../libmello/cmake/");
+    println!("cargo:rerun-if-changed=../libmello/vcpkg-overlays/");
     println!("cargo:rerun-if-env-changed=LIBCLANG_PATH");
 
     let target_os = env::var("CARGO_CFG_TARGET_OS").unwrap();
     let target_arch = env::var("CARGO_CFG_TARGET_ARCH").unwrap();
     let manifest_dir = env::var("CARGO_MANIFEST_DIR").unwrap();
+    watch_third_party(Path::new(&manifest_dir));
+
+    // MELLO_SYS_BINDINGS_ONLY=1: bindings.rs only, for `cargo check` and
+    // `cargo clippy`, which never link. No vcpkg, no CMake, no libmello build
+    // and no link directives, so a build or test with it set fails at link.
+    // The crate source reads nothing else from this script.
+    println!("cargo:rerun-if-env-changed=MELLO_SYS_BINDINGS_ONLY");
+    if env::var("MELLO_SYS_BINDINGS_ONLY").as_deref() == Ok("1") {
+        run_bindgen(&manifest_dir);
+        return;
+    }
 
     // iOS: cross-compile libmello via the vcpkg toolchain. Step 1 links the voice
     // DSP + transport for real; audio I/O, Silero VAD, and video are stubbed (no
@@ -241,6 +253,31 @@ fn main() {
         }
     }
 
+    // The ONNX models, into models/ next to the test binaries (deps/) and the
+    // other binaries (its parent). find_model_file() in audio_pipeline.cpp
+    // looks in <exe dir>/models/ before it walks up to libmello/models/, and
+    // the walk finds nothing when CARGO_TARGET_DIR is outside the repo. CMake
+    // downloads the models into libmello/models/ above, so they exist here.
+    let models_src = Path::new(&manifest_dir).join("../libmello/models");
+    let mut model_dirs = vec![target_dir.join("models")];
+    if let Some(parent) = target_dir.parent() {
+        model_dirs.push(parent.join("models"));
+    }
+    for model in &["silero_vad.onnx", "echo_suppressor.onnx"] {
+        let src = models_src.join(model);
+        if !src.exists() {
+            println!(
+                "cargo:warning=libmello model {} not found, not copied next to the binaries",
+                src.display()
+            );
+            continue;
+        }
+        for dir in &model_dirs {
+            let _ = std::fs::create_dir_all(dir);
+            let _ = std::fs::copy(&src, dir.join(model));
+        }
+    }
+
     // Platform-specific system libraries
     match target_os.as_str() {
         "windows" => {
@@ -306,6 +343,64 @@ fn main() {
     }
 
     run_bindgen(&manifest_dir);
+}
+
+/// Directories under `libmello/third_party` that the CMake build writes. A
+/// build script that watches its own output reruns on the next cargo command,
+/// so these are not inputs.
+const THIRD_PARTY_GENERATED: [&str; 2] = [
+    // ONNX Runtime archives, extracted at configure time.
+    "onnxruntime",
+    "onnxruntime-ios",
+];
+
+/// Files in `third_party/rnnoise/src` that CMake copies from the downloaded
+/// model data when they are missing.
+const RNNOISE_GENERATED: [&str; 2] = ["rnnoise_data.c", "rnnoise_data.h"];
+
+/// Watch every vendored input under `libmello/third_party`, but not what the
+/// CMake build writes there. Watching the whole directory made the build
+/// script stale for the next cargo command after CMake extracted ONNX Runtime.
+fn watch_third_party(manifest_dir: &Path) {
+    let mut paths: Vec<PathBuf> = Vec::new();
+    for dir in dir_entries(&manifest_dir.join("../libmello/third_party")) {
+        let name = file_name(&dir);
+        if THIRD_PARTY_GENERATED.contains(&name.as_str()) {
+            continue;
+        }
+        if name != "rnnoise" {
+            paths.push(dir);
+            continue;
+        }
+        for sub in dir_entries(&dir) {
+            if file_name(&sub) != "src" {
+                paths.push(sub);
+                continue;
+            }
+            paths.extend(
+                dir_entries(&sub)
+                    .into_iter()
+                    .filter(|f| !RNNOISE_GENERATED.contains(&file_name(f).as_str())),
+            );
+        }
+    }
+    paths.sort();
+    for p in paths {
+        println!("cargo:rerun-if-changed={}", p.display());
+    }
+}
+
+/// The entries of a directory; none when it cannot be read.
+fn dir_entries(dir: &Path) -> Vec<PathBuf> {
+    std::fs::read_dir(dir)
+        .map(|rd| rd.flatten().map(|e| e.path()).collect())
+        .unwrap_or_default()
+}
+
+fn file_name(path: &Path) -> String {
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_default()
 }
 
 /// Generate the Rust bindings from `mello.h`. Shared by the native build and the
