@@ -1,8 +1,8 @@
 # MELLO Text Chat Specification
 
 > **Component:** Text Chat (Rich Messaging)  
-> **Version:** 0.1  
-> **Status:** Beta Scope  
+> **Version:** 0.2  
+> **Status:** Shipped with chat v2 (see `plans/CHAT-V2.md` for the build log)  
 > **Parent:** [00-ARCHITECTURE.md](./00-ARCHITECTURE.md)  
 > **Related:** [01-CLIENT.md](./01-CLIENT.md), [02-MELLO-CORE.md](./02-MELLO-CORE.md), [04-BACKEND.md](./04-BACKEND.md), [11-PRESENCE-CREW-STATE.md](./11-PRESENCE-CREW-STATE.md)
 
@@ -20,13 +20,15 @@ as the Nakama message `content` field. No DMs in beta.
 |----------|--------|-----------|
 | Message format | Structured JSON envelope with `v` field | Forward-compatible, typed, extensible |
 | Formatting | Markdown-lite (Discord-style syntax) | Users already know it, fast to implement |
-| GIF provider | Tenor API v2, client-side | Free tier, generous limits, no backend proxy needed |
-| Emoji | Unicode native + picker | No custom emoji in beta |
+| GIF provider | Giphy API v1, client-side | Tenor's API closed 30 June 2026. Giphy's rules require client-side calls and forbid a proxy or a cache. |
+| Emoji | Unicode, Twemoji bundled, full set in the picker | One look on every OS; the bundled COLRv0 font keeps the system emoji font out of memory. No custom emoji. |
+| Images | Up to four per message, resized to 1600px, on the `mello-chat` bucket | See 2.3 |
+| Reactions | Server-side storage object per message | See 2.4 |
 | Replies | Quote-reply with `reply_to` field | Simple, no threads |
 | DMs | Not in beta | Crew chat only |
-| Unread tracking | Client-side volatile counters | No backend storage needed for beta |
+| Unread tracking | A read cursor per crew in the user's storage | Survives a restart. See 2.5 |
 | Message length | 2000 characters max | Enforced client-side and server-side |
-| Message history | 50 messages initial load, paginate on scroll-up | Nakama cursor-based pagination |
+| Message history | Pages on scroll-up, a window of the newest 200 on screen | Nakama cursor-based pagination. See 4.3 |
 
 ### What Changes
 
@@ -34,7 +36,7 @@ as the Nakama message `content` field. No DMs in beta.
 |-------|--------|-------|
 | Message content | Plain text string | Structured JSON envelope (see §2) |
 | Client rendering | Flat text, raw ISO timestamps | Grouped messages, relative time, markdown, inline GIFs |
-| Chat input | Single text field in panel | Text field + action pills row (GIF, Emoji) |
+| Chat input | Single text field in panel | Text field with a send button + icon buttons (Attach, GIF, Emoji) |
 | Backend | No message validation | Before-hook validates envelope, enforces length limit |
 
 ### What Doesn't Change
@@ -56,7 +58,7 @@ Every message sent via `channel_message_send` uses this JSON structure as the
 ```json
 {
   "v": 1,
-  "type": "text | gif | system",
+  "type": "text | gif | image | system",
   "body": "string",
   "reply_to": "message_id | null",
   "mentions": ["user_id", "..."],
@@ -67,33 +69,33 @@ Every message sent via `channel_message_send` uses this JSON structure as the
 | Field | Type | Required | Description |
 |-------|------|----------|-------------|
 | `v` | `integer` | Yes | Schema version. Always `1` for now. |
-| `type` | `string` | Yes | One of: `text`, `gif`, `system`. |
+| `type` | `string` | Yes | One of: `text`, `gif`, `image`, `system`. |
 | `body` | `string` | Yes | Message text. May contain markdown and mention tokens. Max 2000 chars. Empty string for gif-only messages. |
 | `reply_to` | `string \| null` | No | Nakama message ID of the quoted message. `null` or omitted if not a reply. |
 | `mentions` | `string[]` | No | Array of user IDs mentioned in `body`. Used for notification routing. Omit if empty. |
 | `gif` | `object \| null` | No | GIF metadata. Required when `type` is `gif`. See §2.2. |
+| `images` | `array` | No | Uploaded images. Required when `type` is `image`. See §2.3. |
 
 ### 2.2 GIF Object
-
 ```json
 {
-  "tenor_id": "12345678",
-  "url": "https://media.tenor.com/.../mp4",
-  "preview": "https://media.tenor.com/.../tinygif",
-  "width": 320,
-  "height": 240,
-  "alt": "search query or description"
+  "id": "abc123",
+  "url": "https://media.giphy.com/.../200w.gif",
+  "preview": "https://media.giphy.com/.../100w.gif",
+  "width": 200,
+  "height": 150,
+  "alt": "title"
 }
 ```
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `tenor_id` | `string` | Tenor content ID. Used for Tenor share registration. |
-| `url` | `string` | Primary display URL. Use `mediummp4` format from Tenor response for bandwidth efficiency. |
-| `preview` | `string` | Low-res preview URL. Use `tinygif` format. Shown while `url` loads. |
-| `width` | `integer` | Native width in pixels. |
-| `height` | `integer` | Native height in pixels. |
-| `alt` | `string` | Search query that produced this result. Used as accessible description. |
+| `id` | `string` | Giphy content id. |
+| `url` | `string` | The `fixed_width` rendition (200px wide), what the chat shows. |
+| `preview` | `string` | The `fixed_width_small` rendition (100px wide), what the picker tiles show. |
+| `width` | `integer` | Width of `url` in pixels. |
+| `height` | `integer` | Height of `url` in pixels. |
+| `alt` | `string` | The Giphy title. Used as accessible description. |
 
 ### 2.3 Image Message
 
@@ -297,12 +299,27 @@ Timestamps appear on the group header only, not on every message. On hover over
 any message in the group, show the exact timestamp as a tooltip.
 
 ### 4.3 Message Gravity
+The feed is a plain Flickable over a window of the newest 200 loaded messages
+(`ChatScrollState::WINDOW`). Every row has its real height, so the content
+height is exact: scroll to bottom lands on the last message, and a prepend
+moves the viewport by the exact growth so the row the user reads stays put.
+A virtualized list estimates its height from the rows on screen; that estimate
+sent the view to the same row every time, which is why it is not used.
 
-Messages anchor to the bottom of the chat panel and grow upward. When the user
-is scrolled to the bottom, new messages auto-scroll into view. When the user has
-scrolled up (reading history), new messages do **not** auto-scroll. Instead,
-show a "New messages" pill at the bottom of the message area; clicking it scrolls
-to bottom.
+Rows gather at the bottom when they are fewer than the feed holds. When the
+user is at the bottom, a new message scrolls into view and the read cursor
+moves (2.5). When the user has scrolled up, a new message shows the red
+"New messages" pill instead; clicking it scrolls to the bottom. An own message
+always scrolls to the bottom.
+
+The window grows while the user reads older rows and goes back to 200 when
+they return to the bottom. The top of the feed reveals loaded rows that were
+trimmed before it asks the server for a page. Each scroll target is applied
+on three frames, because a row the model just got is laid out on the next
+frame.
+
+Opening a crew: at the unread rule when the read cursor is behind the newest
+message, else at the bottom.
 
 ### 4.4 Avatars
 
@@ -321,21 +338,16 @@ Avatar indent: avatar width (28px) + spacing (8px) = 36px left padding for
 grouped message bodies.
 
 ### 4.5 GIF Rendering
+GIF messages render inline in the message flow.
 
-GIF messages render inline in the message flow. Display rules:
-
-1. Show `preview` URL immediately (low-res, fast load).
-2. Load `url` (mp4) in background. Swap to mp4 when ready.
-3. Max display width: 300px. Scale height proportionally using `width`/`height`
-   from the gif object.
-4. Click on GIF does nothing in beta (no lightbox).
+1. The chat fetches `url` (the 200px rendition) and decodes every frame, at
+   most 32 frames at 320px, and plays it twice; hover plays it again.
+2. Max display width: 300px. Height from `width`/`height`.
+3. Frames are cached by URL across row rebuilds; the cache keeps the newest
+   16 GIFs. The newest 8 GIFs of the window load at once, older ones on hover.
+4. A GIF that cannot load says "GIF not available".
 5. GIF-only messages (empty body) show just the media. GIF + text messages show
    text above the media.
-
-Rendering mp4 in Slint: use the platform's native video element or fall back to
-rendering the `preview` (animated GIF) as an image if mp4 playback is not
-feasible in Slint. The preview URL is always a GIF image and can be displayed
-with Slint's `Image` element via async fetch.
 
 ### 4.6 Reply Rendering
 
@@ -374,34 +386,32 @@ empty content. Check for empty/null content to detect this.
 ## 5. Chat Input UI
 
 ### 5.1 Layout
-
-The chat input area sits at the bottom of the chat panel. It has two rows:
-an action pills row above the text input.
+The chat input area sits at the bottom of the chat panel: pending image chips
+when there are any, a row of icon buttons, then the field with the send button
+inside it at the right.
 
 ```
 │  ... messages ...                                │
-│                                                  │
-│  [GIF]  [Emoji]                                  │  <- pills row
-│  ┌────────────────────────────────────────────┐  │
-│  │ Message crewmates...                       │  │  <- text input (36px height)
-│  └────────────────────────────────────────────┘  │
+│  [thumb ✕] [thumb ✕]                             │  <- pending images (when any)
+│  [📎] [GIF] [☺]                                   │  <- icon buttons, 28px
+│  ┌──────────────────────────────────────── [↑] ┐  │
+│  │ Message crewmates...                        │  │  <- field, 40px, send inside
+│  └─────────────────────────────────────────────┘  │
 ```
 
 ### 5.2 Action Pills
+Icon buttons, 32×28px, no label on screen (the label is the accessible
+name). Muted icon; on hover a graphite fill; when its popover is open, white
+on the dim fill with the button's cut corners.
 
-Small, ghost-style buttons. Icon + short label. Muted text color, no border.
-On hover: subtle background fill (`Theme.bg-tertiary`). On active/open: accent
-color text.
-
-| Pill | Icon | Action |
+| Button | Icon | Action |
 |------|------|--------|
-| GIF | filmstrip/play icon | Opens GIF search popover (§6) |
-| Emoji | smiley face icon | Opens emoji picker popover (§8) |
+| Attach | paperclip | File dialog, up to four images (2.3) |
+| GIF | filmstrip | Opens the GIF popover (§6) |
+| Emoji | smiley | Opens the emoji picker (§8) |
 
-Future pills (not in beta, but leave room): Attach (paperclip icon, grayed
-out/hidden for now).
-
-Pills row height: ~28px. Compact, does not dominate.
+The send button sits inside the field at its right: red when there is text or
+a ready image (it commits), graphite when the field is empty. Enter sends too.
 
 ### 5.3 Text Input
 
@@ -430,19 +440,20 @@ When present, the sent message includes the `reply_to` field. Focus moves to the
 text input when reply mode activates.
 
 ### 5.5 Message Context Actions
-
-On hover over a message, show a small floating action row at the top-right
-corner of the message:
+A click on a message opens its action bar at the top right of the message,
+over the header line. A second click on the message, a click on another
+message, or Escape closes it. (Hover was unreliable: StyledText takes
+pointer presses itself, so a target under it never fired.)
 
 ```
-                                    [↩️] [😀] [⋯]
+                                    [☺] [↩] [⋯]
   hey everyone check out this link
 ```
 
 | Button | Action |
 |--------|--------|
-| ↩️ Reply | Activates reply mode in input (§5.4) |
-| 😀 React | Opens reaction picker (post-beta, hidden for now) |
+| ☺ React | Opens the emoji picker in reaction mode: the pick becomes a reaction (2.4) |
+| ↩ Reply | Activates reply mode in input (§5.4) |
 | ⋯ More | Context menu: Edit (own messages only), Delete (own messages only), Copy Text |
 
 Edit: replaces message body in input, switches to edit mode. On submit, calls
@@ -450,82 +461,47 @@ Edit: replaces message body in input, switches to edit mode. On submit, calls
 message" indicator (similar to reply bar). Pressing Escape cancels edit.
 
 Delete: confirmation prompt ("Delete this message?"). On confirm, calls
-`channel_message_remove`.
+`channel_message_remove`; the objects of an image message go with it (2.3).
 
----
-
-## 6. GIF Integration (Tenor)
+## 6. GIF Integration (Giphy)
 
 ### 6.1 API Setup
 
-- Provider: Tenor API v2
-- API key: Embedded in client binary. Store as a build-time constant.
-- Base URL: `https://tenor.googleapis.com/v2`
-- Required params on all requests: `key={API_KEY}`, `client_key=mello`,
-  `media_filter=mp4,tinygif`
-
-Register for a Tenor API key at https://developers.google.com/tenor/guides/quickstart.
-Free tier allows 50 search requests/minute.
+- Provider: Giphy API v1, called from the client. Giphy's rules: "Do not
+  proxy requests to GIPHY", "Do not cache API responses or media URLs", and
+  search and trending must be called from the client.
+- API key: baked in at build time from `GIPHY_API_KEY`. A production build
+  refuses to compile without it; a dev build without it shows "GIFs are off in
+  this build". Beta keys allow 100 calls per hour per key; apply for a
+  production key before launch.
+- Base URL: `https://api.giphy.com/v1/gifs`, `rating=g`, `limit=20`.
 
 ### 6.2 Endpoints
 
-**Search:**
-```
-GET /search?q={query}&key={KEY}&client_key=mello&media_filter=mp4,tinygif&limit=20
-```
-
-**Trending (shown on popover open, before user types):**
-```
-GET /featured?key={KEY}&client_key=mello&media_filter=mp4,tinygif&limit=20
-```
-
-**Register share (call after user sends a GIF):**
-```
-POST /registershare?key={KEY}&client_key=mello&id={tenor_id}&q={search_query}
-```
+| Call | Endpoint |
+|---|---|
+| Search | `GET /search?q={query}&api_key={KEY}&limit=20&rating=g` |
+| Trending (on open, before the user types) | `GET /trending?api_key={KEY}&limit=20&rating=g` |
 
 ### 6.3 Response Mapping
 
-From Tenor search results, extract per-result:
-
-```
-tenor_id = result.id
-url      = result.media_formats.mp4.url        (or mediummp4 if mp4 absent)
-preview  = result.media_formats.tinygif.url
-width    = result.media_formats.mp4.dims[0]     (or tinygif dims)
-height   = result.media_formats.mp4.dims[1]
-alt      = search query
-```
+`url` = `images.fixed_width.url` (or `original`), `preview` =
+`images.fixed_width_small.url` (or `preview_gif`, or `url`), `width`/`height`
+from `fixed_width`, `alt` = `title`. A dimension that is not a number is 0;
+it does not fail the page.
 
 ### 6.4 GIF Popover UI
 
-Opens upward from the GIF pill, overlaying the message area. Does not resize
-the chat panel.
+Opens above the composer. Search field with focus on open, trending until the
+user types, two columns of tiles at real aspect that animate while open.
+Click a tile: sends `type: "gif"` and closes. Escape or the GIF button closes.
+"Powered by GIPHY" at the bottom, as Giphy requires.
 
-```
-┌──────────────────────────────────────────┐
-│  🔍 Search Tenor                         │  <- search input, auto-focus
-├──────────────────────────────────────────┤
-│  ┌────────┐ ┌────────┐ ┌────────┐       │
-│  │  gif   │ │  gif   │ │  gif   │       │  <- masonry-style grid
-│  │        │ │        │ └────────┘       │     (2 or 3 columns)
-│  └────────┘ └────────┘ ┌────────┐       │
-│  ┌────────┐ ┌────────┐ │  gif   │       │
-│  │  gif   │ │  gif   │ │        │       │
-│  └────────┘ └────────┘ └────────┘       │
-└──────────────────────────────────────────┘
-```
+An error is never a blank grid: the popover shows one sentence ("The GIF
+service did not answer. Your messages still send.", "Too many GIF searches
+right now. Try again in a minute.", "The GIF service refused this build's
+key.", "GIFs are off in this build.") and a Try again button.
 
-- Popover dimensions: ~340px wide, ~360px tall.
-- On open: load trending GIFs.
-- On type in search: debounce 300ms, then call search endpoint.
-- Grid shows preview URLs (tinygif) for fast loading.
-- Click a GIF: sends message with `type: "gif"`, closes popover,
-  calls registershare in background.
-- Escape or click outside: closes popover without sending.
-- "Powered by Tenor" attribution at bottom of popover (required by Tenor ToS).
-
----
 
 ## 7. @Mentions
 
@@ -587,40 +563,38 @@ the entire message to draw attention.
 ## 8. Emoji Picker
 
 ### 8.1 Data Source
-
-Embed a static JSON dataset of Unicode emoji in the client binary. Use a
-curated subset (~1500 common emoji) grouped by category. The dataset maps
-each emoji to: codepoint(s), short name, keywords, category.
-
-Categories: Smileys & People, Animals & Nature, Food & Drink, Activities,
-Travel & Places, Objects, Symbols, Flags.
+The full Unicode set the bundled font draws: `mello-core/src/emoji_table.rs`,
+generated by `tools/emoji/gen_emoji_table.py` from Unicode's `emoji-test.txt`,
+every fully-qualified emoji up to Emoji 14.0 without skin-tone variants, 1849
+entries in eight categories (Smileys & People, Animals & Nature, Food & Drink,
+Activities, Travel & Places, Objects, Symbols, Flags). Each entry maps the
+emoji to its Unicode name and category. The font is Twemoji (Mozilla's COLRv0
+build with base outlines added, `client/ui/fonts/LICENSE-Twemoji.txt`).
 
 ### 8.2 Picker UI
-
-Opens upward from the Emoji pill, same pattern as the GIF popover.
+Opens above the composer, 320px tall.
 
 ```
 ┌──────────────────────────────────────────┐
-│  🔍 Search emoji                         │
-├──────────────────────────────────────────┤
-│  😀 😃 😄 😁 😅 😂 🤣 😊 😇 🙂         │
-│  😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛         │
+│  🔍 Search emoji                         │  <- focus on open
+│  RECENT                                  │
+│  🔥 💀 😂 👀 🎮 🙏 👍 ❤️ 🤝               │  <- the session's picks, newest first
+│  😀 😃 😄 😁 😆 😅 😂 🤣 😊               │
+│  😇 🙂 🙃 😉 😌 😍 🥰 😘 😗               │  <- the category, or the search hits
 │  ...                                     │
 ├──────────────────────────────────────────┤
 │  [😀] [🐱] [🍕] [⚽] [🚗] [💡] [❤️] [🏳️] │  <- category tabs
 └──────────────────────────────────────────┘
 ```
 
-- Grid of emoji, ~8-10 per row.
-- Category tabs at bottom for quick navigation.
-- Search filters by short name and keywords.
-- Click emoji: inserts Unicode character at cursor position in text input.
-  Does **not** close the picker (user may want to insert multiple).
-- Escape or click outside: closes picker.
-- Optional: "Frequently used" row at top, tracked locally (in-memory for beta,
-  no persistence needed).
-
----
+- Nine cells per row that share the width (about 36px in the 400px panel),
+  24px glyphs. The grid is a ListView of uniform rows.
+- Search matches every word of the name; the exact name comes first, then
+  names that start with the query. No hits: "No emoji called that".
+- Click an emoji: inserts it at the end of the field and closes the picker.
+  In reaction mode (opened from React, 5.5) the pick is a reaction instead.
+- Escape, the Emoji button, or a pick closes it.
+- Emoji-only messages of three or fewer render at 32px (`Theme.font-xxl`).
 
 ## 9. Unread Tracking
 
@@ -846,43 +820,6 @@ the raw JSON directly.
 ---
 
 ## 13. Implementation Phases
+Shipped as chat v2. The build log, the decisions and what was dropped are in
+`plans/CHAT-V2.md`.
 
-These are implementation ordering guidelines for the agent. Each phase is
-independently shippable.
-
-### Phase 1: Visual Fixes (no backend changes)
-
-- Message grouping (§4.1)
-- Human-readable timestamps (§4.2)
-- Bottom-anchored message gravity (§4.3)
-- Avatar on group headers (§4.4)
-- Scroll-up pagination with spinner (§11.2)
-
-### Phase 2: Structured Envelope
-
-- Message envelope schema (§2)
-- Backend validation hook (§10.1)
-- mello-core `ParsedMessage` types and `Command`/`Event` updates (§12)
-
-### Phase 3: Rich Features
-
-- GIF search, popover, send, render (§6, §4.5)
-- Reply-to: context action, reply bar, send, render (§4.6, §5.4, §5.5)
-- Edit/delete: context actions, edit mode, tombstone render (§4.7, §5.5)
-- Action pills row UI (§5.1, §5.2)
-
-### Phase 4: Polish
-
-- @Mentions: autocomplete, token render, highlight own mentions (§7)
-- Emoji picker (§8)
-- Unread tracking + sidebar badges (§9)
-- System messages from server events (§10.2)
-- "New messages" scroll pill (§4.3)
-
-### Phase 5: Markdown Rendering (blocked on Slint 1.16)
-
-- Upgrade Slint dependency to 1.16+ (or pin to master if stable enough)
-- Swap message body `Text` elements to `StyledText` with `@markdown()` (§3.2)
-- Implement `prepare_body_for_display()` pre-processor for mentions and
-  bare URL wrapping (§3.3)
-- Wire `StyledText.link-clicked` callback to open URLs externally
