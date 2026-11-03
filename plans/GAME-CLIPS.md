@@ -30,7 +30,7 @@ todos:
     content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests. Built 2026-11-02, not committed (game_clips.go, section 6.5): post_clip is idempotent on clip_id (voice too), the game hero after a fresh stream preview, the hourly abort job. Go tests pass; a live test against local MinIO (MELLO_S3_LIVE=1) passes: MinIO refuses a part one byte short or long, and a poster without its Cache-Control. Open: does R2 enforce the signed Content-Length; the voice clip_upload_url checks no membership and no clipper, so a signed-in user can overwrite any clip's MP4, a game clip's too"
     status: in_progress
   - id: client-key-settings
-    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. Open: the Buffer folder control and the Q23 control (Game clips while streaming)"
+    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. Open: the Buffer folder control. Q23 is dropped (Bob, 2026-11-03)"
     status: in_progress
   - id: feed-card
     content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file. Built 2026-11-02, not committed: GameClipCard (client/ui/panels/game_clip_card.slint, a Preview for slint-viewer), the clip_kind, clip_uploading and clip_can_play fields of FeedCardData, the poster through the snapshot loader (the clipper's own poster file first), flow tests. Until clip-streaming-playback lands, a click opens the clip with the OS: the clipper's own file, else the uploaded MP4. Open: Bob's approval of the render; the chat card (no chat message carries a clip today, voice clips neither)"
@@ -339,8 +339,6 @@ Bob's rule (2026-11-01): the game clips feature must not affect a stream that th
 - F7: `SharedGameAudio` (`shared_game_audio.cpp`) is one process loopback of a game's process tree, with a fan-out. The context keeps one per pid (`Context::game_audio`). The stream host's audio pipeline and the replay take their game audio from it. On a Windows without process loopback, the stream host keeps its own capture with the endpoint fallback, as before; the replay then has no game audio.
 | F8 | The gates (10.3, 10.4) | The "stream and replay together" lane adds an F8 press during the run, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay. The stream gates must pass inside the spread of the `main` runs in every case. The perf case "buffer on plus a stream" reports the stream's encode queue drops and frame timing. |
 
-A Settings control "Game clips while streaming" (on, off) gives a streamer who sees an effect a way out (Q23).
-
 **The upload during a stream (F4, section G of the review).** The host runs a GoogCC bandwidth estimate on TWCC feedback (`GoogCcController`, `libmello/src/transport/twcc.hpp`). `QualityController` (`mello-core/src/stream/controller.rs`) moves a rung down after 2 s under the floor or 2 s of encoder overload, and up after 15 s (`UP_DWELL`).
 
 | # | Rule |
@@ -619,7 +617,6 @@ A "Game clips" section in Settings:
 | Game clips (F8) | On, off | On (Q1) |
 | Clip quality | 1080p60, 720p60, 720p30 | 720p60 (Q2) |
 | Buffer folder | A folder | The OS temp folder (CLIPS.md 4.4) |
-| Game clips while streaming | On, off | On, if Q23 adds it (section 3.6) |
 
 A control that cannot work shows why, in the label register: "No hardware encoder".
 
@@ -877,7 +874,7 @@ One feature branch and one PR (`feat/game-clips`). The manager refactor is its o
 | Q20 | The game's mixer slider is in the loopback, m3llo's own slider is not in the voice ring. Does the mux apply m3llo's slider to the voice, so the clip balance is what the user heard? | Yes (Bob, 2026-11-02). Record m3llo's session volume with the voice ring's time anchors and apply it in the mux. Both sources are then at the same point, after their sliders and before the endpoint volume. |
 | Q21 | A game in exclusive fullscreen: the replay never injects the hook (Q4). What does the replay do? | Measured (Bob, 2026-11-02): CS2 in exclusive Fullscreen was captured by WGC (section 9.1). The replay stays on WGC window and gates on its frames, not on the exclusive-fullscreen check (section 4.1). A game that WGC cannot see gets no clips, and the toast says "Set the game to borderless". |
 | Q22 | WGC asks Windows for borderless access at the first WGC start in the process (`ensure_borderless_access`, `capture_wgc.cpp`). Can a consent dialog appear when the replay starts? | No (Bob, 2026-11-02): m3llo is signed in production, and no borderless dialog appears. The replay asks at its first WGC start, as the stream does. |
-| Q23 | A Settings control "Game clips while streaming" (on, off)? | Open. Proposed by the review: yes, default on, with the rules of section 3.6. A streamer who sees any effect has a way out. |
+| Q23 | A Settings control "Game clips while streaming" (on, off)? | No (Bob, 2026-11-03). The rules of section 3.6 keep the stream first. |
 | Q24 | Voice times in the ring (section 5.1): the local mic sits in the mix at the render time, late by a varying queue depth, and the replay lane's voice markers prove only the mic path. | Decided (Bob, 2026-11-02). The mic: the ring keeps it apart from the crew mix, each with its own anchors. The remote path: a check in the QA journey, where the second client plays a tone burst at a known time (section 10.5). |
 | Q25 | The starting values of the upload budget during a stream (section 3.6, G2): at most 1 Mbps, and 25 % of the headroom. | Open. The gate (G7) confirms or moves them. A 20 MB clip then takes about 3 min. |
 | — | Upload during a stream (2026-11-01) | Decided: the upload runs during the stream, governed by the stream's controller (section 3.6, G1 to G8). "No upload while a stream runs" is rejected. |
