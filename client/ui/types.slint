@@ -625,6 +625,18 @@ export struct ChatImageData {
     failed: bool,
 }
 
+/// One image in the viewer: the full picture once fetched.
+export struct ViewerImageData {
+    url: string,
+    width: int,
+    height: int,
+    /// "1600×1000 · 1.2 MB"
+    label: string,
+    image: image,
+    has-image: bool,
+    failed: bool,
+}
+
 /// A pending image chip in the composer.
 export struct AttachmentData {
     id: string,

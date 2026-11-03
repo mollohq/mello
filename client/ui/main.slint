@@ -36,7 +36,7 @@ import {
     NoticeEntryData,
     TesterData,
     InvitePersonData,
-    VideoRect, AttachmentData, EmojiRowData, EmojiCategoryData} from "types.slint";
+    VideoRect, AttachmentData, EmojiRowData, EmojiCategoryData, ViewerImageData} from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
 import { StreamSourceMenu } from "panels/stream_source_menu.slint";
@@ -56,6 +56,7 @@ import { ForceUpdateWindow } from "panels/force_update_dialog.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
+import { ChatImageViewer } from "panels/image_viewer.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
@@ -225,11 +226,15 @@ export component MainWindow inherits Window {
     /// The composer's pending image chips.
     in property <[AttachmentData]> chat-attachments: [];
     /// The image open in the viewer over the chat panel. Empty when closed.
-    in-out property <string> chat-image-open: "";
-    in-out property <string> chat-image-open-sender: "";
-    in property <image> chat-image-open-image;
-    in property <bool> chat-has-image-open-image: false;
-    in property <string> chat-image-open-label: "";
+    /// The image viewer over the whole window. Empty list = closed.
+    in-out property <[ViewerImageData]> chat-viewer-images: [];
+    in-out property <int> chat-viewer-index: 0;
+    in-out property <string> chat-viewer-sender: "";
+    in-out property <bool> chat-viewer-open: false;
+    /// The message whose action bar is open, for the state port and tests.
+    in-out property <string> chat-actions-message-id: "";
+    /// The viewer shows another index; the client fetches that image.
+    callback chat-viewer-shown(/* index */ int);
     in-out property <bool> emoji-popover-open: false;
     in property <[MentionMemberData]> mention-suggestions: [];
     in-out property <string> chat-input-text: "";
@@ -1310,17 +1315,13 @@ export component MainWindow inherits Window {
                     emoji-categories: root.emoji-categories;
                     emoji-category <=> root.emoji-category;
                     emoji-target-message <=> root.emoji-target-message;
+                    actions-message-id <=> root.chat-actions-message-id;
                     react(id, emoji) => { root.react(id, emoji); }
                     emoji-search(query) => { root.emoji-search(query); }
                     emoji-category-selected(index) => { root.emoji-category-selected(index); }
                     emoji-picked(emoji) => { root.emoji-picked(emoji); }
                     emoji-popover-open <=> root.emoji-popover-open;
                     attachments: root.chat-attachments;
-                    image-open <=> root.chat-image-open;
-                    image-open-sender <=> root.chat-image-open-sender;
-                    image-open-image: root.chat-image-open-image;
-                    has-image-open-image: root.chat-has-image-open-image;
-                    image-open-label: root.chat-image-open-label;
                     attach-clicked() => { root.attach-clicked(); }
                     attachment-removed(id) => { root.attachment-removed(id); }
                     paste-image() => { return root.paste-image(); }
@@ -1688,6 +1689,16 @@ export component MainWindow inherits Window {
     }
 
     // ===================== INVITE SHARE MODAL =====================
+    if root.chat-viewer-open: ChatImageViewer {
+        images: root.chat-viewer-images;
+        index <=> root.chat-viewer-index;
+        sender: root.chat-viewer-sender;
+        close => { root.chat-viewer-open = false; }
+        save(url) => { root.chat-image-save(url); }
+        copy(url) => { root.chat-image-copy(url); }
+        shown(i) => { root.chat-viewer-shown(i); }
+    }
+
     if invite-share-open: InviteShareModal {
         invite-url: root.invite-share-url;
         // Two-way: the modal's revert writes `copied`, and a one-way binding

@@ -765,34 +765,57 @@ fn wire_attachments(ctx: &AppContext) {
         let messages = ctx.chat_messages.clone();
         let anim = ctx.gif_chat_anim.clone();
         let app_weak = ctx.app.as_weak();
+        let viewer = ViewerFetch::new(ctx);
         ctx.app.on_chat_image_clicked(move |url, sender| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
-            let label = messages
+            // The viewer shows every image of the message, starting at the
+            // one clicked, with the feed's small pixels until the full ones land.
+            let images: Vec<mello_core::chat::ImageData> = messages
                 .borrow()
                 .iter()
-                .flat_map(|m| m.images.iter())
-                .find(|i| i.url == url.as_str())
+                .find(|m| m.images.iter().any(|i| i.url == url.as_str()))
+                .map(|m| m.images.clone())
+                .unwrap_or_default();
+            if images.is_empty() {
+                return;
+            }
+            let index = images
+                .iter()
+                .position(|i| i.url == url.as_str())
+                .unwrap_or(0);
+            let rows: Vec<crate::ViewerImageData> = images
+                .iter()
                 .map(|i| {
                     let size = if i.bytes > 0 {
                         format!(" · {}", crate::chat_images::size_label(i.bytes))
                     } else {
                         String::new()
                     };
-                    format!("{}×{}{}", i.width, i.height, size)
+                    let small = anim.current_frame(&i.url);
+                    crate::ViewerImageData {
+                        url: i.url.clone().into(),
+                        width: i.width as i32,
+                        height: i.height as i32,
+                        label: format!("{}×{}{}", i.width, i.height, size).into(),
+                        has_image: small.is_some(),
+                        image: small.unwrap_or_default(),
+                        failed: anim.has_failed(&i.url),
+                    }
                 })
-                .unwrap_or_default();
-            match anim.current_frame(url.as_str()) {
-                Some(px) => {
-                    app.set_chat_image_open_image(px);
-                    app.set_chat_has_image_open_image(true);
-                }
-                None => app.set_chat_has_image_open_image(false),
-            }
-            app.set_chat_image_open_label(label.into());
-            app.set_chat_image_open_sender(sender);
-            app.set_chat_image_open(url);
+                .collect();
+            app.set_chat_viewer_images(Rc::new(slint::VecModel::from(rows)).into());
+            app.set_chat_viewer_index(index as i32);
+            app.set_chat_viewer_sender(sender);
+            app.set_chat_viewer_open(true);
+            viewer.show(index);
+        });
+    }
+    {
+        let viewer = ViewerFetch::new(ctx);
+        ctx.app.on_chat_viewer_shown(move |index| {
+            viewer.show(index.max(0) as usize);
         });
     }
     {
@@ -1005,6 +1028,91 @@ impl MarkRead {
             crew_id: crew,
             message_id,
             time,
+        });
+    }
+}
+
+/// Fetches the full image for the viewer's shown index, once per URL, and
+/// puts it into the viewer's row. The feed cache holds a 640px version; the
+/// viewer wants the real one.
+struct ViewerFetch {
+    app: slint::Weak<crate::MainWindow>,
+    rt: tokio::runtime::Handle,
+    fetched: Rc<RefCell<std::collections::HashSet<String>>>,
+}
+
+impl ViewerFetch {
+    fn new(ctx: &AppContext) -> Self {
+        Self {
+            app: ctx.app.as_weak(),
+            rt: ctx.rt.clone(),
+            fetched: Rc::default(),
+        }
+    }
+
+    fn show(&self, index: usize) {
+        let Some(app) = self.app.upgrade() else {
+            return;
+        };
+        let rows = app.get_chat_viewer_images();
+        let Some(row) = rows.row_data(index) else {
+            return;
+        };
+        let url = row.url.to_string();
+        if url.is_empty() || !self.fetched.borrow_mut().insert(url.clone()) {
+            return;
+        }
+        let app_weak = self.app.clone();
+        self.rt.spawn(async move {
+            let decoded = match crate::http::shared().get(&url).send().await {
+                Ok(resp) => match resp.bytes().await {
+                    Ok(bytes) => image::load_from_memory(&bytes).ok().map(|img| {
+                        // Bounded, so a seeded or pasted monster never costs a GPU texture
+                        // the size of a wall.
+                        let img = if img.width().max(img.height()) > 2048 {
+                            img.resize(2048, 2048, image::imageops::FilterType::Triangle)
+                        } else {
+                            img
+                        };
+                        let rgba = img.to_rgba8();
+                        let (w, h) = (rgba.width(), rgba.height());
+                        (rgba.into_raw(), w, h)
+                    }),
+                    Err(_) => None,
+                },
+                Err(_) => None,
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                let rows = app.get_chat_viewer_images();
+                for i in 0..rows.row_count() {
+                    let Some(mut row) = rows.row_data(i) else {
+                        continue;
+                    };
+                    if row.url.as_str() != url {
+                        continue;
+                    }
+                    match &decoded {
+                        Some((rgba, w, h)) => {
+                            row.image = slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+                                slint::Rgba8Pixel,
+                            >::clone_from_slice(
+                                rgba, *w, *h
+                            ));
+                            row.has_image = true;
+                            row.failed = false;
+                        }
+                        None => {
+                            if !row.has_image {
+                                row.failed = true;
+                            }
+                        }
+                    }
+                    rows.set_row_data(i, row);
+                }
+            });
         });
     }
 }

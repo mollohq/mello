@@ -1555,25 +1555,32 @@ fn deleting_an_image_message_removes_its_objects() {
     }
 }
 
-/// Clicking an image opens the viewer with the sender and the size line.
+/// Clicking an image opens the viewer over the window with every image of
+/// the message, starting at the one clicked.
 #[test]
-fn clicking_an_image_opens_the_viewer() {
+fn clicking_an_image_opens_the_viewer_at_that_image() {
+    use slint::Model;
     let mut h = Harness::new();
     let mut m = chat_message_fixture("img1", "bob", 0);
-    m.images = vec![image_data(3)];
+    m.images = vec![image_data(3), image_data(4), image_data(5)];
     h.emit(Event::MessagesLoaded {
         messages: vec![m],
         has_more_history: false,
     });
     h.app()
-        .invoke_chat_image_clicked(image_data(3).url.into(), "bob".into());
-    assert_eq!(h.app().get_chat_image_open(), image_data(3).url);
-    assert_eq!(h.app().get_chat_image_open_sender(), "bob");
-    assert_eq!(h.app().get_chat_image_open_label(), "1600×900 · 118 KB");
-    assert!(
-        !h.app().get_chat_has_image_open_image(),
-        "pixels not fetched in the harness"
+        .invoke_chat_image_clicked(image_data(4).url.into(), "bob".into());
+    assert!(h.app().get_chat_viewer_open());
+    assert_eq!(
+        h.app().get_chat_viewer_index(),
+        1,
+        "the clicked one, the second"
     );
+    assert_eq!(h.app().get_chat_viewer_sender(), "bob");
+    let rows = h.app().get_chat_viewer_images();
+    assert_eq!(rows.row_count(), 3, "every image of the message");
+    let shown = rows.row_data(1).expect("row");
+    assert_eq!(shown.label, "1600×900 · 118 KB");
+    assert!(!shown.has_image, "pixels not fetched in the harness");
 }
 
 // ---------------------------------------------------------------------------
@@ -1668,10 +1675,11 @@ fn reactions_show_as_chips_and_a_click_toggles_mine() {
 }
 
 /// ★ Regression: the action bar sat in a 28px gutter that three buttons
-/// overflowed, under the body. Every message on screen has React, Reply and
-/// More, and Reply starts reply mode for that message.
+/// overflowed, under the body, so nothing showed. It opens on a click on the
+/// message, at its top right, with React, Reply and More; a second click on
+/// the message closes it. Reply starts reply mode.
 #[test]
-fn every_message_on_screen_has_its_action_bar() {
+fn a_click_on_a_message_opens_its_action_bar() {
     let mut h = Harness::new();
     open_chat(&mut h);
     h.emit(Event::MessagesLoaded {
@@ -1680,28 +1688,54 @@ fn every_message_on_screen_has_its_action_bar() {
     });
     next_frame();
     let_feed_settle();
-    assert_eq!(h.controls_labelled("React").len(), 3);
-    assert_eq!(h.controls_labelled("Reply").len(), 3);
+    assert_eq!(
+        h.controls_labelled("React").len(),
+        0,
+        "no bar until a click"
+    );
+    let bodies = h.controls_labelled("Message actions");
+    assert_eq!(bodies.len(), 3);
+
+    bodies[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
     let reply = h.controls_labelled("Reply");
+    assert_eq!(reply.len(), 1, "one bar, on the clicked message");
+    assert_eq!(h.controls_labelled("React").len(), 1);
+    assert_eq!(h.controls_labelled("More actions").len(), 1);
     let (top, bottom) = feed_frame(&h);
-    for r in &reply {
-        let y = r.absolute_position().y;
-        assert!(
-            y > top - 30.0 && y < bottom,
-            "the bar sits with its message: {y}"
-        );
-        assert!(
-            r.size().width > 10.0 && r.size().height > 10.0,
-            "a real button"
-        );
-    }
-    reply[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    let body = &bodies[1];
+    let bar = &reply[0];
+    assert!(
+        bar.size().width >= 28.0 && bar.size().height >= 28.0,
+        "a button you can hit"
+    );
+    assert!(
+        bar.absolute_position().y > top - 30.0 && bar.absolute_position().y < bottom,
+        "the bar sits with its message"
+    );
+    assert!(
+        bar.absolute_position().x > body.absolute_position().x + body.size().width - 120.0,
+        "at the right edge of the message, not over the words"
+    );
+
+    bar.mock_single_click(slint::platform::PointerEventButton::Left);
     h.pump();
     next_frame();
     assert_eq!(
         h.controls_labelled("Cancel reply").len(),
         1,
         "reply mode is on, with its bar in the composer"
+    );
+
+    let bodies = h.controls_labelled("Message actions");
+    bodies[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
+    assert_eq!(
+        h.controls_labelled("Reply").len(),
+        0,
+        "a second click closes the bar"
     );
 }
 

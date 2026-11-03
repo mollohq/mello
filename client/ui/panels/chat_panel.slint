@@ -60,6 +60,7 @@ component LinkPill inherits Rectangle {
 
 // PopupWindow lives in a component (not in `for`) so it can anchor to the ⋮ button.
 component MessageMoreMenu inherits Rectangle {
+    in property <length> size: 16px;
     in property <bool> active: false;
     in property <bool> open-above: false;
     in property <bool> is-own-message: false;
@@ -70,8 +71,8 @@ component MessageMoreMenu inherits Rectangle {
     callback delete-requested();
     callback copy-requested();
 
-    width: 16px;
-    height: 16px;
+    width: size;
+    height: size;
     border-radius: 4px;
     background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
@@ -86,8 +87,8 @@ component MessageMoreMenu inherits Rectangle {
 
     Image {
         source: @image-url("../icons/more.svg");
-        width: 12px;
-        height: 12px;
+        width: size * 0.65;
+        height: size * 0.65;
         colorize: Theme.text-secondary;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -544,11 +545,9 @@ export component ChatPanel inherits Rectangle {
 
     // Image attachments and the viewer
     in property <[AttachmentData]> attachments: [];
-    in-out property <string> image-open: "";
-    in-out property <string> image-open-sender: "";
-    in property <image> image-open-image;
-    in property <bool> has-image-open-image: false;
-    in property <string> image-open-label: "";
+    /// The message whose action bar is open. A click on a message opens its
+    /// bar; a click on the same message or Escape closes it.
+    in-out property <string> actions-message-id: "";
     callback attach-clicked();
     callback attachment-removed(/* id */ string);
     callback paste-image() -> bool;
@@ -966,12 +965,13 @@ export component ChatPanel inherits Rectangle {
                         width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
-                        alignment: start;
+                        // No `alignment: start`: it would drop the stretch, the
+                        // content would be as wide as its text, and the action
+                        // bar would sit over the words instead of at the right.
                         property <length> actions-y: 0px;
-                        property <bool> body-hovered: body-hover.has-hover
-                            || react-touch.has-hover
-                            || reply-touch.has-hover
-                            || more-menu.pointer-hover
+                        // A click, not a hover: hover was easy to miss and
+                        // the bar was gone before the pointer reached it.
+                        property <bool> body-hovered: root.actions-message-id == msg.message-id
                             || root.more-menu-message-id == msg.message-id;
 
                         // Gutter column: keeps the body under the name, next to the avatar.
@@ -985,18 +985,8 @@ export component ChatPanel inherits Rectangle {
                             background: msg.mentions-self ? (Theme.action-dim) : transparent;
                             border-radius: Theme.radius-sm;
 
-                            body-hover := TouchArea {
-                                // a11y: none (hover detector: shows the message action bar)
-                                width: parent.width;
-                                height: parent.height;
-                            }
 
-                            if root.more-menu-message-id != "": TouchArea {
-                                // a11y: none (click-away: a click outside closes the open message menu)
-                                width: parent.width;
-                                height: parent.height;
-                                clicked => { root.more-menu-message-id = ""; }
-                            }
+
 
                             VerticalLayout {
                                 horizontal-stretch: 1;
@@ -1063,16 +1053,7 @@ export component ChatPanel inherits Rectangle {
                                         horizontal-stretch: 1;
                                     }
 
-                                    if msg.links.length > 0: HorizontalLayout {
-                                        spacing: 6px;
-                                        alignment: start;
 
-                                        for link[idx] in msg.links: LinkPill {
-                                            url: msg.links[idx].url;
-                                            label: msg.links[idx].label;
-                                            clicked(url) => { root.link-clicked(url); }
-                                        }
-                                    }
                                 }
 
                                 if msg.is-edited: Text {
@@ -1096,15 +1077,38 @@ export component ChatPanel inherits Rectangle {
                             }
                             }
 
+                            // Above the text, so a click anywhere on the message opens the
+                            // bar. StyledText takes presses itself, so a target under it
+                            // never fires. The link pills sit in their own row below.
+                            body-hover := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Message actions";
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => {
+                                    root.actions-message-id =
+                                        root.actions-message-id == msg.message-id ? "" : msg.message-id;
+                                    root.more-menu-message-id = "";
+                                }
+                            }
+
+                            if root.more-menu-message-id != "": TouchArea {
+                                // a11y: none (click-away: a click outside closes the open message menu)
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => { root.more-menu-message-id = ""; }
+                            }
+
                             // The action bar: React, Reply, More, at the top right of the
                             // message, over the header line, as in every chat app. Drawn
                             // after the text so it takes the pointer first.
                             actions-bar := Rectangle {
                                 x: parent.width - self.width - 4px;
-                                y: -14px;
-                                width: 72px;
-                                height: 24px;
-                                opacity: body-hovered ? 1 : 0;
+                                y: -18px;
+                                width: 104px;
+                                height: 32px;
+                                // Gone, not transparent: an invisible bar takes no clicks.
+                                visible: body-hovered;
                                 background: transparent;
 
                                 CutButtonShape {
@@ -1124,22 +1128,23 @@ export component ChatPanel inherits Rectangle {
                                 HorizontalLayout {
                                     width: parent.width;
                                     height: parent.height;
-                                    spacing: 2px;
+                                    spacing: 4px;
                                     padding-left: 4px;
                                     padding-right: 4px;
                                     alignment: center;
+                                    cross-axis-alignment: center;
 
                                     Rectangle {
-                                        width: 16px;
-                                        height: 16px;
+                                        width: 28px;
+                                        height: 28px;
                                         border-radius: 4px;
                                         background: react-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
                                         Image {
                                             source: @image-url("../icons/smile.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: Theme.text-primary;
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                         }
@@ -1147,22 +1152,24 @@ export component ChatPanel inherits Rectangle {
                                         react-touch := TouchArea {
                                             accessible-role: button;
                                             accessible-label: "React";
+                                            enabled: body-hovered;
+                                            accessible-enabled: body-hovered;
                                             mouse-cursor: pointer;
                                             clicked => { root.pick-reaction-for(msg.message-id); }
                                         }
                                     }
 
                                     Rectangle {
-                                        width: 16px;
-                                        height: 16px;
+                                        width: 28px;
+                                        height: 28px;
                                         border-radius: 4px;
                                         background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
                                         Image {
                                             source: @image-url("../icons/reply.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: Theme.text-primary;
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
                                         }
@@ -1170,6 +1177,8 @@ export component ChatPanel inherits Rectangle {
                                         reply-touch := TouchArea {
                                             accessible-role: button;
                                             accessible-label: "Reply";
+                                            enabled: body-hovered;
+                                            accessible-enabled: body-hovered;
                                             clicked => {
                                                 root.reply-mode = true;
                                                 root.reply-to-id = msg.message-id;
@@ -1179,6 +1188,7 @@ export component ChatPanel inherits Rectangle {
                                     }
 
                                     more-menu := MessageMoreMenu {
+                                        size: 28px;
                                         active: root.more-menu-message-id == msg.message-id;
                                         open-above: feed.at-bottom && idx >= messages.length - 2;
                                         is-own-message: msg.sender-id == root.user-id;
@@ -1336,6 +1346,22 @@ export component ChatPanel inherits Rectangle {
                                     }
                                 }
                             }
+                        }
+                    }
+
+                    // Link pills, under the text in their own row, so the click
+                    // target above the text never covers them.
+                    if !msg.is-system && !msg.is-unread-divider && msg.links.length > 0: HorizontalLayout {
+                        padding-left: 40px;
+                        padding-right: 4px;
+                        padding-top: 4px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        for link[idx] in msg.links: LinkPill {
+                            url: msg.links[idx].url;
+                            label: msg.links[idx].label;
+                            clicked(url) => { root.link-clicked(url); }
                         }
                     }
 
@@ -2141,6 +2167,10 @@ export component ChatPanel inherits Rectangle {
                 edited => { root.chat-input-changed(self.text); }
 
                 key-pressed(event) => {
+                    if event.text == Key.Escape && root.actions-message-id != "" {
+                        root.actions-message-id = "";
+                        return accept;
+                    }
                     if event.text == Key.Escape && (root.emoji-popover-open || root.gif-popover-open) {
                         root.emoji-popover-open = false;
                         root.emoji-target-message = "";
@@ -2221,152 +2251,6 @@ export component ChatPanel inherits Rectangle {
         } // chat-body Rectangle
     }
 
-    // --- Image viewer: over the panel, not a new window ---
-    if root.image-open != "": Rectangle {
-        width: parent.width;
-        height: parent.height;
-        background: #000000DC;
-
-        TouchArea {
-            // a11y: none (backdrop: a click outside the image closes the viewer)
-            clicked => { root.image-open = ""; }
-        }
-
-        viewer-keys := FocusScope {
-            key-pressed(event) => {
-                if event.text == Key.Escape {
-                    root.image-open = "";
-                    return accept;
-                }
-                reject
-            }
-        }
-
-        VerticalLayout {
-            padding: 20px;
-            spacing: 12px;
-
-            // No `alignment` here: it would drop the stretch and give the
-            // image box no height at all.
-            Rectangle {
-                vertical-stretch: 1;
-                if root.has-image-open-image: Image {
-                    source: root.image-open-image;
-                    width: parent.width;
-                    height: parent.height;
-                    image-fit: contain;
-                }
-                if !root.has-image-open-image: Text {
-                    font-weight: Theme.weight-sentence;
-                    font-family: Theme.font-body;
-                    text: "Loading image…";
-                    font-size: Theme.font-md;
-                    color: Theme.text-tertiary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
-                    width: parent.width;
-                    height: parent.height;
-                }
-                TouchArea {
-                    // a11y: none (keeps a click on the image from closing the viewer)
-                }
-            }
-
-            HorizontalLayout {
-                height: 20px;
-                spacing: 12px;
-                Text {
-                    font-family: Theme.font-display;
-                    font-weight: Theme.weight-display;
-                    text: root.image-open-sender;
-                    font-size: Theme.font-md;
-                    color: Theme.text-primary;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                Text {
-                    font-family: Theme.font-label;
-                    font-weight: Theme.weight-label;
-                    letter-spacing: Theme.track-label;
-                    text: root.image-open-label;
-                    font-size: Theme.font-xs;
-                    color: Theme.text-secondary;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                }
-            }
-
-            HorizontalLayout {
-                height: 32px;
-                spacing: 8px;
-
-                for action[i] in ["Save", "Copy"]: Rectangle {
-                    width: 84px;
-                    background: transparent;
-                    CutButtonShape {
-                        width: parent.width;
-                        height: parent.height;
-                        n: 8px;
-                        fill: action-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
-                    }
-                    action-touch := TouchArea {
-                        accessible-role: button;
-                        accessible-label: action + " image";
-                        mouse-cursor: pointer;
-                        clicked => {
-                            if action == "Save" { root.image-save(root.image-open); }
-                            else { root.image-copy(root.image-open); }
-                        }
-                    }
-                    Text {
-                        font-family: Theme.font-label;
-                        font-weight: Theme.weight-label;
-                        letter-spacing: Theme.track-label;
-                        text: action == "Save" ? "SAVE" : "COPY";
-                        font-size: Theme.font-xs;
-                        color: Theme.text-primary;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: parent.width;
-                        height: parent.height;
-                    }
-                }
-
-                Rectangle { horizontal-stretch: 1; }
-
-                // The one white button on this surface.
-                Rectangle {
-                    width: 90px;
-                    background: transparent;
-                    CutButtonShape {
-                        width: parent.width;
-                        height: parent.height;
-                        n: 8px;
-                        fill: close-touch.has-hover ? Theme.action-press : Theme.action;
-                    }
-                    close-touch := TouchArea {
-                        accessible-role: button;
-                        accessible-label: "Close image";
-                        mouse-cursor: pointer;
-                        clicked => { root.image-open = ""; }
-                    }
-                    Text {
-                        font-family: Theme.font-label;
-                        font-weight: Theme.weight-label;
-                        letter-spacing: Theme.track-label;
-                        text: "CLOSE";
-                        font-size: Theme.font-xs;
-                        color: Theme.bg-app;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: parent.width;
-                        height: parent.height;
-                    }
-                }
-            }
-        }
-    }
-
     // Full-height left edge (crew panel style); on top so bg-app header does not cover it.
     Rectangle {
         x: 0;
@@ -2384,6 +2268,7 @@ export component Preview inherits ChatPanel {
     user-name: "bobdev";
     user-id: "u1";
     messages-this-week: 12;
+    actions-message-id: "p4";
     has-new-messages: true;
     mention-members: [
         { user-id: "u2", display-name: "oweboweob", initials: "OW" },
@@ -2560,17 +2445,6 @@ export component PreviewImages inherits ChatPanel {
             ],
         },
     ];
-}
-
-/// The viewer over the panel, before the pixels arrive.
-export component PreviewImageViewer inherits ChatPanel {
-    width: 400px;
-    height: 820px;
-    user-name: "bobdev";
-    user-id: "u1";
-    image-open: "https://chat.example/c/u/a.jpg";
-    image-open-sender: "k0ji";
-    image-open-label: "1600×1000 · 1.2 MB";
 }
 
 /// Two messages: the rows sit together at the bottom at their own height.
