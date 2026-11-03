@@ -30,7 +30,11 @@
 
 ## What is m3llo
 
-m3llo is the app for your gaming crew. Voice, streams, clips, and a feed that remembers every session. Perfect for crews up to 100 people. 100.000 member communities are probably better at Discord, but you're welcome to try it in m3llo ;)
+Most crews play together three nights a week and keep none of it. The clutch is gone by morning. The group chat scrolls past it. By Sunday nobody remembers who carried.
+
+m3llo is the app for your gaming crew. Voice and streams while you play, a clip button for the plays worth keeping, and a crew feed that holds on to all of it: the session, the clips, who showed up, and a weekly recap of how it went.
+
+Built for the people you actually play with. Five of you, or fifty, who know each other by name. Bigger than that and Discord is probably the better home, but you're welcome to try ;)
 
 Open source. Made in Europe. Apache 2.0.
 
