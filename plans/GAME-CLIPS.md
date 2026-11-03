@@ -734,9 +734,26 @@ macOS gets game clips (Q11), after the Windows release. Until then the Settings 
 | What the voice markers prove | `mello_voice_inject_capture` is the mic path. The remote voice path (SFU, playout, mix) is not in this lane, so the voice gate proves the mic path only. The QA journey checks the remote path with a tone burst (section 10.5, Q24). |
 | Real loopback source (hw lane, Windows PC) | The reference source gives the game audio with exact capture times, so it does not test the loopback times. One row plays a 1 kHz tone with on and off steps from a small WASAPI player in the gate tool (no ffmpeg or ffplay: GPL, and m3llo is Apache 2.0) through a real process loopback, against the frame codes: offset within +-20 ms. The CPU lane cannot run this row. |
 | Lanes | `cpu` (any machine), `hw` (the machine's encoder: NVENC on Bob's PC, AMF on an AMD box). |
-| Streamed playback | Serve the captured MP4 from local MinIO through a delay and rate shim (20 Mbps, 50 ms). Play it through `ClipRangeReader` and the viewer pipeline. Gates: first frame under 1 s, no stall at 20 Mbps, every frame code in order, a seek to 20 s shows the frame of 20 s within 1 s. |
+| Streamed playback | Built (2026-11-03): `scripts/replay-gate.sh --playback` (with the press rows) or `--playback-only` (press-35s and this row), both lanes; `tools/stream-gate/src/playback.rs` and `http_shim.rs`. The run's press-35s MP4 plays over HTTP through a delay and rate shim (20 Mbps token bucket, 50 ms before each response's first byte), mello-core's `RangeReader` and libmello's clip player (the viewer pipeline inside it), with the CPU frame callback; the gate pulls the sound 10 ms at a time. Deviation: the shim serves the file itself, not local MinIO. The journey `qa/journeys/feed-game-clip.ts` already plays an MP4 from local MinIO, and the shim gives the row a fixed link. Two plays with an empty cache: to the end, and a seek to 20 s right after the first frame. Gates (`benchmarks/baselines/replay/gates.json`, row `playback`): first frame under 1 s from the start call, no buffering state after the first frame, every frame code in order with no unit skipped, a seek to 20 s shows the frame of 20 s within 1 s. Measured: the table below. |
 | Stream and replay together | The `clean` profile of the stream gate with a replay consumer on the same manager. The run adds an F8 press, a forced overload that drops the replay to 30 fps, and a pause and a resume of the replay (section 3.6, F8). The stream gates must pass inside the spread of the `main` runs in every case. This lane also proves the capture manager refactor. |
 | Upload during a stream (section 3.6, G7) | The same lane runs one clip upload at the budget through the shim, against local MinIO. The stream gates, the TWCC RTT and the RTP jitter stay inside the spread of the `main` runs. A second case with no headroom (`rate_fraction` 1.0) proves that the upload pauses and the stream loses no rung to it. |
+
+**Streamed playback, measured 2026-11-03** (Windows PC, quiet runs, load guard under 5 %). The row fails. The causes are in libmello, which this work did not change.
+
+| Metric | cpu lane (720p60, 5 Mbps, 5 runs) | hw lane (1080p60, 8 Mbps, 1 run) | Gate |
+|---|---|---|---|
+| First frame from the start call | 1869 to 1883 ms: FAIL | 2823 ms: FAIL | 1000 ms |
+| Of it: the first 1 MiB range (`RangeReader::open`) | 466 to 467 ms | 467 ms | |
+| The player's own start, from the file | 56 to 57 ms | 167 ms | |
+| Buffering state after the first frame | 238 to 420 ms, the clock held 0 ms: FAIL | 1834 ms, the clock held 0 ms: FAIL | 0 |
+| Frames out of order, skipped, unreadable | 0, 0, 0 (1800 of 1800 units shown) | 0, 0, 0 (1320 of 1320 units shown) | 0 |
+| Seek to 20 s: the frame of 20 s | 923 to 925 ms: pass | 1833 ms: FAIL | 1000 ms |
+
+| Cause | Evidence (`target/replay-gate/<lane>/playback/`) |
+|---|---|
+| The Media Foundation MPEG-4 source reads about 5.5 s of media before its first sample: 3.25 to 3.5 MiB at 5 Mbps, 5.25 to 5.75 MiB at 8 Mbps, also from a local file. At 20 Mbps that read alone takes 1.4 s and 2.2 s, so no range reader reaches 1 s with this demux. | `reads.csv`: 256 KiB reads up to 3.25 to 3.5 MiB (cpu) and 5.25 to 5.75 MiB (hw) before the first frame; `read_waits.csv`: four (cpu) and six (hw) 1 MiB ranges before it. |
+| `ClipPlayer::state()` says buffering while a read waits (`waiting_`), also when the sound and the picture play on. The client shows BUFFERING then. The waits come while the source's read-ahead is ahead of the fetch: at the start, and at 8 Mbps also during play (3.3, 5.1, 10.2 and 19.2 s after the start call). | `state.csv`: buffering with a moving position; the longest gap between two shown frames is 19 ms (cpu) and 36 ms (hw). |
+| Seek (hw): the source starts the seek only when its read that waits returns (424 ms). The range reader then fetches one more range after the old position (464 ms) before the seek's range. The first sample after the seek needs two ranges (2 x 470 ms). On the cpu lane the source does not wait at the seek, so the seek costs the range in flight and one range. | `results.json` `clips.playback.info.seek.fetch`, `read_waits.csv`. |
 
 The gate runs from the QA harness, not from `check.sh`.
 

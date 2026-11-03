@@ -11,14 +11,18 @@
 //!
 //! `replay` is the game clip lane (plans/GAME-CLIPS.md 10.3): the same clip
 //! and game audio through the replay buffer into MP4 clips, each read back
-//! and checked. Run it with `scripts/replay-gate.sh`.
+//! and checked. Run it with `scripts/replay-gate.sh`. Its streamed playback
+//! row (`playback`) plays a clip over HTTP through a delay and rate shim
+//! (`http_shim`), mello-core's range reader and libmello's clip player.
 
 pub mod audio;
 pub mod clip;
 pub mod code;
+pub mod http_shim;
 pub mod load;
 pub mod metrics;
 pub mod netmodel;
+pub mod playback;
 pub mod profile;
 pub mod replay;
 pub mod report;

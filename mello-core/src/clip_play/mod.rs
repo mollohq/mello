@@ -169,8 +169,16 @@ impl Drop for ClipPlayback {
     }
 }
 
-/// libmello's read callback: Media Foundation threads.
-unsafe extern "C" fn read_clip(user: *mut c_void, offset: u64, buf: *mut u8, len: u32) -> i64 {
+/// libmello's read callback (`MelloClipReadCallback`) over a `ClipBytes`:
+/// Media Foundation threads. Public for the stream gate's streamed playback
+/// row, which plays a clip through the same adapter as the client.
+///
+/// # Safety
+///
+/// `user` is null or points to an `Arc<dyn ClipBytes>` that lives until
+/// `mello_clip_player_stop` returns. `buf` is null or points to `len`
+/// writable bytes.
+pub unsafe extern "C" fn read_clip(user: *mut c_void, offset: u64, buf: *mut u8, len: u32) -> i64 {
     if user.is_null() || buf.is_null() {
         return READ_ERROR;
     }

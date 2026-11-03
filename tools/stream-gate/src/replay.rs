@@ -1,6 +1,7 @@
 //! The replay lane (plans/GAME-CLIPS.md 10.3): the game clip buffer records
 //! the reference clip, presses capture 30 s clips, and the gate reads each
-//! clip back. No SFU and no shim: a clip is a file.
+//! clip back. No SFU and no shim: a clip is a file (the streamed playback
+//! row, `playback.rs`, has its own HTTP shim).
 //!
 //! The path. The reference source plays the clip and its game audio track
 //! (`mello_test_set_reference_clip`, `mello_test_set_reference_audio`) into a
@@ -1582,6 +1583,21 @@ mod tests {
                     );
                     assert!(got.enforced);
                 }
+            }
+            // The streamed playback row: its gates are the code's, and no
+            // other gate.
+            let list = per.get(crate::playback::ROW).expect("playback row");
+            let want = crate::playback::gates();
+            assert_eq!(list.len(), want.len(), "{} playback", l.name);
+            for want in want {
+                let got = list.iter().find(|g| g.metric == want.metric).expect("gate");
+                assert_eq!(
+                    (got.min, got.max, got.enforced),
+                    (want.min, want.max, want.enforced),
+                    "{} playback {}",
+                    l.name,
+                    want.metric
+                );
             }
         }
         let hw = &gates.lanes["hw"][LOOPBACK];

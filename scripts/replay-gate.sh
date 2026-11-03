@@ -6,7 +6,8 @@
 # Presses at 35 s, 47 s, 60 s and 62 s capture 30 s clips with
 # mello_replay_capture. Each MP4 is read back: every frame decoded through a
 # stream viewer and its burned-in code read, the game audio markers found.
-# No SFU and no shim: a clip is a file.
+# No SFU and no shim: a clip is a file (the playback row has its own HTTP
+# shim).
 #
 # Lanes:
 #   --lane cpu (default)  the 720p60 clip and clip quality (5000 kbps),
@@ -18,6 +19,12 @@
 #                         them through process loopback. Build the player
 #                         first: cmake --build libmello/build-ci --config
 #                         Release --target mello_tone_player
+#   --playback            adds the streamed playback row: the press-35s clip
+#                         over HTTP through a delay and rate shim (20 Mbps,
+#                         50 ms), mello-core's range reader and libmello's
+#                         clip player; first frame, buffering state, frame
+#                         order, a seek to 20 s
+#   --playback-only       records press-35s and runs that row alone
 # Gates: benchmarks/baselines/replay/gates.json (per lane and clip: the start
 # frame, no missing frame, the length, the game audio offset, and the PSNR,
 # SSIM and VMAF floors). --write-baseline sets the lane's floors from the run
@@ -40,8 +47,9 @@
 #   ./scripts/replay-gate.sh --lane hw                # hardware lane
 #   ./scripts/replay-gate.sh --no-vmaf                # PSNR and SSIM only
 #   ./scripts/replay-gate.sh --repeat 3 --write-baseline   # set the floors
-# Output (results.json; per clip: the MP4, frames.csv, markers.csv) lands in
-# target/replay-gate/<lane>/.
+#   ./scripts/replay-gate.sh --playback-only          # the streamed playback row
+# Output (results.json; per clip: the MP4, frames.csv, markers.csv; the
+# playback row's CSVs in playback/) lands in target/replay-gate/<lane>/.
 set -eu
 
 cd "$(dirname "$0")/.."

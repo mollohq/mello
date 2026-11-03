@@ -1,5 +1,5 @@
 {
-  "_comment": "Gates of the replay lane (plans/GAME-CLIPS.md 10.3, tools/stream-gate/src/replay.rs, scripts/replay-gate.sh), per lane and clip, in the schema of benchmarks/baselines/stream/gates.json. The structural gates (length, start frame, frame order, game audio offset; the loopback row's offset) are absolute: they come from the plan, never from a run, and a test in replay.rs keeps them equal to replay::structural_gates and replay::loopback_gates. The quality floors (psnr_y_mean, ssim_y_mean, vmaf_mean) come from `scripts/replay-gate.sh --lane <lane> --repeat 3 --write-baseline` on one commit and machine: the first run's value minus the largest of a fixed margin (VMAF 2 points, PSNR 1 dB, SSIM 0.01) and 1.1 x the spread of the runs, the rule of tools/stream-gate/make_gates.py; baseline-<lane>.json keeps the runs and _spread the values. A lane without floors has the structural gates only. Gates may tighten; they never loosen.",
+  "_comment": "Gates of the replay lane (plans/GAME-CLIPS.md 10.3, tools/stream-gate/src/replay.rs, scripts/replay-gate.sh), per lane and clip, in the schema of benchmarks/baselines/stream/gates.json. The structural gates (length, start frame, frame order, game audio offset; the loopback row's offset) are absolute: they come from the plan, never from a run, and a test in replay.rs keeps them equal to replay::structural_gates and replay::loopback_gates. The quality floors (psnr_y_mean, ssim_y_mean, vmaf_mean) come from `scripts/replay-gate.sh --lane <lane> --repeat 3 --write-baseline` on one commit and machine: the first run's value minus the largest of a fixed margin (VMAF 2 points, PSNR 1 dB, SSIM 0.01) and 1.1 x the spread of the runs, the rule of tools/stream-gate/make_gates.py; baseline-<lane>.json keeps the runs and _spread the values. A lane without floors has the structural gates only. The playback row (--playback, tools/stream-gate/src/playback.rs) has absolute gates only: the time to the first frame, no buffering state after it, the frame order, the seek to 20 s; a test in replay.rs keeps them equal to playback::gates. Gates may tighten; they never loosen.",
   "_spread": {
     "cpu": {
       "press-35s": {
@@ -74,6 +74,44 @@
   },
   "lanes": {
     "cpu": {
+      "playback": [
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_first_frame_ms",
+          "note": "plan 6.2 and 10.3: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_buffering_ms",
+          "note": "plan 10.3: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_out_of_order",
+          "note": "plan 10.3: every frame code in order: no shown frame goes back or repeats"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_skipped",
+          "note": "plan 10.3: every unit of the clip shows when it plays to its end in real time"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_unreadable",
+          "note": "every shown frame's code reads"
+        },
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_seek_ms",
+          "note": "plan 10.3: a seek to 20 s shows the frame of 20 s within 1 s"
+        }
+      ],
       "press-35s": [
         {
           "enforced": true,
@@ -375,6 +413,44 @@
           "max": 20.0,
           "metric": "loopback_offset_abs_max_ms",
           "note": "plan 10.3: a real process loopback, burst onset to the frame captured then within +-20 ms"
+        }
+      ],
+      "playback": [
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_first_frame_ms",
+          "note": "plan 6.2 and 10.3: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_buffering_ms",
+          "note": "plan 10.3: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_out_of_order",
+          "note": "plan 10.3: every frame code in order: no shown frame goes back or repeats"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_skipped",
+          "note": "plan 10.3: every unit of the clip shows when it plays to its end in real time"
+        },
+        {
+          "enforced": true,
+          "max": 0.0,
+          "metric": "playback_frames_unreadable",
+          "note": "every shown frame's code reads"
+        },
+        {
+          "enforced": true,
+          "max": 1000.0,
+          "metric": "playback_seek_ms",
+          "note": "plan 10.3: a seek to 20 s shows the frame of 20 s within 1 s"
         }
       ],
       "press-35s": [

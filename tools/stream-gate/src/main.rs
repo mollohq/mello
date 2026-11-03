@@ -35,8 +35,8 @@
 //! 2 = setup or run error.
 //!
 //! ```text
-//! stream-gate replay [--lane cpu|hw] [--loopback] [--out DIR] [--repeat N]
-//!                    [--write-baseline] [--no-vmaf] [--keep]
+//! stream-gate replay [--lane cpu|hw] [--loopback] [--playback | --playback-only]
+//!                    [--out DIR] [--repeat N] [--write-baseline] [--no-vmaf] [--keep]
 //! ```
 //!
 //! The replay lane (plans/GAME-CLIPS.md 10.3, `replay.rs`). Use
@@ -44,8 +44,11 @@
 //! 720p60 clip quality, OpenH264 encode and decode. `--lane hw`: the 1080p60
 //! clip and quality, the machine's encoder and decoder. `--loopback` (hw
 //! lane) adds the real loopback row: it plays tone bursts on the speakers.
-//! `--repeat N` runs the lane N times: the gates read the first run, the
-//! results keep the spread. `--write-baseline` writes
+//! `--playback` adds the streamed playback row (`playback.rs`): the run's
+//! press-35s clip plays over HTTP through the delay and rate shim, the range
+//! reader and the clip player. `--playback-only` records press-35s and runs
+//! that row alone. `--repeat N` runs the lane N times: the gates read the
+//! first run, the results keep the spread. `--write-baseline` writes
 //! `benchmarks/baselines/replay/baseline-<lane>.json` (refused when it
 //! exists) and sets the lane's quality floors in `gates.json` from the runs.
 //! Output: `target/replay-gate/<lane>/`. Exit codes: 0 pass, 1 an enforced
@@ -62,7 +65,7 @@ use stream_gate::profile::{self, GateFile, Lane, Profile};
 use stream_gate::report::{self, Metrics};
 use stream_gate::session::{self, clock_us, Ctx, Host, ViewerRecord, ViewerSpec};
 use stream_gate::shim::{Plan, Shim};
-use stream_gate::{audio, clip, replay, score, sfu};
+use stream_gate::{audio, clip, playback, replay, score, sfu};
 
 /// Stage 7: the clip's game audio and how to score it.
 struct AudioRun {
@@ -1707,6 +1710,8 @@ fn real_main() -> Result<bool, String> {
 struct ReplayArgs {
     lane: String,
     loopback: bool,
+    playback: bool,
+    playback_only: bool,
     out: Option<PathBuf>,
     repeat: u32,
     write_baseline: bool,
@@ -1718,6 +1723,8 @@ fn parse_replay_args() -> Result<ReplayArgs, String> {
     let mut a = ReplayArgs {
         lane: "cpu".into(),
         loopback: false,
+        playback: false,
+        playback_only: false,
         out: None,
         repeat: 1,
         write_baseline: false,
@@ -1731,6 +1738,8 @@ fn parse_replay_args() -> Result<ReplayArgs, String> {
         match arg.as_str() {
             "--lane" => a.lane = val("--lane")?,
             "--loopback" => a.loopback = true,
+            "--playback" => a.playback = true,
+            "--playback-only" => a.playback_only = true,
             "--out" => a.out = Some(PathBuf::from(val("--out")?)),
             "--repeat" => {
                 a.repeat = val("--repeat")?
@@ -1742,8 +1751,8 @@ fn parse_replay_args() -> Result<ReplayArgs, String> {
             "--keep" => a.keep = true,
             "-h" | "--help" => {
                 println!(
-                    "stream-gate replay [--lane cpu|hw] [--loopback] [--out DIR] [--repeat N] \
-                     [--write-baseline] [--no-vmaf] [--keep]"
+                    "stream-gate replay [--lane cpu|hw] [--loopback] [--playback | --playback-only] \
+                     [--out DIR] [--repeat N] [--write-baseline] [--no-vmaf] [--keep]"
                 );
                 std::process::exit(0);
             }
@@ -1752,6 +1761,12 @@ fn parse_replay_args() -> Result<ReplayArgs, String> {
     }
     if a.repeat == 0 {
         return Err("--repeat must be at least 1".into());
+    }
+    if a.playback_only && (a.playback || a.loopback || a.write_baseline) {
+        return Err(
+            "--playback-only runs the playback row alone: drop --playback, --loopback and --write-baseline"
+                .into(),
+        );
     }
     Ok(a)
 }
@@ -1784,6 +1799,9 @@ struct ReplayScoring<'a> {
     /// The marker detector's own delay, samples.
     bias: f64,
     script: &'a Path,
+    /// The presses each run records: every press, or press-35s alone for
+    /// `--playback-only`.
+    presses: &'a [(&'static str, f64)],
     no_vmaf: bool,
     keep: bool,
     /// The scorer's answer of the last clip that ran VMAF.
@@ -2210,18 +2228,19 @@ fn record_once(
     loopback: Option<&Path>,
 ) -> Result<Recorded, String> {
     let (height, fps, bitrate_kbps) = encoding;
-    for name in replay::PRESSES
+    for name in s
+        .presses
         .iter()
         .map(|(n, _)| *n)
-        .chain([replay::LOOPBACK, "rings"])
+        .chain([replay::LOOPBACK, playback::ROW, "rings"])
     {
         let _ = std::fs::remove_dir_all(dir.join(name));
     }
     let rings = dir.join("rings");
-    let last_press = replay::PRESSES.iter().map(|p| p.1).fold(0.0, f64::max);
+    let last_press = s.presses.iter().map(|p| p.1).fold(0.0, f64::max);
     eprint!(
-        "replay-gate: run {run}: recording, {} presses up to {last_press:.0} s ... ",
-        replay::PRESSES.len()
+        "replay-gate: run {run}: recording, {} press(es) up to {last_press:.0} s ... ",
+        s.presses.len()
     );
     let spec = replay::RecordSpec {
         clip_path: s.clip_path,
@@ -2233,7 +2252,8 @@ fn record_once(
         pid: 0,
         buffer_dir: &rings,
         out_dir: dir,
-        presses: replay::PRESSES
+        presses: s
+            .presses
             .iter()
             .map(|(n, at)| ((*n).to_owned(), *at))
             .collect(),
@@ -2288,11 +2308,15 @@ fn record_once(
     })
 }
 
-/// Read every clip of a run back and score it.
-fn read_back(s: &mut ReplayScoring<'_>, r: &Recorded) -> Result<ReplayRun, String> {
+/// Read every clip of a run that is a row back and score it.
+fn read_back(
+    s: &mut ReplayScoring<'_>,
+    r: &Recorded,
+    rows: &[String],
+) -> Result<ReplayRun, String> {
     let t = Instant::now();
     let mut clips = BTreeMap::new();
-    for cap in &r.rec.captures {
+    for cap in r.rec.captures.iter().filter(|c| rows.contains(&c.name)) {
         eprint!(
             "replay-gate: run {}: {:<10} read back ... ",
             r.run, cap.name
@@ -2343,6 +2367,93 @@ fn read_back(s: &mut ReplayScoring<'_>, r: &Recorded) -> Result<ReplayRun, Strin
     })
 }
 
+/// The streamed playback row of one run: its press-35s clip over HTTP
+/// through the shim, the range reader and the clip player
+/// (`playback::run_row`). Also returns the load guard's reason when the
+/// machine was busy during a play.
+fn playback_row(
+    ctx: &Arc<Ctx>,
+    s: &ReplayScoring<'_>,
+    r: &Recorded,
+) -> Result<(ClipRun, Option<String>), String> {
+    let cap = r
+        .rec
+        .captures
+        .iter()
+        .find(|c| c.name == playback::SOURCE_PRESS)
+        .ok_or(format!(
+            "the playback row needs the {} clip",
+            playback::SOURCE_PRESS
+        ))?;
+    if cap.clip.is_none() {
+        return Ok((
+            ClipRun {
+                metrics: Metrics::new(),
+                info: json!({ "source": cap.name, "error": cap.error }),
+            },
+            None,
+        ));
+    }
+    let dir = cap
+        .mp4
+        .parent()
+        .and_then(Path::parent)
+        .ok_or(format!("{}: no run directory", cap.mp4.display()))?
+        .join(playback::ROW);
+    let clock = &r.rec.clock;
+    let fps = s.clip_spec.fps;
+    let back_us = (f64::from(replay::CLIP_S) * 1e6) as u64;
+    let target = replay::frame_at(clock, cap.press_us.saturating_sub(back_us)).map(|n| n as i64);
+    let spec = playback::RowSpec {
+        mp4: &cap.mp4,
+        dir: &dir,
+        size: (s.clip_spec.width, s.clip_spec.height),
+        fps,
+        clip_frames: clock.clip_frames,
+        first_expect: target.unwrap_or(0) - i64::from(fps) / 2,
+    };
+    eprint!(
+        "replay-gate: run {}: {:<10} {} over the shim, to the end and with a seek ... ",
+        r.run,
+        playback::ROW,
+        playback::SOURCE_PRESS
+    );
+    let t = Instant::now();
+    let row = playback::run_row(ctx, &spec)?;
+    let g = |k: &str| report::fmt_num(row.metrics.get(k).cloned().flatten());
+    eprintln!(
+        "{:.1} s (first frame {} ms, buffering {} ms, skipped {}, seek {} ms, other CPU {} %)",
+        t.elapsed().as_secs_f64(),
+        g("playback_first_frame_ms"),
+        g("playback_buffering_ms"),
+        g("playback_frames_skipped"),
+        g("playback_seek_ms"),
+        report::fmt_num(row.other_cpu_pct)
+    );
+    let busy = match row.other_cpu_pct {
+        Some(pct) if pct > stream_gate::load::MAX_OTHER_PCT => {
+            eprintln!(
+                "replay-gate: WARNING: other processes used {pct:.0} % of the CPU during a play of run {}",
+                r.run
+            );
+            Some(format!("run {}, the playback row ({pct:.0} %)", r.run))
+        }
+        _ => None,
+    };
+    let mut info = row.info;
+    if let Some(o) = info.as_object_mut() {
+        o.insert("source".into(), json!(cap.name));
+        o.insert("bytes".into(), json!(file_bytes(&cap.mp4)));
+    }
+    Ok((
+        ClipRun {
+            metrics: row.metrics,
+            info,
+        },
+        busy,
+    ))
+}
+
 /// Each row's gates against its metrics. A VMAF gate without a VMAF score
 /// is a note, as in the stream gate.
 fn check_replay_gates(
@@ -2391,6 +2502,21 @@ const REPLAY_SUMMARY: &[(&str, &str)] = &[
     ("mux_ms", "mux ms"),
 ];
 
+/// The metrics of the playback summary table.
+const PLAYBACK_SUMMARY: &[(&str, &str)] = &[
+    ("playback_first_frame_ms", "first frame ms"),
+    ("playback_open_ms", "first range ms"),
+    ("playback_buffering_ms", "buffering ms"),
+    ("playback_buffering_clock_held_ms", "clock held ms"),
+    ("playback_frames_shown", "shown"),
+    ("playback_frames_skipped", "skipped"),
+    ("playback_frames_out_of_order", "out of order"),
+    ("playback_frames_unreadable", "unread"),
+    ("playback_seek_ms", "seek ms"),
+    ("playback_seek_first_frame_ms", "seek 1st ms"),
+    ("playback_shim_mbps", "shim Mbps"),
+];
+
 fn replay_main() -> Result<bool, String> {
     let args = parse_replay_args()?;
     let started = Instant::now();
@@ -2436,12 +2562,23 @@ fn replay_main() -> Result<bool, String> {
             lane.quality.as_str()
         ));
     }
-    let mut rows: Vec<String> = replay::PRESSES
+    let with_playback = args.playback || args.playback_only;
+    // --playback-only records press-35s alone and scores only its playback.
+    let presses: Vec<(&'static str, f64)> = replay::PRESSES
         .iter()
-        .map(|(n, _)| (*n).to_owned())
+        .filter(|(n, _)| !args.playback_only || *n == playback::SOURCE_PRESS)
+        .copied()
         .collect();
+    let mut rows: Vec<String> = if args.playback_only {
+        Vec::new()
+    } else {
+        presses.iter().map(|(n, _)| (*n).to_owned()).collect()
+    };
     if args.loopback {
         rows.push(replay::LOOPBACK.to_owned());
+    }
+    if with_playback {
+        rows.push(playback::ROW.to_owned());
     }
     let lane_gates = gates.lanes.get(lane.name).ok_or(format!(
         "{} has no lane '{}'",
@@ -2493,7 +2630,12 @@ fn replay_main() -> Result<bool, String> {
     } else {
         2.0 * plane * 1.5 * frames / lane.vmaf_subsample as f64
     };
-    let need = plane * frames + pair + 1e9;
+    // The playback row alone needs no luma or VMAF files.
+    let need = if args.playback_only {
+        1e9
+    } else {
+        plane * frames + pair + 1e9
+    };
     let free = replay::free_bytes(&out_dir);
     if let Some(free) = free {
         if (free as f64) < need {
@@ -2531,6 +2673,7 @@ fn replay_main() -> Result<bool, String> {
         spec: &spec,
         bias,
         script: &script,
+        presses: &presses,
         no_vmaf: args.no_vmaf,
         keep: args.keep,
         vmaf: None,
@@ -2566,12 +2709,21 @@ fn replay_main() -> Result<bool, String> {
     }
     let mut runs: Vec<ReplayRun> = Vec::new();
     for r in &recorded {
-        runs.push(read_back(&mut scoring, r)?);
+        runs.push(read_back(&mut scoring, r, &rows)?);
+    }
+    // The playback row plays in real time: after every read-back and VMAF
+    // run, so the machine is quiet; its own load guard covers each play.
+    if with_playback {
+        for (r, run) in recorded.iter().zip(runs.iter_mut()) {
+            let (row, busy) = playback_row(&ctx, &scoring, r)?;
+            run.busy.extend(busy);
+            run.clips.insert(playback::ROW.to_owned(), row);
+        }
     }
     let vmaf = scoring.vmaf.take();
     let scratch_peak = scoring.scratch_peak;
     let vmaf_scored = vmaf.as_ref().is_some_and(|v| v.available);
-    if !vmaf_scored && !args.no_vmaf {
+    if !vmaf_scored && !args.no_vmaf && !args.playback_only {
         eprintln!(
             "replay-gate: WARNING: no VMAF ({}). PSNR and SSIM only.",
             vmaf.as_ref()
@@ -2594,6 +2746,8 @@ fn replay_main() -> Result<bool, String> {
         .map(|r| {
             let list = if r == replay::LOOPBACK {
                 replay::loopback_gates()
+            } else if r == playback::ROW {
+                playback::gates()
             } else {
                 replay::structural_gates(fps)
             };
@@ -2678,6 +2832,14 @@ fn replay_main() -> Result<bool, String> {
             "start": "start_lead_frames = the frame the source captured 30 s before the press (its clock) minus the clip's first frame",
             "markers": "marker k (frame 15k): its onset in the clip's sound, less the detector bias, minus the clip time of frame 15k; markers within 50 ms of either end of the sound are not expected",
             "loopback": "mello_tone_player: 1 kHz, 100 ms every 1000 ms; each onset (steady clock) maps to the clip time of the frame the source captured then",
+            "playback": format!(
+                "the {} MP4 -> http_shim on 127.0.0.1 ({} Mbps, {} ms before each response's first byte, a token bucket of {} bytes) -> RangeReader::open (1 MiB ranges, a cache file) -> clip_play::read_clip -> mello_test_clip_player_start, CPU frame callback -> burned-in code; the sound pulled 10 ms at a time (mello_voice_test_pull_output). Two plays with an empty cache: to the end, and a seek to {} s right after the first frame. The truth: every unit decoded one at a time (replay::decode).",
+                playback::SOURCE_PRESS,
+                stream_gate::http_shim::PLAYBACK_LINK.rate_bps / 1_000_000,
+                stream_gate::http_shim::PLAYBACK_LINK.delay.as_millis(),
+                stream_gate::http_shim::PLAYBACK_LINK.burst_bytes,
+                playback::SEEK_TO_MS / 1000
+            ),
         },
         "source": first.source,
         "runs": runs.iter().map(|r| json!({
@@ -2722,7 +2884,7 @@ fn replay_main() -> Result<bool, String> {
         table.push_str("---:|");
     }
     table.push('\n');
-    for (row, m) in &results {
+    for (row, m) in results.iter().filter(|(r, _)| *r != playback::ROW) {
         table.push_str(&format!("| {row} |"));
         for (k, _) in REPLAY_SUMMARY {
             table.push_str(&format!(
@@ -2732,8 +2894,31 @@ fn replay_main() -> Result<bool, String> {
         }
         table.push('\n');
     }
-    print!("{table}");
-    println!();
+    if results.keys().any(|r| r != playback::ROW) {
+        print!("{table}");
+        println!();
+    }
+    if let Some(m) = results.get(playback::ROW) {
+        let mut t = String::from("| playback |");
+        for (_, h) in PLAYBACK_SUMMARY {
+            t.push_str(&format!(" {h} |"));
+        }
+        t.push_str("\n|---|");
+        for _ in PLAYBACK_SUMMARY {
+            t.push_str("---:|");
+        }
+        t.push_str("\n| ");
+        t.push_str(playback::SOURCE_PRESS);
+        t.push_str(" |");
+        for (k, _) in PLAYBACK_SUMMARY {
+            t.push_str(&format!(
+                " {} |",
+                report::fmt_num(m.get(*k).cloned().flatten())
+            ));
+        }
+        println!("{t}");
+        println!();
+    }
     print!("{}", report::gate_table(&gate_results));
     for n in &notes {
         println!("NOTE: {n}");
