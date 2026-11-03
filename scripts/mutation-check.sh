@@ -20,6 +20,18 @@ export CI=true
 PASS=0
 FAIL=0
 BAK=/tmp/mello-mutation.bak
+# The file under mutation, restored on any exit. A run that stopped between a
+# mutation and its restore (the QA harness stops a run, Ctrl-C) left a broken
+# line in the checkout; the Linux laptop built an e2e client from it
+# (2026-11-03).
+MUTATING=""
+restore() {
+    if [ -n "$MUTATING" ] && [ -f "$BAK" ]; then
+        cp "$BAK" "$MUTATING"; touch "$MUTATING"
+        printf '\n  restored %s\n' "$MUTATING"
+    fi
+}
+trap restore EXIT INT TERM
 
 # NOTE ON `touch`: restoring a file with cp/mv gives it the backup's older
 # mtime, so cargo considers it unchanged and happily reuses the artifact built
@@ -29,6 +41,7 @@ mut() {
     desc="$1"; file="$2"; pat="$3"; rep="$4"
 
     cp "$file" "$BAK"
+    MUTATING="$file"
     # perl with quotemeta rather than sed: these patterns are real Rust source
     # and routinely contain regex metacharacters and the | used in match arms,
     # which silently corrupt a sed s|..|..| expression. Each line of the
@@ -46,12 +59,14 @@ mut() {
         printf '  \033[33m[STALE]\033[0m   %s\n' "$desc"
         printf '            pattern no longer matches; the code moved and this mutation needs updating\n'
         cp "$BAK" "$file"; touch "$file"
+        MUTATING=""
         FAIL=$((FAIL + 1))
         return
     fi
 
     out=$(cargo test -p mello-client --lib 2>&1 | grep -E '^test result:' | head -1 || true)
     cp "$BAK" "$file"; touch "$file"
+    MUTATING=""
 
     case "$out" in
         *FAILED*) printf '  \033[32m[caught]\033[0m  %s\n' "$desc"; PASS=$((PASS + 1)) ;;
