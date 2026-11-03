@@ -1,5 +1,5 @@
 import { Theme } from "../theme.slint";
-import { CutButtonShape, CutMask } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { ViewerImageData } from "../types.slint";
 
 /// The chat image viewer: one image big over the whole window, the other
@@ -29,7 +29,7 @@ export component ChatImageViewer inherits Rectangle {
     }
 
     TouchArea {
-        // a11y: none (backdrop: a click outside the image closes the viewer)
+        // a11y: none (backdrop: a click outside the card closes the viewer)
         clicked => { root.close(); }
     }
 
@@ -43,8 +43,35 @@ export component ChatImageViewer inherits Rectangle {
         }
     }
 
+    // A modal card at 70% of the window, like every other modal: the cut,
+    // the keyline, the surface. The scrim behind makes the buttons read.
+    card := Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        width: parent.width * 0.7;
+        height: parent.height * 0.7;
+        background: transparent;
+
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            fill: Theme.graphic-light;
+        }
+        CutShape {
+            width: parent.width;
+            height: parent.height;
+            n: Theme.notch;
+            inset: Theme.keyline;
+            fill: Theme.surface;
+        }
+
+        TouchArea {
+            // a11y: none (input blocker: stops clicks reaching the backdrop)
+        }
+
     VerticalLayout {
-        padding: 32px;
+        padding: 24px;
         spacing: 14px;
 
         // The image, with a chevron each side when there are several.
@@ -156,7 +183,7 @@ export component ChatImageViewer inherits Rectangle {
                     x: parent.width - self.width; y: 0;
                     width: 8px; height: 8px; n: 8px;
                     corner: "tr";
-                    fill: Theme.scrim;
+                    fill: Theme.surface;
                 }
                 TouchArea {
                     accessible-role: button;
@@ -269,6 +296,7 @@ export component ChatImageViewer inherits Rectangle {
                 }
             }
         }
+    }
     }
 }
 
