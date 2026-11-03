@@ -204,5 +204,13 @@ Apache 2.0. See [LICENSE](LICENSE).
 ---
 
 <p align="center">
+  <a href="https://github.com/mollohq">
+    <picture>
+      <source media="(prefers-color-scheme: dark)" srcset=".github/assets/mollo-tech-white.png">
+      <source media="(prefers-color-scheme: light)" srcset=".github/assets/mollo-tech-black.png">
+      <img src=".github/assets/mollo-tech-white.png" alt="Mollo Tech AB" height="48">
+    </picture>
+  </a>
+  <br/>
   <sub>Made in Göteborg, Sweden by <a href="https://github.com/mollohq">Mollo Tech AB</a></sub>
 </p>
