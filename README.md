@@ -1,7 +1,3 @@
-<p align="center">
-  <img src=".github/assets/og-image.png" alt="m3llo" />
-</p>
-
 <h1 align="center">m3llo</h1>
 
 <p align="center">
@@ -25,7 +21,7 @@
 ---
 
 <p align="center">
-  <img src=".github/assets/readme-hero.png" alt="m3llo app screenshot showing crew feed, live stream, voice chat, and crew chat" width="100%" />
+  <img src=".github/assets/readme-hero.png" alt="m3llo showing the crew feed with a session replay, a weekly recap, voice clips, and crew chat" width="100%" />
 </p>
 
 ## What is m3llo
