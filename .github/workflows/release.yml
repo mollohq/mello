@@ -122,6 +122,26 @@ jobs:
           $toolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
           & (Join-Path $toolPath 'vpk.exe') --help | Select-Object -First 1
 
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        shell: pwsh
+        run: |
+          foreach ($name in 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'DISCORD_CLIENT_ID', 'TWITCH_CLIENT_ID', 'NAKAMA_SERVER_KEY', 'NAKAMA_HTTP_KEY') {
+            if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+              Write-Error "$name is empty: add the repository secret and pass it to this step"
+              exit 1
+            }
+          }
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
       # Only the client: dist/ packs mello.exe, the ORT DLLs, the models and
       # the hook (CMake, below). The tools/* crates and m3llo-hud are never
       # shipped. Building -p also keeps tool-only features (voice-test-client
@@ -132,6 +152,7 @@ jobs:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
@@ -318,12 +339,32 @@ jobs:
           echo "$RUNNER_TEMP/vpk" >> "$GITHUB_PATH"
           "$RUNNER_TEMP/vpk/vpk" --help | head -2
 
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        run: |
+          for name in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET DISCORD_CLIENT_ID TWITCH_CLIENT_ID NAKAMA_SERVER_KEY NAKAMA_HTTP_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "$name is empty: add the repository secret and pass it to this step" >&2
+              exit 1
+            fi
+          done
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
       - name: Build client
         run: cargo build --release --locked -p mello-client --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
@@ -500,12 +541,32 @@ jobs:
       - name: Refresh lockfile for stamped workspace version
         run: cargo update --workspace --offline
 
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        run: |
+          for name in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET DISCORD_CLIENT_ID TWITCH_CLIENT_ID NAKAMA_SERVER_KEY NAKAMA_HTTP_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "$name is empty: add the repository secret and pass it to this step" >&2
+              exit 1
+            fi
+          done
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
       - name: Build client
         run: cargo build --release --locked -p mello-client --features mello-client/production
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
