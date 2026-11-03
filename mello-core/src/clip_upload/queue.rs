@@ -1,5 +1,5 @@
-//! The persisted queue of game clips that are not up (plans/GAME-CLIPS.md
-//! 6.3): each clip with its upload id and its done parts, so a client restart
+//! The persisted queue of game clips that are not up (CLIPS.md
+//! 15.7): each clip with its upload id and its done parts, so a client restart
 //! goes on from the last part. It uses the JSON file pattern of
 //! `pending_session_ends`, in the same folder.
 //!

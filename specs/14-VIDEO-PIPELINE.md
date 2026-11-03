@@ -361,6 +361,15 @@ private:
 dropped, and the pool is made again (`Recreate`) at the new size. The next
 frame has the whole window.
 
+**Client area.** WGC captures the visible frame of a window, with its
+title bar and borders. `WgcCapture` cuts the client area out of each window
+frame: the DWM extended frame bounds against the client origin, in physical
+pixels (`client_crop` in `window_crop.hpp`), copied into a texture of its own.
+`width()` and `height()` give the cut size. A borderless or fullscreen game
+is its client area and has nothing to cut. A monitor capture is not cut. The
+hook captures the swapchain and has no title bar. Tests: `WindowCrop.*` (the
+rule, and a real window with a title bar: the size and the top-left pixel).
+
 **WGC and cursor:** `IsCursorCaptureEnabled(true)`. WGC draws the pointer into the captured texture where it is over the window or monitor (`CursorMode::InFrame`). Until streaming-quality stage 8 it was off, and no viewer saw a pointer.
 
 ### 4.5 ProcessCapture and the Capture Ladder
@@ -457,9 +466,10 @@ Nothing in the product selects it.
 ### 4.8 CaptureManager (Windows host)
 
 `capture_manager.{hpp,cpp}`. One capture of one target, given to every
-consumer that encodes it. Today each stream host makes a private manager with
-one consumer, its `VideoPipeline`. The game clips replay buffer becomes a
-second consumer of the same capture later (`plans/GAME-CLIPS.md` §3.5).
+consumer that encodes it. A stream host makes a manager with one consumer, its
+`VideoPipeline`. The game clip replay (CLIPS.md §15.3) makes its own manager on
+the game window, and joins the stream's manager when the user streams the same
+game (the row "A replay beside a stream").
 
 | Item | Rule |
 |---|---|
@@ -468,6 +478,8 @@ second consumer of the same capture later (`plans/GAME-CLIPS.md` §3.5).
 | Swap | The manager consumes `consume_swap_event()` once per frame, before the calls, and increments the swap generation. A consumer forces a keyframe on the first frame it encodes with a new generation, whatever frames it decimated. |
 | Add | `add_consumer` before or after `start`. The next frame reaches the new consumer. At most 4 consumers. |
 | Remove | `remove_consumer` marks the consumer removed, under the same mutex as the per-call counter that a delivery increments, so no new call starts. The last consumer stops the source (the backend's own 5 s bound). Another consumer waits for its call in flight, at most 5 s. `Removed`: the manager never calls it again. `Abandoned` (the source stop timed out, or a call is stuck): the owner leaks the consumer and the manager, as `VideoPipeline::abandoned` did before. The manager is used once: after the last remove it takes no consumer. |
+| Target only | Each frame carries `target_only` (`CaptureSource::frames_show_only_target`; for `ProcessCapture`, the method that delivers now). A WGC monitor or DXGI frame shows the whole monitor and is not target only. The replay drops it and reports `MELLO_REPLAY_WAITING`. |
+| A replay beside a stream | A stream of the replay's game starts as without the replay. Then `ReplaySession::follow_stream` stops the replay's own WGC capture and adds the replay as a consumer of the stream's manager, with its preprocessor and encoder made again on that manager's device, at min(replay rate, stream rate). Before the stream removes its consumer, `leave_stream` puts the replay back on its own WGC window capture. The hook stops with the stream. The context keeps a weak reference to a running stream's manager and its game, so a replay that starts during the stream joins it at once. The encode size stays the same over a switch, and each switch starts a new segment with an IDR (a gap of about 100 ms). A failure in a switch turns off the replay only. |
 | Audio | A consumer sets its own `AudioCallback` and `TimedAudioCallback`. The manager sets its own callback on the source only while a consumer has one, so a source with no listener makes no audio. A setter waits for an audio call in flight to that consumer. |
 | Queries | `width`, `height`, `backend_name`, `get_cursor`, `cursor_mode`, `state`, `failed`, `target_exited`, `method_history`, `provides_timed_audio` go to the source: every consumer sees one value. `source()` gives the source for the reference clip's timing (`mello_stream_reference_info`). |
 | Threads and locks | `add_consumer`, `start`, `remove_consumer` and the audio setters run one at a time under `op_mutex_`, never from inside a callback of the same manager. Lock order: `op_mutex_`, a lock inside the source, then the list mutex. The delivery paths take a source lock (the reference source calls its audio callback under its own mutex), then the list mutex. Nothing calls into the source under the list mutex. |
@@ -801,6 +813,28 @@ There is no software encoder fallback in the product. Streaming requires a hardw
 
 If `EncoderFactory` exhausts all hardware candidates without success, it returns `Err`. The stream cannot start and the user is shown a clear error message. In practice this affects only machines with no GPU at all — any system with NVIDIA, AMD, or Intel graphics from the last decade has hardware H.264 encode capability.
 
+### 6.8 The Recording Intent (game clips)
+
+`EncoderConfig::intent` (`EncoderIntent::Stream` or `Recording`) tells the
+encoder what the video is for. A stream follows the network at the lowest
+latency. A recording goes to the replay ring (CLIPS.md §15.4) and is read back
+later. `EncoderFactory` passes the intent to NVENC and AMF.
+
+| Setting | Stream | Recording |
+|---|---|---|
+| Size and rate | Preset, adaptive rungs | The clip quality (1080p60, 720p60, 720p30), source aspect, fixed |
+| GOP | 4 s, plus an IDR on request | 1 s (`keyframe_interval = fps`). The replay ring asks for an IDR only after a dropped unit or an oversize GOP. |
+| Rate control | VBR, maximum 1.25 × target, VBV 0.5 s of the maximum rate | VBR, maximum 1.25 × target, VBV 1 s of the maximum rate (`compute_vbv_bits`) |
+| NVENC tuning | P4 ULL, P1 ULL, P1 LL | P4 high quality, P1 high quality, P1 LL (`NvencEncoder::tuning_attempts`) |
+| AMF usage | Ultra low latency, low latency mode on | High quality, else transcoding; low latency mode off (`AmfEncoder::intent_settings`) |
+| B-frames and lookahead | Off | Off. The high quality tuning turns them on, so the encoder turns them off again: the ring segments and the MP4 passthrough need every frame in decode order. |
+| SPS and PPS | At each IDR | At each IDR |
+| Bitrate | Preset, bitrate controller | Per clip quality: 8000, 5000 and 3000 kbps (`GameClipQuality::encoding`). No bitrate controller. |
+| Cost tiers | Yes | The replay sheds frames first (12-STREAMING.md §3.7, F3) |
+
+Tests: one per encoder for the tuning, the VBV and the GOP of each intent
+(`test_video_pipeline.cpp`).
+
 ---
 
 ## 7. Decoding
@@ -968,6 +1002,20 @@ session of the peer (each video session) gets it.
 
 The timeline's interface was enough: stage 7 changed nothing in
 `video_receive_timeline.*`.
+
+### 8.4 Frame Sources (stream and clip)
+
+The decode thread reads its frames from a `transport::FrameSource`
+(`video_receive_timeline.hpp`): `poll`, `on_decoded`, `on_decode_error`,
+`wait`, `wake`, `stats`. The receive timeline is the source of a stream. The
+game clip player (CLIPS.md §15.9) gives `ClipFrameSource`
+(`clip/clip_player_win.cpp`), which releases demuxed H.264 on the clock of the
+clip's sound. `TimelineFrame` and `TimelineDecision` carry no WebRTC type, so
+both sources return them.
+
+`ViewerPipeline::flush()` frees the ready slots that are not on screen. A
+seek and a pause call it. A decode that started before the flush drops its
+frame (`flush_gen_`).
 
 ---
 

@@ -98,7 +98,7 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
 
     // The game audio: process loopback of the game's process tree, the one
     // capture of the game that a stream shares (F7). Never endpoint loopback:
-    // it records the crew voice and every other app twice (plan 9.1).
+    // it records the crew voice and every other app twice (CLIPS.md 15.12).
     if (config_.pid != 0) {
         game_audio_ = config_.game_audio && config_.game_audio->pid() == config_.pid
                           ? config_.game_audio
@@ -123,7 +123,7 @@ bool ReplaySession::start_impl(const ReplayConfig& config, std::string* error) {
 std::shared_ptr<video::CaptureManager> ReplaySession::make_own_capture(std::string* error) const {
     // WGC on the game window, and nothing else. No resolve_capture_target: it
     // would turn a window that cannot carry a stream into its process and
-    // run the whole ladder, monitor capture included (plan 3.3).
+    // run the whole ladder, monitor capture included (CLIPS.md 15.3).
     video::CaptureSourceDesc desc{};
     if (config_.source) {
         desc = *config_.source;
@@ -153,7 +153,7 @@ bool ReplaySession::open_capture(std::shared_ptr<video::CaptureManager> manager,
         return false;
     }
 
-    // The recording encoder: a 1 s GOP, the quality tuning (plan 3.4).
+    // The recording encoder: a 1 s GOP, the quality tuning (14-VIDEO-PIPELINE.md 6.8).
     video::EncoderConfig enc{};
     enc.width = enc_w_;
     enc.height = enc_h_;
@@ -279,7 +279,7 @@ void ReplaySession::leave_stream() {
     if (!close_capture()) return;
     if (stopped_.load(std::memory_order_acquire)) return;
     // Back to WGC window. The stream's capture, the hook too, stops with the
-    // stream (Q19).
+    // stream (14-VIDEO-PIPELINE.md 4.8).
     std::string error;
     std::shared_ptr<video::CaptureManager> own = make_own_capture(&error);
     if (!own || !open_capture(std::move(own), true, config_.fps, &error)) {
@@ -436,8 +436,8 @@ void ReplaySession::encode_loop() {
 void ReplaySession::check_own_load() {
     // The replay's own encoder cannot hold its rate: the same rule as the
     // stream's (VideoPipeline::encoder_is_overloaded). The encoder gives up
-    // its quality features first, then the replay sheds a rate step (plan
-    // 3.4: without a stream, the same overload signal).
+    // its quality features first, then the replay sheds a rate step
+    // (14-VIDEO-PIPELINE.md 6.8: without a stream, the same overload signal).
     const uint64_t offered = frames_offered_.load(std::memory_order_relaxed);
     const uint64_t drops = queue_drops_.load(std::memory_order_relaxed);
     video::VideoPipeline::EncoderLoadSample sample{};
@@ -461,7 +461,7 @@ void ReplaySession::check_own_load() {
 
 void ReplaySession::on_game_audio(const int16_t* samples, size_t count) {
     // 48 kHz stereo. The time of the first frame: the arrival less the length
-    // of the packet, as the stream's game audio has it (plan 5.1).
+    // of the packet, as the stream's game audio has it (CLIPS.md 15.4).
     const size_t frames = count / ReplayAudioRing::kChannels;
     if (frames == 0) return;
     const uint64_t capture_us = now_us() - frames * 1'000'000 / ReplayAudioRing::kRate;
@@ -512,7 +512,7 @@ void ReplaySession::copy_poster_frame(ID3D11Texture2D* texture) {
     if (FAILED(device->CreateTexture2D(&staging_desc, nullptr, &staging))) return;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context;
     device->GetImmediateContext(&context);
-    // A submit, no wait (plan F6). The map on the capture's caller waits.
+    // A submit, no wait (12-STREAMING.md 3.7, F6). The map on the capture's caller waits.
     context->CopyResource(staging.Get(), texture);
     {
         std::lock_guard<std::mutex> lock(poster_mutex_);
@@ -603,7 +603,7 @@ bool ReplaySession::capture(float seconds, audio::AudioPipeline* voice,
             ClipAudioSource crew;
             crew.channels = 1;
             crew.chunks = std::move(window.crew);
-            crew.gain_points = std::move(window.crew_volume);  // Q20
+            crew.gain_points = std::move(window.crew_volume);  // CLIPS.md 15.4
             ClipAudioSource mic;
             mic.channels = 1;
             mic.chunks = std::move(window.mic);

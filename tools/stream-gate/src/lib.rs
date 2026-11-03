@@ -9,7 +9,7 @@
 //! latency and visual scores; `report` prints them against the frozen
 //! baseline and checks the gates. Run it with `scripts/stream-gate.sh`.
 //!
-//! `replay` is the game clip lane (plans/GAME-CLIPS.md 10.3): the same clip
+//! `replay` is the game clip lane (CLIPS.md 15.13): the same clip
 //! and game audio through the replay buffer into MP4 clips, each read back
 //! and checked. Run it with `scripts/replay-gate.sh`. Its streamed playback
 //! row (`playback`) plays a clip over HTTP through a delay and rate shim

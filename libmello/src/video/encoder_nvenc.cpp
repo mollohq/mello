@@ -53,7 +53,7 @@ void NvencEncoder::apply_rate_and_gop(NV_ENC_CONFIG& enc_config, const EncoderCo
     // No lookahead and no B-frames for either intent. The encode loop is one
     // frame in, one packet out, and the high quality tuning of a recording
     // turns both on. The replay ring and the MP4 passthrough also need every
-    // frame in decode order (game clips plan 3.4).
+    // frame in decode order (14-VIDEO-PIPELINE.md 6.8).
     enc_config.rcParams.enableLookahead   = 0;
     enc_config.rcParams.enableExtLookahead = 0;
     enc_config.rcParams.lookaheadDepth  = 0;

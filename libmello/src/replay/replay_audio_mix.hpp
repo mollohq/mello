@@ -17,14 +17,14 @@ struct ClipAudioSource {
     float gain = 1.0f;
     /// A gain over time, as (time, gain) points. A point holds until the
     /// next one; before the first one, the first one holds. Empty: unity.
-    /// The crew voice gets m3llo's mixer slider here (plan Q20).
+    /// The crew voice gets m3llo's mixer slider here (CLIPS.md 15.4).
     std::vector<std::pair<uint64_t, float>> gain_points;
     std::vector<TimedPcm> chunks;  ///< oldest first
 };
 
 constexpr uint32_t kClipAudioRate = 48000;
 
-/// The clip audio (plans/GAME-CLIPS.md 5.3): 48 kHz stereo int16 from
+/// The clip audio (CLIPS.md 15.4): 48 kHz stereo int16 from
 /// `t0_us` to `end_us`.
 ///
 /// Each source is placed at its own times. Its chunks are cut into runs with
@@ -32,7 +32,7 @@ constexpr uint32_t kClipAudioRate = 48000;
 /// removes the drift of the source clock (300 ppm is 9 ms over 30 s) and the
 /// jitter of arrival-time stamps, so neither moves nor cracks the audio. A gap
 /// is silence at its place in time. The sum goes through a limiter at -1 dBFS
-/// (plan Q9: unity gain with a limiter).
+/// (CLIPS.md 15.4: unity gain with a limiter).
 std::vector<int16_t> mix_clip_audio(uint64_t t0_us, uint64_t end_us,
                                     const std::vector<ClipAudioSource>& sources);
 

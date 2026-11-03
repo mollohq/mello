@@ -1,4 +1,4 @@
-//! The game clip key (F8) in the client (plans/GAME-CLIPS.md 4.3): the replay
+//! The game clip key (F8) in the client (CLIPS.md 15.2): the replay
 //! state that core reports, the key, and the HUD toast. The Settings section
 //! and the Keybinds row are in `callbacks/settings.rs`. A saved clip goes to
 //! core for the post and the upload (`mello_core::clip_upload`). The clip
@@ -21,7 +21,7 @@ pub struct GameClipUi {
 }
 
 /// F8: a clip while the replay runs. A paused or waiting replay still has
-/// its ring, so it clips too. Otherwise the HUD toast says why (plan 4.3).
+/// its ring, so it clips too. Otherwise the HUD toast says why (CLIPS.md 15.2).
 pub(crate) fn game_clip_key_pressed(ctx: &AppContext) {
     let ui = ctx.game_clip.borrow().clone();
     match ui.state {
@@ -69,7 +69,7 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
                 game_name,
                 reason,
             };
-            // Plan 4.2: the replay stops on a full disk, and says so once.
+            // CLIPS.md 15.2: the replay stops on a full disk, and says so once.
             if state == GameClipState::DiskLow && was != GameClipState::DiskLow {
                 toast(ctx, DISK_LOW_TOAST);
             }
@@ -92,8 +92,8 @@ pub(crate) fn handle(ctx: &AppContext, event: Event) {
                 height
             );
             toast(ctx, "Game clip saved");
-            // The clip goes to the active crew (plan 4.4, Q6), and core
-            // uploads it in the background (plan 6.3).
+            // The clip goes to the active crew (CLIPS.md 15.2), and core
+            // uploads it in the background (CLIPS.md 15.7).
             let crew_id = ctx.app.get_active_crew_id().to_string();
             if crew_id.is_empty() {
                 log::warn!("[game clip] {clip_id} stays local: no active crew");

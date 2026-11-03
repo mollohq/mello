@@ -89,7 +89,7 @@ TEST(ReplayAvClock, FitRunsFindsTheDriftOfAFastClock) {
     EXPECT_NEAR(runs[0].start_us, 10'000'000.0, 500.0) << "the jitter averages out";
 }
 
-// Game clips plan 10.2: three sources on their own clocks, one 300 ppm fast,
+// CLIPS.md 15.13: three sources on their own clocks, one 300 ppm fast,
 // one 200 ppm slow, with jittered stamps. After the mix each marker is within
 // 1 ms of its true time.
 TEST(ReplayAvClock, ThreeSourcesLandOnTheirTimesWithDriftAndJitter) {
@@ -118,7 +118,7 @@ TEST(ReplayAvClock, ThreeSourcesLandOnTheirTimesWithDriftAndJitter) {
     }
 }
 
-// Game clips plan 10.2 (ReplayGaps): a gap is silence at its place, and the
+// CLIPS.md 15.13 (ReplayGaps): a gap is silence at its place, and the
 // audio after it keeps its own time.
 TEST(ReplayGaps, AGapIsSilenceAndTheAudioAfterItKeepsItsTime) {
     const uint64_t t0 = 10'000'000;

@@ -1,4 +1,4 @@
-//! The upload pace (plans/GAME-CLIPS.md 6.3 and 3.6, G5 and G8): the rate
+//! The upload pace (CLIPS.md 15.7; 12-STREAMING.md 3.7, G5 and G8): the rate
 //! cap that the state of the PC sets, and a reader that holds the MP4 bytes
 //! to that rate in small writes.
 //!

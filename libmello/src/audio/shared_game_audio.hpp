@@ -13,12 +13,12 @@ namespace mello::audio {
 class WasapiLoopbackCapture;
 
 /// The game audio of one game, given to every consumer that needs it: the
-/// stream host's audio pipeline and the game clip replay (plans/GAME-CLIPS.md
-/// 3.6, F7). One WASAPI process loopback of the game's process tree, as the
+/// stream host's audio pipeline and the game clip replay (12-STREAMING.md
+/// 3.7, F7). One WASAPI process loopback of the game's process tree, as the
 /// game has one video capture.
 ///
 /// Never endpoint loopback: it records the crew voice and every other app
-/// (plan 9.1). On a Windows without process loopback `open` returns null,
+/// (CLIPS.md 15.12). On a Windows without process loopback `open` returns null,
 /// and the stream host keeps its own capture as before.
 ///
 /// Threads: the loopback's capture thread calls each consumer, in the order

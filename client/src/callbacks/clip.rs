@@ -54,7 +54,7 @@ pub fn wire(ctx: &AppContext) {
     let player_ctx = ctx.clone();
     ctx.app.on_play_clip(move |path| {
         let path = path.to_string();
-        // A game clip plays in the clip player (plans/GAME-CLIPS.md 6.2).
+        // A game clip plays in the clip player (CLIPS.md 15.9).
         if let Some(card) = crate::handlers::clip::game_clip_card(&player_ctx.app, &path) {
             crate::game_clip_player::open(&player_ctx, &card);
             return;

@@ -1,5 +1,5 @@
 {
-  "_comment": "Gates of the replay lane (plans/GAME-CLIPS.md 10.3, tools/stream-gate/src/replay.rs, scripts/replay-gate.sh), per lane and clip, in the schema of benchmarks/baselines/stream/gates.json. The structural gates (length, start frame, frame order, game audio offset; the loopback row's offset) are absolute: they come from the plan, never from a run, and a test in replay.rs keeps them equal to replay::structural_gates and replay::loopback_gates. The quality floors (psnr_y_mean, ssim_y_mean, vmaf_mean) come from `scripts/replay-gate.sh --lane <lane> --repeat 3 --write-baseline` on one commit and machine: the first run's value minus the largest of a fixed margin (VMAF 2 points, PSNR 1 dB, SSIM 0.01) and 1.1 x the spread of the runs, the rule of tools/stream-gate/make_gates.py; baseline-<lane>.json keeps the runs and _spread the values. A lane without floors has the structural gates only. The playback row (--playback, tools/stream-gate/src/playback.rs) has absolute gates only: the time to the first frame, no buffering state after it, the frame order, the seek to 20 s; a test in replay.rs keeps them equal to playback::gates. Gates may tighten; they never loosen.",
+  "_comment": "Gates of the replay lane (CLIPS.md 15.13, tools/stream-gate/src/replay.rs, scripts/replay-gate.sh), per lane and clip, in the schema of benchmarks/baselines/stream/gates.json. The structural gates (length, start frame, frame order, game audio offset; the loopback row's offset) are absolute: they come from the plan, never from a run, and a test in replay.rs keeps them equal to replay::structural_gates and replay::loopback_gates. The quality floors (psnr_y_mean, ssim_y_mean, vmaf_mean) come from `scripts/replay-gate.sh --lane <lane> --repeat 3 --write-baseline` on one commit and machine: the first run's value minus the largest of a fixed margin (VMAF 2 points, PSNR 1 dB, SSIM 0.01) and 1.1 x the spread of the runs, the rule of tools/stream-gate/make_gates.py; baseline-<lane>.json keeps the runs and _spread the values. A lane without floors has the structural gates only. The playback row (--playback, tools/stream-gate/src/playback.rs) has absolute gates only: the time to the first frame, no buffering state after it, the frame order, the seek to 20 s; a test in replay.rs keeps them equal to playback::gates. Gates may tighten; they never loosen.",
   "_spread": {
     "cpu": {
       "press-35s": {
@@ -79,25 +79,25 @@
           "enforced": true,
           "max": 1000.0,
           "metric": "playback_first_frame_ms",
-          "note": "plan 6.2 and 10.3: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
+          "note": "CLIPS.md 15.9 and 15.13: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_buffering_ms",
-          "note": "plan 10.3: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
+          "note": "CLIPS.md 15.13: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_frames_out_of_order",
-          "note": "plan 10.3: every frame code in order: no shown frame goes back or repeats"
+          "note": "CLIPS.md 15.13: every frame code in order: no shown frame goes back or repeats"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_frames_skipped",
-          "note": "plan 10.3: every unit of the clip shows when it plays to its end in real time"
+          "note": "CLIPS.md 15.13: every unit of the clip shows when it plays to its end in real time"
         },
         {
           "enforced": true,
@@ -109,7 +109,7 @@
           "enforced": true,
           "max": 1000.0,
           "metric": "playback_seek_ms",
-          "note": "plan 10.3: a seek to 20 s shows the frame of 20 s within 1 s"
+          "note": "CLIPS.md 15.13: a seek to 20 s shows the frame of 20 s within 1 s"
         }
       ],
       "press-35s": [
@@ -118,26 +118,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -161,7 +161,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         },
         {
           "enforced": true,
@@ -188,26 +188,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -231,7 +231,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         },
         {
           "enforced": true,
@@ -258,26 +258,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -301,7 +301,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         },
         {
           "enforced": true,
@@ -328,26 +328,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -371,7 +371,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         },
         {
           "enforced": true,
@@ -400,7 +400,7 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
@@ -412,7 +412,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "loopback_offset_abs_max_ms",
-          "note": "plan 10.3: a real process loopback, burst onset to the frame captured then within +-20 ms"
+          "note": "CLIPS.md 15.13: a real process loopback, burst onset to the frame captured then within +-20 ms"
         }
       ],
       "playback": [
@@ -420,25 +420,25 @@
           "enforced": true,
           "max": 1000.0,
           "metric": "playback_first_frame_ms",
-          "note": "plan 6.2 and 10.3: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
+          "note": "CLIPS.md 15.9 and 15.13: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_buffering_ms",
-          "note": "plan 10.3: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
+          "note": "CLIPS.md 15.13: no stall at 20 Mbps: the player's state says buffering at no time after the first frame"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_frames_out_of_order",
-          "note": "plan 10.3: every frame code in order: no shown frame goes back or repeats"
+          "note": "CLIPS.md 15.13: every frame code in order: no shown frame goes back or repeats"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "playback_frames_skipped",
-          "note": "plan 10.3: every unit of the clip shows when it plays to its end in real time"
+          "note": "CLIPS.md 15.13: every unit of the clip shows when it plays to its end in real time"
         },
         {
           "enforced": true,
@@ -450,7 +450,7 @@
           "enforced": true,
           "max": 1000.0,
           "metric": "playback_seek_ms",
-          "note": "plan 10.3: a seek to 20 s shows the frame of 20 s within 1 s"
+          "note": "CLIPS.md 15.13: a seek to 20 s shows the frame of 20 s within 1 s"
         }
       ],
       "press-35s": [
@@ -459,26 +459,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -502,7 +502,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         }
       ],
       "press-47s": [
@@ -511,26 +511,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -554,7 +554,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         }
       ],
       "press-60s": [
@@ -563,26 +563,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -606,7 +606,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         }
       ],
       "press-62s": [
@@ -615,26 +615,26 @@
           "max": 31.0,
           "metric": "duration_s",
           "min": 30.0,
-          "note": "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
+          "note": "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long"
         },
         {
           "enforced": true,
           "max": 60.0,
           "metric": "start_lead_frames",
           "min": 0.0,
-          "note": "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
+          "note": "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_missing",
-          "note": "plan 10.3: no missing frame index from the first frame to the last"
+          "note": "CLIPS.md 15.13: no missing frame index from the first frame to the last"
         },
         {
           "enforced": true,
           "max": 0.0,
           "metric": "frames_out_of_order",
-          "note": "plan 10.3: every frame index in order"
+          "note": "CLIPS.md 15.13: every frame index in order"
         },
         {
           "enforced": true,
@@ -658,7 +658,7 @@
           "enforced": true,
           "max": 20.0,
           "metric": "av_offset_abs_max_ms",
-          "note": "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker"
+          "note": "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker"
         }
       ]
     }

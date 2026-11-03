@@ -7,7 +7,7 @@
 namespace mello::replay {
 
 /// The load level of the game clip replay under overload
-/// (plans/GAME-CLIPS.md 3.6, F3). The replay sheds first: the first overload
+/// (12-STREAMING.md 3.7, F3). The replay sheds first: the first overload
 /// signal drops it to 30 fps, the next one pauses it. Only then may the
 /// stream give up its own quality. After 60 s with no overload the replay
 /// goes one level back up. The ring keeps its content over a pause; a clip

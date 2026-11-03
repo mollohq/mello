@@ -34,7 +34,7 @@ namespace mello::replay {
 
 struct ReplayConfig {
     /// The game window: the replay captures it with WGC window capture, and
-    /// nothing else (plans/GAME-CLIPS.md 3.3: no monitor or desktop capture).
+    /// nothing else (CLIPS.md 15.3: no monitor or desktop capture).
     void* hwnd = nullptr;
     /// The game process: its audio, through WASAPI process loopback of its
     /// process tree. 0: no game audio.
@@ -42,7 +42,7 @@ struct ReplayConfig {
     /// The game audio capture of `pid` that the stream host shares (F7, the
     /// context's registry). Null: the replay opens one for itself.
     std::shared_ptr<audio::SharedGameAudio> game_audio;
-    /// The clip quality (plan section 7): the encode height and rate.
+    /// The clip quality (CLIPS.md 15.10): the encode height and rate.
     uint32_t height = 720;
     uint32_t fps = 60;
     uint32_t bitrate_kbps = 5000;
@@ -71,22 +71,22 @@ struct ReplayClip {
     bool     poster_live = false;
 };
 
-/// The game clip replay buffer (plans/GAME-CLIPS.md 3, 5): a consumer of a
+/// The game clip replay buffer (CLIPS.md 15.3 and 15.4): a consumer of a
 /// CaptureManager with its own preprocessor and recording encoder, the video
 /// and game audio rings, and the capture of a clip into an MP4 and a poster.
 ///
 /// Alone, the replay has its own capture manager on the game window (WGC
 /// window). While the user streams the same game, it is a second consumer of
-/// the stream's capture manager, so the game has one capture (plan 3.2):
-///  - The stream starts exactly as without the replay (F2, Q18). Then
+/// the stream's capture manager, so the game has one capture (CLIPS.md 15.3):
+///  - The stream starts exactly as without the replay (F2). Then
 ///    `follow_stream` stops the replay's own capture and attaches the replay
 ///    to the stream's manager, on that manager's device.
 ///  - The replay takes the frames of the hook and of WGC window. It drops the
-///    frames of a monitor method (WGC monitor, DXGI) and waits (3.3, Q4).
+///    frames of a monitor method (WGC monitor, DXGI) and waits (CLIPS.md 15.3).
 ///  - It records at the stream's rate, never above it (F1).
 ///  - Before the stream stops, `leave_stream` puts the replay back on its own
 ///    WGC window capture. The stream's capture, the hook too, then stops with
-///    the stream (Q19).
+///    the stream (14-VIDEO-PIPELINE.md 4.8).
 /// The encode size stays the same over a switch: the preprocessor fits each
 /// source into it, so a clip has one picture size. Each switch starts a new
 /// segment with an IDR.
@@ -94,7 +94,7 @@ struct ReplayClip {
 /// Threads:
 ///  - The capture thread calls the frame callback: decimate, convert into the
 ///    NV12 ring, enqueue (2 deep, newest wins), and the poster copy (a
-///    submit, no wait, plan F6).
+///    submit, no wait, 12-STREAMING.md 3.7, F6).
 ///  - The encode thread encodes and hands each access unit to the video ring.
 ///  - The loopback thread hands the game audio to the audio ring.
 ///  - `capture` runs on the caller's worker thread, never the command loop.
@@ -210,7 +210,7 @@ private:
     void on_timed_audio(const float* samples, uint32_t frames, uint32_t channels, uint32_t rate,
                         int64_t capture_us);
     std::vector<int16_t> timed_pcm_;  // on_timed_audio's thread
-    /// The capture thread copies the frame for the poster (plan F6).
+    /// The capture thread copies the frame for the poster (12-STREAMING.md 3.7, F6).
     void copy_poster_frame(ID3D11Texture2D* texture);
     bool write_live_poster(const std::filesystem::path& poster, std::chrono::milliseconds wait);
 

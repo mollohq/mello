@@ -20,7 +20,7 @@ struct AccessUnitRef {
     bool     keyframe = false;
 };
 
-/// The rolling video buffer of the game clip replay (plans/GAME-CLIPS.md 5.2).
+/// The rolling video buffer of the game clip replay (CLIPS.md 15.4).
 ///
 /// One preallocated ring file of fixed slots. A slot holds one segment: one
 /// GOP, from an IDR with SPS and PPS up to the next IDR. An index in RAM keeps
@@ -44,7 +44,7 @@ class ReplayVideoRing {
 public:
     /// 30 s of clip, one GOP before it, and spare segments for pinning (5.2).
     static constexpr uint32_t kSegments = 40;
-    /// The RAM queue between the encode thread and the writer (plan section 8).
+    /// The RAM queue between the encode thread and the writer (CLIPS.md 15.11).
     static constexpr uint64_t kQueueBytes = 2ull * 1024 * 1024;
 
     struct Config {

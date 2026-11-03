@@ -1024,7 +1024,7 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     }
 
     if (encoder_is_overloaded(sample)) {
-        // F3 (GAME-CLIPS.md 3.6): a game clip replay on this capture sheds
+        // F3 (12-STREAMING.md 3.7): a game clip replay on this capture sheds
         // first. The stream's tier moves only when it has nothing left.
         bool shed = false;
         {

@@ -1,4 +1,4 @@
-//! The bytes of a game clip for the player (plans/GAME-CLIPS.md 6.2).
+//! The bytes of a game clip for the player (CLIPS.md 15.9).
 //!
 //! A remote clip comes in range requests of 1 MiB on one connection, a few
 //! ranges ahead of the last read, into a cache file at their offsets. The
@@ -23,7 +23,7 @@ pub const READ_ERROR: i64 = -1;
 /// One range request.
 pub const CHUNK: u64 = 1024 * 1024;
 /// Ranges fetched ahead of the last read: about 6 s at the default quality
-/// (plan 6.2 asks for 3 s ahead; the margin covers a slow request).
+/// (CLIPS.md 15.9 asks for 3 s ahead; the margin covers a slow request).
 const AHEAD_CHUNKS: u64 = 4;
 const RETRIES: u32 = 3;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);

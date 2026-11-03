@@ -1,4 +1,4 @@
-//! The upload worker (plans/GAME-CLIPS.md 6.3 to 6.5): one thread at low
+//! The upload worker (CLIPS.md 15.7 and 15.8): one thread at low
 //! priority takes each queued clip through `post_clip`, the poster, the MP4
 //! parts and the complete, one request at a time. The queue file is saved
 //! after each step, so a restart goes on from the last step.
@@ -38,7 +38,7 @@ pub(crate) enum Failure {
     Stopped,
 }
 
-/// The three RPCs of plan 6.5.
+/// The three RPCs of CLIPS.md 15.8.
 pub(crate) trait Backend {
     fn post_clip(&self, req: &PostClipRequest) -> Result<PostClipResponse, Failure>;
     fn upload_urls(
@@ -532,7 +532,7 @@ fn now_ms() -> i64 {
         .unwrap_or(0)
 }
 
-/// The upload thread runs under the game (plan 6.3, Q8).
+/// The upload thread runs under the game (CLIPS.md 15.7).
 #[cfg(windows)]
 fn set_low_priority() {
     #[link(name = "kernel32")]
@@ -559,7 +559,7 @@ mod tests {
 
     const PART: u64 = 5 * 1024 * 1024;
 
-    /// A backend that answers as the server of plan 6.5 does.
+    /// A backend that answers as the server of CLIPS.md 15.8 does.
     #[derive(Default)]
     struct FakeBackend {
         calls: RefCell<Vec<String>>,

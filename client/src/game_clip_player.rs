@@ -1,4 +1,4 @@
-//! The game clip player in the client (plans/GAME-CLIPS.md 6.2): the view
+//! The game clip player in the client (CLIPS.md 15.9): the view
 //! over the feed area (`ClipPlayerUi`), its controls, and the native
 //! presenter that shows the clip. There is one presenter: a watched stream
 //! and a clip never show at the same time.

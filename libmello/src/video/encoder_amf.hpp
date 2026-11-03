@@ -45,7 +45,7 @@ public:
     /// What an intent asks of the AMF H.264 encoder. A stream takes the
     /// ultra-low-latency usage with the low latency mode. A recording takes
     /// the high quality usage, then transcoding on a driver without it, and
-    /// no low latency mode (game clips plan 3.4). B-frames stay off for both.
+    /// no low latency mode (14-VIDEO-PIPELINE.md 6.8). B-frames stay off for both.
     /// Pure, testable without AMD hardware.
     struct IntentSettings {
         std::vector<int64_t> usages;           ///< AMF_VIDEO_ENCODER_USAGE_*, tried in order

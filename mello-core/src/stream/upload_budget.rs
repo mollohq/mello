@@ -1,5 +1,5 @@
-//! The game clip upload's budget while the user streams (plans/GAME-CLIPS.md
-//! 3.6, G2 to G4). The stream has priority. The upload gets bandwidth only
+//! The game clip upload's budget while the user streams (12-STREAMING.md
+//! 3.7, G2 and G4). The stream has priority. The upload gets bandwidth only
 //! while the stream holds its top rung with no trouble for 15 s, and it
 //! pauses at once on a rung drop, an overload or a goog_cc target under the
 //! stream's bitrate: the upload sheds before the stream moves.

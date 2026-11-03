@@ -332,7 +332,7 @@ impl super::Client {
 
         // Auto-start clip buffer for voice clip capture
         self.handle_start_clip_buffer();
-        // The game clip replay runs in voice (plans/GAME-CLIPS.md 4.1).
+        // The game clip replay runs in voice (CLIPS.md 15.2).
         self.replay_in_voice = true;
         self.sync_replay();
     }

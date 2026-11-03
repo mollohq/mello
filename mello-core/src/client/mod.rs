@@ -1226,7 +1226,7 @@ impl Client {
                     duration_seconds: f64::from(duration_seconds),
                     width,
                     height,
-                    // The replay runs only in voice (plan Q5): every game
+                    // The replay runs only in voice (CLIPS.md 15.2): every game
                     // clip has the crew voice.
                     has_voice: true,
                     created_ms: chrono::Utc::now().timestamp_millis(),

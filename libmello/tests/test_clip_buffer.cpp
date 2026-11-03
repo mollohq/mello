@@ -244,7 +244,7 @@ void write_mic(ClipBuffer& buffer, Fn tone) {
 
 } // namespace
 
-// Game clips Q24: the mic keeps its capture time. It comes in on its own
+// CLIPS.md 15.4: the mic keeps its capture time. It comes in on its own
 // thread, after the crew audio of the same time, and a 2 ms burst in it lands
 // at its capture time in the clip mix, the Opus lookahead taken out.
 TEST(ClipBuffer, TheMicKeepsItsCaptureTime) {
@@ -278,7 +278,7 @@ TEST(ClipBuffer, TheMicKeepsItsCaptureTime) {
     EXPECT_LE(std::abs(off_ms), 2.0) << "the burst is " << off_ms << " ms off its capture time";
 }
 
-// Game clips Q20: the crew mix carries m3llo's mixer volume, and the window
+// CLIPS.md 15.4: the crew mix carries m3llo's mixer volume, and the window
 // gives it as gain points.
 TEST(ClipBuffer, TheCrewVolumeComesWithTheWindow) {
     TempDir dir;

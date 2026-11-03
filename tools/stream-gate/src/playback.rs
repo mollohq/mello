@@ -1,4 +1,4 @@
-//! The streamed playback row of the replay lane (plans/GAME-CLIPS.md 10.3):
+//! The streamed playback row of the replay lane (CLIPS.md 15.13):
 //! a clip MP4 of the run plays over HTTP as a viewer plays it from the feed.
 //!
 //! The path. `http_shim` serves the MP4 on 127.0.0.1 through a link of
@@ -1212,29 +1212,29 @@ fn gate(metric: &str, max: f64, note: &str) -> Gate {
     }
 }
 
-/// The gates of the row (plan 10.3), absolute: `--write-baseline` writes
+/// The gates of the row (CLIPS.md 15.13), absolute: `--write-baseline` writes
 /// them into gates.json; a test in replay.rs keeps the committed file equal.
 pub fn gates() -> Vec<Gate> {
     vec![
         gate(
             "playback_first_frame_ms",
             1000.0,
-            "plan 6.2 and 10.3: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay",
+            "CLIPS.md 15.9 and 15.13: the first frame under 1 s from the start call on a 20 Mbps link with 50 ms delay",
         ),
         gate(
             "playback_buffering_ms",
             0.0,
-            "plan 10.3: no stall at 20 Mbps: the player's state says buffering at no time after the first frame",
+            "CLIPS.md 15.13: no stall at 20 Mbps: the player's state says buffering at no time after the first frame",
         ),
         gate(
             "playback_frames_out_of_order",
             0.0,
-            "plan 10.3: every frame code in order: no shown frame goes back or repeats",
+            "CLIPS.md 15.13: every frame code in order: no shown frame goes back or repeats",
         ),
         gate(
             "playback_frames_skipped",
             0.0,
-            "plan 10.3: every unit of the clip shows when it plays to its end in real time",
+            "CLIPS.md 15.13: every unit of the clip shows when it plays to its end in real time",
         ),
         gate(
             "playback_frames_unreadable",
@@ -1244,7 +1244,7 @@ pub fn gates() -> Vec<Gate> {
         gate(
             "playback_seek_ms",
             1000.0,
-            "plan 10.3: a seek to 20 s shows the frame of 20 s within 1 s",
+            "CLIPS.md 15.13: a seek to 20 s shows the frame of 20 s within 1 s",
         ),
     ]
 }

@@ -452,7 +452,7 @@ private:
     std::unique_ptr<ClipBuffer> clip_buffer_;
     // m3llo's volume in the Windows volume mixer (0 when muted), written by
     // the WASAPI render thread about every 100 ms. The clip voice ring keeps
-    // it with the crew mix (game clips Q20). It lives here, not in the
+    // it with the crew mix (CLIPS.md 15.4). It lives here, not in the
     // playback, so a device switch keeps it. 1.0 on other platforms.
     std::atomic<float> session_volume_{1.0f};
     // capture_->input_latency_ms() at the last device (re)open, for the time

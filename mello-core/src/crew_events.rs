@@ -268,7 +268,7 @@ pub struct PostClipRequest {
     pub local_path: String,
     #[serde(default)]
     pub waveform: String,
-    /// A game clip's video size (plans/GAME-CLIPS.md 6.5). Zero for a voice clip.
+    /// A game clip's video size (CLIPS.md 15.8). Zero for a voice clip.
     #[serde(default, skip_serializing_if = "is_zero")]
     pub width: u32,
     #[serde(default, skip_serializing_if = "is_zero")]
@@ -325,7 +325,7 @@ pub struct ClipUploadCompleteResponse {
     pub poster_url: String,
 }
 
-// --- Game clip upload (plans/GAME-CLIPS.md 6.5) ---
+// --- Game clip upload (CLIPS.md 15.8) ---
 
 /// `clip_upload_url` for a game clip: the poster PUT and the MP4 parts.
 #[derive(Debug, Clone, Serialize, Deserialize)]

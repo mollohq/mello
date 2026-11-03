@@ -320,7 +320,7 @@ func hasAll(have []string, want ...string) bool {
 }
 
 // The design depends on this: a presigned part or poster URL accepts only a
-// body of the signed length (plans/GAME-CLIPS.md 6.3, G6).
+// body of the signed length (CLIPS.md 15.7; 12-STREAMING.md 3.7, G6).
 func TestPresignedURLsSignTheLength(t *testing.T) {
 	p := testPresignClient()
 	ctx := context.Background()

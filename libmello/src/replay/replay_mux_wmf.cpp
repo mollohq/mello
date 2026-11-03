@@ -259,7 +259,7 @@ bool write_clip_mp4(const ClipMuxInput& in, const std::filesystem::path& path,
         MELLO_LOG_ERROR(TAG, "mux: Finalize failed: 0x%08lx", hr);
         return false;
     }
-    // Web and phone playback start before the download ends (plan 5.4).
+    // Web and phone playback start before the download ends (CLIPS.md 15.5).
     if (!mp4_faststart(part, path)) {
         MELLO_LOG_ERROR(TAG, "mux: moving moov to the front failed");
         std::filesystem::remove(path, ec);

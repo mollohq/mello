@@ -1,4 +1,4 @@
-//! The game clip replay buffer (plans/GAME-CLIPS.md 4 and 5.3): while the
+//! The game clip replay buffer (CLIPS.md 15.2 and 15.4): while the
 //! user is in voice and a game runs, libmello records the game; F8 saves the
 //! last 30 s as an MP4 with a poster.
 //!
@@ -15,14 +15,14 @@ use std::sync::mpsc;
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-/// The seconds of game that F8 saves (plan section 1).
+/// The seconds of game that F8 saves (CLIPS.md 15.1).
 pub(crate) const GAME_CLIP_SECONDS: f32 = 30.0;
 
 /// The time a new game must keep the focus before it takes the replay
-/// (plan 4.2). An alt-tab between two games does not restart it each time.
+/// (CLIPS.md 15.2). An alt-tab between two games does not restart it each time.
 pub(crate) const SWITCH_HOLD: Duration = Duration::from_secs(10);
 
-/// The free space the buffer folder must have (plan 4.1).
+/// The free space the buffer folder must have (CLIPS.md 15.2).
 pub(crate) const DISK_FREE_MIN: u64 = 2 * 1024 * 1024 * 1024;
 
 /// The ring files of a running replay (100 MB at 1080p60, the largest)
@@ -41,7 +41,7 @@ pub(crate) struct ReplayTarget {
     pub quality: GameClipQuality,
 }
 
-/// The game to record, from the rules of plan 4.1 that core knows: the
+/// The game to record, from the rules of CLIPS.md 15.2 that core knows: the
 /// setting is on, the user is in voice, and `game` runs. The worker adds the
 /// disk check, and libmello the encoder and the capture.
 pub(crate) fn replay_target(
@@ -65,7 +65,7 @@ pub(crate) fn replay_target(
     })
 }
 
-/// One replay at a time (plan 4.2). The replay keeps its game while that
+/// One replay at a time (CLIPS.md 15.2). The replay keeps its game while that
 /// game runs. A different game in focus takes it after `SWITCH_HOLD`.
 #[derive(Debug, Default)]
 pub(crate) struct GameHold {
@@ -121,7 +121,7 @@ impl GameHold {
     }
 }
 
-/// Plan 4.1: too little free space for the replay. The ring files of a
+/// CLIPS.md 15.2: too little free space for the replay. The ring files of a
 /// running replay count as free.
 pub(crate) fn disk_too_low(free: u64, running: bool) -> bool {
     let free = if running {
@@ -247,9 +247,9 @@ impl super::Client {
     /// game. Called after each game event, each voice start and leave, each
     /// setting change, and each second of a switch hold.
     pub(super) fn sync_replay(&mut self) {
-        // The upload pace: 3 Mbps while a game runs (plan 6.3, G8).
+        // The upload pace: 3 Mbps while a game runs (CLIPS.md 15.7; 12-STREAMING.md 3.7, G8).
         crate::clip_upload::pace().set_game_running(self.game_state.current_game().is_some());
-        // Game clips are Windows only until the macOS work (plan 9.2).
+        // Game clips are Windows only until the macOS work (CLIPS.md 15.14).
         if !cfg!(windows) {
             return;
         }
@@ -379,7 +379,7 @@ impl Worker {
         disk_free(&std::env::temp_dir()).is_some_and(|free| disk_too_low(free, self.running))
     }
 
-    /// Plan 4.2: stop, which deletes the ring, and tell the UI once.
+    /// CLIPS.md 15.2: stop, which deletes the ring, and tell the UI once.
     fn enter_disk_low(&mut self) {
         if !self.disk_low {
             log::warn!(
@@ -415,7 +415,7 @@ impl Worker {
         #[cfg(feature = "e2e-game")]
         let result = if crate::e2e_game::is_fake_pid(target.pid) {
             // A fake game has no window: the replay records a reference clip
-            // in its place (plans/GAME-CLIPS.md 10.5).
+            // in its place (CLIPS.md 15.13).
             crate::e2e_game::start_reference_replay(self.ctx, &config)
         } else {
             unsafe { mello_sys::mello_replay_start(self.ctx, &config) }

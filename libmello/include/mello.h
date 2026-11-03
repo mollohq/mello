@@ -404,7 +404,7 @@ MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_sampl
 MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
 
 /* ============================================================================
- * Game Clip Replay (F8, plans/GAME-CLIPS.md)
+ * Game Clip Replay (F8, CLIPS.md 15)
  * ============================================================================ */
 
 /** What the replay buffer records. */
@@ -1139,7 +1139,7 @@ MELLO_API void mello_stream_set_native_frame_callback(
 );
 
 /* ============================================================================
- * Game clip player (plans/GAME-CLIPS.md 6.2)
+ * Game clip player (CLIPS.md 15.9)
  * ============================================================================
  * An MP4 that plays from its first bytes: the video through the stream
  * viewer's decoder and the native frame callback, the sound in the voice
@@ -1186,7 +1186,7 @@ MELLO_API void mello_clip_player_get_state(MelloClipPlayer* player, MelloClipPla
  *  stay responsive. The read callback is not called after it returns. */
 MELLO_API void mello_clip_player_stop(MelloClipPlayer* player);
 
-/* ---- Game clip tests (the stream gate's replay lane, plans/GAME-CLIPS.md 10.3).
+/* ---- Game clip tests (the stream gate's replay lane, CLIPS.md 15.13).
  *      Test only: no product code calls these. ---- */
 
 /** Start the replay on the reference clip (mello_test_set_reference_clip) in

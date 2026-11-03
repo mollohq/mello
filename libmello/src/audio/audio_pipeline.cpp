@@ -1083,7 +1083,7 @@ void AudioPipeline::render_frame() {
 
     // Clip buffer: the remote playback as heard, at the time it plays. The
     // local mic goes in on the capture thread at its own time, so the ring
-    // does not move it to the render time (game clips Q24).
+    // does not move it to the render time (CLIPS.md 15.4).
     if (clip_buffer_ && clip_buffer_->is_active()) {
         const uint64_t heard_us =
             steady_now_us() + static_cast<uint64_t>(output_latency_ms() * 1000.0f);

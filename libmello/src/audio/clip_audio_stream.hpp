@@ -1,6 +1,6 @@
 #pragma once
 
-// The sound of a game clip that plays (plans/GAME-CLIPS.md 6.2): 48 kHz
+// The sound of a game clip that plays (CLIPS.md 15.9): 48 kHz
 // stereo PCM from the clip's demux thread to the audio render thread, and
 // the clip clock. The voice clip playback (a mono file decoded whole into a
 // vector) is not reused: a game clip streams, and its picture follows this

@@ -1,4 +1,4 @@
-// The game clip MP4 (plans/GAME-CLIPS.md 5.3, 5.4, 10.2): H.264 passthrough
+// The game clip MP4 (CLIPS.md 15.4, 15.5 and 15.13): H.264 passthrough
 // from the replay ring, AAC from the clip mix, the moov box first, the poster.
 // The video is a fixture that libmello's own recording encoder made once
 // (160x96, 30 fps, an IDR every 30 frames with SPS and PPS, no B-frames, an
@@ -335,10 +335,10 @@ TEST(ReplayMux, APosterFromTheMp4IsAJpeg) {
     EXPECT_EQ(soi[0], 0xFF);
     EXPECT_EQ(soi[1], 0xD8) << "a JPEG starts with SOI";
     EXPECT_GT(fs::file_size(jpeg), 500u);
-    EXPECT_LT(fs::file_size(jpeg), 1024u * 1024u) << "under 1 MB (plan G1)";
+    EXPECT_LT(fs::file_size(jpeg), 1024u * 1024u) << "under 1 MB (12-STREAMING.md 3.7, G1)";
 }
 
-// Game clips plan 5.2 and 10.2 (ReplayMuxTime): a 30 s clip at the default
+// CLIPS.md 15.4 and 15.13 (ReplayMuxTime): a 30 s clip at the default
 // quality (720p60 at 5 Mbps: about 10 KB a frame) muxes in under 3 s. The
 // fixture's units are padded with filler NAL units to that size.
 TEST(ReplayMuxTime, ThirtySecondsAtTheDefaultQualityMuxInUnderThreeSeconds) {
@@ -550,7 +550,7 @@ TEST(ReplaySession, AClipOfTheReferenceSourceHasItsFramesAndALivePoster) {
                 static_cast<unsigned long long>(stats.frames_encoded));
 }
 
-// The stream gate's replay lane (plan 10.3): the reference source's game
+// The stream gate's replay lane (CLIPS.md 15.13): the reference source's game
 // audio goes into the clip in place of a process loopback, and the read-back
 // gives the clip's video units and its sound. The reference audio loops with
 // the 2 s clip and clicks once a loop, so the decoded clicks are 2 s apart.
@@ -625,7 +625,7 @@ TEST(ReplaySession, TheReferenceGameAudioIsInTheClipAndReadsBack) {
     }
 }
 
-// Game clips plan 3.2 and 3.5: a stream of the same game starts, and the
+// CLIPS.md 15.3; 14-VIDEO-PIPELINE.md 4.8: a stream of the same game starts, and the
 // replay moves onto the stream's capture and keeps recording while the
 // stream keeps its frames. Before the stream stops, the replay goes back to
 // its own capture and keeps recording. A clip over both switches plays.
@@ -733,7 +733,7 @@ TEST(ReplaySession, DISABLED_RecordsTheGameOfMelloReplayPid) {
     EXPECT_TRUE(ok);
 }
 
-// Game clips plan 3.6, F3: the stream that the replay follows is overloaded
+// 12-STREAMING.md 3.7, F3: the stream that the replay follows is overloaded
 // twice. The replay drops to 30 fps, then pauses, while the stream keeps its
 // frames. A third time the replay has nothing left, and the stream moves its
 // own cost tier. A clip over the pause shows the last frame for the gap.

@@ -1,4 +1,4 @@
-// FEED-12: a game clip (plans/GAME-CLIPS.md 10.5). bob is in voice and plays
+// FEED-12: a game clip (CLIPS.md 15.13). bob is in voice and plays
 // a game. He presses F8, and the crew feed shows the clip card with its
 // poster. The video goes up, and alice plays the clip, pauses it and seeks.
 //
@@ -21,7 +21,7 @@ const GAME_ID = "rocket-league";
 // The clip holds what the ring recorded. The journey presses F8 this long
 // after the replay starts, so the clip has about this much footage.
 const RECORD_MS = 8_000;
-// A clip is at most 30 s (plan 4.1).
+// A clip is at most 30 s (CLIPS.md 15.2).
 const MAX_CLIP_MS = 31_000;
 const FAILURES = ["GameClipFailed", "GameClipUploadFailed"];
 

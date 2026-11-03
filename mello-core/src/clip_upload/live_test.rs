@@ -1,5 +1,5 @@
-//! A live run of the upload against the local stack (plans/GAME-CLIPS.md
-//! 6.5): `post_clip`, the poster, the MP4 parts and both completes through the
+//! A live run of the upload against the local stack (CLIPS.md
+//! 15.8): `post_clip`, the poster, the MP4 parts and both completes through the
 //! real HTTP code, then the public objects with a range request. Ignored: it
 //! needs the local Docker stack with this branch's backend and the seed users.
 //!
@@ -124,7 +124,7 @@ fn a_game_clip_goes_up_to_the_local_stack() {
         assert!(secs >= floor, "{secs:.1} s is faster than the cap allows");
     }
 
-    // The objects are public, immutable and serve byte ranges (plan 6.2).
+    // The objects are public, immutable and serve byte ranges (CLIPS.md 15.9).
     let http = reqwest::blocking::Client::new();
     let resp = http.get(&media_url).send().expect("GET the mp4");
     assert!(

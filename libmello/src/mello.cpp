@@ -711,7 +711,7 @@ MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* confi
 #ifdef _WIN32
     try {
         auto* c = ctx_cast(ctx);
-        // One replay at a time (plans/GAME-CLIPS.md 4.2).
+        // One replay at a time (CLIPS.md 15.2).
         if (auto old = c->exchange_replay(nullptr)) old->stop();
         mello::replay::ReplayConfig rc;
         rc.hwnd = config->hwnd;
@@ -1736,7 +1736,7 @@ MelloStreamHost* mello_stream_start_host(
         stream_timer_resolution_acquire();
 #ifdef _WIN32
         // A game clip replay of the same game moves onto this stream's
-        // capture: one capture per game (plans/GAME-CLIPS.md 3.2). The stream
+        // capture: one capture per game (CLIPS.md 15.3). The stream
         // started exactly as it would without it (F2).
         const auto manager = host->video->shared_capture_manager();
         const uint32_t key = stream_game_key(desc);
@@ -1762,7 +1762,7 @@ void mello_stream_stop_host(MelloStreamHost* host) {
         stream_audio_teardown(host);
 #ifdef _WIN32
         // A replay that follows this stream goes back to its own capture
-        // first, so this stream's capture stops with the stream (Q19).
+        // first, so this stream's capture stops with the stream (14-VIDEO-PIPELINE.md 4.8).
         host->video->set_overload_shedder(nullptr);
         if (const auto mine = host->video->shared_capture_manager()) {
             if (host->ctx->stream_capture().manager.lock() == mine) host->ctx->set_stream_capture({});
@@ -2079,7 +2079,7 @@ void mello_stream_set_native_frame_callback(
     } catch (...) {}
 }
 
-// ---- Game clip player (plans/GAME-CLIPS.md 6.2) ------------------------------
+// ---- Game clip player (CLIPS.md 15.9) ------------------------------
 
 struct MelloClipPlayer {
     std::unique_ptr<mello::clip::ClipPlayer> player;

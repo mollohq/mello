@@ -1,5 +1,5 @@
-//! The delay and rate shim of the streamed playback row (plans/GAME-CLIPS.md
-//! 10.3): an HTTP/1.1 server on 127.0.0.1 that serves one clip file with
+//! The delay and rate shim of the streamed playback row (CLIPS.md
+//! 15.13): an HTTP/1.1 server on 127.0.0.1 that serves one clip file with
 //! range requests, as the local MinIO serves an uploaded clip, through a
 //! link of a fixed rate and delay. std::net only.
 //!
@@ -32,8 +32,8 @@ pub struct Link {
     pub write_bytes: usize,
 }
 
-/// The link of the streamed playback row: 20 Mbps, 50 ms (plan 6.2 and
-/// 10.3).
+/// The link of the streamed playback row: 20 Mbps, 50 ms (CLIPS.md 15.9 and
+/// 15.13).
 pub const PLAYBACK_LINK: Link = Link {
     rate_bps: 20_000_000,
     delay: Duration::from_millis(50),

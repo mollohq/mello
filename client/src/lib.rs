@@ -525,7 +525,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hotkey_mgr
             .borrow()
             .register_clip(callbacks::settings::clip_binding(&s));
-        // The game clip key (plans/GAME-CLIPS.md 4.3). Windows only until
+        // The game clip key (CLIPS.md 15.2). Windows only until
         // the macOS work.
         if cfg!(windows) {
             hotkey_mgr

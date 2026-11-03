@@ -1,4 +1,4 @@
-//! The game clip player in mello-core (plans/GAME-CLIPS.md 6.2): the clip's
+//! The game clip player in mello-core (CLIPS.md 15.9): the clip's
 //! bytes (`range_reader`), libmello's player (`mello_clip_player_*`), and its
 //! state for the UI. The pictures go to the native presenter, as a watched
 //! stream's do, so a clip plays only while no stream is watched.

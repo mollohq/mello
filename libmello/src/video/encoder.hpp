@@ -14,7 +14,7 @@ namespace mello::video {
 
 enum class VideoCodec { H264, AV1 };
 
-/// What the encoded video is for (plans/GAME-CLIPS.md 3.4). A stream follows
+/// What the encoded video is for (14-VIDEO-PIPELINE.md 6.8). A stream follows
 /// the network at the lowest latency. A recording goes to the replay ring and
 /// is read back later: it takes a quality tuning and a longer VBV. Its caller
 /// sets a 1 s GOP and does not ask for IDRs.

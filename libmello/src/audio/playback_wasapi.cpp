@@ -117,7 +117,7 @@ bool WasapiPlayback::initialize(const char* device_id) {
         return false;
     }
 
-    // Optional: the game clip voice uses it (game clips Q20). Playback runs
+    // Optional: the game clip voice uses it (CLIPS.md 15.4). Playback runs
     // without it.
     hr = audio_client_->GetService(__uuidof(ISimpleAudioVolume),
                                    reinterpret_cast<void**>(&session_volume_));

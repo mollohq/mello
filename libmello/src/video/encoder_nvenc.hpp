@@ -36,7 +36,7 @@ public:
         const char*        label;
     };
     /// A stream takes ultra-low latency. A recording takes the high quality
-    /// tuning (game clips plan 3.4), and low latency on a driver without it.
+    /// tuning (14-VIDEO-PIPELINE.md 6.8), and low latency on a driver without it.
     /// Pure, testable without NVIDIA hardware.
     static std::vector<TuningAttempt> tuning_attempts(EncoderIntent intent);
 

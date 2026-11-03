@@ -453,7 +453,7 @@ func TestNoHeroWhenNothingQualifies(t *testing.T) {
 	}
 }
 
-// ---- game clip hero (plans/GAME-CLIPS.md 6.1) ----
+// ---- game clip hero (CLIPS.md 15.6) ----
 
 // typedClipCard is a clip card that carries its StoredClip, as
 // buildMergedTimeline makes it.

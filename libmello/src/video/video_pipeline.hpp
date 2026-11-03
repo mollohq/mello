@@ -208,12 +208,12 @@ public:
     /// until stop_host().
     CaptureManager* capture_manager() const { return manager_.get(); }
     /// The same, for a second consumer that holds it (the game clip replay,
-    /// plans/GAME-CLIPS.md 3.2). Null when not hosting.
+    /// CLIPS.md 15.3). Null when not hosting.
     std::shared_ptr<CaptureManager> shared_capture_manager() const { return manager_; }
 
     /// Another consumer of this capture that gives up its own load before
-    /// this stream gives up quality: the game clip replay (GAME-CLIPS.md
-    /// 3.6, F3). The encode thread calls it when this host is overloaded;
+    /// this stream gives up quality: the game clip replay (12-STREAMING.md
+    /// 3.7, F3). The encode thread calls it when this host is overloaded;
     /// true means the other consumer shed a step, and the cost tier stays
     /// this time. It must return fast. Null: none, and the overload rule is
     /// the stream's own, unchanged. Any thread; a clear waits for a call

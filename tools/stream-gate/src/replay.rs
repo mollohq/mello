@@ -1,4 +1,4 @@
-//! The replay lane (plans/GAME-CLIPS.md 10.3): the game clip buffer records
+//! The replay lane (CLIPS.md 15.13): the game clip buffer records
 //! the reference clip, presses capture 30 s clips, and the gate reads each
 //! clip back. No SFU and no shim: a clip is a file (the streamed playback
 //! row, `playback.rs`, has its own HTTP shim).
@@ -58,7 +58,7 @@ pub const CLIP_S: f32 = 30.0;
 
 /// The presses: name, seconds after the source's first frame. Each window
 /// holds a scene cut of the clip (10 s into each 20 s loop); 47 s is the
-/// plan's case for it. The windows of 60 s and 62 s overlap: the ring pins
+/// case for it. The windows of 60 s and 62 s overlap: the ring pins
 /// the segments of both.
 pub const PRESSES: &[(&str, f64)] = &[
     ("press-35s", 35.0),
@@ -1139,7 +1139,7 @@ fn gate(metric: &str, min: Option<f64>, max: Option<f64>, note: &str) -> Gate {
     }
 }
 
-/// The absolute gates of a reference clip (plan 10.3). `--write-baseline`
+/// The absolute gates of a reference clip (CLIPS.md 15.13). `--write-baseline`
 /// writes them into gates.json; a test keeps the committed file equal.
 pub fn structural_gates(fps: u32) -> Vec<Gate> {
     vec![
@@ -1147,25 +1147,25 @@ pub fn structural_gates(fps: u32) -> Vec<Gate> {
             "duration_s",
             Some(30.0),
             Some(31.0),
-            "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+            "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
         ),
         gate(
             "start_lead_frames",
             Some(0.0),
             Some(f64::from(fps)),
-            "plan 10.3: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
+            "CLIPS.md 15.13: the first frame is the frame captured 30 s before the press, or up to one GOP (1 s) earlier",
         ),
         gate(
             "frames_missing",
             None,
             Some(0.0),
-            "plan 10.3: no missing frame index from the first frame to the last",
+            "CLIPS.md 15.13: no missing frame index from the first frame to the last",
         ),
         gate(
             "frames_out_of_order",
             None,
             Some(0.0),
-            "plan 10.3: every frame index in order",
+            "CLIPS.md 15.13: every frame index in order",
         ),
         gate(
             "frames_unreadable",
@@ -1189,19 +1189,19 @@ pub fn structural_gates(fps: u32) -> Vec<Gate> {
             "av_offset_abs_max_ms",
             None,
             Some(20.0),
-            "plan 10.3: game audio burst to video frame offset within +-20 ms for every marker",
+            "CLIPS.md 15.13: game audio burst to video frame offset within +-20 ms for every marker",
         ),
     ]
 }
 
-/// The gates of the loopback row (plan 10.3, real loopback source).
+/// The gates of the loopback row (CLIPS.md 15.13, real loopback source).
 pub fn loopback_gates() -> Vec<Gate> {
     vec![
         gate(
             "duration_s",
             Some(30.0),
             Some(31.0),
-            "plan 3.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
+            "CLIPS.md 15.4: a 30 s clip from the key frame at or before its start is 30 to 31 s long",
         ),
         gate(
             "loopback_bursts_missing",
@@ -1213,7 +1213,7 @@ pub fn loopback_gates() -> Vec<Gate> {
             "loopback_offset_abs_max_ms",
             None,
             Some(20.0),
-            "plan 10.3: a real process loopback, burst onset to the frame captured then within +-20 ms",
+            "CLIPS.md 15.13: a real process loopback, burst onset to the frame captured then within +-20 ms",
         ),
     ]
 }

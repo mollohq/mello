@@ -439,9 +439,9 @@ pub enum Command {
         seconds: f32,
     },
     /// F8: the last 30 s of the game, from the replay buffer, as an MP4 with
-    /// a poster (plans/GAME-CLIPS.md 5.3). Runs on the replay worker thread.
+    /// a poster (CLIPS.md 15.4). Runs on the replay worker thread.
     CaptureGameClip,
-    /// The Settings section "Game clips" (plans/GAME-CLIPS.md 7). Sent at
+    /// The Settings section "Game clips" (CLIPS.md 15.10). Sent at
     /// startup, on each change and on reset. Off stops the replay and
     /// deletes its ring.
     SetGameClips {
@@ -449,7 +449,7 @@ pub enum Command {
         #[serde(default)]
         quality: crate::events::GameClipQuality,
     },
-    /// Play a game clip in the player (plans/GAME-CLIPS.md 6.2): its URL, or
+    /// Play a game clip in the player (CLIPS.md 15.9): its URL, or
     /// the clipper's own file. Not while a stream is watched.
     PlayGameClip {
         source: String,
@@ -462,7 +462,7 @@ pub enum Command {
     },
     CloseGameClip,
     /// Post a captured game clip to the crew and upload it in the background
-    /// (plans/GAME-CLIPS.md 6.3). The fields are those of `GameClipCaptured`.
+    /// (CLIPS.md 15.7). The fields are those of `GameClipCaptured`.
     ShareGameClip {
         crew_id: String,
         clip_id: String,

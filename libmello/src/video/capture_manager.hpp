@@ -27,12 +27,12 @@ struct CapturedFrame {
     uint32_t swap_generation = 0;
     /// The frame shows only the capture target, not a monitor
     /// (`CaptureSource::frames_show_only_target`). The game clip replay drops
-    /// the others (plans/GAME-CLIPS.md 3.3).
+    /// the others (CLIPS.md 15.3).
     bool target_only = true;
 };
 
 /// The capture of one target, given to every consumer that encodes it
-/// (plans/GAME-CLIPS.md section 3.5).
+/// (14-VIDEO-PIPELINE.md 4.8).
 ///
 /// The manager owns the graphics device, the capture source and the
 /// present-to-capture histogram. A consumer (the stream host's

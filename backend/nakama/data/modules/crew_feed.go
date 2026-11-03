@@ -923,7 +923,7 @@ func fillerRole(c feedCard) string {
 //     this list starts at the next item.
 //  2. a belt that moved in the last 24 h (the head2head card, see beltMovedHeroIndex)
 //  3. a stream preview (session-preview) from the last 24 h
-//  4. a game clip with a poster from the last 24 h (plans/GAME-CLIPS.md 6.1, Q7)
+//  4. a game clip with a poster from the last 24 h (CLIPS.md 15.6)
 //  5. a real recap, on Monday
 //  6. the best session
 //

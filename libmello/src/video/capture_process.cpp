@@ -301,7 +301,7 @@ static bool process_in_exclusive_fullscreen(uint32_t pid) {
 // --- ProcessCapture ---
 
 /// The hook and WGC window show only the game. WGC monitor and DXGI show the
-/// whole monitor, which the game clip replay never records (GAME-CLIPS.md 3.3).
+/// whole monitor, which the game clip replay never records (CLIPS.md 15.3).
 static bool step_shows_only_target(LadderStep step) {
     return step == LadderStep::Hook || step == LadderStep::WgcWindow;
 }

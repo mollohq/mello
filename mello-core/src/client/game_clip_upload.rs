@@ -5,7 +5,7 @@
 use crate::clip_upload::{PendingClip, UploadWorker};
 
 impl super::Client {
-    /// Each sign-in. Game clips are Windows only until the macOS work (plan 9.2).
+    /// Each sign-in. Game clips are Windows only until the macOS work (CLIPS.md 15.14).
     pub(super) fn start_clip_uploads(&mut self) {
         if !cfg!(windows) {
             return;

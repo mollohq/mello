@@ -19,15 +19,15 @@ class OpusEnc;
 using util::RingFile;
 
 // Rolling disk buffer of the voice for voice clips (F7, CLIPS.md section 4)
-// and game clips (F8, plans/GAME-CLIPS.md 5.1).
+// and game clips (F8, CLIPS.md 15.4).
 //
 // Two streams, each 20 ms Opus frames in a ring file of fixed slots on disk,
 // the oldest frame overwritten:
 // - the crew mix as the user heard it, from the render thread, with the time
 //   it played (render time plus output latency) and m3llo's volume in the
-//   Windows volume mixer (game clips Q20);
+//   Windows volume mixer (CLIPS.md 15.4);
 // - the local mic after the echo canceller, from the capture thread, with its
-//   capture time (game clips Q24).
+//   capture time (CLIPS.md 15.4).
 // Each producer hands its samples and their time to a small RAM queue (2 s).
 // A writer thread encodes them into the ring files. The time of each frame
 // travels with its samples and is stored in its slot.

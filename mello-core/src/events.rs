@@ -88,7 +88,7 @@ pub enum StreamRole {
 }
 // --- end stage 6 ---
 
-/// The state of the game clip replay buffer (plans/GAME-CLIPS.md 4).
+/// The state of the game clip replay buffer (CLIPS.md 15.2).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum GameClipState {
@@ -105,11 +105,11 @@ pub enum GameClipState {
     /// The replay cannot run for this game (`reason` says why).
     Unavailable,
     /// The buffer folder has under 2 GB free: no replay until the disk has
-    /// space again (plan 4.1).
+    /// space again (CLIPS.md 15.2).
     DiskLow,
 }
 
-/// The clip quality of the Settings section (plans/GAME-CLIPS.md 7).
+/// The clip quality of the Settings section (CLIPS.md 15.10).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum GameClipQuality {
     #[serde(rename = "1080p60")]
@@ -139,7 +139,7 @@ impl GameClipQuality {
     }
 
     /// Height, frame rate and bitrate (kbps). The bitrates are the estimates
-    /// of plan 6.3 until the replay lane sets them (plan 3.4).
+    /// of CLIPS.md 15.7 until the replay lane sets them (14-VIDEO-PIPELINE.md 6.8).
     pub fn encoding(self) -> (u32, u32, u32) {
         match self {
             Self::P1080Fps60 => (1080, 60, 8000),
@@ -668,7 +668,7 @@ pub enum Event {
     ClipCaptureFailed {
         reason: String,
     },
-    /// The game clip replay buffer changed state (plans/GAME-CLIPS.md 4).
+    /// The game clip replay buffer changed state (CLIPS.md 15.2).
     /// `reason` says why it is off or not available, for the HUD toast.
     GameClipStateChanged {
         state: GameClipState,
@@ -697,7 +697,7 @@ pub enum Event {
         clip_id: String,
         reason: String,
     },
-    /// The game clip player's state (plans/GAME-CLIPS.md 6.2): when a flag
+    /// The game clip player's state (CLIPS.md 15.9): when a flag
     /// changes, and as the position moves.
     GameClipPlayback {
         position_ms: u64,

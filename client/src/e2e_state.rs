@@ -172,7 +172,7 @@ struct Snapshot {
     feed_cards: Vec<FeedCardSnap>,
     /// The clip that plays in the feed.
     clip: ClipSnap,
-    /// The game clip player over the feed (plans/GAME-CLIPS.md 6.2).
+    /// The game clip player over the feed (CLIPS.md 15.9).
     game_clip_player: GameClipPlayerSnap,
     /// The head2head card of the feed (the first one), if any.
     head2head: Head2headSnap,

@@ -51,7 +51,7 @@ public:
     /// host audio pipeline and its stream host peer (stream_audio_link.hpp).
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link() const { return stream_audio_link_; }
 
-    /// The game clip replay (F8), one at a time (plans/GAME-CLIPS.md 4.2).
+    /// The game clip replay (F8), one at a time (CLIPS.md 15.2).
     /// A capture holds its own reference, so a stop during a capture lets
     /// the capture finish. Any thread.
     std::shared_ptr<replay::ReplaySession> replay() const {
@@ -67,7 +67,7 @@ public:
 
 #ifdef _WIN32
     /// The capture of the running stream host, so a replay of the same game
-    /// that starts later joins it (plans/GAME-CLIPS.md 3.5). `key` is the
+    /// that starts later joins it (14-VIDEO-PIPELINE.md 4.8). `key` is the
     /// game (ReplaySession::game_key). Weak: the stream owns its capture.
     struct StreamCapture {
         std::weak_ptr<video::CaptureManager> manager;
@@ -84,7 +84,7 @@ public:
     }
 
     /// The game audio of `pid`, shared by the stream host and the game clip
-    /// replay: one process loopback per game (GAME-CLIPS.md 3.6, F7). While
+    /// replay: one process loopback per game (12-STREAMING.md 3.7, F7). While
     /// one holder lives, a second call returns the same capture. Null when
     /// Windows has no process loopback. Any thread.
     std::shared_ptr<audio::SharedGameAudio> game_audio(uint32_t pid);

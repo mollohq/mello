@@ -309,7 +309,7 @@ export component MainWindow inherits Window {
     in property <string> clip-key-label: "";
     in property <string> settings-clip-key-warning: "";
     in-out property <bool> settings-clip-binding: false;
-    /// Game clips (plans/GAME-CLIPS.md 7): Windows only until the macOS work.
+    /// Game clips (CLIPS.md 15.10): Windows only until the macOS work.
     in property <bool> game-clips-available: false;
     in-out property <bool> settings-game-clips-enabled: true;
     in property <[AudioDeviceData]> settings-game-clip-qualities: [];
@@ -1168,7 +1168,7 @@ export component MainWindow inherits Window {
                         // --- end stage 9 ---
 
                         // A game clip plays over the feed area
-                        // (plans/GAME-CLIPS.md 6.2).
+                        // (CLIPS.md 15.9).
                         if ClipPlayerUi.open: ExpandedClipPlayer {
                             width: parent.width;
                             height: parent.height;

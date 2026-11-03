@@ -555,6 +555,41 @@ Measured on the laptop (2026-11-01, a 120 Hz game window, 720p60, 5 Mbps):
 | NVENC through GL, shared memory | 62% | 60 |
 | OpenH264, shared memory | 79% | 60 |
 
+### 3.7 Game clips beside a stream
+
+The game clip replay (CLIPS.md §15) runs while the user is in voice and plays
+a game, also while the user streams. The rule: the replay must not affect a
+stream that the user runs. Each place where the replay meets a stream has a
+rule.
+
+| # | Where | Rule as built |
+|---|---|---|
+| F1 | The capture rate | The replay of the streamed game is a consumer of the stream's `CaptureManager` (14-VIDEO-PIPELINE.md §4.8). It records at min(replay rate, stream rate) and never raises the capture rate. |
+| F2 | A stream starts while the replay runs | The stream runs its ladder exactly as without the replay. Then the replay follows the stream's capture (`follow_stream`). It drops each frame that shows a monitor (`target_only` false) and reports Waiting. |
+| F3 | Overload | The replay sheds first. `ReplayLoad` (`replay/replay_load.hpp`) has three levels: full rate, 30 fps, paused. The stream's overload check (`VideoPipeline::maybe_reduce_encoder_cost`, once per 60 frames) first calls the overload shedder that `mello_stream_start_host` sets: a replay that follows the stream gives up one level, and the stream keeps its tier. The stream's tier moves only when the replay is paused. Without a replay the stream's rule is unchanged. After 60 s with no overload the replay goes one level back up. The ring keeps its content over a pause. |
+| F4 | Upload | A game clip uploads during the stream, at a budget that the stream's quality controller sets (G1 to G8 below). |
+| F5 | A replay fault | An encoder, convert or ring error turns off the replay only. The replay never moves the ladder and never sets `device_poisoned_`. A device that the GPU removed ends both. |
+| F6 | The poster readback | The copy to a staging texture is a submit on the capture thread, with no wait. The map and the JPEG run on the mux worker. |
+| F7 | Game audio | One process loopback per game: `SharedGameAudio` (`audio/shared_game_audio.cpp`), kept per pid by the context (`Context::game_audio`). The stream host's audio pipeline and the replay take their game audio from it. On a Windows without process loopback the stream host keeps its own capture with the endpoint fallback; the replay then has no game audio. |
+| F8 | Gates | Not built yet: a stream gate case with a replay on the same manager, an F8 press, a forced overload and a pause (CLIPS.md §15.14). |
+
+**The upload during a stream.** `UploadGovernor`
+(`mello-core/src/stream/upload_budget.rs`) turns the stream's state into an
+upload budget after each update of the quality controller. `StreamManager` holds an `UploadPaceHold`
+for the whole stream: the upload pauses at the stream start, and every way
+out of a stream gives the pace back to the game rule.
+
+| # | Rule |
+|---|---|
+| G1 | The poster uploads at once in every state, at 1 Mbps or more (`POSTER_FLOOR_BPS`). It is under 1 MB. |
+| G2 | Budget = min(1 Mbps, 25 % of the headroom), where the headroom is the goog_cc target minus the encoder bitrate (`MAX_BPS`, `HEADROOM_PERCENT`). |
+| G3 | The budget is 0 (the upload pauses) under the top rung, on an overload, and when the goog_cc target is under the stream's bitrate. The upload goes on after 15 s at the top rung with no trouble (`RESUME_HOLD`, the controller's own rung-up hold). |
+| G4 | No goog_cc target yet, or a target at 95 % or more of the preset (the target is capped at the preset, so it cannot show headroom): a fixed 500 kbps (`FIXED_BPS`). |
+| G5 | The pace reader (`clip_upload/pace.rs`) gives at most one 16 KB write at a time and keeps no credit from an idle time. One connection. The socket send buffer is not set: reqwest has no option for it. |
+| G6 | S3 multipart in 5 MiB parts, each a presigned `UploadPart` with a signed `Content-Length`. A pause of 10 s ends the part in flight (`PAUSE_ABORT`), so a pause costs at most that part. |
+| G7 | Gate: not built yet (CLIPS.md §15.14). |
+| G8 | With a game and no stream: 3 Mbps (`GAME_RATE_BPS`). No game: no cap. |
+
 ---
 
 ## 4. Stream Manager (Host-side Rust)

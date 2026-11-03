@@ -1934,7 +1934,7 @@ component GamesTab inherits VerticalLayout {
     callback riot-connect-clicked();
     callback riot-disconnect-clicked();
 
-    // Game clips (plans/GAME-CLIPS.md 7). Windows only until the macOS work.
+    // Game clips (CLIPS.md 15.10). Windows only until the macOS work.
     in property <bool> game-clips-available: false;
     in-out property <bool> game-clips-enabled: true;
     in property <[AudioDeviceData]> game-clip-qualities: [];
@@ -2992,7 +2992,7 @@ export component SettingsModal inherits Rectangle {
     in-out property <bool> clip-binding: false;
     callback clip-key-captured(string, bool, bool, bool, bool);
 
-    // Game clips (plans/GAME-CLIPS.md 7): the Games section and the Keybinds
+    // Game clips (CLIPS.md 15.10): the Games section and the Keybinds
     // row. Windows only until the macOS work.
     in property <bool> game-clips-available: false;
     in-out property <bool> game-clips-enabled: true;

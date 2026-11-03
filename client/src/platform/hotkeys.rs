@@ -24,7 +24,7 @@ pub struct PttBinding {
 /// storage format of `Settings::clip_key`. Keybinds in Settings changes it.
 pub const DEFAULT_CLIP_KEY: &str = "F7";
 
-/// The game clip key (plans/GAME-CLIPS.md 4.3), in the same format. Windows
+/// The game clip key (CLIPS.md 15.2), in the same format. Windows
 /// only until the macOS work; a Settings row comes with todo
 /// `client-key-settings`.
 pub const DEFAULT_GAME_CLIP_KEY: &str = "F8";
@@ -501,7 +501,7 @@ fn start_listener(
     game_clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if super::linux_shortcuts::wayland_session() {
-        // Game clips are Windows only (plans/GAME-CLIPS.md 9.2): the portal
+        // Game clips are Windows only (CLIPS.md 15.14): the portal
         // binds no game clip key.
         drop(game_clip_tx);
         super::linux_shortcuts::start(binding, active, event_tx, clip_binding, clip_tx)
@@ -649,7 +649,7 @@ fn start_rdev_listener(
             // The PTT state resets while PTT is off; the clip key keeps its own.
             let mut clip_mods = ModifierState::default();
             let mut clip_held = false;
-            // The game clip key keeps its own held state (GAME-CLIPS.md 4.3).
+            // The game clip key keeps its own held state (CLIPS.md 15.2).
             let mut game_clip_held = false;
 
             if let Err(e) = rdev::listen(move |event| {

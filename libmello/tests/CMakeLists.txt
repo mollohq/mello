@@ -220,8 +220,8 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
 endif()
 
 
-# Game clips step 2a: a manual probe of WASAPI process loopback on a running
-# game (plans/GAME-CLIPS.md section 0.3). Not a test; ctest does not run it.
+# Game clips: a manual probe of WASAPI process loopback on a running
+# game (CLIPS.md 15.12). Not a test; ctest does not run it.
 if(WIN32)
     add_executable(mello_loopback_probe loopback_probe.cpp)
     target_include_directories(mello_loopback_probe PRIVATE
@@ -232,7 +232,7 @@ if(WIN32)
     target_link_libraries(mello_loopback_probe PRIVATE mello ole32)
 
     # The real loopback row of the stream gate's replay lane: a 1 kHz tone in
-    # bursts, with each onset on the steady clock (plans/GAME-CLIPS.md 10.3).
+    # bursts, with each onset on the steady clock (CLIPS.md 15.13).
     # Not a test; ctest does not run it.
     add_executable(mello_tone_player tone_player.cpp)
     target_compile_definitions(mello_tone_player PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)

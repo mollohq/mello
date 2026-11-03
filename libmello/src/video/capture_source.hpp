@@ -182,7 +182,7 @@ public:
     /// True when the frames show only the capture target (a window, a game, a
     /// clip). False when they show a monitor: the desktop, other windows and
     /// notifications. The game clip replay records only target frames
-    /// (plans/GAME-CLIPS.md 3.3). ProcessCapture answers for the method that
+    /// (CLIPS.md 15.3). ProcessCapture answers for the method that
     /// delivers now, so a consumer reads it during its frame callback.
     virtual bool frames_show_only_target() const { return true; }
 

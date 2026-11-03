@@ -116,7 +116,7 @@ fn reference_clip() -> Option<std::path::PathBuf> {
 }
 
 /// The replay of a fake game: the reference clip in place of the game's
-/// window, which a fake game does not have (plans/GAME-CLIPS.md 10.5).
+/// window, which a fake game does not have (CLIPS.md 15.13).
 pub(crate) fn start_reference_replay(
     ctx: *mut mello_sys::MelloContext,
     config: &mello_sys::MelloReplayConfig,

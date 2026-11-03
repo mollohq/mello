@@ -18,8 +18,8 @@ struct AudioChunkRef {
     uint32_t frames = 0;      ///< valid frames, at most kChunkFrames
 };
 
-/// The rolling game audio buffer of the game clip replay (plans/GAME-CLIPS.md
-/// 5.2): 48 kHz stereo int16 PCM in a ring file of 10 ms chunks, with the
+/// The rolling game audio buffer of the game clip replay (CLIPS.md
+/// 15.4): 48 kHz stereo int16 PCM in a ring file of 10 ms chunks, with the
 /// capture time of each chunk.
 ///
 /// The audio thread hands packets of any size to a bounded RAM queue. The

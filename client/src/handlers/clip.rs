@@ -2069,7 +2069,7 @@ fn daily_recap_rows(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::Da
         .collect()
 }
 
-/// The card fields of a game clip (plans/GAME-CLIPS.md 6.1). The clipper's
+/// The card fields of a game clip (CLIPS.md 15.6). The clipper's
 /// PC has the files: it shows its poster and plays its clip at once. The
 /// crew shows the poster when it is up, and plays when the video is up.
 #[derive(Debug, Default, PartialEq)]

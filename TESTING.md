@@ -467,7 +467,7 @@ OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
 
 ### Replay gate (game clips)
 
-The replay lane of the stream gate (plans/GAME-CLIPS.md 10.3,
+The replay lane of the stream gate (CLIPS.md 15.13,
 `tools/stream-gate/src/replay.rs`). The same clip and game audio play into
 the replay buffer in place of a game window
 (`mello_test_replay_start_reference`). Presses at 35 s, 47 s, 60 s and 62 s
@@ -552,8 +552,8 @@ Info metrics split the numbers: `playback_open_ms` (the first range),
 `<lane>/playback/`: `frames.csv` (each shown frame: present time, code,
 unit), `state.csv`, `requests.csv` (the shim's responses), `read_waits.csv`
 and `reads.csv` (the player's read calls). The load guard covers the two
-plays over HTTP. The plan serves the clip from local MinIO; the row serves
-the file from the shim (plan 10.3 says why).
+plays over HTTP. The journey plays a clip from local MinIO; the row serves
+the file from the shim, which gives the row a fixed link.
 
 ### Stream start, watch and reconnect (streaming-quality stage 6)
 

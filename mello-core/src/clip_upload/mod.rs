@@ -1,4 +1,4 @@
-//! The game clip upload (plans/GAME-CLIPS.md 6.3 to 6.5). F8 writes an MP4
+//! The game clip upload (CLIPS.md 15.7 and 15.8). F8 writes an MP4
 //! and a poster to disk. This module posts the clip to the crew and puts both
 //! files in the bucket, in the background, while the game runs.
 //!

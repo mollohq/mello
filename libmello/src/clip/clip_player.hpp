@@ -1,6 +1,6 @@
 #pragma once
 
-// The game clip player (plans/GAME-CLIPS.md 6.2): an MP4 that plays from its
+// The game clip player (CLIPS.md 15.9): an MP4 that plays from its
 // first bytes, read through a callback (mello-core's range reader, or a file).
 //
 //   read callback --> byte stream --> Media Foundation demux (own thread)
@@ -65,7 +65,7 @@ struct ClipPlayerState {
 
 /// The `buffering` of the state. With sound, the sound's stall rule says when
 /// play waits: a read that waits while the sound plays on is the source
-/// reading ahead, not a stall (plans/GAME-CLIPS.md 10.3). Without sound, a
+/// reading ahead, not a stall (CLIPS.md 15.13). Without sound, a
 /// read that waits is the only sign.
 inline bool reports_buffering(bool stalled, bool has_audio, bool read_waits, bool ended) {
     return (stalled || (!has_audio && read_waits)) && !ended;

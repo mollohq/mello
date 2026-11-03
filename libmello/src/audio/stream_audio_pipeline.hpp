@@ -37,7 +37,7 @@ public:
 
 #ifdef _WIN32
     /// The game audio capture of the streamed game, shared with the game
-    /// clip replay (GAME-CLIPS.md 3.6, F7). Before start(). When it is the
+    /// clip replay (12-STREAMING.md 3.7, F7). Before start(). When it is the
     /// game of `capture_pid`, start() takes the audio from it and opens no
     /// loopback of its own; else, or with none, start() works as before.
     void set_shared_game_audio(std::shared_ptr<class SharedGameAudio> shared);

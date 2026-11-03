@@ -1,4 +1,4 @@
-// Game clips step 2a (plans/GAME-CLIPS.md section 0.3): measure WASAPI
+// Game clips (CLIPS.md 15.12): measure WASAPI
 // process loopback on a running game before the replay ring depends on it.
 //
 // Opens the stream host's loopback (WasapiLoopbackCapture, include the target

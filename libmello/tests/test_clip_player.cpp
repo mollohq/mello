@@ -1,4 +1,4 @@
-// The game clip player (plans/GAME-CLIPS.md 6.2): an MP4 that plays from
+// The game clip player (CLIPS.md 15.9): an MP4 that plays from
 // its first bytes, the picture on the sound's clock.
 //
 // The clip is made here with the game clip mux from the H.264 fixture of

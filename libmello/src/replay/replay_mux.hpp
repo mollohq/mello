@@ -7,7 +7,7 @@
 
 namespace mello::replay {
 
-/// What the mux needs for one game clip (plans/GAME-CLIPS.md 5.3, 5.4).
+/// What the mux needs for one game clip (CLIPS.md 15.4 and 15.5).
 struct ClipMuxInput {
     /// Access units in decode order. The first one is an IDR with SPS and
     /// PPS. The clip's time zero is the capture time of the first one.
@@ -44,7 +44,7 @@ bool write_poster_jpeg(const uint8_t* bgra, uint32_t width, uint32_t height, uin
 
 /// Write a JPEG of the frame of `mp4` at or after `time_us` from the start of
 /// the clip, decoded once. The poster when no frame came after the press: a
-/// minimized game (plan 5.3).
+/// minimized game (CLIPS.md 15.4).
 bool write_poster_from_mp4(const std::filesystem::path& mp4, uint64_t time_us,
                            const std::filesystem::path& jpeg);
 

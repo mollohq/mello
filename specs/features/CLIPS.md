@@ -2,7 +2,7 @@
 
 > **Component:** Crew Memory, Clips, Crew Feed  
 > **Version:** 1.0  
-> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim; dot-matrix waveform clip cards landed; next-generation feed phase 2 landed: hero priority, empty-card rule, skeleton trio)  
+> **Status:** v1 In Progress (durable crew memory landed: clips and recaps persist outside the ledger trim; dot-matrix waveform clip cards landed; next-generation feed phase 2 landed: hero priority, empty-card rule, skeleton trio; game clips (F8) built on Windows, section 15)  
 > **Depends on:** CREW-EVENT-LEDGER.md, 13-VOICE-CHANNELS.md  
 > **Mockups:** m3llo-crew-feed-mockup-v4.html (populated), m3llo-crew-feed-cold-start-full.html (empty)
 
@@ -66,6 +66,13 @@ This is the hero clip type. A friend hits a clutch play, you tap clip, and you h
 
 **Not in v1.** Ships in a later phase once streaming is stable.
 
+### 3.3 Game Clip (F8)
+
+The user's own game: the last 30 seconds of the game video, the game audio,
+the crew voice and the user's mic, in one MP4. A replay buffer records while
+the user plays and is in voice, also without a stream. Clip type `game`.
+Built on Windows. Section 15 has the whole design.
+
 ---
 
 ## 4. Rolling Disk Buffer
@@ -85,7 +92,7 @@ Voice written to temp files as Opus packets, in two streams. 60 seconds of both 
 - The ring files (`voice_ring_*`, `voice_mic_*`) are in the `mello_clips` folder of the OS temp folder. They are opened delete on close (Windows) or unlinked after open (macOS), so a crash leaves no file.
 - A write error turns the buffer off.
 
-On clip capture: the buffer encodes what is still in the queues, reads the last 30 seconds of slots of both streams, decodes them, and mixes them at their own times (the Opus lookahead taken out) into a WAV. The clip flow muxes that into an MP4 container. A game clip (F8) reads the same window with `read_window`, and the mux applies the mixer volume to the crew mix (plans/GAME-CLIPS.md 5.1, Q20, Q24).
+On clip capture: the buffer encodes what is still in the queues, reads the last 30 seconds of slots of both streams, decodes them, and mixes them at their own times (the Opus lookahead taken out) into a WAV. The clip flow muxes that into an MP4 container. A game clip (F8) reads the same window with `read_window`, and the mux applies the mixer volume to the crew mix (section 15.4).
 
 ### 4.2 Stream Buffer (Future)
 
@@ -107,8 +114,7 @@ Sequential write throughput needed: ~0.6MB/s for stream buffers, negligible for 
 - Buffer temp file created when the user joins a voice channel or starts watching a stream
 - Written to continuously as a fixed-size ring file, oldest data overwritten
 - Deleted immediately when the user leaves voice or stops watching
-- Default location: OS temp directory
-- Configurable in settings (for gamers who want it on a specific drive)
+- Location: the `mello_clips` folder of the OS temp folder. It is not a setting: the app picks the folder.
 - If disk is critically full (< 100MB free), disable buffering gracefully and hide the clip button
 
 ### 4.5 Memory Impact
@@ -248,6 +254,7 @@ Center shows the **Crew Feed**: a bento grid layout with mixed-size cards, newes
 Card types in the bento grid:
 
 - **Clip card** — single cell, always the standard size. Grey label, ring and dots; an unread clip wears red. Dot-matrix waveform, play ring, clip badge, duration, who clipped it, game tag, participant avatars, timestamp. Tap the wave to play from that point; drag to scrub. A voice clip is never the hero and never takes the wide cell.
+- **Game clip card** — footage of the clipper's own game, with the m3llo play button. See section 15.6. A game clip with a poster can be the hero.
 - **Stream preview card** — a finished stream with snapshots. Feed type `session-preview`, drawn by `SessionPreviewCard`. See [STREAM-SNAPSHOTS-CLIENT.md](./STREAM-SNAPSHOTS-CLIENT.md) sections 3.1 and 4. It leads the feed for 24 hours (see hero priority).
   - As the hero (frame C) the card is footage edge to edge in two columns and two rows, cut at the top right. A STREAM tag sits at the top left. A play ring (56 px, white outline, black disc) sits at 46 % of the height. The snapshot plays from the ring, so the card has no filled white button.
   - Bottom left: the time word in capitals ("YESTERDAY"), the title in Oxanium 28 px, then the streamer octagon, the streamer name, the game and "N watched". Bottom right: the length ("1 h 12 min") on a black chip.
@@ -296,9 +303,10 @@ The server picks the hero of `this_week` in this order. The first item that exis
 
 1. A live stream. The client shows it above the feed. The server order starts at the next item.
 2. A stream preview from the last 24 hours. The best one by quality score.
-3. A belt that moved in the last 24 hours. The head2head entry is the hero (HEAD2HEAD.md section 5). `beltMovedHeroIndex` stays an empty hook: the client builds the card.
-4. A real recap, on Monday (UTC), while the recap is under 24 hours old.
-5. The best session: the best stream preview of any age.
+3. A game clip with a poster from the last 24 hours. The newest one (`freshGameClipHeroIndex`). A voice clip is never the hero.
+4. A belt that moved in the last 24 hours. The head2head entry is the hero (HEAD2HEAD.md section 5). `beltMovedHeroIndex` stays an empty hook: the client builds the card.
+5. A real recap, on Monday (UTC), while the recap is under 24 hours old.
+6. The best session: the best stream preview of any age.
 
 If no item exists, the feed has no hero. The latest recap then takes its own pinned slot as before.
 
@@ -486,9 +494,10 @@ Voice sessions, stream sessions, game sessions, chat activity summaries. These a
 
 Clip metadata is durable, stored in its own per-crew document `crew_clips/{crew_id}` (capped at most-recent 250). Each `StoredClip` carries:
 
-- event_id (time-sortable, used as the pagination cursor), clip_id, clip_type (voice, stream in future)
+- event_id (time-sortable, used as the pagination cursor), clip_id, clip_type (voice, game; stream in future)
 - media_url (populated after S3 upload by `clip_upload_complete`)
-- local_path (clipper's machine)
+- local_path (clipper's machine). Only the clipper's client uses it: the client compares `actor_id` with the viewer (`game_clip_fields` in `client/src/handlers/clip.rs`). Two clients on one PC share the temp folder, so a file that exists is not proof.
+- a game clip also: width, height, has_voice, poster_url (section 15.8)
 - participants + participant_names (at clip time)
 - game (if detected via game sensing)
 - duration_seconds, actor_id (clipper), ts, score
@@ -507,7 +516,7 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 ### 11.4 Retrieval
 
 - `crew_feed` RPC is the curated primary feed. Curation lives server-side: the server decides which items appear, their order, and each item's role and size. It returns two sections:
-  - `this_week`: the curated recent feed (replaces the client-side bento ordering). Hero precedence is in section 7.1 (`heroIndex` in `crew_feed.go`). A clip is never the hero and never gets the wide size. The latest recap is pinned, then the daily recaps, then diversity/priority fillers capped at 7 slots with one wide/lg promotion. Empty cards are dropped first (`cardHasContent`).
+  - `this_week`: the curated recent feed (replaces the client-side bento ordering). Hero precedence is in section 7.1 (`heroIndex` in `crew_feed.go`). A voice clip is never the hero and never gets the wide size. A game clip can be the hero (section 7.1). The latest recap is pinned, then the daily recaps, then diversity/priority fillers capped at 7 slots with one wide/lg promotion. Empty cards are dropped first (`cardHasContent`).
   - `memory`: the durable spine of older recaps, clips, and stream replays not already shown this week, returned as a bounded first page (currently 60 entries), with the server-emitted `locked` m3llo+ upsell pinned at the end when the viewer is not premium.
   - Each entry is `{ id, type, role, size, ts, data }`. `type` is the data kind (clip | recap | daily-recap | session-preview | session | recent-games | head2head); `role` (hero | standard | quiet | recap | locked) and `size` (sm | md | lg) are the curation knobs tuned server-side. `data` is the existing typed payload; clients keep their own text formatting and ignore unknown type/role/size values. The role/size weights and the quiet-type set are a server config block (`crew_feed.go`), changeable without a client release.
 - `crew_timeline` RPC is the raw paginated source (merged 7-day ledger + recent clips + latest recap, newest-first, cursor-based). Used for deep scroll.
@@ -541,6 +550,7 @@ Stream sessions stay in the ledger for the recent window, but a lean projection 
 - All card types: clip, stream preview, session, daily recap, now playing, recent games, weekly recap
 - Cold-start skeleton trio and invite line
 - Contextual center view (feed vs active stream)
+- Game clips (F8) on Windows: replay buffer, MP4, upload, card, streamed playback (section 15)
 
 **Backend:**
 - `post_clip` RPC storing clip metadata in the durable `crew_clips/{crew_id}` store (capped at most-recent 250)
@@ -574,6 +584,354 @@ Social-ready vertical video (9:16). Branded frame, m3llo watermark. GPU-accelera
 
 ### m3llo+
 Subscription flow. Permanent cloud retention. Crew boost. Retention expiry notifications. Full crew feed history.
+
+---
+
+## 15. Game Clips (F8)
+
+Built on Windows. macOS and the other open items are in section 15.14.
+
+### 15.1 What F8 Does
+
+F8 saves the last 30 seconds of the user's own game as one MP4:
+
+- the game video,
+- the game audio,
+- the crew voice that the user heard, and the user's own mic.
+
+A replay buffer records while the user plays and is in voice, also when the
+user does not stream. It works like a ShadowPlay replay buffer. A game clip is
+clip type `game`. It is not the stream clip of section 3.2: a stream clip is a
+viewer's clip of a crew member's stream.
+
+| Key | Clip | Needs |
+|---|---|---|
+| F7 | Voice clip, audio only (section 3.1) | Voice, mic access |
+| F8 | Game clip: video, game audio, voice | Voice, and the replay records (section 15.2) |
+
+The key is the only trigger. Auto highlights (a clip that game telemetry
+starts) need a way to ask the user first. They are a later iteration
+(section 15.14).
+
+### 15.2 When the Replay Runs
+
+The replay worker (`mello-core/src/client/replay.rs`) runs one replay at a
+time. It records when all of these are true:
+
+| Condition | Source |
+|---|---|
+| The setting "Game clips" is on. Default: on. | `Settings::game_clips_enabled` |
+| The user is in voice. A game clip always has the crew voice. | The voice session |
+| Game sensing reports a game | The primary game: the foreground game, else a fullscreen game, else the oldest game |
+| The OS temp folder has 2 GB free | Checked every 10 s. The replay's own ring files count as free (`RING_ALLOWANCE`, 128 MB), so a start at just over 2 GB does not stop itself. |
+| A hardware encoder exists | `EncoderFactory`. No software encoder (14-VIDEO-PIPELINE.md §6.7). |
+| WGC window capture delivers frames of the game | Section 15.3. The exclusive-fullscreen check does not turn the replay off: WGC window captured CS2 in exclusive fullscreen. |
+
+| Event | Action |
+|---|---|
+| A game starts and the rules hold, or the user joins voice while a game runs | Start the replay. |
+| The user leaves voice, the game exits, or the setting goes off | Stop. The ring files go. |
+| Another game is the primary game for 10 s | The replay moves to it (`SWITCH_HOLD`, `GameHold`). An alt-tab between two games does not restart it. An exit takes effect at once. |
+| The game is minimized | The capture holds and the ring keeps its content. The state is Waiting. A clip shows the last frame for the gap. |
+| The free space goes under 2 GB | Stop. The state is DiskLow, and the HUD shows "Game clips are off: the disk is almost full" once. The replay starts again when the space is back. |
+| The clip quality changes | The replay starts again at the new quality. |
+
+Known limit: with two games and a window that is not a game in focus, the
+primary game falls to the fullscreen or the oldest game, and after 10 s the
+replay moves to it.
+
+**The key** (`client/src/game_clip.rs`, `client/src/platform/hotkeys.rs`):
+
+- F8 on a new install (`DEFAULT_GAME_CLIP_KEY`). Settings, KEYBINDS has a
+  Game clip row. It is stored as `Settings::game_clip_key`, in the format of
+  `ptt_key`.
+- KEYBINDS refuses a game clip key that push-to-talk or the voice clip key
+  uses, and the voice clip row refuses the game clip key.
+- F7 and F8 keep their own held state. A held key makes one clip.
+- The key makes a clip only while the replay records. Otherwise the HUD
+  toast says why: "Game clips are off in Settings", "No game to clip", "Join
+  voice to clip your game", "Clips are not available for this game".
+- A clip shows "Game clip saved". A capture that fails shows "No game clip".
+- The clip goes to the active crew. A user is always in a crew.
+
+### 15.3 Capture
+
+- **One capture per game.** The replay is a consumer of a `CaptureManager`
+  (14-VIDEO-PIPELINE.md §4.8), with its own preprocessor and its own
+  encoder. The stream encoder follows the network and drops its size and
+  rate on a bad uplink. A clip must not get worse because of that, so the
+  replay encodes with the recording intent (14-VIDEO-PIPELINE.md §6.8).
+- **The ladder.** WGC window only. Never WGC monitor or DXGI: they record
+  the whole monitor, with notifications and other windows. The hook only
+  when a stream of the same game already uses it. The replay never injects
+  the hook.
+- **The client area.** WGC window frames are cut to the client area, so a
+  windowed game has no title bar in a clip (14-VIDEO-PIPELINE.md §4.4).
+- **The border.** Windows 11 hides the WGC border. Windows 10 always shows
+  it, and game clips run there with it.
+- **With a stream** of the same game: 12-STREAMING.md §3.7.
+
+### 15.4 Rings and A/V Sync
+
+Every sample carries a time on the steady clock (`mello_clock_now_us`). The
+mux puts all sources on that clock.
+
+| Source | Time of a sample |
+|---|---|
+| Video | The capture time of the frame |
+| Game audio | The arrival time at `GetBuffer` minus the duration of the packet, as in the stream host |
+| Crew mix | The render time plus the output latency: the time the user heard it. m3llo's session volume travels with it. |
+| Mic | Its capture time. The voice ring keeps the mic apart from the crew mix, each with its own time anchors (section 4.1). |
+
+| Ring | File | Content | Size |
+|---|---|---|---|
+| Video | `replay_video_<pid>_<n>.bin` | Annex-B access units. One segment is one GOP (1 s) and starts with an IDR plus SPS and PPS. An index per segment: byte offset, size, capture time and keyframe flag of each unit. | 40 slots of 2 s of the peak rate: 62.5 MB at 720p60, about 100 MB at 1080p60 |
+| Game audio | `replay_audio_<pid>_<n>.bin` | 48 kHz stereo int16 PCM, a time anchor per 10 ms chunk | 40 s, 7.7 MB |
+| Voice | The voice clip ring (section 4.1) | The crew mix and the mic as two Opus streams | 1.5 MB |
+
+- The ring files are in the `mello_clips` folder of the OS temp folder,
+  preallocated, and opened delete on close. A crash leaves no file.
+- A GOP that is larger than its slot ends its segment early, and the ring
+  asks the encoder for an IDR.
+- The encode thread hands each unit to a bounded RAM queue (2 MB) and a
+  writer thread writes it. A full queue drops the unit and every unit after
+  it up to the next keyframe, counts them, and asks for an IDR. A disk stall
+  never blocks the encoder.
+- A capture pins the segments it reads. The writer skips a pinned segment.
+  Two captures inside 30 s pin up to 32 of the 40 segments.
+
+**Capture and mux:**
+
+```
+F8 ─▶ client gate ─▶ Command::CaptureGameClip ─▶ the replay worker
+      ─▶ mello_replay_capture(ctx, 30 s, mp4_path, poster_path)
+         1. T0 = the last keyframe at or before now minus 30 s.
+         2. Pin the segments from T0. Read the voice window (read_window).
+         3. Mux: video passthrough, game audio and voice mixed, AAC.
+         4. Unpin. Write the poster JPEG.
+      ─▶ Event::GameClipCaptured ─▶ Command::ShareGameClip ─▶ upload (15.7)
+```
+
+- Video: H.264 passthrough, no decode and no encode. Sample durations come
+  from the capture times.
+- Audio: one stereo AAC-LC track at 160 kbps. Game audio and voice go on a
+  48 kHz timeline from T0. The voice is mono, center.
+- Drift: each source gets a linear resample ratio from its own time anchors.
+- Gaps (a minimized game, a dropped chunk) become silence at their own
+  place. The audio after a gap does not move.
+- Mix: game and voice at unity gain, then a limiter. Process loopback
+  captures after the game's own volume and after its slider in the Windows
+  volume mixer. The mux applies m3llo's session volume to the crew mix, so
+  the balance is what the user heard.
+- A clip is 30 to 31 s long, because it starts at a keyframe. A 30 s mux at
+  5 Mbps takes under 1 s (the budget is 3 s).
+
+### 15.5 The MP4 and the Poster
+
+| Item | Rule |
+|---|---|
+| Muxer | `IMFSinkWriter`: H.264 input type equal to output type (passthrough), the AAC encoder MFT. No new dependency. |
+| moov first | `mp4_faststart` after `Finalize` moves the moov box before mdat and moves the chunk offsets with it, so playback starts before the download ends. `MF_MPEG4SINK_MOOV_BEFORE_MDAT` wrote chunk offsets that point before the media data, so it is not used. |
+| Poster | The first captured frame after the press: a copy to a staging texture on the capture thread (a submit, no wait), then the map and a JPEG (WIC) on the mux worker. A minimized game delivers no frame: the poster is then the clip's last IDR, decoded once. `MelloReplayClip::poster_live` says which. |
+| Files | The MP4 and the poster are in `mello_clips` of the OS temp folder. They stay as the clipper's copy. |
+
+### 15.6 The Feed Card
+
+`GameClipCard` (`client/ui/panels/game_clip_card.slint`). A game clip card is
+footage, like the stream preview card, not the waveform card.
+
+- The poster edge to edge, one corner cut. Black washes under the text.
+- Top left: the CLIP tag. An unread clip wears red.
+- The m3llo play button at the center: a cut tile (top left and bottom
+  right), a black wash, a white keyline, the play triangle with its back
+  corners cut. Hover fills it white. It replaces the play ring over footage.
+- Bottom left: the clipper octagon, the clipper name, the game. Bottom
+  right: the length on a black chip ("0:31").
+- The poster is up and the video is not: the card shows "uploading".
+- A game clip with a poster from the last 24 hours can be the hero (section
+  7.1).
+- `FeedCardData` fields: `clip-kind` ("game"), `clip-poster-path`,
+  `clip-uploading`, `clip-can-play`.
+- Only the clipper's client uses `local_path` and the local poster
+  (section 11.2). The others use `poster_url` and `media_url`.
+- A click opens the player (section 15.9).
+
+### 15.7 Upload
+
+`mello-core/src/clip_upload/`. One worker thread at the lowest priority, one
+request at a time: `post_clip`, the poster, the MP4 parts, the complete.
+
+| Item | Rule |
+|---|---|
+| Order | The poster first, at once in every state, at 1 Mbps or more. The card shows the poster and "uploading" as soon as it is up. Then the MP4. |
+| Body | Read from disk in writes of 16 KB. The file is never read into RAM. |
+| Parts | S3 multipart in 5 MiB parts, each a presigned `UploadPart` with a signed `Content-Length`. |
+| Pace | No game: no cap. A game: 3 Mbps. A stream: the stream's budget (12-STREAMING.md §3.7). A budget of 0 pauses the upload. A pause of 10 s ends the part in flight. |
+| Queue | `game_clip_uploads.json` (`game_clip_uploads.<MELLO_SESSION_KEY>.json` for a second client), in the state folder (`session_store::store_dir`). One entry per clip with its upload id and its done parts, saved after each step, so a restart goes on from the last step. At most 50 entries and 7 days. Only the clipper's session uploads a clip. |
+| Errors | A part that gets 403 asks for new URLs once (with `upload_id`). A 404 (the upload is gone) starts a new upload once. A refusal drops the clip from the queue. The local file stays. |
+
+### 15.8 Backend
+
+`backend/nakama/data/modules/game_clips.go` and `clips.go`. The voice clip
+calls do not change. An empty `clip_type` is `voice`. A game clip uses three
+calls in this order: `post_clip`, `clip_upload_url`, `clip_upload_complete`
+(once for the poster, once for the video).
+
+**`post_clip`.** `clip_type` is `voice` or `game`. Other values are refused.
+A game clip adds `width` (1 to 7680), `height` (1 to 4320) and `has_voice`.
+`clip_id` matches `[A-Za-z0-9_-]{1,64}`, because it is part of the object
+keys. `StoredClip` gets `width`, `height`, `has_voice` and `poster_url`.
+`post_clip` is idempotent on `clip_id` and the clipper: a retry gets the first
+`event_id`. The same `clip_id` from another user is code 6.
+
+**`clip_upload_url`** with `clip_type: "game"`:
+
+| Request field | Rule |
+|---|---|
+| `clip_id`, `crew_id` | The clip is a game clip in the crew's clips document, and the caller is its clipper. |
+| `poster_bytes` | 1 to 1 MiB |
+| `video_bytes` | 1 to 64 MiB |
+| `upload_id` | Optional. Set: new part URLs for this multipart upload, no new upload (a resume, or URLs that expired). |
+
+| Response field | Content |
+|---|---|
+| `poster_upload_url` | A presigned PUT for `crews/{crew_id}/{clip_id}.jpg`. Signed headers: `Content-Type: image/jpeg`, `Content-Length` = `poster_bytes`, the `Cache-Control`. |
+| `poster_url` | The public URL of the poster |
+| `upload_id` | The multipart upload of `crews/{crew_id}/{clip_id}.mp4`, with `Content-Type: video/mp4` and the `Cache-Control` |
+| `part_size` | 5 MiB. Every part has this size, except the last. R2 needs equal parts. |
+| `parts` | One `{part_number, url, bytes}` per part. Each `url` is a presigned `UploadPart` with a signed `Content-Length`. |
+| `media_url` | The public URL of the MP4 |
+| `cache_control` | `public, max-age=31536000, immutable`: a clip object never changes |
+
+The URLs expire after 1 hour. With no S3, every field is empty, as for a
+voice clip.
+
+**`clip_upload_complete`** with `clip_type: "game"`:
+
+| `part` | Backend |
+|---|---|
+| `poster` | HEAD the poster: it exists, at most 1 MiB, `image/jpeg`. Set `poster_url` and push `feed_changed`. |
+| `video` | `CompleteMultipartUpload` with `upload_id` and `parts` (`{part_number, etag}`). HEAD the MP4: it exists, at most 64 MiB, `video/mp4`. Set `media_url` and push `feed_changed`. An object over the cap is deleted. An upload that is gone (`NoSuchUpload`) goes on to the HEAD, so a retry after a lost answer works. |
+
+**Cleanup.** `StartGameClipUploadCleanupJob` runs at start and each hour. It
+aborts each multipart upload under `crews/` that started more than 24 h ago.
+It lists with no prefix, because MinIO lists the uploads of one exact key
+only.
+
+The per-user daily clip limit and the retention of section 6.2 apply to game
+clips too.
+
+### 15.9 Playback
+
+Playback streams the MP4 from its first bytes. It never downloads the whole
+file first. The MP4 is progressive with the moov box first, so the first
+range gives the index and the first frames. The same URL plays as is in a
+browser `<video>` and in `AVPlayer`. There is no HLS: a single rendition
+needs no playlist, and m3llo has no server transcode.
+
+**The player in the client.** `ExpandedClipPlayer`
+(`client/ui/panels/clip_player_view.slint`) opens over the feed area: play and
+pause, the scrubber, BUFFERING, Space pauses, Escape closes. The picture fills
+the panel. The native presenter is one per client, so a clip plays only while
+no stream is watched, and a watched stream closes the clip. Commands:
+`PlayGameClip`, `SetGameClipPaused`, `SeekGameClip`, `CloseGameClip`. Events:
+`GameClipPlayback`, `GameClipPlaybackClosed`.
+
+**The range reader** (`mello-core/src/clip_play/range_reader.rs`):
+
+| Item | Rule |
+|---|---|
+| Ranges | 1 MiB (`CHUNK`), into a cache file in `mello_clips/play` of the OS temp folder, with a map of the ranges it has |
+| Ahead | 4 ranges after the last read (`AHEAD_CHUNKS`): about 6 s at 720p60 |
+| Order | A range that a read waits for comes first. |
+| Give way | A range ahead in flight stops when a read waits for a range more than 4 ranges away (a seek). A range that a read waits for always completes. |
+| Seek back | A read far behind the head moves the ranges ahead back to it. |
+| Retries | 3. Connect timeout 10 s, request timeout 30 s. |
+| Local file | The clipper plays the local file with no fetch (`LocalClip`). |
+
+**The player in libmello** (`libmello/src/clip/`, 03-LIBMELLO.md §3 and §7):
+
+- `ClipByteStream` is an `IMFByteStream` over the read callback. It reports
+  `MFBYTESTREAM_IS_SEEKABLE`, its length and the content type `video/mp4`.
+  `BeginRead` returns at once and reads on Media Foundation's work queue, so
+  the source gives the first sample after the first range.
+- The sound is the clock. A video frame is released on it, through the
+  stream viewer's decoder and presenter (14-VIDEO-PIPELINE.md §8.4).
+- Buffering: with sound, the state says buffering only when the sound
+  stalls (`reports_buffering`). A read that waits while the sound plays on
+  is a read ahead. Without sound, a read that waits is a stall. In a stall
+  the picture holds and the sound pauses.
+- A seek plays from the keyframe before the position.
+
+Measured with the stream gate's replay lane (a 20 Mbps link with 50 ms delay,
+an empty cache):
+
+| Metric | cpu lane (720p60) | hw lane (1080p60) | Target |
+|---|---|---|---|
+| First frame from the start call | 528 ms | 607 and 611 ms | 1000 ms |
+| Buffering after the first frame | 0 ms | 0 ms | 0 |
+| Seek to 20 s | 944 ms | 1784 ms | 1000 ms |
+
+### 15.10 Settings
+
+Settings, Games, GAME CLIPS. Hidden on macOS.
+
+| Control | Values | Default |
+|---|---|---|
+| Game clips (F8) | On, off | On |
+| Clip quality | 1080p60 (8000 kbps), 720p60 (5000 kbps), 720p30 (3000 kbps) | 720p60 |
+
+KEYBINDS has the Game clip row (section 15.2). The app picks the ring folder
+(the OS temp folder). It is not a setting. There is no switch for game clips
+while streaming: the rules of 12-STREAMING.md §3.7 keep the stream first.
+
+### 15.11 Cost While the User Plays
+
+Estimates at 720p60. The perf scenario that measures them is not built yet
+(section 15.14).
+
+| Resource | Estimate |
+|---|---|
+| GPU | One capture copy and one BGRA to NV12 convert per frame (0.1 to 0.3 ms), one hardware encode on the encoder engine |
+| CPU | Under 2 % of one core. The threads wait on events. The game audio is PCM, with no encode. |
+| Process RAM | The ring index, a 2 MB write queue, the encoder buffers. At most 10 MB more than without the replay. |
+| Disk | About 72 MB of ring files, fixed after the start. About 0.8 MB/s of writes. |
+| Install size | No new binary. Media Foundation and WIC are OS parts. |
+
+### 15.12 Windows Parts
+
+| Part | Rule |
+|---|---|
+| Game audio | WASAPI process loopback on the game's process tree (Windows 10 2004 or later), shared with a stream of the same game (12-STREAMING.md §3.7, F7). Endpoint loopback is not used: it records the crew voice and every other app twice. Measured on CS2 and Hearthstone (10 min each): a signal for the whole run, after the game's own volume and after its slider in the volume mixer. CS2 plays no sound in the background by default, so a clip of an alt-tabbed CS2 has no game audio, as the user heard. |
+| Encoder | NVENC, tested. AMF, built and not tested on AMD hardware. QSV is off unless `MELLO_ENABLE_QSV=1`, so a PC with Intel graphics only has no game clips. |
+| Exclusive fullscreen | WGC window captured CS2 in exclusive fullscreen. A game that WGC cannot see delivers no frames and gets no clips. |
+| Consent | No borderless consent dialog shows: m3llo is signed. The replay asks for borderless access at its first WGC start, as the stream does. |
+
+### 15.13 Tests
+
+| Level | Tests |
+|---|---|
+| Unit (`check.sh`) | The game clip key and KEYBINDS rules (`hotkeys.rs`), the client flow tests (`flow_tests.rs`: the key, the toasts, the settings, the card), the replay worker rules (`replay.rs`), the upload worker against a local stub, the queue and the pace (`clip_upload/`), the upload budget (`upload_budget.rs`), the range reader, the Go tests (`game_clips_test.go`, `crew_feed_test.go`) |
+| libmello ctest (`check-full.sh`) | `ReplayVideoRing`, `ReplayAudioRing`, `ReplayMux`, `ReplayMuxTime`, `ReplayMix`, `ReplayAvClock`, `ReplayGaps`, `ReplayLoad`, `ReplaySession`, `CaptureManager`, `SharedGameAudio`, `EncoderIntent`, `WindowCrop`, `ClipPlayer`, `ClipAudioStream` |
+| Replay lane | `scripts/replay-gate.sh` (`stream-gate replay`, `tools/stream-gate/src/replay.rs`). The reference clip goes through the replay, with presses at 35, 47, 60 and 62 s. Gates in `benchmarks/baselines/replay/gates.json`: the first frame is T0 within one GOP, no frame is missing, a length of 30 to 31 s, PSNR, SSIM and VMAF floors, the game audio markers within ±20 ms of their frames. `--playback` adds the streamed playback row (`playback.rs`, `http_shim.rs`): the first frame within 1 s, no buffering, every frame in order, a seek to 20 s within 1 s. The QA harness runs the lane, not `check.sh`. TESTING.md has the commands. |
+| Journey | `qa/journeys/feed-game-clip.ts` (FEED-12). An `e2e-game` build gives a fake game (`mello-core/src/e2e_game.rs`) whose replay records the reference clip. bob joins voice and presses F8 through `POST /game-clip-key` on the state port. bob's card shows the local poster. alice waits for the upload, plays the MP4 from local S3, pauses, seeks and closes the player. |
+
+### 15.14 Not Built Yet
+
+| Item | State |
+|---|---|
+| macOS | ScreenCaptureKit window capture with app audio, VideoToolbox, `AVAssetWriter`. Until then the Settings section is hidden and F8 does nothing on macOS. |
+| The chat card | No chat message carries a clip today, a voice clip neither. |
+| The physical F7 and F8 key on Bob's PC | A synthetic key press reaches the key hook, the physical key does not (Logitech G HUB runs there). The cause is not known. |
+| The hw seek | 1784 ms against 1000 ms at 1080p60 (section 15.9). Before the seek the MPEG-4 source makes one or two more reads, and the keyframe spans two 1 MiB ranges. A fix needs a seek that starts at once (or a demux of our own) and a smaller first range. |
+| Unread first frames on hw | In 2 replay lane runs the first frames of a play did not read. The cause is not known. |
+| R2 and the signed `Content-Length` | MinIO refuses a part of the wrong length. R2 is not checked. |
+| The voice `clip_upload_url` | It checks no crew membership and no clipper, so a signed-in user can overwrite any clip's MP4, a game clip's too. |
+| Gates | The hw lane floors, the real loopback row (`tone_player.cpp` is built and not run), the remote voice check of the journey (a tone burst from the second client within ±20 ms; the mic path removes a tone, so the burst needs a path past the noise suppression), the stream and replay together case (12-STREAMING.md §3.7, F8 and G7), the perf scenario (section 15.11), the QA harness checks. |
+| The upload budget | 1 Mbps and 25 % of the headroom are starting values. The G7 gate confirms or moves them. |
+| Auto highlights | A second iteration. A clip that the user did not choose needs a way to ask the user first (opt in, per user or per crew). Then: a trigger and a tag on `CaptureGameClip` and `post_clip`, the poster at the marker time, 45 ring segments (a marker at round end needs 35 s back), and the CS2 adapter (`telemetry/cs2_gsi.rs`) as the first marker source. |
+| Stream clips, trim, share export | Sections 3.2 and 14. |
+| iOS and the web lounge | The MP4 plays in `AVPlayer` and `<video>` as is. The cards there are follow-ups. |
 
 ---
 

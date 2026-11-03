@@ -395,7 +395,7 @@ pub struct StreamManager {
     quality_last_frames: u64,
     quality_last_drops: u64,
     quality_last_source_changes: u32,
-    /// The game clip upload's budget during the stream (GAME-CLIPS.md 3.6,
+    /// The game clip upload's budget during the stream (12-STREAMING.md 3.7,
     /// G2 to G4), and the stream's hold on the upload pace.
     upload_governor: UploadGovernor,
     upload_pace: UploadPaceHold,
@@ -879,8 +879,8 @@ impl StreamManager {
         self.update_upload_budget(now);
     }
 
-    /// The game clip upload's budget from the stream's state (GAME-CLIPS.md
-    /// 3.6). Reads the controller only; the stream never waits for it.
+    /// The game clip upload's budget from the stream's state (12-STREAMING.md
+    /// 3.7). Reads the controller only; the stream never waits for it.
     fn update_upload_budget(&mut self, now: Instant) {
         let load = StreamLoad {
             top_rung: self.quality.rung_index() == 0,

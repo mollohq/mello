@@ -112,7 +112,7 @@ pub fn wire(ctx: &AppContext) {
     // The clip button names the clip key from the first frame.
     ctx.app
         .set_clip_key_label(clip_key_label(&ctx.settings.borrow()).into());
-    // Game clips are Windows only until the macOS work (plan 9.2).
+    // Game clips are Windows only until the macOS work (CLIPS.md 15.14).
     ctx.app.set_game_clips_available(cfg!(windows));
     ctx.app
         .set_settings_game_clip_qualities(slint::ModelRc::new(slint::VecModel::from(
@@ -564,7 +564,7 @@ pub fn wire(ctx: &AppContext) {
                 app.set_settings_clip_key_warning("".into());
             });
     }
-    // --- Game clips (plans/GAME-CLIPS.md 4.3 and 7) ---
+    // --- Game clips (CLIPS.md 15.2 and 15.10) ---
     {
         let s = ctx.settings.clone();
         let app_weak = ctx.app.as_weak();

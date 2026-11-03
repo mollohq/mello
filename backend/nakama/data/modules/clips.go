@@ -34,7 +34,7 @@ const (
 	clipWaveformBytes    = 64
 
 	// An empty clip_type is a voice clip. A game clip is F8 footage
-	// (plans/GAME-CLIPS.md section 6.5).
+	// (CLIPS.md 15.8).
 	clipTypeVoice = "voice"
 	clipTypeGame  = "game"
 )

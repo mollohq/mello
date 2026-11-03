@@ -1187,7 +1187,7 @@ TEST(CaptureLadder, ASwapToASlowMethodLeavesNoGap) {
     capture.stop();
 }
 
-// Game clips plan 3.3: the replay records only frames that show the game.
+// CLIPS.md 15.3: the replay records only frames that show the game.
 // ProcessCapture tells, during each frame, whether the method that delivered
 // it shows only the game (hook, WGC window) or the monitor.
 TEST(CaptureLadder, EachFrameSaysWhetherItShowsOnlyTheGame) {
@@ -1662,7 +1662,7 @@ TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {
     EXPECT_EQ(qsv.cost_tier(), 0);
 }
 
-// Game clips plan 3.4: the replay encodes with a recording intent. A stream
+// 14-VIDEO-PIPELINE.md 6.8: the replay encodes with a recording intent. A stream
 // keeps what it had.
 TEST(EncoderIntent, AStreamKeepsTheUltraLowLatencyTuning) {
     const auto nvenc = NvencEncoder::tuning_attempts(EncoderIntent::Stream);

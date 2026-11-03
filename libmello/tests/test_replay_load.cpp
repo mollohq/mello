@@ -1,4 +1,4 @@
-// The game clip replay sheds first under overload (plans/GAME-CLIPS.md 3.6,
+// The game clip replay sheds first under overload (12-STREAMING.md 3.7,
 // F3), and one game audio capture serves the stream and the replay (F7).
 #include <gtest/gtest.h>
 #include "replay/replay_load.hpp"

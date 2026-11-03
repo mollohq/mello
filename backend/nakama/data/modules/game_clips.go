@@ -17,7 +17,7 @@ import (
 )
 
 // ---------------------------------------------------------------------------
-// Game clips (F8): the upload calls of plans/GAME-CLIPS.md section 6.5. The
+// Game clips (F8): the upload calls of CLIPS.md 15.8. The
 // poster is one presigned PUT, the MP4 a multipart upload of 5 MiB parts.
 // Every presigned URL signs its Content-Length, so a client cannot upload
 // more bytes than it asked for.

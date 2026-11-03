@@ -1,5 +1,5 @@
-// The real loopback row of the stream gate's replay lane (plans/GAME-CLIPS.md
-// 10.3): a process that plays a 1 kHz tone in bursts, so the replay records
+// The real loopback row of the stream gate's replay lane (CLIPS.md
+// 15.13): a process that plays a 1 kHz tone in bursts, so the replay records
 // it through WASAPI process loopback as it records a game. No ffmpeg or
 // ffplay: they are GPL, and m3llo is Apache 2.0.
 //

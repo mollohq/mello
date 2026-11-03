@@ -1,5 +1,5 @@
 // CaptureManager: the frame and audio fan-out to the consumers, and the
-// add and remove rules (plans/GAME-CLIPS.md section 3.5). A fake source
+// add and remove rules (14-VIDEO-PIPELINE.md 4.8). A fake source
 // delivers on the test's own threads, so no GPU and no timing is involved.
 #include <gtest/gtest.h>
 #include "video/capture_manager.hpp"

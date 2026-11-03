@@ -1,5 +1,5 @@
 #!/bin/sh
-# Replay gate: the game clip lane of the stream gate (plans/GAME-CLIPS.md 10.3).
+# Replay gate: the game clip lane of the stream gate (CLIPS.md 15.13).
 #
 # The reference clip and its game audio play into the replay buffer in place
 # of a game window (the capture manager, the recording encoder, the rings).

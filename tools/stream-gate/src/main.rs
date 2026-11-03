@@ -39,7 +39,7 @@
 //!                    [--out DIR] [--repeat N] [--write-baseline] [--no-vmaf] [--keep]
 //! ```
 //!
-//! The replay lane (plans/GAME-CLIPS.md 10.3, `replay.rs`). Use
+//! The replay lane (CLIPS.md 15.13, `replay.rs`). Use
 //! scripts/replay-gate.sh. `--lane cpu` (default): the 720p60 clip and the
 //! 720p60 clip quality, OpenH264 encode and decode. `--lane hw`: the 1080p60
 //! clip and quality, the machine's encoder and decoder. `--loopback` (hw
@@ -1705,7 +1705,7 @@ fn real_main() -> Result<bool, String> {
     }
 }
 
-// ---- the replay lane (plans/GAME-CLIPS.md 10.3) ----------------------------------
+// ---- the replay lane (CLIPS.md 15.13) ----------------------------------
 
 struct ReplayArgs {
     lane: String,

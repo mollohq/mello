@@ -35,8 +35,8 @@ pub struct Settings {
     /// The voice clip key, as `ptt_key` stores a key ("F7", "Ctrl+F7").
     /// `None` turns the key off.
     pub clip_key: Option<String>,
-    /// Game clips (plans/GAME-CLIPS.md 7): the replay of the game while the
-    /// user is in voice. On by default (Q1).
+    /// Game clips (CLIPS.md 15.10): the replay of the game while the
+    /// user is in voice. On by default.
     pub game_clips_enabled: bool,
     /// "1080p60", "720p60" or "720p30" (`GameClipQuality`).
     pub game_clip_quality: String,

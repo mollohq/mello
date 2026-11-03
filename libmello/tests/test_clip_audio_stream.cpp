@@ -1,5 +1,5 @@
-// The sound and the clock of a game clip that plays (plans/GAME-CLIPS.md
-// 6.2): the demux thread writes 48 kHz stereo PCM, the render thread mixes
+// The sound and the clock of a game clip that plays (CLIPS.md
+// 15.9): the demux thread writes 48 kHz stereo PCM, the render thread mixes
 // it into the speaker output, and the frames it played are the clock that
 // the picture follows.
 

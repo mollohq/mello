@@ -1,7 +1,7 @@
 #pragma once
 
 // A game clip MP4 read back, for the stream gate's replay lane
-// (plans/GAME-CLIPS.md 10.3): the H.264 units as a decoder takes them, and
+// (CLIPS.md 15.13): the H.264 units as a decoder takes them, and
 // the sound as PCM. Windows: Media Foundation. False elsewhere.
 
 #include <cstddef>

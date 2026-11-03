@@ -35,7 +35,7 @@ constexpr int64_t kDecodeLeadUs = 25'000;
 /// How often a source with nothing to release looks again.
 constexpr int64_t kIdlePollUs = 10'000;
 /// Sound that must wait before play starts (0.3 s) and goes on after a stall
-/// (1 s, plan 6.2); under 50 ms of it is a stall.
+/// (1 s, CLIPS.md 15.9); under 50 ms of it is a stall.
 constexpr size_t kStartFrames = audio::ClipAudioStream::kSampleRate * 3 / 10;
 constexpr size_t kResumeFrames = audio::ClipAudioStream::kSampleRate;
 constexpr size_t kStarveFrames = audio::ClipAudioStream::kSampleRate / 20;
@@ -85,7 +85,7 @@ private:
 /// BeginRead returns at once and reads on Media Foundation's long-function
 /// work queue. A read that waited on the source's own thread kept the MPEG-4
 /// source from answering sample requests: over a slow link it read 3 to 6 MiB
-/// ahead before it gave the first sample (plans/GAME-CLIPS.md 10.3).
+/// ahead before it gave the first sample (CLIPS.md 15.13).
 class ClipByteStream : public IMFByteStream, public IMFAsyncCallback {
 public:
     ClipByteStream(uint64_t length, ReadFn read, std::shared_ptr<std::atomic<bool>> stop,

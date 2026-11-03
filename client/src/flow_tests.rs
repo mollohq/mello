@@ -3766,7 +3766,7 @@ fn the_clip_key_captures_a_voice_clip_only_in_voice() {
 }
 
 /// F8 clips the game while core reports the replay running, also while it
-/// waits or is paused: its ring still has the game (GAME-CLIPS.md 4.3). With
+/// waits or is paused: its ring still has the game (CLIPS.md 15.2). With
 /// no replay, or one that is not available for the game, F8 makes no clip.
 #[test]
 fn the_game_clip_key_clips_only_while_the_replay_runs() {
@@ -3823,7 +3823,7 @@ fn the_game_clip_key_clips_only_while_the_replay_runs() {
 }
 
 /// A saved game clip goes to the active crew for the upload, and stays
-/// local with no active crew (plans/GAME-CLIPS.md 4.4, 6.3).
+/// local with no active crew (CLIPS.md 15.2 and 15.7).
 #[test]
 fn a_saved_game_clip_is_shared_with_the_active_crew() {
     let mut h = Harness::new();
@@ -4043,7 +4043,7 @@ fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
 }
 
 /// The game clip key is bound in Settings, Keybinds, below the voice clip
-/// key (GAME-CLIPS.md 4.3). The new key is saved and shown.
+/// key (CLIPS.md 15.2). The new key is saved and shown.
 #[cfg(windows)]
 #[test]
 fn keybinds_rebinds_the_game_clip_key() {
@@ -4115,7 +4115,7 @@ fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::Gam
     })
 }
 
-/// The Game clips section in Settings, Games (GAME-CLIPS.md 7): the switch
+/// The Game clips section in Settings, Games (CLIPS.md 15.10): the switch
 /// and the quality are saved and sent to core, which starts or stops the
 /// replay.
 #[cfg(windows)]
