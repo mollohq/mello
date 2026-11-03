@@ -15,7 +15,7 @@
 <p align="center">
   <img src="https://img.shields.io/badge/platform-windows%20%7C%20macos%20%7C%20linux-blue" alt="Platform: Windows, macOS, Linux" />
   <img src="https://img.shields.io/badge/license-Apache%202.0-green" alt="License: Apache 2.0" />
-  <img src="https://img.shields.io/github/stars/mollohq/mello?style=flat&color=EB4D5F" alt="GitHub stars" />
+  <img src="https://img.shields.io/github/stars/mollohq/m3llo?style=flat&color=EB4D5F" alt="GitHub stars" />
 </p>
 
 ---
@@ -46,20 +46,20 @@ Made in Europe.
 Grab the latest build for your platform:
 
 <p align="center">
-  <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-win-x64-stable-Setup.exe">
+  <a href="https://github.com/mollohq/m3llo/releases/latest/download/m3llo-win-x64-stable-Setup.exe">
     <img src="https://img.shields.io/badge/Download-Windows-0078D6?style=for-the-badge&logo=windows&logoColor=white" alt="Download for Windows" />
   </a>
   &nbsp;
-  <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-osx-arm64-stable-Setup.pkg">
+  <a href="https://github.com/mollohq/m3llo/releases/latest/download/m3llo-osx-arm64-stable-Setup.pkg">
     <img src="https://img.shields.io/badge/Download-macOS-000000?style=for-the-badge&logo=apple&logoColor=white" alt="Download for macOS" />
   </a>
   &nbsp;
-  <a href="https://github.com/mollohq/mello/releases/latest/download/m3llo-linux-x64-stable.AppImage">
+  <a href="https://github.com/mollohq/m3llo/releases/latest/download/m3llo-linux-x64-stable.AppImage">
     <img src="https://img.shields.io/badge/Download-Linux-FCC624?style=for-the-badge&logo=linux&logoColor=black" alt="Download for Linux" />
   </a>
 </p>
 
-All releases, changelogs, and previous versions on the [Releases page](https://github.com/mollohq/mello/releases).
+All releases, changelogs, and previous versions on the [Releases page](https://github.com/mollohq/m3llo/releases).
 
 ---
 
@@ -71,7 +71,7 @@ We hang out on m3llo itself.
 - **Bluesky:** [@m3llo.app](https://bsky.app/profile/m3llo.app)
 - **Reddit:** [r/m3llo_app](https://reddit.com/r/m3llo_app)
 - **Threads:** [@m3llo.app](https://www.threads.com/@m3llo.app)
-- **Issues:** [GitHub Issues](https://github.com/mollohq/mello/issues) for bugs and feature requests
+- **Issues:** [GitHub Issues](https://github.com/mollohq/m3llo/issues) for bugs and feature requests
 
 ---
 
@@ -99,7 +99,7 @@ Building and running is supported on Windows, macOS and Linux.
 
 ```bash
 # Clone
-git clone https://github.com/mollohq/mello.git
+git clone https://github.com/mollohq/m3llo.git
 cd mello
 
 # Start backend
@@ -164,8 +164,8 @@ Contributions are welcome.
 
 **Every new feature needs a spec.** Look at [`/specs`](./specs) to see the format. A spec doesn't have to be long, but it needs to cover what, why, and the key constraints. No spec, no merge.
 
-- Bugs: open an [issue](https://github.com/mollohq/mello/issues)
-- Ideas: start a [discussion](https://github.com/mollohq/mello/discussions)
+- Bugs: open an [issue](https://github.com/mollohq/m3llo/issues)
+- Ideas: start a [discussion](https://github.com/mollohq/m3llo/discussions)
 - Code: PRs welcome, read specs first
 - Docs: always needed
 
