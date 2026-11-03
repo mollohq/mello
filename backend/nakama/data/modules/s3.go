@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -106,6 +107,23 @@ func GeneratePresignedPUTChat(key, contentType string, expiry time.Duration) (st
 		return "", fmt.Errorf("presign PUT failed: %w", err)
 	}
 	return result.URL, nil
+}
+
+// PutChatObject writes bytes to the chat bucket directly. The dev seed uses
+// it; clients go through a presigned PUT.
+func PutChatObject(ctx context.Context, key, contentType string, data []byte) error {
+	if !ChatImagesConfigured() {
+		return fmt.Errorf("chat S3 not configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := chatClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(chatBucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
+	return err
 }
 
 // DeleteChatObjects removes the given keys from the chat bucket. A missing
