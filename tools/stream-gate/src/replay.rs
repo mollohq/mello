@@ -137,7 +137,7 @@ pub struct Capture {
     /// When `mello_replay_capture` returned.
     pub done_us: u64,
     /// `mello_replay_state` just before the press.
-    pub state: i32,
+    pub state: mello_sys::MelloReplayState,
     pub mp4: PathBuf,
     pub poster: PathBuf,
     /// None: the capture failed (`error` says why).

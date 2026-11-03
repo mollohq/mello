@@ -7,11 +7,12 @@
 // each frame decodes to a grey picture one step brighter than the last, so
 // the CPU frame callback tells which frame is on screen. A thread takes the
 // sound 10 ms at a time, as the audio render thread does.
-#ifdef _WIN32
 #include <gtest/gtest.h>
 
-#include "audio/clip_audio_stream.hpp"
 #include "clip/clip_player.hpp"
+
+#ifdef _WIN32
+#include "audio/clip_audio_stream.hpp"
 #include "replay/h264_nal.hpp"
 #include "replay/replay_audio_mix.hpp"
 #include "replay/replay_mux.hpp"
