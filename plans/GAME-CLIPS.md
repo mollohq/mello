@@ -30,8 +30,8 @@ todos:
     content: "Nakama: validate clip_type, game clip fields, a presigned poster PUT with a signed length and Cache-Control, multipart for the MP4 (CreateMultipartUpload, a presigned UploadPart per 5 MB part with a signed length, CompleteMultipartUpload), an abort after 24 h, clip_upload_complete checks the objects with HEAD, Go tests. Built 2026-11-02, not committed (game_clips.go, section 6.5): post_clip is idempotent on clip_id (voice too), the game hero after a fresh stream preview, the hourly abort job. Go tests pass; a live test against local MinIO (MELLO_S3_LIVE=1) passes: MinIO refuses a part one byte short or long, and a poster without its Cache-Control. Open: does R2 enforce the signed Content-Length; the voice clip_upload_url checks no membership and no clipper, so a signed-in user can overwrite any clip's MP4, a game clip's too"
     status: in_progress
   - id: client-key-settings
-    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. Open: the Buffer folder control. Q23 is dropped (Bob, 2026-11-03)"
-    status: in_progress
+    content: "Client: F8 listener and gate, Settings section, HUD toast, testkit tests. Built 2026-11-02 for a first manual test (game_clip.rs): F8 on Windows with its own held state, the gate on the replay state, the HUD clip toast, a flow test. Added 2026-11-02: the GAME CLIPS section in Settings, Games (the switch and the clip quality; hidden on macOS), the Game clip row in KEYBINDS (Settings::game_clip_key, refuses the voice clip and PTT keys, and the voice clip row refuses it), the F8 toasts for a setting that is off and a full disk. No Buffer folder control and no Q23 switch (Bob, 2026-11-03): the app uses the OS temp folder"
+    status: completed
   - id: feed-card
     content: "Client: game clip card with poster in the feed and in chat; the clipper plays the local file. Built 2026-11-02, not committed: GameClipCard (client/ui/panels/game_clip_card.slint, a Preview for slint-viewer), the clip_kind, clip_uploading and clip_can_play fields of FeedCardData, the poster through the snapshot loader (the clipper's own poster file first), flow tests. Until clip-streaming-playback lands, a click opens the clip with the OS: the clipper's own file, else the uploaded MP4. Open: Bob's approval of the render; the chat card (no chat message carries a clip today, voice clips neither)"
     status: in_progress
@@ -616,7 +616,6 @@ A "Game clips" section in Settings:
 |---|---|---|
 | Game clips (F8) | On, off | On (Q1) |
 | Clip quality | 1080p60, 720p60, 720p30 | 720p60 (Q2) |
-| Buffer folder | A folder | The OS temp folder (CLIPS.md 4.4) |
 
 A control that cannot work shows why, in the label register: "No hardware encoder".
 
