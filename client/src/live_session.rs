@@ -185,6 +185,7 @@ mod tests {
                 game_name: name.into(),
                 game_id: id.into(),
                 started_at: to_rfc3339(NOW - ago_min * 60_000),
+                activity: String::new(),
             }),
         }
     }

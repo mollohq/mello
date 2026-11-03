@@ -2623,7 +2623,7 @@ component AboutTab inherits VerticalLayout {
         }
 
         AboutLinks {
-            links: [{ name: "Pion", url: "https://pion.ly" }, { name: "OpenMoji", url: "https://openmoji.org" }, { name: "Oxanium", url: "https://fonts.google.com/specimen/Oxanium" }, { name: "Barlow", url: "https://fonts.google.com/specimen/Barlow" }];
+            links: [{ name: "Pion", url: "https://pion.ly" }, { name: "Twemoji", url: "https://twemoji.twitter.com" }, { name: "Oxanium", url: "https://fonts.google.com/specimen/Oxanium" }, { name: "Barlow", url: "https://fonts.google.com/specimen/Barlow" }];
             clicked(url) => { root.link-clicked(url); }
         }
         }
@@ -2702,8 +2702,8 @@ component AboutTab inherits VerticalLayout {
                 alignment: start;
                 spacing: 4px;
                 AboutSentence { text: "Emoji by"; }
-                AboutLink { name: "OpenMoji"; url: "https://openmoji.org"; clicked(url) => { root.link-clicked(url); } }
-                AboutSentence { text: "(https://openmoji.org), CC BY-SA 4.0"; }
+                AboutLink { name: "Twemoji"; url: "https://twemoji.twitter.com"; clicked(url) => { root.link-clicked(url); } }
+                AboutSentence { text: "(https://twemoji.twitter.com), CC BY 4.0"; }
             }
         }
     }

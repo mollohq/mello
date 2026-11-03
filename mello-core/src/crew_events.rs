@@ -85,6 +85,10 @@ pub struct GameSessionEndRequest {
     /// streaks or duplicate the ledger event server-side.
     #[serde(default)]
     pub session_id: String,
+    /// The activity inside the game (spec 18 §3.11): the Roblox experience's
+    /// name. Empty for a game without one, and absent from the payload then.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub activity: String,
     /// Session start, Unix ms. 0 when unknown. Additive: the backend ignores
     /// unknown JSON fields today (plain `json.Unmarshal`).
     #[serde(default)]
@@ -290,6 +294,30 @@ pub struct PostClipResponse {
     pub event_id: String,
     #[serde(default)]
     pub clip_id: String,
+}
+
+// --- Chat image upload ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUploadURLRequest {
+    pub crew_id: String,
+    pub mime: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUploadURLResponse {
+    #[serde(default)]
+    pub upload_url: String,
+    #[serde(default)]
+    pub media_url: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatDeleteImagesRequest {
+    pub keys: Vec<String>,
 }
 
 // --- Clip upload ---

@@ -21,16 +21,41 @@ permissions:
 jobs:
   build-windows:
     runs-on: [self-hosted, Windows]
+    # The job took 41 min with the test and Clippy steps; it is about half
+    # that without them. The bound is for a wedged runner (the default is
+    # 360 min, and PR Checks queues behind this job on the same machine).
+    timeout-minutes: 60
+    # One release job at a time on the shared runner: a second release waits
+    # here instead of in the runner queue, so PR jobs queued meanwhile go
+    # first. A third run that arrives while one waits replaces the waiting one.
+    concurrency:
+      group: release-windows
+      cancel-in-progress: false
     env:
       RELEASE_CHANNEL: "win-x64-stable"
 
     steps:
+      # The self-hosted runners check out into the same _work/mello/mello as
+      # PR Checks. A default checkout runs `git clean -ffdx` and deletes the
+      # ONNX Runtime (377 MB) and the models that CMake downloads into
+      # libmello/, which the PR lane keeps warm. clean: false and the next
+      # step clean everything else. Only the ORT of the version CMake asks for
+      # is kept, so a stale one is never packed. The models are kept only
+      # while their sources in libmello/CMakeLists.txt are the same as when
+      # they were last kept (a stamp file), because CMake downloads a model
+      # only when the file is missing. scripts/ci/clean-workspace.ps1 and
+      # clean-workspace.sh do this; PR Checks runs the same scripts.
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
+          clean: false
+
+      - name: Clean the workspace, keep ORT and the models
+        shell: pwsh
+        run: ./scripts/ci/clean-workspace.ps1
 
       - name: Set version
         shell: pwsh
@@ -61,22 +86,85 @@ jobs:
         shell: pwsh
         run: cargo update --workspace --offline
 
-      - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+      # The packaging prerequisites (Azure, .NET 8, vpk) take seconds. They run
+      # before the long build, so a broken one fails the job early. The signup
+      # smoke test needs the built binary, so it runs right after the build.
+      - name: Login to Azure
+        uses: azure/login@v3
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Verify Azure Login
+        run: az account show --output table
+
+      # .NET 8 for vpk, in the runner's tool cache: the machine's own .NET
+      # installs (system, Homebrew, an old global vpk) do not take part.
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
+
+      # vpk at the version of the velopack crate the client links: the
+      # updater inside the package and the library must match. Installed for
+      # this run only, as its .NET 8 build: vpk 1.2 also ships a .NET 10
+      # build, which a newer SDK picks and the .NET 8 runtime cannot start.
+      - name: Install vpk
+        shell: pwsh
+        run: |
+          $lines = Get-Content Cargo.lock
+          $i = [array]::IndexOf($lines, 'name = "velopack"')
+          $version = $lines[$i + 1] -replace '^version = "(.*)"$', '$1'
+          $toolPath = Join-Path $env:RUNNER_TEMP 'vpk'
+          dotnet tool install vpk --version $version --framework net8.0 --tool-path $toolPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          $toolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
+          & (Join-Path $toolPath 'vpk.exe') --help | Select-Object -First 1
+
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        shell: pwsh
+        run: |
+          foreach ($name in 'GOOGLE_CLIENT_ID', 'GOOGLE_CLIENT_SECRET', 'DISCORD_CLIENT_ID', 'TWITCH_CLIENT_ID', 'NAKAMA_SERVER_KEY', 'NAKAMA_HTTP_KEY') {
+            if ([string]::IsNullOrEmpty([Environment]::GetEnvironmentVariable($name))) {
+              Write-Error "$name is empty: add the repository secret and pass it to this step"
+              exit 1
+            }
+          }
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
+      # Only the client: dist/ packs mello.exe, the ORT DLLs, the models and
+      # the hook (CMake, below). The tools/* crates and m3llo-hud are never
+      # shipped. Building -p also keeps tool-only features (voice-test-client
+      # turns on mello-core/test-faults) out of the shipped binary.
+      - name: Build client
+        run: cargo build --release --locked -p mello-client --features mello-client/production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 
-      - name: Run tests
-        run: cargo test --workspace --locked
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # No cargo test or Clippy here: PR Checks runs `cargo test --workspace`
+      # and `cargo clippy --workspace --all-targets -- -D warnings` on Windows,
+      # macOS and Linux before a PR can merge (required checks), so the code a
+      # tag on main points at has passed both. They cost 21 min of the shared
+      # runner per release.
+      # A workflow_dispatch build of an unmerged branch has no such guarantee.
 
       # Drives the binary just built through a real signup against production.
       # Keys are baked in at compile time via option_env!, so a build made with
@@ -123,39 +211,6 @@ jobs:
           cp hook/bin/Release/mello-offsets32.exe dist/
           del dist/*.lib -ErrorAction SilentlyContinue
 
-      - name: Login to Azure
-        uses: azure/login@v3
-        with:
-          creds: ${{ secrets.AZURE_CREDENTIALS }}
-
-      - name: Verify Azure Login
-        run: az account show --output table
-
-      # .NET 8 for vpk, in the runner's tool cache: the machine's own .NET
-      # installs (system, Homebrew, an old global vpk) do not take part.
-      - name: Install .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
-
-      # vpk at the version of the velopack crate the client links: the
-      # updater inside the package and the library must match. Installed for
-      # this run only, as its .NET 8 build: vpk 1.2 also ships a .NET 10
-      # build, which a newer SDK picks and the .NET 8 runtime cannot start.
-      - name: Install vpk
-        shell: pwsh
-        run: |
-          $lines = Get-Content Cargo.lock
-          $i = [array]::IndexOf($lines, 'name = "velopack"')
-          $version = $lines[$i + 1] -replace '^version = "(.*)"$', '$1'
-          $toolPath = Join-Path $env:RUNNER_TEMP 'vpk'
-          dotnet tool install vpk --version $version --framework net8.0 --tool-path $toolPath
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          $toolPath | Out-File -FilePath $env:GITHUB_PATH -Append -Encoding utf8
-          & (Join-Path $toolPath 'vpk.exe') --help | Select-Object -First 1
-
       - name: Velopack Package
         shell: cmd
         run: |
@@ -184,6 +239,11 @@ jobs:
 
   build-macos:
     runs-on: [self-hosted, macOS]
+    # See the Windows job for the bound and the concurrency group.
+    timeout-minutes: 60
+    concurrency:
+      group: release-macos
+      cancel-in-progress: false
     env:
       RELEASE_CHANNEL: "osx-arm64-stable"
       CODE_SIGNING_KEYCHAIN: "mello_code_signing"
@@ -196,6 +256,11 @@ jobs:
           fetch-depth: 0
           submodules: recursive
           token: ${{ secrets.GH_PAT }}
+          clean: false
+
+      # See the Windows job.
+      - name: Clean the workspace, keep ORT and the models
+        run: ./scripts/ci/clean-workspace.sh
 
       - name: Set version
         run: |
@@ -255,22 +320,59 @@ jobs:
             --keychain "$KEYCHAIN_PATH" \
             "${{ env.NOTARY_PROFILE_NAME }}"
 
-      - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+      # The packaging prerequisites run before the long build (see the
+      # Windows job).
+      # .NET 8 for vpk, as on Windows: the Mac's Homebrew .NET 10 SDK and its
+      # .NET 6 and 8 runtimes in /usr/local/share/dotnet do not take part.
+      - name: Install .NET 8
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: "8.0.x"
+        env:
+          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
+
+      # vpk at the version of the velopack crate the client links, for this
+      # run only, as its .NET 8 build (see the Windows job).
+      - name: Install vpk
+        run: |
+          VPK_VERSION=$(grep -A1 '^name = "velopack"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
+          dotnet tool install vpk --version "$VPK_VERSION" --framework net8.0 --tool-path "$RUNNER_TEMP/vpk"
+          echo "$RUNNER_TEMP/vpk" >> "$GITHUB_PATH"
+          "$RUNNER_TEMP/vpk/vpk" --help | head -2
+
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        run: |
+          for name in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET DISCORD_CLIENT_ID TWITCH_CLIENT_ID NAKAMA_SERVER_KEY NAKAMA_HTTP_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "$name is empty: add the repository secret and pass it to this step" >&2
+              exit 1
+            fi
+          done
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
+      - name: Build client
+        run: cargo build --release --locked -p mello-client --features mello-client/production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 
-      - name: Run tests
-        run: cargo test --workspace --locked
-
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      # No cargo test or Clippy: see the Windows job.
 
       # See the Windows job for why this exists and what it leaves behind.
       - name: Signup smoke test
@@ -296,24 +398,6 @@ jobs:
               --sign "Developer ID Application: ${{ secrets.APPLE_TEAM_NAME }}" \
               "$dylib"
           done
-
-      # .NET 8 for vpk, as on Windows: the Mac's Homebrew .NET 10 SDK and its
-      # .NET 6 and 8 runtimes in /usr/local/share/dotnet do not take part.
-      - name: Install .NET 8
-        uses: actions/setup-dotnet@v4
-        with:
-          dotnet-version: "8.0.x"
-        env:
-          DOTNET_INSTALL_DIR: ${{ runner.tool_cache }}/dotnet-8
-
-      # vpk at the version of the velopack crate the client links, for this
-      # run only, as its .NET 8 build (see the Windows job).
-      - name: Install vpk
-        run: |
-          VPK_VERSION=$(grep -A1 '^name = "velopack"$' Cargo.lock | sed -n 's/^version = "\(.*\)"/\1/p')
-          dotnet tool install vpk --version "$VPK_VERSION" --framework net8.0 --tool-path "$RUNNER_TEMP/vpk"
-          echo "$RUNNER_TEMP/vpk" >> "$GITHUB_PATH"
-          "$RUNNER_TEMP/vpk/vpk" --help | head -2
 
       - name: Velopack Package
         run: |
@@ -459,14 +543,35 @@ jobs:
       - name: Refresh lockfile for stamped workspace version
         run: cargo update --workspace --offline
 
-      - name: Build client
-        run: cargo build --release --locked --workspace --features mello-client/production
+      # The client bakes these in at compile time (mello-core/src/config.rs,
+      # option_env!). An empty one ships a dead sign-in button or a client that
+      # cannot reach the server, so the job stops here instead.
+      - name: Check the baked-in secrets
+        run: |
+          for name in GOOGLE_CLIENT_ID GOOGLE_CLIENT_SECRET DISCORD_CLIENT_ID TWITCH_CLIENT_ID NAKAMA_SERVER_KEY NAKAMA_HTTP_KEY; do
+            if [ -z "${!name}" ]; then
+              echo "$name is empty: add the repository secret and pass it to this step" >&2
+              exit 1
+            fi
+          done
         env:
           GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
           GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
           DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+
+      - name: Build client
+        run: cargo build --release --locked -p mello-client --features mello-client/production
+        env:
+          GOOGLE_CLIENT_ID: ${{ secrets.GOOGLE_CLIENT_ID }}
+          GOOGLE_CLIENT_SECRET: ${{ secrets.GOOGLE_CLIENT_SECRET }}
+          DISCORD_CLIENT_ID: ${{ secrets.DISCORD_CLIENT_ID }}
+          TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
+          NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
+          NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 

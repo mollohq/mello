@@ -101,7 +101,7 @@ bool EchoSuppressor::initialize(const std::string& model_path) {
     gru_h02_.assign(SUP_HIDDEN, 0.0f);
     reset();
 
-    initialized_ = true;
+    initialized_.store(true, std::memory_order_release);
     MELLO_LOG_INFO("echo", "suppressor ready (model=%s)", model_path.c_str());
     return true;
 #endif  // MELLO_IOS_NO_VAD
@@ -115,14 +115,14 @@ void EchoSuppressor::shutdown() {
     }
     ort_.reset();
 #endif
-    initialized_ = false;
+    initialized_.store(false, std::memory_order_release);
 }
 
 void EchoSuppressor::set_enabled(bool enabled) {
     enabled_.store(enabled, std::memory_order_relaxed);
     if (enabled) reset();
     MELLO_LOG_INFO("echo", "neural suppression %s%s", enabled ? "enabled" : "disabled",
-                   (enabled && !initialized_) ? " (no model: passthrough)" : "");
+                   (enabled && !ready()) ? " (no model: passthrough)" : "");
 }
 
 void EchoSuppressor::reset() {
@@ -292,7 +292,7 @@ void EchoSuppressor::run_inference(const float* mic16, const float* far16, float
 
 void EchoSuppressor::process(int16_t* frame48k) noexcept {
     try {
-        if (!enabled_.load(std::memory_order_relaxed) || !initialized_) return;
+        if (!enabled_.load(std::memory_order_relaxed) || !ready()) return;
 #ifndef MELLO_IOS_NO_VAD
         if (!session_ || !frame48k) return;
 

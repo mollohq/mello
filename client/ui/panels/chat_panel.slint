@@ -1,8 +1,8 @@
 import { Theme, MelloTextInput } from "../theme.slint";
-import { CutShape, CutButtonShape } from "../components/cut.slint";
+import { CutShape, CutButtonShape, CutMask } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
+import { ChatFocus, ChatMessageData, ChatLinkData, ChatImageData, AttachmentData, GifItemData, EmojiItemData, EmojiRowData, EmojiCategoryData, MentionMemberData } from "../types.slint";
 import { ListView } from "std-widgets.slint";
-import { ChatFocus, ChatMessageData, ChatLinkData, GifItemData, EmojiItemData, MentionMemberData } from "../types.slint";
 
 component LinkPill inherits Rectangle {
     in property <string> url;
@@ -11,13 +11,23 @@ component LinkPill inherits Rectangle {
 
     property <length> pill-max-width: 260px;
     max-width: pill-max-width;
+    background: transparent;
 
-    border-radius: Theme.r-pill;
-    background: pill-touch.has-hover
-        ? (Theme.dark ? Theme.graphic-light : Theme.hover-overlay)
-        : (Theme.dark ? Theme.hover-overlay : Theme.hover-overlay);
-    border-width: 1px;
-    border-color: Theme.graphic-light;
+    // A link is a button, so it cuts top-left and bottom-right and carries a
+    // keyline. No radius: radii are for dots, discs and pips.
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 6px;
+        fill: Theme.graphic-light;
+    }
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 6px;
+        inset: Theme.keyline;
+        fill: pill-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
+    }
 
     pill-touch := TouchArea {
         accessible-role: button;
@@ -60,6 +70,7 @@ component LinkPill inherits Rectangle {
 
 // PopupWindow lives in a component (not in `for`) so it can anchor to the ⋮ button.
 component MessageMoreMenu inherits Rectangle {
+    in property <length> size: 16px;
     in property <bool> active: false;
     in property <bool> open-above: false;
     in property <bool> is-own-message: false;
@@ -70,8 +81,8 @@ component MessageMoreMenu inherits Rectangle {
     callback delete-requested();
     callback copy-requested();
 
-    width: 16px;
-    height: 16px;
+    width: size;
+    height: size;
     border-radius: 4px;
     background: more-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
 
@@ -86,8 +97,8 @@ component MessageMoreMenu inherits Rectangle {
 
     Image {
         source: @image-url("../icons/more.svg");
-        width: 12px;
-        height: 12px;
+        width: size * 0.65;
+        height: size * 0.65;
         colorize: Theme.text-secondary;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
@@ -200,40 +211,33 @@ component PillButton inherits Rectangle {
     in property <bool> active: false;
     callback clicked();
 
+    // An icon button: the label is what a screen reader and the driver read.
+    // The open one is white on the dim fill, with the button's cut corners.
     height: 28px;
-    width: pill-layout.preferred-width + 16px;
+    width: 32px;
     background: transparent;
-    border-width: touch.has-hover ? 1px : 0px;
-    border-color: Theme.action;
+
+    if active || touch.has-hover: CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: 5px;
+        fill: active ? Theme.action-dim : Theme.surface-hover;
+    }
 
     touch := TouchArea {
         accessible-role: button;
         accessible-label: root.label;
+        mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
 
-    pill-layout := HorizontalLayout {
-        spacing: 4px;
-        padding-left: 8px;
-        padding-right: 8px;
-        alignment: center;
-
-        Image {
-            source: icon;
-            width: 14px;
-            height: 14px;
-            colorize: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
-            y: (parent.height - self.height) / 2;
-        }
-
-        Text {
-            font-family: Theme.font-body;
-            text: label;
-            font-size: Theme.font-xs;
-            font-weight: 500;
-            color: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
-            vertical-alignment: center;
-        }
+    Image {
+        source: icon;
+        width: 16px;
+        height: 16px;
+        colorize: active || touch.has-hover ? Theme.accent : Theme.text-tertiary;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
     }
 }
 
@@ -352,6 +356,8 @@ component ChatClipCard inherits Rectangle {
 
 component GifPopover inherits Rectangle {
     in property <[GifItemData]> gifs: [];
+    /// One sentence on why there are no tiles. Empty when the request worked.
+    in property <string> error: "";
     in property <bool> show: false;
     callback search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
@@ -410,7 +416,64 @@ component GifPopover inherits Rectangle {
             }
         }
 
-        Flickable {
+        if root.error != "": VerticalLayout {
+            vertical-stretch: 1;
+            alignment: center;
+            spacing: 12px;
+            padding-left: 24px;
+            padding-right: 24px;
+
+            Text {
+                font-weight: Theme.weight-sentence;
+                font-family: Theme.font-body;
+                text: root.error;
+                font-size: Theme.font-md;
+                color: Theme.text-secondary;
+                horizontal-alignment: center;
+                wrap: word-wrap;
+            }
+
+            HorizontalLayout {
+                alignment: center;
+
+                // Retry is an action, so the button is graphite, not white:
+                // one white button per surface, and the search field has focus.
+                Rectangle {
+                    width: 110px;
+                    height: 32px;
+                    background: transparent;
+
+                    CutButtonShape {
+                        width: parent.width;
+                        height: parent.height;
+                        n: 8px;
+                        fill: gif-retry.has-hover ? Theme.graphic-med : Theme.surface-hover;
+                    }
+
+                    gif-retry := TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Try again";
+                        mouse-cursor: pointer;
+                        clicked => { root.search(gif-search.text); }
+                    }
+
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: "TRY AGAIN";
+                        font-size: Theme.font-xs;
+                        color: Theme.text-primary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width;
+                        height: parent.height;
+                    }
+                }
+            }
+        }
+
+        if root.error == "": Flickable {
             vertical-stretch: 1;
 
             VerticalLayout {
@@ -481,6 +544,66 @@ export component ChatPanel inherits Rectangle {
 
     // GIF popover
     in property <[GifItemData]> gif-results: [];
+    in property <string> gif-error: "";
+
+    // Image attachments and the viewer
+    in property <[AttachmentData]> attachments: [];
+    /// The message whose action bar is open. A click on a message opens its
+    /// bar; a click on the same message or Escape closes it.
+    in-out property <string> actions-message-id: "";
+    callback attach-clicked();
+    callback attachment-removed(/* id */ string);
+    callback paste-image() -> bool;
+    callback image-clicked(/* url */ string, /* sender */ string);
+    callback image-save(/* url */ string);
+    callback image-copy(/* url */ string);
+
+    /// A pick in the picker: a reaction when a message asked for one, else
+    /// text in the field. The picker closes either way.
+    function pick-emoji(emoji: string) {
+        root.emoji-picked(emoji);
+        root.emoji-popover-open = false;
+        if root.emoji-target-message != "" {
+            root.react(root.emoji-target-message, emoji);
+            root.emoji-target-message = "";
+            return;
+        }
+        chat-input.text += emoji;
+        root.chat-input-changed(chat-input.text);
+        chat-input.focus();
+    }
+
+    /// Open the picker to choose a reaction for `message-id`.
+    function pick-reaction-for(message-id: string) {
+        root.emoji-target-message = message-id;
+        root.emoji-popover-open = true;
+        root.emoji-pill-clicked();
+    }
+
+    /// Enter and the send button. Text, or ready chips, or both.
+    function submit-message() {
+        if root.chat-input-text == "" && root.attachments.length == 0 {
+            return;
+        }
+        if root.edit-mode {
+            if root.chat-input-text == "" {
+                return;
+            }
+            root.edit-message(root.edit-message-id, root.chat-input-text);
+            root.edit-mode = false;
+            root.edit-message-id = "";
+        } else if root.reply-mode {
+            root.message-submitted-with-reply(root.chat-input-text, root.reply-to-id);
+            root.reply-mode = false;
+            root.reply-to-id = "";
+            root.reply-to-name = "";
+        } else {
+            root.message-submitted(root.chat-input-text);
+        }
+        root.chat-input-text = "";
+        root.composer-multiline = false;
+        root.composer-line-count = 1;
+    }
     in-out property <bool> gif-popover-open: false;
 
     // Reply mode state
@@ -495,10 +618,27 @@ export component ChatPanel inherits Rectangle {
     // New messages pill state
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
+    // Frames each scroll timer has applied its target on (see the timers).
+    property <int> bottom-ticks: 0;
+    property <int> unread-ticks: 0;
+    property <int> history-ticks: 0;
+    /// Open the feed with the unread rule near the top, not at the bottom.
+    in-out property <bool> scroll-to-unread-request: false;
+    /// Where the unread rule sits in the rows, reported by the rule's row.
+    in-out property <length> unread-row-y: 0px;
     in property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
     in property <[MentionMemberData]> mention-suggestions: [];
-    in property <[EmojiItemData]> emoji-list: [];
+    in property <[EmojiRowData]> emoji-rows: [];
+    in property <[EmojiItemData]> recent-emoji: [];
+    in property <[EmojiCategoryData]> emoji-categories: [];
+    in-out property <int> emoji-category: 0;
+    /// A message id while the picker is choosing a reaction for it.
+    in-out property <string> emoji-target-message: "";
+    callback react(/* message_id */ string, /* emoji */ string);
+    callback emoji-search(/* query */ string);
+    callback emoji-category-selected(/* index */ int);
+    callback emoji-picked(/* emoji */ string);
 
     in-out property <bool> emoji-popover-open: false;
     in-out property <string> more-menu-message-id: "";
@@ -521,7 +661,7 @@ export component ChatPanel inherits Rectangle {
     callback gif-pill-clicked();
     callback gif-search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
-    callback gif-hovered(/* preview_url */ string);
+    callback gif-hovered(/* url */ string);
     callback emoji-pill-clicked();
     callback edit-message(/* message_id */ string, /* new_body */ string);
     callback delete-message(/* message_id */ string);
@@ -608,31 +748,34 @@ export component ChatPanel inherits Rectangle {
         Rectangle {
             vertical-stretch: 1;
 
-        feed := ListView {
-            // `feed` id is referenced by the delegates + the scroll/history timers.
-            // ListView virtualizes: only rows near the viewport are instantiated and
-            // drawn, so Skia no longer records the entire feed into one giant glyph
-            // stream — that was the ~180 MB idle allocation this migration removes.
+        feed := Flickable {
+            // `feed` id is referenced by the rows + the scroll/history timers.
+            // A plain Flickable over the loaded window of messages (at most a
+            // few hundred rows, see ChatScrollState::WINDOW). Every row has its
+            // real height, so content-height is exact: scroll-to-bottom lands
+            // on the last message and a history prepend keeps the anchor row
+            // still. A virtualized ListView estimates content-height from the
+            // rows on screen, and that estimate sent the view to the same row
+            // every time.
             width: parent.width;
             height: parent.height;
-            // The pre-ListView Flickable drew no scrollbars; keep that look.
-            // Wheel/trackpad scrolling is unaffected by bar visibility.
-            vertical-scrollbar-policy: ScrollBarPolicy.always-off;
-            horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
             property <bool> at-bottom: self.content-height <= self.height
                 || (-self.content-y + self.height) >= (self.content-height - 32px);
+            // How far from the top the user is: content-y is 0 at the top and
+            // goes negative as they scroll down.
             property <bool> at-top: self.content-y >= -8px;
             property <bool> was-at-top: false;
             // Content height captured when older history is requested, so the prepend
-            // nudge below can keep the anchor message exactly in place (measured, not
-            // a fixed per-row estimate — correct for variable-height rows).
+            // nudge below can keep the anchor message exactly in place.
             property <length> saved-content-height;
+            property <length> saved-content-y;
 
             changed content-y => {
                 root.chat-viewport-changed(self.at-bottom);
                 if self.at-top && !self.was-at-top && root.has-more-history && !root.loading-history {
                     self.saved-content-height = self.content-height;
+                    self.saved-content-y = self.content-y;
                     root.request-history();
                 }
                 self.was-at-top = self.at-top;
@@ -641,17 +784,67 @@ export component ChatPanel inherits Rectangle {
                 }
             }
 
+            // The only child of a Flickable: its preferred height is the
+            // content-height, which is why no estimate is involved.
+            rows := VerticalLayout {
+                width: feed.width;
+                // The layout is sized to the feed when the rows are shorter
+                // than it. `end` keeps every row at its own height and
+                // gathers them at the bottom (spec §4.3, message gravity);
+                // without it the rows stretch to fill the empty space.
+                alignment: end;
+
             for msg[idx] in messages: VerticalLayout {
-                    // visible-width, NOT width: the cupertino ScrollView's inner
-                    // Flickable is `parent.width - 4px` regardless of scrollbar
-                    // policy, and ListView's content-width is derived from the
-                    // delegates' widths. Sizing rows by `feed.width` makes the
-                    // viewport 4px wider than the Flickable, which lets the whole
-                    // feed pan sideways by those 4px. `visible-width` is the
-                    // Flickable's real width in every style.
-                    width: feed.visible-width;
+                    width: feed.width;
                     padding-top: msg.is-unread-divider ? 8px : (msg.is-group-start && idx > 0 ? 16px : 2px);
+
+                    // Day separator: a graphite rule with the day in the label
+                    // register. Red is for unread; a date is not a state.
+                    if msg.day-label != "" && !msg.is-unread-divider: HorizontalLayout {
+                        width: parent.width;
+                        height: 22px;
+                        spacing: 10px;
+                        padding-left: 4px;
+                        padding-right: 4px;
+                        padding-bottom: 6px;
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.graphic-light;
+                            }
+                        }
+
+                        Text {
+                            font-family: Theme.font-label;
+                            font-weight: Theme.weight-label;
+                            letter-spacing: Theme.track-label;
+                            text: msg.day-label;
+                            font-size: Theme.font-xs;
+                            color: Theme.text-secondary;
+                            horizontal-stretch: 0;
+                            vertical-alignment: center;
+                        }
+
+                        Rectangle {
+                            horizontal-stretch: 1;
+                            Rectangle {
+                                height: 1px;
+                                width: parent.width;
+                                y: (parent.height - self.height) / 2;
+                                background: Theme.graphic-light;
+                            }
+                        }
+                    }
                     padding-bottom: idx == messages.length - 1 ? 24px : 0px;
+
+                    // The rule's row reports its place, so the unread timer
+                    // can open the feed there.
+                    init => { if msg.is-unread-divider { root.unread-row-y = self.y; } }
+                    changed y => { if msg.is-unread-divider { root.unread-row-y = self.y; } }
 
                     // Unread divider — stretch wrappers for lines; inner rect centers 1px rule (y ignored on HL children)
                     if msg.is-unread-divider: HorizontalLayout {
@@ -770,89 +963,23 @@ export component ChatPanel inherits Rectangle {
 
                     // Message row: left gutter (hover actions) + text/reply (media is below)
                     if !msg.is-system && !msg.is-unread-divider
-                        && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip): HorizontalLayout {
+                        && (msg.text != "" || msg.reply-to-id != "" || msg.is-deleted || msg.is-gif || msg.is-clip || msg.is-image): HorizontalLayout {
                         spacing: 8px;
-                        width: feed.visible-width;
+                        width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
-                        alignment: start;
+                        // No `alignment: start`: it would drop the stretch, the
+                        // content would be as wide as its text, and the action
+                        // bar would sit over the words instead of at the right.
                         property <length> actions-y: 0px;
-                        property <bool> body-hovered: body-hover.has-hover
-                            || hover-bar-hover.has-hover
-                            || reply-touch.has-hover
-                            || more-menu.pointer-hover
+                        // A click, not a hover: hover was easy to miss and
+                        // the bar was gone before the pointer reached it.
+                        property <bool> body-hovered: root.actions-message-id == msg.message-id
                             || root.more-menu-message-id == msg.message-id;
 
-                        // Gutter column for hover actions (avatar is in header row above)
+                        // Gutter column: keeps the body under the name, next to the avatar.
                         Rectangle {
                             width: 28px;
-
-                            hover-bar-hover := TouchArea {
-                                // a11y: none (hover detector: shows the message action bar)
-                                x: 0;
-                                y: actions-y;
-                                width: 28px;
-                                height: 24px;
-
-                                HorizontalLayout {
-                                    width: parent.width;
-                                    height: 24px;
-                                    opacity: body-hovered ? 1 : 0;
-                                    spacing: 2px;
-                                    alignment: center;
-
-                                    Rectangle {
-                                        width: 16px;
-                                        height: 16px;
-                                        border-radius: 4px;
-                                        background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
-
-                                        Image {
-                                            source: @image-url("../icons/reply.svg");
-                                            width: 12px;
-                                            height: 12px;
-                                            colorize: Theme.text-secondary;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                        }
-
-                                        reply-touch := TouchArea {
-                                            accessible-role: button;
-                                            accessible-label: "Reply";
-                                            clicked => {
-                                                root.reply-mode = true;
-                                                root.reply-to-id = msg.message-id;
-                                                root.reply-to-name = msg.sender-name;
-                                            }
-                                        }
-                                    }
-
-                                    more-menu := MessageMoreMenu {
-                                        active: root.more-menu-message-id == msg.message-id;
-                                        open-above: feed.at-bottom && idx >= messages.length - 2;
-                                        is-own-message: msg.sender-id == root.user-id;
-                                        toggled => {
-                                            root.more-menu-message-id =
-                                                root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
-                                        }
-                                        edit-requested => {
-                                            root.edit-mode = true;
-                                            root.edit-message-id = msg.message-id;
-                                            chat-input.text = msg.text;
-                                            chat-input.focus();
-                                            root.more-menu-message-id = "";
-                                        }
-                                        delete-requested => {
-                                            root.delete-confirm-message-id = msg.message-id;
-                                            root.more-menu-message-id = "";
-                                        }
-                                        copy-requested => {
-                                            root.copy-message-text(msg.text);
-                                            root.more-menu-message-id = "";
-                                        }
-                                    }
-                                }
-                            }
                         }
 
                         // Message content
@@ -861,18 +988,8 @@ export component ChatPanel inherits Rectangle {
                             background: msg.mentions-self ? (Theme.action-dim) : transparent;
                             border-radius: Theme.radius-sm;
 
-                            body-hover := TouchArea {
-                                // a11y: none (hover detector: shows the message action bar)
-                                width: parent.width;
-                                height: parent.height;
-                            }
 
-                            if root.more-menu-message-id != "": TouchArea {
-                                // a11y: none (click-away: a click outside closes the open message menu)
-                                width: parent.width;
-                                height: parent.height;
-                                clicked => { root.more-menu-message-id = ""; }
-                            }
+
 
                             VerticalLayout {
                                 horizontal-stretch: 1;
@@ -933,20 +1050,13 @@ export component ChatPanel inherits Rectangle {
                                         accessible-label: msg.text;
                                         text: msg.display-styled;
                                         default-color: Theme.text-secondary;
-                                        default-font-size: Theme.font-md;
+                                        // Three emoji or fewer and nothing else: big, as in
+                                        // every chat app. A 13px emoji is a smudge.
+                                        default-font-size: msg.is-emoji-only ? Theme.font-xxl : Theme.font-md;
                                         horizontal-stretch: 1;
                                     }
 
-                                    if msg.links.length > 0: HorizontalLayout {
-                                        spacing: 6px;
-                                        alignment: start;
 
-                                        for link[idx] in msg.links: LinkPill {
-                                            url: msg.links[idx].url;
-                                            label: msg.links[idx].label;
-                                            clicked(url) => { root.link-clicked(url); }
-                                        }
-                                    }
                                 }
 
                                 if msg.is-edited: Text {
@@ -969,17 +1079,155 @@ export component ChatPanel inherits Rectangle {
                                 wrap: word-wrap;
                             }
                             }
+
+                            // Above the text, so a click anywhere on the message opens the
+                            // bar. StyledText takes presses itself, so a target under it
+                            // never fires. The link pills sit in their own row below.
+                            body-hover := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Message actions";
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => {
+                                    root.actions-message-id =
+                                        root.actions-message-id == msg.message-id ? "" : msg.message-id;
+                                    root.more-menu-message-id = "";
+                                }
+                            }
+
+                            if root.more-menu-message-id != "": TouchArea {
+                                // a11y: none (click-away: a click outside closes the open message menu)
+                                width: parent.width;
+                                height: parent.height;
+                                clicked => { root.more-menu-message-id = ""; }
+                            }
+
+                            // The action bar: React, Reply, More, at the top right of the
+                            // message, over the header line, as in every chat app. Drawn
+                            // after the text so it takes the pointer first.
+                            actions-bar := Rectangle {
+                                x: parent.width - self.width - 4px;
+                                y: -18px;
+                                width: 104px;
+                                height: 32px;
+                                // Gone, not transparent: an invisible bar takes no clicks.
+                                visible: body-hovered;
+                                background: transparent;
+
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: 6px;
+                                    fill: Theme.graphic-light;
+                                }
+                                CutButtonShape {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    n: 6px;
+                                    inset: Theme.keyline;
+                                    fill: Theme.surface-hover;
+                                }
+
+                                HorizontalLayout {
+                                    width: parent.width;
+                                    height: parent.height;
+                                    spacing: 4px;
+                                    padding-left: 4px;
+                                    padding-right: 4px;
+                                    alignment: center;
+                                    cross-axis-alignment: center;
+
+                                    Rectangle {
+                                        width: 28px;
+                                        height: 28px;
+                                        border-radius: 4px;
+                                        background: react-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/smile.svg");
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: Theme.text-primary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        react-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "React";
+                                            enabled: body-hovered;
+                                            accessible-enabled: body-hovered;
+                                            mouse-cursor: pointer;
+                                            clicked => { root.pick-reaction-for(msg.message-id); }
+                                        }
+                                    }
+
+                                    Rectangle {
+                                        width: 28px;
+                                        height: 28px;
+                                        border-radius: 4px;
+                                        background: reply-touch.has-hover ? Theme.bg-tertiary : Theme.surface;
+
+                                        Image {
+                                            source: @image-url("../icons/reply.svg");
+                                            width: 16px;
+                                            height: 16px;
+                                            colorize: Theme.text-primary;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                        }
+
+                                        reply-touch := TouchArea {
+                                            accessible-role: button;
+                                            accessible-label: "Reply";
+                                            enabled: body-hovered;
+                                            accessible-enabled: body-hovered;
+                                            clicked => {
+                                                root.reply-mode = true;
+                                                root.reply-to-id = msg.message-id;
+                                                root.reply-to-name = msg.sender-name;
+                                            }
+                                        }
+                                    }
+
+                                    more-menu := MessageMoreMenu {
+                                        size: 28px;
+                                        active: root.more-menu-message-id == msg.message-id;
+                                        open-above: feed.at-bottom && idx >= messages.length - 2;
+                                        is-own-message: msg.sender-id == root.user-id;
+                                        toggled => {
+                                            root.more-menu-message-id =
+                                                root.more-menu-message-id == msg.message-id ? "" : msg.message-id;
+                                        }
+                                        edit-requested => {
+                                            root.edit-mode = true;
+                                            root.edit-message-id = msg.message-id;
+                                            chat-input.text = msg.text;
+                                            chat-input.focus();
+                                            root.more-menu-message-id = "";
+                                        }
+                                        delete-requested => {
+                                            root.delete-confirm-message-id = msg.message-id;
+                                            root.more-menu-message-id = "";
+                                        }
+                                        copy-requested => {
+                                            root.copy-message-text(msg.text);
+                                            root.more-menu-message-id = "";
+                                        }
+                                    }
+                                }
+                            }
                         }
                     }
 
                     // Media row: full content width under avatar column (not double-guttered)
-                    if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip): HorizontalLayout {
-                        width: feed.visible-width;
+                    if !msg.is-system && !msg.is-unread-divider && (msg.is-gif || msg.is-clip || msg.is-image): HorizontalLayout {
+                        width: feed.width;
                         padding-left: 4px;
                         padding-right: 4px;
                         spacing: 8px;
                         alignment: start;
-                        property <length> media-col-w: feed.visible-width - 44px;
+                        property <length> media-col-w: feed.width - 44px;
 
                         Rectangle {
                             width: 28px;
@@ -989,6 +1237,78 @@ export component ChatPanel inherits Rectangle {
                             width: media-col-w;
                             spacing: 4px;
 
+                            // Images: one under the other, each at most 300px wide,
+                            // one cut corner like every card. Click opens the viewer.
+                            if msg.is-image: VerticalLayout {
+                                spacing: 4px;
+                                for img[img-idx] in msg.images: Rectangle {
+                                    property <float> aspect: img.height > 0 ? img.width / img.height : 1.33;
+                                    property <length> media-w: min(300px, media-col-w);
+                                    width: media-w;
+                                    height: max(60px, media-w / aspect);
+                                    clip: true;
+                                    background: img.has-image ? transparent : Theme.bg-app;
+
+                                    if img.has-image: Image {
+                                        source: img.image;
+                                        width: parent.width;
+                                        height: parent.height;
+                                        image-fit: cover;
+                                    }
+
+                                    if !img.has-image: Text {
+                                        font-weight: Theme.weight-sentence;
+                                        font-family: Theme.font-body;
+                                        text: img.failed ? "Image not available" : "Loading image…";
+                                        font-size: Theme.font-xs;
+                                        color: Theme.text-tertiary;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                        width: parent.width;
+                                        height: parent.height;
+                                    }
+
+                                    // The size tag, bottom right, in a black wash over content.
+                                    if img.has-image && img.bytes-label != "": Rectangle {
+                                        x: parent.width - self.width - 8px;
+                                        y: parent.height - self.height - 8px;
+                                        width: size-tag.preferred-width + 14px;
+                                        height: 20px;
+                                        background: #000000B8;
+                                        size-tag := Text {
+                                            font-family: Theme.font-body;
+                                            font-weight: Theme.weight-sentence;
+                                            text: img.bytes-label;
+                                            font-size: Theme.font-xs;
+                                            color: Theme.text-secondary;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                            width: parent.width;
+                                            height: parent.height;
+                                        }
+                                    }
+
+                                    CutMask {
+                                        x: parent.width - self.width;
+                                        y: 0;
+                                        width: 12px;
+                                        height: 12px;
+                                        n: 12px;
+                                        corner: "tr";
+                                        fill: Theme.surface;
+                                    }
+
+                                    image-touch := TouchArea {
+                                        accessible-role: button;
+                                        accessible-label: "Open image";
+                                        enabled: img.has-image;
+                                        accessible-enabled: img.has-image;
+                                        mouse-cursor: img.has-image ? pointer : default;
+                                        clicked => { root.image-clicked(img.url, msg.sender-name); }
+                                    }
+                                }
+                            }
+
                             if msg.is-clip: ChatClipCard {
                                 sender-name: msg.sender-name;
                                 clip-duration: msg.clip-duration;
@@ -997,7 +1317,7 @@ export component ChatPanel inherits Rectangle {
 
                             if msg.is-gif: Rectangle {
                                 property <float> aspect: msg.gif-height > 0 ? msg.gif-width / msg.gif-height : 1.33;
-                                property <length> media-w: min(400px, media-col-w);
+                                property <length> media-w: min(300px, media-col-w);
                                 width: media-w;
                                 height: media-w / aspect;
                                 border-radius: Theme.radius-sm;
@@ -1014,7 +1334,7 @@ export component ChatPanel inherits Rectangle {
                                 if !msg.has-gif-image: Text {
                                     font-weight: Theme.weight-sentence;
                                     font-family: Theme.font-body;
-                                    text: "Loading GIF…";
+                                    text: msg.gif-failed ? "GIF not available" : "Loading GIF…";
                                     font-size: Theme.font-xs;
                                     color: Theme.text-tertiary;
                                     horizontal-alignment: center;
@@ -1025,16 +1345,113 @@ export component ChatPanel inherits Rectangle {
                                     // a11y: none (hover detector: previews the GIF)
                                     mouse-cursor: pointer;
                                     moved => {
-                                        root.gif-hovered(msg.gif-preview-url);
+                                        root.gif-hovered(msg.gif-url);
                                     }
                                 }
                             }
                         }
                     }
+
+                    // Link pills, under the text in their own row, so the click
+                    // target above the text never covers them.
+                    if !msg.is-system && !msg.is-unread-divider && msg.links.length > 0: HorizontalLayout {
+                        padding-left: 40px;
+                        padding-right: 4px;
+                        padding-top: 4px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        for link[idx] in msg.links: LinkPill {
+                            url: msg.links[idx].url;
+                            label: msg.links[idx].label;
+                            clicked(url) => { root.link-clicked(url); }
+                        }
+                    }
+
+                    // Reactions: emoji and count, the user's own with the white
+                    // outline, and a plus that opens the picker for one more.
+                    if !msg.is-system && !msg.is-unread-divider && msg.reactions.length > 0: HorizontalLayout {
+                        padding-left: 40px;
+                        padding-right: 4px;
+                        padding-top: 4px;
+                        spacing: 6px;
+                        alignment: start;
+
+                        for r[ri] in msg.reactions: Rectangle {
+                            width: reaction-label.preferred-width + 20px;
+                            height: 22px;
+                            background: transparent;
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                fill: r.mine ? Theme.action-line : (reaction-touch.has-hover ? Theme.graphic-med : Theme.surface-hover);
+                            }
+                            if r.mine: CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                inset: Theme.keyline;
+                                fill: reaction-touch.has-hover ? Theme.graphic-med : Theme.surface;
+                            }
+                            reaction-label := HorizontalLayout {
+                                spacing: 5px;
+                                alignment: center;
+                                padding-left: 6px;
+                                padding-right: 8px;
+                                Text {
+                                    text: r.emoji;
+                                    font-size: 12px;
+                                    vertical-alignment: center;
+                                }
+                                Text {
+                                    font-family: Theme.font-display;
+                                    font-weight: Theme.weight-display;
+                                    text: r.count;
+                                    font-size: Theme.font-sm;
+                                    color: Theme.text-primary;
+                                    vertical-alignment: center;
+                                }
+                            }
+                            reaction-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "React " + r.emoji;
+                                mouse-cursor: pointer;
+                                clicked => { root.react(msg.message-id, r.emoji); }
+                            }
+                        }
+
+                        Rectangle {
+                            width: 24px;
+                            height: 22px;
+                            background: transparent;
+                            CutButtonShape {
+                                width: parent.width;
+                                height: parent.height;
+                                n: 4px;
+                                fill: add-reaction-touch.has-hover ? Theme.graphic-med : Theme.surface-hover;
+                            }
+                            Image {
+                                source: @image-url("../icons/plus.svg");
+                                width: 10px;
+                                height: 10px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Theme.text-secondary;
+                            }
+                            add-reaction-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: "Add reaction";
+                                mouse-cursor: pointer;
+                                clicked => { root.pick-reaction-for(msg.message-id); }
+                            }
+                        }
+                    }
                 }
+            } // close rows
         }
 
-        // Loading-older-history indicator (overlay; ListView can't host non-delegate rows)
+        // Loading-older-history indicator (overlay)
         if root.loading-history: Rectangle {
             x: 0;
             y: 0;
@@ -1112,25 +1529,52 @@ export component ChatPanel inherits Rectangle {
             }
         }
 
+        // The three scroll timers each apply their target on three frames,
+        // because a row the model just got is laid out on the next frame,
+        // and a target read before that is one row short.
         scroll-timer := Timer {
-            interval: 1ms;
+            interval: 16ms;
             running: root.scroll-to-bottom-request;
             triggered => {
-                feed.content-y = -(feed.content-height - feed.height);
-                root.scroll-to-bottom-request = false;
-                root.has-new-messages = false;
-                root.scroll-to-bottom-done();
+                feed.content-y = -max(0px, feed.content-height - feed.height);
+                root.bottom-ticks += 1;
+                if root.bottom-ticks >= 3 {
+                    root.bottom-ticks = 0;
+                    root.scroll-to-bottom-request = false;
+                    root.has-new-messages = false;
+                    root.scroll-to-bottom-done();
+                }
+            }
+        }
+
+        unread-timer := Timer {
+            interval: 16ms;
+            running: root.scroll-to-unread-request;
+            triggered => {
+                // The rule a little below the top edge, never past the end.
+                feed.content-y = -max(0px, min(root.unread-row-y - 24px, feed.content-height - feed.height));
+                root.unread-ticks += 1;
+                if root.unread-ticks >= 3 {
+                    root.unread-ticks = 0;
+                    root.scroll-to-unread-request = false;
+                }
             }
         }
 
         history-timer := Timer {
-            interval: 1ms;
+            interval: 16ms;
             running: root.history-prepended-rows > 0;
             triggered => {
-                // Keep the anchor message in place: shift the viewport by the exact
-                // height of the newly-prepended content (measured), not a per-row guess.
-                feed.content-y += feed.content-height - feed.saved-content-height;
-                root.history-prepended-done();
+                // Keep the anchor message in place. content-y is 0 at the top
+                // and negative further down, so new content above the anchor
+                // moves it down by the exact growth, and the viewport follows.
+                // From the saved values each time, so three applications are one.
+                feed.content-y = feed.saved-content-y - (feed.content-height - feed.saved-content-height);
+                root.history-ticks += 1;
+                if root.history-ticks >= 3 {
+                    root.history-ticks = 0;
+                    root.history-prepended-done();
+                }
             }
         }
         } // close feed container Rectangle
@@ -1367,7 +1811,7 @@ export component ChatPanel inherits Rectangle {
 
         // --- Emoji popover ---
         if root.emoji-popover-open: Rectangle {
-            height: 200px;
+            height: 320px;
             background: transparent;
 
             CutShape {
@@ -1384,50 +1828,171 @@ export component ChatPanel inherits Rectangle {
                 fill: Theme.surface;
             }
 
-            Flickable {
-                width: parent.width;
-                height: parent.height;
+            VerticalLayout {
+                padding: 8px;
+                spacing: 6px;
 
-                VerticalLayout {
-                    padding: 8px;
-                    spacing: 4px;
+                // Search, with focus on open.
+                Rectangle {
+                    height: 32px;
+                    background: Theme.bg-app;
+                    border-width: 1px;
+                    border-color: emoji-search-input.has-focus ? Theme.graphic-med : Theme.graphic-light;
 
-                    for row-start[row-idx] in [0, 8, 16, 24, 32, 40, 48, 56, 64, 72, 80, 88, 96, 104, 112, 120, 128, 136, 144, 152]: HorizontalLayout {
+                    emoji-search-input := MelloTextInput {
+                        accessible-label: "Search emoji";
+                        x: 10px;
+                        width: parent.width - 20px;
+                        height: parent.height;
+                        font-size: Theme.font-md;
+                        color: Theme.text-primary;
+                        vertical-alignment: center;
+                        edited => { root.emoji-search(self.text); }
+                        init => { self.focus(); }
+                        // Escape closes the picker from the search field too.
+                        key-pressed(event) => {
+                            if event.text == Key.Escape {
+                                root.emoji-popover-open = false;
+                                root.emoji-target-message = "";
+                                chat-input.focus();
+                                return accept;
+                            }
+                            reject
+                        }
+                    }
+
+                    if emoji-search-input.text == "": Text {
+                        font-weight: Theme.weight-sentence;
+                        font-family: Theme.font-body;
+                        x: 10px;
+                        text: "Search emoji";
+                        font-size: Theme.font-md;
+                        color: Theme.text-tertiary;
+                        vertical-alignment: center;
+                    }
+                }
+
+                // Recent: one row, newest first. Only while not searching.
+                if root.recent-emoji.length > 0 && emoji-search-input.text == "": VerticalLayout {
+                    spacing: 2px;
+                    Text {
+                        font-family: Theme.font-label;
+                        font-weight: Theme.weight-label;
+                        letter-spacing: Theme.track-label;
+                        text: "RECENT";
+                        font-size: 9px;
+                        color: Theme.text-tertiary;
+                        height: 14px;
+                        vertical-alignment: center;
+                    }
+                    recent-row := HorizontalLayout {
                         spacing: 2px;
-
-                        for col in [0, 1, 2, 3, 4, 5, 6, 7]: Rectangle {
-                            property <int> emoji-index: row-start + col;
-                            property <bool> in-range: emoji-index < emoji-list.length;
-                            visible: in-range;
-                            width: 32px;
-                            height: 32px;
-                            clip: true;
-
-                            if in-range: Rectangle {
+                        height: 36px;
+                        alignment: start;
+                        for r[ri] in root.recent-emoji: Rectangle {
+                            // Nine cells share the width; a short row keeps the size.
+                            width: (recent-row.width - 16px) / 9;
+                            background: recent-touch.has-hover ? Theme.bg-tertiary : transparent;
+                            Text {
+                                text: r.emoji;
+                                font-size: 24px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
                                 width: parent.width;
                                 height: parent.height;
-                                background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
+                            }
+                            recent-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: r.name;
+                                clicked => { root.pick-emoji(r.emoji); }
+                            }
+                        }
+                    }
+                }
 
-                                // No font-family: Oxanium and Barlow carry
-                                // no emoji, so naming either of them here
-                                // gives a grid of tofu boxes. Left unset,
-                                // the platform emoji font resolves them.
-                                Text {
-                                    text: emoji-list[emoji-index].emoji;
-                                    font-size: 18px;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
+                // The grid: the active category, or the search hits. Nine
+                // cells share the width, 24px glyphs. A ListView is right
+                // here: every row is the same height, so no estimate lies.
+                emoji-grid := ListView {
+                    vertical-stretch: 1;
+                    vertical-scrollbar-policy: ScrollBarPolicy.always-off;
+                    horizontal-scrollbar-policy: ScrollBarPolicy.always-off;
 
-                                emoji-cell-touch := TouchArea {
-                                    accessible-role: button;
-                                    accessible-label: emoji-list[emoji-index].name;
-                                    clicked => {
-                                        chat-input.text += emoji-list[emoji-index].emoji;
-                                        chat-input.focus();
-                                        root.emoji-popover-open = false;
-                                    }
-                                }
+                    for row[row-idx] in root.emoji-rows: HorizontalLayout {
+                        height: 38px;
+                        width: emoji-grid.visible-width;
+                        spacing: 2px;
+                        padding-bottom: 2px;
+                        alignment: start;
+
+                        for cell[ci] in row.cells: Rectangle {
+                            // Nine cells share the width; a short last row keeps the size.
+                            width: (emoji-grid.visible-width - 16px) / 9;
+                            background: emoji-cell-touch.has-hover ? Theme.bg-tertiary : transparent;
+
+                            // No font-family: Oxanium and Barlow carry no emoji.
+                            Text {
+                                text: cell.emoji;
+                                font-size: 24px;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: parent.width;
+                                height: parent.height;
+                            }
+
+                            emoji-cell-touch := TouchArea {
+                                accessible-role: button;
+                                accessible-label: cell.name;
+                                clicked => { root.pick-emoji(cell.emoji); }
+                            }
+                        }
+                    }
+                }
+
+                if root.emoji-rows.length == 0 && emoji-search-input.text != "": Text {
+                    font-weight: Theme.weight-sentence;
+                    font-family: Theme.font-body;
+                    text: "No emoji called that";
+                    font-size: Theme.font-md;
+                    color: Theme.text-tertiary;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                    height: 60px;
+                }
+
+                // Category tabs along the bottom. The active one is white underlined.
+                Rectangle {
+                    height: 1px;
+                    background: Theme.graphic-light;
+                }
+                HorizontalLayout {
+                    height: 30px;
+                    spacing: 2px;
+                    for cat[ci] in root.emoji-categories: Rectangle {
+                        horizontal-stretch: 1;
+                        property <bool> on: ci == root.emoji-category && emoji-search-input.text == "";
+                        Text {
+                            text: cat.icon;
+                            font-size: 16px;
+                            opacity: on || tab-touch.has-hover ? 1 : 0.5;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: parent.width;
+                            height: parent.height - 2px;
+                        }
+                        Rectangle {
+                            x: 0;
+                            y: parent.height - self.height;
+                            width: parent.width;
+                            height: 2px;
+                            background: on ? Theme.action : transparent;
+                        }
+                        tab-touch := TouchArea {
+                            accessible-role: tab;
+                            accessible-label: cat.name;
+                            clicked => {
+                                emoji-search-input.text = "";
+                                root.emoji-category-selected(ci);
                             }
                         }
                     }
@@ -1439,6 +2004,7 @@ export component ChatPanel inherits Rectangle {
         if root.gif-popover-open: GifPopover {
             show: root.gif-popover-open;
             gifs: root.gif-results;
+            error: root.gif-error;
             search(query) => { root.gif-search(query); }
             gif-selected(gif-id, url, preview-url, w, h) => {
                 root.gif-selected(gif-id, url, preview-url, w, h);
@@ -1447,11 +2013,96 @@ export component ChatPanel inherits Rectangle {
             close => { root.gif-popover-open = false; }
         }
 
+        // --- Pending image chips ---
+        if root.attachments.length > 0: HorizontalLayout {
+            height: 72px;
+            spacing: 8px;
+            padding-left: 4px;
+            padding-top: 4px;
+            padding-bottom: 4px;
+            alignment: start;
+
+            for a[a-idx] in root.attachments: Rectangle {
+                width: 64px;
+                height: 64px;
+                clip: true;
+                background: Theme.bg-app;
+
+                if a.has-thumb: Image {
+                    source: a.thumb;
+                    width: parent.width;
+                    height: parent.height;
+                    image-fit: cover;
+                    opacity: a.state == "ready" ? 1 : 0.45;
+                }
+
+                // The word under the thumbnail: size, step, or the reason.
+                Rectangle {
+                    x: 0;
+                    y: parent.height - self.height;
+                    width: parent.width;
+                    height: 16px;
+                    background: #000000B8;
+                    Text {
+                        font-family: Theme.font-body;
+                        font-weight: Theme.weight-sentence;
+                        text: a.label;
+                        font-size: 9px;
+                        color: a.state == "failed" ? Theme.live : Theme.text-secondary;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: parent.width - 4px;
+                        height: parent.height;
+                        overflow: elide;
+                    }
+                }
+
+                CutMask {
+                    x: parent.width - self.width;
+                    y: 0;
+                    width: 8px;
+                    height: 8px;
+                    n: 8px;
+                    corner: "tr";
+                    fill: Theme.surface;
+                }
+
+                // Remove, top right.
+                Rectangle {
+                    x: parent.width - self.width - 3px;
+                    y: 3px;
+                    width: 16px;
+                    height: 16px;
+                    background: #000000CC;
+                    Image {
+                        source: @image-url("../icons/x.svg");
+                        width: 9px;
+                        height: 9px;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: Theme.text-primary;
+                    }
+                    TouchArea {
+                        accessible-role: button;
+                        accessible-label: "Remove image";
+                        mouse-cursor: pointer;
+                        clicked => { root.attachment-removed(a.id); }
+                    }
+                }
+            }
+        }
+
         // --- Action pills row ---
         HorizontalLayout {
             height: 28px;
             spacing: 4px;
             padding-left: 0px;
+
+            PillButton {
+                icon: @image-url("../icons/paperclip.svg");
+                label: "Attach";
+                clicked => { root.attach-clicked(); }
+            }
 
             PillButton {
                 icon: @image-url("../icons/gif.svg");
@@ -1470,6 +2121,7 @@ export component ChatPanel inherits Rectangle {
                 label: "Emoji";
                 active: root.emoji-popover-open;
                 clicked => {
+                    root.emoji-target-message = "";
                     root.emoji-popover-open = !root.emoji-popover-open;
                     if root.emoji-popover-open {
                         root.emoji-pill-clicked();
@@ -1508,7 +2160,7 @@ export component ChatPanel inherits Rectangle {
                 text <=> root.chat-input-text;
                 x: 18px;
                 y: 0;
-                width: parent.width - 36px;
+                width: parent.width - 36px - 34px;
                 height: parent.height;
                 font-size: Theme.font-md;
                 color: Theme.text-primary;
@@ -1518,6 +2170,23 @@ export component ChatPanel inherits Rectangle {
                 edited => { root.chat-input-changed(self.text); }
 
                 key-pressed(event) => {
+                    if event.text == Key.Escape && root.actions-message-id != "" {
+                        root.actions-message-id = "";
+                        return accept;
+                    }
+                    if event.text == Key.Escape && (root.emoji-popover-open || root.gif-popover-open) {
+                        root.emoji-popover-open = false;
+                        root.emoji-target-message = "";
+                        root.gif-popover-open = false;
+                        return accept;
+                    }
+                    // Cmd/Ctrl+V with an image on the clipboard: a chip, not text.
+                    if (event.modifiers.meta || event.modifiers.control) && event.text == "v" {
+                        if root.paste-image() {
+                            return accept;
+                        }
+                        return reject;
+                    }
                     if event.text == Key.Return {
                         if event.modifiers.shift {
                             if !root.composer-multiline {
@@ -1526,23 +2195,7 @@ export component ChatPanel inherits Rectangle {
                             root.pending-newline = true;
                             accept
                         } else {
-                            if root.chat-input-text != "" {
-                                if root.edit-mode {
-                                    root.edit-message(root.edit-message-id, root.chat-input-text);
-                                    root.edit-mode = false;
-                                    root.edit-message-id = "";
-                                } else if root.reply-mode {
-                                    root.message-submitted-with-reply(root.chat-input-text, root.reply-to-id);
-                                    root.reply-mode = false;
-                                    root.reply-to-id = "";
-                                    root.reply-to-name = "";
-                                } else {
-                                    root.message-submitted(root.chat-input-text);
-                                }
-                                root.chat-input-text = "";
-                                root.composer-multiline = false;
-                                root.composer-line-count = 1;
-                            }
+                            root.submit-message();
                             accept
                         }
                     } else {
@@ -1559,6 +2212,41 @@ export component ChatPanel inherits Rectangle {
                 color: Theme.text-tertiary;
                 font-size: Theme.font-md;
                 text: "Message crewmates...";
+            }
+
+            // Send: red when there is something to send (it commits), graphite
+            // when the field is empty. Bottom right, so it stays put as the
+            // field grows.
+            send-btn := Rectangle {
+                property <bool> armed: root.chat-input-text != "" || root.attachments.length > 0;
+                x: parent.width - self.width - 6px;
+                y: parent.height - self.height - 6px;
+                width: 28px;
+                height: 28px;
+                background: transparent;
+
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: 6px;
+                    fill: send-btn.armed ? Theme.live : Theme.surface-hover;
+                }
+                Image {
+                    source: @image-url("../icons/arrow-up.svg");
+                    width: 14px;
+                    height: 14px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    colorize: send-btn.armed ? Theme.on-live : Theme.text-tertiary;
+                }
+                TouchArea {
+                    accessible-role: button;
+                    accessible-label: "Send";
+                    enabled: send-btn.armed;
+                    accessible-enabled: send-btn.armed;
+                    mouse-cursor: send-btn.armed ? pointer : default;
+                    clicked => { root.submit-message(); }
+                }
             }
         }
         } // composer block
@@ -1583,13 +2271,8 @@ export component Preview inherits ChatPanel {
     user-name: "bobdev";
     user-id: "u1";
     messages-this-week: 12;
+    actions-message-id: "p4";
     has-new-messages: true;
-    emoji-list: [
-        { emoji: "😀", name: "grinning" },
-        { emoji: "👍", name: "thumbsup" },
-        { emoji: "🔥", name: "fire" },
-        { emoji: "❤️", name: "heart" },
-    ];
     mention-members: [
         { user-id: "u2", display-name: "oweboweob", initials: "OW" },
         { user-id: "u3", display-name: "k0ji", initials: "K0" },
@@ -1602,7 +2285,7 @@ export component Preview inherits ChatPanel {
             display-text: "hey crew, stream at 8?",
             display-styled: @markdown("hey crew, stream at 8?"),
             timestamp: "May 19, 8:02 PM", display-time: "Yesterday",
-            is-group-start: true,
+            is-group-start: true, day-label: "Yesterday",
         },
         {
             message-id: "p2", sender-id: "u2", sender-name: "oweboweob",
@@ -1615,6 +2298,7 @@ export component Preview inherits ChatPanel {
         // Markdown + link
         {
             message-id: "p3", sender-id: "u1", sender-name: "bobdev",
+            reactions: [ { emoji: "😂", count: 2, mine: false }, { emoji: "💀", count: 1, mine: true } ],
             sender-initials: "B0", text: "Check **bold**, *italic*, and https://slint.dev",
             display-text: "Check **bold**, *italic*, and",
             display-styled: @markdown("Check **bold**, *italic*, and"),
@@ -1655,6 +2339,14 @@ export component Preview inherits ChatPanel {
         {
             message-id: "__unread__", is-unread-divider: true,
         },
+        {
+            message-id: "j1", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "🔥🔥",
+            display-text: "🔥🔥",
+            display-styled: @markdown("🔥🔥"),
+            timestamp: "May 20, 8:09 PM", display-time: "8:09 PM",
+            is-group-start: true, is-emoji-only: true,
+        },
         // GIF placeholder
         {
             message-id: "p7", sender-id: "u2", sender-name: "oweboweob",
@@ -1662,7 +2354,7 @@ export component Preview inherits ChatPanel {
             display-text: "", display-styled: @markdown(""),
             timestamp: "May 19, 8:10 PM", display-time: "8:10 PM",
             is-group-start: true, is-gif: true,
-            gif-preview-url: "https://media.giphy.com/media/example.gif",
+            gif-url: "https://media.giphy.com/media/example.gif",
             gif-width: 320, gif-height: 240,
         },
         // Clip card
@@ -1710,18 +2402,89 @@ export component PreviewEmoji inherits ChatPanel {
     user-name: "bobdev";
     user-id: "u1";
     emoji-popover-open: true;
-    emoji-list: [
-        { emoji: "😀", name: "grinning" },
-        { emoji: "👍", name: "thumbsup" },
-        { emoji: "🔥", name: "fire" },
-        { emoji: "❤️", name: "heart" },
-        { emoji: "😂", name: "joy" },
-        { emoji: "🎮", name: "game" },
-        { emoji: "💀", name: "skull" },
-        { emoji: "🙏", name: "pray" },
-        { emoji: "👀", name: "eyes" },
-        { emoji: "🤝", name: "handshake" },
+    recent-emoji: [
+        { emoji: "🔥", name: "fire" }, { emoji: "💀", name: "skull" }, { emoji: "😂", name: "joy" },
     ];
+    emoji-categories: [
+        { name: "Smileys & People", icon: "😀" }, { name: "Animals & Nature", icon: "🐱" },
+        { name: "Food & Drink", icon: "🍕" }, { name: "Activities", icon: "⚽" },
+        { name: "Travel & Places", icon: "🚗" }, { name: "Objects", icon: "💡" },
+        { name: "Symbols", icon: "❤️" }, { name: "Flags", icon: "🏳️" },
+    ];
+    emoji-rows: [
+        { cells: [
+            { emoji: "😀", name: "grinning" }, { emoji: "😃", name: "big eyes" }, { emoji: "😄", name: "smiling eyes" },
+            { emoji: "😁", name: "beaming" }, { emoji: "😆", name: "squinting" }, { emoji: "😅", name: "sweat" },
+            { emoji: "🤣", name: "rolling" }, { emoji: "😂", name: "joy" }, { emoji: "🙂", name: "slightly" },
+        ] },
+        { cells: [
+            { emoji: "🙃", name: "upside" }, { emoji: "😉", name: "wink" }, { emoji: "😊", name: "blush" },
+        ] },
+    ];
+}
+
+/// An image message in the feed and two pending chips in the composer.
+export component PreviewImages inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    chat-input-text: "that round was insane, clip it";
+    attachments: [
+        { id: "a1", state: "ready", label: "860 KB" },
+        { id: "a2", state: "uploading", label: "uploading" },
+    ];
+    messages: [
+        {
+            message-id: "i1", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "look at this one",
+            display-text: "look at this one",
+            display-styled: @markdown("look at this one"),
+            timestamp: "just now", display-time: "19:41",
+            is-group-start: true, is-image: true,
+            images: [
+                { url: "https://chat.example/c/u/a.jpg", width: 1600, height: 1000, bytes-label: "1.2 MB" },
+                { url: "https://chat.example/c/u/b.jpg", width: 800, height: 1200, bytes-label: "", failed: true },
+            ],
+        },
+    ];
+}
+
+/// Two messages: the rows sit together at the bottom at their own height.
+export component PreviewTwo inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    messages-this-week: 2;
+    messages: [
+        {
+            message-id: "t1", sender-id: "u2", sender-name: "oweboweob",
+            sender-initials: "OW", text: "hello from alice",
+            display-text: "hello from alice",
+            display-styled: @markdown("hello from alice"),
+            timestamp: "just now", display-time: "just now",
+            is-group-start: true,
+        },
+        {
+            message-id: "t2", sender-id: "u3", sender-name: "k0ji",
+            sender-initials: "K0", text: "hi alice, bob here",
+            display-text: "hi alice, bob here",
+            display-styled: @markdown("hi alice, bob here"),
+            timestamp: "just now", display-time: "just now",
+            is-group-start: true,
+        },
+    ];
+}
+
+/// The GIF picker with a failed request: a sentence and a retry button.
+export component PreviewGifError inherits ChatPanel {
+    width: 400px;
+    height: 820px;
+    user-name: "bobdev";
+    user-id: "u1";
+    gif-popover-open: true;
+    gif-error: "The GIF service did not answer. Your messages still send.";
 }
 
 /// The GIF picker, open. The cells have no preview image, so they show

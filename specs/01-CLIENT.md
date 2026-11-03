@@ -176,8 +176,8 @@ The ABOUT tab is read-only. It has these parts, top to bottom.
 | THANK YOU | One sentence: m3llo runs on the work of many people and services, and this page names them. |
 | THE OG CREW THAT HELPED SHAPE M3LLO | A row of seven octagons, each with the tester's Steam avatar and the name under it in Oxanium 600: Ostkatt, Propotato, xtrÖm, Erle, Halvtokig, LipzzarN, Keyden. Each octagon is a control labelled "<name> on Steam" that opens the Steam profile in the browser. |
 | SERVICES WE USE | Names only, each a link to its site where one exists (a control labelled "<name> website" that opens the address in the browser through `open_url::open`), and only services that are free or open source: Nakama (Heroic Labs), IGDB, DiceBear, Giphy, Google STUN, Steam, Epic Games, GOG, Riot Games. Paid vendors and sign-in providers are not listed. |
-| OPEN SOURCE WE SHIP | Names only, each a link like the services: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, OpenMoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
-| CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0". IGDB, Slint and OpenMoji are links to igdb.com, slint.dev and openmoji.org. |
+| OPEN SOURCE WE SHIP | Names only, each a link like the services: Slint, Velopack, RNNoise, WebRTC audio processing, ONNX Runtime, Silero VAD, OpenH264, Opus, OpenSSL, libdatachannel, Pion, Twemoji, Oxanium, Barlow. Then "And the Rust crates listed in the third-party notices." Then the button "Third-party notices". |
+| CREDITS | "Game data and artwork by IGDB", "Made with Slint", and "Emoji by Twemoji (https://twemoji.twitter.com), CC BY 4.0". IGDB, Slint and Twemoji are links to igdb.com, slint.dev and twemoji.twitter.com. |
 
 The "Third-party notices" button opens a view in the same modal. A back control returns to ABOUT.
 The view lists each licence text once, with the names of the dependencies that share it.
@@ -190,7 +190,7 @@ A private profile, a profile with no avatar or a failed fetch leaves the monogra
 **Attribution obligations.** Two licences require a visible line in the app.
 
 - The Slint royalty-free licence requires visible attribution. The CREDITS line "Made with Slint" meets it.
-- OpenMoji uses CC BY-SA 4.0. The CREDITS line for OpenMoji, with its address and the licence name, meets it.
+- Twemoji graphics use CC BY 4.0. The CREDITS line for Twemoji, with its address and the licence name, meets it. The font file is Mozilla's COLRv0 build (`client/ui/fonts/LICENSE-Twemoji.txt`).
 
 Do not remove either line. Do not move them out of the ABOUT tab.
 
@@ -199,7 +199,7 @@ It writes `third_party_notices.txt` into `OUT_DIR`. The client embeds it, and `c
 
 - Records are separated by U+001E. Each record has three fields separated by U+001F: the names (one `name version` pair per line), the licence name and the licence text.
 - Dependencies with the same licence text share one record.
-- Sources: the Rust crates (`cargo tree` for the shipped targets, normal dependencies only, with the licence files in the crate source), `libmello/vcpkg.json` and `libmello/third_party`, the font licences in `client/ui/fonts`, and OpenMoji and Slint by name.
+- Sources: the Rust crates (`cargo tree` for the shipped targets, normal dependencies only, with the licence files in the crate source), `libmello/vcpkg.json` and `libmello/third_party`, the font licences in `client/ui/fonts`, and Twemoji and Slint by name.
 
 ---
 

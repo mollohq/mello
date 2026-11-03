@@ -37,6 +37,8 @@ import {
     TesterData,
     InvitePersonData,
     VideoRect,
+    FeedView,
+    AttachmentData, EmojiRowData, EmojiCategoryData, ViewerImageData,
 } from "types.slint";
 import { CrewPanel } from "panels/crew_panel.slint";
 import { StreamSourcePicker } from "panels/stream_source_picker.slint";
@@ -57,6 +59,7 @@ import { ForceUpdateWindow } from "panels/force_update_dialog.slint";
 import { DiscoverPanel } from "panels/discover_panel.slint";
 import { JoinCrewModal } from "panels/join_crew_modal.slint";
 import { InviteShareModal } from "panels/invite_share_modal.slint";
+import { ChatImageViewer } from "panels/image_viewer.slint";
 import { CrewSettingsModal } from "panels/crew_settings_modal.slint";
 import { RiotLinkModal } from "panels/riot_link_modal.slint";
 import { StatsProfileModal } from "panels/stats_profile_modal.slint";
@@ -69,7 +72,7 @@ export { ClipPlayerUi }
 // --- end stage 9 ---
 
 
-export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, ForceUpdateWindow }
+export { ChatFocus, BeltReveal, RecapSeal, Clock, SealedUi, CrewData, MemberData, ChatMessageData, AudioDeviceData, VoiceChannelData, VoiceChannelMember, CaptureSourceData, DiscoverCrewData, SearchUserData, FeedCardData, TitleHeld, H2hPairRow, H2hPerson, Head2headData, RecapLbRow, RecapAwardRow, RecapBeltMovedRow, RecapBeltHeldRow, RecapHeldTitle, RecentGameTile, JoinedRowData, BeltHeroData, HeroStreamData, StreamCardData, YouStripData, GameStatsCardData, GameIntegrationData, InstalledGameData, NoticeEntryData, TesterData, InvitePersonData, Theme, VideoRect, FeedView, ForceUpdateWindow }
 
 export component MainWindow inherits Window {
     title: "m3llo";
@@ -209,13 +212,35 @@ export component MainWindow inherits Window {
     in property <[ChatMessageData]> messages: [];
     in property <int> chat-messages-this-week: 0;
     in property <[GifItemData]> gif-results: [];
+    /// Why the GIF picker is empty. Empty string when the last request worked.
+    in property <string> gif-error: "";
     in property <bool> loading-history: false;
     in property <bool> has-more-history: false;
     in-out property <bool> has-new-messages: false;
     in-out property <bool> scroll-to-bottom-request: false;
+    in-out property <bool> scroll-to-unread-request: false;
     in-out property <int> history-prepended-rows: 0;
     in property <[MentionMemberData]> mention-members: [];
-    in property <[EmojiItemData]> emoji-list: [];
+    /// The picker grid: the active category, or the search hits.
+    in property <[EmojiRowData]> emoji-rows: [];
+    in property <[EmojiItemData]> recent-emoji: [];
+    in property <[EmojiCategoryData]> emoji-categories: [];
+    in-out property <int> emoji-category: 0;
+    /// When set, the next emoji pick is a reaction on this message, not text.
+    in-out property <string> emoji-target-message: "";
+    /// The composer's pending image chips.
+    in property <[AttachmentData]> chat-attachments: [];
+    /// The image open in the viewer over the chat panel. Empty when closed.
+    /// The image viewer over the whole window. Empty list = closed.
+    in-out property <[ViewerImageData]> chat-viewer-images: [];
+    in-out property <int> chat-viewer-index: 0;
+    in-out property <string> chat-viewer-sender: "";
+    in-out property <bool> chat-viewer-open: false;
+    /// The message whose action bar is open, for the state port and tests.
+    in-out property <string> chat-actions-message-id: "";
+    /// The viewer shows another index; the client fetches that image.
+    callback chat-viewer-shown(/* index */ int);
+    in-out property <bool> emoji-popover-open: false;
     in property <[MentionMemberData]> mention-suggestions: [];
     in-out property <string> chat-input-text: "";
     in-out property <int> composer-line-count: 1;
@@ -263,6 +288,8 @@ export component MainWindow inherits Window {
     // Pre-filled post-game record from telemetry (e.g. "5W–3L · 2-win streak").
     in property <string> game-summary: "";
     in property <string> telemetry-hint: "";
+    // The activity inside the game (spec 18 §3.11): the Roblox experience.
+    in property <string> game-activity: "";
     in property <bool> can-stream: false;
     in-out property <int> bar-state: 0;
 
@@ -675,8 +702,22 @@ export component MainWindow inherits Window {
     callback gif-pill-clicked();
     callback gif-search(/* query */ string);
     callback gif-selected(/* gif_id */ string, /* url */ string, /* preview_url */ string, /* width */ int, /* height */ int);
-    callback gif-hovered(/* preview_url */ string);
+    callback gif-hovered(/* url */ string);
+    /// The Attach pill: open a file dialog for up to four images.
+    callback attach-clicked();
+    callback attachment-removed(/* id */ string);
+    /// Cmd/Ctrl+V in the field. True when the clipboard held an image and it
+    /// became a chip, so the field does not paste text.
+    callback paste-image() -> bool;
+    callback chat-image-clicked(/* url */ string, /* sender */ string);
+    callback chat-image-save(/* url */ string);
+    callback chat-image-copy(/* url */ string);
     callback emoji-pill-clicked();
+    callback emoji-search(/* query */ string);
+    callback emoji-category-selected(/* index */ int);
+    callback emoji-picked(/* emoji */ string);
+    /// Toggle this user's reaction under `emoji` on a message.
+    callback react(/* message_id */ string, /* emoji */ string);
     callback chat-viewport-changed(/* at_bottom */ bool);
     callback scroll-to-bottom-done();
     callback link-clicked(/* url */ string);
@@ -1206,6 +1247,7 @@ export component MainWindow inherits Window {
                         game-hue-index: root.game-hue-index;
                         game-summary: root.game-summary;
                         telemetry-hint: root.telemetry-hint;
+                        game-activity: root.game-activity;
                         can-stream: root.can-stream;
                         is-hosting: root.is-hosting;
                         is-watching: root.is-watching;
@@ -1285,16 +1327,35 @@ export component MainWindow inherits Window {
                     messages: root.messages;
                     messages-this-week: root.chat-messages-this-week;
                     gif-results: root.gif-results;
+                    gif-error: root.gif-error;
                     user-name: root.user-name;
                     user-id: root.user-id;
                     loading-history: root.loading-history;
                     has-more-history: root.has-more-history;
                     has-new-messages <=> root.has-new-messages;
                     scroll-to-bottom-request <=> root.scroll-to-bottom-request;
+                    scroll-to-unread-request <=> root.scroll-to-unread-request;
                     history-prepended-rows: root.history-prepended-rows;
                     mention-members: root.mention-members;
                     mention-suggestions: root.mention-suggestions;
-                    emoji-list: root.emoji-list;
+                    emoji-rows: root.emoji-rows;
+                    recent-emoji: root.recent-emoji;
+                    emoji-categories: root.emoji-categories;
+                    emoji-category <=> root.emoji-category;
+                    emoji-target-message <=> root.emoji-target-message;
+                    actions-message-id <=> root.chat-actions-message-id;
+                    react(id, emoji) => { root.react(id, emoji); }
+                    emoji-search(query) => { root.emoji-search(query); }
+                    emoji-category-selected(index) => { root.emoji-category-selected(index); }
+                    emoji-picked(emoji) => { root.emoji-picked(emoji); }
+                    emoji-popover-open <=> root.emoji-popover-open;
+                    attachments: root.chat-attachments;
+                    attach-clicked() => { root.attach-clicked(); }
+                    attachment-removed(id) => { root.attachment-removed(id); }
+                    paste-image() => { return root.paste-image(); }
+                    image-clicked(url, sender) => { root.chat-image-clicked(url, sender); }
+                    image-save(url) => { root.chat-image-save(url); }
+                    image-copy(url) => { root.chat-image-copy(url); }
                     chat-input-text <=> root.chat-input-text;
                     composer-line-count <=> root.composer-line-count;
                     composer-multiline <=> root.composer-multiline;
@@ -1656,6 +1717,16 @@ export component MainWindow inherits Window {
     }
 
     // ===================== INVITE SHARE MODAL =====================
+    if root.chat-viewer-open: ChatImageViewer {
+        images: root.chat-viewer-images;
+        index <=> root.chat-viewer-index;
+        sender: root.chat-viewer-sender;
+        close => { root.chat-viewer-open = false; }
+        save(url) => { root.chat-image-save(url); }
+        copy(url) => { root.chat-image-copy(url); }
+        shown(i) => { root.chat-viewer-shown(i); }
+    }
+
     if invite-share-open: InviteShareModal {
         invite-url: root.invite-share-url;
         // Two-way: the modal's revert writes `copied`, and a one-way binding

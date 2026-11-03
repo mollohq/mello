@@ -1,7 +1,7 @@
 import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButton, CutButtonShape, OctShape, OctMask } from "../components/cut.slint";
 import { UserAvatar, AvatarOverflow } from "../components/avatar.slint";
-import { BeltReveal, ChatFocus, DaySession, FeedCardData, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
+import { BeltReveal, ChatFocus, DaySession, FeedCardData, FeedView, H2hPerson, HeroStreamData, JoinedRowData, RecentGameTile, StreamCardData, YouStripData } from "../types.slint";
 import { ActiveStreamsPanel } from "./active_streams_panel.slint";
 import { SessionPreviewCard } from "./session_preview_card.slint";
 import { GameClipCard } from "./game_clip_card.slint";
@@ -2729,6 +2729,7 @@ component FeedSlot inherits Rectangle {
     // Real cards
     if card.card-type == "clip" && card.clip-kind == "game": GameClipCard {
         width: parent.width; height: parent.height;
+        card-id: card.id;
         is-hero: card.is-hero;
         is-new: card.is-new;
         poster: card.snapshot-poster;
@@ -2987,6 +2988,17 @@ export component CrewFeed inherits Rectangle {
     callback session-preview-request-frame(/* session_id */ string, /* index */ int);
     callback feed-show-more-clicked();
     callback you-strip-clicked();
+
+    // The visible band for the session-preview posters (FeedView). The feed
+    // scrolls inside this panel, so the panel's own bounds are the band.
+    property <length> view-top: self.absolute-position.y;
+    property <length> view-bottom: self.absolute-position.y + self.height;
+    init => {
+        FeedView.top = self.view-top;
+        FeedView.bottom = self.view-bottom;
+    }
+    changed view-top => { FeedView.top = self.view-top; }
+    changed view-bottom => { FeedView.bottom = self.view-bottom; }
 
     // A recap with content holds the whole side column beside the two-stream
     // hero, so it is the only card there (frame D). Mirrors `side_cards` in

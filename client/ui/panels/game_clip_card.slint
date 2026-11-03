@@ -2,6 +2,7 @@ import { Theme } from "../theme.slint";
 import { CutShape, CutMask, CutButtonShape } from "../components/cut.slint";
 import { UserAvatar } from "../components/avatar.slint";
 import { MediaChip, PlayButton, FootageWash } from "../components/stream_hero.slint";
+import { FeedView } from "../types.slint";
 
 // ============================================================
 //  The game clip card (CLIPS.md 15.6). A game clip is footage,
@@ -53,7 +54,30 @@ export component GameClipCard inherits Rectangle {
     /// "0:31"
     in property <string> duration;
 
+    /// The feed card id, for the poster request.
+    in property <string> card-id;
+
     callback play-clicked();
+
+    // The poster is decoded only while the card is within one band height of
+    // the feed's visible band (FeedView); out of it, Rust drops the poster.
+    property <length> band: FeedView.bottom - FeedView.top;
+    property <bool> near-view: root.card-id != ""
+        && self.absolute-position.y + self.height > FeedView.top - band
+        && self.absolute-position.y < FeedView.bottom + band;
+
+    function want-poster() {
+        FeedView.poster-wanted(root.card-id, root.near-view, footage.width / 1px, footage.height / 1px);
+    }
+
+    // Also when far: a feed rebuild can hand a new instance a row that still
+    // holds a poster.
+    init => {
+        root.want-poster();
+    }
+    changed near-view => {
+        root.want-poster();
+    }
 
     property <length> edge: root.is-hero ? 18px : 10px;
 

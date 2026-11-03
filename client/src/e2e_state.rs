@@ -296,6 +296,39 @@ struct FeedCardSnap {
     clip_uploading: bool,
     /// The video is up, or this PC has the clip file.
     clip_can_play: bool,
+    /// The grid row the card is in, one-based (`feed_grid::rows`). A card in
+    /// the stream rows above the grid is row 0.
+    row: usize,
+    /// The card holds a two-column slot.
+    wide: bool,
+}
+
+/// The feed cards on screen with their grid row and slot width.
+fn read_feed_cards(app: &MainWindow) -> Vec<FeedCardSnap> {
+    let cards: Vec<crate::FeedCardData> = app.get_feed_cards().iter().collect();
+    let infos: Vec<crate::feed_grid::CardInfo> =
+        cards.iter().map(crate::feed_grid::CardInfo::of).collect();
+    let start = crate::feed_grid::grid_start(app.get_active_stream_cards().row_count(), &infos);
+    let rows = crate::feed_grid::rows(&infos, start);
+    let wide = crate::feed_grid::wide_slot_indices(&infos, start);
+    cards
+        .iter()
+        .enumerate()
+        .take(LIST_LIMIT)
+        .map(|(i, c)| FeedCardSnap {
+            id: c.id.to_string(),
+            card_type: c.card_type.to_string(),
+            title: c.title.to_string(),
+            actor_name: c.actor_name.to_string(),
+            clip_path: c.clip_path.to_string(),
+            clip_kind: c.clip_kind.to_string(),
+            clip_poster_path: c.clip_poster_path.to_string(),
+            clip_uploading: c.clip_uploading,
+            clip_can_play: c.clip_can_play,
+            row: rows[i],
+            wide: wide.contains(&i),
+        })
+        .collect()
 }
 
 #[derive(Serialize)]
@@ -593,6 +626,10 @@ struct MessageSnap {
     edited: bool,
     deleted: bool,
     gif: bool,
+    /// How many images the message carries.
+    images: usize,
+    /// How many distinct reaction emoji the message has.
+    reactions: usize,
     /// The message mentions this user (the row is marked).
     mentions_me: bool,
 }
@@ -1235,6 +1272,8 @@ fn read(app: &MainWindow) -> Snapshot {
                     edited: m.is_edited,
                     deleted: m.is_deleted,
                     gif: m.is_gif,
+                    images: m.images.row_count(),
+                    reactions: m.reactions.row_count(),
                     mentions_me: m.mentions_self,
                 })
                 .collect();
@@ -1325,17 +1364,7 @@ fn read(app: &MainWindow) -> Snapshot {
                 can_watch: c.can_watch,
             }),
         },
-        feed_cards: first_rows(&app.get_feed_cards(), |c| FeedCardSnap {
-            id: c.id.to_string(),
-            card_type: c.card_type.to_string(),
-            title: c.title.to_string(),
-            actor_name: c.actor_name.to_string(),
-            clip_path: c.clip_path.to_string(),
-            clip_kind: c.clip_kind.to_string(),
-            clip_poster_path: c.clip_poster_path.to_string(),
-            clip_uploading: c.clip_uploading,
-            clip_can_play: c.clip_can_play,
-        }),
+        feed_cards: read_feed_cards(app),
         clip: ClipSnap {
             path: app.get_clip_playing_path().into(),
             paused: app.get_clip_paused(),

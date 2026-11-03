@@ -17,6 +17,7 @@ pub mod crew_state;
 #[cfg(feature = "e2e-game")]
 pub mod e2e_game;
 pub mod emoji;
+pub mod emoji_table;
 pub mod error;
 pub mod events;
 pub mod feed_reload;
@@ -31,6 +32,7 @@ pub mod nakama;
 pub mod oauth;
 pub mod pending_session_ends;
 pub mod presence;
+pub mod roblox_names;
 pub mod session;
 pub mod session_store;
 pub mod stats;

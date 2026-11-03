@@ -1323,6 +1323,7 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
             create_time: "2026-03-08T12:00:00Z".into(),
             update_time: "2026-03-08T12:00:00Z".into(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,
@@ -1339,6 +1340,1098 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
     assert_eq!(row.display_text, "hey @Me");
     assert_eq!(row.text, "hey @Me", "copy and edit must see the name");
     assert!(row.mentions_self);
+}
+
+// ---------------------------------------------------------------------------
+// Chat: images
+// ---------------------------------------------------------------------------
+
+fn image_data(n: u32) -> mello_core::chat::ImageData {
+    mello_core::chat::ImageData {
+        url: format!("http://localhost:9000/mello-chat/crew-1/u-bob/{n}.jpg"),
+        width: 1600,
+        height: 900,
+        bytes: 120_000,
+        mime: "image/jpeg".into(),
+    }
+}
+
+fn test_png(w: u32, h: u32) -> Vec<u8> {
+    let img = image::RgbaImage::from_fn(w, h, |x, y| {
+        image::Rgba([(x % 256) as u8, (y % 256) as u8, 40, 255])
+    });
+    let mut out = std::io::Cursor::new(Vec::new());
+    image::DynamicImage::ImageRgba8(img)
+        .write_to(&mut out, image::ImageFormat::Png)
+        .expect("png");
+    out.into_inner()
+}
+
+/// An image message is a row with its images, and every image is asked
+/// from the cache so the pixels arrive without a hover.
+#[test]
+fn an_image_message_renders_its_images_and_asks_the_cache() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img1", "bob", 0);
+    m.images = vec![image_data(1), image_data(2)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m],
+        has_more_history: false,
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "img1")
+        .expect("row");
+    assert!(row.is_image);
+    assert_eq!(row.images.row_count(), 2);
+    let first = row.images.row_data(0).expect("image");
+    assert_eq!(first.bytes_label, "118 KB");
+    assert!(!first.has_image, "no pixels yet");
+    for n in [1, 2] {
+        assert!(
+            h.ctx().gif_chat_anim.is_requested(&image_data(n).url),
+            "image {n} was asked from the cache"
+        );
+    }
+}
+
+/// A picked image is a chip at once, uploads when prepared, and the send
+/// the user asked for in between goes out as one image message when the
+/// upload lands. The chips go with it.
+#[test]
+fn a_send_waits_for_the_upload_then_goes_as_one_image_message() {
+    use crate::chat_images::{lock, AttachmentState};
+    use slint::Model;
+    let mut h = Harness::new();
+    let id =
+        crate::callbacks::chat::begin_attachment(&h.ctx().chat_attachments, &h.app().as_weak())
+            .expect("a slot");
+    assert_eq!(h.app().get_chat_attachments().row_count(), 1);
+    assert_eq!(
+        h.app()
+            .get_chat_attachments()
+            .row_data(0)
+            .expect("chip")
+            .state,
+        "preparing"
+    );
+
+    h.app().invoke_send_message("with a caption".into());
+    h.pump();
+    assert!(
+        h.commands().is_empty(),
+        "nothing sends while the image prepares"
+    );
+
+    let prepared = crate::chat_images::prepare_image(&test_png(2400, 1200));
+    crate::callbacks::chat::attachment_prepared(h.ctx(), &id, prepared);
+    let chip = h.app().get_chat_attachments().row_data(0).expect("chip");
+    assert_eq!(chip.state, "uploading");
+    assert!(chip.has_thumb);
+    let cmds = h.commands();
+    let upload = cmds
+        .iter()
+        .find_map(|c| match c {
+            Command::UploadChatImage {
+                attachment_id,
+                mime,
+                width,
+                height,
+                bytes,
+            } => Some((
+                attachment_id.clone(),
+                mime.clone(),
+                *width,
+                *height,
+                bytes.len(),
+            )),
+            _ => None,
+        })
+        .expect("the prepared bytes go to the core");
+    assert_eq!(upload.0, id);
+    assert_eq!(upload.1, "image/jpeg");
+    assert_eq!(
+        (upload.2, upload.3),
+        (1600, 800),
+        "resized to 1600 on the long side"
+    );
+    assert!(upload.4 > 0);
+
+    h.emit(Event::ChatImageUploaded {
+        attachment_id: id.clone(),
+        image: image_data(7),
+    });
+    let cmds = h.commands();
+    match cmds
+        .iter()
+        .find(|c| matches!(c, Command::SendImages { .. }))
+    {
+        Some(Command::SendImages {
+            images, content, ..
+        }) => {
+            assert_eq!(images.len(), 1);
+            assert_eq!(images[0].url, image_data(7).url);
+            assert_eq!(content, "with a caption");
+        }
+        _ => panic!("the message goes out as images, got {cmds:?}"),
+    }
+    assert_eq!(
+        h.app().get_chat_attachments().row_count(),
+        0,
+        "the chips went with it"
+    );
+    assert!(lock(&h.ctx().chat_attachments).pending_send.is_none());
+    let _ = AttachmentState::Preparing;
+}
+
+/// A failed upload keeps its chip with the reason, and a send with text goes
+/// out as text; a failed chip never blocks the composer.
+#[test]
+fn a_failed_upload_keeps_its_reason_and_text_still_sends() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let id =
+        crate::callbacks::chat::begin_attachment(&h.ctx().chat_attachments, &h.app().as_weak())
+            .expect("a slot");
+    crate::callbacks::chat::attachment_prepared(
+        h.ctx(),
+        &id,
+        crate::chat_images::prepare_image(&test_png(10, 10)),
+    );
+    let _ = h.commands();
+    h.emit(Event::ChatImageUploadFailed {
+        attachment_id: id,
+        reason: "The upload was refused.".into(),
+    });
+    let chip = h.app().get_chat_attachments().row_data(0).expect("chip");
+    assert_eq!(chip.state, "failed");
+    assert_eq!(chip.label, "The upload was refused.");
+
+    h.app().invoke_send_message("still here".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::SendMessage { content, .. } if content == "still here")),
+        "text goes as text, got {cmds:?}"
+    );
+}
+
+/// Deleting an image message also asks the core to remove its objects.
+#[test]
+fn deleting_an_image_message_removes_its_objects() {
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img9", "bob", 0);
+    m.images = vec![image_data(1)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m, chat_message_fixture("t1", "alice", 1)],
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.app().invoke_delete_message("t1".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(cmds
+        .iter()
+        .any(|c| matches!(c, Command::DeleteMessage { message_id } if message_id == "t1")));
+    assert!(
+        !cmds
+            .iter()
+            .any(|c| matches!(c, Command::DeleteChatImages { .. })),
+        "a text message has no objects"
+    );
+
+    h.app().invoke_delete_message("img9".into());
+    h.pump();
+    let cmds = h.commands();
+    match cmds
+        .iter()
+        .find(|c| matches!(c, Command::DeleteChatImages { .. }))
+    {
+        Some(Command::DeleteChatImages { urls }) => assert_eq!(urls, &vec![image_data(1).url]),
+        _ => panic!("the objects go with the message, got {cmds:?}"),
+    }
+}
+
+/// Clicking an image opens the viewer over the window with every image of
+/// the message, starting at the one clicked.
+#[test]
+fn clicking_an_image_opens_the_viewer_at_that_image() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let mut m = chat_message_fixture("img1", "bob", 0);
+    m.images = vec![image_data(3), image_data(4), image_data(5)];
+    h.emit(Event::MessagesLoaded {
+        messages: vec![m],
+        has_more_history: false,
+    });
+    h.app()
+        .invoke_chat_image_clicked(image_data(4).url.into(), "bob".into());
+    assert!(h.app().get_chat_viewer_open());
+    assert_eq!(
+        h.app().get_chat_viewer_index(),
+        1,
+        "the clicked one, the second"
+    );
+    assert_eq!(h.app().get_chat_viewer_sender(), "bob");
+    let rows = h.app().get_chat_viewer_images();
+    assert_eq!(rows.row_count(), 3, "every image of the message");
+    let shown = rows.row_data(1).expect("row");
+    assert_eq!(shown.label, "1600×900 · 118 KB");
+    assert!(!shown.has_image, "pixels not fetched in the harness");
+}
+
+// ---------------------------------------------------------------------------
+// Chat: reactions
+// ---------------------------------------------------------------------------
+
+fn reaction_update(
+    message_id: &str,
+    pairs: &[(&str, &[&str])],
+) -> mello_core::crew_state::ReactionUpdate {
+    mello_core::crew_state::ReactionUpdate {
+        crew_id: "crew-1".into(),
+        message_id: message_id.into(),
+        reactions: pairs
+            .iter()
+            .map(|(e, users)| {
+                (
+                    (*e).to_string(),
+                    users.iter().map(|u| (*u).to_string()).collect(),
+                )
+            })
+            .collect(),
+    }
+}
+
+/// Loaded reactions show as chips with a count; the user's own is marked.
+/// A click on a chip toggles: remove when it is mine, add when it is not.
+#[test]
+fn reactions_show_as_chips_and_a_click_toggles_mine() {
+    use slint::Model;
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    h.emit(Event::ChatReactionsLoaded {
+        crew_id: "crew-1".into(),
+        items: vec![reaction_update(
+            "m0",
+            &[("🔥", &["u-bob", "u-me"]), ("💀", &["u-bob"])],
+        )],
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "m0")
+        .expect("row");
+    let chips: Vec<(String, i32, bool)> = (0..row.reactions.row_count())
+        .filter_map(|i| row.reactions.row_data(i))
+        .map(|r| (r.emoji.to_string(), r.count, r.mine))
+        .collect();
+    assert_eq!(
+        chips,
+        vec![("💀".to_string(), 1, false), ("🔥".to_string(), 2, true)]
+    );
+
+    let _ = h.commands();
+    h.app().invoke_react("m0".into(), "🔥".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::ReactToMessage { message_id, emoji, add: false } if message_id == "m0" && emoji == "🔥")),
+        "mine comes off, got {cmds:?}"
+    );
+    h.app().invoke_react("m0".into(), "💀".into());
+    h.pump();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(
+            |c| matches!(c, Command::ReactToMessage { emoji, add: true, .. } if emoji == "💀")
+        ),
+        "not mine goes on, got {cmds:?}"
+    );
+
+    // The server's answer replaces the message's reactions in place.
+    h.emit(Event::ChatReactionChanged {
+        update: reaction_update("m0", &[("💀", &["u-bob", "u-me"])]),
+    });
+    let rows = h.app().get_messages();
+    let row = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "m0")
+        .expect("row");
+    assert_eq!(row.reactions.row_count(), 1);
+    let only = row.reactions.row_data(0).expect("chip");
+    assert_eq!(
+        (only.emoji.to_string(), only.count, only.mine),
+        ("💀".to_string(), 2, true)
+    );
+}
+
+/// ★ Regression: the action bar sat in a 28px gutter that three buttons
+/// overflowed, under the body, so nothing showed. It opens on a click on the
+/// message, at its top right, with React, Reply and More; a second click on
+/// the message closes it. Reply starts reply mode.
+#[test]
+fn a_click_on_a_message_opens_its_action_bar() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+    assert_eq!(
+        h.controls_labelled("React").len(),
+        0,
+        "no bar until a click"
+    );
+    let bodies = h.controls_labelled("Message actions");
+    assert_eq!(bodies.len(), 3);
+
+    bodies[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
+    let reply = h.controls_labelled("Reply");
+    assert_eq!(reply.len(), 1, "one bar, on the clicked message");
+    assert_eq!(h.controls_labelled("React").len(), 1);
+    assert_eq!(h.controls_labelled("More actions").len(), 1);
+    let (top, bottom) = feed_frame(&h);
+    let body = &bodies[1];
+    let bar = &reply[0];
+    assert!(
+        bar.size().width >= 28.0 && bar.size().height >= 28.0,
+        "a button you can hit"
+    );
+    assert!(
+        bar.absolute_position().y > top - 30.0 && bar.absolute_position().y < bottom,
+        "the bar sits with its message"
+    );
+    assert!(
+        bar.absolute_position().x > body.absolute_position().x + body.size().width - 120.0,
+        "at the right edge of the message, not over the words"
+    );
+
+    bar.mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
+    assert_eq!(
+        h.controls_labelled("Cancel reply").len(),
+        1,
+        "reply mode is on, with its bar in the composer"
+    );
+
+    let bodies = h.controls_labelled("Message actions");
+    bodies[1].mock_single_click(slint::platform::PointerEventButton::Left);
+    h.pump();
+    next_frame();
+    assert_eq!(
+        h.controls_labelled("Reply").len(),
+        0,
+        "a second click closes the bar"
+    );
+}
+
+/// React on a message opens the picker in reaction mode: the pick becomes a
+/// reaction, the picker closes, and the field keeps its text.
+#[test]
+fn the_picker_in_reaction_mode_reacts_instead_of_typing() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-me".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    next_frame();
+    h.app().set_chat_input_text("draft".into());
+    h.app().set_emoji_target_message("m1".into());
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    h.app().invoke_emoji_search("fire".into());
+    next_frame();
+    let _ = h.commands();
+    h.click_label("fire");
+    next_frame();
+    let cmds = h.commands();
+    assert!(
+        cmds.iter().any(|c| matches!(c, Command::ReactToMessage { message_id, emoji, add: true } if message_id == "m1" && emoji == "🔥")),
+        "the pick is a reaction, got {cmds:?}"
+    );
+    assert_eq!(
+        h.app().get_chat_input_text(),
+        "draft",
+        "the field is untouched"
+    );
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "a reaction closes the picker"
+    );
+    assert_eq!(h.app().get_emoji_target_message(), "");
+}
+
+// ---------------------------------------------------------------------------
+// Chat: read cursor
+// ---------------------------------------------------------------------------
+
+fn preview(id: &str, user: &str, ts: &str) -> mello_core::crew_state::MessagePreview {
+    mello_core::crew_state::MessagePreview {
+        message_id: Some(id.into()),
+        user_id: Some(user.into()),
+        username: user.into(),
+        preview: format!("msg {id}"),
+        timestamp: ts.into(),
+    }
+}
+
+/// The read cursor puts the unread rule after the last read message and
+/// opens the feed there. Reaching the bottom stores the cursor at the newest
+/// message, once.
+#[test]
+fn the_feed_opens_at_the_unread_rule_from_the_read_cursor() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-me".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 40),
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.emit(Event::ChatReadCursorLoaded {
+        crew_id: "crew-1".into(),
+        cursor: Some(mello_core::chat::ChatReadCursor {
+            message_id: "m19".into(),
+            time: chat_message_fixture("m19", "bob", 190).create_time,
+        }),
+    });
+    assert_eq!(
+        h.ctx().chat_scroll.first_unread_id().as_deref(),
+        Some("m20")
+    );
+    assert!(h.app().get_has_new_messages());
+    assert!(
+        h.commands().is_empty(),
+        "nothing is marked read while unread rows are above the bottom"
+    );
+    next_frame();
+    let_feed_settle();
+    let (top, bottom) = feed_frame(&h);
+    let first_unread =
+        visible_body(&h, "message m20 from alice").expect("the first unread is on screen");
+    assert!(
+        first_unread.absolute_position().y < top + 120.0,
+        "the unread rule sits near the top: {} vs {top}",
+        first_unread.absolute_position().y
+    );
+    assert!(
+        visible_body(&h, "message m39 from bob").is_none(),
+        "the newest message is below the feed, {bottom} tall"
+    );
+
+    // Scroll to the end: at the bottom, the cursor moves to the newest message.
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: -50_000.0,
+        });
+    h.pump();
+    next_frame();
+    let cmds = h.commands();
+    let marks: Vec<_> = cmds
+        .iter()
+        .filter_map(|c| match c {
+            Command::MarkChatRead {
+                crew_id,
+                message_id,
+                ..
+            } => Some((crew_id.clone(), message_id.clone())),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(marks, vec![("crew-1".to_string(), "m39".to_string())]);
+
+    h.app().invoke_chat_viewport_changed(true);
+    h.pump();
+    assert!(
+        !h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::MarkChatRead { .. })),
+        "the same newest message is not stored twice"
+    );
+}
+
+/// A crew never read before is read up to its newest message as soon as it
+/// opens, so the next start has a cursor.
+#[test]
+fn a_crew_without_a_cursor_is_marked_read_at_the_newest() {
+    let mut h = Harness::new();
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    let _ = h.commands();
+    h.emit(Event::ChatReadCursorLoaded {
+        crew_id: "crew-1".into(),
+        cursor: None,
+    });
+    let cmds = h.commands();
+    assert!(
+        cmds.iter()
+            .any(|c| matches!(c, Command::MarkChatRead { message_id, .. } if message_id == "m2")),
+        "got {cmds:?}"
+    );
+    assert!(h.ctx().chat_scroll.first_unread_id().is_none());
+}
+
+/// The sidebar badge of another crew counts the previews newer than its
+/// cursor, own messages excluded, and the crew on screen has none.
+#[test]
+fn an_unread_crew_gets_a_badge_from_its_cursor_and_previews() {
+    let mut h = Harness::new();
+    h.app().set_user_id("u-me".into());
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(Event::ChatReadCursors {
+        cursors: vec![(
+            "crew-2".into(),
+            mello_core::chat::ChatReadCursor {
+                message_id: "p1".into(),
+                time: "2026-03-08T12:00:00Z".into(),
+            },
+        )],
+    });
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-2".into(),
+        messages: vec![
+            preview("p3", "u-me", "2026-03-08T12:05:00Z"),
+            preview("p2", "u-bob", "2026-03-08T12:02:00Z"),
+            preview("p1", "u-bob", "2026-03-08T12:00:00Z"),
+        ],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-2").count,
+        1,
+        "p2 only: p1 is read, p3 is mine"
+    );
+
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-1".into(),
+        messages: vec![preview("q1", "u-bob", "2026-03-08T12:09:00Z")],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-1").count,
+        0,
+        "the crew on screen has no badge"
+    );
+
+    h.emit(Event::MessagePreviewUpdated {
+        crew_id: "crew-3".into(),
+        messages: vec![
+            preview("r1", "u-bob", "2026-03-08T12:09:00Z"),
+            preview("r0", "u-kim", "2026-03-08T11:00:00Z"),
+        ],
+    });
+    assert_eq!(
+        h.ctx().unread_tracker.borrow().get("crew-3").count,
+        2,
+        "no cursor: every preview by others is unread"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Chat: emoji
+// ---------------------------------------------------------------------------
+
+/// Three emoji or fewer with no text render big. The flag is on the row, and
+/// an edit that turns text into emoji updates it in place.
+#[test]
+fn an_emoji_only_message_is_flagged_for_the_jumbo_size() {
+    use slint::Model;
+    let mut h = Harness::new();
+    let mut fire = chat_message_fixture("e1", "alice", 0);
+    fire.content = "🔥🔥".into();
+    fire.display_body = "🔥🔥".into();
+    let mut words = chat_message_fixture("e2", "bob", 1);
+    words.content = "🔥 nice".into();
+    words.display_body = "🔥 nice".into();
+    h.emit(Event::MessagesLoaded {
+        messages: vec![fire, words],
+        has_more_history: false,
+    });
+    let rows = h.app().get_messages();
+    let row = |id: &str| {
+        (0..rows.row_count())
+            .filter_map(|i| rows.row_data(i))
+            .find(|r| r.message_id == id)
+            .expect("row")
+    };
+    assert!(row("e1").is_emoji_only);
+    assert!(!row("e2").is_emoji_only);
+
+    h.emit(Event::ChatMessageEdited {
+        message_id: "e2".into(),
+        new_content: "💀".into(),
+        new_display_body: "💀".into(),
+        mentions: Vec::new(),
+        update_time: "2026-03-08T10:02:00Z".into(),
+    });
+    let rows = h.app().get_messages();
+    let edited = (0..rows.row_count())
+        .filter_map(|i| rows.row_data(i))
+        .find(|r| r.message_id == "e2")
+        .expect("row");
+    assert!(edited.is_emoji_only, "the edit changed the row in place");
+}
+
+/// A pick adds the emoji to the field and closes the picker. Escape in the
+/// field closes it too. Recent keeps the picks, newest first.
+#[test]
+fn the_emoji_picker_closes_after_a_pick() {
+    use slint::Model;
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    assert_eq!(
+        h.controls_labelled("Message crewmates").len(),
+        1,
+        "the field stays a control while the picker is open"
+    );
+    assert_eq!(h.app().get_emoji_categories().row_count(), 8);
+    assert!(
+        h.app().get_emoji_rows().row_count() > 10,
+        "the first category fills the grid"
+    );
+
+    // Fire lives far down Travel & Places, past what the virtualized grid
+    // draws, so search brings it to the first row.
+    h.app().invoke_emoji_search("fire".into());
+    next_frame();
+    // ★ Regression: fixed 36px cells made the grid wider than the popover,
+    // and the picker scrolled sideways. The cells share the panel width.
+    let fire = h.controls_labelled("fire");
+    assert_eq!(fire.len(), 1, "one fire cell at the top of the hits");
+    assert!(
+        fire[0].size().width > 30.0,
+        "a useful cell size, got {}",
+        fire[0].size().width
+    );
+    h.click_label("fire");
+    next_frame();
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "a pick closes the picker"
+    );
+    assert_eq!(h.app().get_chat_input_text(), "🔥");
+
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    h.app().invoke_emoji_search("skull".into());
+    next_frame();
+    h.click_label("skull");
+    next_frame();
+    assert_eq!(h.app().get_chat_input_text(), "🔥💀");
+    let recent: Vec<String> = (0..h.app().get_recent_emoji().row_count())
+        .filter_map(|i| h.app().get_recent_emoji().row_data(i))
+        .map(|e| e.emoji.to_string())
+        .collect();
+    assert_eq!(recent, ["💀", "🔥"], "newest pick first");
+
+    h.app().set_emoji_popover_open(true);
+    next_frame();
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Escape.into(),
+        });
+    next_frame();
+    assert!(
+        !h.app().get_emoji_popover_open(),
+        "Escape closes the picker"
+    );
+}
+
+/// Search filters the grid by name; clearing it brings the category back.
+#[test]
+fn the_emoji_picker_searches_by_name() {
+    use slint::Model;
+    let h = Harness::new();
+    h.app().invoke_emoji_search("thumbs up".into());
+    let rows = h.app().get_emoji_rows();
+    let first = rows
+        .row_data(0)
+        .and_then(|r| r.cells.row_data(0))
+        .expect("a hit");
+    assert_eq!(first.emoji, "👍");
+    h.app().invoke_emoji_search("zzzz".into());
+    assert_eq!(
+        h.app().get_emoji_rows().row_count(),
+        0,
+        "no hits, the panel says so"
+    );
+    h.app().invoke_emoji_search("".into());
+    assert!(
+        h.app().get_emoji_rows().row_count() > 10,
+        "the category is back"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Chat feed: scroll position
+// ---------------------------------------------------------------------------
+
+fn chat_message_fixture(id: &str, sender: &str, minute: usize) -> mello_core::events::ChatMessage {
+    let stamp = format!("2026-03-08T{:02}:{:02}:00Z", 10 + minute / 60, minute % 60);
+    mello_core::events::ChatMessage {
+        message_id: id.into(),
+        sender_id: format!("u-{sender}"),
+        sender_name: sender.into(),
+        content: format!("message {id} from {sender}"),
+        display_body: format!("message {id} from {sender}"),
+        mentions: Vec::new(),
+        timestamp: stamp.clone(),
+        create_time: stamp.clone(),
+        update_time: stamp,
+        gif: None,
+        images: Vec::new(),
+        reply_to: None,
+        is_system: false,
+        is_edited: false,
+        is_deleted: false,
+    }
+}
+
+/// `count` messages from two senders taking turns, ten minutes apart, so
+/// every row is a group start with a header: tall rows, many of them.
+fn chat_messages_fixture(prefix: &str, count: usize) -> Vec<mello_core::events::ChatMessage> {
+    (0..count)
+        .map(|i| {
+            let sender = if i % 2 == 0 { "alice" } else { "bob" };
+            chat_message_fixture(&format!("{prefix}{i}"), sender, i * 10)
+        })
+        .collect()
+}
+
+/// The crew view with the chat panel on screen, in a window tall enough to
+/// show a few dozen rows and short enough that 120 do not fit.
+fn open_chat(h: &mut Harness) {
+    h.app().set_logged_in(true);
+    h.app().set_onboarding_step(0);
+    h.app().set_show_discover(false);
+    h.app().set_active_crew_id("crew-1".into());
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 1000));
+    h.pump();
+    next_frame();
+}
+
+/// Let the scroll and history timers run their three frames, then settle.
+fn let_feed_settle() {
+    for _ in 0..4 {
+        i_slint_backend_testing::mock_elapsed_time(std::time::Duration::from_millis(16));
+        next_frame();
+    }
+}
+
+fn feed_frame(h: &Harness) -> (f32, f32) {
+    let feed = h.find("ChatPanel::feed");
+    assert_eq!(feed.len(), 1, "one chat feed on screen");
+    let y = feed[0].absolute_position().y;
+    (y, y + feed[0].size().height)
+}
+
+/// The on-screen body of a message, by its text. The element tree holds only
+/// what is drawn, so a body that scrolled out of the feed is absent.
+fn visible_body(h: &Harness, text: &str) -> Option<ElementHandle> {
+    let mut found: Vec<_> = ElementHandle::find_by_accessible_label(h.app(), text).collect();
+    assert!(found.len() <= 1, "one body per message: {text:?}");
+    found.pop()
+}
+
+/// ★ Regression: the feed was a virtualized ListView whose content height is
+/// an estimate, so "scroll to bottom" landed on an estimated row, the same one
+/// every time. A plain Flickable over the loaded window has exact heights.
+#[test]
+fn the_feed_opens_at_the_last_message() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 120),
+        has_more_history: true,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let (top, bottom) = feed_frame(&h);
+    let last = visible_body(&h, "message m119 from bob").expect("the last message is on screen");
+    let last_bottom = last.absolute_position().y + last.size().height;
+    assert!(
+        last.absolute_position().y >= top && last_bottom <= bottom + 0.5,
+        "the last message is inside the feed: body {}..{last_bottom}, feed {top}..{bottom}",
+        last.absolute_position().y
+    );
+    assert!(
+        visible_body(&h, "message m0 from alice").is_none(),
+        "120 rows do not fit, so the first one is scrolled out"
+    );
+    assert!(
+        !h.app().get_scroll_to_bottom_request(),
+        "the scroll request was consumed"
+    );
+}
+
+/// ★ Regression: the rows' layout is the only child of the Flickable, so it
+/// is sized to the feed when the rows are shorter than it, and it stretched
+/// two messages across the whole panel. Rows keep their height and sit at
+/// the bottom.
+#[test]
+fn a_short_feed_keeps_its_rows_together_at_the_bottom() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 2),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let (_, bottom) = feed_frame(&h);
+    let first = visible_body(&h, "message m0 from alice").expect("first body");
+    let second = visible_body(&h, "message m1 from bob").expect("second body");
+    // Stretched rows stretch their bodies: a one-line body was 386px tall.
+    for (name, body) in [("first", &first), ("second", &second)] {
+        assert!(
+            body.size().height < 40.0,
+            "the {name} body keeps its one-line height, got {}",
+            body.size().height
+        );
+    }
+    let second_bottom = second.absolute_position().y + second.size().height;
+    assert!(
+        bottom - second_bottom < 80.0,
+        "the last message sits at the bottom of the feed: {second_bottom} vs {bottom}"
+    );
+}
+
+/// Sending while reading older rows: the own message lands in view at the
+/// bottom, and the "New messages" pill does not show for it.
+#[test]
+fn an_own_message_scrolls_the_feed_to_the_bottom() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.app().set_user_id("u-alice".into());
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 60),
+        has_more_history: false,
+    });
+    next_frame();
+    let_feed_settle();
+    let (top, bottom) = feed_frame(&h);
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: 50_000.0,
+        });
+    h.pump();
+    next_frame();
+    assert!(
+        visible_body(&h, "message m59 from bob").is_none(),
+        "scrolled away from the bottom"
+    );
+
+    h.app().invoke_send_message("mine".into());
+    h.pump();
+    let mut own = chat_message_fixture("own1", "alice", 9000);
+    own.content = "mine".into();
+    own.display_body = "mine".into();
+    h.emit(Event::MessageReceived { message: own });
+    next_frame();
+    let_feed_settle();
+    let mine = visible_body(&h, "mine").expect("the own message is on screen");
+    let mine_bottom = mine.absolute_position().y + mine.size().height;
+    assert!(
+        mine_bottom <= bottom + 0.5 && mine.absolute_position().y >= top,
+        "at the bottom: {mine_bottom} vs {bottom}"
+    );
+    assert!(
+        !h.app().get_has_new_messages(),
+        "no pill for your own message"
+    );
+}
+
+/// ★ Regression: the prepend nudge used the same estimate, so loading older
+/// history jumped the view. The row the user was reading must not move.
+#[test]
+fn older_history_keeps_the_anchor_row_still() {
+    let mut h = Harness::new();
+    open_chat(&mut h);
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 60),
+        has_more_history: true,
+    });
+    next_frame();
+    let_feed_settle();
+    let _ = h.commands();
+
+    // Scroll to the very top. That asks for older history and records the
+    // content height the nudge works from.
+    let (top, _) = feed_frame(&h);
+    h.app()
+        .window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(1400.0, top + 200.0),
+            delta_x: 0.0,
+            delta_y: 50_000.0,
+        });
+    h.pump();
+    next_frame();
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::LoadHistory { .. })),
+        "the top of the feed asks the server for older messages"
+    );
+    let anchor =
+        visible_body(&h, "message m0 from alice").expect("the first message is at the top");
+    let anchor_y = anchor.absolute_position().y;
+    assert!(
+        anchor_y >= top && anchor_y < top + 80.0,
+        "the first row sits at the top of the feed"
+    );
+
+    h.emit(Event::HistoryLoaded {
+        messages: chat_messages_fixture("old", 50),
+        cursor: None,
+    });
+    next_frame();
+    let_feed_settle();
+
+    let same = visible_body(&h, "message m0 from alice").expect("the anchor is still on screen");
+    let same_y = same.absolute_position().y;
+    assert!(
+        (same_y - anchor_y).abs() < 0.5,
+        "the row the user was reading stays put: was {anchor_y}, now {same_y}"
+    );
+    assert!(
+        visible_body(&h, "message old0 from alice").is_none(),
+        "the older messages sit above the feed, to scroll up into"
+    );
+}
+
+/// The feed shows at most `WINDOW` rows. Messages trimmed from the top are
+/// still loaded, so the top of the feed reveals those before it asks the
+/// server for a page.
+#[test]
+fn the_feed_reveals_loaded_messages_before_asking_the_server() {
+    use crate::chat_ui::ChatScrollState;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 260),
+        has_more_history: true,
+    });
+    assert_eq!(h.app().get_messages().row_count(), ChatScrollState::WINDOW);
+    assert!(h.app().get_has_more_history());
+    let _ = h.commands();
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 250);
+    assert!(
+        h.commands().is_empty(),
+        "no server page while local rows remain"
+    );
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 260);
+    assert!(h.commands().is_empty());
+
+    h.app().invoke_request_history();
+    h.pump();
+    assert!(
+        h.commands()
+            .iter()
+            .any(|c| matches!(c, Command::LoadHistory { .. })),
+        "past the oldest loaded message the server is asked"
+    );
+}
+
+/// A new message while the user reads older rows keeps every shown row. Back
+/// at the bottom the window shrinks to `WINDOW` again.
+#[test]
+fn the_window_shrinks_again_at_the_bottom() {
+    use crate::chat_ui::ChatScrollState;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 260),
+        has_more_history: false,
+    });
+    h.app().invoke_request_history();
+    h.pump();
+    assert_eq!(h.app().get_messages().row_count(), 250);
+
+    h.app().invoke_chat_viewport_changed(false);
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("new1", "bob", 9000),
+    });
+    assert_eq!(
+        h.app().get_messages().row_count(),
+        251 + 1,
+        "251 rows and the unread divider"
+    );
+
+    h.app().invoke_chat_viewport_changed(true);
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("new2", "alice", 9001),
+    });
+    assert_eq!(h.app().get_messages().row_count(), ChatScrollState::WINDOW);
+}
+
+/// ★ Regression: every event replaced the row model, so Slint rebuilt all
+/// rows. A new message is one insert into the model that was already there.
+#[test]
+fn a_new_message_is_one_insert_into_the_same_model() {
+    use slint::Model;
+    let mut h = Harness::new();
+    h.emit(Event::MessagesLoaded {
+        messages: chat_messages_fixture("m", 3),
+        has_more_history: false,
+    });
+    let before = h.app().get_messages();
+    let ids_before: Vec<_> = (0..before.row_count())
+        .filter_map(|i| before.row_data(i))
+        .map(|r| r.message_id.to_string())
+        .collect();
+    h.emit(Event::MessageReceived {
+        message: chat_message_fixture("m3", "bob", 40),
+    });
+    let after = h.app().get_messages();
+    assert!(
+        std::ptr::eq(
+            before.as_any() as *const _ as *const u8,
+            after.as_any() as *const _ as *const u8
+        ),
+        "the model is the same object"
+    );
+    assert_eq!(before.row_count(), 4);
+    let ids_after: Vec<_> = (0..after.row_count())
+        .filter_map(|i| after.row_data(i))
+        .map(|r| r.message_id.to_string())
+        .collect();
+    assert_eq!(&ids_after[..3], &ids_before[..]);
+    assert_eq!(ids_after[3], "m3");
 }
 
 // ---------------------------------------------------------------------------
@@ -8331,11 +9424,10 @@ fn five_clips_never_take_a_wide_slot() {
     }
 }
 
-/// Recent games is on the first screen for a big crew: in the first two rows
-/// of the plain grid (head2head, invite and one card, then one card and the
-/// wide slot), not behind the clips.
+/// Recent games is on the first screen for a big crew: in the first three rows
+/// of the grid (row 2, or row 3 under a day card), not behind the clips.
 #[test]
-fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
+fn recent_games_is_in_the_first_three_rows_of_a_big_crew() {
     let mut h = Harness::new();
     app_with_crew_of(&mut h, 50);
     set_roster(
@@ -8351,9 +9443,18 @@ fn recent_games_is_in_the_first_two_rows_of_a_big_crew() {
         .iter()
         .position(|t| t == "recent-games")
         .expect("recent games card");
+    let infos: Vec<crate::feed_grid::CardInfo> = {
+        let m = h.app().get_feed_cards();
+        (0..m.row_count())
+            .filter_map(|i| m.row_data(i))
+            .map(|c| crate::feed_grid::CardInfo::of(&c))
+            .collect()
+    };
+    let rows = crate::feed_grid::rows(&infos, 0);
     assert!(
-        at <= 4,
-        "recent games at card {at}, past the second row: {types:?}"
+        rows[at] <= 3,
+        "recent games at card {at}, row {}, past the third row: {types:?}",
+        rows[at]
     );
 }
 
@@ -8492,6 +9593,7 @@ fn mate_plays(user: &str, game_id: &str, name: &str, ago_min: i64) -> Event {
                     game_name: name.into(),
                     game_id: game_id.into(),
                     started_at: mello_core::presence::to_rfc3339(now_ms() - ago_min * 60_000),
+                    activity: String::new(),
                 }),
             },
         },
@@ -10670,7 +11772,7 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
     for (name, url) in [
         ("IGDB", "https://www.igdb.com"),
         ("Slint", "https://slint.dev"),
-        ("OpenMoji", "https://openmoji.org"),
+        ("Twemoji", "https://twemoji.twitter.com"),
     ] {
         let links = h.controls_labelled(&format!("{name} website"));
         assert_eq!(links.len(), 2, "{name}: the list and the credits");
@@ -10688,9 +11790,9 @@ fn the_about_tab_is_a_control_and_opens_the_credits() {
         assert_eq!(labelled_count(&h, text), 1, "{text}");
     }
     assert_eq!(
-        labelled_count(&h, "(https://openmoji.org), CC BY-SA 4.0"),
+        labelled_count(&h, "(https://twemoji.twitter.com), CC BY 4.0"),
         1,
-        "the OpenMoji licence line stays"
+        "the Twemoji licence line stays"
     );
 }
 
@@ -10812,7 +11914,7 @@ fn the_notices_view_opens_lists_crates_libraries_and_fonts_and_goes_back() {
     assert!(listed("opus (vcpkg)"), "a libmello library");
     assert!(listed("Oxanium"), "the Oxanium font");
     assert!(listed("Barlow"), "the Barlow font");
-    assert!(listed("OpenMoji"), "the OpenMoji line");
+    assert!(listed("Twemoji"), "the Twemoji line");
     for e in h.app().get_settings_notices().iter() {
         assert!(!e.license.is_empty() && !e.text.is_empty(), "{}", e.names);
     }
@@ -10823,4 +11925,43 @@ fn the_notices_view_opens_lists_crates_libraries_and_fonts_and_goes_back() {
         !h.controls_labelled("Third-party notices").is_empty(),
         "the About tab is back"
     );
+}
+
+/// The Roblox experience's name arrives after the join and sits under the
+/// game's name in the bar (spec 18 §3.11). A name for another game is not
+/// the bar's; a teleport clears it; the end of the game clears it.
+#[test]
+fn the_bar_names_the_roblox_experience_under_the_game() {
+    let mut h = Harness::new();
+    h.emit(game_detected("roblox", "Roblox", now_ms() - 60_000));
+    assert_eq!(h.app().get_game_activity().as_str(), "");
+
+    h.emit(Event::GameActivity {
+        game_id: "counter-strike-2".into(),
+        activity: "Not this one".into(),
+    });
+    assert_eq!(h.app().get_game_activity().as_str(), "");
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: "Grow a Garden".into(),
+    });
+    assert_eq!(h.app().get_game_activity().as_str(), "Grow a Garden");
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: String::new(),
+    });
+    assert_eq!(
+        h.app().get_game_activity().as_str(),
+        "",
+        "a teleport clears it"
+    );
+
+    h.emit(Event::GameActivity {
+        game_id: "roblox".into(),
+        activity: "Adopt Me!".into(),
+    });
+    h.emit(game_ended("roblox", "Roblox", 30));
+    assert_eq!(h.app().get_game_activity().as_str(), "", "the game ended");
 }

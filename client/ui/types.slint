@@ -613,6 +613,49 @@ export struct ChatLinkData {
     label: string,
 }
 
+/// One reaction chip under a message.
+export struct ReactionData {
+    emoji: string,
+    count: int,
+    /// This user is among the reactors: the chip gets the white outline.
+    mine: bool,
+}
+
+/// One image of an image message. `image` is filled by the client's image
+/// cache once the bytes are decoded; until then the frame shows "Loading".
+export struct ChatImageData {
+    url: string,
+    width: int,
+    height: int,
+    bytes-label: string,
+    image: image,
+    has-image: bool,
+    failed: bool,
+}
+
+/// One image in the viewer: the full picture once fetched.
+export struct ViewerImageData {
+    url: string,
+    width: int,
+    height: int,
+    /// "1600×1000 · 1.2 MB"
+    label: string,
+    image: image,
+    has-image: bool,
+    failed: bool,
+}
+
+/// A pending image chip in the composer.
+export struct AttachmentData {
+    id: string,
+    /// "preparing", "uploading", "ready" or "failed".
+    state: string,
+    /// The size when ready, the step while it runs, the reason when failed.
+    label: string,
+    thumb: image,
+    has-thumb: bool,
+}
+
 export struct ChatMessageData {
     message-id: string,
     sender-id: string,
@@ -633,7 +676,15 @@ export struct ChatMessageData {
     is-gif: bool,
     gif-image: image,
     has-gif-image: bool,
-    gif-preview-url: string,
+    gif-failed: bool,
+    gif-url: string,
+    /// Only emoji, at most three: the body renders at Theme.font-xxl.
+    is-emoji-only: bool,
+    is-image: bool,
+    images: [ChatImageData],
+    /// "Today", "Yesterday" or a date when this message starts a day. "" otherwise.
+    day-label: string,
+    reactions: [ReactionData],
     gif-width: int,
     gif-height: int,
     is-clip: bool,
@@ -650,6 +701,17 @@ export struct ChatMessageData {
 export struct EmojiItemData {
     emoji: string,
     name: string,
+}
+
+/// One row of the picker grid, nine cells at most.
+export struct EmojiRowData {
+    cells: [EmojiItemData],
+}
+
+/// A category tab: its name for the label, one emoji as its icon.
+export struct EmojiCategoryData {
+    name: string,
+    icon: string,
 }
 
 export struct MentionMemberData {
@@ -786,6 +848,18 @@ export global VideoRect {
     // Args: canvas_x, canvas_y, canvas_w, canvas_h, viewport_y, viewport_h
     // All in logical pixels; Rust multiplies by scale_factor.
     callback geometry-changed(float, float, float, float, float, float);
+}
+
+/// The crew feed's visible band in window coordinates, set by CrewFeed. A
+/// session-preview card wants its poster only while it is within one band
+/// height of the band: 37 posters of 480x270 kept for a long feed were 19 MB
+/// of the client's private working set.
+export global FeedView {
+    in-out property <length> top;
+    in-out property <length> bottom;
+    // Args: card id, wanted, media width, media height (logical pixels; Rust
+    // multiplies by scale_factor). Wanted false: Rust drops the poster.
+    callback poster-wanted(string, bool, float, float);
 }
 
 // --- stage 9 (streaming-quality): the stream card's controls ---

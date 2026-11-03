@@ -1,3 +1,4 @@
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::rc::Rc;
 
@@ -5,8 +6,8 @@ use slint::Model;
 use slint::StyledText;
 
 use crate::{
-    ChatLinkData, ChatMessageData, CrewData, DebugHistory, InvitePersonData, MainWindow,
-    MemberData, VoiceChannelData, VoiceChannelMember,
+    ChatImageData, ChatLinkData, ChatMessageData, CrewData, DebugHistory, InvitePersonData,
+    MainWindow, MemberData, VoiceChannelData, VoiceChannelMember,
 };
 
 pub fn parse_capture_source_id(id: &str, mode: &str) -> (Option<u32>, Option<u64>, Option<u32>) {
@@ -51,8 +52,13 @@ pub fn invite_person(p: &mello_core::crew::InvitePerson) -> InvitePersonData {
     }
 }
 
+/// Message id to emoji to the users who reacted, as the server keeps it.
+pub type ReactionMap =
+    Rc<RefCell<HashMap<String, std::collections::BTreeMap<String, Vec<String>>>>>;
+
 pub struct ChatConvertOptions<'a> {
     pub user_id: &'a str,
+    pub reactions: &'a HashMap<String, std::collections::BTreeMap<String, Vec<String>>>,
     pub user_avatar: &'a slint::Image,
     pub has_user_avatar: bool,
     pub avatar_cache: &'a HashMap<String, slint::Image>,
@@ -129,8 +135,10 @@ pub fn chat_messages_to_slint(
         }
 
         let is_gif = d.gif.is_some();
-        let (gif_preview_url, gif_width, gif_height) = match &d.gif {
-            Some(g) => (g.preview.clone(), g.width as i32, g.height as i32),
+        // The chat shows the display rendition (`url`, 200px wide). The
+        // smaller `preview` is for picker tiles only.
+        let (gif_url, gif_width, gif_height) = match &d.gif {
+            Some(g) => (g.url.clone(), g.width as i32, g.height as i32),
             None => (String::new(), 0, 0),
         };
         let is_self = d.sender_id == opts.user_id;
@@ -143,6 +151,41 @@ pub fn chat_messages_to_slint(
         };
 
         let mentions_self = d.mentions.iter().any(|m| m.user_id == opts.user_id);
+        let reactions: Vec<crate::ReactionData> = opts
+            .reactions
+            .get(&d.message_id)
+            .map(|by_emoji| {
+                by_emoji
+                    .iter()
+                    .filter(|(_, users)| !users.is_empty())
+                    .map(|(emoji, users)| crate::ReactionData {
+                        emoji: emoji.clone().into(),
+                        count: users.len() as i32,
+                        mine: users.iter().any(|u| u == opts.user_id),
+                    })
+                    .collect()
+            })
+            .unwrap_or_default();
+        let is_image = !d.images.is_empty();
+        let images: Vec<ChatImageData> = d
+            .images
+            .iter()
+            .map(|i| ChatImageData {
+                url: i.url.clone().into(),
+                width: i.width as i32,
+                height: i.height as i32,
+                bytes_label: if i.bytes > 0 {
+                    crate::chat_images::size_label(i.bytes).into()
+                } else {
+                    slint::SharedString::default()
+                },
+                image: slint::Image::default(),
+                has_image: false,
+                failed: false,
+            })
+            .collect();
+        let is_emoji_only =
+            !d.is_system && !d.is_deleted && mello_core::chat::is_emoji_only(&d.display_body);
         let (display_text, links) = if d.is_system || d.is_deleted {
             (d.display_body.clone(), Vec::new())
         } else {
@@ -208,10 +251,16 @@ pub fn chat_messages_to_slint(
             is_continuation: d.is_continuation,
             is_system: d.is_system,
             is_unread_divider: false,
+            day_label: d.day_label.clone().into(),
+            reactions: Rc::new(slint::VecModel::from(reactions)).into(),
             is_gif,
             gif_image: slint::Image::default(),
             has_gif_image: false,
-            gif_preview_url: gif_preview_url.into(),
+            gif_failed: false,
+            gif_url: gif_url.into(),
+            is_emoji_only,
+            is_image,
+            images: Rc::new(slint::VecModel::from(images)).into(),
             gif_width,
             gif_height,
             is_clip: false,
@@ -227,6 +276,82 @@ pub fn chat_messages_to_slint(
     }
 
     out
+}
+
+/// Make the chat rows equal to `rows`, in place, keyed by `message_id`.
+///
+/// A new model makes Slint drop and rebuild every row, StyledText layout and
+/// all, on every event. Keeping the `VecModel` changes only the rows that
+/// differ: a new message is one insert, an edit is one `set_row_data`, and
+/// the rows trimmed from the window are removals. Only a model of another
+/// type replaces the whole thing.
+pub fn sync_chat_rows(app: &MainWindow, rows: Vec<ChatMessageData>) {
+    let model = app.get_messages();
+    let Some(current) = model
+        .as_any()
+        .downcast_ref::<slint::VecModel<ChatMessageData>>()
+    else {
+        app.set_messages(Rc::new(slint::VecModel::from(rows)).into());
+        return;
+    };
+
+    // From the end, so the indices of the rows still to check hold.
+    for i in (0..current.row_count()).rev() {
+        let gone = current
+            .row_data(i)
+            .is_none_or(|row| !rows.iter().any(|r| r.message_id == row.message_id));
+        if gone {
+            current.remove(i);
+        }
+    }
+
+    for (i, row) in rows.into_iter().enumerate() {
+        match current.row_data(i) {
+            Some(cur) if cur.message_id == row.message_id => {
+                if !chat_row_same(&cur, &row) {
+                    current.set_row_data(i, row);
+                }
+            }
+            _ => current.insert(i, row),
+        }
+    }
+}
+
+fn same_reactions(
+    a: &slint::ModelRc<crate::ReactionData>,
+    b: &slint::ModelRc<crate::ReactionData>,
+) -> bool {
+    if a.row_count() != b.row_count() {
+        return false;
+    }
+    (0..a.row_count()).all(|i| match (a.row_data(i), b.row_data(i)) {
+        (Some(x), Some(y)) => x.emoji == y.emoji && x.count == y.count && x.mine == y.mine,
+        _ => false,
+    })
+}
+
+/// The fields a rebuild can change. `gif_image` and `has_gif_image` are
+/// owned by the animator and compared on purpose: a rebuild carries an empty
+/// image, so comparing it would wipe the frame; `sync_gif_images` puts it back.
+fn chat_row_same(a: &ChatMessageData, b: &ChatMessageData) -> bool {
+    a.text == b.text
+        && a.display_text == b.display_text
+        && a.timestamp == b.timestamp
+        && a.display_time == b.display_time
+        && a.is_group_start == b.is_group_start
+        && a.is_continuation == b.is_continuation
+        && a.is_edited == b.is_edited
+        && a.is_deleted == b.is_deleted
+        && a.mentions_self == b.mentions_self
+        && a.has_sender_avatar == b.has_sender_avatar
+        && a.reply_to_name == b.reply_to_name
+        && a.reply_preview_text == b.reply_preview_text
+        && a.sender_name == b.sender_name
+        && a.is_emoji_only == b.is_emoji_only
+        && a.is_image == b.is_image
+        && a.day_label == b.day_label
+        && same_reactions(&a.reactions, &b.reactions)
+        && a.images.row_count() == b.images.row_count()
 }
 
 /// Make the crew list equal to `crews`, in place.
@@ -289,23 +414,124 @@ pub fn apply_unread_to_crews(app: &MainWindow, tracker: &mello_core::chat::Unrea
     sync_crews(app, updated);
 }
 
-/// Scan recent messages for GIFs and kick off animated frame fetches.
-pub fn fetch_gif_images_for_messages(
-    model: &Rc<slint::VecModel<ChatMessageData>>,
+/// The animator delivered a frame (or a failure) for `url`: put it into the
+/// matching image of row `i`, if any. Still images have one frame, so this
+/// runs once per image.
+pub fn fill_row_image(
+    model: &slint::ModelRc<ChatMessageData>,
+    i: usize,
+    row: &ChatMessageData,
+    url: &str,
+    frame: &crate::gif_animator::GifFrame<'_>,
+) {
+    let mut hit = false;
+    let images: Vec<ChatImageData> = (0..row.images.row_count())
+        .filter_map(|j| row.images.row_data(j))
+        .map(|mut img| {
+            if img.url.as_str() == url {
+                hit = true;
+                match frame {
+                    crate::gif_animator::GifFrame::Image(px) => {
+                        img.image = (*px).clone();
+                        img.has_image = true;
+                        img.failed = false;
+                    }
+                    crate::gif_animator::GifFrame::Failed => {
+                        img.has_image = false;
+                        img.failed = true;
+                    }
+                }
+            }
+            img
+        })
+        .collect();
+    if hit {
+        let mut updated = row.clone();
+        updated.images = Rc::new(slint::VecModel::from(images)).into();
+        model.set_row_data(i, updated);
+    }
+}
+
+/// Give every image row the pixels the cache already holds. Images load for
+/// every row in the window; they are small (640px at most) and the cache
+/// evicts the oldest past its cap.
+fn sync_still_images(
+    model: &slint::ModelRc<ChatMessageData>,
     rt: &tokio::runtime::Handle,
     chat_anim: &crate::gif_animator::GifAnimator,
 ) {
-    const MAX_GIF_PREFETCH: usize = 8;
-    let inbox = chat_anim.inbox();
-    let start = model.row_count().saturating_sub(MAX_GIF_PREFETCH);
-    for i in start..model.row_count() {
-        if let Some(item) = model.row_data(i) {
-            let url = item.gif_preview_url.to_string();
-            if item.is_gif && !url.is_empty() && !chat_anim.has_url(&url) {
-                chat_anim.note_activity();
-                crate::image_cache::spawn_gif_fetch(url, rt, &inbox);
-            }
+    for i in 0..model.row_count() {
+        let Some(item) = model.row_data(i) else {
+            continue;
+        };
+        if !item.is_image {
+            continue;
         }
+        let mut changed = false;
+        let images: Vec<ChatImageData> = (0..item.images.row_count())
+            .filter_map(|j| item.images.row_data(j))
+            .map(|mut img| {
+                let url = img.url.to_string();
+                if let Some(px) = chat_anim.current_frame(&url) {
+                    if !img.has_image {
+                        img.image = px;
+                        img.has_image = true;
+                        changed = true;
+                    }
+                } else if chat_anim.has_failed(&url) {
+                    if !img.failed {
+                        img.failed = true;
+                        changed = true;
+                    }
+                } else {
+                    chat_anim.fetch(&url, rt);
+                }
+                img
+            })
+            .collect();
+        if changed {
+            let mut row = item;
+            row.images = Rc::new(slint::VecModel::from(images)).into();
+            model.set_row_data(i, row);
+        }
+    }
+}
+
+/// Give every GIF row the frame the animator already holds, and fetch the
+/// newest `MAX_GIF_PREFETCH` GIFs that are not in the cache yet. Older GIFs
+/// load on hover (`gif-hovered`). Still images sync too. Called after every
+/// row rebuild, so a rebuild never sends a decoded image back to "Loading".
+pub fn sync_gif_images(
+    model: &slint::ModelRc<ChatMessageData>,
+    rt: &tokio::runtime::Handle,
+    chat_anim: &crate::gif_animator::GifAnimator,
+) {
+    sync_still_images(model, rt, chat_anim);
+    const MAX_GIF_PREFETCH: usize = 8;
+    let mut fetch_budget = MAX_GIF_PREFETCH;
+    for i in (0..model.row_count()).rev() {
+        let Some(mut item) = model.row_data(i) else {
+            continue;
+        };
+        if !item.is_gif || item.gif_url.is_empty() {
+            continue;
+        }
+        let url = item.gif_url.to_string();
+        if let Some(img) = chat_anim.current_frame(&url) {
+            if !item.has_gif_image {
+                item.gif_image = img;
+                item.has_gif_image = true;
+                model.set_row_data(i, item);
+            }
+        } else if chat_anim.has_failed(&url) {
+            if !item.gif_failed {
+                item.gif_failed = true;
+                model.set_row_data(i, item);
+            }
+        } else if fetch_budget > 0 {
+            chat_anim.fetch(&url, rt);
+        }
+        fetch_budget = fetch_budget.saturating_sub(1);
     }
 }
 
@@ -364,11 +590,16 @@ pub fn format_game_line(game: &mello_core::presence::GamePresence, now_ms: i64) 
                 .map(|started_ms| format_elapsed_minutes(now_ms.saturating_sub(started_ms)))
                 .unwrap_or_default()
         });
-    if duration.is_empty() {
-        game.game_name.clone()
-    } else {
-        format!("{} · {duration}", game.game_name)
+    let mut line = game.game_name.clone();
+    if !game.activity.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&game.activity);
     }
+    if !duration.is_empty() {
+        line.push_str(" · ");
+        line.push_str(&duration);
+    }
+    line
 }
 
 pub fn game_line_from_presence(
@@ -683,6 +914,7 @@ mod tests {
             game_name: String::new(),
             game_id: "g1".into(),
             started_at: mello_core::presence::to_rfc3339(1_700_000_000_000),
+            activity: String::new(),
         };
         assert_eq!(
             game_line_from_presence(Some(&empty_name), 1_700_000_000_000),
@@ -698,8 +930,23 @@ mod tests {
             game_name: "Valorant".into(),
             game_id: "valorant".into(),
             started_at: started,
+            activity: String::new(),
         };
         assert_eq!(format_game_line(&game, now), "Valorant · 1h 23m");
+    }
+
+    /// A Roblox crewmate's line names the experience between the game and
+    /// the time.
+    #[test]
+    fn game_line_names_the_activity_inside_the_game() {
+        let now = 1_700_000_000_000i64;
+        let game = GamePresence {
+            game_name: "Roblox".into(),
+            game_id: "roblox".into(),
+            started_at: mello_core::presence::to_rfc3339(now - 12 * 60_000),
+            activity: "Grow a Garden".into(),
+        };
+        assert_eq!(format_game_line(&game, now), "Roblox · Grow a Garden · 12m");
     }
 
     #[test]

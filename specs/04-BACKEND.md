@@ -95,7 +95,9 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `CrewClipsRPC`, `CrewRecapsRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
 | `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
 | `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
-| `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers |
+| `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers; the chat bucket (`CHAT_S3_BUCKET`, `CHAT_S3_PUBLIC_URL`) with `GeneratePresignedPUTChat` and `DeleteChatObjects` |
+| `chat_images.go` | `ChatUploadURLRPC`, `ChatDeleteImagesRPC`, the chat image key rules and `validateChatImages` for the message hook |
+| `chat_reactions.go` | `ChatReactRPC`, `ChatReactionsRPC`; `applyReaction` and `validReactionEmoji` are pure |
 | `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |
 | `admin_capture_policy.go` | `AdminCapturePolicyGetRPC`, `AdminCapturePolicySetRPC` — server-to-server read and conditional write of the game capture hook policy (§4.2). Powers the admin Hook policy page. |
 | `discover_curation.go` | `AdminDiscoverCurationGetRPC`, `AdminDiscoverCurationSetRPC`: server-to-server read and conditional write of the Discover curation (§4.3). `readDiscoverCuration` is also read by `DiscoverCrewsRPC`. Powers the admin Discover page. |
@@ -130,6 +132,10 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_recaps` | Yes | Paginated access to durable recaps. |
 | `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. Only the clipper, a crew member, after `post_clip`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
+| `chat_upload_url` | Yes | A presigned PUT on the chat images bucket for a crew member: key `{crew_id}/{user_id}/{uuid}.{ext}`, 15 min, `image/jpeg`, `image/png` or `image/gif`, at most 8 MB. Returns `upload_url`, `media_url`, `key`. Empty URLs when the bucket is off. |
+| `chat_delete_images` | Yes | Removes up to four objects from the chat bucket. Only keys whose second segment is the caller's user id. |
+| `chat_react` | Yes | Adds or removes the caller under one emoji on one message (`chat_reactions/{message_id}`, system-owned, read by all). At most 20 distinct emoji per message. Every crew member then gets notification 117 with the message's reactions. |
+| `chat_reactions` | Yes | The reactions of up to 250 messages of one crew in one read, for the loaded window. |
 | `admin_live_snapshot` | No (`http_key`, server-to-server only) | Returns live voice rooms and active streams (see §4.1). Rejects client sessions. Cached 15s, stale served on collect failure. |
 | `admin_capture_policy_get` | No (`http_key`, server-to-server only) | Returns the stored hook policy and its storage version (see §4.2). Rejects client sessions. |
 | `admin_capture_policy_set` | No (`http_key`, server-to-server only) | Replaces the stored hook policy, only if the storage version still matches (see §4.2). Rejects client sessions. |
@@ -532,6 +538,10 @@ Estimated cost: ~$2,000-5,000/mo
 | POST | `/v2/rpc/crew_timeline` | Yes | Raw paginated merge for deep scroll |
 | POST | `/v2/rpc/clip_upload_url` | Yes | Get presigned PUT URL for S3/R2 upload |
 | POST | `/v2/rpc/clip_upload_complete` | Yes | Confirm upload, set media_url |
+| POST | `/v2/rpc/chat_upload_url` | Yes | Presigned PUT for a chat image |
+| POST | `/v2/rpc/chat_delete_images` | Yes | Remove own chat image objects |
+| POST | `/v2/rpc/chat_react` | Yes | Add or remove a reaction |
+| POST | `/v2/rpc/chat_reactions` | Yes | Reactions of many messages |
 
 ### WebSocket Messages
 

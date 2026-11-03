@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -33,7 +34,123 @@ var (
 	snapshotsClient    *s3.Client
 	snapshotsBucket    string
 	snapshotsPublicURL string
+
+	chatOnce      sync.Once
+	chatClient    *s3.Client
+	chatPresigner *s3.PresignClient
+	chatBucket    string
+	chatPublicURL string
 )
+
+// initChatS3 sets up the chat images bucket: its own bucket (CHAT_S3_BUCKET,
+// default mello-chat) and public base (CHAT_S3_PUBLIC_URL), on the shared
+// credentials and endpoints. Without the public base, image messages are
+// refused: the validation hook needs it to pin image URLs to this bucket.
+func initChatS3() {
+	chatOnce.Do(func() {
+		endpoint := os.Getenv("S3_ENDPOINT")
+		accessKey := os.Getenv("S3_ACCESS_KEY")
+		secretKey := os.Getenv("S3_SECRET_KEY")
+		chatPublicURL = strings.TrimRight(os.Getenv("CHAT_S3_PUBLIC_URL"), "/")
+		if endpoint == "" || accessKey == "" || secretKey == "" || chatPublicURL == "" {
+			chatPublicURL = ""
+			return
+		}
+		chatBucket = os.Getenv("CHAT_S3_BUCKET")
+		if chatBucket == "" {
+			chatBucket = "mello-chat"
+		}
+		creds := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
+		chatClient = s3.New(s3.Options{
+			Region:       "auto",
+			BaseEndpoint: aws.String(endpoint),
+			Credentials:  creds,
+			UsePathStyle: true,
+		})
+		presignEndpoint := os.Getenv("S3_PRESIGN_ENDPOINT")
+		if presignEndpoint == "" {
+			presignEndpoint = endpoint
+		}
+		chatPresigner = s3.NewPresignClient(s3.New(s3.Options{
+			Region:       "auto",
+			BaseEndpoint: aws.String(presignEndpoint),
+			Credentials:  creds,
+			UsePathStyle: true,
+		}))
+	})
+}
+
+// ChatImagesConfigured reports whether chat image upload is available.
+func ChatImagesConfigured() bool {
+	initChatS3()
+	return chatClient != nil
+}
+
+// ChatPublicBase is the public base URL of the chat bucket, "" when off.
+func ChatPublicBase() string {
+	initChatS3()
+	return chatPublicURL
+}
+
+// ChatPublicURL is the public URL of a chat image key.
+func ChatPublicURL(key string) string {
+	base := ChatPublicBase()
+	if base == "" {
+		return ""
+	}
+	return base + "/" + key
+}
+
+func GeneratePresignedPUTChat(key, contentType string, expiry time.Duration) (string, error) {
+	if !ChatImagesConfigured() {
+		return "", fmt.Errorf("chat S3 not configured")
+	}
+	result, err := chatPresigner.PresignPutObject(context.Background(), &s3.PutObjectInput{
+		Bucket:      aws.String(chatBucket),
+		Key:         aws.String(key),
+		ContentType: aws.String(contentType),
+	}, s3.WithPresignExpires(expiry))
+	if err != nil {
+		return "", fmt.Errorf("presign PUT failed: %w", err)
+	}
+	return result.URL, nil
+}
+
+// PutChatObject writes bytes to the chat bucket directly. The dev seed uses
+// it; clients go through a presigned PUT.
+func PutChatObject(ctx context.Context, key, contentType string, data []byte) error {
+	if !ChatImagesConfigured() {
+		return fmt.Errorf("chat S3 not configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	_, err := chatClient.PutObject(ctx, &s3.PutObjectInput{
+		Bucket:      aws.String(chatBucket),
+		Key:         aws.String(key),
+		Body:        bytes.NewReader(data),
+		ContentType: aws.String(contentType),
+	})
+	return err
+}
+
+// DeleteChatObjects removes the given keys from the chat bucket. A missing
+// key is not an error: a delete that ran twice has nothing left to do.
+func DeleteChatObjects(ctx context.Context, keys []string) error {
+	if !ChatImagesConfigured() {
+		return fmt.Errorf("chat S3 not configured")
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	for _, key := range keys {
+		if _, err := chatClient.DeleteObject(ctx, &s3.DeleteObjectInput{
+			Bucket: aws.String(chatBucket),
+			Key:    aws.String(key),
+		}); err != nil {
+			return fmt.Errorf("delete %s: %w", key, err)
+		}
+	}
+	return nil
+}
 
 func initS3() {
 	s3Once.Do(func() {

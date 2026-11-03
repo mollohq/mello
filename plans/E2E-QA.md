@@ -109,7 +109,7 @@ Use it only for OS surfaces: tray, notifications, installer, updater. Those stay
 
 | Service | Source |
 |---|---|
-| Nakama + Postgres + MinIO | `backend/docker-compose.yml` (exists) |
+| Nakama + Postgres + RustFS | `backend/docker-compose.yml` (exists) |
 | SFU | `mello-sfu` (exists) |
 | Lounge site | `mello-site`, `npm run dev` (exists) |
 | Fake OAuth provider | New, §8 |

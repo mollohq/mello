@@ -2973,7 +2973,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
 
             let gen = ctx.snapshot_loader.bump_generation();
             ctx.snapshot_loader
-                .load_poster_cards(ctx.app.as_weak(), gen);
+                .load_session_preview_cards(ctx.app.as_weak(), gen);
 
             // Update clip-count on the active crew's sidebar card
             let active_crew_id = ctx.app.get_active_crew_id().to_string();

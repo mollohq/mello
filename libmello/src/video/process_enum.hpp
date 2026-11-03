@@ -28,6 +28,10 @@ struct GameProcess {
     // `pid` to identify a process across client restarts — pids are recycled,
     // (pid, started_at_ms) is not.
     int64_t     started_at_ms = 0;
+    // Main window is minimized (IsIconic). A tray-resident launcher can keep a
+    // visible, titled window parked at the minimized position from the moment
+    // it starts, so "has a window" alone does not mean "is being played".
+    bool        is_minimized = false;
 };
 
 /// Returns every running process. The game catalogue in mello-core decides
@@ -61,6 +65,7 @@ struct VisibleWindow {
     std::string exe;  // executable filename only
     std::string path; // full executable path
     uint32_t    pid;
+    bool        minimized = false; // IsIconic at enumeration time
 };
 
 /// Returns all visible top-level windows suitable for capture.

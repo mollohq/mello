@@ -1,5 +1,8 @@
 use futures::{SinkExt, StreamExt};
 use std::collections::HashMap;
+
+/// The user-owned collection of chat read cursors, one key per crew.
+const CHAT_READ_COLLECTION: &str = "chat_read";
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 use tokio::sync::{mpsc, RwLock};
@@ -1237,6 +1240,90 @@ impl NakamaClient {
         Ok(results)
     }
 
+    /// Read several keys of one collection for one user. Missing keys are
+    /// absent from the result.
+    pub async fn read_storage_keys(
+        &self,
+        collection: &str,
+        keys: &[String],
+        user_id: &str,
+    ) -> Result<Vec<(String, String)>> {
+        if keys.is_empty() {
+            return Ok(Vec::new());
+        }
+        let token = self.bearer()?;
+        let url = format!("{}/v2/storage", self.config.http_base());
+        let object_ids: Vec<serde_json::Value> = keys
+            .iter()
+            .map(|key| {
+                serde_json::json!({
+                    "collection": collection,
+                    "key": key,
+                    "user_id": user_id,
+                })
+            })
+            .collect();
+        let body = serde_json::json!({ "object_ids": object_ids });
+        let resp = self
+            .http
+            .post(&url)
+            .bearer_auth(&token)
+            .json(&body)
+            .send()
+            .await?;
+        if !resp.status().is_success() {
+            let err_text = resp.text().await.unwrap_or_default();
+            return Err(Error::Server(format!(
+                "storage read by keys failed: {}",
+                err_text
+            )));
+        }
+        let objects: ApiStorageObjects = resp.json().await?;
+        Ok(objects
+            .objects
+            .unwrap_or_default()
+            .into_iter()
+            .filter_map(|o| {
+                let key = o.key?;
+                let val = o.value.filter(|v| !v.is_empty())?;
+                Some((key, val))
+            })
+            .collect())
+    }
+
+    /// The read cursors of `crew_ids` for the signed-in user.
+    pub async fn read_chat_cursors(
+        &self,
+        crew_ids: &[String],
+    ) -> Result<Vec<(String, crate::chat::ChatReadCursor)>> {
+        let user_id = self
+            .current_user_id()
+            .ok_or_else(|| Error::Server("not signed in".into()))?
+            .to_string();
+        let rows = self
+            .read_storage_keys(CHAT_READ_COLLECTION, crew_ids, &user_id)
+            .await?;
+        Ok(rows
+            .into_iter()
+            .filter_map(|(key, val)| {
+                serde_json::from_str::<crate::chat::ChatReadCursor>(&val)
+                    .ok()
+                    .map(|c| (key, c))
+            })
+            .collect())
+    }
+
+    /// Store where the user stopped reading `crew_id`. Owner read and write.
+    pub async fn write_chat_cursor(
+        &self,
+        crew_id: &str,
+        cursor: &crate::chat::ChatReadCursor,
+    ) -> Result<()> {
+        let value = serde_json::to_string(cursor)?;
+        self.write_storage(CHAT_READ_COLLECTION, crew_id, &value, 1, 1)
+            .await
+    }
+
     /// Write a single object to Nakama storage.
     pub async fn write_storage(
         &self,
@@ -1544,6 +1631,56 @@ impl NakamaClient {
         let resp = self.rpc("clip_upload_url", &payload).await?;
         let parsed: crate::crew_events::ClipUploadURLResponse = serde_json::from_str(&resp)?;
         Ok(parsed)
+    }
+
+    pub async fn chat_upload_url(
+        &self,
+        req: &crate::crew_events::ChatUploadURLRequest,
+    ) -> Result<crate::crew_events::ChatUploadURLResponse> {
+        let payload = serde_json::to_value(req)?;
+        let resp = self.rpc("chat_upload_url", &payload).await?;
+        let parsed: crate::crew_events::ChatUploadURLResponse = serde_json::from_str(&resp)?;
+        Ok(parsed)
+    }
+
+    pub async fn chat_delete_images(
+        &self,
+        req: &crate::crew_events::ChatDeleteImagesRequest,
+    ) -> Result<()> {
+        let payload = serde_json::to_value(req)?;
+        self.rpc("chat_delete_images", &payload).await?;
+        Ok(())
+    }
+
+    pub async fn chat_react(
+        &self,
+        crew_id: &str,
+        message_id: &str,
+        emoji: &str,
+        add: bool,
+    ) -> Result<crate::crew_state::ReactionUpdate> {
+        let payload = serde_json::json!({
+            "crew_id": crew_id,
+            "message_id": message_id,
+            "emoji": emoji,
+            "op": if add { "add" } else { "remove" },
+        });
+        let resp = self.rpc("chat_react", &payload).await?;
+        Ok(serde_json::from_str(&resp)?)
+    }
+
+    pub async fn chat_reactions(
+        &self,
+        crew_id: &str,
+        message_ids: &[String],
+    ) -> Result<Vec<crate::crew_state::ReactionUpdate>> {
+        if message_ids.is_empty() {
+            return Ok(Vec::new());
+        }
+        let payload = serde_json::json!({ "crew_id": crew_id, "message_ids": message_ids });
+        let resp = self.rpc("chat_reactions", &payload).await?;
+        let parsed: crate::crew_state::ChatReactionsResponse = serde_json::from_str(&resp)?;
+        Ok(parsed.items)
     }
 
     pub async fn clip_upload_complete(
@@ -2031,20 +2168,7 @@ impl NakamaClient {
             }
         }
 
-        let mut chronological: Vec<ChatMessage> = pages_newest_first
-            .into_iter()
-            .rev()
-            .flat_map(|mut page| {
-                page.reverse();
-                page
-            })
-            .collect();
-
-        if chronological.len() > target_count {
-            chronological = chronological.split_off(chronological.len() - target_count);
-        }
-
-        Ok((chronological, cur))
+        Ok((history_oldest_first(pages_newest_first), cur))
     }
 
     async fn fetch_channel_messages_page(
@@ -2179,6 +2303,21 @@ pub(crate) fn mentioned_user_ids(list: &ApiChannelMessageList) -> Vec<String> {
         .filter_map(|m| m.content.as_deref())
         .filter_map(crate::chat::parse_content)
         .flat_map(|e| crate::chat::extract_mentions(&e.body))
+        .collect()
+}
+
+/// Join newest-first pages into one oldest-first list. Every parsed message
+/// is kept: the cursor already points past the oldest page, so trimming to
+/// the requested count would lose the messages between that page and the
+/// trimmed rest, and no later page would bring them back.
+fn history_oldest_first(pages_newest_first: Vec<Vec<ChatMessage>>) -> Vec<ChatMessage> {
+    pages_newest_first
+        .into_iter()
+        .rev()
+        .flat_map(|mut page| {
+            page.reverse();
+            page
+        })
         .collect()
 }
 
@@ -2586,6 +2725,13 @@ fn handle_notification(code: i32, content: &str, event_tx: &std::sync::mpsc::Sen
                 });
             }
             Err(e) => log::warn!("Failed to parse voice_update notification: {}", e),
+        },
+        // 117 = one message's reactions
+        117 => match serde_json::from_str::<crew_state::ReactionUpdate>(content) {
+            Ok(update) => {
+                let _ = event_tx.send(Event::ChatReactionChanged { update });
+            }
+            Err(e) => log::warn!("Failed to parse chat_reaction notification: {}", e),
         },
         // 116 = the crew feed has new content
         116 => match serde_json::from_str::<crew_state::FeedChanged>(content) {
@@ -3273,5 +3419,47 @@ mod push_tests {
             "{head}"
         );
         assert_eq!(payload, serde_json::json!({"token": "ab12"}));
+    }
+}
+
+#[cfg(test)]
+mod history_tests {
+    use super::*;
+
+    fn msg(id: &str) -> ChatMessage {
+        ChatMessage {
+            message_id: id.into(),
+            sender_id: "u".into(),
+            sender_name: "u".into(),
+            content: id.into(),
+            display_body: id.into(),
+            mentions: Vec::new(),
+            timestamp: String::new(),
+            create_time: String::new(),
+            update_time: String::new(),
+            gif: None,
+            images: Vec::new(),
+            reply_to: None,
+            is_system: false,
+            is_edited: false,
+            is_deleted: false,
+        }
+    }
+
+    /// ★ Regression: the joined history was cut to the requested count after
+    /// the cursor had moved past every fetched page, so the oldest messages of
+    /// a multi-page fetch were gone for good and scroll-up never showed them.
+    #[test]
+    fn every_fetched_page_reaches_the_caller() {
+        let pages = vec![
+            vec![msg("9"), msg("8"), msg("7")],
+            vec![msg("6"), msg("5")],
+            vec![msg("4"), msg("3"), msg("2"), msg("1")],
+        ];
+        let ids: Vec<_> = history_oldest_first(pages)
+            .into_iter()
+            .map(|m| m.message_id)
+            .collect();
+        assert_eq!(ids, ["1", "2", "3", "4", "5", "6", "7", "8", "9"]);
     }
 }

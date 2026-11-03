@@ -13,7 +13,7 @@
 //!   only, and the LICENSE / COPYING files in the crate source.
 //! - libmello: `libmello/vcpkg.json` and `libmello/third_party/*`.
 //! - The OFL texts of Oxanium and Barlow, in `ui/fonts`.
-//! - OpenMoji and Slint, by name.
+//! - Twemoji and Slint, by name.
 
 use std::collections::BTreeMap;
 use std::fmt::Write as _;
@@ -42,17 +42,68 @@ struct Dep {
     text: String,
 }
 
+/// Libraries vendored under `libmello/third_party`, with the licence file
+/// they carry: directory, display name, SPDX licence.
+const VENDORED: [(&str, &str, &str); 5] = [
+    ("rnnoise", "RNNoise", "BSD-3-Clause"),
+    (
+        "webrtc-audio-processing",
+        "WebRTC audio processing",
+        "BSD-3-Clause",
+    ),
+    (
+        "webrtc-goog-cc",
+        "WebRTC congestion control",
+        "BSD-3-Clause",
+    ),
+    ("webrtc-neteq", "WebRTC NetEQ", "BSD-3-Clause"),
+    ("webrtc-video-timing", "WebRTC video timing", "BSD-3-Clause"),
+];
+
 /// Paths the build script must watch. Without these Cargo reruns the script
 /// on every edit in the package, which compiles the Slint UI again.
+///
+/// Only the files that `generate` reads, not all of `libmello/third_party`:
+/// the libmello CMake build extracts ONNX Runtime into that directory, so
+/// watching it made this script stale for the next cargo command.
 pub fn rerun_paths(manifest_dir: &Path) -> Vec<PathBuf> {
     let root = manifest_dir.join("..");
-    vec![
+    let third_party = root.join("libmello/third_party");
+    let mut paths = vec![
         root.join("Cargo.lock"),
         root.join("libmello/vcpkg.json"),
-        root.join("libmello/third_party"),
+        third_party.join("openh264/BINARY_LICENSE.txt"),
         manifest_dir.join("ui/fonts"),
         manifest_dir.join("build_notices.rs"),
-    ]
+    ];
+    for (dir, _, _) in VENDORED {
+        paths.extend(license_files(&third_party.join(dir)));
+    }
+    // ONNX Runtime: the licence in each extracted folder. Before CMake has
+    // extracted one, watch the folder itself, so the script runs again once
+    // the licence is there. A missing folder makes Cargo rerun the script on
+    // every command, which is what a cold build needs: this script does not
+    // wait for the mello-sys build script, where CMake extracts ORT.
+    //
+    // With MELLO_SYS_BINDINGS_ONLY=1 (check and clippy, mello-sys/build.rs)
+    // CMake never runs and nothing ships, so a missing folder is not
+    // watched: it would compile the UI again on every check. client/build.rs
+    // reruns this script when the variable changes.
+    let ort = third_party.join("onnxruntime");
+    let ort_licenses: Vec<PathBuf> = std::fs::read_dir(&ort)
+        .map(|rd| {
+            rd.flatten()
+                .flat_map(|e| license_files(&e.path()))
+                .collect()
+        })
+        .unwrap_or_default();
+    let bindings_only = std::env::var("MELLO_SYS_BINDINGS_ONLY").as_deref() == Ok("1");
+    if !ort_licenses.is_empty() {
+        paths.extend(ort_licenses);
+    } else if !bindings_only || ort.is_dir() {
+        paths.push(ort);
+    }
+    paths
 }
 
 /// Collect the notices and write the asset. Returns the number of records.
@@ -120,21 +171,30 @@ fn registry_roots() -> Vec<PathBuf> {
         .unwrap_or_default()
 }
 
-/// The text of every licence file in a directory, joined.
-fn license_text(dir: &Path) -> String {
+/// The licence files in a directory, sorted.
+fn license_files(dir: &Path) -> Vec<PathBuf> {
     let mut files: Vec<PathBuf> = std::fs::read_dir(dir)
         .map(|rd| rd.flatten().map(|e| e.path()).collect())
         .unwrap_or_default();
+    files.retain(|f| {
+        let lower = f
+            .file_name()
+            .and_then(|n| n.to_str())
+            .map(str::to_lowercase)
+            .unwrap_or_default();
+        f.is_file() && LICENSE_PREFIXES.iter().any(|p| lower.starts_with(p))
+    });
     files.sort();
+    files
+}
+
+/// The text of every licence file in a directory, joined.
+fn license_text(dir: &Path) -> String {
     let mut out: Vec<String> = Vec::new();
-    for f in files {
+    for f in license_files(dir) {
         let Some(name) = f.file_name().and_then(|n| n.to_str()) else {
             continue;
         };
-        let lower = name.to_lowercase();
-        if !f.is_file() || !LICENSE_PREFIXES.iter().any(|p| lower.starts_with(p)) {
-            continue;
-        }
         if let Ok(t) = std::fs::read_to_string(&f) {
             let t = t.replace("\r\n", "\n");
             out.push(if out.is_empty() {
@@ -328,21 +388,7 @@ fn libmello_deps(root: &Path) -> Vec<Dep> {
         }
     }
     // Libraries vendored under third_party, with the licence file they carry.
-    for (dir, name, license) in [
-        ("rnnoise", "RNNoise", "BSD-3-Clause"),
-        (
-            "webrtc-audio-processing",
-            "WebRTC audio processing",
-            "BSD-3-Clause",
-        ),
-        (
-            "webrtc-goog-cc",
-            "WebRTC congestion control",
-            "BSD-3-Clause",
-        ),
-        ("webrtc-neteq", "WebRTC NetEQ", "BSD-3-Clause"),
-        ("webrtc-video-timing", "WebRTC video timing", "BSD-3-Clause"),
-    ] {
+    for (dir, name, license) in VENDORED {
         let text = license_text(&root.join("libmello/third_party").join(dir));
         if !text.is_empty() {
             deps.push(Dep {
@@ -415,10 +461,10 @@ fn bundled_assets(manifest_dir: &Path) -> Vec<Dep> {
         });
     }
     deps.push(Dep {
-        name: "OpenMoji".into(),
+        name: "Twemoji".into(),
         version: "".into(),
-        license: "CC-BY-SA-4.0".into(),
-        text: "Emoji by OpenMoji (https://openmoji.org), CC BY-SA 4.0.\nLicence: https://creativecommons.org/licenses/by-sa/4.0/".into(),
+        license: "CC-BY-4.0".into(),
+        text: "Emoji by Twemoji (https://twemoji.twitter.com), copyright Twitter, Inc and other contributors, CC BY 4.0.\nFont build: twemoji-colr by Mozilla (https://github.com/mozilla/twemoji-colr).\nLicence: https://creativecommons.org/licenses/by/4.0/".into(),
     });
     deps.push(Dep {
         name: "Slint".into(),

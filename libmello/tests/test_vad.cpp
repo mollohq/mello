@@ -8,16 +8,25 @@
 
 using namespace mello::audio;
 
+// The directory of this source file (libmello/tests). The model and the
+// fixtures are found from it, not from the working dir, so a build dir
+// outside the repo finds them too.
+static std::string source_dir() {
+    std::string self(__FILE__);
+    auto pos = self.find_last_of("/\\");
+    return (pos == std::string::npos) ? "." : self.substr(0, pos);
+}
+
 static std::string get_model_path() {
     const char* env_path = std::getenv("MELLO_VAD_MODEL");
     if (env_path) return env_path;
-    return "../../models/silero_vad.onnx";
+    return source_dir() + "/../models/silero_vad.onnx";
 }
 
 static std::string get_fixture_path(const char* name) {
     const char* env_dir = std::getenv("MELLO_TEST_FIXTURES");
     if (env_dir) return std::string(env_dir) + "/" + name;
-    return std::string("../../tests/fixtures/") + name;
+    return source_dir() + "/fixtures/" + name;
 }
 
 // Minimal WAV loader -- reads 16-bit PCM mono/stereo, returns mono int16 samples

@@ -2,8 +2,9 @@ use mello_core::Command;
 use slint::ComponentHandle;
 
 use crate::app_context::AppContext;
+use crate::snapshot_cache::THUMB_MAX_WIDTH;
 use crate::snapshot_loader;
-use crate::MainWindow;
+use crate::{FeedView, MainWindow};
 
 pub fn wire(ctx: &AppContext) {
     ctx.app.on_feed_show_more_clicked(|| {
@@ -40,6 +41,28 @@ pub fn wire(ctx: &AppContext) {
                 let gen = loader.current_generation();
                 loader.request_playback_frame(app_weak.clone(), sid, url, idx, gen);
             }
+        });
+
+    let loader = ctx.snapshot_loader.clone();
+    let app_weak: slint::Weak<MainWindow> = ctx.app.as_weak();
+    ctx.app
+        .global::<FeedView>()
+        .on_poster_wanted(move |card_id, wanted, w, h| {
+            let Some(app) = app_weak.upgrade() else {
+                return;
+            };
+            // `image-fit: cover` on a 16:9 poster: the drawn width covers the
+            // card width and the height at 16:9, whichever is wider.
+            let scale = app.window().scale_factor();
+            let drawn = (w.max(h * 16.0 / 9.0) * scale).ceil() as u32;
+            let max_w = drawn.clamp(1, THUMB_MAX_WIDTH);
+            log::debug!(
+                "[snapshot] poster wanted={} card={} w={}",
+                wanted,
+                card_id,
+                max_w
+            );
+            loader.poster_wanted(app_weak.clone(), card_id.to_string(), wanted, max_w);
         });
 
     let cmd = ctx.cmd_tx.clone();

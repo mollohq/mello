@@ -356,7 +356,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
                     .collect();
                 crate::converters::sync_crews(&ctx.app, cleared);
                 ctx.chat_messages.borrow_mut().clear();
-                ctx.chat_scroll.reset_on_messages_loaded();
+                ctx.chat_scroll.reset_on_messages_loaded(false);
                 let empty: Vec<ChatMessageData> = vec![];
                 let rc = Rc::new(slint::VecModel::from(empty));
                 ctx.app.set_messages(rc.into());

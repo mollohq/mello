@@ -346,6 +346,18 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	if err := initializer.RegisterRpc("clip_upload_complete", ClipUploadCompleteRPC); err != nil {
 		return err
 	}
+	if err := initializer.RegisterRpc("chat_upload_url", ChatUploadURLRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("chat_delete_images", ChatDeleteImagesRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("chat_react", ChatReactRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("chat_reactions", ChatReactionsRPC); err != nil {
+		return err
+	}
 	if err := initializer.RegisterRpc("diagnostic_log_upload_url", DiagnosticLogUploadURLRPC); err != nil {
 		return err
 	}
@@ -363,6 +375,9 @@ func InitModule(ctx context.Context, logger runtime.Logger, db *sql.DB, nk runti
 	// RPCs — dev tools
 	// -----------------------------------------------------------------------
 	if err := initializer.RegisterRpc("dev_seed_state", DevSeedStateRPC); err != nil {
+		return err
+	}
+	if err := initializer.RegisterRpc("dev_seed_chat", DevSeedChatRPC); err != nil {
 		return err
 	}
 	if err := initializer.RegisterRpc("dev_fault", DevFaultRPC); err != nil {

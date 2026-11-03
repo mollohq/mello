@@ -133,9 +133,59 @@ if(MSVC)
 endif()
 
 include(GoogleTest)
-gtest_discover_tests(mello_tests)
-gtest_discover_tests(mello_rtp_tests)
-gtest_discover_tests(mello_procenum_tests)
+
+if(CMAKE_VERSION VERSION_LESS 3.22)
+    message(FATAL_ERROR "libmello tests need CMake 3.22 or newer: gtest_discover_tests(TEST_FILTER) is used to split serial and parallel suites")
+endif()
+
+# ctest can run the cases in parallel (ctest -j): gtest_discover_tests makes
+# one ctest entry, and one process, per case. The suites below use a real
+# resource that a second test process can hold at the same time, or measure
+# wall-clock rates that a loaded machine skews. They run with RUN_SERIAL
+# (no other case runs at the same time), under the name prefix "serial/".
+# Put a new suite here when it opens one of these:
+#   - D3D11/DXGI devices, screen and window capture, the game hook and its
+#     injected test processes, hardware encoders and decoders (NVENC, AMF,
+#     QSV, NVDEC, VA-API), the streaming reference loopback;
+#   - process enumeration and process start/stop;
+#   - audio devices (Core Audio HAL, VoiceProcessingIO);
+#   - sockets: libdatachannel peers and ICE on loopback, mello_init.
+set(MELLO_SERIAL_SUITES
+    # GPU, capture, hook, hardware codecs (Windows)
+    GraphicsDevice GraphicsDeviceTest HookCapture HookLoopback D3D9ExShare
+    WgcCaptureRestart VideoPipelineTest CaptureLadder NativePresent
+    NvdecHostCopy EncodeSize EncoderControl EncoderFactory EncoderCostTier
+    EncoderOverloadPolicy FramerateDecimation IdleKeepalive
+    VideoPipelinePreprocessor VideoPipelineCursorShape VideoPipelineFit
+    ViewerPipelineTest ViewerConverter
+    ReferenceBitrate ReferenceClip ReferenceGeometry ReferenceLoopback
+    SoftCodecSwitch ViewerSizeChange
+    # GPU and hardware codecs (Linux)
+    LinuxGpu LinuxVideoGpu LinuxVaDriver VaDmaBufFormats ViewerDecoderSwitch
+    LinuxHardwareDecoder LinuxHardwareEncoder
+    # Processes
+    HookPolicy ProcessEnum ProcessLiveness
+    # Audio devices (macOS)
+    PipelineBackend VpioDuplex
+    # Sockets and ICE
+    PeerRtpRolesTest AvSyncWire RtpVideoSender*Test VoicePacketSinkWire
+    VoiceRtpTimestamps VoiceSendFeedbackWire VoiceSlotHoldTest StreamAudioCApi
+)
+list(TRANSFORM MELLO_SERIAL_SUITES APPEND ".*")
+list(JOIN MELLO_SERIAL_SUITES ":" MELLO_SERIAL_FILTER)
+
+function(mello_discover_tests target)
+    gtest_discover_tests(${target}
+        TEST_FILTER "${MELLO_SERIAL_FILTER}"
+        TEST_PREFIX "serial/"
+        PROPERTIES RUN_SERIAL TRUE)
+    gtest_discover_tests(${target}
+        TEST_FILTER "-${MELLO_SERIAL_FILTER}")
+endfunction()
+
+mello_discover_tests(mello_tests)
+mello_discover_tests(mello_rtp_tests)
+mello_discover_tests(mello_procenum_tests)
 
 # The reference source and the software encoder of the streaming quality
 # gate are Windows only (D3D11). The loopback needs the Cisco OpenH264 DLL,
@@ -163,6 +213,23 @@ if(WIN32 AND NOT IOS)
                 "$<TARGET_FILE_DIR:mello_tests>/${_ort_dll}"
             COMMENT "Copying ${_ort_dll} next to mello_tests")
     endforeach()
+endif()
+
+# The ONNX models, into models/ next to mello_tests: mello_init loads them
+# through find_model_file() (audio_pipeline.cpp), which looks in
+# <exe dir>/models/ before it walks up to libmello/models/. The walk finds
+# nothing when the build dir is outside the repo. Only mello_tests runs the
+# audio pipeline; the other test executables do not load the models.
+# Desktop-only: iOS stubs VAD and the suppressor, and CMake does not
+# download the models there.
+if(NOT IOS)
+    add_custom_command(TARGET mello_tests POST_BUILD
+        COMMAND ${CMAKE_COMMAND} -E make_directory
+            "$<TARGET_FILE_DIR:mello_tests>/models"
+        COMMAND ${CMAKE_COMMAND} -E copy_if_different
+            "${SILERO_VAD_MODEL}" "${ECHO_SUPPRESSOR_MODEL}"
+            "$<TARGET_FILE_DIR:mello_tests>/models/"
+        COMMENT "Copying the ONNX models next to mello_tests")
 endif()
 
 # Stage 3 spike: vendored NetEQ + AudioMixerImpl (option MELLO_WEBRTC_NETEQ,

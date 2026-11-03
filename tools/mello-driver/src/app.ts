@@ -135,6 +135,7 @@ export type AppState = {
     cards: { host_id: string; streamer_name: string; viewer_count: number; width: number; height: number; can_watch: boolean }[];
   };
   /** The feed of the active crew, in screen order (newest first), at most 20. */
+  /** The feed cards on screen. `row` is the grid row, one-based (0 in the stream rows above the grid); `wide` is a two-column slot. */
   feed_cards: {
     id: string;
     card_type: string;
@@ -149,6 +150,8 @@ export type AppState = {
     clip_uploading: boolean;
     /** The video is up, or this PC has the clip file. */
     clip_can_play: boolean;
+    row: number;
+    wide: boolean;
   }[];
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };

@@ -86,7 +86,10 @@ type GameSessionData struct {
 	// Foreground minutes, where DurationMin is wall time. A game left open
 	// overnight has honest wall time and near-zero active time, and only the
 	// surface can decide which number to show.
-	ActiveMin   int      `json:"active_min,omitempty"`
+	ActiveMin int `json:"active_min,omitempty"`
+	// The activity inside the game (spec 18 §3.11): the Roblox experience's
+	// name. Empty for a game without one.
+	Activity    string   `json:"activity,omitempty"`
 	PlayerIDs   []string `json:"player_ids"`
 	PlayerNames []string `json:"player_names"`
 	// Minutes the actor overlapped each PlayerIDs entry (index-aligned). Index 0
@@ -728,6 +731,9 @@ type GameSessionEndRequest struct {
 	// the same id; duplicates are acknowledged without re-applying stats or
 	// appending a second ledger event. Empty for older clients (no dedup).
 	SessionID string `json:"session_id"`
+	// The activity inside the game (spec 18 §3.11): the Roblox experience's
+	// name. Optional; a value over maxActivityLen is dropped, not cut.
+	Activity string `json:"activity,omitempty"`
 	// UTC offset of the user's clock in minutes, east positive. Optional.
 	// Head2head night_owl reads it. A value outside -840..840 is ignored.
 	TzOffsetMin *int `json:"tz_offset_min,omitempty"`
@@ -740,6 +746,9 @@ type GameSessionEndRequest struct {
 }
 
 const (
+	// maxActivityLen is the longest activity name the server keeps, in
+	// bytes. Roblox caps an experience name at 50 characters.
+	maxActivityLen = 200
 	// sessionEndFutureSlack is how far past the receive time a client end_ms
 	// may be (clock skew).
 	sessionEndFutureSlack = 5 * time.Minute
@@ -873,6 +882,9 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 	req.Losses = clampSessionOutcome(req.Losses)
 	req.Draws = clampSessionOutcome(req.Draws)
 	req.DurationMin, req.ActiveMin = clampGameSessionDurations(req.DurationMin, req.ActiveMin)
+	if len(req.Activity) > maxActivityLen {
+		req.Activity = ""
+	}
 
 	if !isCrewMember(ctx, nk, req.CrewID, userID) {
 		return "", runtime.NewError("not a crew member", 7)
@@ -917,6 +929,7 @@ func GameSessionEndRPC(ctx context.Context, logger runtime.Logger, db *sql.DB, n
 		GameID:           req.GameID,
 		GameIGDBID:       req.IgdbID,
 		ActiveMin:        req.ActiveMin,
+		Activity:         req.Activity,
 		PlayerIDs:        playerIDs,
 		PlayerNames:      playerNames,
 		PlayerOverlapMin: playerOverlapMin,

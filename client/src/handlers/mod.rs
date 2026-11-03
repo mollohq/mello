@@ -1,5 +1,5 @@
 mod auth;
-mod chat;
+pub(crate) mod chat;
 pub(crate) mod clip;
 mod crew;
 mod game;
@@ -135,6 +135,13 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::ChatMessageEdited { .. }
         | Event::ChatMessageDeleted { .. }
         | Event::GifsLoaded { .. }
+        | Event::GifsFailed { .. }
+        | Event::ChatReactionsLoaded { .. }
+        | Event::ChatReactionChanged { .. }
+        | Event::ChatReadCursorLoaded { .. }
+        | Event::ChatReadCursors { .. }
+        | Event::ChatImageUploaded { .. }
+        | Event::ChatImageUploadFailed { .. }
         | Event::MessagePreviewUpdated { .. } => chat::handle(ctx, event),
 
         // Streaming
@@ -204,6 +211,7 @@ fn dispatch(ctx: &AppContext, event: Event) {
 
         // Game sensing + telemetry
         Event::GameDetected { .. }
+        | Event::GameActivity { .. }
         | Event::GameEnded { .. }
         | Event::PostGameTimeout
         | Event::MatchEnded { .. }

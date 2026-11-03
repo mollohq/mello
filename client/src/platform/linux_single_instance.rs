@@ -43,8 +43,20 @@ mod tests {
         format!("m3llo-test-{name}-{}", std::process::id())
     }
 
+    /// The tests of this module take turns. A child process holds a copy of every
+    /// descriptor of the test process between its fork and its exec, the lock
+    /// socket of another test too, until the exec closes it (close-on-exec). The
+    /// child test forks while the other test drops its lock and binds the name
+    /// again: in parallel, that bind found the name taken 9 times in 10.
+    static TURN: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    fn turn() -> std::sync::MutexGuard<'static, ()> {
+        TURN.lock().unwrap_or_else(|e| e.into_inner())
+    }
+
     #[test]
     fn a_second_instance_is_refused() {
+        let _turn = turn();
         let name = unique("second");
         let first = InstanceLock::acquire(&name).expect("first");
         assert!(first.is_single());
@@ -58,6 +70,7 @@ mod tests {
     /// outlives the lock (the updater, a browser) does not hold it.
     #[test]
     fn a_child_process_does_not_keep_the_lock() {
+        let _turn = turn();
         let name = unique("child");
         let lock = InstanceLock::acquire(&name).expect("lock");
         assert!(lock.is_single());

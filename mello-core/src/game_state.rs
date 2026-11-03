@@ -12,6 +12,15 @@ struct GameSession {
     game: ActiveGame,
     /// Match outcomes accumulated this session (from a telemetry adapter).
     matches: Vec<MatchResult>,
+    /// The adapter's activity id for a gated session (a Roblox place id).
+    activity_id: Option<String>,
+    /// The activity's name once the client's lookup answered (spec 18
+    /// §3.11): the Roblox experience. Presence and the ledger carry it.
+    activity_name: Option<String>,
+    /// The process's foreground total when this session opened. The sensor
+    /// counts foreground time per process; a gated session that is the
+    /// second experience of one process starts from the first one's total.
+    foreground_base: i64,
 }
 
 #[derive(Default)]
@@ -28,6 +37,13 @@ pub struct GameStateManager {
     sessions: std::collections::HashMap<String, GameSession>,
     /// The game the user is actually looking at; drives presence and the bar.
     primary: Option<String>,
+    /// Games whose adapter opens and closes the session (spec 18 §2.4). The
+    /// sensor's `Started` parks them in `pending` until the adapter reports
+    /// an activity.
+    gated: std::collections::HashSet<String>,
+    /// Gated games whose process is up without an activity: Roblox on its
+    /// home screen, or parked in the tray.
+    pending: std::collections::HashMap<String, ActiveGame>,
 }
 
 impl GameStateManager {
@@ -35,11 +51,20 @@ impl GameStateManager {
         Self::default()
     }
 
+    /// The games whose session waits for their adapter (spec 18 §2.4). The
+    /// client sets this from the registry minus the integrations the user
+    /// turned off: a game without a running adapter falls back to the window.
+    pub fn set_gated_games(&mut self, ids: impl IntoIterator<Item = String>) {
+        self.gated = ids.into_iter().collect();
+    }
+
     /// Process a game event from the sensor and return UI events to emit
     /// plus an optional session summary for the `game_session_end` RPC.
     pub fn handle_event(&mut self, event: GameEvent) -> (Vec<Event>, Option<SessionSummary>) {
         let mut events = Vec::new();
-        let mut session_end = None;
+        // A stop returns `close_session`'s summary directly; nothing else
+        // here produces one.
+        let session_end = None;
 
         match event {
             GameEvent::Started(game) => {
@@ -52,6 +77,21 @@ impl GameStateManager {
                 );
                 let pid = game.pid;
                 let game_id = game.game_id.clone();
+                if self.gated.contains(&game_id) {
+                    if self.sessions.contains_key(&game_id) {
+                        log::debug!(
+                            "[game-state] {} already in play; keeping the adapter's session",
+                            game.game_name
+                        );
+                    } else {
+                        log::info!(
+                            "[game-state] {} is up; its adapter says when play starts",
+                            game.game_name
+                        );
+                        self.pending.insert(game_id, game);
+                    }
+                    return (events, session_end);
+                }
                 // The sensor coalesces, so a repeat Started for an open game is
                 // not expected. Keep the earliest start and stay quiet rather
                 // than announce the same game twice.
@@ -80,6 +120,9 @@ impl GameStateManager {
                     GameSession {
                         game,
                         matches: Vec::new(),
+                        activity_id: None,
+                        activity_name: None,
+                        foreground_base: 0,
                     },
                 );
                 // First game in becomes primary until the sensor says otherwise,
@@ -90,66 +133,37 @@ impl GameStateManager {
             }
             GameEvent::Stopped { game, ended_at } => {
                 let game_id = game.game_id.clone();
-                let Some(mut session) = self.sessions.remove(&game_id) else {
+                self.pending.remove(&game_id);
+                if !self.sessions.contains_key(&game_id) {
                     log::debug!(
                         "[game-state] stop for untracked game {} (pid {}); ignoring",
                         game_id,
                         game.pid
                     );
                     return (events, session_end);
-                };
-                if self.primary.as_deref() == Some(game_id.as_str()) {
-                    self.primary = self.sessions.keys().next().cloned();
                 }
-
-                // The sensor accumulates foreground time on its scan loop and
-                // ships the live total on stop; Started only carries a snapshot.
-                session.game.foreground_ms = session.game.foreground_ms.max(game.foreground_ms);
-
-                // Duration spans the real process lifetime, not the window we
-                // happened to be watching. `ended_at` is when it was last seen
-                // alive — for a session recovered after a restart that is well
-                // before now, and using now would invent hours that never
-                // happened.
-                let duration_min = ((ended_at - session.game.started_at).max(0) / 60_000) as u32;
-                let (wins, losses, draws) = tally(&session.matches);
-
-                log::info!(
-                    "[game-state] game stopped: {} (duration={}min, foreground={}min, {}W-{}L-{}D over {} matches)",
-                    session.game.game_name,
-                    duration_min,
-                    session.game.foreground_ms / 60_000,
-                    wins,
-                    losses,
-                    draws,
-                    session.matches.len(),
-                );
-
-                if duration_min >= MIN_SESSION_LEDGER_MIN {
-                    session_end = Some(SessionSummary {
-                        game_name: session.game.game_name.clone(),
-                        game_id: session.game.game_id.clone(),
-                        duration_min,
-                        active_min: (session.game.foreground_ms / 60_000) as u32,
-                        igdb_id: session.game.igdb_id.unwrap_or(0),
-                        wins,
-                        losses,
-                        draws,
-                        matches: std::mem::take(&mut session.matches),
-                        start_ms: session.game.started_at,
-                        end_ms: ended_at,
-                    });
+                return self.close_session(&game_id, ended_at, game.foreground_ms);
+            }
+            GameEvent::Foreground {
+                game_id,
+                foreground_ms,
+            } => {
+                if let Some(open) = self.sessions.get_mut(&game_id) {
+                    open.game.foreground_ms = open.game.foreground_ms.max(foreground_ms);
                 }
-
-                events.push(Event::GameEnded {
-                    game_id: session.game.game_id.clone(),
-                    game_name: session.game.game_name.clone(),
-                    short_name: session.game.short_name.clone(),
-                    duration_min,
-                });
+                if let Some(parked) = self.pending.get_mut(&game_id) {
+                    parked.foreground_ms = parked.foreground_ms.max(foreground_ms);
+                }
             }
             GameEvent::PrimaryChanged { game_id } => {
-                self.primary = game_id;
+                // A gated game that is up without play cannot be what the user
+                // is playing: fall back to an open session.
+                self.primary = match game_id {
+                    Some(id) if self.pending.contains_key(&id) => {
+                        self.sessions.keys().next().cloned()
+                    }
+                    other => other,
+                };
             }
             // The client reads the library before the event reaches here.
             GameEvent::LibraryScanned { .. } => {}
@@ -158,10 +172,181 @@ impl GameStateManager {
         (events, session_end)
     }
 
+    /// Close an open session at `ended_at`. `foreground_ms` is the sensor's
+    /// final total for the process when the process exited, or the last one
+    /// seen when an adapter closes the session with the process still up.
+    fn close_session(
+        &mut self,
+        game_id: &str,
+        ended_at: i64,
+        foreground_ms: i64,
+    ) -> (Vec<Event>, Option<SessionSummary>) {
+        let mut events = Vec::new();
+        let mut session_end = None;
+        let Some(mut session) = self.sessions.remove(game_id) else {
+            return (events, session_end);
+        };
+        if self.primary.as_deref() == Some(game_id) {
+            self.primary = self.sessions.keys().next().cloned();
+        }
+
+        // The sensor accumulates foreground time on its scan loop and ships
+        // the live total on stop; Started only carries a snapshot. A gated
+        // session counts from the total it opened at.
+        session.game.foreground_ms =
+            (session.game.foreground_ms.max(foreground_ms) - session.foreground_base).max(0);
+
+        // Duration spans the real process lifetime, not the window we
+        // happened to be watching. `ended_at` is when it was last seen
+        // alive — for a session recovered after a restart that is well
+        // before now, and using now would invent hours that never
+        // happened.
+        let duration_min = ((ended_at - session.game.started_at).max(0) / 60_000) as u32;
+        let (wins, losses, draws) = tally(&session.matches);
+
+        log::info!(
+            "[game-state] game stopped: {} (duration={}min, foreground={}min, {}W-{}L-{}D over {} matches)",
+            session.game.game_name,
+            duration_min,
+            session.game.foreground_ms / 60_000,
+            wins,
+            losses,
+            draws,
+            session.matches.len(),
+        );
+
+        if duration_min >= MIN_SESSION_LEDGER_MIN {
+            session_end = Some(SessionSummary {
+                game_name: session.game.game_name.clone(),
+                game_id: session.game.game_id.clone(),
+                duration_min,
+                active_min: (session.game.foreground_ms / 60_000) as u32,
+                igdb_id: session.game.igdb_id.unwrap_or(0),
+                wins,
+                losses,
+                draws,
+                matches: std::mem::take(&mut session.matches),
+                start_ms: session.game.started_at,
+                end_ms: ended_at,
+                activity: session.activity_name.take(),
+            });
+        }
+
+        events.push(Event::GameEnded {
+            game_id: session.game.game_id.clone(),
+            game_name: session.game.game_name.clone(),
+            short_name: session.game.short_name.clone(),
+            duration_min,
+        });
+        (events, session_end)
+    }
+
     /// Process a telemetry event from an adapter (e.g. CS2 GSI). Accumulates
-    /// match outcomes into the matching session and returns any live UI events.
-    pub fn handle_telemetry(&mut self, event: TelemetryEvent) -> Vec<Event> {
+    /// match outcomes into the matching session and returns any live UI
+    /// events, plus a session summary when an adapter closed a gated session
+    /// (spec 18 §2.4).
+    pub fn handle_telemetry(
+        &mut self,
+        event: TelemetryEvent,
+    ) -> (Vec<Event>, Option<SessionSummary>) {
         match event {
+            TelemetryEvent::ActivityStarted {
+                game_id,
+                activity_id,
+                ts,
+            } => {
+                if let Some(open) = self.sessions.get_mut(&game_id) {
+                    log::info!(
+                        "[game-state] {} moved to activity {activity_id}",
+                        open.game.game_name
+                    );
+                    open.activity_id = Some(activity_id);
+                    // The old name is wrong now; the bar shows none until
+                    // the lookup names the new activity.
+                    let events = match open.activity_name.take() {
+                        Some(_) => vec![Event::GameActivity {
+                            game_id,
+                            activity: String::new(),
+                        }],
+                        None => Vec::new(),
+                    };
+                    return (events, None);
+                }
+                let Some(mut game) = self.pending.remove(&game_id) else {
+                    log::debug!("[game-state] activity for {game_id} with no process up; ignoring");
+                    return (Vec::new(), None);
+                };
+                // The session starts at the join, not when the process did.
+                game.started_at = ts;
+                log::info!(
+                    "[game-state] play started: {} ({}, activity {activity_id}, since {ts})",
+                    game.game_name,
+                    game.game_id
+                );
+                let detected = Event::GameDetected {
+                    game_id: game.game_id.clone(),
+                    game_name: game.game_name.clone(),
+                    short_name: game.short_name.clone(),
+                    color: game.color.clone(),
+                    pid: game.pid,
+                    exe_path: game.exe_path.clone(),
+                    started_at_ms: ts,
+                };
+                let foreground_base = game.foreground_ms;
+                self.sessions.insert(
+                    game_id.clone(),
+                    GameSession {
+                        game,
+                        matches: Vec::new(),
+                        activity_id: Some(activity_id),
+                        activity_name: None,
+                        foreground_base,
+                    },
+                );
+                if self.primary.is_none() {
+                    self.primary = Some(game_id);
+                }
+                (vec![detected], None)
+            }
+            TelemetryEvent::ActivityNamed {
+                game_id,
+                activity_id,
+                name,
+            } => {
+                let Some(open) = self.sessions.get_mut(&game_id) else {
+                    log::debug!("[game-state] a name for {game_id} with no session; ignoring");
+                    return (Vec::new(), None);
+                };
+                if open.activity_id.as_deref() != Some(activity_id.as_str()) {
+                    log::debug!(
+                        "[game-state] a name for activity {activity_id} of {game_id}, which moved on; ignoring"
+                    );
+                    return (Vec::new(), None);
+                }
+                log::info!("[game-state] {} is in {name:?}", open.game.game_name);
+                open.activity_name = Some(name.clone());
+                (
+                    vec![Event::GameActivity {
+                        game_id,
+                        activity: name,
+                    }],
+                    None,
+                )
+            }
+            TelemetryEvent::ActivityEnded { game_id, ts } => {
+                let Some(open) = self.sessions.get(&game_id) else {
+                    log::debug!(
+                        "[game-state] activity ended for {game_id} with no session; ignoring"
+                    );
+                    return (Vec::new(), None);
+                };
+                // The process is still up: it goes back to waiting for play.
+                let parked = open.game.clone();
+                let foreground_ms = parked.foreground_ms;
+                let closed = self.close_session(&game_id, ts, foreground_ms);
+                self.pending.insert(game_id, parked);
+                closed
+            }
             TelemetryEvent::MatchEnded(m) => {
                 // Attribute by game_id rather than "whatever is current" — with
                 // two games open, the wrong session would otherwise absorb the
@@ -175,7 +360,7 @@ impl GameStateManager {
                         "[game-state] telemetry for {} with no matching session; ignoring",
                         m.game_id
                     );
-                    return Vec::new();
+                    return (Vec::new(), None);
                 };
                 log::info!(
                     "[game-state] match ended: {} {}-{} on {}",
@@ -191,14 +376,16 @@ impl GameStateManager {
                     map: m.map.clone(),
                 };
                 session.matches.push(*m);
-                vec![ev]
+                (vec![ev], None)
             }
             // Match start / score changes are tracked by the adapter; no UI
             // event yet (reserved for live HUD score and future auto-clip hooks).
-            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::ScoreChanged { .. } => Vec::new(),
+            TelemetryEvent::MatchStarted { .. } | TelemetryEvent::ScoreChanged { .. } => {
+                (Vec::new(), None)
+            }
             TelemetryEvent::SetupRequired { game_id, hint } => {
                 log::info!("[game-state] telemetry setup required for {game_id}: {hint}");
-                vec![Event::TelemetrySetupHint { game_id, hint }]
+                (vec![Event::TelemetrySetupHint { game_id, hint }], None)
             }
         }
     }
@@ -215,6 +402,23 @@ impl GameStateManager {
     /// game it records until another game holds the focus for 10 s.
     pub fn running_game(&self, game_id: &str) -> Option<&ActiveGame> {
         self.sessions.get(game_id).map(|s| &s.game)
+    }
+
+    /// The named activity of the primary game (spec 18 §3.11), for presence.
+    /// `None` when the session has no activity or its name is not known.
+    pub fn current_activity(&self) -> Option<&str> {
+        self.primary
+            .as_ref()
+            .and_then(|id| self.sessions.get(id))
+            .and_then(|s| s.activity_name.as_deref())
+    }
+
+    /// True while the open session of `game_id` is in `activity_id`. The
+    /// client asks before it starts a lookup for the activity's name.
+    pub fn is_in_activity(&self, game_id: &str, activity_id: &str) -> bool {
+        self.sessions
+            .get(game_id)
+            .is_some_and(|s| s.activity_id.as_deref() == Some(activity_id))
     }
 
     /// True while any game is running, regardless of which has focus.
@@ -242,6 +446,9 @@ pub struct SessionSummary {
     pub start_ms: i64,
     /// When the game was last seen alive (Unix ms).
     pub end_ms: i64,
+    /// The named activity of a gated session (spec 18 §3.11): the Roblox
+    /// experience. `None` for every other game, or when the lookup failed.
+    pub activity: Option<String>,
 }
 
 /// Count streak-eligible wins/losses/draws. Wins/losses move the record;
@@ -572,7 +779,7 @@ mod tests {
         mgr.handle_event(GameEvent::Started(game.clone()));
 
         // Four matches: 2 wins, 1 loss, 1 draw (draw recorded but not in W/L).
-        let ui = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
+        let (ui, _) = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
         assert!(matches!(&ui[0], Event::MatchEnded { result, .. } if result == "win"));
         mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Loss)));
         mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
@@ -609,7 +816,7 @@ mod tests {
     #[test]
     fn telemetry_ignored_without_active_game() {
         let mut mgr = GameStateManager::new();
-        let ui = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
+        let (ui, _) = mgr.handle_telemetry(TelemetryEvent::MatchEnded(match_result(Outcome::Win)));
         assert!(ui.is_empty());
     }
 
@@ -657,5 +864,294 @@ mod tests {
             ended_at: game.started_at + 30 * 60_000,
         });
         assert_eq!(summary.expect("ledger-worthy").active_min, 5);
+    }
+}
+
+/// Adapter-gated sessions (spec 18 §2.4): the sensor says the process is up,
+/// the adapter says when play starts and ends.
+#[cfg(test)]
+mod gated_tests {
+    use super::*;
+    use crate::game_sensing::ActiveGame;
+    use crate::telemetry::TelemetryEvent;
+
+    const START: i64 = 1_700_000_000_000;
+    const JOIN: i64 = START + 5 * 60_000;
+    const LEAVE: i64 = JOIN + 30 * 60_000;
+
+    fn game(pid: u32, game_id: &str) -> ActiveGame {
+        ActiveGame {
+            game_id: game_id.into(),
+            game_name: format!("Game {game_id}"),
+            short_name: "G".into(),
+            color: "#888888".into(),
+            exe: format!("{game_id}.exe"),
+            exe_path: format!(r"C:\Games\{game_id}.exe"),
+            pid,
+            igdb_id: Some(1),
+            started_at: START,
+            started_at_ms: START,
+            foreground_ms: 0,
+        }
+    }
+
+    fn roblox(pid: u32) -> ActiveGame {
+        game(pid, "roblox")
+    }
+
+    fn gated() -> GameStateManager {
+        let mut m = GameStateManager::new();
+        m.set_gated_games(["roblox".to_string()]);
+        m
+    }
+
+    fn joined(place: &str, ts: i64) -> TelemetryEvent {
+        TelemetryEvent::ActivityStarted {
+            game_id: "roblox".into(),
+            activity_id: place.into(),
+            ts,
+        }
+    }
+
+    fn left(ts: i64) -> TelemetryEvent {
+        TelemetryEvent::ActivityEnded {
+            game_id: "roblox".into(),
+            ts,
+        }
+    }
+
+    fn foreground(total_ms: i64) -> GameEvent {
+        GameEvent::Foreground {
+            game_id: "roblox".into(),
+            foreground_ms: total_ms,
+        }
+    }
+
+    /// Roblox on its home screen, or parked in the tray: the process and its
+    /// window are up, and nobody is playing.
+    #[test]
+    fn a_gated_game_up_without_play_is_not_a_session() {
+        let mut m = gated();
+        let (events, end) = m.handle_event(GameEvent::Started(roblox(1)));
+        assert!(events.is_empty(), "no NOW PLAYING for the home screen");
+        assert!(end.is_none());
+        assert!(!m.any_active());
+        assert!(m.current_game().is_none());
+    }
+
+    #[test]
+    fn the_adapter_opens_the_session_at_the_join() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        let (events, end) = m.handle_telemetry(joined("107778070777162", JOIN));
+        assert!(end.is_none());
+        assert_eq!(events.len(), 1);
+        assert!(matches!(
+            &events[0],
+            Event::GameDetected { game_id, started_at_ms, .. }
+                if game_id == "roblox" && *started_at_ms == JOIN
+        ));
+        assert_eq!(m.current_game().map(|g| g.game_id.as_str()), Some("roblox"));
+    }
+
+    #[test]
+    fn the_adapter_closes_the_session_at_the_leave_with_the_process_still_up() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        m.handle_event(foreground(12 * 60_000));
+
+        let (events, end) = m.handle_telemetry(left(LEAVE));
+        assert!(matches!(&events[0], Event::GameEnded { duration_min, .. } if *duration_min == 30));
+        let summary = end.expect("a 30 minute experience is recorded");
+        assert_eq!(summary.duration_min, 30);
+        assert_eq!(summary.active_min, 12);
+        assert_eq!(summary.start_ms, JOIN);
+        assert_eq!(summary.end_ms, LEAVE);
+        assert!(!m.any_active(), "back on the home screen: not play");
+
+        // The process is still up, so the next join is a new session.
+        let (events, _) = m.handle_telemetry(joined("q", LEAVE + 60_000));
+        assert_eq!(events.len(), 1);
+        assert!(m.any_active());
+    }
+
+    /// The sensor counts foreground time per process. The second experience
+    /// of one process must not inherit the first one's minutes.
+    #[test]
+    fn the_second_experience_counts_its_own_foreground_time() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        m.handle_event(foreground(10 * 60_000));
+        m.handle_telemetry(left(LEAVE));
+        m.handle_event(foreground(11 * 60_000));
+        m.handle_telemetry(joined("q", LEAVE + 60_000));
+        m.handle_event(foreground(15 * 60_000));
+        let (_, end) = m.handle_telemetry(left(LEAVE + 10 * 60_000));
+        assert_eq!(end.expect("recorded").active_min, 4);
+    }
+
+    fn named(place: &str, name: &str) -> TelemetryEvent {
+        TelemetryEvent::ActivityNamed {
+            game_id: "roblox".into(),
+            activity_id: place.into(),
+            name: name.into(),
+        }
+    }
+
+    /// The lookup answers after the join. The name goes to the bar, to
+    /// presence and, at the leave, to the ledger.
+    #[test]
+    fn the_lookup_names_the_activity_for_the_bar_presence_and_the_ledger() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        assert!(m.is_in_activity("roblox", "p"));
+        assert!(!m.is_in_activity("roblox", "q"));
+        assert_eq!(m.current_activity(), None, "not known before the answer");
+
+        let (events, end) = m.handle_telemetry(named("p", "Grow a Garden"));
+        assert!(end.is_none());
+        assert!(matches!(
+            &events[..],
+            [Event::GameActivity { game_id, activity }]
+                if game_id == "roblox" && activity == "Grow a Garden"
+        ));
+        assert_eq!(m.current_activity(), Some("Grow a Garden"));
+
+        let (_, end) = m.handle_telemetry(left(LEAVE));
+        assert_eq!(
+            end.expect("recorded").activity.as_deref(),
+            Some("Grow a Garden")
+        );
+    }
+
+    /// An answer for an activity the session has left is wrong by now.
+    #[test]
+    fn a_late_name_for_a_past_activity_is_dropped() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        m.handle_telemetry(joined("q", JOIN + 60_000));
+        let (events, _) = m.handle_telemetry(named("p", "Old Place"));
+        assert!(events.is_empty());
+        assert_eq!(m.current_activity(), None);
+
+        let (events, _) = m.handle_telemetry(named("q", "New Place"));
+        assert_eq!(events.len(), 1);
+        assert_eq!(m.current_activity(), Some("New Place"));
+    }
+
+    /// A name without a session changes nothing.
+    #[test]
+    fn a_name_without_a_session_is_ignored() {
+        let mut m = gated();
+        let (events, end) = m.handle_telemetry(named("p", "Nowhere"));
+        assert!(events.is_empty());
+        assert!(end.is_none());
+        assert_eq!(m.current_activity(), None);
+    }
+
+    /// A teleport clears the bar's name until the lookup names the new
+    /// activity; a teleport before any name says nothing.
+    #[test]
+    fn a_teleport_clears_the_old_name() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        let (events, _) = m.handle_telemetry(joined("q", JOIN + 60_000));
+        assert!(events.is_empty(), "nothing to clear");
+        m.handle_telemetry(named("q", "Place Q"));
+        let (events, _) = m.handle_telemetry(joined("r", JOIN + 120_000));
+        assert!(matches!(
+            &events[..],
+            [Event::GameActivity { activity, .. }] if activity.is_empty()
+        ));
+        assert_eq!(m.current_activity(), None);
+    }
+
+    #[test]
+    fn a_teleport_keeps_the_session_open() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        let (events, end) = m.handle_telemetry(joined("q", JOIN + 60_000));
+        assert!(events.is_empty(), "no second NOW PLAYING");
+        assert!(end.is_none());
+        assert!(m.any_active());
+    }
+
+    #[test]
+    fn the_process_exit_closes_an_open_gated_session() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_telemetry(joined("p", JOIN));
+        let mut gone = roblox(1);
+        gone.foreground_ms = 3 * 60_000;
+        let (events, end) = m.handle_event(GameEvent::Stopped {
+            game: Box::new(gone),
+            ended_at: LEAVE,
+        });
+        assert_eq!(events.len(), 1);
+        let summary = end.expect("recorded");
+        assert_eq!(
+            summary.duration_min, 30,
+            "from the join, not the process start"
+        );
+        assert_eq!(summary.active_min, 3);
+        assert!(!m.any_active());
+    }
+
+    #[test]
+    fn the_process_exit_while_parked_is_quiet() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(roblox(1)));
+        let (events, end) = m.handle_event(GameEvent::Stopped {
+            game: Box::new(roblox(1)),
+            ended_at: LEAVE,
+        });
+        assert!(events.is_empty());
+        assert!(end.is_none());
+        // Parked no more: a join now has no process to attach to.
+        let (events, _) = m.handle_telemetry(joined("p", LEAVE + 1));
+        assert!(events.is_empty());
+    }
+
+    #[test]
+    fn an_activity_without_a_process_is_ignored() {
+        let mut m = gated();
+        let (events, end) = m.handle_telemetry(joined("p", JOIN));
+        assert!(events.is_empty());
+        assert!(end.is_none());
+        assert!(!m.any_active());
+        let (events, end) = m.handle_telemetry(left(LEAVE));
+        assert!(events.is_empty());
+        assert!(end.is_none());
+    }
+
+    /// With the integration turned off the adapter never runs, so the game
+    /// must not be gated: the window opens the session as for any game.
+    #[test]
+    fn an_ungated_game_still_opens_on_its_window() {
+        let mut m = GameStateManager::new();
+        let (events, _) = m.handle_event(GameEvent::Started(roblox(1)));
+        assert_eq!(events.len(), 1);
+        assert!(m.any_active());
+    }
+
+    #[test]
+    fn a_parked_gated_game_does_not_take_focus_from_an_open_one() {
+        let mut m = gated();
+        m.handle_event(GameEvent::Started(game(2, "counter-strike-2")));
+        m.handle_event(GameEvent::Started(roblox(1)));
+        m.handle_event(GameEvent::PrimaryChanged {
+            game_id: Some("roblox".into()),
+        });
+        assert_eq!(
+            m.current_game().map(|g| g.game_id.as_str()),
+            Some("counter-strike-2"),
+            "the home screen is not what the user plays"
+        );
     }
 }

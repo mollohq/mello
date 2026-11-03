@@ -34,6 +34,9 @@ pub struct ChatMessage {
     pub create_time: String,
     pub update_time: String,
     pub gif: Option<crate::chat::GifData>,
+    /// Uploaded images of an `image` message, in order.
+    #[serde(default)]
+    pub images: Vec<crate::chat::ImageData>,
     pub reply_to: Option<String>,
     pub is_system: bool,
     pub is_edited: bool,
@@ -350,6 +353,26 @@ pub enum Event {
         /// `true` when Nakama returned a pagination cursor (older messages exist).
         has_more_history: bool,
     },
+    /// The user's read cursor for the crew whose messages just loaded. Sent
+    /// after `MessagesLoaded`; `None` when the crew was never read.
+    ChatReadCursorLoaded {
+        crew_id: String,
+        cursor: Option<crate::chat::ChatReadCursor>,
+    },
+    /// Every crew's read cursor, after the crews list. The sidebar badges
+    /// come from these and the message previews.
+    ChatReadCursors {
+        cursors: Vec<(String, crate::chat::ChatReadCursor)>,
+    },
+    /// The reactions of the loaded messages, for the crew on screen.
+    ChatReactionsLoaded {
+        crew_id: String,
+        items: Vec<crate::crew_state::ReactionUpdate>,
+    },
+    /// One message's reactions changed (notification 117).
+    ChatReactionChanged {
+        update: crate::crew_state::ReactionUpdate,
+    },
     HistoryLoaded {
         messages: Vec<ChatMessage>,
         cursor: Option<String>,
@@ -371,6 +394,11 @@ pub enum Event {
     },
     GifsLoaded {
         gifs: Vec<crate::chat::GifData>,
+    },
+    /// A GIF search or trending request produced no page. The picker shows
+    /// the reason; nothing fails silently.
+    GifsFailed {
+        error: crate::giphy::GifError,
     },
 
     VoiceStateChanged {
@@ -719,6 +747,17 @@ pub enum Event {
         clip_id: String,
         event_id: String,
     },
+    /// A chat image is on the bucket. `attachment_id` is the composer's own
+    /// id for the pending chip.
+    ChatImageUploaded {
+        attachment_id: String,
+        image: crate::chat::ImageData,
+    },
+    /// A chat image did not reach the bucket. The chip shows the reason.
+    ChatImageUploadFailed {
+        attachment_id: String,
+        reason: String,
+    },
     /// Clip MP4 uploaded to cloud storage.
     ClipUploaded {
         clip_id: String,
@@ -775,6 +814,13 @@ pub enum Event {
         /// presence `started_at` carries, so the live session card counts the
         /// viewer's own game from the same moment as the crew sees it.
         started_at_ms: i64,
+    },
+    /// The activity inside an open gated session got a name (spec 18
+    /// §3.11): the Roblox experience. Empty when the activity changed and the
+    /// new name is not known yet. The bar shows it under the game's name.
+    GameActivity {
+        game_id: String,
+        activity: String,
     },
     /// A game process exited.
     GameEnded {
