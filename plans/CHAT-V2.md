@@ -1,6 +1,7 @@
 # Crew chat v2
 
-> Status: approved 2 Nov 2026. Phase 0 built on `feat/chat-v2` (worktree `mello-wt-chat-v2`).
+> Status: approved 2 Nov 2026. Phases 0, 1 and 2 built on `feat/chat-v2` (worktree `mello-wt-chat-v2`)
+> and tested by Bob on the local stack on 3 Nov 2026. One PR for all of it.
 > Before the next release: add the `GIPHY_API_KEY` secret to the mollohq/mello repository.
 > The release workflow passes it, and a production build refuses to compile without it.
 > Mockup: `designs/chat-v2.html`. Spec to update after: `specs/features/TEXT-CHAT.md`.
@@ -36,7 +37,7 @@ Each phase is one branch and one PR. Order is fixed. Phase 0 ships alone first.
 
 ### Phase 0: make what exists work
 
-Built. Each row below is a commit on `feat/chat-v2`. The chat journey passes on the branch.
+Built and tested locally. Each row below is a commit on `feat/chat-v2`. The chat journey passes on the branch.
 Twemoji glyphs are verified through the real renderer with `client/examples/emoji_probe.rs`
 (the headless viewer draws no colour fonts). Open: `qa/journeys/chat-emoji.ts` found the
 message field missing from the driver's control list while the picker is open; the harness
@@ -59,7 +60,8 @@ Done when: a release build shows trending GIFs, a feed with 120 messages opens a
 
 ### Phase 1: images
 
-Built on `feat/chat-v2`, the one branch for all of chat v2. Not run
+Built on `feat/chat-v2`, the one branch for all of chat v2, and tested locally. The viewer became a
+modal card at 70% of the window with a switcher for the message's images. Not run
 against the local stack yet: the compose file creates the `mello-chat` bucket, so `docker compose
 up` recreates `minio-init` on next start. Drop from another app is out: the winit backend delivers
 no file drops; paste and the dialog cover it.
@@ -78,8 +80,10 @@ Privacy: keys are ULIDs, unguessable. The bucket stays in the EU. No EXIF leaves
 
 ### Phase 2: feel
 
-Built on `feat/chat-v2`: 2.1, 2.2 (server-side model as decided), 2.3, 2.4. 2.5 was dropped
-(Giphy forbids a proxy). Not run against the local stack yet.
+Built on `feat/chat-v2` and tested locally: 2.1, 2.2 (server-side model as decided), 2.3, 2.4.
+2.5 was dropped (Giphy forbids a proxy). Changed on test: the picker closes on a pick, and the
+action bar opens on a click on the message instead of hover (StyledText takes presses itself, so a
+target under it never fired). `dev_seed_chat` seeds four days of Gamers history to test with.
 
 | # | Change |
 |---|---|
