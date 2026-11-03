@@ -22,7 +22,7 @@ as the Nakama message `content` field. No DMs in beta.
 | Formatting | Markdown-lite (Discord-style syntax) | Users already know it, fast to implement |
 | GIF provider | Giphy API v1, client-side | Tenor's API closed 30 June 2026. Giphy's rules require client-side calls and forbid a proxy or a cache. |
 | Emoji | Unicode, Twemoji bundled, full set in the picker | One look on every OS; the bundled COLRv0 font keeps the system emoji font out of memory. No custom emoji. |
-| Images | Up to four per message, resized to 1600px, on the `mello-chat` bucket | See 2.3 |
+| Images | Up to four per message, resized to 1600px, on the `mello-media` bucket | See 2.3 |
 | Reactions | Server-side storage object per message | See 2.4 |
 | Replies | Quote-reply with `reply_to` field | Simple, no threads |
 | DMs | Not in beta | Crew chat only |
@@ -103,7 +103,7 @@ Every message sent via `channel_message_send` uses this JSON structure as the
 in `body`. Each entry:
 
 ```json
-{ "url": "https://chat.m3llo.app/{crew_id}/{user_id}/{id}.jpg",
+{ "url": "https://media.m3llo.app/{crew_id}/{user_id}/{id}.jpg",
   "width": 1600, "height": 900, "bytes": 118000, "mime": "image/jpeg" }
 ```
 
@@ -114,13 +114,13 @@ in `body`. Each entry:
 | Size | 8 MB after encode. The server refuses more. |
 | Types | `image/jpeg`, `image/png` (kept when the source PNG has transparency), `image/gif` (bytes kept as they are) |
 | EXIF | Dropped by the re-encode. Orientation is applied first. |
-| Host | The chat bucket's public base (`CHAT_S3_PUBLIC_URL`). The server refuses any other host. |
+| Host | The chat bucket's public base (`MEDIA_S3_PUBLIC_URL`). The server refuses any other host. |
 
 Upload: the client calls `chat_upload_url` (crew, mime, bytes) for a presigned
 PUT under `{crew_id}/{user_id}/{id}.{ext}`, PUTs the bytes, then sends the
 message. The uploader's id is in the key, so `chat_delete_images` accepts only
 the caller's own keys; the client calls it when the sender deletes the message.
-The bucket is `mello-chat`, apart from clips (see 04-BACKEND.md).
+The bucket is `mello-media`, apart from clips (see 04-BACKEND.md).
 
 Composer: the Attach pill opens a file dialog (up to four), Cmd/Ctrl+V with an
 image on the clipboard adds a chip, and a chip shows preparing, uploading, the

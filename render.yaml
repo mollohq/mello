@@ -65,9 +65,9 @@ services:
         value: mello-snapshots
       - key: SNAPSHOTS_S3_PUBLIC_URL
         value: https://snapshots.m3llo.app
-      - key: CHAT_S3_BUCKET
-        value: mello-chat
-      - key: CHAT_S3_PUBLIC_URL
+      - key: MEDIA_S3_BUCKET
+        value: mello-media
+      - key: MEDIA_S3_PUBLIC_URL
         sync: false
 
   - type: web
