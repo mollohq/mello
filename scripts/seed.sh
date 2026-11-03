@@ -172,6 +172,22 @@ else
     echo "    $seed_resp"
 fi
 
+# ── chat history (Gamers: four days, GIF, images, reactions; Devs: today) ──
+
+echo ""
+echo "  chat history"
+
+if seed_resp=$(curl -sf -X POST \
+    "$BASE/v2/rpc/dev_seed_chat" \
+    -H "Authorization: Bearer ${tok[alice]}" \
+    -H "Content-Type: application/json" \
+    -d '""' 2>&1); then
+    echo "    $seed_resp"
+else
+    echo "    [!] dev_seed_chat failed (backend may need rebuild)"
+    echo "    $seed_resp"
+fi
+
 # ── summary ──────────────────────────────────────────────────────
 
 echo ""
@@ -194,4 +210,10 @@ echo "    bob:     online, in voice (Gamers), speaking"
 echo "    charlie: online, streaming CS2 in voice (Devs)"
 echo "    diana:   idle"
 echo "    Chat previews in Devs, Gamers, Music, Design, Retro"
+echo ""
+echo "  Chat history (persistent, seeded once; reseed with"
+echo "    curl -X POST \$BASE/v2/rpc/dev_seed_chat -d '{\"reset\":true}' as alice):"
+echo "    Gamers:  four days, 60+ messages, a GIF, two image messages, reactions,"
+echo "             every member's cursor before 'gg ez' so the feed opens at the unread rule"
+echo "    Devs:    six messages today, read by alice only (badge for bob and charlie)"
 echo ""

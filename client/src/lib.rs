@@ -7,6 +7,7 @@ mod autolaunch;
 mod avatar;
 mod build_info;
 pub(crate) mod callbacks;
+mod chat_images;
 mod chat_ui;
 mod converters;
 mod day_card;
@@ -119,6 +120,13 @@ impl DebugHistory {
 fn nakama_config() -> Config {
     #[cfg(feature = "production")]
     let cfg = Config::production();
+    // A shipped build without a Giphy key shows an empty GIF picker and a 401
+    // in the log. Refuse to build instead (release.yml passes the secret).
+    #[cfg(feature = "production")]
+    const _: () = assert!(
+        option_env!("GIPHY_API_KEY").is_some(),
+        "GIPHY_API_KEY must be set for a production build"
+    );
 
     #[cfg(not(feature = "production"))]
     let cfg = Config::development();
@@ -562,8 +570,8 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     ));
 
     // --- GIF animators ---
-    let gif_popover_anim = gif_animator::GifAnimator::new(50, None);
-    let gif_chat_anim = gif_animator::GifAnimator::new(50, Some(2));
+    let gif_popover_anim = gif_animator::GifAnimator::new(50, None, 24);
+    let gif_chat_anim = gif_animator::GifAnimator::new(50, Some(2), 16);
 
     // --- Build AppContext ---
     let snapshot_loader = Rc::new(snapshot_loader::SnapshotLoader::new(rt.handle().clone()));
@@ -595,6 +603,10 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         discover_loading: Rc::new(RefCell::new(false)),
         chat_messages: Rc::new(RefCell::new(Vec::new())),
         chat_scroll: Rc::new(chat_ui::ChatScrollState::new()),
+        chat_attachments: std::sync::Arc::new(std::sync::Mutex::new(Default::default())),
+        read_cursors: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        crew_previews: Rc::new(RefCell::new(std::collections::HashMap::new())),
+        reactions: Rc::new(RefCell::new(std::collections::HashMap::new())),
         unread_tracker: Rc::new(RefCell::new(mello_core::chat::UnreadTracker::new())),
         active_crew_id: Rc::new(RefCell::new(String::new())),
         avatar_state: std::sync::Arc::new(std::sync::Mutex::new(avatar::AvatarGridState::new())),
@@ -701,16 +713,29 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
     // --- Start chat GIF animator ---
     {
         let app_weak = ctx.app.as_weak();
-        ctx.gif_chat_anim.start(move |url, img| {
+        ctx.gif_chat_anim.start(move |url, frame| {
             let Some(app) = app_weak.upgrade() else {
                 return;
             };
             let msgs = app.get_messages();
             for i in 0..msgs.row_count() {
                 if let Some(mut m) = msgs.row_data(i) {
-                    if m.is_gif && m.gif_preview_url.as_str() == url {
-                        m.gif_image = img.clone();
-                        m.has_gif_image = true;
+                    if m.is_image {
+                        converters::fill_row_image(&msgs, i, &m, url, &frame);
+                        continue;
+                    }
+                    if m.is_gif && m.gif_url.as_str() == url {
+                        match &frame {
+                            gif_animator::GifFrame::Image(img) => {
+                                m.gif_image = (*img).clone();
+                                m.has_gif_image = true;
+                                m.gif_failed = false;
+                            }
+                            gif_animator::GifFrame::Failed => {
+                                m.has_gif_image = false;
+                                m.gif_failed = true;
+                            }
+                        }
                         msgs.set_row_data(i, m);
                     }
                 }

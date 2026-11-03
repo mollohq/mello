@@ -13,8 +13,27 @@ pub enum MessageType {
     #[default]
     Text,
     Gif,
+    Image,
     System,
 }
+
+/// One uploaded image of an `image` message. `url` is on the chat bucket's
+/// public host; the server refuses any other host.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ImageData {
+    pub url: String,
+    pub width: u32,
+    pub height: u32,
+    /// Size of the uploaded file in bytes, shown on the bubble.
+    #[serde(default)]
+    pub bytes: u64,
+    /// `image/jpeg`, `image/png` or `image/gif`.
+    #[serde(default)]
+    pub mime: String,
+}
+
+/// The most images one message carries.
+pub const MAX_IMAGES_PER_MESSAGE: usize = 4;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct GifData {
@@ -41,6 +60,8 @@ pub struct MessageEnvelope {
     pub mentions: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gif: Option<GifData>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub images: Vec<ImageData>,
     // System message fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub event: Option<String>,
@@ -58,6 +79,7 @@ impl MessageEnvelope {
             reply_to,
             mentions,
             gif: None,
+            images: Vec::new(),
             event: None,
             data: None,
         }
@@ -71,6 +93,24 @@ impl MessageEnvelope {
             reply_to: None,
             mentions: Vec::new(),
             gif: Some(gif),
+            images: Vec::new(),
+            event: None,
+            data: None,
+        }
+    }
+
+    /// An image message: up to `MAX_IMAGES_PER_MESSAGE` uploaded images with
+    /// an optional caption. Extra images are dropped, not sent.
+    pub fn image(images: Vec<ImageData>, body: &str, reply_to: Option<String>) -> Self {
+        let mentions = extract_mentions(body);
+        Self {
+            v: 1,
+            msg_type: MessageType::Image,
+            body: body.to_string(),
+            reply_to,
+            mentions,
+            gif: None,
+            images: images.into_iter().take(MAX_IMAGES_PER_MESSAGE).collect(),
             event: None,
             data: None,
         }
@@ -348,6 +388,13 @@ fn json_object_has_displayable_chat(obj: &serde_json::Map<String, serde_json::Va
     if obj.get("gif").is_some() {
         return true;
     }
+    if obj
+        .get("images")
+        .and_then(|v| v.as_array())
+        .is_some_and(|a| !a.is_empty())
+    {
+        return true;
+    }
     if obj.get("event").is_some() {
         return true;
     }
@@ -370,7 +417,7 @@ fn envelope_is_displayable(envelope: &MessageEnvelope) -> bool {
     if envelope.msg_type == MessageType::System {
         return true;
     }
-    if envelope.gif.is_some() {
+    if envelope.gif.is_some() || !envelope.images.is_empty() {
         return true;
     }
     !envelope.body.trim().is_empty()
@@ -394,6 +441,7 @@ pub fn chat_message_from_envelope(
     let is_deleted = !is_system
         && content_str.trim().is_empty()
         && envelope.gif.is_none()
+        && envelope.images.is_empty()
         && envelope.body.is_empty();
     if is_deleted {
         return Some(ChatMessage {
@@ -407,6 +455,7 @@ pub fn chat_message_from_envelope(
             create_time,
             update_time,
             gif: None,
+            images: Vec::new(),
             reply_to: envelope.reply_to,
             is_system: false,
             is_edited: false,
@@ -435,6 +484,7 @@ pub fn chat_message_from_envelope(
         create_time,
         update_time,
         gif: envelope.gif,
+        images: envelope.images,
         reply_to: envelope.reply_to,
         is_system,
         is_edited,
@@ -465,6 +515,7 @@ pub fn parse_content(content_str: &str) -> Option<MessageEnvelope> {
                 reply_to: None,
                 mentions: Vec::new(),
                 gif: None,
+                images: Vec::new(),
                 event: None,
                 data: None,
             });
@@ -517,6 +568,16 @@ impl UnreadTracker {
         self.counts.remove(crew_id);
     }
 
+    /// Set the unread state of a crew outright, from a read cursor.
+    pub fn set(&mut self, crew_id: &str, count: u32, has_mention: bool) {
+        if count == 0 {
+            self.counts.remove(crew_id);
+        } else {
+            self.counts
+                .insert(crew_id.to_string(), UnreadState { count, has_mention });
+        }
+    }
+
     /// Get unread state for a crew.
     pub fn get(&self, crew_id: &str) -> UnreadState {
         self.counts.get(crew_id).cloned().unwrap_or_default()
@@ -551,9 +612,13 @@ pub struct DisplayMessage {
     pub is_edited: bool,
     pub is_deleted: bool,
     pub gif: Option<GifData>,
+    pub images: Vec<ImageData>,
     pub reply_to: Option<String>,
     pub reply_to_name: Option<String>,
     pub reply_preview: Option<String>,
+    /// The separator above this message when it starts a new local day:
+    /// "Today", "Yesterday", a date. "" otherwise.
+    pub day_label: String,
 }
 
 const GROUP_GAP_SECS: i64 = 300; // 5 minutes
@@ -582,6 +647,40 @@ fn parse_timestamp(ts: &str) -> Option<DateTime<Utc>> {
                 .ok()
                 .map(|ndt| ndt.and_utc())
         })
+}
+
+/// The label of a day separator, in local time: "Today", "Yesterday", the
+/// weekday with the date inside the last week, the date in this year, and
+/// the date with the year before that. "" when `ts` does not parse.
+pub fn day_label(ts: &str) -> String {
+    day_label_at(ts, Utc::now())
+}
+
+fn day_label_at(ts: &str, now: DateTime<Utc>) -> String {
+    let Some(dt) = parse_timestamp(ts) else {
+        return String::new();
+    };
+    let day = dt.with_timezone(&Local).date_naive();
+    let today = now.with_timezone(&Local).date_naive();
+    let days_ago = (today - day).num_days();
+    match days_ago {
+        0 => "Today".to_string(),
+        1 => "Yesterday".to_string(),
+        2..=6 => day.format("%A %-d %b").to_string(),
+        _ if day.year() == today.year() => day.format("%-d %b").to_string(),
+        _ => day.format("%-d %b %Y").to_string(),
+    }
+}
+
+/// True when `a` and `b` fall on different local days. An unparseable
+/// timestamp never starts a day.
+fn different_local_day(a: &str, b: &str) -> bool {
+    match (parse_timestamp(a), parse_timestamp(b)) {
+        (Some(x), Some(y)) => {
+            x.with_timezone(&Local).date_naive() != y.with_timezone(&Local).date_naive()
+        }
+        _ => false,
+    }
 }
 
 /// Format a timestamp for display per spec section 4.2.
@@ -621,6 +720,127 @@ pub fn format_display_time(ts: &str) -> String {
 }
 
 /// Count non-system, non-deleted messages from the current local week (Mon–Sun) in the loaded set.
+/// The bucket key of a chat image URL: the last three path segments,
+/// `{crew}/{user}/{file}`. `None` for any other shape.
+pub fn image_key_from_url(url: &str) -> Option<String> {
+    let path = url.split('?').next()?.trim_end_matches('/');
+    let segments: Vec<&str> = path.rsplitn(4, '/').collect();
+    if segments.len() < 4 {
+        return None;
+    }
+    let (file, user, crew) = (segments[0], segments[1], segments[2]);
+    if file.is_empty() || user.is_empty() || crew.is_empty() {
+        return None;
+    }
+    Some(format!("{crew}/{user}/{file}"))
+}
+
+/// Where the user stopped reading a crew's chat. One per crew, in the user's
+/// own Nakama storage (`chat_read/{crew_id}`), so the unread rule and the
+/// sidebar badge survive a restart.
+#[derive(Debug, Clone, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub struct ChatReadCursor {
+    pub message_id: String,
+    /// `create_time` of that message.
+    pub time: String,
+}
+
+/// True when `ts` is later than `cursor_time`. Both are Nakama timestamps.
+/// An unparseable value is never later, so nothing reads as unread by mistake.
+pub fn is_after(ts: &str, cursor_time: &str) -> bool {
+    match (parse_timestamp(ts), parse_timestamp(cursor_time)) {
+        (Some(a), Some(b)) => a > b,
+        _ => false,
+    }
+}
+
+/// The first message after the cursor: by id when the cursor's message is
+/// loaded, by time otherwise. `None` when everything is read. System rows
+/// do not count.
+pub fn first_unread_after<'a>(
+    messages: &'a [ChatMessage],
+    cursor: &ChatReadCursor,
+) -> Option<&'a ChatMessage> {
+    if let Some(pos) = messages
+        .iter()
+        .position(|m| m.message_id == cursor.message_id)
+    {
+        return messages[pos + 1..].iter().find(|m| !m.is_system);
+    }
+    messages
+        .iter()
+        .find(|m| !m.is_system && is_after(&m.create_time, &cursor.time))
+}
+
+/// The most emoji a message may hold and still render big.
+pub const JUMBO_EMOJI_MAX: usize = 3;
+
+/// True when `body` is nothing but emoji, at most `JUMBO_EMOJI_MAX` of them,
+/// so the client renders it large (the Discord rule). A ZWJ sequence, a flag
+/// pair, a keycap, or a skin-toned emoji each count as one. Any letter,
+/// digit or punctuation makes it text.
+pub fn is_emoji_only(body: &str) -> bool {
+    let chars: Vec<char> = body.chars().filter(|c| !c.is_whitespace()).collect();
+    let mut count = 0usize;
+    let mut joined = false; // the previous scalar was a ZWJ
+    let mut pending_flag_half = false;
+    for (i, &c) in chars.iter().enumerate() {
+        let cp = c as u32;
+        let is_modifier = matches!(cp,
+            0xFE0E | 0xFE0F            // variation selectors
+            | 0x20E3                   // combining keycap
+            | 0x1F3FB..=0x1F3FF        // skin tones
+            | 0xE0020..=0xE007F        // tag characters (subdivision flags)
+        );
+        if is_modifier {
+            continue;
+        }
+        if cp == 0x200D {
+            joined = true;
+            continue;
+        }
+        let is_regional = (0x1F1E6..=0x1F1FF).contains(&cp);
+        let is_emoji = is_regional
+            || matches!(cp,
+                0x1F000..=0x1FAFF      // pictographs, emoticons, symbols
+                | 0x2600..=0x27BF      // misc symbols, dingbats
+                | 0x2300..=0x23FF      // misc technical (⌚ ⏰ ⏳)
+                | 0x2B00..=0x2BFF      // arrows and shapes (⭐ ⬆)
+                | 0x2190..=0x21FF      // arrows (↔ ↩)
+                | 0x3030 | 0x303D | 0x3297 | 0x3299
+                | 0x00A9 | 0x00AE | 0x2122 | 0x2139 | 0x24C2
+                | 0x25AA..=0x25FE
+                | 0x2934 | 0x2935
+            );
+        // '#', '*' and a digit are emoji only as a keycap: followed by U+20E3,
+        // with or without a variation selector in between.
+        let is_keycap = matches!(c, '#' | '*' | '0'..='9')
+            && chars[i + 1..]
+                .iter()
+                .find(|x| **x as u32 != 0xFE0F)
+                .is_some_and(|x| *x as u32 == 0x20E3);
+        if !is_emoji && !is_keycap {
+            return false;
+        }
+        if is_regional {
+            if pending_flag_half {
+                pending_flag_half = false;
+                continue; // second half of a flag
+            }
+            pending_flag_half = true;
+        }
+        if joined {
+            joined = false;
+            continue; // part of the previous emoji
+        }
+        count += 1;
+        if count > JUMBO_EMOJI_MAX {
+            return false;
+        }
+    }
+    count > 0
+}
+
 pub fn count_messages_this_week(messages: &[ChatMessage]) -> i32 {
     let now = Local::now();
     let today = now.date_naive();
@@ -674,6 +894,12 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
     let mut result = Vec::with_capacity(messages.len());
 
     for (i, msg) in messages.iter().enumerate() {
+        let starts_day = i == 0 || different_local_day(&messages[i - 1].timestamp, &msg.timestamp);
+        let day = if starts_day {
+            day_label(&msg.timestamp)
+        } else {
+            String::new()
+        };
         if msg.is_system {
             result.push(DisplayMessage {
                 message_id: msg.message_id.clone(),
@@ -691,14 +917,16 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
                 is_edited: false,
                 is_deleted: false,
                 gif: None,
+                images: Vec::new(),
                 reply_to: None,
                 reply_to_name: None,
                 reply_preview: None,
+                day_label: day,
             });
             continue;
         }
 
-        let is_group_start = if msg.reply_to.is_some() || i == 0 {
+        let is_group_start = if msg.reply_to.is_some() || i == 0 || starts_day {
             true
         } else {
             let prev = &messages[i - 1];
@@ -740,6 +968,8 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
             is_edited: msg.is_edited && !msg.is_deleted,
             is_deleted: msg.is_deleted,
             gif: msg.gif.clone(),
+            images: msg.images.clone(),
+            day_label: day,
             reply_to: msg.reply_to.clone(),
             reply_to_name,
             reply_preview,
@@ -751,6 +981,176 @@ pub fn prepare_messages_for_display(messages: &[ChatMessage]) -> Vec<DisplayMess
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn day_labels_read_today_yesterday_weekday_then_dates() {
+        use chrono::TimeZone;
+        // Local midday, so the day does not shift with the zone.
+        let now_local = Local
+            .with_ymd_and_hms(2026, 11, 3, 12, 0, 0)
+            .single()
+            .expect("now");
+        let now = now_local.with_timezone(&Utc);
+        let at = |days_ago: i64| {
+            (now_local - chrono::Duration::days(days_ago))
+                .with_timezone(&Utc)
+                .to_rfc3339()
+        };
+        assert_eq!(day_label_at(&at(0), now), "Today");
+        assert_eq!(day_label_at(&at(1), now), "Yesterday");
+        assert_eq!(day_label_at(&at(2), now), "Sunday 1 Nov");
+        assert_eq!(day_label_at(&at(6), now), "Wednesday 28 Oct");
+        assert_eq!(day_label_at(&at(7), now), "27 Oct");
+        assert_eq!(day_label_at(&at(400), now), "29 Sep 2025");
+        assert_eq!(day_label_at("garbage", now), "");
+    }
+
+    #[test]
+    fn a_new_local_day_gets_a_separator_and_starts_a_group() {
+        use chrono::TimeZone;
+        let day1 = Local
+            .with_ymd_and_hms(2026, 11, 2, 23, 50, 0)
+            .single()
+            .expect("t");
+        let a = msg(
+            "a",
+            "u1",
+            "Alice",
+            &day1.with_timezone(&Utc).to_rfc3339(),
+            "late",
+        );
+        let b = msg(
+            "b",
+            "u1",
+            "Alice",
+            &(day1 + chrono::Duration::minutes(3))
+                .with_timezone(&Utc)
+                .to_rfc3339(),
+            "still late",
+        );
+        let c = msg(
+            "c",
+            "u1",
+            "Alice",
+            &(day1 + chrono::Duration::minutes(12))
+                .with_timezone(&Utc)
+                .to_rfc3339(),
+            "past midnight",
+        );
+        let rows = prepare_messages_for_display(&[a, b, c]);
+        assert!(
+            !rows[0].day_label.is_empty(),
+            "the first message starts its day"
+        );
+        assert_eq!(rows[1].day_label, "");
+        assert!(
+            rows[1].is_continuation,
+            "three minutes later, same day: grouped"
+        );
+        assert!(
+            !rows[2].day_label.is_empty(),
+            "midnight passed: a separator"
+        );
+        assert!(
+            rows[2].is_group_start,
+            "and a new group, even within five minutes"
+        );
+    }
+
+    #[test]
+    fn the_first_unread_is_after_the_cursor_by_id_then_by_time() {
+        let a = msg("a", "u1", "A", "2026-03-08T12:00:00Z", "1");
+        let mut sys = msg("s", "u1", "A", "2026-03-08T12:01:00Z", "joined");
+        sys.is_system = true;
+        let b = msg("b", "u1", "A", "2026-03-08T12:02:00Z", "2");
+        let c = msg("c", "u1", "A", "2026-03-08T12:03:00Z", "3");
+        let list = vec![a, sys, b, c];
+        let by_id = ChatReadCursor {
+            message_id: "a".into(),
+            time: "2026-03-08T12:00:00Z".into(),
+        };
+        assert_eq!(
+            first_unread_after(&list, &by_id).map(|m| m.message_id.as_str()),
+            Some("b")
+        );
+        let old = ChatReadCursor {
+            message_id: "gone".into(),
+            time: "2026-03-08T12:02:30Z".into(),
+        };
+        assert_eq!(
+            first_unread_after(&list, &old).map(|m| m.message_id.as_str()),
+            Some("c")
+        );
+        let all_read = ChatReadCursor {
+            message_id: "c".into(),
+            time: "2026-03-08T12:03:00Z".into(),
+        };
+        assert!(first_unread_after(&list, &all_read).is_none());
+        assert!(!is_after("garbage", "2026-03-08T12:00:00Z"));
+    }
+
+    #[test]
+    fn an_image_envelope_round_trips_and_caps_at_four() {
+        let img = |n: u32| ImageData {
+            url: format!("http://localhost:9000/mello-chat/c1/u1/{n}.jpg"),
+            width: 1600,
+            height: 900,
+            bytes: 120_000,
+            mime: "image/jpeg".into(),
+        };
+        let env = MessageEnvelope::image((0..6).map(img).collect(), "look", None);
+        assert_eq!(env.msg_type, MessageType::Image);
+        assert_eq!(env.images.len(), MAX_IMAGES_PER_MESSAGE);
+        let json = serde_json::to_string(&env).expect("json");
+        assert!(json.contains("\"type\":\"image\""));
+        let back = parse_content(&json).expect("parses");
+        assert_eq!(back.images, env.images);
+        assert!(envelope_is_displayable(&MessageEnvelope::image(
+            vec![img(1)],
+            "",
+            None
+        )));
+        assert!(!envelope_is_displayable(&MessageEnvelope::image(
+            vec![],
+            "",
+            None
+        )));
+    }
+
+    #[test]
+    fn an_image_url_maps_to_its_bucket_key() {
+        assert_eq!(
+            image_key_from_url("https://chat.m3llo.app/crew-1/user-9/01ABC.jpg").as_deref(),
+            Some("crew-1/user-9/01ABC.jpg")
+        );
+        assert_eq!(
+            image_key_from_url("http://localhost:9000/mello-chat/c1/u1/a.png?x=1").as_deref(),
+            Some("c1/u1/a.png")
+        );
+        assert_eq!(image_key_from_url("https://chat.m3llo.app/a.jpg"), None);
+    }
+
+    #[test]
+    fn emoji_only_counts_sequences_as_one_and_stops_at_three() {
+        use super::is_emoji_only;
+        assert!(is_emoji_only("🔥🔥"));
+        assert!(is_emoji_only("🔥 🔥 🔥"));
+        assert!(is_emoji_only("❤️"));
+        assert!(is_emoji_only("👍🏽"));
+        assert!(is_emoji_only("👨‍👩‍👧"), "a ZWJ family is one emoji");
+        assert!(is_emoji_only("🇸🇪"), "a flag pair is one emoji");
+        assert!(is_emoji_only("🇸🇪🇳🇴🇩🇰"), "three flags");
+        assert!(is_emoji_only("1️⃣"), "a keycap is one emoji");
+        assert!(is_emoji_only("⭐⏰↔️"));
+        assert!(!is_emoji_only("🔥🔥🔥🔥"), "four is text size");
+        assert!(!is_emoji_only("🔥 nice"));
+        assert!(!is_emoji_only("gg"));
+        assert!(!is_emoji_only("123"));
+        assert!(!is_emoji_only("1#"));
+        assert!(is_emoji_only("1️⃣2️⃣3️⃣"));
+        assert!(!is_emoji_only(""));
+        assert!(!is_emoji_only("   "));
+    }
+
     use super::*;
 
     fn msg(id: &str, sender: &str, name: &str, ts: &str, text: &str) -> ChatMessage {
@@ -765,6 +1165,7 @@ mod tests {
             create_time: ts.to_string(),
             update_time: ts.to_string(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,
@@ -1067,6 +1468,7 @@ mod tests {
             create_time: iso.into(),
             update_time: iso.into(),
             gif: None,
+            images: Vec::new(),
             reply_to: None,
             is_system: false,
             is_edited: false,

@@ -584,6 +584,10 @@ struct MessageSnap {
     edited: bool,
     deleted: bool,
     gif: bool,
+    /// How many images the message carries.
+    images: usize,
+    /// How many distinct reaction emoji the message has.
+    reactions: usize,
     /// The message mentions this user (the row is marked).
     mentions_me: bool,
 }
@@ -1194,6 +1198,8 @@ fn read(app: &MainWindow) -> Snapshot {
                     edited: m.is_edited,
                     deleted: m.is_deleted,
                     gif: m.is_gif,
+                    images: m.images.row_count(),
+                    reactions: m.reactions.row_count(),
                     mentions_me: m.mentions_self,
                 })
                 .collect();

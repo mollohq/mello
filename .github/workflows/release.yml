@@ -155,6 +155,7 @@ jobs:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 
@@ -367,6 +368,7 @@ jobs:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 
@@ -569,6 +571,7 @@ jobs:
           TWITCH_CLIENT_ID: ${{ secrets.TWITCH_CLIENT_ID }}
           NAKAMA_SERVER_KEY: ${{ secrets.NAKAMA_SERVER_KEY }}
           NAKAMA_HTTP_KEY: ${{ secrets.NAKAMA_HTTP_KEY }}
+          GIPHY_API_KEY: ${{ secrets.GIPHY_API_KEY }}
           # A fresh install takes an invite from the clipboard only on this host.
           LOUNGE_HOST: m3llo.app
 

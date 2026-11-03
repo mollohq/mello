@@ -284,6 +284,30 @@ pub struct PostClipResponse {
     pub clip_id: String,
 }
 
+// --- Chat image upload ---
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUploadURLRequest {
+    pub crew_id: String,
+    pub mime: String,
+    pub bytes: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatUploadURLResponse {
+    #[serde(default)]
+    pub upload_url: String,
+    #[serde(default)]
+    pub media_url: String,
+    #[serde(default)]
+    pub key: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ChatDeleteImagesRequest {
+    pub keys: Vec<String>,
+}
+
 // --- Clip upload ---
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

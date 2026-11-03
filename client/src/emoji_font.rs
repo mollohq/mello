@@ -1,27 +1,38 @@
 //! Bundled color-emoji font setup.
 //!
-//! Slint 1.17's Skia renderer copies the *entire* fallback emoji font into heap
+//! Slint's Skia renderer copies the *entire* fallback emoji font into heap
 //! memory the first time any color emoji renders, and caches it for the app's
 //! lifetime (`i-slint-renderer-skia/font_cache.rs`, `FontMgr::new_from_data`).
 //! On macOS that font is Apple Color Emoji.ttc — a one-emoji message costs a
 //! permanent 188 MB of phys_footprint, with transient peaks of 2-3x that from
-//! the TTC re-extraction workaround in the same file.
+//! the TTC re-extraction workaround in the same file. Still true in 1.18.
 //!
-//! Workaround: ship OpenMoji (COLRv0, ~10 MB) and put it on `SLINT_FONT_PATH`
-//! before Slint initializes. Slint registers fonts from that variable into the
-//! generic-family fallback chain (`i-slint-common/sharedfontique.rs`), which
-//! Parley consults before the system emoji fallback — so emoji resolve to
-//! OpenMoji and the system emoji font is never touched. Measured: idle with
-//! emoji on screen drops from ~400 MB to ~216 MB.
+//! Workaround: ship Twemoji (Mozilla's COLRv0 build, 1.7 MB after
+//! `tools/fonts/twemoji_base_outlines.py`, which gives every base glyph an
+//! outline: without one CoreText reports zero bounds and Skia draws nothing;
+//! `client/examples/emoji_probe.rs` shows the result) and put it on
+//! `SLINT_FONT_PATH` before Slint initializes. Slint registers fonts from that
+//! variable into the generic-family fallback chain
+//! (`i-slint-common/sharedfontique.rs`), which Parley consults before the
+//! system emoji fallback — so emoji resolve to Twemoji and the system emoji
+//! font is never touched. Measured with OpenMoji, the previous font on the
+//! same path: idle with emoji on screen drops from ~400 MB to ~216 MB.
 //!
-//! Bonus: emoji render identically on Windows/macOS/Linux.
+//! Bonus: emoji render identically on Windows/macOS/Linux, and they are the
+//! set Discord draws, so a gamer reads them as the emoji they know.
 //!
-//! OpenMoji is CC BY-SA 4.0 — attribution: "Emoji by OpenMoji
-//! (https://openmoji.org), CC BY-SA 4.0". Keep this in the app credits.
+//! Twemoji graphics are CC BY 4.0 — attribution: "Emoji by Twemoji
+//! (https://twemoji.twitter.com), CC BY 4.0". Keep this in the app credits.
+//! See `client/ui/fonts/LICENSE-Twemoji.txt`.
+//!
+//! The Mozilla build covers Unicode 14. Newer emoji fall through to the
+//! system font (and its memory cost) until we build our own font from the
+//! maintained Twemoji fork.
 
 use std::path::PathBuf;
 
-static OPENMOJI_TTF: &[u8] = include_bytes!("../ui/fonts/OpenMoji-color-glyf_colr_0.ttf");
+static EMOJI_TTF: &[u8] = include_bytes!("../ui/fonts/Twemoji.Mozilla.ttf");
+const EMOJI_FILE: &str = "Twemoji.Mozilla.ttf";
 
 /// Make the bundled emoji font available to Slint's font fallback.
 /// Must run before the first Slint window is created (the fontique collection
@@ -52,19 +63,28 @@ pub fn setup() {
 }
 
 /// Write the embedded font to the app data dir (once; re-written only when the
-/// bundled bytes change size, e.g. after an update).
+/// bundled bytes change size, e.g. after an update). The OpenMoji file that
+/// earlier builds wrote next to it is removed, so the fallback chain holds one
+/// emoji font.
 fn ensure_font_on_disk() -> Option<PathBuf> {
     let dirs = directories::ProjectDirs::from("", "", crate::APP_NAME)?;
     let dir = dirs.data_dir().join("fonts");
-    let path = dir.join("OpenMoji-color-glyf_colr_0.ttf");
+    let path = dir.join(EMOJI_FILE);
 
     let up_to_date = std::fs::metadata(&path)
-        .map(|m| m.len() == OPENMOJI_TTF.len() as u64)
+        .map(|m| m.len() == EMOJI_TTF.len() as u64)
         .unwrap_or(false);
     if !up_to_date {
         std::fs::create_dir_all(&dir).ok()?;
-        std::fs::write(&path, OPENMOJI_TTF).ok()?;
+        std::fs::write(&path, EMOJI_TTF).ok()?;
         log::info!("[emoji] wrote bundled emoji font to {}", path.display());
+    }
+    let old = dir.join("OpenMoji-color-glyf_colr_0.ttf");
+    if old.exists() {
+        match std::fs::remove_file(&old) {
+            Ok(()) => log::info!("[emoji] removed the previous emoji font {}", old.display()),
+            Err(e) => log::warn!("[emoji] could not remove {}: {}", old.display(), e),
+        }
     }
     Some(path)
 }
