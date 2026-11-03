@@ -130,7 +130,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `crew_timeline` | Yes | Raw paginated merge (ledger + recent clips + latest recap) for deep scroll. Cursor-based. |
 | `crew_clips` | Yes | Paginated access to durable clips. |
 | `crew_recaps` | Yes | Paginated access to durable recaps. |
-| `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. |
+| `clip_upload_url` | Yes | Returns a presigned PUT URL for direct S3/R2 upload and the public `media_url`. Only the clipper, a crew member, after `post_clip`. |
 | `clip_upload_complete` | Yes | Updates the clip's `media_url` after successful upload. |
 | `chat_upload_url` | Yes | A presigned PUT on the chat images bucket for a crew member: key `{crew_id}/{user_id}/{uuid}.{ext}`, 15 min, `image/jpeg`, `image/png` or `image/gif`, at most 8 MB. Returns `upload_url`, `media_url`, `key`. Empty URLs when the bucket is off. |
 | `chat_delete_images` | Yes | Removes up to four objects from the chat bucket. Only keys whose second segment is the caller's user id. |

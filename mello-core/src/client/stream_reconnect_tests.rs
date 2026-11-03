@@ -812,11 +812,14 @@ async fn end_stream_and_the_loop_do_not_wait_on_a_stalled_backend() {
             matches!(e, Event::AudioDevicesListed { .. })
         })
         .await;
-        let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+        // The leave must not wait for the 10 s stall. 5 s proves that and
+        // leaves room for a loaded machine: the full pre-push run missed 2 s
+        // once while the test alone takes 1.3 s.
+        let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
         while sfu.leaves.lock().expect("leaves").is_empty() {
             assert!(
                 tokio::time::Instant::now() < deadline,
-                "no SFU leave within 2 s of END STREAM"
+                "no SFU leave within 5 s of END STREAM"
             );
             tokio::time::sleep(Duration::from_millis(5)).await;
         }

@@ -47,6 +47,7 @@ libmello/
 │   ├── video/
 │   │   ├── video_pipeline.hpp/cpp
 │   │   ├── capture_source.hpp      # CaptureSource interface, CaptureState
+│   │   ├── capture_manager.hpp/cpp # CaptureManager: one capture and its device, given to each consumer (Windows host)
 │   │   ├── capture_process.hpp/cpp # ProcessCapture: the capture ladder
 │   │   ├── capture_hook.hpp/cpp    # Game capture hook backend (client side)
 │   │   ├── hook_launcher.hpp/cpp   # Offsets helper and injection helper
@@ -123,6 +124,7 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | `MelloStreamHost` | Active stream hosting session |
 | `MelloStreamView` | Active stream viewing session |
 | `MelloPeerConnection` | One peer connection: the client side of an SFU session |
+| `MelloClipPlayer` | One game clip that plays (Windows) |
 
 ### API surface groups
 
@@ -133,6 +135,9 @@ The entire library is exposed through a single C header (`mello.h`). This is the
 | **Stream Host** | `mello_stream_start_host`, `stop_host`, `get_video_packet`, `request_keyframe`, `get_stats` | Config struct controls resolution/bitrate/encoder |
 | **Stream View** | `mello_stream_start_viewer`, `stop_viewer`, `viewer_attach_peer`, `viewer_get_stats`, `set_native_frame_callback`, `feed_audio_packet`, `viewer_set_audio_muted`, `viewer_set_audio_volume`; `feed_packet` and `present_frame` for tests and tools | `viewer_attach_peer` hands the view its SFU peer: the view's decode thread takes frames from the peer's receive timeline and its present thread calls the frame callbacks at each frame's render time (streaming-quality stage 3, 12-STREAMING.md §7). It also takes the game audio from the peer's network thread into the view's NetEQ in the voice mix, and runs the A/V sync (stage 7, 12-STREAMING.md §9.3 and §9.4). Mute flushes the queued audio; the volume is per stream |
 | **Peer Transport** | `mello_peer_create`, `destroy`, `set_ice_servers`, `create_offer`, `create_answer`, `set_remote_description`, `handle_remote_offer`, `add_ice_candidate`, `send_reliable`, `send_ping`, `rtt_ms`, `pong_age_ms` | The client side of an SFU session (§6), plus control-plane liveness/RTT probes. `create_answer` stays for the in-process tests, where a libmello peer stands in for the SFU |
+| **Game clip replay** | `mello_replay_start`, `stop`, `state`, `capture` | Windows only. One replay at a time per context: a start stops a running one. `MelloReplayConfig` names the game window and pid, the clip quality (height, fps, kbps) and the ring folder (NULL: the OS temp folder). `capture` writes the last N seconds as an MP4 and a JPEG poster and blocks for about a second. `MelloReplayState`: `OFF`, `RECORDING`, `WAITING` (no frames now, or a monitor frame), `FAILED`, `PAUSED` (overload, 12-STREAMING.md §3.7). CLIPS.md §15 |
+| **Game clip player** | `mello_clip_player_start`, `set_native_frame_callback`, `set_paused`, `seek`, `get_state`, `stop` | Windows only (`start` returns NULL elsewhere). The caller gives the clip's length and a read callback (`MelloClipReadCallback`, which returns the bytes, 0 at the end, `MELLO_CLIP_READ_WAIT` or -1). The video goes through the viewer's decoder and the native frame callback, the sound into the voice output on its own stereo stream. `stop` joins threads. CLIPS.md §15.9 |
+| **Game clip tests** | `mello_test_replay_start_reference`, `mello_test_replay_reference_info` | The stream gate's replay lane: the replay on the reference clip in place of a game window. No product code calls them |
 | **Devices** | `mello_get_audio_inputs`, `get_audio_outputs`, `set_audio_input`, `set_audio_output`, `get_encoders` | Query/switch audio devices and video encoders at runtime |
 
 ### Callbacks
@@ -469,6 +474,20 @@ Media goes on RTP tracks: voice (Opus: the mic m-line and the receive slots), st
 `mello_peer_send_audio_frame` is safe on the capture thread while another thread renegotiates the same peer. It holds the peer `mutex_` only to copy the track pointer and never takes `negotiation_mutex_`. Renegotiation holds `negotiation_mutex_` and takes `mutex_` only for short copies. libdatachannel `Track::send` is thread safe and does not block on the network.
 
 libmello is **synchronous C++ by design** — no async runtimes. Threads are created internally and communicate via lock-free ring buffers and thread-safe queues. The C API is callable from any thread but `MelloContext` operations are not thread-safe (caller must serialize).
+
+### Game clip replay and player (Windows)
+
+| Part | Thread | Work |
+|---|---|---|
+| Replay frames | The capture thread (`CaptureManager` consumer) | Decimate, convert into the replay's NV12 ring, enqueue (2 deep, newest wins). The poster copy is a submit with no wait. |
+| Replay encode | The replay's encode thread | Encode with the recording intent (14-VIDEO-PIPELINE.md §6.8), hand each access unit to the video ring's RAM queue. It never waits on the disk. |
+| Ring writers | One writer thread per ring file | Write the RAM queues of the video ring and the game audio ring to their files. |
+| Game audio | The loopback thread of `SharedGameAudio` | One WASAPI process loopback per game pid (`Context::game_audio`). It fans out the PCM to the stream host's audio pipeline and the replay's audio ring, under one mutex for the whole fan-out, so a `remove` waits for a call that runs. |
+| Clip capture | The caller's worker thread | `mello_replay_capture`: pin the segments, mux, write the poster. Never on the command loop. |
+| Player demux | The player's demux thread | Its own Media Foundation source reader for its whole life, over `ClipByteStream`. H.264 to Annex B for the viewer, AAC to 48 kHz stereo PCM for the clip sound. |
+| Player reads | Media Foundation's long-function work queue | `ClipByteStream::BeginRead` returns at once and the read runs on the work queue, so the source answers sample requests while a read waits for its bytes. Stop aborts the reads and waits for them before the source shuts down. |
+| Player video | The viewer's decode and present threads | `ClipFrameSource` in place of the receive timeline (14-VIDEO-PIPELINE.md §8.4). |
+| Player sound | The voice render thread | `ClipAudioStream`: an SPSC ring that the demux thread fills. The played samples minus the output latency are the clock of the video. |
 
 ---
 

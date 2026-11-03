@@ -13,6 +13,7 @@ use super::input::{InputPassthrough, InputPassthroughStub};
 use super::pacer::{calc_stream_pacing_target_kbps, PacingTelemetry};
 use super::pause::{pause_message, PauseController};
 use super::sink::{PacketSink, SinkVideoFeedback, SinkVideoFeedbackKind};
+use super::upload_budget::{StreamLoad, UploadGovernor, UploadPaceHold};
 use crate::events::Event;
 
 const PACING_TELEMETRY_INTERVAL_SECS: u64 = 2;
@@ -394,6 +395,10 @@ pub struct StreamManager {
     quality_last_frames: u64,
     quality_last_drops: u64,
     quality_last_source_changes: u32,
+    /// The game clip upload's budget during the stream (12-STREAMING.md 3.7,
+    /// G2 to G4), and the stream's hold on the upload pace.
+    upload_governor: UploadGovernor,
+    upload_pace: UploadPaceHold,
     /// Viewer pause UX: debounced capture-target availability. Transitions
     /// broadcast a control message and (for the host UI) an event.
     pause: PauseController,
@@ -507,6 +512,8 @@ impl StreamManager {
             quality_last_frames: 0,
             quality_last_drops: 0,
             quality_last_source_changes: 0,
+            upload_governor: UploadGovernor::default(),
+            upload_pace: UploadPaceHold::new(),
             pause: PauseController::new(),
             pause_event_tx: None,
             last_manager_sample: ManagerTelemetrySnapshot::default(),
@@ -869,6 +876,21 @@ impl StreamManager {
         if let Some(allocation) = update.allocation_kbps {
             self.sink.set_max_allocated_kbps(allocation).await;
         }
+        self.update_upload_budget(now);
+    }
+
+    /// The game clip upload's budget from the stream's state (12-STREAMING.md
+    /// 3.7). Reads the controller only; the stream never waits for it.
+    fn update_upload_budget(&mut self, now: Instant) {
+        let load = StreamLoad {
+            top_rung: self.quality.rung_index() == 0,
+            overloaded: self.quality.overloaded(),
+            gcc_kbps: self.quality.gcc_kbps(),
+            bitrate_kbps: self.quality.bitrate_kbps(),
+            preset_kbps: self.quality.preset_kbps(),
+        };
+        let bps = self.upload_governor.budget_bps(load, now);
+        self.upload_pace.set(bps);
     }
 
     fn apply_rung_geometry(&self, rung: Rung) {
@@ -1340,6 +1362,8 @@ impl StreamManager {
                 log::debug!("Stream manager goog_cc target: {} bps", bitrate_bps);
                 self.quality.set_gcc_target_bps(bitrate_bps);
                 self.apply_quality_bitrate(now).await;
+                // A target under the stream pauses the upload at once (G3).
+                self.update_upload_budget(now);
             }
         }
     }

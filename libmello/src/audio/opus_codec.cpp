@@ -58,6 +58,12 @@ void OpusEnc::set_inband_fec(int mode) {
     if (encoder_) opus_encoder_ctl(encoder_, OPUS_SET_INBAND_FEC(mode));
 }
 
+int OpusEnc::lookahead() const {
+    opus_int32 samples = 0;
+    if (encoder_) opus_encoder_ctl(encoder_, OPUS_GET_LOOKAHEAD(&samples));
+    return static_cast<int>(samples);
+}
+
 // --- Decoder ---
 
 OpusDec::OpusDec() = default;

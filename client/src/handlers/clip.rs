@@ -9,8 +9,8 @@ use crate::converters::{avatar_color_index, make_initials};
 use crate::head2head::{self, Person, Placement};
 use crate::sealed::{self, Seal};
 use crate::{
-    FeedCardData, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapClip, RecapGameRow,
-    RecapHeldTitle, RecapLbRow, RecapPerson, RecentGameTile,
+    FeedCardData, MainWindow, RecapAwardRow, RecapBeltHeldRow, RecapBeltMovedRow, RecapClip,
+    RecapGameRow, RecapHeldTitle, RecapLbRow, RecapPerson, RecentGameTile,
 };
 
 fn normalized_entry_data(raw: &serde_json::Value) -> serde_json::Value {
@@ -2069,6 +2069,73 @@ fn daily_recap_rows(ctx: &AppContext, data: &serde_json::Value) -> Vec<crate::Da
         .collect()
 }
 
+/// The card fields of a game clip (CLIPS.md 15.6). The clipper's
+/// PC has the files: it shows its poster and plays its clip at once. The
+/// crew shows the poster when it is up, and plays when the video is up.
+#[derive(Debug, Default, PartialEq)]
+struct GameClipFields {
+    play_path: String,
+    poster_url: String,
+    local_poster: String,
+    uploading: bool,
+    can_play: bool,
+}
+
+/// `viewer_id` is the user who sees the card. Only the clipper plays the
+/// local file: two accounts on one PC must not share it.
+fn game_clip_fields(
+    data: &serde_json::Value,
+    viewer_id: &str,
+    exists: impl Fn(&str) -> bool,
+) -> Option<GameClipFields> {
+    if data.get("clip_type").and_then(|v| v.as_str()) != Some("game") {
+        return None;
+    }
+    let field = |key: &str| {
+        data.get(key)
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+    };
+    let media_url = field("media_url");
+    let clipper = field("actor_id").is_some_and(|id| id == viewer_id);
+    let local = field("local_path").filter(|p| clipper && exists(p));
+    let local_poster = local
+        .as_deref()
+        .map(|p| {
+            std::path::Path::new(p)
+                .with_extension("jpg")
+                .to_string_lossy()
+                .into_owned()
+        })
+        .filter(|p| exists(p))
+        .unwrap_or_default();
+    let play_path = local.or_else(|| media_url.clone()).unwrap_or_default();
+    Some(GameClipFields {
+        can_play: !play_path.is_empty(),
+        uploading: media_url.is_none(),
+        play_path,
+        poster_url: field("poster_url").unwrap_or_default(),
+        local_poster,
+    })
+}
+
+/// The game clip card in the feed or the memory band that plays `path`.
+pub(crate) fn game_clip_card(app: &MainWindow, path: &str) -> Option<FeedCardData> {
+    if path.is_empty() {
+        return None;
+    }
+    [app.get_feed_cards(), app.get_memory_cards()]
+        .iter()
+        .find_map(|cards| {
+            cards.iter().find(|c| {
+                c.card_type.as_str() == "clip"
+                    && c.clip_kind.as_str() == "game"
+                    && c.clip_path.as_str() == path
+            })
+        })
+}
+
 // Build a feed card from a server feed entry. card_type is the server-provided
 // feed type; the backend type is recovered for copy extraction.
 fn build_feed_card(
@@ -2174,6 +2241,26 @@ fn build_feed_card(
         .or_else(|| data.get("local_path").and_then(|v| v.as_str()))
         .unwrap_or("")
         .to_string();
+    let game_clip = if feed_type == "clip" {
+        game_clip_fields(&data, ctx.app.get_user_id().as_str(), |p| {
+            std::path::Path::new(p).exists()
+        })
+    } else {
+        None
+    };
+    let clip_path = game_clip
+        .as_ref()
+        .map(|g| g.play_path.clone())
+        .unwrap_or(clip_path);
+    // A game clip's poster is its one snapshot.
+    let snapshot_urls = match &game_clip {
+        Some(g) if !g.poster_url.is_empty() => vec![g.poster_url.clone()],
+        Some(_) => Vec::new(),
+        None => snapshot_urls,
+    };
+    let game_clip_has_poster = game_clip
+        .as_ref()
+        .is_some_and(|g| !g.poster_url.is_empty() || !g.local_poster.is_empty());
 
     let participant_count = data
         .get("participants")
@@ -2668,7 +2755,15 @@ fn build_feed_card(
         game_verified,
         recent_games: ModelRc::new(VecModel::from(recent_games)),
         recent_pc_count: recent_pc_count as i32,
-        snapshot_loading: feed_type == "session-preview" && has_snapshots,
+        snapshot_loading: (feed_type == "session-preview" && has_snapshots) || game_clip_has_poster,
+        clip_kind: if game_clip.is_some() { "game" } else { "" }.into(),
+        clip_poster_path: game_clip
+            .as_ref()
+            .map(|g| g.local_poster.as_str())
+            .unwrap_or_default()
+            .into(),
+        clip_uploading: game_clip.as_ref().is_some_and(|g| g.uploading),
+        clip_can_play: game_clip.as_ref().is_some_and(|g| g.can_play),
         snapshot_poster_ready: false,
         snapshot_error: false,
         snapshot_playback_index: 0,
@@ -2946,6 +3041,47 @@ pub fn handle(ctx: &AppContext, event: Event) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_game_clip_plays_the_local_file_first_and_waits_for_the_upload() {
+        let clip = serde_json::json!({
+            "clip_type": "game",
+            "actor_id": "bob",
+            "local_path": "C:/clips/game_clip_1.mp4",
+            "poster_url": "http://minio/crews/c/game_clip_1.jpg",
+        });
+        let on_this_pc = |p: &str| p.starts_with("C:/clips/");
+        let nowhere = |_: &str| false;
+
+        // The clipper: the local clip and poster, while the video uploads.
+        assert_eq!(
+            game_clip_fields(&clip, "bob", on_this_pc),
+            Some(GameClipFields {
+                play_path: "C:/clips/game_clip_1.mp4".into(),
+                poster_url: "http://minio/crews/c/game_clip_1.jpg".into(),
+                local_poster: "C:/clips/game_clip_1.jpg".into(),
+                uploading: true,
+                can_play: true,
+            })
+        );
+        // The crew: the poster, "uploading", and nothing to play yet.
+        let crew = game_clip_fields(&clip, "alice", nowhere).expect("a game clip");
+        assert!(crew.uploading && !crew.can_play);
+        assert_eq!(crew.local_poster, "");
+        // A crewmate on the clipper's PC (two accounts): not the clipper's file.
+        assert_eq!(game_clip_fields(&clip, "alice", on_this_pc), Some(crew));
+
+        // The video is up: the crew plays the MP4.
+        let mut up = clip.clone();
+        up["media_url"] = "http://minio/crews/c/game_clip_1.mp4".into();
+        let crew = game_clip_fields(&up, "alice", on_this_pc).expect("a game clip");
+        assert_eq!(crew.play_path, "http://minio/crews/c/game_clip_1.mp4");
+        assert!(!crew.uploading && crew.can_play);
+
+        // A voice clip is not a game clip.
+        let voice = serde_json::json!({ "clip_type": "voice", "media_url": "x" });
+        assert_eq!(game_clip_fields(&voice, "bob", on_this_pc), None);
+    }
 
     #[test]
     fn skeleton_trio_rule() {

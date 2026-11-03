@@ -114,6 +114,12 @@ impl NakamaClient {
         self.token().ok_or(Error::NotConnected)
     }
 
+    /// The session token as the client keeps it, for a thread that makes
+    /// its own RPC calls (the game clip upload). A refresh shows there.
+    pub(crate) fn shared_token(&self) -> super::SharedToken {
+        self.token.clone()
+    }
+
     pub fn config(&self) -> &Config {
         &self.config
     }

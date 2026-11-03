@@ -1,0 +1,323 @@
+import { Theme } from "../theme.slint";
+import { CutShape, CutMask, CutButtonShape } from "../components/cut.slint";
+import { UserAvatar } from "../components/avatar.slint";
+import { MediaChip, PlayButton, FootageWash } from "../components/stream_hero.slint";
+import { FeedView } from "../types.slint";
+
+// ============================================================
+//  The game clip card (CLIPS.md 15.6). A game clip is footage,
+//  like the stream preview: the poster edge to edge, one corner cut, black
+//  washes under the text. The CLIP tag top left wears red while the clip is
+//  unread. The play ring is the action; there is no filled white button.
+//  The clipper and the game sit bottom left, the length bottom right.
+// ============================================================
+
+/// "CLIP" with the scissors, on a black chip. Red is state: unread.
+component ClipTag inherits MediaChip {
+    in property <bool> unread;
+    in property <bool> small;
+
+    pad-x: root.small ? 8px : 10px;
+    Image {
+        source: @image-url("../icons/scissors.svg");
+        colorize: root.unread ? Theme.clip-amber : Theme.text-primary;
+        width: root.small ? 9px : 10px;
+        height: root.small ? 9px : 10px;
+    }
+    Text {
+        text: "CLIP";
+        font-family: Theme.font-label;
+        font-weight: Theme.weight-label;
+        font-size: 9px;
+        letter-spacing: 1.4px;
+        color: root.unread ? Theme.clip-amber : Theme.text-primary;
+    }
+}
+
+export component GameClipCard inherits Rectangle {
+    in property <bool> is-hero;
+    /// Unread: the tag and the keyline wear red.
+    in property <bool> is-new;
+    in property <image> poster;
+    in property <bool> poster-ready;
+    in property <bool> poster-loading;
+    /// The poster is up and the video is not: the crew sees "Uploading".
+    in property <bool> uploading;
+    /// The video is up, or this PC has the clip file.
+    in property <bool> can-play;
+    in property <string> clipper-name;
+    in property <string> clipper-initials;
+    in property <int> clipper-hue-index;
+    in property <image> clipper-avatar;
+    in property <bool> clipper-has-avatar;
+    in property <string> game-name;
+    /// "0:31"
+    in property <string> duration;
+
+    /// The feed card id, for the poster request.
+    in property <string> card-id;
+
+    callback play-clicked();
+
+    // The poster is decoded only while the card is within one band height of
+    // the feed's visible band (FeedView); out of it, Rust drops the poster.
+    property <length> band: FeedView.bottom - FeedView.top;
+    property <bool> near-view: root.card-id != ""
+        && self.absolute-position.y + self.height > FeedView.top - band
+        && self.absolute-position.y < FeedView.bottom + band;
+
+    function want-poster() {
+        FeedView.poster-wanted(root.card-id, root.near-view, footage.width / 1px, footage.height / 1px);
+    }
+
+    // Also when far: a feed rebuild can hand a new instance a row that still
+    // holds a poster.
+    init => {
+        root.want-poster();
+    }
+    changed near-view => {
+        root.want-poster();
+    }
+
+    property <length> edge: root.is-hero ? 18px : 10px;
+
+    background: transparent;
+    clip: true;
+
+    CutShape {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: root.is-new ? Theme.clip-amber
+            : card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
+    }
+
+    footage := Rectangle {
+        x: Theme.keyline;
+        y: Theme.keyline;
+        width: parent.width - 2 * Theme.keyline;
+        height: parent.height - 2 * Theme.keyline;
+        clip: true;
+        background: Theme.media-ground;
+
+        if root.poster-ready: Image {
+            width: parent.width;
+            height: parent.height;
+            source: root.poster;
+            image-fit: cover;
+        }
+        if root.poster-loading && !root.poster-ready: Rectangle {
+            background: Theme.card-bg-skel;
+        }
+        if !root.poster-loading && !root.poster-ready: Rectangle {
+            background: Theme.card-bg-inset;
+            Image {
+                source: @image-url("../icons/gamepad.svg");
+                colorize: Theme.skel-ghost;
+                width: root.is-hero ? 28px : 20px;
+                height: root.is-hero ? 28px : 20px;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+            }
+        }
+
+        FootageWash {
+            width: parent.width;
+            height: parent.height;
+        }
+
+        ClipTag {
+            x: root.edge;
+            y: root.is-hero ? 14px : 9px;
+            unread: root.is-new;
+            small: !root.is-hero;
+        }
+
+        if root.can-play && !root.poster-loading: PlayButton {
+            x: (parent.width - self.width) / 2;
+            y: parent.height * (root.is-hero ? 0.46 : 0.42) - self.height / 2;
+            size: root.is-hero ? 56px : 40px;
+            hover: card-touch.has-hover;
+        }
+        if !root.can-play && root.uploading: MediaChip {
+            x: (parent.width - self.width) / 2;
+            y: parent.height * (root.is-hero ? 0.46 : 0.42) - self.height / 2;
+            Image {
+                source: @image-url("../icons/upload.svg");
+                colorize: Theme.text-primary;
+                width: 10px;
+                height: 10px;
+            }
+            Text {
+                text: "UPLOADING";
+                font-family: Theme.font-label;
+                font-weight: Theme.weight-label;
+                font-size: 9px;
+                letter-spacing: 1.4px;
+                color: Theme.text-primary;
+            }
+        }
+
+        // The clipper and the game, bottom left; the length, bottom right.
+        HorizontalLayout {
+            x: root.edge;
+            y: parent.height - self.height - (root.is-hero ? 16px : 10px);
+            width: parent.width - 2 * root.edge;
+            height: root.is-hero ? 40px : 26px;
+            spacing: root.is-hero ? 12px : 8px;
+            cross-axis-alignment: center;
+
+            UserAvatar {
+                bg-color: #000000;
+                initials: root.clipper-initials;
+                avatar: root.clipper-avatar;
+                has-avatar: root.clipper-has-avatar;
+                color-index: root.clipper-hue-index;
+                size: root.is-hero ? 40px : 24px;
+            }
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                spacing: root.is-hero ? 2px : 0px;
+                Text {
+                    text: root.clipper-name;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display;
+                    font-size: root.is-hero ? 17px : 12.5px;
+                    color: Theme.text-primary;
+                    overflow: elide;
+                }
+                if root.game-name != "": Text {
+                    text: root.game-name;
+                    font-family: Theme.font-body;
+                    font-weight: Theme.weight-sentence;
+                    font-size: root.is-hero ? 13px : 11px;
+                    color: #A2A2A8;
+                    overflow: elide;
+                }
+            }
+            // The length: a black chip, cut at two corners.
+            Rectangle {
+                width: length-text.preferred-width + (root.is-hero ? 24px : 14px);
+                height: root.is-hero ? 34px : 22px;
+                CutButtonShape {
+                    width: parent.width;
+                    height: parent.height;
+                    n: root.is-hero ? 5px : 4px;
+                    fill: #000000A8;
+                }
+                length-text := Text {
+                    x: root.is-hero ? 12px : 7px;
+                    height: parent.height;
+                    text: root.duration;
+                    font-family: Theme.font-display;
+                    font-weight: Theme.weight-display-bold;
+                    font-size: root.is-hero ? 20px : 13px;
+                    letter-spacing: root.is-hero ? -0.4px : 0px;
+                    color: Theme.text-primary;
+                    vertical-alignment: center;
+                }
+            }
+        }
+    }
+
+    // The footage is a rectangle: put the cut corner back, with its keyline.
+    CutMask {
+        width: parent.width;
+        height: parent.height;
+        n: Theme.notch;
+        corner: "tr";
+        fill: Theme.bg-app;
+    }
+    Path {
+        width: parent.width;
+        height: parent.height;
+        viewbox-width: self.width / 1px;
+        viewbox-height: self.height / 1px;
+        stroke: root.is-new ? Theme.clip-amber
+            : card-touch.has-hover && root.can-play ? Theme.graphic-med : Theme.card-border;
+        stroke-width: 1px;
+        commands: "M \{(self.width - Theme.notch) / 1px} 0 L \{self.width / 1px} \{Theme.notch / 1px}";
+    }
+
+    card-touch := TouchArea {
+        accessible-role: button;
+        accessible-label: "Play the game clip of " + root.clipper-name;
+        accessible-enabled: root.can-play;
+        enabled: root.can-play;
+        mouse-cursor: root.can-play ? pointer : default;
+        clicked => { root.play-clicked(); }
+    }
+}
+
+// Headless preview:
+//   slint-viewer --screenshot out.png --component Preview \
+//     client/ui/panels/game_clip_card.slint
+export component Preview inherits Rectangle {
+    in property <image> poster;
+    in property <bool> has-poster: false;
+
+    width: 980px;
+    height: 640px;
+    background: Theme.bg-app;
+
+    VerticalLayout {
+        padding: 20px;
+        spacing: 16px;
+
+        // The hero: unread, plays.
+        GameClipCard {
+            height: 330px;
+            is-hero: true;
+            is-new: true;
+            poster: root.poster;
+            poster-ready: root.has-poster;
+            can-play: true;
+            clipper-name: "b0bben";
+            clipper-initials: "b0";
+            clipper-hue-index: 2;
+            game-name: "Hearthstone";
+            duration: "0:31";
+        }
+
+        HorizontalLayout {
+            spacing: 16px;
+            height: 220px;
+
+            // A standard cell, read.
+            GameClipCard {
+                poster: root.poster;
+                poster-ready: root.has-poster;
+                can-play: true;
+                clipper-name: "alice";
+                clipper-initials: "al";
+                clipper-hue-index: 4;
+                game-name: "Counter-Strike 2";
+                duration: "0:30";
+            }
+            // Another member's clip, still uploading.
+            GameClipCard {
+                is-new: true;
+                poster: root.poster;
+                poster-ready: root.has-poster;
+                uploading: true;
+                clipper-name: "diana";
+                clipper-initials: "di";
+                clipper-hue-index: 6;
+                game-name: "League of Legends";
+                duration: "0:30";
+            }
+            // The poster still loads.
+            GameClipCard {
+                poster-loading: true;
+                can-play: true;
+                clipper-name: "charlie";
+                clipper-initials: "ch";
+                clipper-hue-index: 1;
+                game-name: "Valorant";
+                duration: "0:29";
+            }
+        }
+    }
+}

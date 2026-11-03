@@ -1,6 +1,6 @@
 mod auth;
 pub(crate) mod chat;
-mod clip;
+pub(crate) mod clip;
 mod crew;
 mod game;
 pub(crate) mod games;
@@ -196,6 +196,15 @@ fn dispatch(ctx: &AppContext, event: Event) {
         | Event::FeedLoaded { .. }
         // Raw timeline is kept for later deep-scroll; no UI handler yet.
         | Event::TimelineLoaded { .. } => clip::handle(ctx, event),
+
+        // Game clips (F8)
+        Event::GameClipStateChanged { .. }
+        | Event::GameClipCaptured { .. }
+        | Event::GameClipFailed { .. }
+        | Event::GameClipUploadFailed { .. } => crate::game_clip::handle(ctx, event),
+        Event::GameClipPlayback { .. } | Event::GameClipPlaybackClosed { .. } => {
+            crate::game_clip_player::handle(ctx, event)
+        }
 
         // About tab
         Event::TesterAvatarLoaded { .. } => crate::about::on_avatar_loaded(ctx),

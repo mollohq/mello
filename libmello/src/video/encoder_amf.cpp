@@ -83,7 +83,8 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         return false;
     }
 
-    // Configure for ultra-low latency
+    // The usage of the intent: ultra-low latency for a stream, high quality
+    // for a recording.
     if (codec_ == VideoCodec::H264) {
         auto set_required = [&](const wchar_t* property, const auto& value, const char* label) {
             const AMF_RESULT property_res = encoder_->SetProperty(property, value);
@@ -96,12 +97,28 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
 
         const uint32_t fps = config.fps > 0 ? config.fps : 60;
         const amf_int64 bitrate_bps = static_cast<amf_int64>(config.bitrate_kbps * 1000);
-        const amf_int64 vbv_bits = static_cast<amf_int64>(vbv_bits_for(config.bitrate_kbps, fps));
+        const amf_int64 vbv_bits =
+            static_cast<amf_int64>(vbv_bits_for(config.bitrate_kbps, fps, config.intent));
+        const IntentSettings intent = intent_settings(config.intent);
 
-        if (!set_required(AMF_VIDEO_ENCODER_USAGE,
-                          static_cast<amf_int64>(AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY),
-                          "usage=ultra-low-latency") ||
-            !set_required(AMF_VIDEO_ENCODER_LOWLATENCY_MODE, true, "low-latency-mode") ||
+        // The usage sets the whole parameter set, so it goes first. A driver
+        // older than the high quality usage refuses it; the next one is tried.
+        bool usage_set = false;
+        for (const int64_t usage : intent.usages) {
+            const AMF_RESULT usage_res =
+                encoder_->SetProperty(AMF_VIDEO_ENCODER_USAGE, static_cast<amf_int64>(usage));
+            if (usage_res == AMF_OK) {
+                usage_set = true;
+                MELLO_LOG_INFO(TAG, "AMF: usage=%lld", static_cast<long long>(usage));
+                break;
+            }
+            MELLO_LOG_WARN(TAG, "AMF: usage %lld rejected: %d", static_cast<long long>(usage),
+                           usage_res);
+        }
+
+        if (!usage_set ||
+            !set_required(AMF_VIDEO_ENCODER_LOWLATENCY_MODE, intent.low_latency_mode,
+                          "low-latency-mode") ||
             !set_required(AMF_VIDEO_ENCODER_PREENCODE_ENABLE,
                           static_cast<amf_int64>(AMF_VIDEO_ENCODER_PREENCODE_DISABLED),
                           "preencode=disabled") ||
@@ -129,7 +146,7 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
                           static_cast<amf_int64>(AMF_VIDEO_ENCODER_RATE_CONTROL_METHOD_PEAK_CONSTRAINED_VBR),
                           "rate-control=VBR-peak-constrained") ||
             !set_required(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(config.fps, 1), "frame-rate") ||
-            !set_required(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits, "VBV=0.5s")) {
+            !set_required(AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, vbv_bits, "VBV")) {
             encoder_.Release(); context_->Terminate(); context_.Release();
             factory_ = nullptr;
             FreeLibrary(dll_); dll_ = nullptr;
@@ -197,8 +214,10 @@ bool AmfEncoder::initialize(const GraphicsDevice& device, const EncoderConfig& c
         MELLO_LOG_INFO(TAG, "AMF: tier 0 quality preset=%lld vbaq=%d high-motion-boost=%d",
                        static_cast<long long>(preset), vbaq ? 1 : 0, boost ? 1 : 0);
         MELLO_LOG_INFO(TAG,
-            "AMF: effective H264 profile=High level=5.1 usage=ULL low-latency=on preencode=off vbv=%lld gop=%u B-frames=disabled",
-            static_cast<long long>(vbv_bits_for(config.bitrate_kbps, config.fps)),
+            "AMF: effective H264 profile=High level=5.1 intent=%s low-latency=%s preencode=off vbv=%lld gop=%u B-frames=disabled",
+            config.intent == EncoderIntent::Recording ? "recording" : "stream",
+            intent_settings(config.intent).low_latency_mode ? "on" : "off",
+            static_cast<long long>(vbv_bits_for(config.bitrate_kbps, config.fps, config.intent)),
             config.keyframe_interval);
     }
 
@@ -306,6 +325,18 @@ bool AmfEncoder::encode(ID3D11Texture2D* nv12_texture, EncodedPacket& out) {
     return true;
 }
 
+AmfEncoder::IntentSettings AmfEncoder::intent_settings(EncoderIntent intent) {
+    IntentSettings s;
+    if (intent == EncoderIntent::Recording) {
+        s.usages = {AMF_VIDEO_ENCODER_USAGE_HIGH_QUALITY, AMF_VIDEO_ENCODER_USAGE_TRANSCODING};
+        s.low_latency_mode = false;
+    } else {
+        s.usages = {AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY};
+        s.low_latency_mode = true;
+    }
+    return s;
+}
+
 AmfEncoder::TierSettings AmfEncoder::tier_settings(int tier) {
     TierSettings t{};
     if (tier >= 1) t.quality_preset = AMF_VIDEO_ENCODER_QUALITY_PRESET_SPEED;
@@ -386,7 +417,7 @@ void AmfEncoder::set_bitrate(uint32_t kbps) {
     if (encoder_ && codec_ == VideoCodec::H264) {
         const uint32_t fps = config_.fps > 0 ? config_.fps : 60;
         const amf_int64 bitrate_bps = static_cast<amf_int64>(kbps * 1000);
-        const amf_int64 vbv_bits = static_cast<amf_int64>(vbv_bits_for(kbps, fps));
+        const amf_int64 vbv_bits = static_cast<amf_int64>(vbv_bits_for(kbps, fps, config_.intent));
         const AMF_RESULT target_res =
             encoder_->SetProperty(AMF_VIDEO_ENCODER_TARGET_BITRATE, bitrate_bps);
         const AMF_RESULT peak_res =
@@ -432,7 +463,8 @@ void AmfEncoder::set_framerate(uint32_t fps) {
     if (!encoder_ || codec_ != VideoCodec::H264) return;
     const AMF_RESULT rate_res = encoder_->SetProperty(AMF_VIDEO_ENCODER_FRAMERATE, AMFConstructRate(fps, 1));
     const AMF_RESULT vbv_res = encoder_->SetProperty(
-        AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE, static_cast<amf_int64>(vbv_bits_for(config_.bitrate_kbps, fps)));
+        AMF_VIDEO_ENCODER_VBV_BUFFER_SIZE,
+        static_cast<amf_int64>(vbv_bits_for(config_.bitrate_kbps, fps, config_.intent)));
     if (rate_res != AMF_OK || vbv_res != AMF_OK) {
         MELLO_LOG_ERROR(TAG, "AMF: framerate %u reconfigure rejected (rate=%d vbv=%d)", fps,
                         rate_res, vbv_res);

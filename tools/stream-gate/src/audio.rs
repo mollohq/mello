@@ -257,7 +257,7 @@ pub fn write_raw(path: &Path, reference: &ReferenceAudio) -> Result<(), String> 
 }
 
 /// Amplitude of a sinusoid at `freq` in `x` (Goertzel over the window).
-fn tone_amplitude(x: &[i16], freq: f64) -> f64 {
+pub fn tone_amplitude(x: &[i16], freq: f64) -> f64 {
     let n = x.len();
     if n == 0 {
         return 0.0;
@@ -442,6 +442,24 @@ pub struct AvScores {
     pub matches: Vec<(u64, u64, usize, f64)>,
 }
 
+/// Detector bias in samples: where `marker_onsets` finds the reference's own
+/// markers, after their true onsets (the median).
+pub fn detector_bias(spec: &AudioSpec, reference: &ReferenceAudio) -> f64 {
+    let mono_ref: Vec<i16> = reference.stereo.iter().step_by(2).copied().collect();
+    let nf = spec.marker_freqs_hz.len() as u64;
+    let onsets = marker_onsets(spec, &mono_ref);
+    let mut d: Vec<f64> = onsets
+        .iter()
+        .filter_map(|&(fi, s)| {
+            let period = marker_sample(spec, 1) as f64;
+            let k = (s as f64 / period).round() as u64;
+            (k % nf == fi as u64).then(|| s as f64 - marker_sample(spec, k) as f64)
+        })
+        .collect();
+    d.sort_by(|a, b| a.total_cmp(b));
+    d.get(d.len() / 2).copied().unwrap_or(0.0)
+}
+
 /// Score one viewer. `presents` and `clock` are the video side; the
 /// detector bias comes from the same detector on the reference.
 pub fn score_av(
@@ -470,22 +488,8 @@ pub fn score_av(
             .collect();
     }
 
-    // Detector bias: where it finds the reference's first markers.
-    let mono_ref: Vec<i16> = reference.stereo.iter().step_by(2).copied().collect();
     let nf = spec.marker_freqs_hz.len() as u64;
-    let bias = {
-        let onsets = marker_onsets(spec, &mono_ref);
-        let mut d: Vec<f64> = onsets
-            .iter()
-            .filter_map(|&(fi, s)| {
-                let period = marker_sample(spec, 1) as f64;
-                let k = (s as f64 / period).round() as u64;
-                (k % nf == fi as u64).then(|| s as f64 - marker_sample(spec, k) as f64)
-            })
-            .collect();
-        d.sort_by(|a, b| a.total_cmp(b));
-        d.get(d.len() / 2).copied().unwrap_or(0.0)
-    };
+    let bias = detector_bias(spec, reference);
 
     // The video: first present time of each absolute frame.
     let fps = f64::from(clock.fps.max(1));

@@ -111,11 +111,16 @@ impl SnapshotLoader {
         if row.snapshot_poster_ready || !self.inflight.lock().unwrap().insert(card_id.clone()) {
             return;
         }
+        let gen = self.current_generation();
+        let local = row.clip_poster_path.to_string();
+        if !local.is_empty() {
+            self.request_local_poster(app_weak, card_id, local, gen, max_w);
+            return;
+        }
         let Some(url) = first_snapshot_url(&row) else {
             self.inflight.lock().unwrap().remove(&card_id);
             return;
         };
-        let gen = self.current_generation();
         self.request_poster(app_weak, card_id, url, gen, max_w);
     }
 
@@ -240,9 +245,56 @@ impl SnapshotLoader {
         });
     }
 
-    /// After the feed is set: disk-prefetch frame 0 for session-preview cards
-    /// in both the this_week grid and the memory band. The posters decode
-    /// when the cards ask for them (`poster_wanted`).
+    /// Load a poster that is on this PC (a game clip's own poster), at most
+    /// `max_w` wide, and update the feed card row.
+    fn request_local_poster(
+        &self,
+        app_weak: Weak<MainWindow>,
+        card_id: String,
+        path: String,
+        gen: u32,
+        max_w: u32,
+    ) {
+        let sem = self.semaphore.clone();
+        let generation = self.generation.clone();
+        let wanted = self.wanted.clone();
+        let inflight = Inflight(self.inflight.clone(), card_id.clone());
+        self.rt.spawn(async move {
+            let _inflight = inflight;
+            let _permit = sem.acquire().await.ok();
+            if generation.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let rgba = tokio::task::spawn_blocking(move || {
+                let (bytes, w, h) =
+                    snapshot_cache::decode_thumb_rgba(std::path::Path::new(&path), &path)?;
+                snapshot_cache::fit_width(bytes, w, h, max_w)
+            })
+            .await;
+            if generation.load(Ordering::SeqCst) != gen {
+                return;
+            }
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(app) = app_weak.upgrade() else {
+                    return;
+                };
+                match rgba {
+                    Ok(Some((bytes, w, h))) => {
+                        if wanted.lock().unwrap().contains(&card_id) {
+                            let img = snapshot_cache::rgba_bytes_to_image(bytes, w, h);
+                            apply_poster(&app, &card_id, img);
+                        }
+                    }
+                    _ => set_card_error(&app, &card_id),
+                }
+            });
+        });
+    }
+
+    /// After the feed is set: disk-prefetch frame 0 for session-preview and
+    /// game clip cards in both the this_week grid and the memory band. The
+    /// posters decode when the cards ask for them (`poster_wanted`); a game
+    /// clip with its poster on this PC decodes that file.
     pub fn load_session_preview_cards(&self, app_weak: Weak<MainWindow>, gen: u32) {
         self.wanted.lock().unwrap().clear();
         if let Some(app) = app_weak.upgrade() {
@@ -251,20 +303,25 @@ impl SnapshotLoader {
                     let Some(mut card) = cards.row_data(i) else {
                         continue;
                     };
-                    if card.card_type.as_str() != "session-preview" {
+                    let game_clip =
+                        card.card_type.as_str() == "clip" && card.clip_kind.as_str() == "game";
+                    if card.card_type.as_str() != "session-preview" && !game_clip {
                         continue;
                     }
+                    let local = card.clip_poster_path.to_string();
                     let url = first_snapshot_url(&card);
-                    let Some(url) = url else {
+                    if local.is_empty() && url.is_none() {
                         continue;
-                    };
+                    }
 
                     card.snapshot_loading = true;
                     card.snapshot_poster_ready = false;
                     card.snapshot_error = false;
                     cards.set_row_data(i, card.clone());
 
-                    self.prefetch_disk(url, gen);
+                    if let (true, Some(url)) = (local.is_empty(), url) {
+                        self.prefetch_disk(url, gen);
+                    }
                 }
             }
         }

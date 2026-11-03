@@ -176,6 +176,8 @@ impl super::Client {
             log::warn!("Already watching a stream, ignoring WatchStream");
             return;
         }
+        // One native presenter: a watched stream closes a clip that plays.
+        self.close_game_clip("");
         let clicked_at = Instant::now();
         log::info!("Starting stream viewer for host {}", host_id);
         let ctx = self.voice.mello_ctx();

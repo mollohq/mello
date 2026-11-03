@@ -6,6 +6,7 @@
 #ifndef MELLO_H
 #define MELLO_H
 
+#include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
 
@@ -361,7 +362,9 @@ MELLO_API void mello_test_set_clock_ms(int64_t now_ms);
  * Clip Buffer
  * ============================================================================ */
 
-/** Start the rolling voice clip buffer. Call when joining a voice channel. */
+/** Start the rolling voice clip buffer. Call when joining a voice channel.
+ *  The buffer is a ring file of Opus frames in the OS temp folder, deleted
+ *  on stop. Fails, and stays off, when that folder has under 100 MB free. */
 MELLO_API MelloResult mello_clip_buffer_start(MelloContext* ctx);
 
 /** Stop and discard the clip buffer. Call when leaving voice. */
@@ -400,6 +403,63 @@ MELLO_API MelloResult mello_clip_seek(MelloContext* ctx, uint64_t position_sampl
 
 /** Encode a WAV file to MP4/AAC-LC. Standalone (no MelloContext needed). */
 MELLO_API MelloResult mello_clip_encode(const char* wav_path, const char* mp4_path, int bitrate);
+
+/* ============================================================================
+ * Game Clip Replay (F8, CLIPS.md 15)
+ * ============================================================================ */
+
+/** What the replay buffer records. */
+typedef struct MelloReplayConfig {
+    /** The game window. The replay captures it with WGC window capture and
+     *  nothing else: no monitor or desktop capture. NULL: the main window of
+     *  `pid`, found as the stream's process capture finds it. */
+    void*       hwnd;
+    /** The game process: its audio through process loopback. 0: none. */
+    uint32_t    pid;
+    /** The clip quality: the encode height (1080 or 720) and rate (60, 30). */
+    uint32_t    height;
+    uint32_t    fps;
+    uint32_t    bitrate_kbps;
+    /** The folder of the ring files. NULL or "": the OS temp folder. */
+    const char* buffer_dir;
+} MelloReplayConfig;
+
+typedef enum MelloReplayState {
+    MELLO_REPLAY_OFF = 0,        /**< not started, or stopped */
+    MELLO_REPLAY_RECORDING = 1,  /**< frames come in */
+    MELLO_REPLAY_WAITING = 2,    /**< the game draws nothing now (minimized) */
+    MELLO_REPLAY_FAILED = 3,     /**< a fault turned the replay off */
+    MELLO_REPLAY_PAUSED = 4,     /**< overload: the replay gave up its frames first */
+} MelloReplayState;
+
+/** A captured game clip. */
+typedef struct MelloReplayClip {
+    uint64_t duration_us;
+    uint32_t width;
+    uint32_t height;
+    uint64_t bytes;
+    bool     has_game_audio;
+    /** The poster is a frame after the press; false: the clip's last IDR. */
+    bool     poster_live;
+} MelloReplayClip;
+
+/** Start the replay buffer for one game (one at a time: a running replay
+ *  stops first). Windows only. MELLO_ERROR_FAILED on failure, and
+ *  mello_get_error says why ("no hardware encoder", "the game window cannot
+ *  be captured", ...). */
+MELLO_API MelloResult mello_replay_start(MelloContext* ctx, const MelloReplayConfig* config);
+
+/** Stop the replay buffer and delete its ring files. */
+MELLO_API void mello_replay_stop(MelloContext* ctx);
+
+MELLO_API MelloReplayState mello_replay_state(MelloContext* ctx);
+
+/** Write the last `seconds` of the game as an MP4 (H.264, AAC with the game
+ *  audio and the voice of the clip buffer) at `mp4_path` and a JPEG poster at
+ *  `poster_path`. Blocks for about a second: call it on a worker thread, not
+ *  on the command loop. `out` may be NULL. */
+MELLO_API MelloResult mello_replay_capture(MelloContext* ctx, float seconds, const char* mp4_path,
+                                           const char* poster_path, MelloReplayClip* out);
 
 /* ============================================================================
  * Peer Transport (the client side of an SFU connection)
@@ -1084,6 +1144,87 @@ MELLO_API void mello_stream_set_native_frame_callback(
     MelloNativeFrameCallback  callback,
     void*                     user_data
 );
+
+/* ============================================================================
+ * Game clip player (CLIPS.md 15.9)
+ * ============================================================================
+ * An MP4 that plays from its first bytes: the video through the stream
+ * viewer's decoder and the native frame callback, the sound in the voice
+ * output, on the sound's clock. Windows only for now. */
+
+typedef struct MelloClipPlayer MelloClipPlayer;
+
+/** The bytes are not there yet: the player asks again. */
+#define MELLO_CLIP_READ_WAIT (-2)
+
+/** Read up to `len` bytes of the clip at `offset` into `buf`. Returns the
+ *  bytes read (0 at the end of the clip), MELLO_CLIP_READ_WAIT, or -1 on an
+ *  error. Called on Media Foundation threads, never on the caller's: it must
+ *  not block for long. */
+typedef int64_t (*MelloClipReadCallback)(void* user_data, uint64_t offset, uint8_t* buf, uint32_t len);
+
+typedef struct MelloClipPlayerConfig {
+    uint64_t              length;  /**< the size of the MP4 in bytes */
+    MelloClipReadCallback read;
+    void*                 user_data;  /**< for `read`, until mello_clip_player_stop returns */
+} MelloClipPlayerConfig;
+
+typedef struct MelloClipPlayerState {
+    uint64_t position_ms;
+    uint64_t duration_ms;
+    uint32_t width;
+    uint32_t height;
+    bool     buffering;  /**< a read waits, or the sound ran out: the picture holds */
+    bool     paused;
+    bool     ended;      /**< the last frame was shown */
+    bool     failed;     /**< the clip cannot play */
+} MelloClipPlayerState;
+
+/** Start playing. Returns NULL when there is no player on this platform. */
+MELLO_API MelloClipPlayer* mello_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config);
+MELLO_API void mello_clip_player_set_native_frame_callback(MelloClipPlayer* player,
+                                                           MelloNativeFrameCallback callback,
+                                                           void* user_data);
+MELLO_API void mello_clip_player_set_paused(MelloClipPlayer* player, bool paused);
+/** Play from `position_ms` (from the key frame before it). */
+MELLO_API void mello_clip_player_seek(MelloClipPlayer* player, uint64_t position_ms);
+MELLO_API void mello_clip_player_get_state(MelloClipPlayer* player, MelloClipPlayerState* out);
+/** Stop and free the player. It joins threads: call it off any loop that must
+ *  stay responsive. The read callback is not called after it returns. */
+MELLO_API void mello_clip_player_stop(MelloClipPlayer* player);
+
+/* ---- Game clip tests (the stream gate's replay lane, CLIPS.md 15.13).
+ *      Test only: no product code calls these. ---- */
+
+/** Start the replay on the reference clip (mello_test_set_reference_clip) in
+ *  place of a game window. `config->pid` 0: the clip's game audio
+ *  (mello_test_set_reference_audio); else that process's sound through
+ *  process loopback (the real loopback row). `config->hwnd` is not used. */
+MELLO_API MelloResult mello_test_replay_start_reference(MelloContext* ctx, const MelloReplayConfig* config);
+/** The clock of the replay's reference source. False when the replay runs on
+ *  something else. */
+MELLO_API bool mello_test_replay_reference_info(MelloContext* ctx, MelloReferenceInfo* out);
+
+/** One video unit of an MP4 in Annex B, with its time from the start of the
+ *  clip. Return false to stop the read. */
+typedef bool (*MelloTestMp4UnitCallback)(void* user_data, const uint8_t* annex_b, size_t size,
+                                         int64_t time_us, bool keyframe);
+/** PCM of an MP4: 48 kHz stereo int16, the time of its first frame. Return
+ *  false to stop the read. */
+typedef bool (*MelloTestMp4PcmCallback)(void* user_data, const int16_t* stereo, size_t frames,
+                                        int64_t time_us);
+/** Read every video unit of a game clip MP4 in decode order, the track's
+ *  parameter sets before the first key frame. `width` and `height` may be NULL. */
+MELLO_API MelloResult mello_test_mp4_read_video(const char* path_utf8, MelloTestMp4UnitCallback callback,
+                                                void* user_data, uint32_t* width, uint32_t* height);
+/** Decode the sound of a game clip MP4. */
+MELLO_API MelloResult mello_test_mp4_read_audio(const char* path_utf8, MelloTestMp4PcmCallback callback,
+                                                void* user_data);
+
+/** mello_clip_player_start with the CPU frame callback: each frame as RGBA,
+ *  on the player's present thread, at its render time. */
+MELLO_API MelloClipPlayer* mello_test_clip_player_start(MelloContext* ctx, const MelloClipPlayerConfig* config,
+                                                        MelloFrameCallback on_frame, void* user_data);
 
 /** Feed an encoded game-audio packet (the Opus payload, no RTP header)
  *  received from the host for playback. The game audio plays in the voice

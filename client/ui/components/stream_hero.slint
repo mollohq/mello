@@ -76,23 +76,31 @@ export component StreamTag inherits MediaChip {
     }
 }
 
-/// The ring a snapshot or a stream plays from. White is action.
-export component PlayRing inherits Rectangle {
+/// The play button over footage: a cut tile (top left and bottom right, as
+/// every m3llo button), a black wash with a white keyline, and the play
+/// triangle with its back corners cut. Hover fills it white: white is action.
+export component PlayButton inherits Rectangle {
     in property <length> size: 56px;
+    in property <bool> hover: false;
 
     width: root.size;
     height: root.size;
-    border-radius: root.size / 2;
-    border-width: 1.5px;
-    border-color: Theme.text-primary;
-    background: #0000008C;
 
+    CutButtonShape {
+        width: parent.width;
+        height: parent.height;
+        n: root.size * 0.2;
+        inset: 1px;
+        fill: root.hover ? Theme.text-primary : #000000AA;
+        stroke: Theme.text-primary;
+        stroke-width: 2px;
+    }
     Image {
-        source: @image-url("../icons/play-fill.svg");
-        colorize: Theme.text-primary;
-        width: root.size * 0.32;
-        height: root.size * 0.32;
-        x: (parent.width - self.width) / 2 + root.size * 0.05;
+        source: @image-url("../icons/play-cut.svg");
+        colorize: root.hover ? #000000 : Theme.text-primary;
+        width: root.size * 0.38;
+        height: root.size * 0.38;
+        x: (parent.width - self.width) / 2 + root.size * 0.03;
         y: (parent.height - self.height) / 2;
     }
 }
@@ -140,10 +148,11 @@ export component TwoStreamHero inherits Rectangle {
             }
             FootageWash { width: parent.width; height: parent.height; }
 
-            PlayRing {
+            PlayButton {
                 x: (parent.width - self.width) / 2;
                 y: parent.height * 0.44 - self.height / 2;
                 size: 56px;
+                hover: watch-touch.has-hover;
             }
 
             HorizontalLayout {
@@ -180,7 +189,7 @@ export component TwoStreamHero inherits Rectangle {
                 }
             }
 
-            TouchArea {
+            watch-touch := TouchArea {
                 accessible-role: button;
                 accessible-label: "Watch " + s.streamer-name;
                 mouse-cursor: pointer;

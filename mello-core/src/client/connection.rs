@@ -19,6 +19,7 @@ impl super::Client {
         // one, so the first scan after it sends in full.
         self.library_reporter.reset_for_account();
         self.check_protocol_version().await;
+        self.start_clip_uploads();
 
         self.ensure_game_services();
         // A new login sends the library again, without waiting for a rescan.

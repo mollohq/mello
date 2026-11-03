@@ -22,6 +22,8 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <mutex>
 #include <thread>
 #include <vector>
@@ -266,6 +268,69 @@ TEST_F(ViewerPipelineTest, OnlyTheNewestDueFrameIsShown) {
     ViewerStats stats;
     viewer.stats(stats);
     EXPECT_EQ(stats.frames_presented + stats.frames_dropped_present, 5u);
+}
+
+// A frame source that releases the frames given to it, each at its render
+// time (a game clip's source, in short).
+class ScriptedSource : public mello::transport::FrameSource {
+public:
+    void push(std::vector<uint8_t> unit, int64_t render_us) {
+        {
+            std::lock_guard<std::mutex> lock(m_);
+            mello::transport::TimelineFrame f;
+            f.annex_b = std::move(unit);
+            f.keyframe = frames_.empty();
+            f.render_time_us = render_us;
+            frames_.push_back(std::move(f));
+        }
+        cv_.notify_all();
+    }
+    mello::transport::TimelineDecision poll() override {
+        std::lock_guard<std::mutex> lock(m_);
+        mello::transport::TimelineDecision d;
+        if (frames_.empty()) return d;
+        d.kind = mello::transport::TimelineDecision::Kind::Release;
+        d.frame = std::move(frames_.front());
+        frames_.pop_front();
+        return d;
+    }
+    void on_decoded(int64_t) override {}
+    void on_decode_error() override {}
+    bool wait(int64_t wake_us) override {
+        std::unique_lock<std::mutex> lock(m_);
+        const int64_t ms = wake_us > 0 ? std::max<int64_t>(0, (wake_us - ViewerPipeline::now_us()) / 1000) : 100;
+        cv_.wait_for(lock, std::chrono::milliseconds(ms), [this] { return !frames_.empty(); });
+        return true;
+    }
+    void wake() override { cv_.notify_all(); }
+    mello::transport::TimelineStats stats() const override { return {}; }
+
+private:
+    std::mutex m_;
+    std::condition_variable cv_;
+    std::deque<mello::transport::TimelineFrame> frames_;
+};
+
+// A clip seek: the frames that wait in the ring for their render time are
+// dropped at a flush and never shown.
+TEST_F(ViewerPipelineTest, AFlushDropsTheFramesThatWaitInTheRing) {
+    ASSERT_TRUE(start());
+    auto source = std::make_shared<ScriptedSource>();
+    const int64_t later = ViewerPipeline::now_us() + 400'000;
+    source->push(unit(40), later);
+    source->push(unit(60), later + 16'667);
+    viewer.attach_timeline([source] { return source; });
+    for (int i = 0; i < 200 && fake->decoded.load() < 2; ++i) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    ASSERT_EQ(fake->decoded.load(), 2);
+    EXPECT_EQ(viewer.ring_depth(), 2u);
+
+    viewer.flush();
+    EXPECT_EQ(viewer.ring_depth(), 0u);
+    std::this_thread::sleep_for(std::chrono::milliseconds(600));
+    viewer.stop();
+    EXPECT_TRUE(snapshot().empty()) << "a flushed frame was shown";
 }
 
 // A new picture size (a new SPS) gets new slot textures and a new shared

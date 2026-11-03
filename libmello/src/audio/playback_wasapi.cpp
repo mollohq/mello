@@ -3,6 +3,7 @@
 #include "audio_session_win.hpp"
 #include "../util/log.hpp"
 #include <combaseapi.h>
+#include <chrono>
 #include <vector>
 #include <algorithm>
 #include <cmath>
@@ -34,6 +35,7 @@ WasapiPlayback::~WasapiPlayback() {
     stop();
     if (event_) CloseHandle(event_);
     if (render_client_) render_client_->Release();
+    if (session_volume_) session_volume_->Release();
     if (audio_client_) audio_client_->Release();
     if (device_) device_->Release();
 }
@@ -115,6 +117,15 @@ bool WasapiPlayback::initialize(const char* device_id) {
         return false;
     }
 
+    // Optional: the game clip voice uses it (CLIPS.md 15.4). Playback runs
+    // without it.
+    hr = audio_client_->GetService(__uuidof(ISimpleAudioVolume),
+                                   reinterpret_cast<void**>(&session_volume_));
+    if (FAILED(hr)) {
+        session_volume_ = nullptr;
+        MELLO_LOG_WARN("playback", "GetService(ISimpleAudioVolume) failed hr=0x%08lx", hr);
+    }
+
     cached_output_latency_ms_ = query_output_latency_ms();
 
     WAVEFORMATEX* log_fmt = nullptr;
@@ -182,11 +193,23 @@ void WasapiPlayback::playback_thread() {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED);
     std::vector<int16_t> mono_buf;
     uint32_t pb_log_ctr = 0;
+    auto next_volume_read = std::chrono::steady_clock::now();
 
     while (running_) {
         DWORD wait = WaitForSingleObject(event_, 100);
         if (!running_) break;
         if (wait != WAIT_OBJECT_0) continue;
+
+        const auto now = std::chrono::steady_clock::now();
+        if (session_volume_ && session_volume_target_ && now >= next_volume_read) {
+            float level = 1.0f;
+            BOOL mute = FALSE;
+            if (SUCCEEDED(session_volume_->GetMasterVolume(&level)) &&
+                SUCCEEDED(session_volume_->GetMute(&mute))) {
+                session_volume_target_->store(mute ? 0.0f : level, std::memory_order_relaxed);
+            }
+            next_volume_read = now + std::chrono::milliseconds(100);
+        }
 
         UINT32 padding = 0;
         audio_client_->GetCurrentPadding(&padding);

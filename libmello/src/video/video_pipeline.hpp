@@ -16,6 +16,7 @@
 #include <deque>
 
 #ifdef _WIN32
+#include "capture_manager.hpp"
 #include "video_preprocessor.hpp"
 #endif
 
@@ -193,10 +194,33 @@ public:
     };
     void get_host_telemetry(HostTelemetry& out) const;
 
-    /// The active capture source, or nullptr when not hosting.
-    /// Exposed so the stream audio pipeline can attach to backends that carry
-    /// system audio alongside video (ScreenCaptureKit). Valid until stop_host().
-    CaptureSource* capture() const { return capture_.get(); }
+    /// Game audio that the capture makes beside its video, for the stream
+    /// audio pipeline: ScreenCaptureKit's system audio, and the reference
+    /// clip's timed audio. Null stops it and waits for a call in flight.
+    /// Nothing happens when no host runs. Any one control thread.
+    void set_capture_audio_callback(CaptureSource::AudioCallback cb);
+    void set_capture_timed_audio_callback(CaptureSource::TimedAudioCallback cb);
+    /// True when the capture gives game audio through the timed callback.
+    bool capture_provides_timed_audio() const;
+
+#ifdef _WIN32
+    /// The capture this host encodes, or nullptr when not hosting. Valid
+    /// until stop_host().
+    CaptureManager* capture_manager() const { return manager_.get(); }
+    /// The same, for a second consumer that holds it (the game clip replay,
+    /// CLIPS.md 15.3). Null when not hosting.
+    std::shared_ptr<CaptureManager> shared_capture_manager() const { return manager_; }
+
+    /// Another consumer of this capture that gives up its own load before
+    /// this stream gives up quality: the game clip replay (12-STREAMING.md
+    /// 3.7, F3). The encode thread calls it when this host is overloaded;
+    /// true means the other consumer shed a step, and the cost tier stays
+    /// this time. It must return fast. Null: none, and the overload rule is
+    /// the stream's own, unchanged. Any thread; a clear waits for a call
+    /// that runs now.
+    using OverloadShedder = std::function<bool()>;
+    void set_overload_shedder(OverloadShedder shedder);
+#endif
 
     // VIEWER SIDE (streaming-quality stage 3). The work runs in
     // ViewerPipeline (video_viewer.hpp): a decode thread fed by the viewer's
@@ -244,7 +268,7 @@ public:
 
 private:
 #ifdef _WIN32
-    void on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us);
+    void on_captured_frame(const CapturedFrame& frame);
 #elif defined(__APPLE__) || defined(__linux__)
     /// macOS: a CVPixelBufferRef. Linux: a CaptureFrame (capture thread).
     void on_captured_frame(void* cv_pixel_buffer, uint64_t timestamp_us);
@@ -254,8 +278,19 @@ private:
     void on_capture_idle();
 #endif
 
+    // The viewer's device. A Windows host encodes on its capture manager's
+    // device instead (zero copy needs the capture's device).
     GraphicsDevice                       device_{};
+#ifdef _WIN32
+    // Declared before the encoder and the preprocessor, so the device they
+    // were made on is released after them.
+    std::shared_ptr<CaptureManager>      manager_;
+    CaptureManager::ConsumerId           consumer_id_ = 0;
+    // Capture thread: the swap generation this host last forced a keyframe for.
+    uint32_t                             handled_swap_generation_ = 0;
+#else
     std::unique_ptr<CaptureSource>       capture_;
+#endif
     std::unique_ptr<Encoder>             encoder_;
     // Every call into encoder_ that can run beside the encode path goes
     // through this: encode, cost tiers, bitrate, framerate, keyframes.
@@ -376,12 +411,17 @@ private:
     // answers the keyframe request with the last picture at once.
     std::atomic<bool> keepalive_kick_{false};
     std::atomic<uint64_t> idle_repeat_frames_{0};
+#ifndef _WIN32
+    // On Windows the capture manager owns it.
     PresentDelayHistogram present_delay_hist_;
+#endif
 #ifdef _WIN32
     // Called on the encode thread after each encoded frame.
     void maybe_reduce_encoder_cost();
     uint64_t cost_window_start_captured_ = 0;
     uint64_t cost_window_start_drops_    = 0;
+    OverloadShedder overload_shedder_;  // shedder_mutex_
+    std::mutex      shedder_mutex_;
 #endif
 
     // Stats

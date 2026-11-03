@@ -10,6 +10,8 @@
 //! - `POST /fake-game` — `{"action":"start"|"end","game_id":"rocket-league",
 //!   "ago_min":12}` feeds a game sensor event for a catalogue game into the
 //!   core loop (`mello_core::e2e_game`). `ago_min` moves a start into the past.
+//! - `POST /game-clip-key` — press the game clip key (F8) once. The poll loop
+//!   takes the press as it takes the real key (`take_game_clip_keys`).
 //! - `GET /disabled` — the controls on screen that declare
 //!   `accessible-enabled: false`. Slint MCP drops a `false` value from its
 //!   answer, so the driver cannot tell a disabled control from one that does
@@ -22,10 +24,12 @@
 use std::collections::VecDeque;
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
+use std::sync::atomic::{AtomicU32, Ordering};
 use std::sync::{mpsc, Mutex};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use i_slint_backend_testing::{AccessibleRole, ElementQuery};
+use mello_core::events::GameClipState;
 use mello_core::events::StreamMember;
 use mello_core::{Event, VoiceMode};
 use serde::Serialize;
@@ -53,6 +57,9 @@ static EVENT_SEQ: Mutex<u64> = Mutex::new(0);
 static VOICE_TRANSPORT: Mutex<Option<&'static str>> = Mutex::new(None);
 /// The other members of the watched SFU stream, from the core's events.
 static STREAM_MEMBERS: Mutex<Vec<StreamMember>> = Mutex::new(Vec::new());
+/// Game clip key presses from `POST /game-clip-key` that the poll loop has
+/// not taken.
+static GAME_CLIP_KEYS: AtomicU32 = AtomicU32::new(0);
 
 #[derive(Serialize, Clone)]
 struct EventRecord {
@@ -63,6 +70,15 @@ struct EventRecord {
     /// Only for `Error`: the UI never shows these, so the driver must see them.
     #[serde(skip_serializing_if = "Option::is_none")]
     message: Option<String>,
+    /// Only for the game clip events: why a clip failed or the replay is off.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reason: Option<String>,
+    /// Only for `GameClipStateChanged`: `"recording"`, `"off"` and so on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    game_clip_state: Option<GameClipState>,
+    /// Only for the clip events that name a clip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    clip_id: Option<String>,
     /// Only for `VoiceStateChanged`: `"sfu"` or `"disconnected"`.
     #[serde(skip_serializing_if = "Option::is_none")]
     transport: Option<&'static str>,
@@ -156,6 +172,8 @@ struct Snapshot {
     feed_cards: Vec<FeedCardSnap>,
     /// The clip that plays in the feed.
     clip: ClipSnap,
+    /// The game clip player over the feed (CLIPS.md 15.9).
+    game_clip_player: GameClipPlayerSnap,
     /// The head2head card of the feed (the first one), if any.
     head2head: Head2headSnap,
     /// The invite card of the feed, if any.
@@ -270,6 +288,14 @@ struct FeedCardSnap {
     actor_name: String,
     /// The local file of a clip card. Empty for other cards.
     clip_path: String,
+    /// `"game"` for a game clip, else empty.
+    clip_kind: String,
+    /// The poster file of a game clip on this PC. Empty on other PCs.
+    clip_poster_path: String,
+    /// The poster is up and the video is not.
+    clip_uploading: bool,
+    /// The video is up, or this PC has the clip file.
+    clip_can_play: bool,
     /// The grid row the card is in, one-based (`feed_grid::rows`). A card in
     /// the stream rows above the grid is row 0.
     row: usize,
@@ -295,6 +321,10 @@ fn read_feed_cards(app: &MainWindow) -> Vec<FeedCardSnap> {
             title: c.title.to_string(),
             actor_name: c.actor_name.to_string(),
             clip_path: c.clip_path.to_string(),
+            clip_kind: c.clip_kind.to_string(),
+            clip_poster_path: c.clip_poster_path.to_string(),
+            clip_uploading: c.clip_uploading,
+            clip_can_play: c.clip_can_play,
             row: rows[i],
             wide: wide.contains(&i),
         })
@@ -309,6 +339,18 @@ struct ClipSnap {
     /// From 0.0 to 1.0.
     progress: f32,
     duration_ms: i32,
+}
+
+#[derive(Serialize)]
+struct GameClipPlayerSnap {
+    open: bool,
+    position_ms: i32,
+    duration_ms: i32,
+    buffering: bool,
+    paused: bool,
+    ended: bool,
+    /// Why the clip cannot play. Empty when it plays.
+    error: String,
 }
 
 #[derive(Serialize)]
@@ -921,6 +963,25 @@ fn event_record(ev: &Event, seq: u64, ts_ms: u128) -> EventRecord {
         Event::Error { message } => Some(message.clone()),
         _ => None,
     };
+    let reason = match ev {
+        Event::GameClipStateChanged { reason, .. }
+        | Event::GameClipFailed { reason }
+        | Event::GameClipUploadFailed { reason, .. }
+        | Event::GameClipPlaybackClosed { reason } => Some(reason.clone()),
+        _ => None,
+    }
+    .filter(|r| !r.is_empty());
+    let game_clip_state = match ev {
+        Event::GameClipStateChanged { state, .. } => Some(*state),
+        _ => None,
+    };
+    let clip_id = match ev {
+        Event::GameClipCaptured { clip_id, .. }
+        | Event::GameClipUploadFailed { clip_id, .. }
+        | Event::ClipPosted { clip_id, .. }
+        | Event::ClipUploaded { clip_id, .. } => Some(clip_id.clone()),
+        _ => None,
+    };
     let transport = match ev {
         Event::VoiceStateChanged { transport, .. } => Some(transport_name(*transport)),
         _ => None,
@@ -937,10 +998,19 @@ fn event_record(ev: &Event, seq: u64, ts_ms: u128) -> EventRecord {
         ts_ms,
         kind: perf_scenarios::event_type(ev).to_string(),
         message,
+        reason,
+        game_clip_state,
+        clip_id,
         transport,
         connected,
         reconnecting,
     }
+}
+
+/// The game clip key presses that `POST /game-clip-key` made since the last
+/// call. Called from the poll loop.
+pub fn take_game_clip_keys() -> u32 {
+    GAME_CLIP_KEYS.swap(0, Ordering::Relaxed)
 }
 
 /// Start the port when `MELLO_E2E_STATE_PORT` is set. A no-op otherwise.
@@ -994,6 +1064,10 @@ fn serve(mut stream: TcpStream, weak: &slint::Weak<MainWindow>) {
     let path = line.split_whitespace().nth(1).unwrap_or("/");
     let (status, body) = match path {
         "/fake-game" if method == "POST" => fake_game(&body_bytes),
+        "/game-clip-key" if method == "POST" => {
+            GAME_CLIP_KEYS.fetch_add(1, Ordering::Relaxed);
+            ("200 OK", r#"{"ok":true}"#.into())
+        }
         "/state" => match snapshot(weak) {
             Some(json) => ("200 OK", json),
             None => (
@@ -1297,6 +1371,18 @@ fn read(app: &MainWindow) -> Snapshot {
             progress: app.get_clip_progress(),
             duration_ms: app.get_clip_duration_ms(),
         },
+        game_clip_player: {
+            let ui = app.global::<crate::ClipPlayerUi>();
+            GameClipPlayerSnap {
+                open: ui.get_open(),
+                position_ms: ui.get_position_ms(),
+                duration_ms: ui.get_duration_ms(),
+                buffering: ui.get_buffering(),
+                paused: ui.get_paused(),
+                ended: ui.get_ended(),
+                error: ui.get_error().into(),
+            }
+        },
         head2head: read_head2head(app),
         sealed: read_sealed(app),
         invite_card: read_invite_card(app),
@@ -1523,6 +1609,10 @@ mod tests {
             title: "Clutch".into(),
             actor_name: "alice".into(),
             clip_path: "/clips/a.mp4".into(),
+            clip_kind: "game".into(),
+            clip_poster_path: "/clips/a.jpg".into(),
+            clip_uploading: true,
+            clip_can_play: true,
             ..Default::default()
         }]));
         app.set_clip_playing_path("/clips/a.mp4".into());
@@ -1555,11 +1645,28 @@ mod tests {
         assert_eq!(
             s["feed_cards"],
             json!([{"id": "f1", "card_type": "clip", "title": "Clutch",
-                    "actor_name": "alice", "clip_path": "/clips/a.mp4"}])
+                    "actor_name": "alice", "clip_path": "/clips/a.mp4",
+                    "clip_kind": "game", "clip_poster_path": "/clips/a.jpg",
+                    "clip_uploading": true, "clip_can_play": true}])
         );
         assert_eq!(
             s["clip"],
             json!({"path": "/clips/a.mp4", "paused": true, "progress": 0.5, "duration_ms": 30000})
+        );
+        assert_eq!(
+            s["game_clip_player"],
+            json!({"open": false, "position_ms": 0, "duration_ms": 0, "buffering": false,
+                   "paused": false, "ended": false, "error": ""})
+        );
+        let player = app.global::<crate::ClipPlayerUi>();
+        player.set_open(true);
+        player.set_position_ms(7_000);
+        player.set_duration_ms(30_000);
+        player.set_buffering(true);
+        assert_eq!(
+            snapshot_json(app)["game_clip_player"],
+            json!({"open": true, "position_ms": 7000, "duration_ms": 30000, "buffering": true,
+                   "paused": false, "ended": false, "error": ""})
         );
         assert_eq!(
             s["audio"],
@@ -1862,6 +1969,60 @@ mod tests {
         let other = serde_json::to_value(event_record(&Event::MicLevel { level: 0.5 }, 8, 1))
             .expect("record serializes");
         assert!(other.get("connected").is_none(), "{other}");
+    }
+
+    #[test]
+    fn a_game_clip_event_records_its_state_reason_and_clip() {
+        let record = |ev: Event| {
+            let mut v = serde_json::to_value(event_record(&ev, 1, 1)).expect("record serializes");
+            v.as_object_mut()
+                .expect("an object")
+                .retain(|k, _| ["game_clip_state", "reason", "clip_id"].contains(&k.as_str()));
+            v
+        };
+        assert_eq!(
+            record(Event::GameClipStateChanged {
+                state: GameClipState::Recording,
+                game_name: "Rocket League".into(),
+                reason: String::new(),
+            }),
+            json!({"game_clip_state": "recording"})
+        );
+        assert_eq!(
+            record(Event::GameClipStateChanged {
+                state: GameClipState::Unavailable,
+                game_name: "Rocket League".into(),
+                reason: "no hardware encoder".into(),
+            }),
+            json!({"game_clip_state": "unavailable", "reason": "no hardware encoder"})
+        );
+        assert_eq!(
+            record(Event::GameClipCaptured {
+                clip_id: "c1".into(),
+                path: "/clips/c1.mp4".into(),
+                poster_path: "/clips/c1.jpg".into(),
+                duration_seconds: 30.0,
+                width: 1280,
+                height: 720,
+                game_name: "Rocket League".into(),
+            }),
+            json!({"clip_id": "c1"})
+        );
+        assert_eq!(
+            record(Event::GameClipUploadFailed {
+                clip_id: "c1".into(),
+                reason: "the files are gone".into(),
+            }),
+            json!({"clip_id": "c1", "reason": "the files are gone"})
+        );
+    }
+
+    #[test]
+    fn a_game_clip_key_post_is_taken_once() {
+        let _ = take_game_clip_keys();
+        GAME_CLIP_KEYS.fetch_add(2, Ordering::Relaxed);
+        assert_eq!(take_game_clip_keys(), 2);
+        assert_eq!(take_game_clip_keys(), 0);
     }
 
     fn state_changed(in_call: bool, transport: VoiceMode) -> Event {

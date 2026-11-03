@@ -21,6 +21,9 @@ public:
     ~WasapiPlayback() override;
 
     void set_session(AudioSessionWin* session) { session_win_ = session; }
+    /// The render thread writes m3llo's volume in the Windows volume mixer
+    /// here (0 to 1, 0 when muted), about every 100 ms. Set before start().
+    void set_session_volume_target(std::atomic<float>* target) { session_volume_target_ = target; }
     void set_input_channels(uint32_t channels) override { input_channels_ = std::max<uint32_t>(1, channels); }
     uint32_t render_channels() const override { return input_channels_; }
 
@@ -46,6 +49,10 @@ private:
     IMMDevice* device_ = nullptr;
     IAudioClient* audio_client_ = nullptr;
     IAudioRenderClient* render_client_ = nullptr;
+    // The volume of this stream's audio session: the slider of m3llo in the
+    // Windows volume mixer. Null when the service is missing.
+    ISimpleAudioVolume* session_volume_ = nullptr;
+    std::atomic<float>* session_volume_target_ = nullptr;
     HANDLE event_ = nullptr;
 
     uint32_t sample_rate_ = 48000; // internal contract rate

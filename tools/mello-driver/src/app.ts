@@ -136,9 +136,35 @@ export type AppState = {
   };
   /** The feed of the active crew, in screen order (newest first), at most 20. */
   /** The feed cards on screen. `row` is the grid row, one-based (0 in the stream rows above the grid); `wide` is a two-column slot. */
-  feed_cards: { id: string; card_type: string; title: string; actor_name: string; clip_path: string; row: number; wide: boolean }[];
+  feed_cards: {
+    id: string;
+    card_type: string;
+    title: string;
+    actor_name: string;
+    clip_path: string;
+    /** "game" for a game clip, else "". */
+    clip_kind: string;
+    /** The poster file of a game clip on this PC. "" on other PCs. */
+    clip_poster_path: string;
+    /** The poster is up and the video is not. */
+    clip_uploading: boolean;
+    /** The video is up, or this PC has the clip file. */
+    clip_can_play: boolean;
+    row: number;
+    wide: boolean;
+  }[];
   /** The clip that plays in the feed. `path` is "" when none plays. */
   clip: { path: string; paused: boolean; progress: number; duration_ms: number };
+  /** The game clip player over the feed. `error` is "" when the clip plays. */
+  game_clip_player: {
+    open: boolean;
+    position_ms: number;
+    duration_ms: number;
+    buffering: boolean;
+    paused: boolean;
+    ended: boolean;
+    error: string;
+  };
   /** The head2head card of the feed. `present` is false (placement "none") when the feed has none. */
   head2head: {
     present: boolean;
@@ -287,6 +313,12 @@ export type AppEvent = {
   type: string;
   /** Only on Error events. */
   message?: string;
+  /** Only on the game clip events: why a clip failed or the replay is off. */
+  reason?: string;
+  /** Only on GameClipStateChanged. */
+  game_clip_state?: "off" | "recording" | "waiting" | "paused" | "unavailable" | "disklow";
+  /** Only on the clip events that name a clip. */
+  clip_id?: string;
   /** Only on VoiceStateChanged: the transport the call started on, or "disconnected". */
   transport?: "sfu" | "disconnected";
   /** Only on ConnectionStateChanged: the realtime socket is up. */
@@ -621,6 +653,15 @@ export class App {
     if (!r.ok) throw new DriverError(`${this.name}: fakeGame ${action} ${gameId} failed: HTTP ${r.status} ${await r.text()}`);
   }
 
+  /**
+   * Press the game clip key (F8) once, through the real key path. E2e builds
+   * only (`POST /game-clip-key`).
+   */
+  async gameClipKey(): Promise<void> {
+    const r = await fetch(`http://127.0.0.1:${this.statePort}/game-clip-key`, { method: "POST" });
+    if (!r.ok) throw new DriverError(`${this.name}: gameClipKey failed: HTTP ${r.status} ${await r.text()}`);
+  }
+
   /** The controls on screen that declare accessible-enabled: false. */
   async disabledControls(): Promise<DisabledControl[]> {
     const r = await fetch(`http://127.0.0.1:${this.statePort}/disabled`);
@@ -655,6 +696,26 @@ export class App {
         `  last state: ${JSON.stringify(last)}` +
         (errors ? `\n${errors}` : ""),
     );
+  }
+
+  /**
+   * Wait until the event tail holds an event that `predicate` accepts, and
+   * return the newest one. The tail keeps the last 200 core events.
+   */
+  async waitForEvent(what: string, predicate: (e: AppEvent) => boolean, timeoutMs = 15_000): Promise<AppEvent> {
+    const deadline = Date.now() + timeoutMs;
+    let seen: AppEvent[] = [];
+    while (Date.now() < deadline) {
+      seen = await this.events();
+      const hit = seen.filter(predicate).at(-1);
+      if (hit) return hit;
+      await sleep(150);
+    }
+    const tail = seen
+      .slice(-10)
+      .map((e) => `  ${JSON.stringify(e)}`)
+      .join("\n");
+    throw new DriverError(`${this.name}: timed out after ${timeoutMs} ms waiting for the event: ${what}\n  last events:\n${tail}`);
   }
 
   /**

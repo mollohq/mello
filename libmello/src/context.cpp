@@ -2,6 +2,8 @@
 #include "util/log.hpp"
 
 #ifdef _WIN32
+#include "audio/shared_game_audio.hpp"
+#include "replay/replay_session.hpp"
 #include <Windows.h>
 
 static bool s_seh_init_ok = false;
@@ -42,7 +44,29 @@ bool Context::initialize_inner() {
     return true;
 }
 
+#ifdef _WIN32
+std::shared_ptr<audio::SharedGameAudio> Context::game_audio(uint32_t pid) {
+    if (pid == 0) return nullptr;
+    std::lock_guard<std::mutex> lock(game_audio_mutex_);
+    auto it = game_audio_.find(pid);
+    if (it != game_audio_.end()) {
+        if (auto live = it->second.lock()) return live;
+    }
+    auto opened = audio::SharedGameAudio::open(pid);
+    // Old entries of games that ended go when they are found dead.
+    for (auto e = game_audio_.begin(); e != game_audio_.end();) {
+        e = e->second.expired() ? game_audio_.erase(e) : std::next(e);
+    }
+    if (opened) game_audio_[pid] = opened;
+    return opened;
+}
+#endif
+
 void Context::shutdown() {
+#ifdef _WIN32
+    // Before the audio: the replay reads the clip buffer of the voice.
+    if (auto replay = exchange_replay(nullptr)) replay->stop();
+#endif
     audio_.shutdown();
 }
 

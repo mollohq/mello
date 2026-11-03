@@ -2,6 +2,13 @@ find_package(GTest CONFIG REQUIRED)
 
 add_executable(mello_tests
     test_opus_codec.cpp
+    test_clip_audio_stream.cpp
+    test_clip_buffer.cpp
+    test_clip_player.cpp
+    test_replay_load.cpp
+    test_replay_mix.cpp
+    test_replay_mux.cpp
+    test_replay_ring.cpp
     test_noise_suppressor.cpp
     test_echo_canceller.cpp
     test_echo_suppressor.cpp
@@ -24,6 +31,7 @@ add_executable(mello_tests
     test_graphics_device.cpp
     test_process_liveness.cpp
     test_capture_wgc_restart.cpp
+    test_window_crop.cpp
     test_video_preprocessor.cpp
     test_pipewire_metadata.cpp
     test_yuv_convert.cpp
@@ -56,6 +64,8 @@ target_link_libraries(mello_tests PRIVATE
 # real speech (Opus in-band FEC is coded for speech, not for a tone).
 target_compile_definitions(mello_tests PRIVATE
     MELLO_VOICE_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/voice"
+    # A short H.264 stream for the game clip mux tests (test_replay_mux.cpp).
+    MELLO_REPLAY_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/replay"
 )
 
 # The NVENC, AMF and oneVPL headers, for the cost-tier tables of the encoders
@@ -182,7 +192,7 @@ mello_discover_tests(mello_procenum_tests)
 # which scripts/stream-gate.sh fetches into third_party/openh264; it is
 # copied next to the tests when present, else the loopback skips.
 if(WIN32 AND NOT IOS)
-    target_sources(mello_tests PRIVATE test_capture_reference.cpp)
+    target_sources(mello_tests PRIVATE test_capture_reference.cpp test_capture_manager.cpp)
     set(_oh264_dll "${CMAKE_CURRENT_SOURCE_DIR}/../third_party/openh264/openh264-2.6.0-win64.dll")
     if(EXISTS "${_oh264_dll}")
         add_custom_command(TARGET mello_tests POST_BUILD
@@ -276,3 +286,22 @@ if(MELLO_WEBRTC_VIDEO_TIMING)
     gtest_discover_tests(mello_video_timing_spike_tests)
 endif()
 
+
+# Game clips: a manual probe of WASAPI process loopback on a running
+# game (CLIPS.md 15.12). Not a test; ctest does not run it.
+if(WIN32)
+    add_executable(mello_loopback_probe loopback_probe.cpp)
+    target_include_directories(mello_loopback_probe PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}/../src
+        ${CMAKE_CURRENT_SOURCE_DIR}/../include
+    )
+    target_compile_definitions(mello_loopback_probe PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(mello_loopback_probe PRIVATE mello ole32)
+
+    # The real loopback row of the stream gate's replay lane: a 1 kHz tone in
+    # bursts, with each onset on the steady clock (CLIPS.md 15.13).
+    # Not a test; ctest does not run it.
+    add_executable(mello_tone_player tone_player.cpp)
+    target_compile_definitions(mello_tone_player PRIVATE NOMINMAX WIN32_LEAN_AND_MEAN)
+    target_link_libraries(mello_tone_player PRIVATE ole32)
+endif()

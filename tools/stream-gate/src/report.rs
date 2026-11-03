@@ -261,7 +261,8 @@ pub fn metric_of(doc: &Value, profile: &str, metric: &str) -> Option<f64> {
         .as_f64()
 }
 
-fn check(profile: &str, g: &crate::profile::Gate, v: Option<f64>) -> GateResult {
+/// One gate against its value. A missing value fails.
+pub fn check(profile: &str, g: &crate::profile::Gate, v: Option<f64>) -> GateResult {
     let mut rule = String::new();
     if let Some(m) = g.min {
         let _ = write!(rule, ">= {}", fmt_num(Some(m)));

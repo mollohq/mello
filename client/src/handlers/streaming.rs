@@ -9,6 +9,58 @@ use super::stream_cards::sync_active_stream_cards;
 use crate::app_context::AppContext;
 use crate::CaptureSourceData;
 
+/// Makes the DComp swap chain that libmello's present thread shows frames
+/// on: a watched stream's, or a game clip's (one at a time). Windows only.
+pub(crate) fn open_native_presenter(ctx: &AppContext, width: u32, height: u32, what: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        use crate::dcomp_presenter::DCompPresenter;
+        use i_slint_backend_winit::WinitWindowAccessor;
+        let hwnd = ctx
+            .app
+            .window()
+            .with_winit_window(|w: &i_slint_backend_winit::winit::window::Window| {
+                use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+                match w.window_handle().map(|h| h.as_raw()) {
+                    Ok(RawWindowHandle::Win32(h)) => Some(h.hwnd.get()),
+                    _ => None,
+                }
+            })
+            .flatten();
+        let Some(hwnd) = hwnd else {
+            log::error!("Could not obtain HWND for DComp presenter");
+            return;
+        };
+        // The presenter opens libmello's shared textures, so its device has
+        // to sit on the same GPU libmello decodes on.
+        let adapter_luid = mello_core::video_adapter_luid();
+        match DCompPresenter::new(hwnd, width, height, 0.0, 0.0, adapter_luid) {
+            Ok(p) => {
+                // libmello's present thread shows each frame through this
+                // swap chain (stage 3).
+                mello_core::set_native_presenter(Some(p.frame_presenter()));
+                *ctx.dcomp_presenter.borrow_mut() = Some(p);
+                log::info!("DComp presenter created for {what}");
+            }
+            Err(e) => log::error!("Failed to create DComp presenter: {}", e),
+        }
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (ctx, width, height, what);
+}
+
+pub(crate) fn close_native_presenter(ctx: &AppContext, why: &str) {
+    #[cfg(target_os = "windows")]
+    {
+        // No present may reach the swap chain once it goes.
+        mello_core::set_native_presenter(None);
+        let _ = ctx.dcomp_presenter.borrow_mut().take();
+        log::info!("DComp presenter destroyed ({why})");
+    }
+    #[cfg(not(target_os = "windows"))]
+    let _ = (ctx, why);
+}
+
 pub fn handle(ctx: &AppContext, event: Event) {
     match event {
         Event::CaptureSourcesListed {
@@ -238,42 +290,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_paused_streamer_name("".into());
             ctx.stream_frame_timer.set_watching(true);
             ctx.app.set_streamer_name(host_id.into());
-            #[cfg(target_os = "windows")]
-            {
-                use crate::dcomp_presenter::DCompPresenter;
-                use i_slint_backend_winit::WinitWindowAccessor;
-                use slint::ComponentHandle as _;
-                let hwnd = ctx
-                    .app
-                    .window()
-                    .with_winit_window(|w: &i_slint_backend_winit::winit::window::Window| {
-                        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-                        match w.window_handle().map(|h| h.as_raw()) {
-                            Ok(RawWindowHandle::Win32(h)) => Some(h.hwnd.get()),
-                            _ => None,
-                        }
-                    })
-                    .flatten();
-                if let Some(hwnd) = hwnd {
-                    // The presenter opens libmello's shared textures, so its
-                    // device has to sit on the same GPU libmello decodes on.
-                    let adapter_luid = mello_core::video_adapter_luid();
-                    match DCompPresenter::new(hwnd, width, height, 0.0, 0.0, adapter_luid) {
-                        Ok(p) => {
-                            // libmello's present thread shows each frame
-                            // through this swap chain (stage 3).
-                            mello_core::set_native_presenter(Some(p.frame_presenter()));
-                            *ctx.dcomp_presenter.borrow_mut() = Some(p);
-                            log::info!("DComp presenter created for stream watching");
-                        }
-                        Err(e) => {
-                            log::error!("Failed to create DComp presenter: {}", e);
-                        }
-                    }
-                } else {
-                    log::error!("Could not obtain HWND for DComp presenter");
-                }
-            }
+            open_native_presenter(ctx, width, height, "stream watching");
             ctx.app.set_dbg_stream_ui_render_fps(0.0);
             sync_active_stream_cards(ctx);
         }
@@ -290,13 +307,7 @@ pub fn handle(ctx: &AppContext, event: Event) {
             ctx.app.set_streamer_name("".into());
             ctx.app.set_stream_label("".into());
             ctx.app.set_stream_frame(slint::Image::default());
-            #[cfg(target_os = "windows")]
-            {
-                // No present may reach the swap chain once it goes.
-                mello_core::set_native_presenter(None);
-                let _ = ctx.dcomp_presenter.borrow_mut().take();
-                log::info!("DComp presenter destroyed (stopped watching)");
-            }
+            close_native_presenter(ctx, "stopped watching");
             ctx.app.set_dbg_stream_mode("idle".into());
             ctx.app.set_dbg_stream_frames(0);
             ctx.app.set_dbg_stream_packets(0);

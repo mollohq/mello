@@ -91,6 +91,67 @@ pub enum StreamRole {
 }
 // --- end stage 6 ---
 
+/// The state of the game clip replay buffer (CLIPS.md 15.2).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum GameClipState {
+    /// No replay: not in voice, or no game runs.
+    #[default]
+    Off,
+    /// The replay records the game: F8 makes a clip.
+    Recording,
+    /// The game draws nothing now (minimized, a loading screen). F8 still
+    /// makes a clip of what the ring has.
+    Waiting,
+    /// Overload: the replay gave up its frames before a stream did (F3).
+    Paused,
+    /// The replay cannot run for this game (`reason` says why).
+    Unavailable,
+    /// The buffer folder has under 2 GB free: no replay until the disk has
+    /// space again (CLIPS.md 15.2).
+    DiskLow,
+}
+
+/// The clip quality of the Settings section (CLIPS.md 15.10).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+pub enum GameClipQuality {
+    #[serde(rename = "1080p60")]
+    P1080Fps60,
+    #[default]
+    #[serde(rename = "720p60")]
+    P720Fps60,
+    #[serde(rename = "720p30")]
+    P720Fps30,
+}
+
+impl GameClipQuality {
+    /// The name in the settings file and in Settings ("720p60").
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::P1080Fps60 => "1080p60",
+            Self::P720Fps60 => "720p60",
+            Self::P720Fps30 => "720p30",
+        }
+    }
+
+    /// The quality of a stored name. An unknown name is `None`.
+    pub fn parse(name: &str) -> Option<Self> {
+        [Self::P1080Fps60, Self::P720Fps60, Self::P720Fps30]
+            .into_iter()
+            .find(|q| q.as_str() == name)
+    }
+
+    /// Height, frame rate and bitrate (kbps). The bitrates are the estimates
+    /// of CLIPS.md 15.7 until the replay lane sets them (14-VIDEO-PIPELINE.md 6.8).
+    pub fn encoding(self) -> (u32, u32, u32) {
+        match self {
+            Self::P1080Fps60 => (1080, 60, 8000),
+            Self::P720Fps60 => (720, 60, 5000),
+            Self::P720Fps30 => (720, 30, 3000),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct UserSearchResult {
     pub id: String,
@@ -633,6 +694,52 @@ pub enum Event {
     },
     /// Clip capture failed.
     ClipCaptureFailed {
+        reason: String,
+    },
+    /// The game clip replay buffer changed state (CLIPS.md 15.2).
+    /// `reason` says why it is off or not available, for the HUD toast.
+    GameClipStateChanged {
+        state: GameClipState,
+        #[serde(default)]
+        game_name: String,
+        #[serde(default)]
+        reason: String,
+    },
+    /// F8: a game clip saved to local disk, with its poster.
+    GameClipCaptured {
+        clip_id: String,
+        path: String,
+        poster_path: String,
+        duration_seconds: f32,
+        width: u32,
+        height: u32,
+        game_name: String,
+    },
+    /// F8 made no clip.
+    GameClipFailed {
+        reason: String,
+    },
+    /// A game clip cannot go up: the server refused it, or its files are
+    /// gone. The local file stays.
+    GameClipUploadFailed {
+        clip_id: String,
+        reason: String,
+    },
+    /// The game clip player's state (CLIPS.md 15.9): when a flag
+    /// changes, and as the position moves.
+    GameClipPlayback {
+        position_ms: u64,
+        duration_ms: u64,
+        width: u32,
+        height: u32,
+        buffering: bool,
+        paused: bool,
+        ended: bool,
+    },
+    /// The player closed. `reason` says why a clip did not play; empty for a
+    /// close the user asked for.
+    GameClipPlaybackClosed {
+        #[serde(default)]
         reason: String,
     },
     /// Clip metadata posted to backend.

@@ -643,6 +643,16 @@ pub fn set_native_presenter(presenter: Option<NativePresentFn>) {
     }
 }
 
+/// Present one frame now with the installed presenter, if there is one. The
+/// game clip player's present thread (clip_play).
+pub(crate) fn present_native_frame(frame: &super::NativeSurfaceFrame) {
+    if let Ok(mut presenter) = NATIVE_PRESENTER.lock() {
+        if let Some(present) = presenter.as_mut() {
+            present(frame);
+        }
+    }
+}
+
 pub(super) unsafe extern "C" fn on_viewer_native_frame(
     user_data: *mut std::ffi::c_void,
     shared_handle: *mut std::ffi::c_void,

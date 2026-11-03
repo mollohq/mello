@@ -26,6 +26,8 @@ mod flow_catalogue;
 #[cfg(test)]
 mod flow_tests;
 mod foreground_monitor;
+mod game_clip;
+mod game_clip_player;
 mod game_icons;
 mod gif_animator;
 mod handlers;
@@ -516,6 +518,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
             volume: s.output_volume,
         });
         let _ = cmd_tx.send(s.input_sensitivity_command());
+        let _ = cmd_tx.send(s.game_clips_command());
     }
 
     // Restore saved PTT binding and activate listener if PTT mode is on
@@ -530,6 +533,13 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         hotkey_mgr
             .borrow()
             .register_clip(callbacks::settings::clip_binding(&s));
+        // The game clip key (CLIPS.md 15.2). Windows only until
+        // the macOS work.
+        if cfg!(windows) {
+            hotkey_mgr
+                .borrow()
+                .register_game_clip(callbacks::settings::game_clip_binding(&s));
+        }
         let ptt_active = s.input_mode == "push_to_talk";
         hotkey_mgr.borrow().set_active(ptt_active);
         let _ = cmd_tx.send(Command::SetPushToTalk {
@@ -660,6 +670,7 @@ fn run_app() -> Result<(), Box<dyn std::error::Error>> {
         taskbar_toolbar: taskbar_toolbar.clone(),
         stream_card: Rc::new(RefCell::new(Default::default())),
         stream_popout: Rc::new(RefCell::new(Default::default())),
+        game_clip: Rc::new(RefCell::new(Default::default())),
     };
 
     // --- Wire all callbacks ---

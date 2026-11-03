@@ -241,6 +241,7 @@ set(MELLO_SOURCES
     src/context.cpp
     src/audio/audio_pipeline.cpp
     src/audio/audio_backend_test.cpp
+    src/audio/clip_audio_stream.cpp
     src/audio/clip_buffer.cpp
     src/audio/clip_encoder.cpp
     src/audio/opus_codec.cpp
@@ -251,6 +252,12 @@ set(MELLO_SOURCES
     src/audio/echo_suppressor.cpp
     src/audio/ort_loader.cpp
     src/audio/vad.cpp
+    src/clip/clip_player_stub.cpp
+    src/replay/mp4_faststart.cpp
+    src/replay/mp4_read.cpp
+    src/replay/replay_audio_mix.cpp
+    src/replay/replay_audio_ring.cpp
+    src/replay/replay_video_ring.cpp
     src/transport/peer_connection.cpp
     src/transport/rtp_h264_receiver.cpp
     src/transport/rtp_video_receiver_session.cpp
@@ -260,6 +267,7 @@ set(MELLO_SOURCES
     src/transport/ulpfec.cpp
     src/transport/ulpfec.cpp
     src/transport/voice_send_feedback.cpp
+    src/util/ring_file.cpp
     src/video/cursor.cpp
     src/video/encoder_factory.cpp
     src/video/decoder_factory.cpp
@@ -270,12 +278,16 @@ if(WIN32)
     list(APPEND MELLO_SOURCES
         src/audio/capture_wasapi.cpp
         src/audio/capture_wasapi_loopback.cpp
+        src/audio/shared_game_audio.cpp
         src/audio/playback_wasapi.cpp
         src/audio/audio_backend_wasapi.cpp
         src/audio/audio_session_win.cpp
         src/audio/device_enumerator_wasapi.cpp
         src/audio/clip_encoder_wmf.cpp
         src/audio/mic_permission_stub.cpp
+        src/clip/clip_player_win.cpp
+        src/replay/replay_mux_wmf.cpp
+        src/replay/replay_session.cpp
     )
 elseif(IOS)
     # RemoteIO capture/playback + AVAudioSession + mic permission (Step 3). Device
@@ -327,6 +339,7 @@ if(WIN32)
         src/video/video_viewer.cpp
         src/video/capture_dxgi.cpp
         src/video/capture_wgc.cpp
+        src/video/capture_manager.cpp
         src/video/capture_process.cpp
         src/video/capture_hook.cpp
         src/video/hook_launcher.cpp
@@ -501,6 +514,7 @@ if(WIN32)
         d3dcompiler
         windowsapp
         shell32
+        windowscodecs
     )
     # OpenH264 is NOT linked — Cisco prebuilt DLL loaded at runtime via LoadLibrary
 elseif(IOS)

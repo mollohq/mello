@@ -740,6 +740,9 @@ fn a_clip_uploads_to_local_storage_and_plays_back_without_credentials() {
                 game: String::new(),
                 local_path: String::new(),
                 waveform: String::new(),
+                width: 0,
+                height: 0,
+                has_voice: false,
             })
             .await
             .expect("post_clip");

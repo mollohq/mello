@@ -17,6 +17,7 @@ pub mod screencast;
 pub mod sink;
 pub mod sink_sfu;
 pub mod teardown;
+pub mod upload_budget;
 // stage 9 (streaming-quality): the watched stream's format label
 pub mod viewer_format;
 

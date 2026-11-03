@@ -83,9 +83,10 @@ public:
     using FrameCallback = std::function<void(const uint8_t* rgba, uint32_t w, uint32_t h, uint64_t ts)>;
     using NativeFrameCallback = std::function<void(void* shared_handle, uint32_t w, uint32_t h,
                                                    uint32_t format, uint32_t uv_y_offset, uint64_t ts)>;
-    /// Returns the current timeline of the viewer's peer, or null. Asked
-    /// again when the timeline in use stops (a new session).
-    using TimelineProvider = std::function<std::shared_ptr<mello::transport::VideoReceiveTimeline>()>;
+    /// Returns the current frame source: the receive timeline of the viewer's
+    /// peer, or a clip. Null when there is none yet. Asked again when the
+    /// source in use stops (a new session).
+    using TimelineProvider = std::function<std::shared_ptr<mello::transport::FrameSource>()>;
 
     ViewerPipeline();
     ~ViewerPipeline();
@@ -104,6 +105,10 @@ public:
 
     /// Without a timeline: decode this access unit now and show it at once.
     bool feed_packet(const uint8_t* data, size_t size, bool is_keyframe);
+    /// Drop every decoded frame that is not on screen, and a frame decoded
+    /// now: the source jumped (a clip seek or pause). The frame on screen
+    /// stays until the next one. Any thread.
+    void flush();
     size_t decode_queue_depth() const;
     size_t ring_depth() const;
 
@@ -143,7 +148,7 @@ private:
 
     void decode_thread_main();
     void present_thread_main();
-    std::shared_ptr<mello::transport::VideoReceiveTimeline> current_timeline();
+    std::shared_ptr<mello::transport::FrameSource> current_timeline();
     bool decode_into_ring(const std::vector<uint8_t>& bytes, bool keyframe, int64_t render_us,
                           std::optional<uint32_t> rtp_timestamp = std::nullopt);
     int acquire_slot_for_decode();
@@ -191,8 +196,8 @@ private:
 
     std::mutex provider_mutex_;
     TimelineProvider provider_;
-    std::shared_ptr<mello::transport::VideoReceiveTimeline> timeline_;  // decode thread
-    int64_t provider_checked_us_ = 0;                                    // decode thread
+    std::shared_ptr<mello::transport::FrameSource> timeline_;  // decode thread
+    int64_t provider_checked_us_ = 0;                           // decode thread
 
     mutable std::mutex jobs_mutex_;
     std::condition_variable jobs_cv_;
@@ -202,6 +207,9 @@ private:
     std::condition_variable ring_cv_;
     std::array<RingSlot, Decoder::kOutputSlots> ring_;
     uint64_t next_seq_ = 1;
+    // Goes up at each flush. A decode that started before a flush drops its
+    // frame (ring_mutex_).
+    uint64_t flush_gen_ = 0;
 
     std::atomic<bool> presented_since_take_{false};
     std::atomic<uint64_t> frames_decoded_{0};
@@ -218,7 +226,7 @@ private:
     int64_t last_shown_us_ = 0;
     std::atomic<bool> attached_{false};
     mutable std::mutex timeline_stats_mutex_;
-    std::shared_ptr<mello::transport::VideoReceiveTimeline> stats_timeline_;
+    std::shared_ptr<mello::transport::FrameSource> stats_timeline_;
 };
 
 } // namespace mello::video

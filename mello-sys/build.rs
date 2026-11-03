@@ -306,6 +306,8 @@ fn main() {
                 // SHQueryUserNotificationState: exclusive-fullscreen detection
                 // in the process capture ladder.
                 "shell32",
+                // WIC: the game clip poster JPEG.
+                "windowscodecs",
             ] {
                 println!("cargo:rustc-link-lib=dylib={}", lib);
             }

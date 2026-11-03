@@ -332,6 +332,9 @@ impl super::Client {
 
         // Auto-start clip buffer for voice clip capture
         self.handle_start_clip_buffer();
+        // The game clip replay runs in voice (CLIPS.md 15.2).
+        self.replay_in_voice = true;
+        self.sync_replay();
     }
 
     /// Leave the SFU voice session, if any, and cancel an SFU voice join that
@@ -344,7 +347,10 @@ impl super::Client {
     }
 
     pub(super) async fn handle_leave_voice(&mut self) {
-        // Stop clip buffer before tearing down voice
+        // Stop the game clip replay and the clip buffer before tearing down
+        // voice: the replay reads the clip buffer's voice.
+        self.replay_in_voice = false;
+        self.sync_replay();
         self.handle_stop_clip_buffer();
 
         self.sfu_leave_if_connected().await;

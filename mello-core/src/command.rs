@@ -475,6 +475,42 @@ pub enum Command {
         #[serde(default = "default_clip_seconds")]
         seconds: f32,
     },
+    /// F8: the last 30 s of the game, from the replay buffer, as an MP4 with
+    /// a poster (CLIPS.md 15.4). Runs on the replay worker thread.
+    CaptureGameClip,
+    /// The Settings section "Game clips" (CLIPS.md 15.10). Sent at
+    /// startup, on each change and on reset. Off stops the replay and
+    /// deletes its ring.
+    SetGameClips {
+        enabled: bool,
+        #[serde(default)]
+        quality: crate::events::GameClipQuality,
+    },
+    /// Play a game clip in the player (CLIPS.md 15.9): its URL, or
+    /// the clipper's own file. Not while a stream is watched.
+    PlayGameClip {
+        source: String,
+    },
+    SetGameClipPaused {
+        paused: bool,
+    },
+    SeekGameClip {
+        position_ms: u64,
+    },
+    CloseGameClip,
+    /// Post a captured game clip to the crew and upload it in the background
+    /// (CLIPS.md 15.7). The fields are those of `GameClipCaptured`.
+    ShareGameClip {
+        crew_id: String,
+        clip_id: String,
+        path: String,
+        poster_path: String,
+        duration_seconds: f32,
+        width: u32,
+        height: u32,
+        #[serde(default)]
+        game_name: String,
+    },
     PostClip {
         crew_id: String,
         clip_id: String,

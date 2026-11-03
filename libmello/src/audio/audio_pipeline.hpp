@@ -11,6 +11,7 @@
 #include "speech_expander.hpp"
 #include "voice_playout.hpp"
 #include "device_enumerator.hpp"
+#include "clip_audio_stream.hpp"
 #include "clip_buffer.hpp"
 #include "clip_encoder.hpp"
 #include "vad.hpp"
@@ -246,10 +247,14 @@ public:
     }
     // ---- end stage 7 ----
 
-    void start_clip_buffer();
+    // False when the clip buffer could not start (low disk, no ring file).
+    bool start_clip_buffer();
     void stop_clip_buffer();
     bool clip_buffer_active() const;
     bool clip_capture(float seconds, const std::string& output_path);
+    /// The voice of [start_us, end_us) for a game clip: the crew mix and the
+    /// mic at their own times, and m3llo's mixer volume (game clips 5.1).
+    bool clip_voice_window(uint64_t start_us, uint64_t end_us, ClipBuffer::VoiceWindow& out);
     bool play_clip(const std::string& wav_path);
     bool play_mp4(const std::string& mp4_path);
     void stop_clip_playback();
@@ -258,6 +263,11 @@ public:
     void clip_pause();
     void clip_resume();
     void clip_seek(uint64_t position_samples);
+
+    /// The sound of the game clip that plays, or null (clip_audio_stream.hpp).
+    /// The render thread mixes it into the speaker output and the echo
+    /// reference. Any thread.
+    void set_clip_stream(std::shared_ptr<ClipAudioStream> stream);
 
 private:
     void on_captured_audio(const int16_t* samples, size_t count);
@@ -444,7 +454,14 @@ private:
     bool initialized_ = false;
 
     std::unique_ptr<ClipBuffer> clip_buffer_;
-    std::unique_ptr<util::RingBuffer<int16_t>> local_clip_ring_;
+    // m3llo's volume in the Windows volume mixer (0 when muted), written by
+    // the WASAPI render thread about every 100 ms. The clip voice ring keeps
+    // it with the crew mix (CLIPS.md 15.4). It lives here, not in the
+    // playback, so a device switch keeps it. 1.0 on other platforms.
+    std::atomic<float> session_volume_{1.0f};
+    // capture_->input_latency_ms() at the last device (re)open, for the time
+    // of a mic frame on the capture thread (refresh_stream_delay_hint).
+    std::atomic<int> input_device_latency_ms_{0};
 
     // Clip playback: retained PCM with atomic position for lock-free read from audio thread
     std::vector<int16_t> clip_playback_pcm_;
@@ -452,6 +469,10 @@ private:
     size_t clip_playback_total_{0};
     std::atomic<bool> clip_playing_{false};
     std::atomic<bool> clip_paused_{false};
+
+    // The game clip that plays. Read with std::atomic_load on the render
+    // thread, which then holds it for one frame.
+    std::shared_ptr<ClipAudioStream> clip_stream_;
 };
 
 } // namespace mello::audio

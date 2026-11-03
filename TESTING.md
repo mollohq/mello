@@ -53,6 +53,8 @@ Three things that are easy to get wrong:
   The rule: a callback registered on a `MainWindow` or its globals captures
   `as_weak()`, never `ctx.clone()`, unless `Harness::drop` clears it. Check
   with `(ulimit -n 256; CI=true cargo test -p mello-client --lib)`.
+  The test counts `/dev/fd`, so it measures on macOS and Linux only. On
+  Windows it always passes: a leak there shows first on the macOS lane.
 - **`MainWindow`'s default state renders nothing.** `onboarding-step 0` with
   `logged-in false` matches no branch in `main.slint`. Set a state before
   asserting, or the test passes while testing nothing.
@@ -464,6 +466,96 @@ Output (`results.json`, and per profile `presents.csv`, `host.csv`,
 
 `--write-fixture FILE` encodes the first 2 s of the 720p clip with the
 OpenH264 encoder: the H.264 fixture of mello-sfu `tools/stream-soak`.
+
+### Replay gate (game clips)
+
+The replay lane of the stream gate (CLIPS.md 15.13,
+`tools/stream-gate/src/replay.rs`). The same clip and game audio play into
+the replay buffer in place of a game window
+(`mello_test_replay_start_reference`). Presses at 35 s, 47 s, 60 s and 62 s
+after the source's first frame capture 30 s clips (`mello_replay_capture`).
+Each MP4 is read back (`mello_test_mp4_read_video`,
+`mello_test_mp4_read_audio`): the units go through a stream viewer one at a
+time, so every frame is decoded and its code read. No SFU, and no shim
+except the HTTP shim of the streamed playback row (below).
+
+```bash
+./scripts/replay-gate.sh                                # CPU lane: 720p60 clip quality, OpenH264
+./scripts/replay-gate.sh --lane hw                      # 1080p60 clip quality, the machine's encoder
+./scripts/replay-gate.sh --lane hw --loopback           # adds the real loopback row: tones ON THE SPEAKERS
+./scripts/replay-gate.sh --lane cpu --repeat 3 --write-baseline   # set the lane's floors
+```
+
+| Gate (per clip) | Rule |
+|---|---|
+| `duration_s` | 30 to 31 s |
+| `start_lead_frames` | the frame captured 30 s before the press minus the first frame: 0 to 60 (one GOP) |
+| `frames_missing`, `frames_out_of_order`, `frames_unreadable`, `frames_undecoded` | 0 |
+| `av_markers_missing`, `av_offset_abs_max_ms` | every game audio marker found; onset to the clip time of its frame (marker k: frame 15k) within +-20 ms |
+| `psnr_y_mean`, `ssim_y_mean`, `vmaf_mean` | floors from `--write-baseline` (the first run less the largest of a fixed margin and 1.1 x the spread, as `make_gates.py`) |
+| `loopback_offset_abs_max_ms` (hw, `--loopback`) | `mello_tone_player` bursts through process loopback, onset to the clip time of the frame captured then within +-20 ms |
+
+The gates are in `benchmarks/baselines/replay/gates.json`; the structural
+ones are absolute, a test keeps them equal to the code. The clip quality's
+height, rate and bitrate are `GameClipQuality::encoding`. The load guard is
+the stream gate's: over 10 % of other CPU while the replay records, the run
+is INVALID (exit code 2). Each clip's luma frames and VMAF files are deleted
+before the next clip; the gate refuses to start without the scratch space.
+Output (`results.json`; per clip the MP4, `frames.csv`, `markers.csv`) lands
+in `target/replay-gate/<lane>/`.
+
+#### Streamed playback row
+
+`--playback` adds the row `playback`
+(`tools/stream-gate/src/playback.rs`): the run's press-35s clip plays over
+HTTP as a viewer plays it from the feed. `--playback-only` records press-35s
+and runs this row alone (about 80 s on the cpu lane). Both lanes run it.
+
+```bash
+./scripts/replay-gate.sh --playback-only                # the row alone, CPU lane
+./scripts/replay-gate.sh --lane hw --playback-only      # the row alone, hardware lane
+./scripts/replay-gate.sh --playback                     # every press row and the playback row
+```
+
+The path: `http_shim.rs` serves the MP4 on 127.0.0.1 (std::net, HTTP/1.1
+ranges, keep-alive) with 50 ms before each response's first byte and a
+token bucket of 20 Mbps (16 KB at most at once, 4 KB writes); mello-core's
+`RangeReader` (1 MiB ranges, a cache file in `playback/cache`, deleted after
+the row); `clip_play::read_clip`; `mello_test_clip_player_start` with the
+CPU frame callback. The player's clock is its sound: the gate pulls the
+voice output 10 ms at a time on its own thread
+(`mello_voice_test_pull_output`, `MELLO_AUDIO_BACKEND=test`).
+
+| Play | What it does |
+|---|---|
+| play | from the start call to the end of the clip in real time, empty cache |
+| seek | a new start, empty cache; a seek to 20 s right after the first frame |
+| local | the MP4 from the file (`LocalClip`) to its first frame: the player's own start (info only) |
+
+The truth is every unit of the clip decoded one at a time
+(`replay::decode`). The clip loop is 20 s, so the frame of 20 s has the
+loop index of the first frame; after the seek call, a frame counts as one
+from the seek once the state shows the position jump or a frame of the
+seek's GOP shows.
+
+| Gate (row `playback`) | Rule |
+|---|---|
+| `playback_first_frame_ms` | the start call (`RangeReader::open`) to the first frame shown: at most 1000 ms |
+| `playback_buffering_ms` | time the player's state says buffering after the first frame (read every 5 ms): 0 |
+| `playback_frames_out_of_order`, `playback_frames_skipped`, `playback_frames_unreadable` | 0: every unit shows, in order, and its code reads |
+| `playback_seek_ms` | the seek call to the first frame at or after the frame of 20 s: at most 1000 ms |
+
+Info metrics split the numbers: `playback_open_ms` (the first range),
+`playback_player_first_frame_ms`, `playback_local_first_frame_ms`,
+`playback_buffering_clock_ran_ms` and `playback_buffering_clock_held_ms`
+(the buffering state while the position moved or held),
+`playback_read_wait_ms`, `playback_seek_first_frame_ms`,
+`playback_seek_read_wait_ms`, `playback_shim_mbps`. Files in
+`<lane>/playback/`: `frames.csv` (each shown frame: present time, code,
+unit), `state.csv`, `requests.csv` (the shim's responses), `read_waits.csv`
+and `reads.csv` (the player's read calls). The load guard covers the two
+plays over HTTP. The journey plays a clip from local MinIO; the row serves
+the file from the shim, which gives the row a fixed link.
 
 ### Stream start, watch and reconnect (streaming-quality stage 6)
 

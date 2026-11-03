@@ -452,3 +452,89 @@ func TestNoHeroWhenNothingQualifies(t *testing.T) {
 		}
 	}
 }
+
+// ---- game clip hero (CLIPS.md 15.6) ----
+
+// typedClipCard is a clip card that carries its StoredClip, as
+// buildMergedTimeline makes it.
+func typedClipCard(id, clipType string, ts int64, poster string) feedCard {
+	return feedCard{id: id, feedType: "clip", backendType: "clip", ts: ts,
+		data: StoredClip{EventID: id, ClipID: id, ClipType: clipType, Ts: ts, PosterURL: poster}}
+}
+
+func beltMovedCard(now int64) feedCard {
+	return feedCard{id: head2headFeedID, feedType: head2headFeedID, ts: now - 1_000,
+		data: &Head2headFeedData{BeltMovedRecent: &Head2headTitle{MovedAtMs: now - 1_000}}}
+}
+
+// The order: a belt that moved, a fresh stream preview, a fresh game clip
+// with a poster, then the Monday recap.
+func TestHeroOrderPutsAFreshGameClipAfterThePreviewAndBeforeTheRecap(t *testing.T) {
+	now := feedTestMonday
+	belt := beltMovedCard(now)
+	preview := freshPreview("preview", now, 2*3_600_000)
+	game := typedClipCard("game", clipTypeGame, now-3_600_000, "http://cdn/g.jpg")
+	recap := recapAt("recap", now-3_600_000)
+	for _, s := range []struct {
+		cards []feedCard
+		want  string
+	}{
+		{[]feedCard{recap, game, preview, belt}, head2headFeedID},
+		{[]feedCard{recap, game, preview}, "preview"},
+		{[]feedCard{recap, game}, "game"},
+		{[]feedCard{recap}, "recap"},
+	} {
+		i := heroIndex(s.cards, now)
+		if i < 0 || s.cards[i].id != s.want {
+			t.Fatalf("hero of %d cards: got %d, want %q", len(s.cards), i, s.want)
+		}
+	}
+}
+
+// A voice clip, a game clip with no poster and a game clip older than 24 h
+// are never the hero; the Monday recap leads instead.
+func TestHeroNeverTakesAVoiceClipOrAGameClipWithoutPosterOrStale(t *testing.T) {
+	now := feedTestMonday
+	recap := recapAt("recap", now-3_600_000)
+	for name, clip := range map[string]feedCard{
+		"voice":     typedClipCard("c", clipTypeVoice, now-1_000, "http://cdn/v.jpg"),
+		"no poster": typedClipCard("c", clipTypeGame, now-1_000, ""),
+		"stale":     typedClipCard("c", clipTypeGame, now-feedHeroFreshMs-1, "http://cdn/g.jpg"),
+	} {
+		cards := []feedCard{clip, recap}
+		if i := heroIndex(cards, now); i < 0 || cards[i].id != "recap" {
+			t.Errorf("%s: hero %d, want the recap", name, i)
+		}
+		if i := heroIndex([]feedCard{clip}, now); i != -1 {
+			t.Errorf("%s alone: hero %d, want none", name, i)
+		}
+	}
+}
+
+// The newest game clip wins, and a clip from the feed JSON (a map) counts too.
+func TestHeroPicksTheNewestGameClip(t *testing.T) {
+	now := feedTestThursday
+	older := typedClipCard("older", clipTypeGame, now-5*3_600_000, "http://cdn/a.jpg")
+	newer := feedCard{id: "newer", feedType: "clip", backendType: "clip", ts: now - 3_600_000,
+		data: map[string]interface{}{"clip_type": "game", "poster_url": "http://cdn/b.jpg"}}
+	cards := []feedCard{newer, older}
+	if i := heroIndex(cards, now); i != 0 {
+		t.Fatalf("hero %d, want the newer clip", i)
+	}
+	entries := buildThisWeek(cards, now)
+	if entries[0].ID != "newer" || entries[0].Role != "hero" || entries[0].Size != "lg" {
+		t.Fatalf("hero entry: %+v", entries[0])
+	}
+	seen := 0
+	for _, e := range entries {
+		if e.ID == "newer" {
+			seen++
+		}
+	}
+	if seen != 1 {
+		t.Fatalf("the hero clip must be emitted once, got %d", seen)
+	}
+	if e := findEntry(entries, "older"); e == nil || e.Role == "hero" || e.Size == "lg" {
+		t.Fatalf("the older clip must stay a standard filler: %+v", e)
+	}
+}

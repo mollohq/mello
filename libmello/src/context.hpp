@@ -4,11 +4,19 @@
 #include "video/video_pipeline.hpp"
 #include <atomic>
 #include <cstdint>
+#include <map>
 #include <memory>
 #include <string>
 #include <mutex>
 
 namespace mello {
+
+namespace replay {
+class ReplaySession;
+}
+namespace audio {
+class SharedGameAudio;
+}
 
 class Context {
 public:
@@ -43,6 +51,45 @@ public:
     /// host audio pipeline and its stream host peer (stream_audio_link.hpp).
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link() const { return stream_audio_link_; }
 
+    /// The game clip replay (F8), one at a time (CLIPS.md 15.2).
+    /// A capture holds its own reference, so a stop during a capture lets
+    /// the capture finish. Any thread.
+    std::shared_ptr<replay::ReplaySession> replay() const {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        return replay_;
+    }
+    /// Sets the replay and returns the one before it, for the caller to stop.
+    std::shared_ptr<replay::ReplaySession> exchange_replay(std::shared_ptr<replay::ReplaySession> next) {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        replay_.swap(next);
+        return next;
+    }
+
+#ifdef _WIN32
+    /// The capture of the running stream host, so a replay of the same game
+    /// that starts later joins it (14-VIDEO-PIPELINE.md 4.8). `key` is the
+    /// game (ReplaySession::game_key). Weak: the stream owns its capture.
+    struct StreamCapture {
+        std::weak_ptr<video::CaptureManager> manager;
+        uint32_t key = 0;
+        uint32_t fps = 0;
+    };
+    void set_stream_capture(StreamCapture capture) {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        stream_capture_ = std::move(capture);
+    }
+    StreamCapture stream_capture() const {
+        std::lock_guard<std::mutex> lock(replay_mutex_);
+        return stream_capture_;
+    }
+
+    /// The game audio of `pid`, shared by the stream host and the game clip
+    /// replay: one process loopback per game (12-STREAMING.md 3.7, F7). While
+    /// one holder lives, a second call returns the same capture. Null when
+    /// Windows has no process loopback. Any thread.
+    std::shared_ptr<audio::SharedGameAudio> game_audio(uint32_t pid);
+#endif
+
     void set_error(const std::string& error);
     const char* get_error() const;
 
@@ -60,6 +107,13 @@ private:
         std::make_shared<std::atomic<uint64_t>>(0);
     std::shared_ptr<audio::StreamAudioLink> stream_audio_link_ =
         std::make_shared<audio::StreamAudioLink>();
+    std::shared_ptr<replay::ReplaySession> replay_;
+#ifdef _WIN32
+    StreamCapture stream_capture_;
+    std::map<uint32_t, std::weak_ptr<audio::SharedGameAudio>> game_audio_;  // game_audio_mutex_
+    std::mutex game_audio_mutex_;
+#endif
+    mutable std::mutex replay_mutex_;  // replay_ and stream_capture_
 };
 
 } // namespace mello

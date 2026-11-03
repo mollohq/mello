@@ -24,6 +24,11 @@ pub struct PttBinding {
 /// storage format of `Settings::clip_key`. Keybinds in Settings changes it.
 pub const DEFAULT_CLIP_KEY: &str = "F7";
 
+/// The game clip key (CLIPS.md 15.2), in the same format. Windows
+/// only until the macOS work; a Settings row comes with todo
+/// `client-key-settings`.
+pub const DEFAULT_GAME_CLIP_KEY: &str = "F8";
+
 /// One step of the clip key: `held` is true while the key is down, so a
 /// key that auto-repeats clips once. Returns true on the press that clips.
 /// The modifiers must match the binding. A PTT binding on the same keys
@@ -61,6 +66,8 @@ pub struct HotkeyManager {
     event_rx: mpsc::Receiver<PttEvent>,
     clip_binding: Arc<Mutex<Option<PttBinding>>>,
     clip_rx: mpsc::Receiver<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_rx: mpsc::Receiver<()>,
 }
 
 impl HotkeyManager {
@@ -73,12 +80,15 @@ impl HotkeyManager {
     pub fn disabled() -> Self {
         let (_tx, event_rx) = mpsc::channel();
         let (_clip_tx, clip_rx) = mpsc::channel();
+        let (_game_clip_tx, game_clip_rx) = mpsc::channel();
         Self {
             binding: Arc::new(Mutex::new(None)),
             active: Arc::new(AtomicBool::new(false)),
             event_rx,
             clip_binding: Arc::new(Mutex::new(None)),
             clip_rx,
+            game_clip_binding: Arc::new(Mutex::new(None)),
+            game_clip_rx,
         }
     }
 
@@ -88,13 +98,30 @@ impl HotkeyManager {
         let (event_tx, event_rx) = mpsc::channel();
         let clip_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
         let (clip_tx, clip_rx) = mpsc::channel();
+        let game_clip_binding: Arc<Mutex<Option<PttBinding>>> = Arc::new(Mutex::new(None));
+        let (game_clip_tx, game_clip_rx) = mpsc::channel();
 
+        // The game clip key is Windows only until the macOS work.
+        #[cfg(target_os = "macos")]
+        {
+            drop(game_clip_tx);
+            start_listener(
+                binding.clone(),
+                active.clone(),
+                event_tx,
+                clip_binding.clone(),
+                clip_tx,
+            )?;
+        }
+        #[cfg(not(target_os = "macos"))]
         start_listener(
             binding.clone(),
             active.clone(),
             event_tx,
             clip_binding.clone(),
             clip_tx,
+            game_clip_binding.clone(),
+            game_clip_tx,
         )?;
 
         Ok(Self {
@@ -103,6 +130,8 @@ impl HotkeyManager {
             event_rx,
             clip_binding,
             clip_rx,
+            game_clip_binding,
+            game_clip_rx,
         })
     }
 
@@ -131,6 +160,17 @@ impl HotkeyManager {
     /// clip key works with PTT on or off.
     pub fn poll_clip(&self) -> bool {
         self.clip_rx.try_recv().is_ok()
+    }
+
+    /// The game clip key (F8). `None` turns the key off. It keeps its own
+    /// held state, apart from the voice clip key.
+    pub fn register_game_clip(&self, binding: Option<PttBinding>) {
+        *self.game_clip_binding.lock().unwrap() = binding;
+    }
+
+    /// True once for each press of the game clip key since the last call.
+    pub fn poll_game_clip(&self) -> bool {
+        self.game_clip_rx.try_recv().is_ok()
     }
 }
 
@@ -434,8 +474,18 @@ fn start_listener(
     event_tx: mpsc::Sender<PttEvent>,
     clip_binding: Arc<Mutex<Option<PttBinding>>>,
     clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    start_rdev_listener(binding, active, event_tx, clip_binding, clip_tx)
+    start_rdev_listener(
+        binding,
+        active,
+        event_tx,
+        clip_binding,
+        clip_tx,
+        game_clip_binding,
+        game_clip_tx,
+    )
 }
 
 /// Linux: the GlobalShortcuts portal on Wayland (`rdev` sees no key while
@@ -447,11 +497,24 @@ fn start_listener(
     event_tx: mpsc::Sender<PttEvent>,
     clip_binding: Arc<Mutex<Option<PttBinding>>>,
     clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     if super::linux_shortcuts::wayland_session() {
+        // Game clips are Windows only (CLIPS.md 15.14): the portal
+        // binds no game clip key.
+        drop(game_clip_tx);
         super::linux_shortcuts::start(binding, active, event_tx, clip_binding, clip_tx)
     } else {
-        start_rdev_listener(binding, active, event_tx, clip_binding, clip_tx)
+        start_rdev_listener(
+            binding,
+            active,
+            event_tx,
+            clip_binding,
+            clip_tx,
+            game_clip_binding,
+            game_clip_tx,
+        )
     }
 }
 
@@ -462,6 +525,8 @@ fn start_rdev_listener(
     event_tx: mpsc::Sender<PttEvent>,
     clip_binding: Arc<Mutex<Option<PttBinding>>>,
     clip_tx: mpsc::Sender<()>,
+    game_clip_binding: Arc<Mutex<Option<PttBinding>>>,
+    game_clip_tx: mpsc::Sender<()>,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use rdev::{self, EventType, Key};
 
@@ -584,6 +649,8 @@ fn start_rdev_listener(
             // The PTT state resets while PTT is off; the clip key keeps its own.
             let mut clip_mods = ModifierState::default();
             let mut clip_held = false;
+            // The game clip key keeps its own held state (CLIPS.md 15.2).
+            let mut game_clip_held = false;
 
             if let Err(e) = rdev::listen(move |event| {
                 let (key, pressed) = match event.event_type {
@@ -607,6 +674,21 @@ fn start_rdev_listener(
                     ) {
                         log::info!("[hotkeys] clip key pressed");
                         let _ = clip_tx.send(());
+                    }
+                }
+                let game_clip = game_clip_binding.lock().unwrap().clone();
+                if let Some(game_clip) = game_clip {
+                    let ptt_on_key = ptt_on_clip_key(&binding.lock().unwrap(), &game_clip)
+                        && active.load(Ordering::Relaxed);
+                    if clip_key_step(
+                        &mut game_clip_held,
+                        Some(key) == code_str_to_rdev_key(&game_clip.code_str),
+                        pressed,
+                        clip_mods.matches(&game_clip),
+                        ptt_on_key,
+                    ) {
+                        log::info!("[hotkeys] game clip key pressed");
+                        let _ = game_clip_tx.send(());
                     }
                 }
 

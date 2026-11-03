@@ -117,22 +117,29 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         return false;
     }
 
-    if (!init_device()) return false;
-
     config_    = config;
     packet_cb_ = std::move(on_packet);
 
-    // 1. Capture. The user picks what to stream; this picks how. A window that
-    // cannot carry a stream on its own becomes its process here.
+    // 1. Capture. The user picks what to stream; the capture picks how. On
+    // Windows the capture manager makes the device, resolves the target (a
+    // window that cannot carry a stream becomes its process) and initializes
+    // the source.
 #ifdef _WIN32
-    const CaptureSourceDesc resolved = resolve_capture_target(source);
-#elif defined(__linux__)
+    manager_ = CaptureManager::create(source);
+    if (!manager_) {
+        MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
+        return false;
+    }
+    const GraphicsDevice& device = manager_->device();
+#else
+    if (!init_device()) return false;
+#if defined(__linux__)
     // The encoder's DMA-BUF layouts, so the capture keeps the picture on the
     // GPU when the compositor shares one of them.
     CaptureSourceDesc resolved = source;
     resolved.dmabuf_formats = linux_encoder_dmabuf_formats();
 #else
-    const CaptureSourceDesc resolved = source;
+    const CaptureSourceDesc& resolved = source;
 #endif
     capture_ = create_capture_source(resolved);
     if (capture_) capture_->set_present_delay_histogram(&present_delay_hist_);
@@ -140,11 +147,12 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         MELLO_LOG_ERROR(TAG, "Failed to initialize capture source");
         return false;
     }
+#endif
 
 #ifdef _WIN32
     // NV12 requires even dimensions (chroma plane is half-res)
-    uint32_t cap_w = capture_->width()  & ~1u;
-    uint32_t cap_h = capture_->height() & ~1u;
+    uint32_t cap_w = manager_->width()  & ~1u;
+    uint32_t cap_h = manager_->height() & ~1u;
 
     // The color converter downscales in the same GPU pass as BGRA→NV12. The
     // encode size keeps the source aspect, so the converter never stretches.
@@ -180,11 +188,11 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     // It gets the capture size as it is, odd or not: the source is BGRA and
     // the whole of it scales into the even NV12 encode size.
     preprocessor_ = std::make_unique<VideoPreprocessor>();
-    source_w_.store(capture_->width(), std::memory_order_relaxed);
-    source_h_.store(capture_->height(), std::memory_order_relaxed);
+    source_w_.store(manager_->width(), std::memory_order_relaxed);
+    source_h_.store(manager_->height(), std::memory_order_relaxed);
     source_size_changes_.store(0, std::memory_order_relaxed);
     source_size_known_ = false;
-    if (!preprocessor_->initialize(device_, capture_->width(), capture_->height(), enc_w, enc_h)) {
+    if (!preprocessor_->initialize(device, manager_->width(), manager_->height(), enc_w, enc_h)) {
         MELLO_LOG_ERROR(TAG, "Failed to initialize video preprocessor");
         return false;
     }
@@ -205,7 +213,7 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     enc_config.keyframe_interval = keyframe_interval_for(config.fps);
     enc_config.codec         = VideoCodec::H264;
 
-    encoder_ = create_best_encoder(device_, enc_config);
+    encoder_ = create_best_encoder(device, enc_config);
     if (!encoder_) {
         MELLO_LOG_ERROR(TAG, "No encoder available");
         return false;
@@ -234,11 +242,17 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
         });
     }
 
-    auto self = this;
-    if (!capture_->start(config.fps, [self](ID3D11Texture2D* tex, uint64_t ts) {
-        self->on_captured_frame(tex, ts);
-    })) {
+    handled_swap_generation_ = manager_->swap_generation();
+    consumer_id_ = manager_->add_consumer([this](const CapturedFrame& frame) {
+        on_captured_frame(frame);
+    });
+    if (consumer_id_ == 0 || !manager_->start(config.fps)) {
         MELLO_LOG_ERROR(TAG, "Failed to start capture");
+        if (consumer_id_ != 0) {
+            // The source never started, so this returns at once.
+            (void)manager_->remove_consumer(consumer_id_);
+            consumer_id_ = 0;
+        }
         host_running_ = false;
         eq_cv_.notify_all();
         if (encode_thread_.joinable()) encode_thread_.join();
@@ -293,10 +307,15 @@ bool VideoPipeline::start_host(const CaptureSourceDesc& source,
     }
 #endif
 
+#ifdef _WIN32
+    const CaptureManager& capture = *manager_;
+#else
+    const CaptureSource& capture = *capture_;
+#endif
     MELLO_LOG_INFO(TAG, "Host pipeline starting: encoder=%s capture=%s res=%ux%u fps=%u bitrate=%ukbps low_latency=%s",
         encoder_ ? encoder_->name() : "none",
-        capture_->backend_name(),
-        capture_->width(), capture_->height(),
+        capture.backend_name(),
+        capture.width(), capture.height(),
         config.fps, config.bitrate_kbps,
         config.low_latency ? "true" : "false");
 
@@ -310,6 +329,24 @@ void VideoPipeline::stop_host() {
     // Each step is logged before it starts. A stop that hangs in a driver or a
     // capture thread then names its own step in the log: the 2026-09-15 beta
     // hang left no way to tell capture, encode and encoder shutdown apart.
+#ifdef _WIN32
+    MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", manager_ ? manager_->backend_name() : "none");
+    if (manager_ && consumer_id_ != 0) {
+        // The only consumer leaves, so the manager stops the source.
+        const CaptureManager::RemoveResult removed = manager_->remove_consumer(consumer_id_);
+        consumer_id_ = 0;
+        if (removed == CaptureManager::RemoveResult::Abandoned) {
+            // A capture thread is still running inside the driver or inside
+            // this pipeline, so nothing here may be freed or shut down: leak
+            // the whole pipeline, its manager and the device, and return.
+            abandoned_ = true;
+            MELLO_LOG_ERROR(TAG,
+                "stop_host: capture could not be stopped; abandoning this pipeline "
+                "(encoder, preprocessor and device stay allocated)");
+            return;
+        }
+    }
+#else
     MELLO_LOG_INFO(TAG, "stop_host: capture stop (%s)", capture_ ? capture_->backend_name() : "none");
     if (capture_) {
         capture_->stop();
@@ -326,6 +363,7 @@ void VideoPipeline::stop_host() {
             return;
         }
     }
+#endif
 
     // Wake and join the encode thread before shutting down encoder/preprocessor.
     //
@@ -376,7 +414,9 @@ void VideoPipeline::stop_host() {
     MELLO_LOG_INFO(TAG, "Host pipeline stopped: uptime=%llus frames_encoded=%llu keyframes=%u bytes_out=%lluMB",
         uptime_s, frames_encoded_, stats.keyframes_sent, stats.bytes_sent / (1024 * 1024));
 
+#ifndef _WIN32
     capture_.reset();
+#endif
     encoder_.reset();
 #ifdef _WIN32
     {
@@ -384,6 +424,8 @@ void VideoPipeline::stop_host() {
         retired_preprocessors_.clear();
     }
     preprocessor_.reset();
+    // Last: the encoder and the preprocessors were made on its device.
+    manager_.reset();
 #endif
 }
 
@@ -448,6 +490,32 @@ void VideoPipeline::on_capture_idle() {
     }
 }
 #endif
+
+void VideoPipeline::set_capture_audio_callback(CaptureSource::AudioCallback cb) {
+#ifdef _WIN32
+    if (manager_ && consumer_id_ != 0) manager_->set_audio_callback(consumer_id_, std::move(cb));
+#else
+    if (capture_) capture_->set_audio_callback(std::move(cb));
+#endif
+}
+
+void VideoPipeline::set_capture_timed_audio_callback(CaptureSource::TimedAudioCallback cb) {
+#ifdef _WIN32
+    if (manager_ && consumer_id_ != 0) {
+        manager_->set_timed_audio_callback(consumer_id_, std::move(cb));
+    }
+#else
+    if (capture_) capture_->set_timed_audio_callback(std::move(cb));
+#endif
+}
+
+bool VideoPipeline::capture_provides_timed_audio() const {
+#ifdef _WIN32
+    return manager_ && manager_->provides_timed_audio();
+#else
+    return capture_ && capture_->provides_timed_audio();
+#endif
+}
 
 void VideoPipeline::get_host_resolution(uint32_t& w, uint32_t& h) const {
     w = encode_w_;
@@ -615,6 +683,16 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.encode_ms  = static_cast<float>(last_encode_ms_);
     }
 
+#ifdef _WIN32
+    if (manager_) {
+        out.capture_backend = manager_->backend_name();
+        out.capture_failed  = manager_->failed();
+        out.capture_state   = static_cast<uint32_t>(manager_->state());
+        out.target_exited   = manager_->target_exited();
+        out.capture_history = manager_->method_history();
+        manager_->present_delay_snapshot(out.present_delay_hist.data());
+    }
+#else
     if (capture_) {
         out.capture_backend = capture_->backend_name();
         out.capture_failed  = capture_->failed();
@@ -623,6 +701,7 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
         out.capture_history = capture_->method_history();
     }
     present_delay_hist_.snapshot(out.present_delay_hist.data());
+#endif
     if (encoder_) {
         out.encoder_name = encoder_->name();
         out.encoder_cost_tier = encoder_->cost_tier();
@@ -637,7 +716,11 @@ void VideoPipeline::get_host_telemetry(HostTelemetry& out) const {
     out.source_width = source_w_.load(std::memory_order_relaxed);
     out.source_height = source_h_.load(std::memory_order_relaxed);
     out.source_size_changes = source_size_changes_.load(std::memory_order_relaxed);
+#ifdef _WIN32
+    out.gpu_name = manager_ ? manager_->device().adapter_name : device_.adapter_name;
+#else
     out.gpu_name = device_.adapter_name;
+#endif
 }
 
 bool VideoPipeline::encoder_available() const {
@@ -654,8 +737,10 @@ bool VideoPipeline::encoder_available() const {
 }
 
 #ifdef _WIN32
-void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timestamp_us) {
+void VideoPipeline::on_captured_frame(const CapturedFrame& frame) {
     if (!host_running_.load()) return;
+    ID3D11Texture2D* const texture = frame.texture;
+    const uint64_t timestamp_us = frame.capture_us;
 
     frames_captured_.fetch_add(1, std::memory_order_relaxed);
     last_capture_us_.store(now_us(), std::memory_order_relaxed);
@@ -666,7 +751,11 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
         return;
     }
 
-    if (capture_ && capture_->consume_swap_event()) {
+    // The manager counts the capture method changes. A change since the last
+    // frame this host encoded forces a keyframe, as the source's swap event
+    // did when the host read it itself.
+    if (frame.swap_generation != handled_swap_generation_) {
+        handled_swap_generation_ = frame.swap_generation;
         MELLO_LOG_WARN(TAG, "Capture backend swap detected, forcing keyframe");
         request_keyframe();
     }
@@ -676,8 +765,8 @@ void VideoPipeline::on_captured_frame(ID3D11Texture2D* texture, uint64_t timesta
     // (WGC), or the viewer draws it from cursor packets (the hook).
     CursorOverlay overlay{};
     const CursorOverlay* cursor = nullptr;
-    if (capture_ && capture_->cursor_mode() == CursorMode::Composite &&
-        capture_->get_cursor(cursor_frame_) && cursor_frame_.visible &&
+    if (manager_->cursor_mode() == CursorMode::Composite &&
+        manager_->get_cursor(cursor_frame_) && cursor_frame_.visible &&
         !cursor_frame_.shape_bgra.empty()) {
         overlay.x = cursor_frame_.x;
         overlay.y = cursor_frame_.y;
@@ -846,7 +935,8 @@ void VideoPipeline::apply_geometry_request(ID3D11Texture2D* texture) {
     }
     if (target.width == preprocessor_w_ && target.height == preprocessor_h_) return;
     auto next = std::make_unique<VideoPreprocessor>();
-    if (!next->initialize(device_, desc.Width, desc.Height, target.width, target.height)) {
+    if (!next->initialize(manager_->device(), desc.Width, desc.Height, target.width,
+                          target.height)) {
         MELLO_LOG_ERROR(TAG, "geometry: preprocessor at %ux%u failed; staying at %ux%u",
                         target.width, target.height, preprocessor_w_, preprocessor_h_);
         return;
@@ -874,7 +964,7 @@ bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t gen
     config.bitrate_kbps = last_bitrate_kbps_.load(std::memory_order_relaxed);
     config.keyframe_interval = keyframe_interval_for(config_.fps);
     config.codec = VideoCodec::H264;
-    if (!encoder_control_.resize(device_, config)) {
+    if (!encoder_control_.resize(manager_->device(), config)) {
         MELLO_LOG_ERROR(TAG, "geometry: the encoder cannot run at %ux%u", width, height);
         return false;
     }
@@ -896,10 +986,22 @@ bool VideoPipeline::resize_encoder(uint32_t width, uint32_t height, uint32_t gen
     return true;
 }
 
+void VideoPipeline::set_overload_shedder(OverloadShedder shedder) {
+    std::lock_guard<std::mutex> lock(shedder_mutex_);
+    overload_shedder_ = std::move(shedder);
+}
+
 // Runs on the encode thread, immediately after a frame is encoded, so the
 // measurement and the reconfigure share one thread and no extra locking.
 void VideoPipeline::maybe_reduce_encoder_cost() {
-    if (!encoder_ || encoder_->cost_tier() >= encoder_->max_cost_tier()) {
+    if (!encoder_) return;
+    const bool can_reduce = encoder_->cost_tier() < encoder_->max_cost_tier();
+    bool has_shedder = false;
+    {
+        std::lock_guard<std::mutex> lock(shedder_mutex_);
+        has_shedder = static_cast<bool>(overload_shedder_);
+    }
+    if (!can_reduce && !has_shedder) {
         return;
     }
 
@@ -922,7 +1024,14 @@ void VideoPipeline::maybe_reduce_encoder_cost() {
     }
 
     if (encoder_is_overloaded(sample)) {
-        encoder_control_.reduce_cost_tier();
+        // F3 (12-STREAMING.md 3.7): a game clip replay on this capture sheds
+        // first. The stream's tier moves only when it has nothing left.
+        bool shed = false;
+        {
+            std::lock_guard<std::mutex> lock(shedder_mutex_);
+            if (overload_shedder_) shed = overload_shedder_();
+        }
+        if (!shed && can_reduce) encoder_control_.reduce_cost_tier();
     }
     // Reset the window either way: after a downgrade so the next decision
     // measures the new configuration, and after a healthy window so old drops
@@ -999,12 +1108,12 @@ void VideoPipeline::get_viewer_stats(ViewerStats& out) const {
 
 bool VideoPipeline::get_cursor_packet(uint8_t* buf, size_t* size) {
 #ifdef _WIN32
-    if (!capture_ || !host_running_.load() || !buf || !size) return false;
+    if (!manager_ || !host_running_.load() || !buf || !size) return false;
     std::lock_guard<std::mutex> lock(cursor_packet_mutex_);
 
     CursorState cs{};
     bool include_shape = false;
-    if (capture_->cursor_mode() != CursorMode::Packet) {
+    if (manager_->cursor_mode() != CursorMode::Packet) {
         // The frames have the pointer, or nothing does. A viewer that drew it
         // from packets must stop: tell it once.
         if (!cursor_sent_visible_) return false;
@@ -1012,14 +1121,14 @@ bool VideoPipeline::get_cursor_packet(uint8_t* buf, size_t* size) {
         cs.x = cursor_sent_x_;
         cs.y = cursor_sent_y_;
     } else {
-        if (!capture_->get_cursor(cursor_packet_src_)) return false;
+        if (!manager_->get_cursor(cursor_packet_src_)) return false;
 
         // Source pixels to encode pixels: the preprocessor's rule.
         uint32_t src_w = source_w_.load(std::memory_order_relaxed);
         uint32_t src_h = source_h_.load(std::memory_order_relaxed);
         if (src_w == 0 || src_h == 0) {
-            src_w = capture_->width();
-            src_h = capture_->height();
+            src_w = manager_->width();
+            src_h = manager_->height();
         }
         if (src_w == 0 || src_h == 0 || encode_w_ == 0) return false;
         const FitRect fit = VideoPreprocessor::fit(src_w, src_h, encode_w_, encode_h_);

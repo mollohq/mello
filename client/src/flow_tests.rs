@@ -4858,6 +4858,211 @@ fn the_clip_key_captures_a_voice_clip_only_in_voice() {
     assert_eq!(capture(&h.commands()), 1);
 }
 
+/// F8 clips the game while core reports the replay running, also while it
+/// waits or is paused: its ring still has the game (CLIPS.md 15.2). With
+/// no replay, or one that is not available for the game, F8 makes no clip.
+#[test]
+fn the_game_clip_key_clips_only_while_the_replay_runs() {
+    use mello_core::events::GameClipState;
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let capture = |cmds: &[Command]| {
+        cmds.iter()
+            .filter(|c| matches!(c, Command::CaptureGameClip))
+            .count()
+    };
+    let _ = h.commands();
+
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "no replay: no clip");
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::Unavailable,
+        game_name: "Counter-Strike 2".into(),
+        reason: "no hardware encoder".into(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "not available: no clip");
+
+    for state in [
+        GameClipState::Recording,
+        GameClipState::Waiting,
+        GameClipState::Paused,
+    ] {
+        h.emit(Event::GameClipStateChanged {
+            state,
+            game_name: "Counter-Strike 2".into(),
+            reason: String::new(),
+        });
+        crate::game_clip::game_clip_key_pressed(h.ctx());
+        assert_eq!(capture(&h.commands()), 1, "{state:?}: one clip");
+    }
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::Off,
+        game_name: String::new(),
+        reason: String::new(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "the replay stopped: no clip");
+
+    h.emit(Event::GameClipStateChanged {
+        state: GameClipState::DiskLow,
+        game_name: "Counter-Strike 2".into(),
+        reason: "the disk is almost full".into(),
+    });
+    crate::game_clip::game_clip_key_pressed(h.ctx());
+    assert_eq!(capture(&h.commands()), 0, "a full disk: no clip");
+}
+
+/// A saved game clip goes to the active crew for the upload, and stays
+/// local with no active crew (CLIPS.md 15.2 and 15.7).
+#[test]
+fn a_saved_game_clip_is_shared_with_the_active_crew() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let captured = || Event::GameClipCaptured {
+        clip_id: "game_clip_1".into(),
+        path: "C:/clips/game_clip_1.mp4".into(),
+        poster_path: "C:/clips/game_clip_1.jpg".into(),
+        duration_seconds: 30.2,
+        width: 1280,
+        height: 720,
+        game_name: "Hearthstone".into(),
+    };
+    let shared = |cmds: Vec<Command>| -> Vec<(String, String)> {
+        cmds.into_iter()
+            .filter_map(|c| match c {
+                Command::ShareGameClip {
+                    crew_id, clip_id, ..
+                } => Some((crew_id, clip_id)),
+                _ => None,
+            })
+            .collect()
+    };
+
+    h.app().set_active_crew_id("".into());
+    let _ = h.commands();
+    h.emit(captured());
+    assert!(
+        shared(h.commands()).is_empty(),
+        "no crew: the clip stays local"
+    );
+
+    h.app().set_active_crew_id("crew-1".into());
+    h.emit(captured());
+    assert_eq!(
+        shared(h.commands()),
+        vec![("crew-1".to_string(), "game_clip_1".to_string())]
+    );
+}
+
+/// A game clip in the feed is footage with a play ring, not the waveform
+/// card. Before its video is up, the crew sees "Uploading" and cannot play.
+#[test]
+fn a_game_clip_in_the_feed_is_a_footage_card() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    let now_ms = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_millis() as i64;
+    let feed = |media_url: &str| FeedResponse {
+        crew_id: "crew-1".into(),
+        sections: vec![FeedSection {
+            id: "this_week".into(),
+            entries: vec![FeedEntry {
+                id: "evt-game".into(),
+                entry_type: "clip".into(),
+                role: "standard".into(),
+                size: "md".into(),
+                ts: now_ms,
+                data: serde_json::json!({
+                    "clip_id": "game_clip_9",
+                    "clip_type": "game",
+                    "clipper_name": "alice",
+                    "game": "Hearthstone",
+                    "duration_seconds": 30.2,
+                    "width": 1280,
+                    "height": 720,
+                    "local_path": "Z:/not/on/this/pc.mp4",
+                    "poster_url": "http://127.0.0.1:9/game_clip_9.jpg",
+                    "media_url": media_url,
+                }),
+            }],
+        }],
+        joined: vec![],
+    };
+
+    h.emit(Event::FeedLoaded { response: feed("") });
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    assert_eq!(card.clip_kind.as_str(), "game");
+    assert!(card.clip_uploading && !card.clip_can_play);
+    assert!(
+        h.controls_labelled("Play the game clip of alice")
+            .iter()
+            .all(|c| !c.accessible_enabled().unwrap_or(false)),
+        "nothing to play before the upload"
+    );
+
+    h.emit(Event::FeedLoaded {
+        response: feed("http://127.0.0.1:9/game_clip_9.mp4"),
+    });
+    let card = find_clip_card(&h.app().get_feed_cards()).expect("the game clip card");
+    assert!(!card.clip_uploading && card.clip_can_play);
+    assert_eq!(
+        card.clip_path.as_str(),
+        "http://127.0.0.1:9/game_clip_9.mp4"
+    );
+    assert!(
+        crate::handlers::clip::game_clip_card(h.app(), "http://127.0.0.1:9/game_clip_9.mp4")
+            .is_some()
+    );
+    assert!(!h
+        .controls_labelled("Play the game clip of alice")
+        .is_empty());
+
+    // The play button opens the clip player, which plays the uploaded MP4.
+    let _ = h.commands();
+    h.click_label("Play the game clip of alice");
+    fn ui(h: &Harness) -> crate::ClipPlayerUi<'_> {
+        h.app().global::<crate::ClipPlayerUi>()
+    }
+    assert!(ui(&h).get_open(), "the clip player opens over the feed");
+    assert_eq!(ui(&h).get_clipper_name().as_str(), "alice");
+    let played: Vec<String> = h
+        .commands()
+        .into_iter()
+        .filter_map(|c| match c {
+            Command::PlayGameClip { source } => Some(source),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        played,
+        vec!["http://127.0.0.1:9/game_clip_9.mp4".to_string()]
+    );
+
+    // The state from core shows; the close button closes the player.
+    h.emit(Event::GameClipPlayback {
+        position_ms: 12_000,
+        duration_ms: 30_200,
+        width: 1280,
+        height: 720,
+        buffering: false,
+        paused: false,
+        ended: false,
+    });
+    assert_eq!(ui(&h).get_position_ms(), 12_000);
+    assert!(!ui(&h).get_buffering());
+    h.click_label("Close the clip");
+    assert!(!ui(&h).get_open());
+    assert!(h
+        .commands()
+        .iter()
+        .any(|c| matches!(c, Command::CloseGameClip)));
+}
+
 /// The clip button names the clip key, F7 on a new install.
 #[test]
 fn the_clip_button_names_the_clip_key() {
@@ -4918,15 +5123,142 @@ fn keybinds_refuses_the_push_to_talk_key() {
 fn reset_to_defaults_gives_the_clip_key_back_to_f7() {
     let mut h = Harness::new();
     logged_in_app(&mut h);
+    // F9 as Slint reports it. F8 is the game clip key on Windows.
     h.app()
-        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+        .invoke_settings_clip_key_captured("\u{F70C}".into(), false, false, false, false);
     h.pump();
-    assert_eq!(h.app().get_clip_key_label().as_str(), "F8");
+    assert_eq!(h.app().get_clip_key_label().as_str(), "F9");
 
     h.app().invoke_settings_reset_defaults();
     h.pump();
     assert_eq!(h.app().get_clip_key_label().as_str(), "F7");
     assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+}
+
+/// The game clip key is bound in Settings, Keybinds, below the voice clip
+/// key (CLIPS.md 15.2). The new key is saved and shown.
+#[cfg(windows)]
+#[test]
+fn keybinds_rebinds_the_game_clip_key() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("KEYBINDS");
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F8");
+    h.click_label("Game clip key");
+    assert!(
+        h.app().get_settings_game_clip_binding(),
+        "the field listens"
+    );
+
+    // F9 as Slint reports it.
+    h.app()
+        .invoke_settings_game_clip_key_captured("\u{F70C}".into(), false, false, false, false);
+    h.pump();
+
+    assert!(!h.app().get_settings_game_clip_binding());
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F9"));
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F9");
+    assert!(h.app().get_settings_game_clip_key_warning().is_empty());
+}
+
+/// One key, one binding: the game clip key refuses the voice clip key and
+/// the push-to-talk key, and the voice clip key refuses the game clip key.
+/// Each field keeps its key.
+#[cfg(windows)]
+#[test]
+fn keybinds_keeps_the_voice_and_game_clip_keys_apart() {
+    let mut h = Harness::new();
+    logged_in_app(&mut h);
+    h.settings().borrow_mut().ptt_key = Some("KeyV".into());
+
+    // F7 as Slint reports it.
+    h.app()
+        .invoke_settings_game_clip_key_captured("\u{F70A}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().game_clip_key.as_deref(), Some("F8"));
+    assert_eq!(
+        h.app().get_settings_game_clip_key_warning().as_str(),
+        "Voice clip uses F7. Pick another key."
+    );
+
+    h.app()
+        .invoke_settings_game_clip_key_captured("v".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(
+        h.app().get_settings_game_clip_key_warning().as_str(),
+        "Push-to-talk uses V. Pick another key."
+    );
+
+    h.app()
+        .invoke_settings_clip_key_captured("\u{F70B}".into(), false, false, false, false);
+    h.pump();
+    assert_eq!(h.settings().borrow().clip_key.as_deref(), Some("F7"));
+    assert_eq!(
+        h.app().get_settings_clip_key_warning().as_str(),
+        "Game clip uses F8. Pick another key."
+    );
+}
+
+#[cfg(windows)]
+fn game_clips_command(cmds: &[Command]) -> Option<(bool, mello_core::events::GameClipQuality)> {
+    cmds.iter().rev().find_map(|c| match c {
+        Command::SetGameClips { enabled, quality } => Some((*enabled, *quality)),
+        _ => None,
+    })
+}
+
+/// The Game clips section in Settings, Games (CLIPS.md 15.10): the switch
+/// and the quality are saved and sent to core, which starts or stops the
+/// replay.
+#[cfg(windows)]
+#[test]
+fn the_game_clips_section_saves_and_tells_core() {
+    use mello_core::events::GameClipQuality;
+    let mut h = Harness::new();
+    h.app()
+        .window()
+        .set_size(slint::PhysicalSize::new(1600, 3000));
+    logged_in_app(&mut h);
+    h.app().set_settings_open(true);
+    h.pump();
+    h.click_label("GAMES");
+    assert!(h.app().get_settings_game_clips_enabled(), "on by default");
+    assert_eq!(
+        h.app().get_settings_game_clip_quality_name().as_str(),
+        "720p, 60 fps"
+    );
+    let _ = h.commands();
+
+    h.click_label("Game clips");
+    assert!(!h.settings().borrow().game_clips_enabled);
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((false, GameClipQuality::P720Fps60))
+    );
+
+    h.app()
+        .invoke_setting_changed_game_clip_quality("1080p60".into());
+    h.pump();
+    assert_eq!(h.settings().borrow().game_clip_quality, "1080p60");
+    assert_eq!(
+        h.app().get_settings_game_clip_quality_name().as_str(),
+        "1080p, 60 fps"
+    );
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((false, GameClipQuality::P1080Fps60))
+    );
+
+    h.app().invoke_settings_reset_defaults();
+    h.pump();
+    assert_eq!(
+        game_clips_command(&h.commands()),
+        Some((true, GameClipQuality::P720Fps60))
+    );
+    assert!(h.app().get_settings_game_clips_enabled());
+    assert_eq!(h.app().get_game_clip_key_label().as_str(), "F8");
 }
 
 /// Hangup must change the screen on click, before the core answers.
@@ -8401,6 +8733,12 @@ fn games_tab_with_installed(h: &mut Harness) {
     h.click_label("GAMES");
 }
 
+/// The Games tab scrolled to HIDDEN FROM CREW, below the GAME CLIPS section.
+fn hidden_games_in_view(h: &mut Harness) {
+    games_tab_with_installed(h);
+    scroll_settings_to_the_end(h);
+}
+
 fn hidden_command(cmds: &[Command]) -> Option<Vec<String>> {
     cmds.iter().rev().find_map(|c| match c {
         Command::SetHiddenGames { hidden } => Some(hidden.clone()),
@@ -8450,7 +8788,7 @@ fn onboarding_toggle_and_subline_use_the_consent_copy() {
 #[test]
 fn hiding_a_game_sends_the_hidden_set_and_unhiding_clears_it() {
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     let _ = h.commands();
 
     h.click_label("Hidden from crew: Portal 2");
@@ -8477,7 +8815,7 @@ fn hiding_a_game_sends_the_hidden_set_and_unhiding_clears_it() {
 #[test]
 fn a_game_hidden_in_steam_has_no_switch() {
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     assert!(h
         .controls_labelled("Hidden from crew: Steam Hidden Game")
         .is_empty());
@@ -8510,7 +8848,7 @@ fn toggling_hide_removes_the_game_from_the_next_report() {
     assert_eq!(first.len(), 2);
 
     let mut h = Harness::new();
-    games_tab_with_installed(&mut h);
+    hidden_games_in_view(&mut h);
     let _ = h.commands();
     h.click_label("Hidden from crew: Portal 2");
     let hidden: std::collections::HashSet<String> = hidden_command(&h.commands())

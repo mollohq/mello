@@ -7,6 +7,8 @@ mod connection;
 mod connection_tests;
 mod crew;
 mod diagnostics;
+mod game_clip_play;
+mod game_clip_upload;
 mod game_services;
 pub mod log_bundle;
 #[cfg(test)]
@@ -16,6 +18,7 @@ mod mic_permission;
 mod presence;
 mod push;
 mod reconnect;
+mod replay;
 #[cfg(test)]
 mod sfu_reconnect_live_tests;
 mod sfu_voice_join;
@@ -62,6 +65,7 @@ use std::time::Instant;
 
 pub use stream_ffi::feed_viewer_audio_rtp;
 // Stage 7: the per-stream game-audio volume.
+pub(crate) use stream_ffi::present_native_frame;
 pub use stream_ffi::set_viewer_audio_volume;
 use stream_ffi::ViewerState;
 pub use stream_ffi::{set_native_presenter, NativePresentFn};
@@ -130,6 +134,24 @@ pub struct Client {
     /// The activity last sent to the server and the socket generation it was
     /// sent on. A new socket session starts unreported, so a reconnect resends.
     reported_activity: Option<(bool, u64)>,
+    /// The game clip replay worker (replay.rs), made at the first game in
+    /// voice. Declared before `voice`: it drops first, so its thread stops
+    /// before the libmello context goes.
+    replay: Option<replay::ReplayWorker>,
+    /// In voice, for the replay (set where the clip buffer starts and stops).
+    replay_in_voice: bool,
+    /// The game the replay records now.
+    replay_target: Option<replay::ReplayTarget>,
+    /// The Settings section "Game clips" (`Command::SetGameClips`).
+    replay_enabled: bool,
+    replay_quality: crate::events::GameClipQuality,
+    /// The 10 s hold before a new game in focus takes the replay.
+    replay_hold: replay::GameHold,
+    /// The game clip upload thread (clip_upload), made at the first sign-in.
+    clip_uploads: Option<crate::clip_upload::UploadWorker>,
+    /// The game clip that plays (clip_play.rs). Declared before `voice`: a
+    /// drop at shutdown stops it before the libmello context goes.
+    clip_playback: Option<crate::clip_play::ClipPlayback>,
     voice: VoiceManager,
     event_tx: std::sync::mpsc::Sender<Event>,
     frame_slot: FrameSlot,
@@ -357,6 +379,14 @@ impl Client {
         log_bundle::set_event_sender(event_tx.clone());
         Self {
             nakama: NakamaClient::new(config),
+            replay: None,
+            replay_in_voice: false,
+            replay_target: None,
+            replay_enabled: true,
+            replay_quality: Default::default(),
+            replay_hold: Default::default(),
+            clip_uploads: None,
+            clip_playback: None,
             voice,
             event_tx,
             frame_slot,
@@ -472,6 +502,13 @@ impl Client {
         let mut feed_reload_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
         feed_reload_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
 
+        // Ends the 10 s hold of a game clip replay switch (replay.rs).
+        let mut replay_hold_tick = tokio::time::interval(tokio::time::Duration::from_secs(1));
+        replay_hold_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The game clip player's state for the UI (clip_play.rs).
+        let mut clip_play_tick = tokio::time::interval(tokio::time::Duration::from_millis(100));
+        clip_play_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+
         loop {
             for game_event in self.drain_game_events() {
                 if let crate::game_sensing::GameEvent::LibraryScanned { entries } = game_event {
@@ -531,6 +568,8 @@ impl Client {
                 for ev in ui_events {
                     let _ = self.event_tx.send(ev);
                 }
+                // The game clip replay follows the game the user looks at.
+                self.sync_replay();
                 self.sync_game_presence().await;
                 if let Some(summary) = session_end {
                     self.finish_session(summary).await;
@@ -593,6 +632,15 @@ impl Client {
                 }
                 _ = stats_tick.tick(), if self.emit_process_stats => {
                     self.emit_stats_tick();
+                }
+                // A new game in focus takes the replay after its 10 s hold.
+                _ = replay_hold_tick.tick(), if self.replay_hold.waiting() => {
+                    let _step = watchdog.step("replay_hold");
+                    self.sync_replay();
+                }
+                _ = clip_play_tick.tick(), if self.clip_playback.is_some() => {
+                    let _step = watchdog.step("clip_play");
+                    self.clip_play_tick();
                 }
                 _ = feed_reload_tick.tick(), if self.feed_reload.has_pending() => {
                     let _step = watchdog.step("feed_reload");
@@ -1161,6 +1209,54 @@ impl Client {
             }
             Command::CaptureClip { seconds } => {
                 self.handle_capture_clip(seconds);
+            }
+            Command::CaptureGameClip => {
+                self.handle_capture_game_clip();
+            }
+            Command::SetGameClips { enabled, quality } => {
+                self.handle_set_game_clips(enabled, quality);
+            }
+            Command::PlayGameClip { source } => {
+                self.handle_play_game_clip(source).await;
+            }
+            Command::SetGameClipPaused { paused } => {
+                self.handle_set_game_clip_paused(paused);
+            }
+            Command::SeekGameClip { position_ms } => {
+                self.handle_seek_game_clip(position_ms);
+            }
+            Command::CloseGameClip => {
+                self.close_game_clip("");
+            }
+            Command::ShareGameClip {
+                crew_id,
+                clip_id,
+                path,
+                poster_path,
+                duration_seconds,
+                width,
+                height,
+                game_name,
+            } => {
+                self.handle_share_game_clip(crate::clip_upload::PendingClip {
+                    user_id: String::new(),
+                    crew_id,
+                    clip_id,
+                    game: game_name,
+                    mp4_path: path,
+                    poster_path,
+                    duration_seconds: f64::from(duration_seconds),
+                    width,
+                    height,
+                    // The replay runs only in voice (CLIPS.md 15.2): every game
+                    // clip has the crew voice.
+                    has_voice: true,
+                    created_ms: chrono::Utc::now().timestamp_millis(),
+                    posted: false,
+                    poster_done: false,
+                    upload_id: String::new(),
+                    done_parts: Vec::new(),
+                });
             }
             Command::PostClip {
                 crew_id,

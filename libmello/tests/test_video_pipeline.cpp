@@ -1187,6 +1187,44 @@ TEST(CaptureLadder, ASwapToASlowMethodLeavesNoGap) {
     capture.stop();
 }
 
+// CLIPS.md 15.3: the replay records only frames that show the game.
+// ProcessCapture tells, during each frame, whether the method that delivered
+// it shows only the game (hook, WGC window) or the monitor.
+TEST(CaptureLadder, EachFrameSaysWhetherItShowsOnlyTheGame) {
+    FakeLadderBackend::Shared window_state, monitor_state;
+    ProcessCapture capture;
+    ASSERT_TRUE(capture.use_steps_for_test(
+        {LadderStep::WgcWindow, LadderStep::WgcMonitor},
+        [&](LadderStep step) -> std::unique_ptr<CaptureSource> {
+            if (step == LadderStep::WgcWindow) {
+                return std::make_unique<FakeLadderBackend>(1, 0, true, &window_state);
+            }
+            return std::make_unique<FakeLadderBackend>(2, 0, true, &monitor_state);
+        },
+        /*start_index=*/0));
+
+    std::mutex mu;
+    std::vector<std::pair<uintptr_t, bool>> seen;
+    ASSERT_TRUE(capture.start(60, [&](ID3D11Texture2D* texture, uint64_t) {
+        std::lock_guard<std::mutex> lock(mu);
+        seen.emplace_back(reinterpret_cast<uintptr_t>(texture), capture.frames_show_only_target());
+    }));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_TRUE(capture.frames_show_only_target());
+    ASSERT_TRUE(capture.move_for_test(1, /*keep_old_until_first_frame=*/false));
+    std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    EXPECT_FALSE(capture.frames_show_only_target());
+    capture.stop();
+
+    std::lock_guard<std::mutex> lock(mu);
+    size_t monitor_frames = 0;
+    for (const auto& [id, only_game] : seen) {
+        EXPECT_EQ(only_game, id == 1) << "a frame of method " << id;
+        if (id == 2) ++monitor_frames;
+    }
+    EXPECT_GT(monitor_frames, 0u);
+}
+
 // A better method that never delivers costs nothing: the method that has the
 // stream keeps delivering through the whole attempt and after it.
 TEST(CaptureLadder, AFailedSwapKeepsTheOldMethodDelivering) {
@@ -1622,5 +1660,78 @@ TEST(EncoderCostTier, AnUninitialisedEncoderRefusesATier) {
     QsvEncoder qsv;
     EXPECT_FALSE(qsv.reduce_cost_tier());
     EXPECT_EQ(qsv.cost_tier(), 0);
+}
+
+// 14-VIDEO-PIPELINE.md 6.8: the replay encodes with a recording intent. A stream
+// keeps what it had.
+TEST(EncoderIntent, AStreamKeepsTheUltraLowLatencyTuning) {
+    const auto nvenc = NvencEncoder::tuning_attempts(EncoderIntent::Stream);
+    ASSERT_EQ(nvenc.size(), 3u);
+    EXPECT_EQ(nvenc[0].preset, NV_ENC_PRESET_P4_GUID);
+    EXPECT_EQ(nvenc[0].tuning, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY);
+    EXPECT_EQ(nvenc[1].tuning, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY);
+    EXPECT_EQ(nvenc[2].tuning, NV_ENC_TUNING_INFO_LOW_LATENCY);
+
+    const auto amf = AmfEncoder::intent_settings(EncoderIntent::Stream);
+    EXPECT_EQ(amf.usages, std::vector<int64_t>{AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY});
+    EXPECT_TRUE(amf.low_latency_mode);
+}
+
+TEST(EncoderIntent, ARecordingTakesTheHighQualityTuning) {
+    const auto nvenc = NvencEncoder::tuning_attempts(EncoderIntent::Recording);
+    ASSERT_FALSE(nvenc.empty());
+    EXPECT_EQ(nvenc[0].preset, NV_ENC_PRESET_P4_GUID);
+    EXPECT_EQ(nvenc[0].tuning, NV_ENC_TUNING_INFO_HIGH_QUALITY);
+    for (const auto& attempt : nvenc) {
+        EXPECT_NE(attempt.tuning, NV_ENC_TUNING_INFO_ULTRA_LOW_LATENCY) << attempt.label;
+    }
+
+    const auto amf = AmfEncoder::intent_settings(EncoderIntent::Recording);
+    ASSERT_FALSE(amf.usages.empty());
+    EXPECT_EQ(amf.usages[0], AMF_VIDEO_ENCODER_USAGE_HIGH_QUALITY);
+    for (const int64_t usage : amf.usages) {
+        EXPECT_NE(usage, AMF_VIDEO_ENCODER_USAGE_ULTRA_LOW_LATENCY);
+    }
+    EXPECT_FALSE(amf.low_latency_mode);
+}
+
+TEST(EncoderIntent, ARecordingHasOneSecondOfThePeakRateAsVbv) {
+    EXPECT_EQ(vbv_bits_for(5'000, 60, EncoderIntent::Recording), 6'250'000u);
+    EXPECT_EQ(vbv_bits_for(5'000, 60, EncoderIntent::Stream), 3'125'000u);
+    EXPECT_EQ(vbv_bits_for(5'000, 60), 3'125'000u) << "a stream is the default";
+}
+
+// A high quality preset turns B-frames and lookahead on. The replay ring's
+// segments and the MP4 passthrough need every frame in decode order, an IDR
+// with SPS and PPS at each segment start, and one packet per frame.
+TEST(EncoderIntent, NvencKeepsBFramesAndLookaheadOffOverAHighQualityPreset) {
+    NV_ENC_CONFIG cfg{};
+    cfg.frameIntervalP = 3;
+    cfg.rcParams.enableLookahead = 1;
+    cfg.rcParams.lookaheadDepth = 16;
+    cfg.encodeCodecConfig.h264Config.repeatSPSPPS = 0;
+
+    EncoderConfig config{1280, 720, 60, 5'000};
+    config.keyframe_interval = 60;
+    config.intent = EncoderIntent::Recording;
+    NvencEncoder::apply_rate_and_gop(cfg, config);
+
+    EXPECT_EQ(cfg.frameIntervalP, 1);
+    EXPECT_EQ(cfg.rcParams.enableLookahead, 0u);
+    EXPECT_EQ(cfg.rcParams.lookaheadDepth, 0u);
+    EXPECT_EQ(cfg.gopLength, 60u);
+    EXPECT_EQ(cfg.encodeCodecConfig.h264Config.idrPeriod, 60u);
+    EXPECT_EQ(cfg.encodeCodecConfig.h264Config.repeatSPSPPS, 1u);
+    EXPECT_EQ(cfg.rcParams.rateControlMode, NV_ENC_PARAMS_RC_VBR);
+    EXPECT_EQ(cfg.rcParams.averageBitRate, 5'000'000u);
+    EXPECT_EQ(cfg.rcParams.maxBitRate, 6'250'000u);
+    EXPECT_EQ(cfg.rcParams.vbvBufferSize, 6'250'000u);
+
+    NV_ENC_CONFIG stream_cfg{};
+    config.intent = EncoderIntent::Stream;
+    config.keyframe_interval = 240;
+    NvencEncoder::apply_rate_and_gop(stream_cfg, config);
+    EXPECT_EQ(stream_cfg.rcParams.vbvBufferSize, 3'125'000u);
+    EXPECT_EQ(stream_cfg.gopLength, 240u);
 }
 #endif // _WIN32
