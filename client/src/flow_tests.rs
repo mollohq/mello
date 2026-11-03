@@ -1348,7 +1348,7 @@ fn a_mention_renders_as_a_name_before_the_member_list_loads() {
 
 fn image_data(n: u32) -> mello_core::chat::ImageData {
     mello_core::chat::ImageData {
-        url: format!("http://localhost:9000/mello-chat/crew-1/u-bob/{n}.jpg"),
+        url: format!("http://localhost:9000/mello-media/crew-1/u-bob/{n}.jpg"),
         width: 1600,
         height: 900,
         bytes: 120_000,

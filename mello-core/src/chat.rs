@@ -1091,7 +1091,7 @@ mod tests {
     #[test]
     fn an_image_envelope_round_trips_and_caps_at_four() {
         let img = |n: u32| ImageData {
-            url: format!("http://localhost:9000/mello-chat/c1/u1/{n}.jpg"),
+            url: format!("http://localhost:9000/mello-media/c1/u1/{n}.jpg"),
             width: 1600,
             height: 900,
             bytes: 120_000,
@@ -1119,14 +1119,14 @@ mod tests {
     #[test]
     fn an_image_url_maps_to_its_bucket_key() {
         assert_eq!(
-            image_key_from_url("https://chat.m3llo.app/crew-1/user-9/01ABC.jpg").as_deref(),
+            image_key_from_url("https://media.m3llo.app/crew-1/user-9/01ABC.jpg").as_deref(),
             Some("crew-1/user-9/01ABC.jpg")
         );
         assert_eq!(
-            image_key_from_url("http://localhost:9000/mello-chat/c1/u1/a.png?x=1").as_deref(),
+            image_key_from_url("http://localhost:9000/mello-media/c1/u1/a.png?x=1").as_deref(),
             Some("c1/u1/a.png")
         );
-        assert_eq!(image_key_from_url("https://chat.m3llo.app/a.jpg"), None);
+        assert_eq!(image_key_from_url("https://media.m3llo.app/a.jpg"), None);
     }
 
     #[test]

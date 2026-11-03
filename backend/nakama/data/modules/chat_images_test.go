@@ -5,7 +5,7 @@ import (
 	"testing"
 )
 
-const chatBase = "http://localhost:9000/mello-chat"
+const chatBase = "http://localhost:9000/mello-media"
 
 func chatImg(url string) chatImage {
 	return chatImage{URL: url, Width: 1600, Height: 900, Bytes: 120000, Mime: "image/jpeg"}

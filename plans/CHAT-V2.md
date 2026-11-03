@@ -62,14 +62,14 @@ Done when: a release build shows trending GIFs, a feed with 120 messages opens a
 
 Built on `feat/chat-v2`, the one branch for all of chat v2, and tested locally. The viewer became a
 modal card at 70% of the window with a switcher for the message's images. Not run
-against the local stack yet: the compose file creates the `mello-chat` bucket, so `docker compose
+against the local stack yet: the compose file creates the `mello-media` bucket, so `docker compose
 up` recreates `minio-init` on next start. Drop from another app is out: the winit backend delivers
 no file drops; paste and the dialog cover it.
 
 | # | Change |
 |---|---|
 | 1.1 | Envelope `type: "image"` with `images: [{url, width, height, bytes, mime}]`, max 4. Server validates type, count and that each URL is on our public bucket host. |
-| 1.2 | RPC `chat_upload_url`: checks crew membership, returns a presigned PUT for `{crew}/{ulid}.{ext}`, content type `image/jpeg`, `image/png`, `image/webp` or `image/gif`, 15 min. Own bucket `mello-chat` (R2 in prod, MinIO local), new env `CHAT_S3_BUCKET` and `CHAT_S3_PUBLIC_URL` next to the snapshots pair in `s3.go`. Not the clips bucket. |
+| 1.2 | RPC `chat_upload_url`: checks crew membership, returns a presigned PUT for `{crew}/{ulid}.{ext}`, content type `image/jpeg`, `image/png`, `image/webp` or `image/gif`, 15 min. Own bucket `mello-media` (R2 in prod, MinIO local), new env `MEDIA_S3_BUCKET` and `MEDIA_S3_PUBLIC_URL` next to the snapshots pair in `s3.go`. Not the clips bucket. |
 | 1.3 | Client: resize to 1600px on the long side, re-encode (JPEG for photos, PNG kept for screenshots with few colours, GIF passed through), cap 8 MB after encode. PUT with reqwest, then send the message. |
 | 1.4 | Composer: an Attach pill on the left of the pills row opens `rfd` (already a dependency). Paste from clipboard with `arboard` (already a dependency, has image get). Drop onto the panel through Slint `DropArea` if the winit backend delivers file drops; if not, note it and ship paste + dialog. |
 | 1.5 | Pending chips between the pills row and the field, with size, progress and remove. |
@@ -101,7 +101,7 @@ Typing indicator. Pin a message. Share a clip to chat. Message search.
 ## 4. Decisions, settled
 
 - The action row stays between the list and the field as three icon buttons, Attach, GIF, Emoji. The small red send sits inside the field, arrow up.
-- Images get their own bucket, `mello-chat`.
+- Images get their own bucket, `mello-media`.
 - The emoji font is Twemoji.
 - The feed drops the virtualizer for a Flickable over a 200-message window. RAM measured before and after on the perf harness.
 - Image caps: 4 per message, 1600px on the long side, 8 MB each after encode.

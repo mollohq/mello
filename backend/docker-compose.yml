@@ -73,9 +73,9 @@ services:
         rc bucket create --ignore-existing local/mello-snapshots &&
         rc bucket anonymous set download local/mello-snapshots &&
         rc bucket create --ignore-existing local/mello-diagnostics &&
-        rc bucket create --ignore-existing local/mello-chat &&
-        rc bucket anonymous set download local/mello-chat &&
-        echo "Buckets mello-clips, mello-snapshots, mello-diagnostics and mello-chat ready"
+        rc bucket create --ignore-existing local/mello-media &&
+        rc bucket anonymous set download local/mello-media &&
+        echo "Buckets mello-clips, mello-snapshots, mello-diagnostics and mello-media ready"
 
   nakama:
     image: heroiclabs/nakama:3.21.0
@@ -110,8 +110,8 @@ services:
       - S3_PUBLIC_URL=http://localhost:9000/mello-clips
       - SNAPSHOTS_S3_BUCKET=mello-snapshots
       - SNAPSHOTS_S3_PUBLIC_URL=http://localhost:9000/mello-snapshots
-      - CHAT_S3_BUCKET=mello-chat
-      - CHAT_S3_PUBLIC_URL=http://localhost:9000/mello-chat
+      - MEDIA_S3_BUCKET=mello-media
+      - MEDIA_S3_PUBLIC_URL=http://localhost:9000/mello-media
       # Private bucket for user-driven diagnostic log captures (no public URL).
       - DIAGNOSTICS_S3_BUCKET=mello-diagnostics
       # Remote push (spec 23). Unset = pushes are skipped. scripts/e2e.sh points

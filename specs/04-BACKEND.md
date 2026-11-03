@@ -95,7 +95,7 @@ All custom server logic is written in Go and loaded as Nakama runtime modules. M
 | `clips.go` | `PostClipRPC`, `CrewTimelineRPC`, `CrewClipsRPC`, `CrewRecapsRPC`, `ClipUploadURLRPC`, `ClipUploadCompleteRPC`, `WeeklyRecapJob`; durable `crew_clips`/`crew_recaps` storage |
 | `crew_feed.go` | `CrewFeedRPC` — server-side feed curation (order, role, size, locked card) |
 | `stream_sessions_store.go` | Durable `crew_stream_sessions` store (`UpsertStreamSession`, cap) so stream replays outlive the ledger trim |
-| `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers; the chat bucket (`CHAT_S3_BUCKET`, `CHAT_S3_PUBLIC_URL`) with `GeneratePresignedPUTChat` and `DeleteChatObjects` |
+| `s3.go` | S3/R2 presign client singleton, `GeneratePresignedPUT`, `S3PublicURL` helpers; the chat bucket (`MEDIA_S3_BUCKET`, `MEDIA_S3_PUBLIC_URL`) with `GeneratePresignedPUTChat` and `DeleteChatObjects` |
 | `chat_images.go` | `ChatUploadURLRPC`, `ChatDeleteImagesRPC`, the chat image key rules and `validateChatImages` for the message hook |
 | `chat_reactions.go` | `ChatReactRPC`, `ChatReactionsRPC`; `applyReaction` and `validReactionEmoji` are pure |
 | `admin_live_snapshot.go` | `AdminLiveSnapshotRPC` — server-to-server snapshot of non-empty voice rooms (channel, crew, members) plus active streams (`stream_meta` scan). Powers the admin Live view. |

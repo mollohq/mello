@@ -35,8 +35,8 @@ var (
 	chatPublicURL string
 )
 
-// initChatS3 sets up the chat images bucket: its own bucket (CHAT_S3_BUCKET,
-// default mello-chat) and public base (CHAT_S3_PUBLIC_URL), on the shared
+// initChatS3 sets up the chat images bucket: its own bucket (MEDIA_S3_BUCKET,
+// default mello-media) and public base (MEDIA_S3_PUBLIC_URL), on the shared
 // credentials and endpoints. Without the public base, image messages are
 // refused: the validation hook needs it to pin image URLs to this bucket.
 func initChatS3() {
@@ -44,14 +44,14 @@ func initChatS3() {
 		endpoint := os.Getenv("S3_ENDPOINT")
 		accessKey := os.Getenv("S3_ACCESS_KEY")
 		secretKey := os.Getenv("S3_SECRET_KEY")
-		chatPublicURL = strings.TrimRight(os.Getenv("CHAT_S3_PUBLIC_URL"), "/")
+		chatPublicURL = strings.TrimRight(os.Getenv("MEDIA_S3_PUBLIC_URL"), "/")
 		if endpoint == "" || accessKey == "" || secretKey == "" || chatPublicURL == "" {
 			chatPublicURL = ""
 			return
 		}
-		chatBucket = os.Getenv("CHAT_S3_BUCKET")
+		chatBucket = os.Getenv("MEDIA_S3_BUCKET")
 		if chatBucket == "" {
-			chatBucket = "mello-chat"
+			chatBucket = "mello-media"
 		}
 		creds := credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")
 		chatClient = s3.New(s3.Options{
